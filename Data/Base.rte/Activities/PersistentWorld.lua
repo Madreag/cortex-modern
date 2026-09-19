@@ -5,7 +5,11 @@ package.loaded.Constants = nil; require("Constants");
 -- ordered transition, so every machine spawns the same actor at the same committed tick.
 
 local TEAM_HOME_X = {[Activity.TEAM_1] = 880, [Activity.TEAM_2] = 1120, [Activity.TEAM_3] = 640, [Activity.TEAM_4] = 1360};
-local RESPAWN_DELAY_TICKS = 300; -- Five seconds of simulation at the fixed timestep.
+-- The respawn wait is the host's configured one, read in ticks so this clock and the engine's own
+-- seat respawn schedule the same frame.
+local function RespawnDelayTicks(self)
+	return self:GetWorldRespawnDelayFrames();
+end
 
 -- A team with a seated human is the host's: it authors that seat's respawn as a world transition, so
 -- the team loop below must not spawn a second resident for it.
@@ -96,14 +100,15 @@ function PersistentWorld:UpdateActivity()
 	local now = self.worldTick;
 	self.respawnDueAt = self.respawnDueAt or {};
 	local author = self:IsWorldAuthor();
+	local delay = RespawnDelayTicks(self);
 	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
 		if self:TeamActive(team) and not TeamHasSeat(self, team) then
 			if MovableMan:GetFirstBrainActor(team) ~= nil then
 				self.respawnDueAt[team] = nil;
 			elseif self.respawnDueAt[team] == nil then
-				self.respawnDueAt[team] = now + RESPAWN_DELAY_TICKS;
+				self.respawnDueAt[team] = now + delay;
 			elseif now >= self.respawnDueAt[team] then
-				self.respawnDueAt[team] = now + RESPAWN_DELAY_TICKS;
+				self.respawnDueAt[team] = now + delay;
 				if author then
 					SpawnResident(self, team, false);
 				end

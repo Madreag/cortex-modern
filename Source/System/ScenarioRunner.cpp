@@ -1050,6 +1050,13 @@ namespace RTE {
 		return config != nullptr ? config->worldId : std::string();
 	}
 
+	int ScenarioRunner::GetWorldRespawnDelayFrames() {
+		const NetMatchConfig* config = GetLockstepMatchConfig();
+		// With no round attached the preset runs alone on the world's own default.
+		NetMatchConfig fallback;
+		return static_cast<int>(WorldRespawnDelayFrames(config != nullptr ? *config : fallback));
+	}
+
 	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
 		if (s_LockstepCoordinator && !IsPersistentWorld()) {
 			return false;

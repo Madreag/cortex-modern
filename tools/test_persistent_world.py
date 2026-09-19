@@ -97,6 +97,8 @@ RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
+RED_RESPAWN_DELAY_SOURCES = "world-respawn-delay-has-two-sources"
+RED_RESPAWN_DELAY_NOT_CONFIG = "world-respawn-delay-is-not-the-config"
 RED_RELEASE_KEPT_CONTROL = "release-kept-the-departed-control"
 RED_RELEASE_TOOK_LIVE_CONTROL = "release-took-a-live-members-control"
 RED_RELEASE_CLONED_BRAIN = "release-left-the-brain-to-a-clone"
@@ -452,6 +454,13 @@ CASES = (
         "red": RED_CLEAN_LEAVE_WRONG_SEAT,
         "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
         "pass_token": "[net-world-clean-leave-selftest] PASS",
+    },
+    {
+        "name": "world-respawn-delay-has-one-source",
+        "argv": ["-net-world-respawn-delay-selftest"],
+        "red": RED_RESPAWN_DELAY_SOURCES,
+        "also_red": (RED_RESPAWN_DELAY_NOT_CONFIG,),
+        "pass_token": "[net-world-respawn-delay-selftest] PASS",
     },
     {
         "name": "release-frees-the-departed-brain",
