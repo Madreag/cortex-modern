@@ -198,6 +198,11 @@ namespace RTE {
 		/// Arms the native barrier for tables reachable from this state's globals and require caches.
 		/// It undoes table writes only: upvalue slots, setfenv envs, registry-only tables and stack-only tables keep what a preview wrote.
 		void CapturePreviewGlobalFence();
+		/// Arms it with the registry as a rollback root as well, which the release's reference order makes safe.
+		/// @param rootRegistry Whether the registry rolls back with the globals.
+		void CapturePreviewGlobalFence(bool rootRegistry);
+		/// Whether the armed window has the registry as a rollback root.
+		bool PreviewRegistryRooted() const { return m_PreviewRegistryRooted; }
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
 		/// @return How many tables and cached scripts were put back.
 		int ReleasePreviewGlobalFence();
@@ -383,6 +388,7 @@ namespace RTE {
 		lua_State* m_State;
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
 		bool m_PreviewGlobalFenceArmed = false; //!< Whether the VM's native table barrier is armed for this state.
+		bool m_PreviewRegistryRooted = false; //!< Whether the armed barrier holds the registry as a rollback root.
 		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
 		std::unordered_map<std::string, std::unordered_map<std::string, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
@@ -456,6 +462,8 @@ namespace RTE {
 		static bool PreviewGlobalFenceEnabled();
 		/// Stops tracking a function object a preview window handed out; LuabindObjectWrapper's deletion hook.
 		static void ForgetPreviewBornWrapper(LuabindObjectWrapper* wrapper);
+		/// Whether a preview window rolls the Lua registry back with the globals; CC_PREVIEW_REGISTRY_ROOT=1 turns it on.
+		static bool PreviewRegistryRootEnabled();
 		/// How many global entries previews have put back so far.
 		static uint64_t PreviewGlobalsUndoneCount() { return s_PreviewGlobalsUndone; }
 #pragma endregion

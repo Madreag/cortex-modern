@@ -320,7 +320,7 @@ end
 				lua_pushinteger(L, 2);
 				lua_setfield(L, -2, "value");
 				lua_settop(L, top);
-				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0) ? -1 : 0);
+				check("preview_barrier_double_arm_refused", index, round, luaJIT_preview_begin(L, nullptr, 0, 0) ? -1 : 0);
 				check("preview_barrier_native_semantics", index, round, state->RunScriptString("assert(_PreviewBarrierProbe.capi[1] == 92 and _PreviewBarrierProbe.capi.x == 93 and _PreviewBarrierProbe.capi.added == 94)", false));
 				check("preview_barrier_fault_injection", index, round, luaJIT_preview_faultcheck(L) ? 0 : -1);
 				check("preview_barrier_gc_accounting", index, round, state->RunScriptString("_PreviewBarrierProbe.accounting()", false));

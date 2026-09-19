@@ -5027,7 +5027,9 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 	    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
 	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms
 	    << " caller_copies_rolled_back=" << m_PreviewCallerCopiesRolledBack
-	    << " caller_copies_kept=" << m_PreviewCallerCopiesKept;
+	    << " caller_copies_kept=" << m_PreviewCallerCopiesKept
+	    << " upvalue_slots=" << stats.upvalues << " upvalue_writes=" << stats.upvalue_writes
+	    << " registry_root=" << (LuaMan::PreviewRegistryRootEnabled() ? 1 : 0);
 	if (std::isfinite(stats.p99_ms)) {
 		row << " p99_ms=" << stats.p99_ms;
 	}
@@ -6780,6 +6782,73 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewCallerCopyRollsBack ? "PASS" : "FAIL") << " preview_caller_copy_rolls_back" << std::endl;
 	checkpointValues = previewCallerCopyRollsBack && checkpointValues;
+	// The upvalue slots a window writes are counted, and the registry form of the rollback is armed by hand and pinned.
+	bool previewSlotMeasureAndRegistryRoot = false;
+	{
+		const int measureBefore = luaJIT_preview_measure(m_State, 1);
+		const size_t writesBefore = luaJIT_preview_upvalue_writes(m_State);
+		const int staged = RunScriptString(
+		    "_PreviewSlotProbe = (function() local a, b, c = 1, 1, 1 local probe = {} "
+		    "probe.write = function() a = 2; b = 3; c = 2; c = 1 end "
+		    "probe.read = function() return a * 100 + b * 10 + c end "
+		    "return probe end)()",
+		    false);
+		luabind::object beforeWindow(m_State, 100);
+		lua_pushinteger(m_State, 1);
+		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
+		CapturePreviewGlobalFence(true);
+		const bool rooted = PreviewRegistryRooted();
+		int wrote = -99;
+		int insideRegistry = -1;
+		{
+			// The window's own luabind references end with the window, which is what lets the registry roll back.
+			std::vector<std::unique_ptr<luabind::object>> windowBorn;
+			for (int value = 0; value < 3; ++value) {
+				windowBorn.push_back(std::make_unique<luabind::object>(m_State, 300 + value));
+			}
+			wrote = RunScriptString("_PreviewSlotProbe.write()", false);
+			lua_pushinteger(m_State, 2);
+			lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
+			lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
+			insideRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+		}
+		ReleasePreviewGlobalFence();
+		lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
+		const int afterRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
+		lua_pop(m_State, 1);
+		const size_t writes = luaJIT_preview_upvalue_writes(m_State) - writesBefore;
+		int slotsAfter = -1;
+		if (RunScriptString("_PreviewSlotValue = _PreviewSlotProbe.read()", false) == 0) {
+			lua_getglobal(m_State, "_PreviewSlotValue");
+			slotsAfter = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+		}
+		const auto readObject = [this](const luabind::object& object) {
+			object.push(m_State);
+			const int value = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+			return value;
+		};
+		const int kept = readObject(beforeWindow);
+		luabind::object first(m_State, 201);
+		luabind::object second(m_State, 202);
+		luabind::object third(m_State, 203);
+		const bool referencesUsable = kept == 100 && readObject(first) == 201 && readObject(second) == 202 && readObject(third) == 203;
+		std::cout << "[preview-slot-measure] staged=" << staged << " rooted=" << rooted << " wrote=" << wrote
+		          << " upvalue_writes=" << writes << " slots_after=" << slotsAfter
+		          << " registry " << insideRegistry << "->" << afterRegistry
+		          << " references_usable=" << referencesUsable << std::endl;
+		// Two slots changed and one was written back, the registry key the window set is gone, and every reference still names its own value.
+		previewSlotMeasureAndRegistryRoot = staged == 0 && rooted && wrote == 0 && writes == 2 &&
+		                                    slotsAfter == 231 && insideRegistry == 2 && afterRegistry == 1 && referencesUsable;
+		RunScriptString("_PreviewSlotProbe = nil; _PreviewSlotValue = nil", false);
+		lua_pushnil(m_State);
+		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
+		luaJIT_preview_measure(m_State, measureBefore);
+	}
+	std::cout << "[script-graph-selftest] " << (previewSlotMeasureAndRegistryRoot ? "PASS" : "FAIL") << " preview_slot_measure_and_registry_root" << std::endl;
+	checkpointValues = previewSlotMeasureAndRegistryRoot && checkpointValues;
 	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
 	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
 	bool addedLibraryKeyReinstates = false;
@@ -9023,6 +9092,10 @@ void LuaStateWrapper::TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, con
 }
 
 void LuaStateWrapper::CapturePreviewGlobalFence() {
+	CapturePreviewGlobalFence(LuaMan::PreviewRegistryRootEnabled());
+}
+
+void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	if (m_PreviewGlobalFenceArmed) {
 		return;
@@ -9039,10 +9112,20 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 	for (const auto& [path, cached]: m_ScriptCache) {
 		m_PreviewScriptCacheKeys.insert(path);
 	}
-	if (!luaJIT_preview_begin(m_State, skipped, std::size(skipped))) {
+	if (!luaJIT_preview_begin(m_State, skipped, std::size(skipped), rootRegistry ? LUAJIT_PREVIEW_REGISTRY_ROOT : 0u)) {
 		RTEAbort("Unable to arm the native preview table barrier.");
 	}
 	m_PreviewGlobalFenceArmed = true;
+	m_PreviewRegistryRooted = rootRegistry;
+}
+
+bool LuaMan::PreviewRegistryRootEnabled() {
+	// Off until the measurement says what a window writes through the registry; the arms pin both forms.
+	static const bool enabled = [] {
+		const char* value = std::getenv("CC_PREVIEW_REGISTRY_ROOT");
+		return value && value[0] == '1' && value[1] == '\0';
+	}();
+	return enabled;
 }
 
 int LuaStateWrapper::ReleasePreviewGlobalFence() {
@@ -9051,6 +9134,7 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 		return 0;
 	}
 	m_PreviewGlobalFenceArmed = false;
+	m_PreviewRegistryRooted = false;
 	int changes = 0;
 	// A copy the window handed a caller names the window's own function, so it drops that one here and takes the
 	// function the caller had before the window once the cache is back. Its wrapper keeps its address either way.
