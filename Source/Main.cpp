@@ -60,6 +60,7 @@
 #include "GameActivity.h"
 #include "NetActivitySetup.h"
 #include "MovableObject.h"
+#include "MOPixel.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FloatTextSelfTest.h"
@@ -134,6 +135,7 @@
 #endif
 #include <chrono>
 #include <charconv>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -394,6 +396,54 @@ static long long s_eventLedgerFlashTick = -1; //!< The committed tick a preview 
 static uint64_t s_eventLedgerLuaEmitterUID = 0;
 static std::string s_eventLedgerLuaPreset;
 static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
+struct GhostSample {
+	uint64_t tick = 0;
+	PreviewEventLedger::Key key;
+	bool any = false;
+	Vector pos;
+	Vector vel;
+	float globalAccScalar = 1.0F;
+	float airResistance = 0;
+	float airThreshold = 0;
+	bool adopted = false;     //!< A canonical spawn is waiting behind this ghost.
+	bool adopteeHeld = false; //!< That spawn is still off the frame.
+	uint64_t poseTick = 0;
+	uint64_t adoptionTick = 0;
+	long adopteeUID = 0;
+	Vector adopteePos;
+	Vector adopteeVel;
+	float adopteeGlobalAccScalar = 1.0F;
+	float adopteeAirResistance = 0;
+	float adopteeAirThreshold = 0;
+};
+// One row per seamless swap: the ghost went and the spawn it led took the frame.
+struct SwapRecord {
+	uint64_t adoptionTick = 0;
+	uint64_t tick = 0;
+	uint64_t leadTicks = 0;
+	float poseDelta = 0;
+	long adopteeUID = 0;
+	bool adopteeAlive = false;
+	bool adopteeHeldAfter = false;
+	Vector adopteePos;
+	Vector ghostPos;
+};
+static std::vector<SwapRecord> s_eventLedgerSwaps;
+static uint64_t s_eventLedgerSwapCount = 0;
+static int s_eventLedgerHoldDumpPoints = 0; //!< Ticks whose dump was taken both with and without the adoption hold.
+static int s_eventLedgerHoldDumpDiffs = 0;
+static bool s_eventLedgerSwapDumpT0 = false; //!< The three cross-run dump probes: adoption, last led tick, swap.
+static bool s_eventLedgerSwapDumpMid = false;
+static bool s_eventLedgerSwapDumpEnd = false;
+static std::vector<GhostSample> s_eventLedgerGhostSamples; //!< Per-committed-tick ghost kinematics keyed to the ledger event.
+static bool s_eventLedgerGhostRegistered = false;
+static bool s_eventLedgerGhostDumpTaken = false;
+static bool s_eventLedgerGhostDumpIdentical = false;
+static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostMovedKeys;
+static bool s_eventLedgerExpireDroppedGhost = false;
+static std::string s_eventLedgerExpireDetail;
+static long long s_fundsPreviewPress = 0;
+static const int s_fundsPreviewTeam = Activity::TeamOne; //!< The team -net-match-e2e-buy-command grants and buys for.
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -1262,6 +1312,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			LocalPredictionHudSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
+			continue;
+		}
+		if (!lastArg && currentArg == "-local-prediction-funds-preview") {
+			const std::string text = argValue[++i];
+			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
+				std::cerr << "[preview-funds-driver] bad press tick '" << text << "': expected a whole number" << std::endl;
+				return false;
+			}
+			s_fundsPreviewPress = std::strtoll(text.c_str(), nullptr, 10);
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-invariance") {
@@ -2168,6 +2227,7 @@ static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 	std::ostringstream out;
 	out << "sim_count=" << g_TimerMan.GetSimUpdateCount() << " sim_ticks=" << g_TimerMan.GetSimTimeTicks() << " accumulator=" << g_TimerMan.GetSimAccumulator() << "\n";
 	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
+	out << "sound_cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << "\n";
 	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
 	out << "lua_state_cursor=" << g_LuaMan.GetScriptStateCursor() << "\n";
 	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
@@ -2269,6 +2329,33 @@ static void DrawFrameWithPreviews() {
 	}
 	LocalPrediction::EndRender();
 	LocalPredictionHudSelfTest::SampleAfterRender();
+	if (s_fundsPreviewPress > 0) {
+		const long long tick = g_TimerMan.GetSimUpdateCount();
+		const long long delay = std::max<long long>(static_cast<long long>(ScenarioRunner::GetLockstepLocalInputDelay()), 7);
+		if (tick == s_fundsPreviewPress + 1 || tick == s_fundsPreviewPress + delay) {
+			const Activity* activity = g_ActivityMan.GetActivity();
+			// Each peer presents its own seat, so sample that seat and the buying team as this peer shows it.
+			const int seat = activity ? activity->PlayerOfScreen(0) : Players::NoPlayer;
+			const auto oz = [](float funds) {
+				char text[64];
+				std::snprintf(text, sizeof(text), "%.10g", std::floor(funds));
+				return std::string(text);
+			};
+			const std::string& readout = GameActivity::GetLastFundsReadout(seat);
+			std::vector<std::string> problems;
+			const std::string extras = DescribeCanonicalExtras(problems);
+			// The peers compare the world dump; the extras carry this process's own accumulator, so they stay local.
+			const std::string suffix = tick == s_fundsPreviewPress + 1 ? std::string("funds_p1") : std::string("funds_pd");
+			WriteProbeText(suffix, DumpSimStateToString());
+			WriteProbeText(suffix + "_extras", extras);
+			std::cout << "[preview-funds-driver] tick=" << tick << " seat=" << seat << " seat_team=" << (activity ? activity->GetTeamOfPlayer(seat) : static_cast<int>(Activity::NoTeam))
+			          << " buy_team=" << s_fundsPreviewTeam
+			          << " buy_team_oz=" << (activity ? activity->DescribeFundsReadout(s_fundsPreviewTeam, seat) : std::string("EMPTY"))
+			          << " buy_team_committed=" << (activity ? oz(activity->GetTeamFunds(s_fundsPreviewTeam)) : std::string("EMPTY"))
+			          << " peek_tick=" << LocalPrediction::GetLastFillTick() << " problems=" << problems.size()
+			          << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
+		}
+	}
 	g_SceneMan.SetRenderDrawContext(false);
 	t_simRNGOverride = prevSimRNG;
 	NetModerationGUIProbe::AfterDraw();
@@ -2808,8 +2895,68 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 
 // -local-prediction-event-ledger drives one preview and one frame per sim tick, the cadence a played
 // match has; a replay run pumps its ticks without frames, so nothing would preview at all.
+// The seamless swap: the ghost's lead, the particle that takes its pose, and the dumps around the handover.
+static void SampleSeamlessSwap(uint64_t tick, const std::vector<MovableMan::PreviewGhostState>& ghosts) {
+	const MovableMan::PreviewSwap& swap = g_MovableMan.GetLastPreviewSwap();
+	if (swap.count > s_eventLedgerSwapCount) {
+		s_eventLedgerSwapCount = swap.count;
+		SwapRecord record;
+		record.adoptionTick = swap.adoptionTick;
+		record.tick = swap.tick;
+		record.leadTicks = swap.leadTicks;
+		record.poseDelta = swap.poseDelta;
+		record.adopteeUID = swap.adopteeUID;
+		for (const GhostSample& sample: s_eventLedgerGhostSamples) {
+			if (sample.any && sample.adopted && sample.adoptionTick == swap.adoptionTick && sample.adopteeUID == swap.adopteeUID) {
+				record.ghostPos = sample.pos;
+			}
+		}
+		if (MovableObject* adoptee = g_MovableMan.FindObjectByUniqueID(swap.adopteeUID)) {
+			record.adopteeAlive = true;
+			record.adopteeHeldAfter = adoptee->IsHeldForPreviewAdoption();
+			record.adopteePos = adoptee->GetPos();
+		}
+		s_eventLedgerSwaps.push_back(record);
+		if (!s_eventLedgerSwapDumpEnd) {
+			WriteProbeText("event_ledger_swap_end", DumpSimStateToString());
+			s_eventLedgerSwapDumpEnd = true;
+		}
+	}
+	for (const MovableMan::PreviewGhostState& ghost: ghosts) {
+		if (!ghost.adopteeHeld) {
+			continue;
+		}
+		const bool atAdoption = tick == ghost.adoptionTick;
+		const bool atLastLedTick = tick + 1 == ghost.poseTick;
+		if (!atAdoption && !atLastLedTick) {
+			break;
+		}
+		if (MovableObject* adoptee = g_MovableMan.FindObjectByUniqueID(ghost.adopteeUID)) {
+			// Presentation only: the same world dumps the same bytes with the hold on and with it off.
+			const std::string held = DumpSimStateToString();
+			const MovableObject::PreviewAdoption tag = adoptee->GetPreviewAdoption();
+			adoptee->ReleasePreviewAdoptionHold();
+			const std::string freed = DumpSimStateToString();
+			adoptee->HoldForPreviewAdoption(tag.key, tag.revealTick);
+			++s_eventLedgerHoldDumpPoints;
+			if (held != freed) {
+				++s_eventLedgerHoldDumpDiffs;
+			}
+			if (atAdoption && !s_eventLedgerSwapDumpT0) {
+				WriteProbeText("event_ledger_swap_t0", held);
+				s_eventLedgerSwapDumpT0 = true;
+			}
+			if (atLastLedTick && !s_eventLedgerSwapDumpMid) {
+				WriteProbeText("event_ledger_swap_mid", held);
+				s_eventLedgerSwapDumpMid = true;
+			}
+		}
+		break;
+	}
+}
+
 static void PreviewEventLedgerFrameOnTick() {
-	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0) {
+	if (s_eventLedgerPressTick <= 0 && LocalPredictionHudSelfTest::g_PressTick <= 0 && s_fundsPreviewPress <= 0) {
 		return;
 	}
 	if (g_TimerMan.GetSimUpdateCount() == s_eventLedgerPressTick && s_eventLedgerLuaEmitterUID == 0) {
@@ -2834,7 +2981,71 @@ static void PreviewEventLedgerFrameOnTick() {
 			}
 		}
 	}
+	std::string dumpBeforePreview;
+	std::vector<std::string> dumpProblemsBefore;
+	std::vector<MovableMan::PreviewGhostState> ghostsBeforePreview;
+	const bool snapshotGhostWindow = s_eventLedgerPressTick > 0 && !s_eventLedgerGhostDumpTaken;
+	if (snapshotGhostWindow) {
+		ghostsBeforePreview = g_MovableMan.GetPreviewGhostStates();
+		dumpBeforePreview = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsBefore);
+	}
 	LocalPrediction::RunPreview();
+	if (snapshotGhostWindow && g_MovableMan.GetPreviewGhostCount() > 0) {
+		// A ghost that this preview installed or carried forward: the dump around that window must not move.
+		std::vector<PreviewEventLedger::Key> moved;
+		for (const MovableMan::PreviewGhostState& ghost: g_MovableMan.GetPreviewGhostStates()) {
+			const auto before = std::find_if(ghostsBeforePreview.begin(), ghostsBeforePreview.end(), [&ghost](const MovableMan::PreviewGhostState& was) {
+				return was.key.kind == ghost.key.kind && was.key.emitterUID == ghost.key.emitterUID && was.key.presetHash == ghost.key.presetHash && was.key.tick == ghost.key.tick && was.key.seq == ghost.key.seq;
+			});
+			if (before == ghostsBeforePreview.end() || (ghost.pos - before->pos).GetMagnitude() > 0.01) {
+				moved.push_back(ghost.key);
+			}
+		}
+		if (!moved.empty()) {
+			s_eventLedgerGhostMovedKeys = moved;
+			std::vector<std::string> dumpProblemsAfter;
+			const std::string dumpAfterPreview = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsAfter);
+			WriteProbeText("event_ledger_ghost_travel", dumpAfterPreview);
+			s_eventLedgerGhostDumpIdentical = dumpProblemsBefore.empty() && dumpProblemsAfter.empty() && dumpBeforePreview == dumpAfterPreview;
+			s_eventLedgerGhostDumpTaken = true;
+		}
+	}
+	if (s_eventLedgerPressTick > 0) {
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		const std::vector<MovableMan::PreviewGhostState> ghosts = g_MovableMan.GetPreviewGhostStates();
+		if (ghosts.empty()) {
+			GhostSample sample;
+			sample.tick = tick;
+			s_eventLedgerGhostSamples.push_back(sample);
+		} else {
+			for (const MovableMan::PreviewGhostState& ghost: ghosts) {
+				GhostSample sample;
+				sample.tick = tick;
+				sample.key = ghost.key;
+				sample.any = true;
+				sample.pos = ghost.pos;
+				sample.vel = ghost.vel;
+				sample.globalAccScalar = ghost.globalAccScalar;
+				sample.airResistance = ghost.airResistance;
+				sample.airThreshold = ghost.airThreshold;
+				sample.adopted = ghost.adopted;
+				sample.adopteeHeld = ghost.adopteeHeld;
+				sample.poseTick = ghost.poseTick;
+				sample.adoptionTick = ghost.adoptionTick;
+				sample.adopteeUID = ghost.adopteeUID;
+				sample.adopteePos = ghost.adopteePos;
+				sample.adopteeVel = ghost.adopteeVel;
+				sample.adopteeGlobalAccScalar = ghost.adopteeGlobalAccScalar;
+				sample.adopteeAirResistance = ghost.adopteeAirResistance;
+				sample.adopteeAirThreshold = ghost.adopteeAirThreshold;
+				s_eventLedgerGhostSamples.push_back(sample);
+			}
+		}
+		if (g_MovableMan.GetPreviewGhostCount() > 0 && !g_MovableMan.PreviewGhostsAreUnregistered()) {
+			s_eventLedgerGhostRegistered = true;
+		}
+		SampleSeamlessSwap(tick, ghosts);
+	}
 	if (s_eventLedgerFlashTick < 0 && LocalPrediction::GetLastOutcome().firedFrame) {
 		s_eventLedgerFlashTick = g_TimerMan.GetSimUpdateCount();
 	}
@@ -2930,6 +3141,187 @@ static void CheckPreviewEventLedgerSelfTest() {
 		}
 	}
 	check("the_projectile_is_adopted_once", projectileAdoptions == 1, std::to_string(projectileAdoptions) + " adoptions of that projectile");
+	// The ghost the previewed shot left behind holds the last preview pose until the canonical particle adopts it.
+	uint64_t adoptionTick = 0;
+	PreviewEventLedger::Key trackedKey;
+	if (round) {
+		trackedKey.kind = PreviewEventLedger::Projectile;
+		trackedKey.emitterUID = round->emitterUID;
+		trackedKey.tick = round->eventTick;
+		trackedKey.seq = round->seq;
+		for (const PreviewEventLedger::EventStart& start: starts) {
+			if (start.kind == round->kind && start.emitterUID == round->emitterUID && start.eventTick == round->eventTick && start.seq == round->seq && !start.predicted) {
+				adoptionTick = start.committedTick;
+				break;
+			}
+		}
+	}
+	const auto isTracked = [&trackedKey, round](const GhostSample& sample) {
+		return sample.any && round && sample.key.kind == trackedKey.kind && sample.key.emitterUID == trackedKey.emitterUID && sample.key.tick == trackedKey.tick && sample.key.seq == trackedKey.seq;
+	};
+	bool sawGhost = false;
+	uint64_t firstGhostTick = 0;
+	uint64_t lastGhostTick = 0;
+	Vector lastGhostVel;
+	bool ghostAtOrAfterAdoption = false;
+	bool prevValid = false;
+	GhostSample prev;
+	size_t travelTicks = 0;
+	size_t frozenTicks = 0;
+	size_t heldTicks = 0;
+	double worstMotionError = 0.0;
+	const float sampleDt = g_TimerMan.GetDeltaTimeSecs();
+	const Vector gravity = g_SceneMan.GetGlobalAcc();
+	// The canonical motion the adopted particle will run: gravity, air drag, wrap, terrain stop-and-hold.
+	const auto applyForcesCopy = [&](GhostSample state) {
+		Vector vel = state.vel + gravity * state.globalAccScalar * sampleDt;
+		if (state.airResistance > 0 && vel.GetLargest() >= state.airThreshold) {
+			vel *= 1.0F - (state.airResistance * sampleDt);
+		}
+		Vector pos = state.pos + vel * sampleDt;
+		g_SceneMan.WrapPosition(pos);
+		const int pixelX = static_cast<int>(std::floor(pos.m_X));
+		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
+		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
+			state.vel = Vector(0, 0);
+			return state;
+		}
+		state.vel = vel;
+		state.pos = pos;
+		return state;
+	};
+	const double gravityTerm = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
+	const double motionSlack = gravityTerm * 0.5;
+	for (const GhostSample& sample: s_eventLedgerGhostSamples) {
+		if (!isTracked(sample)) {
+			if (!sample.any) {
+				prevValid = false;
+			}
+			continue;
+		}
+		if (!sawGhost) {
+			sawGhost = true;
+			firstGhostTick = sample.tick;
+		}
+		lastGhostTick = sample.tick;
+		lastGhostVel = sample.vel;
+		if (adoptionTick != 0 && sample.tick >= adoptionTick) {
+			ghostAtOrAfterAdoption = true;
+		}
+		if (sample.adopted) {
+			// Past its adoption the ghost holds the pose it is handing over; only the lead is travelled.
+			prevValid = false;
+			continue;
+		}
+		if (prevValid && sample.tick == prev.tick + 1) {
+			const GhostSample expected = applyForcesCopy(prev);
+			worstMotionError = std::max(worstMotionError, static_cast<double>((sample.pos - expected.pos).GetMagnitude()));
+			if ((sample.pos - prev.pos).GetMagnitude() > 0.01) {
+				++travelTicks;
+			} else if (sample.vel.GetMagnitude() <= 0.01 && travelTicks >= 1) {
+				++heldTicks;
+			} else {
+				++frozenTicks;
+			}
+		}
+		prev = sample;
+		prevValid = true;
+	}
+	// The seamless swap: the ghost keeps the pixel through its lead, then hands it to the particle it led.
+	const SwapRecord* swap = nullptr;
+	for (const SwapRecord& record: s_eventLedgerSwaps) {
+		if (adoptionTick != 0 && record.adoptionTick == adoptionTick) {
+			swap = &record;
+		}
+	}
+	size_t heldSamples = 0;
+	size_t heldSteps = 0;
+	bool ghostAtSwapTick = false;
+	bool bothAtLastLedTick = false;
+	double worstHeldMotionError = 0.0;
+	bool prevHeldValid = false;
+	GhostSample prevHeld;
+	for (const GhostSample& sample: s_eventLedgerGhostSamples) {
+		if (!isTracked(sample) || !sample.adopted) {
+			continue;
+		}
+		if (sample.adopteeHeld) {
+			++heldSamples;
+		}
+		if (swap && sample.tick == swap->tick) {
+			ghostAtSwapTick = true;
+		}
+		if (swap && sample.tick + 1 == swap->tick && sample.adopteeHeld) {
+			bothAtLastLedTick = true;
+		}
+		// The held particle's own motion, scored against the same ApplyForces copy the ghost rows use.
+		if (prevHeldValid && sample.tick == prevHeld.tick + 1) {
+			GhostSample from = prevHeld;
+			from.pos = prevHeld.adopteePos;
+			from.vel = prevHeld.adopteeVel;
+			from.globalAccScalar = prevHeld.adopteeGlobalAccScalar;
+			from.airResistance = prevHeld.adopteeAirResistance;
+			from.airThreshold = prevHeld.adopteeAirThreshold;
+			const GhostSample expected = applyForcesCopy(from);
+			worstHeldMotionError = std::max(worstHeldMotionError, static_cast<double>((sample.adopteePos - expected.pos).GetMagnitude()));
+			++heldSteps;
+		}
+		prevHeld = sample;
+		prevHeldValid = sample.adopteeHeld;
+	}
+	const auto poseText = [](const Vector& pose) { return std::to_string(pose.m_X) + "," + std::to_string(pose.m_Y); };
+	const std::string swapDetail = swap ? "lead " + std::to_string(swap->leadTicks) + " ticks, adopted at " + std::to_string(swap->adoptionTick) + ", swapped at " + std::to_string(swap->tick) +
+	                                          ", ghost pose " + poseText(swap->ghostPos) + ", particle pose " + poseText(swap->adopteePos) + ", delta " + std::to_string(swap->poseDelta) + " px, particle " +
+	                                          (swap->adopteeAlive ? (swap->adopteeHeldAfter ? "still held" : "shown") : "gone")
+	                                    : "no swap recorded for the tracked round: the ghost went at adoption and the pixel jumped back to the muzzle";
+	bool trackedMoved = false;
+	for (const PreviewEventLedger::Key& key: s_eventLedgerGhostMovedKeys) {
+		GhostSample moved;
+		moved.any = true;
+		moved.key = key;
+		if (isTracked(moved)) {
+			trackedMoved = true;
+		}
+	}
+	check("the_ghost_appears_on_the_preview_tick", sawGhost && firstGhostTick <= press + 1,
+	      sawGhost ? "first ghost at committed tick " + std::to_string(firstGhostTick) + ", expected <= " + std::to_string(press + 1) : "no ghost sampled in the run");
+	check("the_ghost_travels_every_committed_tick", sawGhost && travelTicks >= 1 && frozenTicks == 0,
+	      !sawGhost ? "no ghost sampled in the run" : std::to_string(travelTicks) + " travelled ticks, " + std::to_string(heldTicks) + " stop-and-hold ticks, " + std::to_string(frozenTicks) + " frozen ticks (a frozen tick is a ghost that neither moved nor stopped on terrain), last vel " + std::to_string(lastGhostVel.GetMagnitude()));
+	check("the_ghost_matches_the_canonical_motion", sawGhost && travelTicks >= 1 && worstMotionError < motionSlack,
+	      "worst |sample - ApplyForces copy of the previous sample| " + std::to_string(worstMotionError) + " px over " + std::to_string(travelTicks + heldTicks + frozenTicks) + " scored steps, slack " + std::to_string(motionSlack) + " (half |g|dt^2=" + std::to_string(gravityTerm) + "; a gravity-less step differs by that term and fails)");
+	check("the_ghost_hands_the_pixel_over_at_the_swap", adoptionTick != 0 && sawGhost && ghostAtOrAfterAdoption && swap != nullptr && lastGhostTick + 1 == swap->tick,
+	      "last ghost at committed tick " + std::to_string(lastGhostTick) + ", adoption at " + std::to_string(adoptionTick) + "; " + swapDetail);
+	check("the_adoption_does_not_snap",
+	      swap != nullptr && swap->leadTicks > 0 && heldSamples == swap->leadTicks && bothAtLastLedTick && !ghostAtSwapTick && swap->adopteeAlive && !swap->adopteeHeldAfter && static_cast<double>(swap->poseDelta) <= motionSlack,
+	      swapDetail + "; the particle was held on " + std::to_string(heldSamples) + " of the " + (swap ? std::to_string(swap->leadTicks) : std::string("0")) + " led ticks, both drawn at the last led tick " + std::to_string(bothAtLastLedTick ? 1 : 0) + ", a ghost was still there at the swap tick " + std::to_string(ghostAtSwapTick ? 1 : 0) + ", slack " + std::to_string(motionSlack) + " px");
+	check("hidden_adoptee_still_simulates", swap != nullptr && heldSteps >= 1 && worstHeldMotionError < motionSlack,
+	      "the held particle's worst |sample - ApplyForces copy of the previous sample| " + std::to_string(worstHeldMotionError) + " px over " + std::to_string(heldSteps) + " held steps, slack " + std::to_string(motionSlack) + " (the unhidden control run is the no-prediction compare of the three swap dump probes)");
+	check("dumps_byte_identical_across_the_swap", s_eventLedgerHoldDumpPoints >= 1 && s_eventLedgerHoldDumpDiffs == 0 && s_eventLedgerSwapDumpT0 && s_eventLedgerSwapDumpMid && s_eventLedgerSwapDumpEnd,
+	      std::to_string(s_eventLedgerHoldDumpPoints) + " ticks dumped with the hold on and off, " + std::to_string(s_eventLedgerHoldDumpDiffs) + " of them differed; probes written adoption=" + std::to_string(s_eventLedgerSwapDumpT0 ? 1 : 0) + " last_led=" + std::to_string(s_eventLedgerSwapDumpMid ? 1 : 0) + " swap=" + std::to_string(s_eventLedgerSwapDumpEnd ? 1 : 0));
+	check("the_ghost_stays_off_the_moid_grid", !s_eventLedgerGhostRegistered,
+	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
+	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && trackedMoved && s_eventLedgerGhostDumpIdentical,
+	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around a preview that moved a ghost" : (!trackedMoved ? "the tracked round's ghost did not move in that window" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
+	if (!s_eventLedgerExpireDroppedGhost && MovableMan::IsConstructed()) {
+		PreviewEventLedger::Key expireKey;
+		expireKey.kind = PreviewEventLedger::Projectile;
+		expireKey.emitterUID = 1;
+		expireKey.tick = 1;
+		expireKey.seq = 99;
+		PreviewEventLedger::Insert(expireKey, {});
+		MovableMan::InstallPreviewGhostForSelfTest(new MOPixel(), expireKey, expireKey.tick);
+		const uint64_t expiredBefore = PreviewEventLedger::GetCounters().expired;
+		PreviewEventLedger::ExpireForTick(expireKey.tick + 2);
+		const std::vector<MovableMan::PreviewGhostState> left = g_MovableMan.GetPreviewGhostStates();
+		const bool plantedGone = std::none_of(left.begin(), left.end(), [&expireKey](const MovableMan::PreviewGhostState& ghost) {
+			return ghost.key.kind == expireKey.kind && ghost.key.emitterUID == expireKey.emitterUID && ghost.key.tick == expireKey.tick && ghost.key.seq == expireKey.seq;
+		});
+		s_eventLedgerExpireDroppedGhost = PreviewEventLedger::GetCounters().expired > expiredBefore && plantedGone;
+		s_eventLedgerExpireDetail = "expired " + std::to_string(expiredBefore) + " -> " + std::to_string(PreviewEventLedger::GetCounters().expired) +
+		    ", planted ghost " + std::string(plantedGone ? "dropped" : "still installed") + ", " + std::to_string(left.size()) + " ghosts left";
+	}
+	check("expired_ghost_vanishes", MovableMan::IsConstructed() && s_eventLedgerExpireDroppedGhost,
+	      !MovableMan::IsConstructed() ? "MovableMan is not constructed in this host, so no ghost could be planted" : s_eventLedgerExpireDetail);
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -3706,7 +4098,17 @@ void RunGameLoop() {
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
+			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
+			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
+			const size_t ghostsBeforeExpire = watchLedgerExpiry ? g_MovableMan.GetPreviewGhostCount() : 0;
 			PreviewEventLedger::ExpireForTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			if (watchLedgerExpiry && PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() < ghostsBeforeExpire) {
+				s_eventLedgerExpireDroppedGhost = true;
+				s_eventLedgerExpireDetail = "the run's own expiry dropped a ghost at committed tick " + std::to_string(g_TimerMan.GetSimUpdateCount());
+			}
+			if (Activity* activity = g_ActivityMan.GetActivity()) {
+				activity->ExpirePresentationViews(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			}
 
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 

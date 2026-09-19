@@ -337,6 +337,18 @@ namespace RTE {
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
 
+		/// A queued buy order this peer has issued but the wire has not applied yet.
+		struct PendingQueuedPurchase {
+			int player = -1;
+			int team = 0;
+			float cost = 0;
+			uint64_t targetFrame = 0;
+			uint64_t sequence = 0;
+		};
+		/// Presentation peek of in-flight local buy orders: pending, outbox, and recovered commands. The caller
+		/// passes the canonical committed tick; a preview's advanced clock would hide every order inside its horizon.
+		static void PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick);
+
 		/// Enqueue an owner-issued game command to ride the next local lockstep frame; the coordinator stamps
 		/// the sender and both peers apply it at the synced frame.
 		static void EnqueueLocalGameCommand(const NetGameCommand& command);

@@ -1421,6 +1421,10 @@ bool ActivityMan::RestartActivityCandidate() {
 		}
 	}
 	g_MovableMan.SetRestoringSnapshot(false);
+	if (restoresSnapshot && activityStarted >= 0 && m_Activity) {
+		m_Activity->ClearAllPresentationViews();
+		m_Activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
 	if (restoresSnapshot) {
 		g_SceneMan.SetSceneToLoad(m_PendingCheckpoint.restartPreset, m_PendingCheckpoint.restartObjects, m_PendingCheckpoint.restartUnits);
 
