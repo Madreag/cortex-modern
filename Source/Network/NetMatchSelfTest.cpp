@@ -1245,10 +1245,11 @@ namespace RTE {
 				*error = "a reserved word of 0 did not decode to dedicated=false";
 				return false;
 			}
-			bytes[reservedOffset] = 4;
+			// The first bit no version knows: 1 is dedicated, 2 the path horizon, 4 the persistent world.
+			bytes[reservedOffset] = static_cast<uint8_t>(NetMatchConfigUtil::c_ReservedPersistentWorldBit << 1);
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 4 was not refused";
+				*error = "a reserved word of 8 was not refused";
 				return false;
 			}
 			return true;
