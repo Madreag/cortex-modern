@@ -10,6 +10,43 @@ import re
 
 TICKS = 1200
 SIM_MS = 1000 / 60
+KILLALL = re.compile(r'killall sparing team \d+ at tick (\d+)')
+SCENARIO_EARLY = re.compile(r'\[scenario\] \S+ passed=no ticks=(\d+)')
+
+
+class EarlyDecision(ValueError):
+    def __init__(self, tick, path=None):
+        self.tick = tick
+        self.path = path
+        self.fail_line = f'FAIL: decided at tick {tick}; measurement window is {TICKS} ticks'
+        super().__init__(self.fail_line)
+
+
+def dump_ticks(path):
+    ticks = set()
+    with Path(path).open(encoding='utf-8-sig') as stream:
+        for line in stream:
+            if re.match(r'^\d+ activity ', line):
+                ticks.add(int(line.split(' ', 1)[0]))
+    return ticks
+
+
+def early_decision_tick(run, peer):
+    run = Path(run)
+    log = run / peer / 'stdout.log'
+    if log.is_file():
+        text = log.read_text(encoding='utf-8-sig', errors='replace')
+        match = KILLALL.search(text) or SCENARIO_EARLY.search(text)
+        if match:
+            tick = int(match[1])
+            if 0 < tick < TICKS:
+                return tick
+    dump = run / f'{peer}_trace.json.simdump.txt'
+    if dump.is_file():
+        ticks = dump_ticks(dump)
+        if ticks and ticks != set(range(1, TICKS + 1)):
+            return max(ticks)
+    return None
 
 
 def write_json(path, value):
@@ -176,7 +213,7 @@ def canonical_positions(path, wanted):
                         raise ValueError(f'{path}:{number}: duplicate committed actor')
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
     if ticks != set(range(1, TICKS + 1)):
-        raise ValueError(f'{path}: canonical dump does not cover ticks 1 through {TICKS}')
+        raise EarlyDecision(max(ticks) if ticks else 0, path)
     return actors
 
 
@@ -264,6 +301,9 @@ def firing_records(inputs, previews, frames, stdout_path):
 
 def reduce_peer(run, peer, baseline=None):
     run = Path(run)
+    decided = early_decision_tick(run, peer)
+    if decided is not None:
+        raise EarlyDecision(decided, run / f'{peer}_trace.json.simdump.txt')
     raw = run / peer / 'feel/raw.jsonl'
     rows = list(read_jsonl(raw))
     if len([row for row in rows if row['type'] == 'schema' and row['version'] == 1]) != 1:
