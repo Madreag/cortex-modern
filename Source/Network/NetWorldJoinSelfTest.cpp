@@ -1150,7 +1150,7 @@ namespace RTE {
 				            "\") instead of handing the update back");
 			}
 			int updates = 1;
-			for (; updates < 10; ++updates) {
+			for (; updates < static_cast<int>(config.worldJoinStartWaitTicks); ++updates) {
 				if (runner.PumpWorldJoinLockstepStart(joinRound, &error)) {
 					return Fail("world-join-lockstep-held-the-sim-update: the silent remote produced a running lockstep after " +
 					            std::to_string(updates) + " updates");
@@ -1413,6 +1413,8 @@ namespace RTE {
 			if (!ScenarioRunner::AcceptWorldTransition(*hostApplied, &error) ||
 			    !ScenarioRunner::AcceptWorldTransition(*joinerApplied, &error)) {
 				return Fail("activate-binding-missing: " + error);
+			// The deadline is the joiner's own updates, so ANY start that blocks overruns it at once.
+			config.worldJoinStartWaitTicks = 4;
 			}
 
 			LoopbackTransport hostTransport;
