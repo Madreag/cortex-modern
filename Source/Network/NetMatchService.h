@@ -607,6 +607,8 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
+		/// Host: watches each seated member's brain and authors one respawn per death.
+		void DriveWorldSeatRespawns(uint64_t nowFrame);
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
 		/// image a bootstrap is already being served. Nothing here reads a file.
 		void PublishFinishedWorldJoinImage();

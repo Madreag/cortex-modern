@@ -3194,6 +3194,154 @@ namespace RTE {
 		return 0;
 	}
 
+	// A seat whose brain dies keeps its seat, watches, and gets one host-authored respawn.
+	int TestSeatRespawnKeepsTheWorldRunning() {
+		NetMatchConfig config = MakeTwoSeatWorld();
+		config.worldRespawnDelaySeconds = 10;
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(config, MakeIdentity(), &error)) {
+			return Fail("seat-respawn-never-scheduled: the world plane refused its own config (" + error + ")");
+		}
+		if (!host.BeginJoin(71, 71, "alive", 1000, &error) || !host.BeginJoin(72, 72, "dying", 1000, &error)) {
+			return Fail("seat-respawn-never-scheduled: the fixture could not seat the world (" + error + ")");
+		}
+		const uint64_t delay = WorldRespawnDelayFrames(config);
+		if (delay != 600) {
+			return Fail("seat-respawn-delay-is-wrong: ten seconds reads " + std::to_string(delay) + " frames, not 600");
+		}
+		NetMatchConfig defaulted = config;
+		defaulted.worldRespawnDelaySeconds = 0;
+		if (WorldRespawnDelayFrames(defaulted) != static_cast<uint64_t>(NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds) * 60) {
+			return Fail("seat-respawn-delay-is-wrong: a world that names no delay reads " +
+			            std::to_string(WorldRespawnDelayFrames(defaulted)) + " frames");
+		}
+		NetWorldMembership& membership = host.Membership();
+		// Both brains alive: nothing is due, whatever the frame.
+		if (!membership.NoteSeatBrain(2, true, 1000) || !membership.NoteSeatBrain(3, true, 1000)) {
+			return Fail("seat-respawn-never-scheduled: a living seat's brain was not recorded");
+		}
+		if (membership.DueSeatRespawn(1000 + delay * 4, delay) != nullptr) {
+			return Fail("seat-respawn-took-a-living-brain: a respawn came due with both brains alive");
+		}
+		// One brain dies at F. The seat stays held and stays its holder's.
+		const uint64_t death = 1200;
+		if (!membership.NoteSeatBrain(3, false, death)) {
+			return Fail("seat-respawn-never-scheduled: a dead seat's brain was not recorded");
+		}
+		const NetWorldSlot* seat = nullptr;
+		for (const NetWorldSlot& slot: membership.Slots()) {
+			if (slot.peerId == 3) {
+				seat = &slot;
+			}
+		}
+		if (seat == nullptr || !seat->held || seat->brainMissingSince != death) {
+			return Fail("seat-respawn-freed-the-seat: the dead seat is held " +
+			            std::to_string(seat != nullptr && seat->held) + " missing since " +
+			            std::to_string(seat == nullptr ? 0 : seat->brainMissingSince));
+		}
+		if (host.FindSession(72) == nullptr || host.Membership().FreeSlots() != 0) {
+			return Fail("seat-respawn-freed-the-seat: the world freed a slot when a brain died");
+		}
+		// Nothing is due before the delay is up, and the seat is a watching seat in between.
+		if (membership.DueSeatRespawn(death + delay - 1, delay) != nullptr) {
+			return Fail("seat-respawn-came-early: a respawn came due " + std::to_string(delay - 1) +
+			            " frames after the death, before the " + std::to_string(delay) + " frame delay");
+		}
+		const NetWorldSlot* due = membership.DueSeatRespawn(death + delay, delay);
+		if (due == nullptr || due->peerId != 3) {
+			return Fail("seat-respawn-never-scheduled: no respawn came due at " + std::to_string(death + delay));
+		}
+		// One death authors one respawn: after it is recorded nothing else comes due for that seat.
+		if (!membership.NoteSeatRespawn(3, death + delay)) {
+			return Fail("seat-respawn-never-scheduled: the authored respawn was not recorded");
+		}
+		if (membership.DueSeatRespawn(death + delay * 3, delay) != nullptr) {
+			return Fail("seat-respawn-fired-twice: a second respawn came due for the same death");
+		}
+		// The transition is the host's, committed at one frame, binding that seat's own player.
+		const NetGameWorldTransition respawn = BuildWorldSeatRespawnTransition(*due, config, membership.Revision(), death + delay);
+		if (respawn.kind != NetGameWorldTransition::SeatRespawn || respawn.peerId != 3 || respawn.team != 1 ||
+		    respawn.player != 1 || respawn.activationFrame != death + delay || !respawn.bindBrain ||
+		    respawn.preset != "Brain Robot" || respawn.className != "AHuman") {
+			return Fail("seat-respawn-transition-is-wrong: kind " + std::to_string(static_cast<int>(respawn.kind)) +
+			            " peer " + std::to_string(static_cast<int>(respawn.peerId)) + " team " + std::to_string(respawn.team) +
+			            " player " + std::to_string(respawn.player) + " at " + std::to_string(respawn.activationFrame));
+		}
+		if (respawn.holderGeneration != due->generation) {
+			return Fail("seat-respawn-moved-the-generation: the respawn names generation " +
+			            std::to_string(respawn.holderGeneration) + ", not " + std::to_string(due->generation));
+		}
+		if (!WorldTransitionSeatsMember(respawn) || !WorldTransitionBindsBrain(respawn, true)) {
+			return Fail("seat-respawn-binds-no-brain: the respawn does not seat its member's brain");
+		}
+		// It spawns at the same place an Activate of that seat does, so both peers put it in one spot.
+		NetWorldJoinSession seatedSession;
+		seatedSession.assignedPeerId = 3;
+		seatedSession.team = 1;
+		seatedSession.holderGeneration = due->generation;
+		const NetGameWorldTransition activate = BuildWorldActivateTransition(seatedSession, config, membership.Revision());
+		if (respawn.posX != activate.posX || respawn.posY != activate.posY || respawn.player != activate.player) {
+			return Fail("seat-respawn-transition-is-wrong: the respawn spawns at " + std::to_string(respawn.posX) +
+			            " where the Activate spawns at " + std::to_string(activate.posX));
+		}
+		// The new kind rides the existing bytes: the codec carries it and refuses the one past it.
+		NetGameCommand command;
+		command.senderPeerId = 1;
+		command.payload = respawn;
+		NetLockstepFrame frame;
+		frame.senderPeerId = 1;
+		frame.targetFrame = death + delay;
+		frame.roundId = 1;
+		frame.commands.push_back(command);
+		std::vector<uint8_t> wire;
+		NetLockstepError codecError;
+		if (!NetLockstepCodec::EncodeRecoveryInput(frame, wire, &codecError)) {
+			return Fail("seat-respawn-left-the-wire: the respawn did not encode (" + codecError.message + ")");
+		}
+		NetLockstepFrame back;
+		if (!NetLockstepCodec::DecodeRecoveryInput(wire, back, &codecError) || back.commands.size() != 1) {
+			return Fail("seat-respawn-left-the-wire: the respawn did not decode (" + codecError.message + ")");
+		}
+		const NetGameWorldTransition* decoded = std::get_if<NetGameWorldTransition>(&back.commands.front().payload);
+		if (decoded == nullptr || *decoded != respawn) {
+			return Fail("seat-respawn-left-the-wire: the decoded respawn differs from the one sent");
+		}
+		NetGameWorldTransition unknown = respawn;
+		unknown.kind = NetGameWorldTransition::SeatRespawn + 1;
+		NetGameCommand unknownCommand;
+		unknownCommand.senderPeerId = 1;
+		unknownCommand.payload = unknown;
+		NetLockstepFrame unknownFrame = frame;
+		unknownFrame.commands = {unknownCommand};
+		std::vector<uint8_t> unknownWire;
+		if (!NetLockstepCodec::EncodeRecoveryInput(unknownFrame, unknownWire, &codecError)) {
+			return Fail("seat-respawn-left-the-wire: an unknown kind did not encode for the refusal arm");
+		}
+		NetLockstepFrame refused;
+		if (NetLockstepCodec::DecodeRecoveryInput(unknownWire, refused, &codecError)) {
+			return Fail("seat-respawn-accepted-an-unknown-kind: the codec accepted kind " +
+			            std::to_string(NetGameWorldTransition::SeatRespawn + 1));
+		}
+		// A living brain closes the seat out, so the next death starts a new clock.
+		if (!membership.NoteSeatBrain(3, true, death + delay + 1)) {
+			return Fail("seat-respawn-never-scheduled: the respawned brain was not recorded");
+		}
+		if (membership.DueSeatRespawn(death + delay * 10, delay) != nullptr) {
+			return Fail("seat-respawn-fired-twice: a seat with a living brain still had a respawn due");
+		}
+		if (!membership.NoteSeatBrain(3, false, death + delay * 2) ||
+		    membership.DueSeatRespawn(death + delay * 3, delay) == nullptr) {
+			return Fail("seat-respawn-never-scheduled: a second death started no new clock");
+		}
+		// The world never ends on a dead brain: nothing here frees a seat or closes the world.
+		if (host.Membership().HeldSlots() != 2 || host.Sessions().size() != 2) {
+			return Fail("seat-respawn-freed-the-seat: the world holds " + std::to_string(host.Membership().HeldSlots()) +
+			            " seats and " + std::to_string(host.Sessions().size()) + " bootstraps after two deaths");
+		}
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -3327,6 +3475,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "respawn") == 0 || std::strcmp(name, "-net-world-respawn-selftest") == 0) {
+			s_FailTag = "net-world-respawn-selftest";
+			return TestSeatRespawnKeepsTheWorldRunning();
+		}
 		if (std::strcmp(name, "promotion") == 0 || std::strcmp(name, "-net-world-promotion-selftest") == 0) {
 			s_FailTag = "net-world-promotion-selftest";
 			return TestFreedSlotPromotesTheOldestSpectator();
@@ -3459,6 +3611,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSeatRespawnKeepsTheWorldRunning(); result != 0) {
 			return result;
 		}
 		if (const int result = TestFreedSlotPromotesTheOldestSpectator(); result != 0) {

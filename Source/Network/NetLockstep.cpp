@@ -1989,7 +1989,7 @@ namespace RTE {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
 							return false;
 						}
-						if (transition.kind > NetGameWorldTransition::Release) {
+						if (transition.kind > NetGameWorldTransition::SeatRespawn) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_kind is not a known transition");
 							return false;
 						}

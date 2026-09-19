@@ -70,6 +70,17 @@ RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
 RED_OVERFLOW_REFUSAL = "world-full-refusal-missing"
 RED_CONCURRENT_ACTIVATION = "concurrent-joins-shared-an-activation"
 RED_PROMOTION_MISSING = "promotion-never-happened"
+RED_RESPAWN_MISSING = "seat-respawn-never-scheduled"
+RED_RESPAWN_EARLY = "seat-respawn-came-early"
+RED_RESPAWN_TWICE = "seat-respawn-fired-twice"
+RED_RESPAWN_FREED_SEAT = "seat-respawn-freed-the-seat"
+RED_RESPAWN_TRANSITION = "seat-respawn-transition-is-wrong"
+RED_RESPAWN_GENERATION = "seat-respawn-moved-the-generation"
+RED_RESPAWN_NO_BRAIN = "seat-respawn-binds-no-brain"
+RED_RESPAWN_WIRE = "seat-respawn-left-the-wire"
+RED_RESPAWN_UNKNOWN_KIND = "seat-respawn-accepted-an-unknown-kind"
+RED_RESPAWN_DELAY = "seat-respawn-delay-is-wrong"
+RED_RESPAWN_LIVING_BRAIN = "seat-respawn-took-a-living-brain"
 RED_PROMOTION_WRONG_WATCHER = "promotion-took-the-wrong-watcher"
 RED_PROMOTION_HELD_SLOT = "promotion-took-a-held-slot"
 RED_PROMOTION_GENERATION = "promotion-kept-the-old-generation"
@@ -320,6 +331,24 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "seat-respawn-keeps-the-world-running",
+        "argv": ["-net-world-respawn-selftest"],
+        "red": RED_RESPAWN_MISSING,
+        "also_red": (
+            RED_RESPAWN_EARLY,
+            RED_RESPAWN_TWICE,
+            RED_RESPAWN_FREED_SEAT,
+            RED_RESPAWN_TRANSITION,
+            RED_RESPAWN_GENERATION,
+            RED_RESPAWN_NO_BRAIN,
+            RED_RESPAWN_WIRE,
+            RED_RESPAWN_UNKNOWN_KIND,
+            RED_RESPAWN_DELAY,
+            RED_RESPAWN_LIVING_BRAIN,
+        ),
+        "pass_token": "[net-world-respawn-selftest] PASS",
     },
     {
         "name": "freed-slot-promotes-the-oldest-spectator",

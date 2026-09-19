@@ -321,6 +321,7 @@ namespace RTE {
 			Respawn = 0,  //!< Replace a team's lost resident; seats nobody.
 			Activate = 1, //!< Seat a caught-up member at its announced tick.
 			Release = 2,  //!< Free a cleanly left member's slot under its next generation.
+			SeatRespawn = 3, //!< Give a seated member a new brain; the seat and its generation stay.
 		};
 
 		uint16_t schema = 1;           //!< World-plane schema; ordinary lockstep never carries this command.
