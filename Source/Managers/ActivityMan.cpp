@@ -579,6 +579,7 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		manifest.activityPreset = descriptor.activityPreset;
 		manifest.scenePreset = descriptor.scenePreset;
 		manifest.peerNames = identity->peerNames;
+		manifest.sideState = identity->sideState;
 	}
 	// The world text is hashed on the archive thread, so the capture never pays for the digest.
 	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? worldStructure : std::string());

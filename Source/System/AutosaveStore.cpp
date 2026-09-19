@@ -224,6 +224,32 @@ namespace RTE {
 		return directory / (matchId + c_AdmissionExtension);
 	}
 
+	std::string AutosaveStore::RenderSideState(const AutosaveSideState& state) {
+		std::ostringstream out;
+		// Ordered containers, one line per entry: the same tick renders the same bytes on every peer.
+		for (const auto& [uid, peer]: state.controlOwners) Line(out, "ControlOwner", std::to_string(uid) + "," + std::to_string(static_cast<unsigned>(peer)));
+		for (const auto& [uid, peer]: state.droppedControlOwners) Line(out, "DroppedControlOwner", std::to_string(uid) + "," + std::to_string(static_cast<unsigned>(peer)));
+		for (const auto& [peer, sequence]: state.appliedCommands) Line(out, "Applied", std::to_string(static_cast<unsigned>(peer)) + "," + std::to_string(sequence));
+		Line(out, "TransferUid", std::to_string(state.firstTransferUid));
+		return out.str();
+	}
+
+	namespace {
+		/// "<number>,<number>" as the side state writes every pair.
+		bool ParsePair(const std::string& text, int64_t& first, uint64_t& second) {
+			const size_t comma = text.find(',');
+			if (comma == std::string::npos) return false;
+			const std::string left = Trim(std::string_view(text).substr(0, comma));
+			const std::string right = Trim(std::string_view(text).substr(comma + 1));
+			if (left.empty() || right.empty()) return false;
+			const bool negative = left.front() == '-';
+			uint64_t magnitude = 0;
+			if (!ParseNumber(negative ? left.substr(1) : left, magnitude) || !ParseNumber(right, second)) return false;
+			first = negative ? -static_cast<int64_t>(magnitude) : static_cast<int64_t>(magnitude);
+			return true;
+		}
+	}
+
 	std::string AutosaveStore::WriteManifest(const AutosaveManifest& manifest) {
 		std::ostringstream out;
 		Line(out, "ManifestSchema", std::to_string(c_ManifestSchema));
@@ -238,6 +264,7 @@ namespace RTE {
 		Line(out, "ActivityPreset", manifest.activityPreset);
 		Line(out, "ScenePreset", manifest.scenePreset);
 		for (const std::string& name: manifest.peerNames) Line(out, "Peer", name);
+		out << RenderSideState(manifest.sideState);
 		return out.str();
 	}
 
@@ -283,6 +310,21 @@ namespace RTE {
 				parsed.scenePreset = value;
 			} else if (key == "Peer") {
 				parsed.peerNames.push_back(value);
+			} else if (key == "ControlOwner" || key == "DroppedControlOwner" || key == "Applied") {
+				int64_t left = 0;
+				uint64_t right = 0;
+				if (!ParsePair(value, left, right)) { if (error) *error = "unreadable " + key; return false; }
+				if (key == "Applied") {
+					if (left < 0 || left > 255) { if (error) *error = "Applied names no peer"; return false; }
+					parsed.sideState.appliedCommands[static_cast<uint8_t>(left)] = right;
+				} else {
+					if (right > 255) { if (error) *error = key + " names no peer"; return false; }
+					auto& owners = key == "ControlOwner" ? parsed.sideState.controlOwners : parsed.sideState.droppedControlOwners;
+					owners[left] = static_cast<uint8_t>(right);
+				}
+			} else if (key == "TransferUid") {
+				if (!ParseNumber(value, number)) { if (error) *error = "unreadable TransferUid"; return false; }
+				parsed.sideState.firstTransferUid = static_cast<int64_t>(number);
 			}
 		}
 		if (!hasSchema || parsed.schema != c_ManifestSchema) {

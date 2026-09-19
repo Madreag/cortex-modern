@@ -624,7 +624,8 @@ namespace RTE {
 			AppendU8(out, payload.held ? 1 : 0);
 			AppendU64LE(out, payload.savedTick);
 			return AppendString(out, payload.matchId, NetLobbyProtocol::c_MaxResumeMatchIdBytes, "resume match id", error) &&
-			       AppendString(out, payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error);
+			       AppendString(out, payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error) &&
+			       AppendString(out, payload.sideStateHash, NetLobbyProtocol::c_MaxShortTextBytes, "resume side state hash", error);
 		}
 
 		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
@@ -672,7 +673,8 @@ namespace RTE {
 						return false;
 					}
 					if (!reader.ReadString(payload.matchId, NetLobbyProtocol::c_MaxResumeMatchIdBytes, "resume match id", error) ||
-					    !reader.ReadString(payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error))
+					    !reader.ReadString(payload.digest, NetLobbyProtocol::c_MaxShortTextBytes, "resume digest", error) ||
+					    !reader.ReadString(payload.sideStateHash, NetLobbyProtocol::c_MaxShortTextBytes, "resume side state hash", error))
 						return false;
 					if (payload.matchId.empty()) {
 						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset(), "resume names no match");

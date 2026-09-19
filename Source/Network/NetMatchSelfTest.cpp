@@ -1889,6 +1889,17 @@ namespace RTE {
 			}
 		};
 
+		/// The agreed side state a row stands on: the same values NetResyncSelfTest.cpp:365-368 uses for
+		/// a resync snapshot, because a checkpoint records exactly what a heal's snapshot would.
+		AutosaveSideState ResumeSideStateFixture() {
+			AutosaveSideState state;
+			state.controlOwners = {{101, 2}, {std::numeric_limits<int32_t>::max(), 16}};
+			state.droppedControlOwners = {{301, 3}};
+			state.appliedCommands = {{2, 10}, {16, std::numeric_limits<uint64_t>::max() - 1}};
+			state.firstTransferUid = 101;
+			return state;
+		}
+
 		std::string ResumePayloadHex(const NetMatchConfig& config) {
 			std::vector<uint8_t> bytes;
 			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return {};
@@ -1923,6 +1934,7 @@ namespace RTE {
 			manifest.activityPreset = config.activityPreset;
 			manifest.scenePreset = config.sceneName;
 			manifest.peerNames = {"Host", "Scout"};
+			manifest.sideState = ResumeSideStateFixture();
 			if (manifest.configPayload.empty() || !AutosaveStore::PublishManifest(scratch.path, manifest, error)) {
 				if (error && error->empty()) *error = "the restart manifest was not published";
 				return false;
@@ -1933,6 +1945,45 @@ namespace RTE {
 			    read.savedTick != 480 || read.intervalSeconds != 30 || read.peerNames != manifest.peerNames ||
 			    read.activityPreset != manifest.activityPreset || read.scenePreset != manifest.scenePreset) {
 				*error = "the restart manifest read back different fields than it was written with";
+				return false;
+			}
+			// The agreed lockstep state of that tick is what a resumed round is played on, so every one
+			// of its four fields has to survive the file unchanged.
+			if (read.sideState != manifest.sideState) {
+				*error = "the restart manifest lost the tick's agreed state: owners " + std::to_string(read.sideState.controlOwners.size()) +
+				         "/" + std::to_string(manifest.sideState.controlOwners.size()) + ", dropped " + std::to_string(read.sideState.droppedControlOwners.size()) +
+				         "/" + std::to_string(manifest.sideState.droppedControlOwners.size()) + ", applied " + std::to_string(read.sideState.appliedCommands.size()) +
+				         "/" + std::to_string(manifest.sideState.appliedCommands.size()) + ", transfer " + std::to_string(read.sideState.firstTransferUid) +
+				         "/" + std::to_string(manifest.sideState.firstTransferUid);
+				return false;
+			}
+			// The hash both sides of a resume compare is taken over that one rendering, so a changed
+			// field must change it and a re-read of the same file must not.
+			if (NetMatchService::HashSideState(read.sideState) != NetMatchService::HashSideState(manifest.sideState)) {
+				*error = "the same agreed state hashed differently after a round trip";
+				return false;
+			}
+			AutosaveSideState moved = manifest.sideState;
+			moved.appliedCommands[2] += 1;
+			if (NetMatchService::HashSideState(moved) == NetMatchService::HashSideState(manifest.sideState)) {
+				*error = "a moved applied-command sequence did not change the agreed state's hash";
+				return false;
+			}
+			NetLobbyResume offer;
+			offer.digest = "worlddigest";
+			offer.sideStateHash = NetMatchService::HashSideState(manifest.sideState);
+			if (!NetMatchService::ResumeOfferMatches(offer, "worlddigest", offer.sideStateHash)) {
+				*error = "a peer holding the offered world and state was not allowed to answer held";
+				return false;
+			}
+			if (NetMatchService::ResumeOfferMatches(offer, "worlddigest", NetMatchService::HashSideState(moved)) ||
+			    NetMatchService::ResumeOfferMatches(offer, "otherworld", offer.sideStateHash)) {
+				*error = "a peer whose state or world differs from the offer was allowed to answer held";
+				return false;
+			}
+			offer.sideStateHash.clear();
+			if (NetMatchService::ResumeOfferMatches(offer, "worlddigest", NetMatchService::HashSideState(manifest.sideState))) {
+				*error = "an offer that names no agreed state was answered held";
 				return false;
 			}
 			NetMatchConfig decoded;
@@ -2634,10 +2685,13 @@ namespace RTE {
 		bool TestResumeHeldPeerSkipsTheTransfer(std::string* error) {
 			const std::string matchId = "00000000deadbeef-00000000000000bb";
 			constexpr uint64_t savedTick = 600;
-			for (bool held: {true, false}) {
+			// held, not held, and holding the same tick on a DIFFERENT agreed state.
+			for (int arm = 0; arm < 3; ++arm) {
+				const bool held = arm == 0;
+				const bool otherState = arm == 2;
 				LoopbackTransport hostTransport, clientTransport;
 				NetPeerId hostPeer = 0, clientPeer = 0;
-				if (!StartLoopbackTransports(static_cast<uint16_t>(held ? 43196 : 43198), hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
+				if (!StartLoopbackTransports(static_cast<uint16_t>(43196 + arm * 2), hostTransport, clientTransport, hostPeer, clientPeer, error)) return false;
 				StateTransferTap tap(hostTransport);
 				NetLobbySession host, client;
 				NetLobbySessionConfig config;
@@ -2651,6 +2705,7 @@ namespace RTE {
 				config.resumeMatchId = matchId;
 				config.resumeTick = savedTick;
 				config.resumeDigest = "worlddigest";
+				config.resumeSideStateHash = NetMatchService::HashSideState(ResumeSideStateFixture());
 				if (!host.Start(tap, config, error)) return false;
 				config.host = false;
 				config.localPeerId = 2;
@@ -2659,7 +2714,17 @@ namespace RTE {
 				config.resumeMatchId.clear();
 				config.resumeTick = 0;
 				config.resumeDigest.clear();
-				config.resumeHeld = [held, &matchId](const NetLobbyResume& offer) { return held && offer.matchId == matchId && offer.savedTick == savedTick; };
+				config.resumeSideStateHash.clear();
+				// What this peer would hold: the third arm holds that tick on a state one applied
+				// command ahead, which is not the state the host is resuming on.
+				AutosaveSideState mine = ResumeSideStateFixture();
+				if (otherState) mine.appliedCommands[2] += 1;
+				const std::string worldDigest = held || otherState ? "worlddigest" : "otherworld";
+				const std::string stateHash = NetMatchService::HashSideState(mine);
+				config.resumeHeld = [&matchId, worldDigest, stateHash](const NetLobbyResume& offer) {
+					return offer.matchId == matchId && offer.savedTick == savedTick &&
+					       NetMatchService::ResumeOfferMatches(offer, worldDigest, stateHash);
+				};
 				if (!client.Start(clientTransport, config, error)) return false;
 				const std::vector<uint8_t> state(2 * NetLobbyProtocol::c_MaxStateChunkBytes + 9, 0x5B);
 				host.BeginStateTransfer(state);
@@ -2669,13 +2734,14 @@ namespace RTE {
 					client.Tick(now++);
 					if (!host.HasPendingStateChunks()) host.RequestStart();
 				}
+				const std::string armName = held ? "held" : (otherState ? "other-state" : "unheld");
 				if (host.IsFailed() || client.IsFailed() || !host.IsStarted() || !client.IsStarted()) {
-					*error = std::string(held ? "held" : "unheld") + " resume arm did not start: host " + NetLobbySession::StateName(host.GetState()) +
+					*error = armName + " resume arm did not start: host " + NetLobbySession::StateName(host.GetState()) +
 					         " client " + NetLobbySession::StateName(client.GetState()) + " " + host.GetFailureReason() + client.GetFailureReason();
 					return false;
 				}
 				if (client.GetStartFrame() != savedTick + 1) {
-					*error = std::string(held ? "held" : "unheld") + " resume arm started at frame " + std::to_string(client.GetStartFrame());
+					*error = armName + " resume arm started at frame " + std::to_string(client.GetStartFrame());
 					return false;
 				}
 				if (held) {
@@ -2689,11 +2755,11 @@ namespace RTE {
 					}
 				} else {
 					if (host.IsResumeHeldBy(2) || client.AnsweredResumeHeld()) {
-						*error = "a peer without the checkpoint answered that it holds it";
+						*error = armName + " peer answered that it holds the offered checkpoint";
 						return false;
 					}
 					if (tap.chunks.size() != 3 || !client.HasCompleteStateTransfer() || client.TakeReceivedState() != state) {
-						*error = "a peer without the checkpoint did not receive the whole state: " + std::to_string(tap.chunks.size()) + " chunk(s)";
+						*error = armName + " peer did not receive the whole state: " + std::to_string(tap.chunks.size()) + " chunk(s)";
 						return false;
 					}
 				}

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AutosaveStore.h"
+
 #include "ControllerFrame.h"
 #include "NetLockstep.h"
 #include "NetResyncState.h"
@@ -131,6 +133,9 @@ namespace RTE {
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
 		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr);
+		/// The lockstep state every peer agrees on at the tick just completed. One reader for two
+		/// callers: the heal's snapshot capture and every checkpoint take these four fields from here.
+		static AutosaveSideState CaptureAgreedSideState();
 		static bool RestoreNetResyncState(const NetResyncState& state, std::string* error = nullptr);
 		/// The in-progress sim tick is the drop frame; the resumed round starts there.
 		static uint64_t ResyncResumeStartFrame(uint64_t dropFrame);

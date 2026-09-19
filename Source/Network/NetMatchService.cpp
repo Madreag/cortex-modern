@@ -1037,14 +1037,31 @@ static std::string ResyncSaveName() {
 		return !m_PendingResyncLoad.empty() || m_PendingAutosaveLoad.has_value();
 	}
 
+	std::string NetMatchService::HashSideState(const AutosaveSideState& sideState) {
+		return NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-sidestate", {{"state", AutosaveStore::RenderSideState(sideState)}}));
+	}
+
+	bool NetMatchService::ResumeOfferMatches(const NetLobbyResume& offer, const std::string& worldDigest, const std::string& sideStateHash) {
+		// Both halves must be the host's: the same world at that tick, and the same agreed lockstep
+		// state to resume it on. An offer missing either names a checkpoint nobody can prove they hold.
+		return !offer.digest.empty() && !offer.sideStateHash.empty() &&
+		       offer.digest == worldDigest && offer.sideStateHash == sideStateHash;
+	}
+
 	bool NetMatchService::AnswerResumeOffer(const NetLobbyResume& offer) {
 		if (offer.matchId.empty() || offer.savedTick == 0) return false;
 		std::string reason;
 		const auto held = AutosaveStore::Find(offer.matchId, offer.savedTick, &reason);
-		// The archive must be the very one the host named, not merely a checkpoint of the same tick.
-		const bool same = held.has_value() && (offer.digest.empty() || held->worldStructureHash == offer.digest);
+		AutosaveManifest manifest;
+		std::string manifestReason;
+		const bool hasManifest = held.has_value() &&
+		                         AutosaveStore::ReadManifest(held->path.parent_path(), offer.matchId, offer.savedTick, manifest, &manifestReason);
+		// The archive must be the very one the host named, and this peer's record of that tick's agreed
+		// lockstep state must be the host's, or the two would resume on different state.
+		const bool same = hasManifest && ResumeOfferMatches(offer, held->worldStructureHash, HashSideState(manifest.sideState));
+		const std::string why = !held ? reason : (!hasManifest ? manifestReason : "the checkpoint's world or agreed state differs");
 		std::cout << "[autosave] resume offer match=" << offer.matchId << " tick=" << offer.savedTick
-		          << (same ? " held locally" : " not held: " + (held ? "digest differs" : reason)) << std::endl;
+		          << (same ? " held locally" : " not held: " + why) << std::endl;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_ResumeHeldMatchId.clear();
 		m_ResumeHeldTick = 0;
@@ -1053,6 +1070,7 @@ static std::string ResyncSaveName() {
 		m_ResumeHeldMatchId = held->matchId;
 		m_ResumeHeldTick = held->savedTick;
 		m_ResumeHeldRound = held->roundId;
+		m_ResumeHeldSideState = manifest.sideState;
 		// The resumed match keeps the checkpoint chain it is resuming, on every peer.
 		m_AutosaveMatchId = held->matchId;
 		m_AutosaveIdentity.sessionId = held->sessionId;
@@ -2150,6 +2168,9 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (now < m_NextAutosaveSimTime) return;
 		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
+		// is read once, here, through the same reader the heal's snapshot capture uses.
+		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
 		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity)) {
 			return;
 		}
@@ -2869,15 +2890,21 @@ static std::string ResyncSaveName() {
 		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
 	}
 
-	NetResyncState NetMatchService::BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId) {
+	NetResyncState NetMatchService::BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId, const AutosaveSideState& sideState) {
 		NetResyncState state;
 		state.sessionId = config.sessionId;
 		state.sourceRound = sourceRound;
 		state.savedTick = savedTick;
-		// A match that restarts has nothing in flight: no pending input, no unacknowledged command and
-		// no control override outliving the process. Every peer derives this same state from the agreed
-		// configuration, so a peer that loads its own copy of the checkpoint and one that is streamed the
+		// The control handoffs, their dropped half, how far each sender's commands were applied and the
+		// round's first owner transfer are carried from the checkpoint's own manifest: every peer wrote
+		// the same values at that tick, so a peer that loads its own copy and one that is streamed the
 		// host's copy start the round on identical lockstep state.
+		state.controlOwners = sideState.controlOwners;
+		state.droppedControlOwners = sideState.droppedControlOwners;
+		state.appliedCommands = sideState.appliedCommands;
+		state.e2eFirstTransferUid = sideState.firstTransferUid;
+		// Nothing is in flight across a restart: a command sent but not yet applied when the host died
+		// is lost, and no input, command or binding is pending at the tick the world stands on.
 		for (const NetMatchPlayerSlot& slot: config.players) {
 			if (slot.cpu || slot.peerId == 0) continue;
 			NetResyncPlayerBindings binding;
@@ -4760,10 +4787,11 @@ static std::string ResyncSaveName() {
 				error = "the stored admission state does not fit this match";
 			} else {
 				m_ReconnectHost.SetLiveMatch(false);
-				resumeState = BuildResumeState(runnerConfig.matchConfig, request.resumeTick, m_ResumeRoundId, m_ResumeMatchId);
+				resumeState = BuildResumeState(runnerConfig.matchConfig, request.resumeTick, m_ResumeRoundId, m_ResumeMatchId, m_ResumeSideState);
 				runnerConfig.resumeMatchId = m_ResumeMatchId;
 				runnerConfig.resumeTick = m_ResumeTick;
 				runnerConfig.resumeDigest = m_ResumeArchiveDigest;
+				runnerConfig.resumeSideStateHash = HashSideState(m_ResumeSideState);
 			}
 		}
 		if (started && request.resumeConfig && request.resumeTick != 0) {
@@ -4835,7 +4863,7 @@ static std::string ResyncSaveName() {
 			// A client that answered the host's offer with its own copy loads that copy and derives the
 			// same lockstep state the host put in the envelope it was spared.
 			pendingAutosave = PendingAutosaveLoad{m_ResumeHeldMatchId, m_ResumeHeldTick};
-			pendingState = BuildResumeState(runner->GetMatchConfig(), m_ResumeHeldTick, m_ResumeHeldRound, m_ResumeHeldMatchId);
+			pendingState = BuildResumeState(runner->GetMatchConfig(), m_ResumeHeldTick, m_ResumeHeldRound, m_ResumeHeldMatchId, m_ResumeHeldSideState);
 		}
 		if (started && !pendingAutosave) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();

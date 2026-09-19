@@ -65,6 +65,7 @@ namespace RTE {
 		std::string resumeMatchId;
 		uint64_t resumeTick = 0;
 		std::string resumeDigest;
+		std::string resumeSideStateHash; //!< The agreed lockstep state the resumed round starts on.
 		std::function<bool(const NetLobbyResume&)> resumeHeld; //!< Client: whether this peer holds it.
 	};
 

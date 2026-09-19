@@ -108,6 +108,7 @@ namespace RTE {
 		std::string resumeMatchId;
 		uint64_t resumeTick = 0;
 		std::string resumeDigest;
+		std::string resumeSideStateHash;
 		std::function<bool(const NetLobbyResume&)> resumeHeld;
 		/// Host: apply a Starting-state kick on this worker after the session tick, never from the game thread.
 		/// The runner hands back the session it just ticked, which the worker owns for the whole setup.
