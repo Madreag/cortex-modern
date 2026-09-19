@@ -350,8 +350,8 @@ namespace RTE {
 		/// Resets the message timer for one player.
 		/// @param player The player to reset the message timer for.
 		void ResetMessageTimer(int player = 0) {
-			CheckpointChange changed(*this, [this, player] { return CheckpointFields(m_MessageTimer[player]); });
 			if (LocalInputOfPlayer(player) != Players::NoPlayer) {
+				CheckpointChange changed(*this, [this, player] { return CheckpointFields(m_MessageTimer[player]); });
 				m_MessageTimer[player].Reset();
 			}
 		}
