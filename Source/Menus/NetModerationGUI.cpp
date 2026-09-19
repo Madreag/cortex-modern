@@ -410,8 +410,7 @@ void NetModerationGUI::LayoutPanel() {
 	if (screenHeight < c_CompactMaxHeight) {
 		const EditorArea area = FreeArea(g_WindowMan.GetResX());
 		int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
-		// An open chat entry owns the run above the panel: the panel gives up rows to its compact form
-		// before the history gives up its last one, and takes them back when the entry closes.
+		// The panel gives up rows to its compact form before an open entry's history gives up its last one.
 		if (m_ChatEntryOpen && g_SettingsMan.GetNetworkChatVisible()) {
 			const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
 			highestTop = std::max(highestTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
@@ -1002,8 +1001,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		area.occupiers.push_back({panelX, panelTop, panelWidth, panelHeight});
 		lower(panelTop - 4);
 	}
-	// A message band is a ceiling as much as a floor: the band stays under one in the top half and above
-	// one in the bottom half, and shares the rows it does keep with none of them.
+	// A message band is a ceiling as much as a floor: the chat stays under a high one and above a low one.
 	for (const auto& band: area.textBands) {
 		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
 		area.occupiers.push_back(band);
@@ -1012,8 +1010,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 
 	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
 	const int available = std::max(0, bottom - topLimit);
-	// The size is the last thing to give, after the entry's spare pixels and the panel's rows: a run that
-	// still cannot hold the chosen size's row above the entry takes the smaller one for this band alone.
+	// The size is the last thing to give, after the entry's spare pixels and the panel's rows.
 	bool reducedTextSize = false;
 	if (wantsLarge && showHistory && m_ChatEntryOpen && available < ChatEntryMinimum(lineH)) {
 		if (GUIFont* small = g_FrameMan.GetSmallFont(true); small && std::max(12, small->GetFontHeight()) + 4 < lineH) {
