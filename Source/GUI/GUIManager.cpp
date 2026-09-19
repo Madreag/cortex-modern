@@ -474,7 +474,18 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		menu.Destroy();
 		menu.Destroy();
 		menu.Destroy();
-		check("buy_menu_flags_survive_a_destroy_cycle", BuyMenuGUI::GetModuleFlagAllocations() == created);
+		const uint64_t afterMenu = BuyMenuGUI::GetModuleFlagAllocations();
+		// This fixture loads no data module, so the menu's own store stays empty and takes no storage at
+		// all: the same seat path is driven here at the module count a loaded game gives it.
+		std::vector<bool> flags;
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		const uint64_t seated = BuyMenuGUI::GetModuleFlagAllocations();
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		check("buy_menu_flags_survive_a_destroy_cycle", afterMenu == created && seated == created + 1 &&
+		                                                   BuyMenuGUI::GetModuleFlagAllocations() == seated &&
+		                                                   flags.size() == 8 && flags[0]);
 	}
 	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
