@@ -266,10 +266,16 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 is dedicated; bit 1 means the path-horizon U16 follows the host-options tail.
+			// Reserved bit 1 is dedicated; bit 2 means the path-horizon U16 follows the host-options tail;
+			// bit 8 means the frame-redundancy U16 trails it. Only a non-default window sets its bit, so
+			// every config published before the option keeps its exact bytes; an older build refuses the word.
 			uint16_t reserved = config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0;
 			if (config.version >= 3 && config.pathHorizonTicks != 0) {
 				reserved |= NetMatchConfigUtil::c_ReservedPathHorizonBit;
+			}
+			const bool carriesRedundancy = config.frameRedundancyTicks != NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			if (carriesRedundancy) {
+				reserved |= NetMatchConfigUtil::c_ReservedFrameRedundancyBit;
 			}
 			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
@@ -317,6 +323,10 @@ namespace RTE {
 					AppendU16LE(out, config.pathHorizonTicks);
 				}
 			}
+			// The window trails every versioned block, so a config recorded before the bit still reads.
+			if (carriesRedundancy) {
+				AppendU16LE(out, config.frameRedundancyTicks);
+			}
 			return true;
 		}
 
@@ -339,6 +349,7 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & NetMatchConfigUtil::c_ReservedDedicatedBit) != 0;
+			const bool carriesRedundancy = (reserved & NetMatchConfigUtil::c_ReservedFrameRedundancyBit) != 0;
 			if (reserved & ~NetMatchConfigUtil::c_ReservedKnownMask) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
@@ -407,6 +418,17 @@ namespace RTE {
 						return false;
 					}
 				}
+			}
+			// Without the bit the config carries the default window, whatever the out parameter held.
+			out.frameRedundancyTicks = NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			if (carriesRedundancy) {
+				uint16_t redundancyTicks = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(redundancyTicks), reader, error, "config.frame_redundancy_ticks")) return false;
+				if (redundancyTicks == 0 || redundancyTicks > NetMatchConfigUtil::c_MaxFrameRedundancyTicks) {
+					SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "frame_redundancy_ticks is out of range");
+					return false;
+				}
+				out.frameRedundancyTicks = static_cast<uint8_t>(redundancyTicks);
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {

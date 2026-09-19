@@ -815,6 +815,10 @@ namespace RTE {
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
 				{"path_horizon", [](auto& c) { ++c.pathHorizonTicks; }},
 				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
+				// The redundancy window rides reserved bit 0x8 and a trailing word, so its round trip
+				// proves the bit and the hash sensitivity proves peers cannot disagree about it.
+				{"frame_redundancy_off", [](auto& c) { c.frameRedundancyTicks = 1; }},
+				{"frame_redundancy_max", [](auto& c) { c.frameRedundancyTicks = NetMatchConfigUtil::c_MaxFrameRedundancyTicks; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
 				{"sender_2", [](auto& c) { ++c.peerInputDelayFrames[1]; }},
 			};
@@ -1245,11 +1249,40 @@ namespace RTE {
 				*error = "a reserved word of 0 did not decode to dedicated=false";
 				return false;
 			}
-			bytes[reservedOffset] = 4;
+			const size_t plainSize = bytes.size();
+			// The first bit no reader knows: 1 dedicated, 2 path horizon, 4 the persistent world, 8 the window.
+			bytes[reservedOffset] = 16;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 4 was not refused";
+				*error = "a reserved word of 16 was not refused";
 				return false;
+			}
+			// The redundancy window rides reserved bit 0x8 and a word after the body. A host that
+			// keeps the default window publishes the same bytes it always did.
+			NetMatchConfig windowed = MakeConfig();
+			windowed.frameRedundancyTicks = 2;
+			message.payload = NetLobbyMatchConfig{windowed};
+			std::vector<uint8_t> windowedBytes;
+			if (!NetLobbyProtocol::Encode(message, windowedBytes, &encodeError) || windowedBytes.size() != plainSize + 2 ||
+			    windowedBytes[reservedOffset] != 8 || windowedBytes[reservedOffset + 1] != 0 ||
+			    windowedBytes[windowedBytes.size() - 2] != 2 || windowedBytes.back() != 0) {
+				*error = "a non-default redundancy window did not encode reserved bit 0x8 and its trailing word";
+				return false;
+			}
+			const NetLobbyDecodeResult windowDecoded = NetLobbyProtocol::Decode(windowedBytes);
+			const NetLobbyMatchConfig* windowConfig = windowDecoded.ok ? std::get_if<NetLobbyMatchConfig>(&windowDecoded.message.payload) : nullptr;
+			if (!windowConfig || windowConfig->config.frameRedundancyTicks != 2) {
+				*error = "reserved bit 0x8 did not decode the redundancy window";
+				return false;
+			}
+			for (const uint8_t outOfRange : {0, NetMatchConfigUtil::c_MaxFrameRedundancyTicks + 1}) {
+				std::vector<uint8_t> broken = windowedBytes;
+				broken[broken.size() - 2] = outOfRange;
+				const NetLobbyDecodeResult refusedWindow = NetLobbyProtocol::Decode(broken);
+				if (refusedWindow.ok || refusedWindow.error.code != NetLobbyErrorCode::InvalidValue) {
+					*error = "a redundancy window outside its range was accepted";
+					return false;
+				}
 			}
 			return true;
 		}
@@ -2510,6 +2543,393 @@ namespace RTE {
 						return false;
 					}
 				}
+			}
+			return true;
+		}
+
+		// A host options edit reaches every peer while the lobby is open: the draft crosses to the
+		// runner's thread through the slot it polls, the round adopts it as the next configuration
+		// revision, every ack and readiness resets, and the hash-checked Start waits for the new one.
+		bool TestLobbyRepublishesHostOptionsRevision(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43137, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession hostLobby, clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.autoStart = false;
+			hostConfig.displayName = "Host";
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.displayName = "Client";
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			uint64_t now = 0;
+			auto pump = [&](int ticks, bool clientToo) {
+				for (int tick = 0; tick < ticks; ++tick, now += 10) {
+					hostLobby.Tick(now);
+					if (clientToo) clientLobby.Tick(now);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+			};
+			pump(20, true);
+			if (!hostLobby.IsConfigAcked(2) || !hostLobby.IsRemoteReady(2)) {
+				*error = "the lobby pair did not reach an acknowledged, ready round";
+				return false;
+			}
+			const NetHash32 firstHash = hostLobby.GetMatchConfigHash();
+			// Apply accepted this draft against the published revision; the runner takes it off the slot.
+			NetMatchConfig draft = hostConfig.matchConfig;
+			draft.difficulty = 73;
+			draft.idleWaitMinutes = 0;
+			draft.frameRedundancyTicks = 1;
+			draft.configRevision = hostConfig.matchConfig.configRevision + 1;
+			NetHostOptionsSlot slot;
+			slot.Post(draft);
+			NetMatchConfig taken;
+			if (!slot.Take(taken) || slot.Take(taken)) {
+				*error = "the host options slot did not hand the runner exactly one draft";
+				return false;
+			}
+			if (!hostLobby.RepublishMatchConfig(taken, error)) return false;
+			if (hostLobby.GetMatchConfigHash() == firstHash || hostLobby.IsConfigAcked(2) || hostLobby.IsRemoteReady(2) ||
+			    hostLobby.GetStats().configRepublishes != 1) {
+				*error = "the republished revision did not reset the round's acks and readiness";
+				return false;
+			}
+			// The host alone cannot start on a revision its peer has not acknowledged.
+			hostLobby.RequestStart();
+			pump(5, false);
+			if (hostLobby.IsStarted()) {
+				*error = "the lobby started before the peer acknowledged the new configuration revision";
+				return false;
+			}
+			pump(20, true);
+			if (!hostLobby.IsStarted() || !clientLobby.IsStarted()) {
+				*error = "the lobby did not start once the peer acknowledged the new revision";
+				return false;
+			}
+			const NetMatchConfig& adopted = clientLobby.GetMatchConfig();
+			if (adopted.configRevision != draft.configRevision || adopted.difficulty != 73 || adopted.idleWaitMinutes != 0 ||
+			    adopted.frameRedundancyTicks != 1 || clientLobby.GetMatchConfigHash() != hostLobby.GetMatchConfigHash()) {
+				*error = "the peer did not adopt the host's new configuration revision";
+				return false;
+			}
+			return true;
+		}
+
+		// Every draft the round has already moved past is refused, and a refusal leaves the published
+		// revision exactly where it was.
+		bool TestLobbyRefusesStaleOptionsRevision(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43139, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession hostLobby, clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = MakeConfig();
+			hostConfig.matchConfig.configRevision = 4;
+			hostConfig.autoStart = false;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			NetMatchConfig draft = hostConfig.matchConfig;
+			draft.difficulty = 61;
+			draft.configRevision = 5;
+			std::string refusal;
+			if (!hostLobby.RepublishMatchConfig(draft, &refusal)) {
+				*error = "the first options revision was refused: " + refusal;
+				return false;
+			}
+			const NetHash32 published = hostLobby.GetMatchConfigHash();
+			// The revision the panel held while the round moved on, and one older still.
+			for (const uint64_t stale: {4ULL, 5ULL}) {
+				NetMatchConfig late = hostConfig.matchConfig;
+				late.difficulty = 12;
+				late.configRevision = stale;
+				if (hostLobby.RepublishMatchConfig(late, &refusal) || refusal != "the draft names a stale configuration revision") {
+					*error = "a stale options revision was published: revision " + std::to_string(stale) + " " + refusal;
+					return false;
+				}
+			}
+			// Seat capacity and session identity are the round's, not a draft's.
+			NetMatchConfig widened = draft;
+			widened.configRevision = 6;
+			widened.peerCount = 3;
+			widened.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client 3"});
+			if (hostLobby.RepublishMatchConfig(widened, &refusal) || refusal != "seat capacity and session identity are fixed for the open lobby") {
+				*error = "an options draft moved the open lobby's capacity: " + refusal;
+				return false;
+			}
+			// A client never authors the round's configuration.
+			NetMatchConfig fromClient = draft;
+			fromClient.configRevision = 6;
+			if (clientLobby.RepublishMatchConfig(fromClient, &refusal) || refusal != "only the host republishes the match config") {
+				*error = "a client published a configuration revision: " + refusal;
+				return false;
+			}
+			if (hostLobby.GetMatchConfigHash() != published || hostLobby.GetMatchConfig().difficulty != 61 ||
+			    hostLobby.GetStats().configRepublishes != 1) {
+				*error = "a refused options draft moved the published revision";
+				return false;
+			}
+			return true;
+		}
+
+		// The seating wait and the message-hearing deadline are two different clocks: the host's
+		// Never leaves a lobby open however long it waits, while a silent peer still trips the
+		// technical deadline at its own fixed value.
+		bool TestSeatingWaitIsNotTheMessageDeadline(std::string* error) {
+			constexpr uint32_t deadlineMs = 10 * 60 * 1000;
+			constexpr uint64_t pastTheOldDayLongBound = 25ULL * 60 * 60 * 1000;
+			if (NetMatchRunner::SeatingWaitExpired(0u, deadlineMs, pastTheOldDayLongBound)) {
+				*error = "a Never seating wait expired";
+				return false;
+			}
+			if (!NetMatchRunner::SeatingWaitExpired(deadlineMs, deadlineMs, deadlineMs + 1) ||
+			    NetMatchRunner::SeatingWaitExpired(deadlineMs, deadlineMs, deadlineMs)) {
+				*error = "a finite seating wait did not expire at its own value";
+				return false;
+			}
+			if (!NetMatchRunner::SeatingWaitExpired(std::nullopt, deadlineMs, deadlineMs + 1) ||
+			    NetMatchRunner::SeatingWaitExpired(std::nullopt, deadlineMs, deadlineMs)) {
+				*error = "a round with no seating policy stopped budgeting by its message deadline";
+				return false;
+			}
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43142, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.matchConfig = MakeConfig();
+			clientConfig.timeoutMs = deadlineMs;
+			if (!clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			clientLobby.Tick(deadlineMs);
+			if (clientLobby.IsFailed()) {
+				*error = "the message deadline tripped before its own value";
+				return false;
+			}
+			clientLobby.Tick(deadlineMs + 1);
+			if (!clientLobby.IsFailed() || clientLobby.GetFailureReason() != "lobby timed out") {
+				*error = "a silent peer did not trip the message deadline: " + clientLobby.GetFailureReason();
+				return false;
+			}
+			return true;
+		}
+
+		// The host-defaults template round-trips every option the panel edits, names the keys it does
+		// not know instead of guessing, and refuses a template a newer build wrote.
+		bool TestHostDefaultsTemplateRoundTrip(std::string* error) {
+			NetMatchConfig config = MakeConfig();
+			config.difficulty = 81;
+			config.startingGold = 12345;
+			config.fogOfWar = true;
+			config.requireClearPathToOrbit = true;
+			config.deployUnits = true;
+			config.brainlessHumansSpectate = false;
+			config.mode = NetMatchMode::CoopPvE;
+			config.peerCount = 3;
+			config.delayPolicy = NetMatchDelayPolicy::Fixed;
+			config.inputDelayFrames = 2;
+			config.peerInputDelayFrames = {2, 5, 3};
+			config.autosaveEnabled = true;
+			config.autosaveIntervalSeconds = 120;
+			config.idleWaitMinutes = 0;
+			config.automaticRepair = false;
+			config.frameRedundancyTicks = 6;
+			config.teamRules[1].technologyIntent = "-Random-";
+			config.teamRules[1].technologyModule = "Coalition.rte";
+			config.teamRules[1].aiSkill = 90;
+			config.players = {
+			    NetMatchPlayerSlot{1, 0, false, "Host"},
+			    NetMatchPlayerSlot{2, 0, false, "Client 2"},
+			    NetMatchPlayerSlot{3, 0, false, "Client 3"},
+			    NetMatchPlayerSlot{0, 1, true, "CPU"},
+			};
+			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) return false;
+			const NetHostDefaultsTemplate saved = NetHostDefaults::FromConfig(config);
+			const std::string text = NetHostDefaults::Serialize(saved);
+			// Nothing about the people in the seats belongs in a template.
+			if (text.find("Client 2") != std::string::npos || text.find("Client 3") != std::string::npos ||
+			    text.find("SessionId") != std::string::npos || text.find(std::to_string(config.sessionId)) != std::string::npos) {
+				*error = "the host defaults template carried an occupant or a session identity";
+				return false;
+			}
+			NetHostDefaultsTemplate read;
+			if (!NetHostDefaults::Parse(text, read, error)) return false;
+			if (read.version != NetHostDefaults::c_Version || read.rules.mode != NetMatchMode::CoopPvE || read.rules.difficulty != 81 ||
+			    read.rules.startingGold != 12345 || !read.rules.fogOfWar || !read.rules.requireClearPathToOrbit || !read.rules.deployUnits ||
+			    read.rules.brainlessHumansSpectate || read.rules.activityPreset != config.activityPreset || read.rules.sceneName != config.sceneName ||
+			    read.rules.teamRules[1].technologyIntent != "-Random-" || read.rules.teamRules[1].technologyModule != "Coalition.rte" ||
+			    read.rules.teamRules[1].aiSkill != 90 || read.peerCount != 3 || read.delayPolicy != NetMatchDelayPolicy::Fixed ||
+			    read.inputDelayFrames != 2 || !read.autosaveEnabled || read.autosaveIntervalSeconds != 120 || read.idleWaitMinutes != 0 ||
+			    read.automaticRepair || read.frameRedundancyTicks != 6 || read.seats.size() != 4) {
+				*error = "the host defaults template did not round-trip every host option";
+				return false;
+			}
+			if (read.seats[1].delayFrames != 5 || read.seats[3].cpu != true || read.seats[3].team != 1) {
+				*error = "the host defaults template did not round-trip its seat intent";
+				return false;
+			}
+			// A key this build does not know is named and skipped; the rest of the template still reads.
+			NetHostDefaultsTemplate withUnknown;
+			if (!NetHostDefaults::Parse(text + "SomethingLater = 4\n", withUnknown, error) || withUnknown.rules.difficulty != 81) {
+				*error = "an unknown host defaults key was not ignored";
+				return false;
+			}
+			// A template a newer build wrote is refused whole, with its version named.
+			std::string refusal;
+			NetHostDefaultsTemplate newer;
+			const std::string newerText = "Version = " + std::to_string(NetHostDefaults::c_Version + 1) + "\nDifficulty = 5\n";
+			if (NetHostDefaults::Parse(newerText, newer, &refusal) ||
+			    refusal.find("version " + std::to_string(NetHostDefaults::c_Version + 1)) == std::string::npos) {
+				*error = "a newer host defaults template was read anyway: " + refusal;
+				return false;
+			}
+			if (NetHostDefaults::Parse("Difficulty = 5\n", newer, &refusal) || refusal.empty()) {
+				*error = "a host defaults template without its version line was read";
+				return false;
+			}
+			// The saved template seeds a new lobby's draft without reshaping its roster.
+			NetMatchConfig fresh = MakeConfig();
+			if (!NetHostDefaults::ApplyTo(read, fresh, error)) return false;
+			if (fresh.difficulty != 81 || fresh.startingGold != 12345 || fresh.mode != NetMatchMode::CoopPvE || fresh.frameRedundancyTicks != 6 ||
+			    fresh.idleWaitMinutes != 0 || fresh.autosaveIntervalSeconds != 120 || fresh.players.size() != MakeConfig().players.size() ||
+			    fresh.sessionId != MakeConfig().sessionId) {
+				*error = "the host defaults template did not seed a new draft";
+				return false;
+			}
+			return true;
+		}
+
+		// The rematch lobby is played on the options the host staged while the finished round's lobby
+		// was still up: the draft crosses on the same slot and the next round publishes it.
+		bool TestRematchStartsFromTheStagedDraft(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			StateTransferTap tap(hostTransport);
+			NetSession hostSession, clientSession;
+			NetLobbySession clientLobby;
+			NetLockstepCoordinator hostCoordinator, clientCoordinator;
+			NetMatchRunner runner;
+			NetHostOptionsSlot slot;
+			const auto startedAt = std::chrono::steady_clock::now();
+			const auto nowMs = [&] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count()); };
+			NetMatchRunnerConfig config;
+			config.host = true;
+			config.matchConfig = MakeConfig();
+			config.useLobbyProtocol = true;
+			config.lobbyWaitMs = 4000;
+			config.sessionWaitMs = 4000;
+			config.lockstepWaitMs = 2000;
+			config.postSessionSettleMs = config.postLobbySettleMs = 0;
+			config.nowMs = nowMs;
+			config.hostOptions = &slot;
+			config.sessionConfig.port = 43141;
+			config.sessionConfig.sessionId = config.matchConfig.sessionId;
+			config.sessionConfig.displayName = "Host";
+			config.sessionConfig.heartbeatIntervalMs = 25;
+			auto& identity = config.sessionConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "host-options-selftest";
+			identity.platform = "test";
+			NetSessionConfig clientSessionConfig = config.sessionConfig;
+			clientSessionConfig.displayName = "Client";
+			++clientSessionConfig.localNonce;
+			tap.afterHostStart = [&](uint16_t, std::string* startError) { return clientSession.StartClient(clientTransport, "loopback", clientSessionConfig, startError); };
+			uint64_t transportClock = 0, lobbyStartedAt = 0;
+			bool lobbyActive = false, coordinatorActive = false;
+			std::string peerError;
+			// The client's whole side runs on the runner's thread, off the transport it polls.
+			tap.beforePoll = [&] {
+				const uint64_t now = nowMs();
+				hostTransport.AdvanceTimeMs(now - transportClock);
+				clientTransport.AdvanceTimeMs(now - transportClock);
+				transportClock = now;
+				if (!clientSession.IsReady()) clientSession.Tick(now);
+				if (!clientSession.IsReady() || !peerError.empty()) return;
+				if (!lobbyActive) {
+					NetLobbySessionConfig lobbyConfig;
+					lobbyConfig.localPeerId = 2;
+					lobbyConfig.remotePeerId = 1;
+					lobbyConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+					lobbyConfig.matchConfig = config.matchConfig;
+					lobbyConfig.session = &clientSession;
+					lobbyConfig.sessionNowMs = nowMs;
+					lobbyActive = clientLobby.Start(clientTransport, lobbyConfig, &peerError);
+					lobbyStartedAt = now;
+				}
+				if (!lobbyActive) return;
+				if (!coordinatorActive) {
+					clientLobby.Tick(now - lobbyStartedAt);
+					if (!clientLobby.IsStarted()) return;
+					NetLockstepConfig lockstepConfig;
+					lockstepConfig.sessionId = clientSession.GetSessionId();
+					lockstepConfig.localPeerId = 2;
+					lockstepConfig.remoteTransportPeerIds = {{1, clientSession.GetRemoteTransportPeerId()}};
+					lockstepConfig.matchConfig = clientLobby.GetMatchConfig();
+					lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstepConfig.matchConfig, 2);
+					lockstepConfig.startFrame = clientLobby.GetStartFrame();
+					lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstepConfig.matchConfig.ownershipPolicy);
+					lockstepConfig.scenario = lockstepConfig.matchConfig.activityPreset;
+					coordinatorActive = clientCoordinator.Start(clientTransport, lockstepConfig, &peerError);
+				}
+				if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
+			};
+			tap.afterLobbyStart = tap.beforePoll;
+			if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !clientCoordinator.IsRunning()) {
+				*error = "staged draft rematch setup failed: " + *error + "; peer=" + peerError;
+				return false;
+			}
+			hostCoordinator.Complete("staged host options rematch round");
+			tap.beforePoll();
+			if (!clientCoordinator.IsStopped()) {
+				*error = "the first round did not stop before the rematch";
+				return false;
+			}
+			lobbyActive = coordinatorActive = false;
+			clientLobby = NetLobbySession{};
+			// Apply accepted this draft while the finished round's lobby was still up.
+			NetMatchConfig draft = runner.GetMatchConfig();
+			draft.difficulty = 44;
+			draft.frameRedundancyTicks = 2;
+			draft.configRevision = draft.configRevision + 1;
+			slot.Post(draft);
+			std::string rematchError;
+			if (!runner.StartNextMatch(tap, hostSession, hostCoordinator, &rematchError)) {
+				*error = "the rematch round did not start: " + rematchError + "; peer=" + peerError;
+				return false;
+			}
+			const NetMatchConfig& played = runner.GetMatchConfig();
+			if (played.difficulty != 44 || played.frameRedundancyTicks != 2 || played.configRevision != draft.configRevision ||
+			    clientLobby.GetMatchConfig().difficulty != 44 || clientLobby.GetMatchConfig().configRevision != draft.configRevision) {
+				*error = "the rematch round was not played on the staged host options draft";
+				return false;
+			}
+			// One draft, one round: nothing stays staged for a round the host never edited.
+			NetMatchConfig leftover;
+			if (slot.Take(leftover)) {
+				*error = "the staged host options draft outlived the round that consumed it";
+				return false;
 			}
 			return true;
 		}
@@ -8318,6 +8738,28 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
+		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
+		std::string republishError, staleOptionsError, seatingWaitError, hostDefaultsError, stagedRematchError;
+		if (!TestLobbyRepublishesHostOptionsRevision(&republishError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << republishError << std::endl;
+		}
+		if (!TestLobbyRefusesStaleOptionsRevision(&staleOptionsError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << staleOptionsError << std::endl;
+		}
+		if (!TestSeatingWaitIsNotTheMessageDeadline(&seatingWaitError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << seatingWaitError << std::endl;
+		}
+		if (!TestHostDefaultsTemplateRoundTrip(&hostDefaultsError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << hostDefaultsError << std::endl;
+		}
+		if (!TestRematchStartsFromTheStagedDraft(&stagedRematchError)) {
+			std::cerr << "[net-match-selftest] FAIL: " << stagedRematchError << std::endl;
+		}
+		if (!republishError.empty()) return fail(republishError);
+		if (!staleOptionsError.empty()) return fail(staleOptionsError);
+		if (!seatingWaitError.empty()) return fail(seatingWaitError);
+		if (!hostDefaultsError.empty()) return fail(hostDefaultsError);
+		if (!stagedRematchError.empty()) return fail(stagedRematchError);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
