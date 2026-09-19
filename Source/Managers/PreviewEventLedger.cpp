@@ -297,7 +297,7 @@ namespace RTE {
 		ExpireForTick(105);
 		const bool held = GetLiveEntryCount() == 1 && GetCounters().expired == 0;
 		if (MovableMan::IsConstructed()) {
-			g_MovableMan.InstallPreviewGhost(new MOPixel(), projectile);
+			MovableMan::InstallPreviewGhostForSelfTest(new MOPixel(), projectile);
 		}
 		ExpireForTick(106);
 		check("an_unclaimed_projectile_expires", held && GetLiveEntryCount() == 0 && GetCounters().expired == 1);
