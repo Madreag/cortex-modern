@@ -31,16 +31,11 @@ namespace RTE {
 		std::vector<std::pair<uint64_t, long int>> quarantine;
 		bool placeObjects = false;
 		bool placeUnits = false;
-		CheckpointText main;
-		CheckpointText index;
 		std::vector<std::pair<std::string, std::shared_ptr<const BitmapSnapshot>>> layers;
-		std::vector<CheckpointText> retired;
-		std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
 		size_t imageBytes = 0;
 		size_t dirtyBytes = 0;
 		double dirtyRatio = 0;
 		int64_t freezeUs = 0;
-		int64_t workerUs = 0;
 		bool luaReused = false;
 		size_t objectsReused = 0;
 		size_t objectsCaptured = 0;

@@ -378,8 +378,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	CheckpointWriter::CacheScope cache(&cow.Cache());
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick;
+	std::vector<std::shared_ptr<const BitmapSnapshot>> retiredLayers;
 	const auto layer = [&](const std::string& name, SceneLayer* value) {
-		if (value) image->layers.emplace_back(name, value->CaptureBitmapSnapshot(&image->retiredLayers));
+		if (value) image->layers.emplace_back(name, value->CaptureBitmapSnapshot(&retiredLayers));
 	};
 	layer("Mat", scene->GetTerrain());
 	layer("FG", scene->GetTerrain()->GetFGSceneLayer());
@@ -420,7 +421,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->quarantine = g_MovableMan.GetLockstepJoinQuarantine();
 	image->placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 	image->placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
-	image->retired = cow.Cache().RetireUnused();
+	std::vector<CheckpointText> retired = cow.Cache().RetireUnused();
 	image->imageBytes = image->activity.OwnedBytes() + image->scene.OwnedBytes() + image->structure.OwnedBytes()
 		+ image->sceneRuntime.OwnedBytes() + image->globals.OwnedBytes();
 	size_t graphBytes = 0;
@@ -442,33 +443,35 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
 	const auto simThread = std::this_thread::get_id();
-	task = AutosaveWriter().Submit([image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel]() mutable {
+	// Nothing writes the image once it is published, so the worker keeps its own buffers.
+	task = AutosaveWriter().Submit([image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel,
+	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)]() mutable {
 		const auto start = std::chrono::steady_clock::now();
+		const auto sinceStart = [&start] {
+			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		};
 		try {
 			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
-			image->retired.clear();
-			image->retiredLayers.clear();
-			image->main = AssembleOwnedSave(*image);
-			image->index = AssembleOwnedIndex(*image);
+			retired.clear();
+			retiredLayers.clear();
+			const CheckpointText main = AssembleOwnedSave(*image);
+			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
-			WriteCheckpointArchive(fileName, path, zipLevel, matchId, image->main.Text(), image->index.Text(), layerNames,
+			WriteCheckpointArchive(fileName, path, zipLevel, matchId, main.Text(), index.Text(), layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
 				    png = images[i]->Bytes();
 				    return true;
 			    });
-			image->workerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
-			CheckpointCow::Get().RecordWorker(image->workerUs);
-			CheckpointCow::Get().PublishLog(tick);
 			if (matchId.empty()) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
-			if (const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS")) {
-				CheckpointCow::Get().WriteMetricsJson(*metrics ? metrics : (System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json"));
-			} else {
-				CheckpointCow::Get().WriteMetricsJson(System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json");
-			}
+			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
+			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
+			// Timed after the last of the work, so the number is the whole task.
+			CheckpointCow::Get().RecordWorker(sinceStart());
+			CheckpointCow::Get().PublishLog(tick);
+			CheckpointCow::Get().WriteMetricsJson(metricsPath);
 			return true;
 		} catch (const std::exception& error) {
-			image->workerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
-			CheckpointCow::Get().RecordWorker(image->workerUs);
+			CheckpointCow::Get().RecordWorker(sinceStart());
 			std::cout << "[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n" << std::flush;
 			return false;
 		}
