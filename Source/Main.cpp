@@ -497,20 +497,20 @@ static bool RunAutosaveRestoreCheck(uint64_t tick, const std::string& which) {
 		refusal = "no restorable checkpoint";
 	}
 	if (!named) {
-		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << tick << " reason=" << refusal << std::endl;
+		{ std::ostringstream line; line <<  "[autosave] restore_check FAIL match=" << matchId << " tick=" << tick << " reason=" << refusal; System::PrintDiagnosticLine(line.str()); }
 		return false;
 	}
 	const bool policy = AutosaveStore::RunSelfTest(matchId);
 	if (!g_ActivityMan.LoadAutosaveToRestart(matchId, named->savedTick) || !g_ActivityMan.RestartActivity()) {
-		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << named->savedTick << " reason=restore refused" << std::endl;
+		{ std::ostringstream line; line <<  "[autosave] restore_check FAIL match=" << matchId << " tick=" << named->savedTick << " reason=restore refused"; System::PrintDiagnosticLine(line.str()); }
 		return false;
 	}
 	const std::string worldHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", g_MovableMan.SaveWorldStructure()}}));
 	const auto restoredTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const bool passed = policy && worldHash == named->worldStructureHash && restoredTick == named->savedTick;
 	// The flag prints as a number, the way the store's own self-test line reports its results.
-	std::cout << std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={} policy={}\n",
-	                         passed ? "PASS" : "FAIL", matchId, named->savedTick, restoredTick, worldHash, named->worldStructureHash, static_cast<int>(policy)) << std::flush;
+	System::PrintDiagnosticLine(std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={} policy={}\n",
+	                         passed ? "PASS" : "FAIL", matchId, named->savedTick, restoredTick, worldHash, named->worldStructureHash, static_cast<int>(policy)));
 	return passed;
 }
 
@@ -593,7 +593,7 @@ void InitializeManagers() {
 		g_MusicMan.Initialize();
 		if (std::getenv("CCCP_HEADLESS") != nullptr) {
 			g_AudioMan.SetOutputSilenced(true);
-			std::cout << "[audio] output silenced for the headless run" << std::endl;
+			{ std::ostringstream line; line <<  "[audio] output silenced for the headless run"; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
 
@@ -654,7 +654,7 @@ int ShutDown(int exitCode) {
 	if (s_globalCallbacksSelfTest && !s_globalCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_saveIoSelfTest) {
 		const bool saved = s_saveIoSelfTestQueued && g_ActivityMan.WaitForSaveGameTask();
-		std::cout << "[save-selftest] completed=" << saved << std::endl;
+		{ std::ostringstream line; line <<  "[save-selftest] completed=" << saved; System::PrintDiagnosticLine(line.str()); }
 		if (!saved || !s_saveMenuSelfTestPassed) exitCode = EXIT_FAILURE;
 	}
 	g_ThreadMan.GetPriorityThreadPool().wait_for_tasks();
@@ -729,7 +729,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-load-game") {
 			if (lastArg) {
-				std::cout << "[load-game] usage: -load-game <SaveName>, the name the load menu shows; add -max-ticks N to stop the run after N ticks" << std::endl;
+				{ std::ostringstream line; line <<  "[load-game] usage: -load-game <SaveName>, the name the load menu shows; add -max-ticks N to stop the run after N ticks"; System::PrintDiagnosticLine(line.str()); }
 				++i;
 				continue;
 			}
@@ -772,7 +772,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			for (uint64_t n = 0; n < count; ++n) {
 				SoundContainer scratch;
 			}
-			std::cout << "[selftest] preallocated " << count << " sound identities cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << std::endl;
+			{ std::ostringstream line; line <<  "[selftest] preallocated " << count << " sound identities cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor(); System::PrintDiagnosticLine(line.str()); }
 			i += 2;
 			continue;
 		}
@@ -785,7 +785,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				s_frameStallArmed = s_frameStallMs > 0;
 			}
 			if (!s_frameStallArmed) {
-				std::cerr << "[selftest] frame stall expected <tick>:<ms>, got " << spec << std::endl;
+				{ std::ostringstream line; line <<  "[selftest] frame stall expected <tick>:<ms>, got " << spec; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 			i += 2;
 			continue;
@@ -1098,7 +1098,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				s_netMatchScreenshotTicks.insert(tick);
 			}
 			if (!valid || s_netMatchScreenshotTicks.size() > 32) {
-				std::cerr << "[net-match-screenshot] expected 1-32 positive, comma-separated applied ticks" << std::endl;
+				{ std::ostringstream line; line <<  "[net-match-screenshot] expected 1-32 positive, comma-separated applied ticks"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
@@ -1119,7 +1119,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-match-e2e-spawn") {
 			E2eNamedSpawn spec;
 			if (!ParseE2eSpawnSpec(argValue[++i], spec)) {
-				std::cerr << "[net-match-e2e-spawn] expected Class:Preset:Module:x:y:tick[:team]" << std::endl;
+				{ std::ostringstream line; line <<  "[net-match-e2e-spawn] expected Class:Preset:Module:x:y:tick[:team]"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_e2eNamedSpawns.push_back(spec);
@@ -1166,7 +1166,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), count);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
-				std::cerr << "[net-match-service-e2e] " << currentArg << " requires a nonnegative 32-bit integer" << std::endl;
+				{ std::ostringstream line; line <<  "[net-match-service-e2e] " << currentArg << " requires a nonnegative 32-bit integer"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			(currentArg == "-net-match-humans" ? s_netMatchHumans : s_netMatchCPUSlots) = count;
@@ -1177,7 +1177,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-match-brainless-spectate") {
 			const std::string value = argValue[++i];
 			if (value != "0" && value != "1") {
-				std::cerr << "[net-match] -net-match-brainless-spectate requires 0 or 1" << std::endl;
+				{ std::ostringstream line; line <<  "[net-match] -net-match-brainless-spectate requires 0 or 1"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_netMatchBrainlessSpectate = value == "1";
@@ -1200,7 +1200,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-net-h4-fault") {
 			const std::string kind = argValue[++i];
 			NetH4SetFault(NetH4FaultFromName(kind));
-			std::cout << "[net-h4-fault] armed " << kind << std::endl;
+			{ std::ostringstream line; line <<  "[net-h4-fault] armed " << kind; System::PrintDiagnosticLine(line.str()); }
 			continue;
 		}
 
@@ -1242,7 +1242,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			}
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreTick);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreTick == 0) {
-				std::cerr << "[autosave] -net-autosave-restore requires the committed tick to restore, or oldest or newest" << std::endl;
+				{ std::ostringstream line; line <<  "[autosave] -net-autosave-restore requires the committed tick to restore, or oldest or newest"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			i += 2;
@@ -1252,7 +1252,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// Restart a match that ended with its host, from the checkpoints and manifest it left behind.
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			if (value.empty()) {
-				std::cerr << "[autosave] -net-resume-match requires the match id to restart" << std::endl;
+				{ std::ostringstream line; line <<  "[autosave] -net-resume-match requires the match id to restart"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_netResumeMatchId = value;
@@ -1263,7 +1263,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netResumeTick);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netResumeTick == 0) {
-				std::cerr << "[autosave] -net-resume-tick requires the committed tick to resume from" << std::endl;
+				{ std::ostringstream line; line <<  "[autosave] -net-resume-tick requires the committed tick to resume from"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			i += 2;
@@ -1274,7 +1274,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreAtTick);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreAtTick == 0) {
-				std::cerr << "[autosave] -net-autosave-restore-at requires the positive sim tick to restore at" << std::endl;
+				{ std::ostringstream line; line <<  "[autosave] -net-autosave-restore-at requires the positive sim tick to restore at"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			i += 2;
@@ -1285,7 +1285,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const std::string value = lastArg ? "" : argValue[i + 1];
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
-				std::cerr << "[autosave] -net-autosave-seconds requires a nonnegative 32-bit integer" << std::endl;
+				{ std::ostringstream line; line <<  "[autosave] -net-autosave-seconds requires a nonnegative 32-bit integer"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			NetMatchService::SetAutosaveSeconds(seconds);
@@ -1299,14 +1299,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (!lastArg && currentArg == "-feel-render-settings") {
 			if (!FrameMan::SetFeelRenderSettings(argValue[++i])) {
-				std::cerr << "[feel] invalid render settings: expected RenderCapHz = 0 or 60" << std::endl;
+				{ std::ostringstream line; line <<  "[feel] invalid render settings: expected RenderCapHz = 0 or 60"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
 		}
 		if (!lastArg && currentArg == "-feel-measure") {
 			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
-				std::cerr << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory" << std::endl;
+				{ std::ostringstream line; line <<  "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
@@ -1371,7 +1371,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const std::string spec = argValue[++i];
 			const size_t colon = spec.find(':');
 			if (colon == std::string::npos) {
-				std::cerr << "[net-replay-dump] bad range '" << spec << "': expected <from>:<to>" << std::endl;
+				{ std::ostringstream line; line <<  "[net-replay-dump] bad range '" << spec << "': expected <from>:<to>"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_netReplayDumpFrom = std::strtoull(spec.c_str(), nullptr, 10);
@@ -1382,7 +1382,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// A fixture's inputs stand in for the player's devices at the UInputMan boundary.
 			std::string scriptError;
 			if (!InputScript::Load(argValue[++i], &scriptError)) {
-				std::cerr << "[input-script] " << scriptError << std::endl;
+				{ std::ostringstream line; line <<  "[input-script] " << scriptError; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
@@ -1391,7 +1391,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// A fixture's direct AI writes on a local actor, made inside the owner's AI pass.
 			std::string scriptError;
 			if (!AIWriteScript::Load(argValue[++i], &scriptError)) {
-				std::cerr << "[ai-write-script] " << scriptError << std::endl;
+				{ std::ostringstream line; line <<  "[ai-write-script] " << scriptError; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
@@ -1404,17 +1404,17 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			const float speed = colon == std::string::npos ? 0.0F : std::strtof(spec.c_str() + colon + 1, &end);
 			const int player = colon == std::string::npos ? -1 : std::atoi(spec.substr(0, colon).c_str());
 			if (colon == std::string::npos || player < 0 || player >= Players::MaxPlayerCount || !end || *end != '\0' || !(speed > 0.0F)) {
-				std::cerr << "[digital-aim-speed] bad spec '" << spec << "': expected <player>:<multiplier>" << std::endl;
+				{ std::ostringstream line; line <<  "[digital-aim-speed] bad spec '" << spec << "': expected <player>:<multiplier>"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			g_UInputMan.GetControlScheme(player)->SetDigitalAimSpeed(speed);
-			std::cout << "[digital-aim-speed] player " << player << " -> " << speed << std::endl;
+			{ std::ostringstream line; line <<  "[digital-aim-speed] player " << player << " -> " << speed; System::PrintDiagnosticLine(line.str()); }
 			continue;
 		}
 		if (!lastArg && currentArg == "-local-prediction-depth") {
 			const std::string text = argValue[++i];
 			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
-				std::cerr << "[localpred] bad depth '" << text << "': expected a whole number" << std::endl;
+				{ std::ostringstream line; line <<  "[localpred] bad depth '" << text << "': expected a whole number"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			LocalPrediction::SetDepthOverride(static_cast<int>(std::strtol(text.c_str(), nullptr, 10)));
@@ -1424,7 +1424,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// The tick the tracked press is sampled at; the shot's sound must be audible by the next one.
 			const std::string text = argValue[++i];
 			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
-				std::cerr << "[preview-event-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				{ std::ostringstream line; line <<  "[preview-event-selftest] bad press tick '" << text << "': expected a whole number"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_eventLedgerPressTick = std::strtoll(text.c_str(), nullptr, 10);
@@ -1439,7 +1439,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-local-prediction-hud") {
 			const std::string text = argValue[++i];
 			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
-				std::cerr << "[preview-hud-selftest] bad press tick '" << text << "': expected a whole number" << std::endl;
+				{ std::ostringstream line; line <<  "[preview-hud-selftest] bad press tick '" << text << "': expected a whole number"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			LocalPredictionHudSelfTest::g_PressTick = std::strtoll(text.c_str(), nullptr, 10);
@@ -1448,7 +1448,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (!lastArg && currentArg == "-local-prediction-funds-preview") {
 			const std::string text = argValue[++i];
 			if (text.empty() || text.find_first_not_of("0123456789") != std::string::npos) {
-				std::cerr << "[preview-funds-driver] bad press tick '" << text << "': expected a whole number" << std::endl;
+				{ std::ostringstream line; line <<  "[preview-funds-driver] bad press tick '" << text << "': expected a whole number"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_fundsPreviewPress = std::strtoll(text.c_str(), nullptr, 10);
@@ -1492,7 +1492,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				ok = repeats.empty() || parseList(repeats, s_lpInvarianceRepeats);
 			}
 			if (!ok) {
-				std::cerr << "[lpinv] bad spec '" << spec << "': expected T:d1,d2,...:r1,r2,... with positive whole numbers" << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] bad spec '" << spec << "': expected T:d1,d2,...:r1,r2,... with positive whole numbers"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_lpInvarianceTick = tick;
@@ -1538,7 +1538,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				start = comma + 1;
 			}
 			if (!ok || (s_lpExpectEquip.empty() && s_lpExpectFireTick <= 0)) {
-				std::cerr << "[lpinv] bad expectation '" << spec << "': expected equip=<preset>@<tick>,fire@<tick>" << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] bad expectation '" << spec << "': expected equip=<preset>@<tick>,fire@<tick>"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			continue;
@@ -1547,7 +1547,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			// b spawn and shadow links, r a shadow item in reach, c spawn parts, wounds and a shadow part.
 			const std::string modes = argValue[++i];
 			if (modes.empty() || modes.find_first_not_of("brcitmqxonlap") != std::string::npos) {
-				std::cerr << "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonlap" << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] bad overlay-link modes '" << modes << "': expected letters from brcitmqxonlap"; System::PrintDiagnosticErrorLine(line.str()); }
 				return false;
 			}
 			s_lpOverlayLinkModes = modes;
@@ -1573,7 +1573,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		g_SettingsMan.SetSkipIntro(true);
 	}
 	if (s_globalCallbacksSelfTest && s_netReplayInPath.empty() && !ScenarioRunner::IsActive()) {
-		std::cout << "[global-callback-selftest] REFUSE needs -net-replay <recording> or -scenario, and UserScenes.rte Checkpoint Global" << std::endl;
+		{ std::ostringstream line; line <<  "[global-callback-selftest] REFUSE needs -net-replay <recording> or -scenario, and UserScenes.rte Checkpoint Global"; System::PrintDiagnosticLine(line.str()); }
 		return false;
 	}
 	return true;
@@ -1639,8 +1639,12 @@ static void DriveModerationE2e() {
 	const uint64_t nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 	if (s_netMatchE2eModerateReadyMs == 0) {
 		s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
-		std::cout << "[net-match-e2e] moderate armed actions=" << s_netMatchE2eModerate.size()
-		          << " seat=" << s_netMatchE2eModerateSeat << " delay_ms=" << s_netMatchE2eModerateDelayMs << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[net-match-e2e] moderate armed actions=" << s_netMatchE2eModerate.size()
+		          << " seat=" << s_netMatchE2eModerateSeat << " delay_ms=" << s_netMatchE2eModerateDelayMs;
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 	if (nowMs < s_netMatchE2eModerateReadyMs) {
 		return;
@@ -1651,7 +1655,7 @@ static void DriveModerationE2e() {
 	if (!menu->AutomationModerate(action, s_netMatchE2eModerateSeat)) {
 		return;
 	}
-	std::cout << "[net-match-e2e] moderate " << action << " seat=" << s_netMatchE2eModerateSeat << " done" << std::endl;
+	{ std::ostringstream line; line <<  "[net-match-e2e] moderate " << action << " seat=" << s_netMatchE2eModerateSeat << " done"; System::PrintDiagnosticLine(line.str()); }
 	++s_netMatchE2eModerateAt;
 	s_netMatchE2eModerateReadyMs = nowMs + s_netMatchE2eModerateDelayMs;
 }
@@ -1842,7 +1846,7 @@ void ProcessMenuScript() {
 			pass = MenuAutomation::Handles(inner) &&
 			       MenuAutomation::Execute(panel->AutomationManager(), "NetSeats", inner, iss, observation);
 		}
-		std::cout << "[menu-script] net_panel " << inner << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		{ std::ostringstream line; line <<  "[menu-script] net_panel " << inner << " " << observation << " " << (pass ? "PASS" : "FAIL"); System::PrintDiagnosticLine(line.str()); }
 		if (!pass) return MenuScriptFail("net_panel " + inner + " " + observation);
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
@@ -2171,7 +2175,7 @@ static void DumpTerrainNow(const std::string& suffix) {
 	};
 	dumpRaw("mat", g_SceneMan.GetScene()->GetTerrain()->GetMaterialBitmap());
 	dumpRaw("fg", g_SceneMan.GetScene()->GetTerrain()->GetFGColorBitmap());
-	std::cout << "[terrain-dump] " << suffix << " saved" << std::endl;
+	{ std::ostringstream line; line <<  "[terrain-dump] " << suffix << " saved"; System::PrintDiagnosticLine(line.str()); }
 }
 
 static bool TerrainDumpArmed() {
@@ -2304,7 +2308,7 @@ static void DumpSimStateNow(const std::string& suffix) {
 	std::ofstream out(base + "." + suffix + ".simstate.txt", std::ios::binary | std::ios::trunc);
 	if (out.is_open()) {
 		g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), out);
-		std::cout << "[sim-dump] " << suffix << " saved" << std::endl;
+		{ std::ostringstream line; line <<  "[sim-dump] " << suffix << " saved"; System::PrintDiagnosticLine(line.str()); }
 	}
 }
 
@@ -2328,7 +2332,7 @@ static void CheckRestoredDeepState() {
 	s_rbProbeRestoreMismatch = restored != s_rbProbeCapturedDeep;
 	if (s_rbProbeRestoreMismatch) {
 		WriteProbeText("rb_restored_" + std::to_string(s_rbProbeAtTick), restored);
-		std::cout << "[rbprobe] RESTORE MISMATCH: the restored world's dump differs from the captured one (rb_captured vs rb_restored)" << std::endl;
+		{ std::ostringstream line; line <<  "[rbprobe] RESTORE MISMATCH: the restored world's dump differs from the captured one (rb_captured vs rb_restored)"; System::PrintDiagnosticLine(line.str()); }
 	}
 }
 
@@ -2343,7 +2347,7 @@ static bool CaptureProbeScriptGraphs() {
 	std::vector<std::string> problems;
 	if (!g_MovableMan.SerializeScriptGraphs(s_rbProbeLuaGraphsAtCapture, problems)) {
 		for (const std::string& problem: problems) {
-			std::cout << "[rbprobe] FAIL: script graph capture refused: " << problem << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] FAIL: script graph capture refused: " << problem; System::PrintDiagnosticLine(line.str()); }
 		}
 		return false;
 	}
@@ -2363,12 +2367,12 @@ static void CheckRestoredScriptGraphs() {
 	if (!g_MovableMan.SerializeScriptGraphs(restored, problems)) {
 		s_rbProbeRestoreMismatch = true;
 		for (const std::string& problem: problems) {
-			std::cout << "[rbprobe] RESTORE MISMATCH: the restored Lua state cannot be carried: " << problem << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] RESTORE MISMATCH: the restored Lua state cannot be carried: " << problem; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
 	if (!g_MovableMan.GetScriptGraphFailure().empty()) {
 		s_rbProbeRestoreMismatch = true;
-		std::cout << "[rbprobe] RESTORE MISMATCH: the set-aside could not carry the Lua state: " << g_MovableMan.GetScriptGraphFailure() << std::endl;
+		{ std::ostringstream line; line <<  "[rbprobe] RESTORE MISMATCH: the set-aside could not carry the Lua state: " << g_MovableMan.GetScriptGraphFailure(); System::PrintDiagnosticLine(line.str()); }
 	}
 	const size_t count = std::max(restored.size(), s_rbProbeLuaGraphsAtCapture.size());
 	for (size_t i = 0; i < count; ++i) {
@@ -2378,7 +2382,7 @@ static void CheckRestoredScriptGraphs() {
 			s_rbProbeRestoreMismatch = true;
 			WriteProbeText("rb_luagraph_" + std::to_string(i) + "_capture", before);
 			WriteProbeText("rb_luagraph_" + std::to_string(i) + "_restored", after);
-			std::cout << "[rbprobe] RESTORE MISMATCH: Lua state " << i << " serializes differently after the restore (rb_luagraph_" << i << "_capture vs _restored)" << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] RESTORE MISMATCH: Lua state " << i << " serializes differently after the restore (rb_luagraph_" << i << "_capture vs _restored)"; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
 }
@@ -2487,7 +2491,7 @@ static void DrawFrameWithPreviews() {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
 		const int result = g_FrameMan.SaveScreenToPNG(name.c_str());
-		std::cout << "[net-match-screenshot] applied_tick=" << tick << " name=" << name << " queued=" << (result == 0) << std::endl;
+		{ std::ostringstream line; line <<  "[net-match-screenshot] applied_tick=" << tick << " name=" << name << " queued=" << (result == 0); System::PrintDiagnosticLine(line.str()); }
 		s_netMatchScreenshotTicks.erase(tick);
 	}
 	LocalPrediction::EndRender();
@@ -2511,12 +2515,16 @@ static void DrawFrameWithPreviews() {
 			const std::string suffix = tick == s_fundsPreviewPress + 1 ? std::string("funds_p1") : std::string("funds_pd");
 			WriteProbeText(suffix, DumpSimStateToString());
 			WriteProbeText(suffix + "_extras", extras);
-			std::cout << "[preview-funds-driver] tick=" << tick << " seat=" << seat << " seat_team=" << (activity ? activity->GetTeamOfPlayer(seat) : static_cast<int>(Activity::NoTeam))
+			{
+				std::ostringstream line;
+				line <<  "[preview-funds-driver] tick=" << tick << " seat=" << seat << " seat_team=" << (activity ? activity->GetTeamOfPlayer(seat) : static_cast<int>(Activity::NoTeam))
 			          << " buy_team=" << s_fundsPreviewTeam
 			          << " buy_team_oz=" << (activity ? activity->DescribeFundsReadout(s_fundsPreviewTeam, seat) : std::string("EMPTY"))
 			          << " buy_team_committed=" << (activity ? oz(activity->GetTeamFunds(s_fundsPreviewTeam)) : std::string("EMPTY"))
 			          << " peek_tick=" << LocalPrediction::GetLastFillTick() << " problems=" << problems.size()
-			          << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
+			          << " readout=" << (readout.empty() ? "EMPTY" : readout);
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 	}
 	g_SceneMan.SetRenderDrawContext(false);
@@ -2625,10 +2633,10 @@ static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	bool caseFailed = false;
 	const auto fail = [&caseFailed, &label](const std::string& what) {
 		caseFailed = true;
-		std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
+		{ std::ostringstream line; line <<  "[lpinv] FAIL " << label << ": " << what; System::PrintDiagnosticLine(line.str()); }
 	};
 	const auto pass = [&label](const std::string& what) {
-		std::cout << "[lpinv] PASS " << label << ": " << what << std::endl;
+		{ std::ostringstream line; line <<  "[lpinv] PASS " << label << ": " << what; System::PrintDiagnosticLine(line.str()); }
 	};
 	++cases;
 	// The letters run in sequence in one process, so each is compared against the state it started from.
@@ -2752,8 +2760,12 @@ static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	} else if (!probe.failure.empty()) {
 		fail("not armed: " + probe.failure);
 	} else {
-		std::cout << "[lpinv] ARMED " << label << ": clone uid=" << probe.cloneUID << (probe.spawn ? " drop=" + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID) : std::string())
-		          << " ghosts " << ghostsBefore << "->" << g_MovableMan.GetPreviewGhostCount() << " [" << LocalPrediction::DescribeLastOutcome() << "]" << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[lpinv] ARMED " << label << ": clone uid=" << probe.cloneUID << (probe.spawn ? " drop=" + probe.spawnPreset + " uid=" + std::to_string(probe.spawnUID) : std::string())
+		          << " ghosts " << ghostsBefore << "->" << g_MovableMan.GetPreviewGhostCount() << " [" << LocalPrediction::DescribeLastOutcome() << "]";
+			System::PrintDiagnosticLine(line.str());
+		}
 		const Actor* clone = dynamic_cast<const Actor*>(probe.clone);
 		if (mode == 'b') {
 			expect("item_in_reach_to_a_retired_spawn", clone->GetItemInReach(), nullptr);
@@ -2790,7 +2802,7 @@ static void RunOverlayLinkArm(char mode, int& cases, int& failures) {
 	if (caseFailed) {
 		++failures;
 	} else {
-		std::cout << "[lpinv] ok " << label << ": canonical state byte-identical" << std::endl;
+		{ std::ostringstream line; line <<  "[lpinv] ok " << label << ": canonical state byte-identical"; System::PrintDiagnosticLine(line.str()); }
 	}
 }
 
@@ -2816,7 +2828,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const std::string before = DumpSimStateToString() + DescribeCanonicalExtras(problems);
 	if (!problems.empty()) {
 		for (const std::string& problem: problems) {
-			std::cout << "[lpinv] FAIL: cannot capture canonical Lua state: " << problem << std::endl;
+			{ std::ostringstream line; line <<  "[lpinv] FAIL: cannot capture canonical Lua state: " << problem; System::PrintDiagnosticLine(line.str()); }
 		}
 		s_lpInvarianceFailures = 1;
 		s_netReplayExitCode = 5;
@@ -2931,7 +2943,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 	const Registrations registrationsBefore = captureRegistrations(registrationProblems);
 	if (!registrationProblems.empty()) {
 		for (const std::string& problem: registrationProblems) {
-			std::cout << "[lpinv] FAIL: cannot capture canonical script registrations: " << problem << std::endl;
+			{ std::ostringstream line; line <<  "[lpinv] FAIL: cannot capture canonical script registrations: " << problem; System::PrintDiagnosticLine(line.str()); }
 		}
 		s_lpInvarianceFailures = 1;
 		s_netReplayExitCode = 5;
@@ -2947,7 +2959,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			bool caseFailed = false;
 			const auto fail = [&caseFailed, &label](const std::string& what) {
 				caseFailed = true;
-				std::cout << "[lpinv] FAIL " << label << ": " << what << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] FAIL " << label << ": " << what; System::PrintDiagnosticLine(line.str()); }
 			};
 			LocalPrediction::SetDepthOverride(depth);
 			const uint64_t previewsBefore = LocalPrediction::GetPreviewCount();
@@ -3017,7 +3029,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			if (caseFailed) {
 				++failures;
 			} else {
-				std::cout << "[lpinv] ok " << label << ": " << previewsRun << " previews, " << outcome << ", canonical state byte-identical" << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] ok " << label << ": " << previewsRun << " previews, " << outcome << ", canonical state byte-identical"; System::PrintDiagnosticLine(line.str()); }
 			}
 		}
 	}
@@ -3033,21 +3045,21 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 		if (!problems.empty()) {
 			++failures;
 			for (const std::string& problem: problems) {
-				std::cout << "[lpinv] FAIL overlay-links set: cannot capture canonical Lua state: " << problem << std::endl;
+				{ std::ostringstream line; line <<  "[lpinv] FAIL overlay-links set: cannot capture canonical Lua state: " << problem; System::PrintDiagnosticLine(line.str()); }
 			}
 		} else if (setAfter != setBefore) {
 			WriteProbeText("lpinv_before_overlay_set", setBefore);
 			WriteProbeText("lpinv_after_overlay_set", setAfter);
 			++failures;
-			std::cout << "[lpinv] FAIL overlay-links set: canonical state changed: " << DescribeStateDifference(setBefore, setAfter) << std::endl;
+			{ std::ostringstream line; line <<  "[lpinv] FAIL overlay-links set: canonical state changed: " << DescribeStateDifference(setBefore, setAfter); System::PrintDiagnosticLine(line.str()); }
 		} else {
-			std::cout << "[lpinv] PASS overlay-links set: canonical state byte-identical" << std::endl;
+			{ std::ostringstream line; line <<  "[lpinv] PASS overlay-links set: canonical state byte-identical"; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
 	LocalPrediction::SetDepthOverride(savedDepth);
 	PreviewScriptSelfTest::SetStrideCounter(false);
 	s_lpInvarianceFailures = failures;
-	std::cout << "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases passed invariance and link checks" << std::endl;
+	{ std::ostringstream line; line <<  "[lpinv] " << (failures == 0 ? "PASS" : "FAIL") << " tick " << simTick << ": " << (cases - failures) << "/" << cases << " cases passed invariance and link checks"; System::PrintDiagnosticLine(line.str()); }
 	g_MetricsCollector.RecordString("lpinv_result", failures == 0 ? "pass" : "fail");
 	g_MetricsCollector.Record("lpinv_cases", cases);
 	g_MetricsCollector.Record("lpinv_failures", failures);
@@ -3224,7 +3236,7 @@ static void CheckPreviewEventLedgerSelfTest() {
 	s_eventLedgerChecked = true;
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool ok, const std::string& detail) {
-		std::cout << "[preview-event-selftest] " << (ok ? "PASS " : "FAIL ") << name << ": " << detail << std::endl;
+		{ std::ostringstream line; line <<  "[preview-event-selftest] " << (ok ? "PASS " : "FAIL ") << name << ": " << detail; System::PrintDiagnosticLine(line.str()); }
 		passed = passed && ok;
 	};
 	const uint64_t press = static_cast<uint64_t>(s_eventLedgerPressTick);
@@ -3491,7 +3503,7 @@ static void CheckPreviewEventLedgerSelfTest() {
 	const PreviewEventLedger::Counters& counters = PreviewEventLedger::GetCounters();
 	check("the_counters_balance", counters.playedAtPreview == counters.adoptedAtCommit + counters.expired + PreviewEventLedger::GetLiveEntryCount(),
 	      PreviewEventLedger::Describe() + " live=" + std::to_string(PreviewEventLedger::GetLiveEntryCount()));
-	std::cout << "[preview-event-selftest] " << (passed ? "PASS" : "FAIL") << " press tick " << press << std::endl;
+	{ std::ostringstream line; line <<  "[preview-event-selftest] " << (passed ? "PASS" : "FAIL") << " press tick " << press; System::PrintDiagnosticLine(line.str()); }
 	if (!passed) {
 		s_netReplayExitCode = 5;
 	}
@@ -3509,7 +3521,7 @@ static void CheckRequiredProbesCompleted() {
 	}
 	if (LocalPredictionHudSelfTest::g_PressTick > 0) {
 		if (!LocalPredictionHudSelfTest::g_Sampled && !LocalPredictionHudSelfTest::g_Checked) {
-			std::cout << "[preview-hud-selftest] FAIL: hud sample at tick " << LocalPredictionHudSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+			{ std::ostringstream line; line <<  "[preview-hud-selftest] FAIL: hud sample at tick " << LocalPredictionHudSelfTest::g_PressTick << " never executed (the run stopped at tick " << stoppedAt << ")"; System::PrintDiagnosticLine(line.str()); }
 			s_netReplayExitCode = 5;
 			LocalPredictionHudSelfTest::g_Checked = true;
 		} else if (!LocalPredictionHudSelfTest::Check()) {
@@ -3517,12 +3529,12 @@ static void CheckRequiredProbesCompleted() {
 		}
 	}
 	if (s_lpInvarianceTick > 0 && s_lpInvarianceFailures < 0) {
-		std::cout << "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")" << std::endl;
+		{ std::ostringstream line; line <<  "[lpinv] FAIL: invariance test at tick " << s_lpInvarianceTick << " never executed (the run stopped at tick " << stoppedAt << ")"; System::PrintDiagnosticLine(line.str()); }
 		g_MetricsCollector.RecordString("lpinv_result", "not_run");
 		s_netReplayExitCode = 5;
 	}
 	if (s_rbProbeRequested && s_rbProbePhase != 4) {
-		std::cout << "[rbprobe] FIDELITY FAIL: the probe at tick " << s_rbProbeAtTick << " did not complete (phase " << s_rbProbePhase << " when the run stopped at tick " << stoppedAt << ")" << std::endl;
+		{ std::ostringstream line; line <<  "[rbprobe] FIDELITY FAIL: the probe at tick " << s_rbProbeAtTick << " did not complete (phase " << s_rbProbePhase << " when the run stopped at tick " << stoppedAt << ")"; System::PrintDiagnosticLine(line.str()); }
 		g_MetricsCollector.RecordString("rbprobe_result", "incomplete");
 		if (s_netReplayExitCode == 0) {
 			s_netReplayExitCode = 1;
@@ -3613,12 +3625,16 @@ static bool RunHarnessCaptureSelfTest() {
 		CheckRestoredScriptGraphs();
 		const bool swept = g_MovableMan.FindObjectByUniqueID(probeUID) == nullptr;
 		probeOrder = captured && settled && swept && !s_rbProbeRestoreMismatch;
-		std::cout << "[harness-order] probe uid=" << probeUID << " captured=" << captured << " settled=" << settled
-		          << " swept=" << swept << " mismatch=" << s_rbProbeRestoreMismatch << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[harness-order] probe uid=" << probeUID << " captured=" << captured << " settled=" << settled
+		          << " swept=" << swept << " mismatch=" << s_rbProbeRestoreMismatch;
+			System::PrintDiagnosticLine(line.str());
+		}
 		s_rbProbeLuaGraphsAtCapture = heldCapture;
 		s_rbProbeRestoreMismatch = heldMismatch;
 	}
-	std::cout << "[script-graph-selftest] " << (probeOrder ? "PASS" : "FAIL") << " rollback_probe_capture_settles_first" << std::endl;
+	{ std::ostringstream line; line <<  "[script-graph-selftest] " << (probeOrder ? "PASS" : "FAIL") << " rollback_probe_capture_settles_first"; System::PrintDiagnosticLine(line.str()); }
 	bool observeOrder = false;
 	long observeUID = 0;
 	if (park(observeUID) && observeUID > 0) {
@@ -3628,10 +3644,14 @@ static bool RunHarnessCaptureSelfTest() {
 		const bool second = ObserveScriptGraphs(after, problems);
 		const bool swept = g_MovableMan.FindObjectByUniqueID(observeUID) == nullptr;
 		observeOrder = first && settled && second && swept && before == after;
-		std::cout << "[harness-order] observe uid=" << observeUID << " swept=" << swept
-		          << " graphs_equal=" << (before == after) << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[harness-order] observe uid=" << observeUID << " swept=" << swept
+		          << " graphs_equal=" << (before == after);
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
-	std::cout << "[script-graph-selftest] " << (observeOrder ? "PASS" : "FAIL") << " contract_audit_observation_settles_first" << std::endl;
+	{ std::ostringstream line; line <<  "[script-graph-selftest] " << (observeOrder ? "PASS" : "FAIL") << " contract_audit_observation_settles_first"; System::PrintDiagnosticLine(line.str()); }
 	// A scenario script starting under a CLI trace run must join it: its own BeginRun would drop the
 	// armed tick-hash trace and leave the trace file without hashes.
 	bool scriptJoinsTheHostRun = false;
@@ -3649,12 +3669,16 @@ static bool RunHarnessCaptureSelfTest() {
 		scriptJoinsTheHostRun = scriptError == 0 && armed == 1 && joined.tickHashes.size() == 1 &&
 		                        g_MetricsCollector.IsRecordingTickHashes() && joined.scenario == "HostOwnedRun" &&
 		                        named != joined.stringValues.end() && named->second == "ScriptOwnedRun";
-		std::cout << "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashes.size()
+		{
+			std::ostringstream line;
+			line <<  "[harness-order] metrics armed=" << armed << " after_script=" << joined.tickHashes.size()
 		          << " recording=" << g_MetricsCollector.IsRecordingTickHashes() << " run=" << joined.scenario
-		          << " script=" << (named != joined.stringValues.end() ? named->second : std::string("-")) << std::endl;
+		          << " script=" << (named != joined.stringValues.end() ? named->second : std::string("-"));
+			System::PrintDiagnosticLine(line.str());
+		}
 		g_MetricsCollector.Destroy();
 	}
-	std::cout << "[script-graph-selftest] " << (scriptJoinsTheHostRun ? "PASS" : "FAIL") << " scenario_script_joins_the_host_metrics_run" << std::endl;
+	{ std::ostringstream line; line <<  "[script-graph-selftest] " << (scriptJoinsTheHostRun ? "PASS" : "FAIL") << " scenario_script_joins_the_host_metrics_run"; System::PrintDiagnosticLine(line.str()); }
 	// Last in the run: a build that fails this one leaves a world held.
 	bool refusalKeepsTheNextHold = false;
 	{
@@ -3672,9 +3696,9 @@ static bool RunHarnessCaptureSelfTest() {
 		MovableMan::WorldSetAside next;
 		const bool nextHold = g_MovableMan.SetAsideWorld(next, false);
 		refusalKeepsTheNextHold = refused && stillHeld && nextHold && g_MovableMan.ReinstateWorld(next) && !g_MovableMan.HasWorldSetAside();
-		std::cout << "[setaside-latch] refused=" << refused << " still_held=" << stillHeld << " next_hold=" << nextHold << std::endl;
+		{ std::ostringstream line; line <<  "[setaside-latch] refused=" << refused << " still_held=" << stillHeld << " next_hold=" << nextHold; System::PrintDiagnosticLine(line.str()); }
 	}
-	std::cout << "[script-graph-selftest] " << (refusalKeepsTheNextHold ? "PASS" : "FAIL") << " refused_reinstate_leaves_the_next_hold_possible" << std::endl;
+	{ std::ostringstream line; line <<  "[script-graph-selftest] " << (refusalKeepsTheNextHold ? "PASS" : "FAIL") << " refused_reinstate_leaves_the_next_hold_possible"; System::PrintDiagnosticLine(line.str()); }
 	return probeOrder && observeOrder && scriptJoinsTheHostRun && refusalKeepsTheNextHold;
 }
 
@@ -3702,13 +3726,13 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			floor = tick + s_rbProbeWindow + 3;
 		}
 		if (s_rbProbeSchedule.empty()) {
-			std::cout << "[rbfuzz] no room for probes under the tick cap" << std::endl;
+			{ std::ostringstream line; line <<  "[rbfuzz] no room for probes under the tick cap"; System::PrintDiagnosticLine(line.str()); }
 			s_rbProbeFuzzCount = 0;
 			return;
 		}
 		s_rbProbeAtTick = s_rbProbeSchedule.front();
 		s_rbProbeSchedule.pop_front();
-		std::cout << "[rbfuzz] " << (s_rbProbeSchedule.size() + 1) << " probes scheduled, window " << s_rbProbeWindow << ", first at " << s_rbProbeAtTick << std::endl;
+		{ std::ostringstream line; line <<  "[rbfuzz] " << (s_rbProbeSchedule.size() + 1) << " probes scheduled, window " << s_rbProbeWindow << ", first at " << s_rbProbeAtTick; System::PrintDiagnosticLine(line.str()); }
 	}
 	if (s_rbProbePhase == 0 && simTick == static_cast<uint64_t>(s_rbProbeAtTick)) {
 		const auto captureStart = std::chrono::steady_clock::now();
@@ -3720,13 +3744,13 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		if (s_rbProbeInMemory) {
 			const auto worldStart = std::chrono::steady_clock::now();
 			if (!g_MovableMan.CaptureWorld(s_rbProbeWorld)) {
-				std::cout << "[rbprobe] FAIL: world capture refused (add queues not drained)" << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] FAIL: world capture refused (add queues not drained)"; System::PrintDiagnosticLine(line.str()); }
 				System::SetQuit(true);
 				return;
 			}
 			worldCaptureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - worldStart).count();
 		} else if (!g_ActivityMan.SaveCurrentGame(RollbackProbeSaveName())) {
-			std::cout << "[rbprobe] FAIL: the capture save was refused" << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] FAIL: the capture save was refused"; System::PrintDiagnosticLine(line.str()); }
 			System::SetQuit(true);
 			return;
 		}
@@ -3736,12 +3760,12 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			ScenarioRunner::ArmReplayRewindBuffer(simTick + 1, static_cast<uint64_t>(s_rbProbeWindow));
 		}
 		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
-		std::cout << "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()) << std::endl;
+		{ std::ostringstream line; line <<  "[rbprobe] capture_ms=" << captureMs << " world_ms=" << worldCaptureMs << " mos=" << (s_rbProbeWorld.actors.size() + s_rbProbeWorld.items.size() + s_rbProbeWorld.particles.size()); System::PrintDiagnosticLine(line.str()); }
 		if (FaultInjected("snapshot_skew") && !s_rbProbeWorld.actors.empty()) {
 			// A deliberately wrong captured field: the restore must be caught by the deep compare.
 			Actor* skewed = s_rbProbeWorld.actors.front();
 			skewed->SetVel(skewed->GetVel() + Vector(0.001F, 0.0F));
-			std::cout << "[rbprobe] fault injected: snapshot_skew on uid " << skewed->GetUniqueID() << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] fault injected: snapshot_skew on uid " << skewed->GetUniqueID(); System::PrintDiagnosticLine(line.str()); }
 		}
 		s_rbProbeCapturedDeep = DumpSimStateToString();
 		s_rbProbeLuaIdentityAtCapture = g_MovableMan.DescribeLuaIdentity();
@@ -3752,13 +3776,13 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 		s_rbProbeRestoreMismatch = false;
 		DumpTerrainNow("rb_cap");
 		s_rbProbePhase = 1;
-		std::cout << "[rbprobe] captured at tick " << simTick << std::endl;
+		{ std::ostringstream line; line <<  "[rbprobe] captured at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 	} else if (s_rbProbePhase == 1 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
 		s_rbProbeFirst.push_back(tickResult);
 		s_rbProbeFirstDeep.push_back(DumpSimStateToString());
 		if (static_cast<long long>(s_rbProbeFirst.size()) >= s_rbProbeWindow) {
 			if (!s_rbProbeInMemory && !g_ActivityMan.WaitForSaveGameTask()) {
-				std::cout << "[rbprobe] FAIL: the capture save did not complete" << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] FAIL: the capture save did not complete"; System::PrintDiagnosticLine(line.str()); }
 				System::SetQuit(true);
 				return;
 			}
@@ -3767,14 +3791,14 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			} else if (s_rbProbeUseLoadGame) {
 				s_rbProbeLaunchRestorePending = true;
 			} else if (!g_ActivityMan.LoadGameToRestart(RollbackProbeSaveName())) {
-				std::cout << "[rbprobe] FAIL: the restore load was refused" << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] FAIL: the restore load was refused"; System::PrintDiagnosticLine(line.str()); }
 				System::SetQuit(true);
 				return;
 			} else {
 				g_ActivityMan.RemoveSavedGame(RollbackProbeSaveName());
 			}
 			s_rbProbePhase = 2;
-			std::cout << "[rbprobe] window recorded; restore staged" << std::endl;
+			{ std::ostringstream line; line <<  "[rbprobe] window recorded; restore staged"; System::PrintDiagnosticLine(line.str()); }
 		}
 	} else if (s_rbProbePhase == 3 && simTick > static_cast<uint64_t>(s_rbProbeAtTick)) {
 		s_rbProbeSecond.push_back(tickResult);
@@ -3810,16 +3834,16 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 					s_rbProbeRestoreMismatch = true;
 					WriteProbeText("rb_lua_identity_capture", s_rbProbeLuaIdentityAtCapture);
 					WriteProbeText("rb_lua_identity_after", identityNow);
-					std::cout << "[rbprobe] FIDELITY FAIL: a Lua object identity changed across the probe (capture " << s_rbProbeAtTick << ")" << std::endl;
+					{ std::ostringstream line; line <<  "[rbprobe] FIDELITY FAIL: a Lua object identity changed across the probe (capture " << s_rbProbeAtTick << ")"; System::PrintDiagnosticLine(line.str()); }
 				}
 			}
 			if (firstDivergence < 0 && s_rbProbeDeepDivergence < 0 && !s_rbProbeRestoreMismatch) {
 				++s_rbProbePassCount;
-				std::cout << "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore, hash and full dump (capture " << s_rbProbeAtTick << ")" << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] FIDELITY PASS: " << s_rbProbeWindow << " ticks byte-identical after the restore, hash and full dump (capture " << s_rbProbeAtTick << ")"; System::PrintDiagnosticLine(line.str()); }
 			} else if (firstDivergence < 0) {
 				++s_rbProbeFailCount;
 				const std::string where = s_rbProbeRestoreMismatch ? "restore mismatch at capture " + std::to_string(s_rbProbeAtTick) : "dump divergence at tick " + std::to_string(s_rbProbeDeepDivergence);
-				std::cout << "[rbprobe] FIDELITY FAIL: hashes identical but " << where << " (capture " << s_rbProbeAtTick << ")" << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] FIDELITY FAIL: hashes identical but " << where << " (capture " << s_rbProbeAtTick << ")"; System::PrintDiagnosticLine(line.str()); }
 				if (s_rbProbeFirstFailure.empty()) {
 					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + ": " + where;
 				}
@@ -3835,8 +3859,12 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 						divergentSubsystems += (divergentSubsystems.empty() ? "" : ",") + name;
 					}
 				}
-				std::cout << "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
-				          << " subsystems=" << divergentSubsystems << " dump=" << (s_rbProbeRestoreMismatch ? std::string("restore mismatch") : std::to_string(s_rbProbeDeepDivergence)) << " (capture " << s_rbProbeAtTick << ")" << std::endl;
+				{
+					std::ostringstream line;
+					line <<  "[rbprobe] FIDELITY FAIL: first divergence at tick " << firstDivergence
+				          << " subsystems=" << divergentSubsystems << " dump=" << (s_rbProbeRestoreMismatch ? std::string("restore mismatch") : std::to_string(s_rbProbeDeepDivergence)) << " (capture " << s_rbProbeAtTick << ")";
+					System::PrintDiagnosticLine(line.str());
+				}
 				if (s_rbProbeFirstFailure.empty()) {
 					s_rbProbeFirstFailure = "capture " + std::to_string(s_rbProbeAtTick) + " diverged at " + std::to_string(firstDivergence) + " [" + divergentSubsystems + "]";
 				}
@@ -3855,11 +3883,14 @@ void RollbackProbeOnHashedTick(uint64_t simTick, const SimChecksum::Result& tick
 			s_rbProbePhase = 4;
 			g_MetricsCollector.RecordString("rbprobe_result", s_rbProbeFailCount == 0 ? "pass" : "fail");
 			if (s_rbProbeFuzzCount > 0) {
-				std::cout << "[rbfuzz] " << (s_rbProbeFailCount == 0 ? "PASS" : "FAIL") << " " << s_rbProbePassCount << "/" << (s_rbProbePassCount + s_rbProbeFailCount) << " probes byte-identical";
+				{
+					std::ostringstream line;
+				line << "[rbfuzz] " << (s_rbProbeFailCount == 0 ? "PASS" : "FAIL") << " " << s_rbProbePassCount << "/" << (s_rbProbePassCount + s_rbProbeFailCount) << " probes byte-identical";
 				if (s_rbProbeFailCount > 0) {
-					std::cout << "; first failure: " << s_rbProbeFirstFailure;
+					line << "; first failure: " << s_rbProbeFirstFailure;
 				}
-				std::cout << std::endl;
+					System::PrintDiagnosticLine(line.str());
+				}
 			}
 			if (s_rbProbeFailCount > 0) {
 				s_netReplayExitCode = 1;
@@ -3887,7 +3918,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		SceneMan::FlushTerrainEvents(base + ".desync.terrainevents.txt");
 	}
 	if (ScenarioRunner::IsActive()) {
-		std::cerr << "[scenario] controller replay failed: " << error << std::endl;
+		{ std::ostringstream line; line <<  "[scenario] controller replay failed: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 		System::SetQuit(true);
 	} else if (ScenarioRunner::IsLockstepReplayPlayback()) {
 		// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
@@ -3899,16 +3930,20 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			ScenarioRunner::SetLockstepReplayOutcome(outcome);
 		}
 		if (outcome != Outcome::Completed) {
-			std::cerr << "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error << std::endl;
+			{ std::ostringstream line; line <<  "[net-replay] playback stopped: " << ScenarioRunner::ReplayOutcomeName(outcome) << ": " << error; System::PrintDiagnosticErrorLine(line.str()); }
 			s_netReplayExitCode = outcome == Outcome::Truncated ? 2 : (outcome == Outcome::Corrupt ? 3 : 4);
 		}
 		g_ActivityMan.EndActivity();
 		ScenarioRunner::ClearControllerReplayError();
 		if (s_netReplayFromMenu) {
-			std::cout << "[net-replay] playback " << (outcome == Outcome::Completed ? "finished" : "FAILED")
+			{
+				std::ostringstream line;
+				line <<  "[net-replay] playback " << (outcome == Outcome::Completed ? "finished" : "FAILED")
 			          << ", ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(outcome)
 			          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed()
-			          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << std::endl;
+			          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0);
+				System::PrintDiagnosticLine(line.str());
+			}
 			s_netReplayReturnStatus = outcome == Outcome::Completed ? "Playback finished: " + std::to_string(ScenarioRunner::GetLockstepReplayFramesConsumed()) + " ticks"
 			                                                      : "Playback failed: " + error;
 			CloseNetReplayPlayback();
@@ -3927,7 +3962,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 			if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
 				s_menuMpTraceError = error;
-				std::cerr << "[menu-mp] trace stopped: " << error << std::endl;
+				{ std::ostringstream line; line <<  "[menu-mp] trace stopped: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
@@ -3981,7 +4016,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			// snapshots its state, every peer reloads the identical file, the match plays on.
 			++s_netMatchResyncs;
 			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
-			std::cout << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot" << std::endl;
+			{ std::ostringstream line; line <<  "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot"; System::PrintDiagnosticLine(line.str()); }
 			ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
@@ -4020,7 +4055,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			}
 			if (resyncOk) {
-				std::cout << "[net-match] resync: match relaunched from the snapshot" << std::endl;
+				{ std::ostringstream line; line <<  "[net-match] resync: match relaunched from the snapshot"; System::PrintDiagnosticLine(line.str()); }
 				g_NetMatchService.NoteResyncRelaunched();
 				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
 				// toast names the frame it resumes on.
@@ -4045,7 +4080,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					returnToMenuAfterNetworkEnd = true;
 				}
 			} else {
-				std::cerr << "[net-match] resync failed: " << resyncError << std::endl;
+				{ std::ostringstream line; line <<  "[net-match] resync failed: " << resyncError; System::PrintDiagnosticErrorLine(line.str()); }
 				g_ConsoleMan.PrintString("NETWORK: Resync failed: " + resyncError);
 				g_NetMatchService.ReportRuntimeError("resync failed: " + resyncError);
 				g_ActivityMan.EndActivity();
@@ -4059,7 +4094,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			}
 		} else {
-			std::cerr << "[net-match] controller sync failed: " << error << std::endl;
+			{ std::ostringstream line; line <<  "[net-match] controller sync failed: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 			g_ConsoleMan.PrintString("NETWORK: Match stopped: " + error);
 			g_NetMatchService.ReportRuntimeError(error);
 			g_ActivityMan.EndActivity();
@@ -4083,7 +4118,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 static bool HandleFailedActivityLaunch() {
 	const std::string reason = "could not launch the activity";
 	const bool menuReplayFailed = s_netReplayFromMenu;
-	std::cerr << (menuReplayFailed ? "[net-replay] " : "[net-match] ") << reason << std::endl;
+	{ std::ostringstream line; line <<  (menuReplayFailed ? "[net-replay] " : "[net-match] ") << reason; System::PrintDiagnosticErrorLine(line.str()); }
 	g_ConsoleMan.PrintString("ERROR: " + reason);
 	if (!menuReplayFailed && g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
 		g_NetMatchService.ReportRuntimeError(reason);
@@ -4218,7 +4253,7 @@ void RunGameLoop() {
 
 		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() >= s_frameStallTick) {
 			s_frameStallFired = true;
-			std::cout << "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs << std::endl;
+			{ std::ostringstream line; line <<  "[selftest] frame stall tick=" << s_frameStallTick << " ms=" << s_frameStallMs; System::PrintDiagnosticLine(line.str()); }
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 		}
 
@@ -4306,25 +4341,32 @@ void RunGameLoop() {
 				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
 				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
 				const bool under = saved && freezeUs > 0 && freezeUs < 16700;
-				std::cout << "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
+				{
+					std::ostringstream line;
+					line <<  "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
 				          << " freeze_240_actors_under_one_tick freeze_us=" << freezeUs
 				          << " saved=" << saved
-				          << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)"
-				          << std::endl;
+				          << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)";
+					System::PrintDiagnosticLine(line.str());
+				}
 			}
 			if (simTick == 1 && (s_netMatchServiceE2E || !s_netReplayInPath.empty() || ScenarioRunner::IsActive())) {
 				if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) {
-					std::cout << "[e2e] rules tick=" << simTick << " difficulty=" << activity->GetDifficulty()
+					{
+						std::ostringstream line;
+					line << "[e2e] rules tick=" << simTick << " difficulty=" << activity->GetDifficulty()
 					          << " gold=" << activity->GetStartingGold() << " fog=" << activity->GetFogOfWarEnabled()
 					          << " orbit=" << activity->GetRequireClearPathToOrbit() << " deploy=" << g_SceneMan.GetPlaceUnitsOnLoad();
 					for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
-						std::cout << " team" << team << ".tech=" << std::quoted(activity->GetTeamTech(team))
+						line << " team" << team << ".tech=" << std::quoted(activity->GetTeamTech(team))
 						          << " team" << team << ".ai=" << activity->GetTeamAISkill(team)
 						          << " team" << team << ".funds=" << activity->GetTeamFunds(team);
 					}
 					const Scene* loadedScene = g_SceneMan.GetScene();
-					std::cout << " cpu_team=" << activity->GetCPUTeam() << " activity=" << std::quoted(activity->GetModuleAndPresetName())
+					line << " cpu_team=" << activity->GetCPUTeam() << " activity=" << std::quoted(activity->GetModuleAndPresetName())
 					          << " scene=" << std::quoted(loadedScene ? loadedScene->GetModuleAndPresetName() : std::string()) << std::endl;
+						System::PrintDiagnosticLine(line.str());
+					}
 				}
 			}
 			// Sample the sim hash on an interval during live lockstep for the runtime desync check. It runs
@@ -4371,7 +4413,7 @@ void RunGameLoop() {
 			    ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestEndRoundTick) {
 				if (GameActivity* gameActivity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 				    gameActivity && gameActivity->GetActivityState() != Activity::Over) {
-					std::cout << "[net-match-service-e2e] end-round: ending the round at tick " << simTick << std::endl;
+					{ std::ostringstream line; line <<  "[net-match-service-e2e] end-round: ending the round at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 					gameActivity->SetWinnerTeam(Activity::TeamOne);
 					g_ActivityMan.EndActivity();
 				}
@@ -4388,8 +4430,12 @@ void RunGameLoop() {
 							continue;
 						}
 						if (placementActivity->PlaceAndSubmitLockstepBrain(player, s_e2eBrains[player].first, s_e2eBrains[player].second, "Base.rte")) {
-							std::cout << "[net-match-service-e2e] brain placement submitted: seat=" << player
-							          << " preset=" << s_e2eBrains[player].second << " tick=" << simTick << std::endl;
+							{
+								std::ostringstream line;
+								line <<  "[net-match-service-e2e] brain placement submitted: seat=" << player
+							          << " preset=" << s_e2eBrains[player].second << " tick=" << simTick;
+								System::PrintDiagnosticLine(line.str());
+							}
 						}
 					}
 				}
@@ -4429,7 +4475,7 @@ void RunGameLoop() {
 				}
 				for (const E2eNamedSpawn& spec: s_e2eNamedSpawns) {
 					if (s_netMatchServiceE2E && simTick == spec.tick) {
-						std::cout << "[net-match-service-e2e] spawn " << spec.className << " " << spec.preset << " at " << spec.x << "," << spec.y << " tick " << spec.tick << std::endl;
+						{ std::ostringstream line; line <<  "[net-match-service-e2e] spawn " << spec.className << " " << spec.preset << " at " << spec.x << "," << spec.y << " tick " << spec.tick; System::PrintDiagnosticLine(line.str()); }
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{spec.className, spec.preset, spec.module, spec.x, spec.y, spec.team}});
 					}
 				}
@@ -4468,7 +4514,7 @@ void RunGameLoop() {
 						} else {
 							order(brain, NetGameAIOrder::DisbandSquad, brain->GetPos(), nullptr);
 						}
-						std::cout << "[net-match-service-e2e] ai order issued at tick " << simTick << " unit " << unit->GetUniqueID() << " brain " << brain->GetUniqueID() << std::endl;
+						{ std::ostringstream line; line <<  "[net-match-service-e2e] ai order issued at tick " << simTick << " unit " << unit->GetUniqueID() << " brain " << brain->GetUniqueID(); System::PrintDiagnosticLine(line.str()); }
 					}
 				}
 				if (s_netMatchServiceE2E && s_netMatchE2eSwitchControlTick > 0 && ScenarioRunner::IsLockstepControllerSyncActive()) {
@@ -4478,9 +4524,9 @@ void RunGameLoop() {
 							if (Actor* target = FindE2eSwitchControlTarget(activity, player)) {
 								s_netMatchE2eSwitchUid = static_cast<int64_t>(target->GetUniqueID());
 								activity->SwitchToActor(target, player, activity->GetTeamOfPlayer(player));
-								std::cout << "[net-match] e2e switch-control: uid=" << s_netMatchE2eSwitchUid << " at tick " << simTick << std::endl;
+								{ std::ostringstream line; line <<  "[net-match] e2e switch-control: uid=" << s_netMatchE2eSwitchUid << " at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 							} else {
-								std::cout << "[net-match] e2e switch-control: uid=0 at tick " << simTick << std::endl;
+								{ std::ostringstream line; line <<  "[net-match] e2e switch-control: uid=0 at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 							}
 							s_netMatchE2eSwitchIssued = true;
 						}
@@ -4489,7 +4535,7 @@ void RunGameLoop() {
 							const int player = activity->PlayerOfScreen(0);
 							if (Actor* brain = activity->GetPlayerBrain(player)) {
 								activity->SwitchToActor(brain, player, activity->GetTeamOfPlayer(player));
-								std::cout << "[net-match] e2e switch-control: hand-back at tick " << simTick << std::endl;
+								{ std::ostringstream line; line <<  "[net-match] e2e switch-control: hand-back at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 							}
 							s_netMatchE2eSwitchHandedBack = true;
 						}
@@ -4522,7 +4568,7 @@ void RunGameLoop() {
 							op.dirX = 0.7F;
 							op.dirY = -0.7F;
 						}
-						std::cout << "[net-match-service-e2e] inventory op " << static_cast<int>(op.op) << " at tick " << simTick << " actor " << op.actorUID << std::endl;
+						{ std::ostringstream line; line <<  "[net-match-service-e2e] inventory op " << static_cast<int>(op.op) << " at tick " << simTick << " actor " << op.actorUID; System::PrintDiagnosticLine(line.str()); }
 						ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, op});
 					}
 				}
@@ -4541,12 +4587,12 @@ void RunGameLoop() {
 								gameActivity->AddOverridePurchase(dummy, 0);
 								gameActivity->SetLandingZone(Vector(900.0F, 0.0F), 0);
 								const bool ordered = gameActivity->CreateDelivery(0);
-								std::cout << "[net-match-service-e2e] buy order placed: " << (ordered ? "ok" : "FAILED") << std::endl;
+								{ std::ostringstream line; line <<  "[net-match-service-e2e] buy order placed: " << (ordered ? "ok" : "FAILED"); System::PrintDiagnosticLine(line.str()); }
 							}
 						}
 					} else if (simTick == 700) {
 						if (const Activity* activity = g_ActivityMan.GetActivity()) {
-							std::cout << "[net-match-service-e2e] team 0 funds at tick 700: " << activity->GetTeamFunds(0) << std::endl;
+							{ std::ostringstream line; line <<  "[net-match-service-e2e] team 0 funds at tick 700: " << activity->GetTeamFunds(0); System::PrintDiagnosticLine(line.str()); }
 						}
 					}
 				}
@@ -4560,20 +4606,20 @@ void RunGameLoop() {
 				// must ride out the stall within the grace window and both must still finish identical.
 				// Works in e2e AND interactive matches so the headed stall overlay can be exercised.
 				if (ScenarioRunner::GetArgs().selftestStall && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == 300) {
-					std::cout << "[net-match] stall: sleeping 8s at tick 300" << std::endl;
+					{ std::ostringstream line; line <<  "[net-match] stall: sleeping 8s at tick 300"; System::PrintDiagnosticLine(line.str()); }
 					std::this_thread::sleep_for(std::chrono::seconds(8));
 				}
 				// Test control: leave the match at the flag's tick (default 300) like a pause-menu quit;
 				// the peer must get a clean end.
 				if (ScenarioRunner::GetArgs().selftestLeave && ScenarioRunner::IsLockstepControllerSyncActive() && simTick == ScenarioRunner::GetArgs().selftestLeaveTick) {
-					std::cout << "[net-match] leave: quitting to menu at tick " << simTick << std::endl;
+					{ std::ostringstream line; line <<  "[net-match] leave: quitting to menu at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
 				}
 				// E2E control: this peer spawns a SECOND brain for its own team; the win condition must ride
 				// through the original brain's death because the team still has the spawned one.
 				if (s_netMatchServiceE2E && ScenarioRunner::GetArgs().selftestBrainSpawnCommand && simTick == 40) {
-					std::cout << "[net-match-service-e2e] brain spawn: team 1 at 1250,700 (sentry)" << std::endl;
+					{ std::ostringstream line; line <<  "[net-match-service-e2e] brain spawn: team 1 at 1250,700 (sentry)"; System::PrintDiagnosticLine(line.str()); }
 					// Spawn the spare as SENTRY like the real brains (P4AlphaDuel), so it holds position and
 					// survives the original's death instead of wandering into the kill zone on BRAINHUNT.
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameSpawnActor{"AHuman", "Brain Robot", "Base.rte", 1250.0F, 700.0F, 1, Actor::AIMODE_SENTRY}});
@@ -4595,13 +4641,13 @@ void RunGameLoop() {
 						if (const Actor* enemyBrain = g_MovableMan.GetFirstBrainActor(targetTeam)) {
 							const float dropX = enemyBrain->GetPos().m_X + (firstDrop ? 4.0F : -4.0F);
 							const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
-							std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " team=" << targetTeam << " x=" << dropX << " y=" << dropY << std::endl;
+							{ std::ostringstream line; line <<  "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " team=" << targetTeam << " x=" << dropX << " y=" << dropY; System::PrintDiagnosticLine(line.str()); }
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
 						} else if (teamOneWindow) {
 							// The tuned 2-peer fallback: keep the original blind drop when team 1's brain query misses.
 							const float dropX = simTick == 80 ? 1120.0F : 1112.0F;
 							const float dropY = g_SceneMan.FindAltitude(Vector(dropX, 0.0F), 2000, 20) - 60.0F;
-							std::cout << "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY << std::endl;
+							{ std::ostringstream line; line <<  "[net-match-service-e2e] brain-kill deliver: tick=" << simTick << " x=" << dropX << " y=" << dropY; System::PrintDiagnosticLine(line.str()); }
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameDeliverCargo{"ACRocket", "Rocket MK2", "Base.rte", dropX, dropY, 0, {{"AHuman", "Green Dummy", "Base.rte"}}}});
 						}
 					}
@@ -4609,7 +4655,7 @@ void RunGameLoop() {
 					// an else of the (new, wider) window check or the added windows would eat poll ticks.
 					if (simTick > 100 && simTick % 5 == 0) {
 						if (const int64_t craftUID = g_MovableMan.GetFirstUnloadingCraftUniqueID(0)) {
-							std::cout << "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID << std::endl;
+							{ std::ostringstream line; line <<  "[net-match-service-e2e] brain-kill scuttle: tick=" << simTick << " craft=" << craftUID; System::PrintDiagnosticLine(line.str()); }
 							ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGameScuttleCraft{craftUID, 0}});
 						}
 					}
@@ -4634,8 +4680,12 @@ void RunGameLoop() {
 							continue;
 						}
 						target->AddDamage(2.0F / target->GetDamageMultiplier());
-						std::cout << "[net-match-service-e2e] brain-damage: tick=" << simTick << " team=" << team << " brain=" << brain->GetUniqueID()
-						          << " attachable=" << target->GetUniqueID() << " health=" << brain->GetHealth() << std::endl;
+						{
+							std::ostringstream line;
+							line <<  "[net-match-service-e2e] brain-damage: tick=" << simTick << " team=" << team << " brain=" << brain->GetUniqueID()
+						          << " attachable=" << target->GetUniqueID() << " health=" << brain->GetHealth();
+							System::PrintDiagnosticLine(line.str());
+						}
 					}
 				}
 
@@ -4655,8 +4705,12 @@ void RunGameLoop() {
 								}
 							}
 							if (lastBrain && lastBrain != activity->GetPlayerBrain(player)) {
-								std::cout << "[net-match-service-e2e] brain-reseat: tick=" << simTick << " team=" << team
-								          << " brain=" << lastBrain->GetUniqueID() << std::endl;
+								{
+									std::ostringstream line;
+									line <<  "[net-match-service-e2e] brain-reseat: tick=" << simTick << " team=" << team
+								          << " brain=" << lastBrain->GetUniqueID();
+									System::PrintDiagnosticLine(line.str());
+								}
 								activity->SetPlayerBrain(lastBrain, player);
 							}
 						}
@@ -4790,7 +4844,7 @@ void RunGameLoop() {
 				const std::string saveName = "p5snap_p" + std::to_string(ScenarioRunner::GetLockstepLocalPeerId());
 				const bool saved = g_ActivityMan.SaveCurrentGame(saveName) && g_ActivityMan.WaitForSaveGameTask();
 				const auto saveMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - saveStart).count();
-				std::cout << "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick << std::endl;
+				{ std::ostringstream line; line <<  "[net-match] snapshot " << (saved ? "saved" : "FAILED") << ": " << saveName << " in " << saveMs << "ms at tick " << simTick; System::PrintDiagnosticLine(line.str()); }
 			}
 
 			// Count the executed tick before the round's stop can break out of the loop below.
@@ -4859,11 +4913,15 @@ void RunGameLoop() {
 						if (suffix == "staged_before") { pendingBefore = pending; havePendingBefore = true; }
 						else if (suffix == "staged_after" && havePendingBefore) {
 							const size_t differences = ContractAudit::Compare(pendingBefore, pending, base + ".pending.diff.txt");
-							std::cout << "[contract-audit-pending] differences=" << differences << " before_fields=" << pendingBefore.size()
-							          << " after_fields=" << pending.size() << std::endl;
+							{
+								std::ostringstream line;
+								line <<  "[contract-audit-pending] differences=" << differences << " before_fields=" << pendingBefore.size()
+							          << " after_fields=" << pending.size();
+								System::PrintDiagnosticLine(line.str());
+							}
 						}
 					}
-					for (const std::string& problem: problems) std::cout << "[contract-audit] graph-problem=" << suffix << " " << problem << std::endl;
+					for (const std::string& problem: problems) { std::ostringstream line; line <<  "[contract-audit] graph-problem=" << suffix << " " << problem; System::PrintDiagnosticLine(line.str()); }
 					for (size_t index = 0; index < graphs.size(); ++index) {
 						std::ofstream out(base + "." + suffix + ".lua" + std::to_string(index), std::ios::binary);
 						out << graphs[index];
@@ -4875,13 +4933,17 @@ void RunGameLoop() {
 							"ConsoleMan:PrintString('[contract-audit-marker] observation=" + suffix + " vm=" + std::to_string(index) +
 							" value=' .. tostring(_ContractAuditCandidateMarker))");
 					}
-					std::cout << "[contract-audit] observation=" << suffix << " fields=" << state.size() << " graph=" << graph << " problems=" << problems.size() << std::endl;
+					{ std::ostringstream line; line <<  "[contract-audit] observation=" << suffix << " fields=" << state.size() << " graph=" << graph << " problems=" << problems.size(); System::PrintDiagnosticLine(line.str()); }
 					return state;
 				};
 				if (s_contractAuditFinished) {
 					observe("continued");
-					std::cout << "[contract-audit-continuation] completed_tick=" << g_TimerMan.GetSimUpdateCount()
-					          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough << std::endl;
+					{
+						std::ostringstream line;
+						line <<  "[contract-audit-continuation] completed_tick=" << g_TimerMan.GetSimUpdateCount()
+					          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough;
+						System::PrintDiagnosticLine(line.str());
+					}
 				} else {
 				ScenarioRunner::SetContractAuditSeedMarker();
                 const bool inputFixture = std::getenv("CC_CONTRACT_INPUT_FIXTURE") != nullptr;
@@ -4940,7 +5002,7 @@ void RunGameLoop() {
 				}
 				const auto after = observe("after");
 				const size_t differences = ContractAudit::Compare(before, after, base + ".diff.txt");
-				std::cout << "[contract-audit] complete operation=" << s_contractAuditOperation << " prepared=" << prepared << " applied=" << applied << " differences=" << differences << std::endl;
+				{ std::ostringstream line; line <<  "[contract-audit] complete operation=" << s_contractAuditOperation << " prepared=" << prepared << " applied=" << applied << " differences=" << differences; System::PrintDiagnosticLine(line.str()); }
 				s_contractAuditFinished = true;
 				ScenarioRunner::PerturbContractAuditContinuation();
 				if (ScenarioRunner::GetArgs().contractAuditContinueThrough == 0) {
@@ -4949,15 +5011,23 @@ void RunGameLoop() {
 					break;
 				}
 				if (g_TimerMan.GetSimUpdateCount() != simTick) {
-					std::cout << "[contract-audit-continuation] invalid_tick_change=1 before=" << simTick
-					          << " after=" << g_TimerMan.GetSimUpdateCount() << std::endl;
+					{
+						std::ostringstream line;
+						line <<  "[contract-audit-continuation] invalid_tick_change=1 before=" << simTick
+					          << " after=" << g_TimerMan.GetSimUpdateCount();
+						System::PrintDiagnosticLine(line.str());
+					}
 					s_contractAuditFinished = false;
 					System::SetQuit(true);
 					g_ActivityMan.EndActivity();
 					break;
 				}
-				std::cout << "[contract-audit-continuation] started_tick=" << simTick
-				          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough << std::endl;
+				{
+					std::ostringstream line;
+					line <<  "[contract-audit-continuation] started_tick=" << simTick
+				          << " requested_tick=" << ScenarioRunner::GetArgs().contractAuditContinueThrough;
+					System::PrintDiagnosticLine(line.str());
+				}
 				}
 			}
 			if (!s_snapshotRoundtripSelfTestName.empty() && simTick > 0) {
@@ -4975,7 +5045,7 @@ void RunGameLoop() {
 						readerPassed = first && empty && next && value == "present" && readerPassed;
 					}
 				}
-				std::cout << "[reader-empty-selftest] " << (readerPassed ? "PASS" : "FAIL") << " cases=10" << std::endl;
+				{ std::ostringstream line; line <<  "[reader-empty-selftest] " << (readerPassed ? "PASS" : "FAIL") << " cases=10"; System::PrintDiagnosticLine(line.str()); }
 				const std::string output = s_snapshotRoundtripSelfTestName + "_roundtrip";
 				g_AudioMan.SetCheckpointTraceEnabled(true);
 				bool loaded = false, saved = false, audioUnchanged = true;
@@ -4993,13 +5063,13 @@ void RunGameLoop() {
 					if (saved && s_snapshotRoundtripLockAudio) audioUnchanged = g_AudioMan.SaveCheckpoint() == audioBeforeSave;
 					g_AudioMan.TraceCheckpointBoundary("roundtrip-save-returned");
 					const bool audioChecked = s_snapshotRoundtripLockAudio && saved;
-					std::cout << "[snapshot-audio-boundary] locked=" << s_snapshotRoundtripLockAudio << " checked=" << audioChecked << " unchanged=" << (audioChecked ? std::to_string(audioUnchanged) : "unchecked") << " perturbed=" << s_snapshotRoundtripPerturbAudio << std::endl;
+					{ std::ostringstream line; line <<  "[snapshot-audio-boundary] locked=" << s_snapshotRoundtripLockAudio << " checked=" << audioChecked << " unchanged=" << (audioChecked ? std::to_string(audioUnchanged) : "unchecked") << " perturbed=" << s_snapshotRoundtripPerturbAudio; System::PrintDiagnosticLine(line.str()); }
 				}
 				g_AudioMan.TraceCheckpointBoundary("roundtrip-mixer-released");
 				const bool playbackContinued = !s_snapshotRoundtripCheckPlayback || (saved && g_AudioMan.RunCheckpointPlaybackContinuationSelfTest());
 				g_AudioMan.SetCheckpointTraceEnabled(false);
 				s_snapshotRoundtripSelfTestPassed = loaded && saved && audioUnchanged && playbackContinued;
-				std::cout << "[snapshot-roundtrip] " << (s_snapshotRoundtripSelfTestPassed ? "PASS" : "FAIL") << " save=" << output << std::endl;
+				{ std::ostringstream line; line <<  "[snapshot-roundtrip] " << (s_snapshotRoundtripSelfTestPassed ? "PASS" : "FAIL") << " save=" << output; System::PrintDiagnosticLine(line.str()); }
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
 				break;
@@ -5027,7 +5097,7 @@ void RunGameLoop() {
 			if (s_saveIoSelfTest && simTick > 0) {
 				if (s_saveMenuSelfTest) s_saveMenuSelfTestPassed = SaveLoadMenuGUI::RunSaveSelfTest(s_saveIoSelfTestName, s_saveIoSelfTestQueued);
 				else s_saveIoSelfTestQueued = g_ActivityMan.SaveCurrentGame(s_saveIoSelfTestName);
-				std::cout << "[save-selftest] queued=" << s_saveIoSelfTestQueued << " pending=" << g_ActivityMan.IsCurrentlySaving() << std::endl;
+				{ std::ostringstream line; line <<  "[save-selftest] queued=" << s_saveIoSelfTestQueued << " pending=" << g_ActivityMan.IsCurrentlySaving(); System::PrintDiagnosticLine(line.str()); }
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
 				break;
@@ -5071,7 +5141,7 @@ void RunGameLoop() {
 			if (!ScenarioRunner::IsActive() && !s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 				if (g_MetricsCollector.GetTickHashCount() >= cap) {
-					std::cout << "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount() << std::endl;
+					{ std::ostringstream line; line <<  "[menu-mp] trace complete at tick " << g_TimerMan.GetSimUpdateCount(); System::PrintDiagnosticLine(line.str()); }
 					// Hand over what we still owe BEFORE the goodbye, so a client one input-delay
 					// behind can finish its own last tick instead of losing the round to our exit.
 					(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
@@ -5156,7 +5226,7 @@ void RunGameLoop() {
 				if (IsFirstE2ERematchReady()) {
 					s_netMatchServiceE2ERematches = 1;
 					const std::string result = BuildNetMatchResultText();
-					std::cout << "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby" << std::endl;
+					{ std::ostringstream line; line <<  "[net-match-service-e2e] rematch: match 1 over (" << result << "), returning to lobby"; System::PrintDiagnosticLine(line.str()); }
 					g_NetMatchService.FinishMatch(result);
 					g_ActivityMan.EndActivity();
 					g_ActivityMan.SetInActivity(false);
@@ -5206,7 +5276,7 @@ void RunGameLoop() {
 						System::SetQuit(true);
 						break;
 					}
-					std::cout << "[net-match-service-e2e] rematch: round 2 launching" << std::endl;
+					{ std::ostringstream line; line <<  "[net-match-service-e2e] rematch: round 2 launching"; System::PrintDiagnosticLine(line.str()); }
 					// Re-anchor tick accounting; round 2 counts fresh from the zeroed sim count.
 					s_netMatchE2ETicks.OnNewMatch();
 					break;
@@ -5274,13 +5344,13 @@ void RunGameLoop() {
 				s_rbProbeMemoryRestorePending = false;
 				const auto restoreStart = std::chrono::steady_clock::now();
 				if (!g_MovableMan.SetAsideWorld(s_rbProbeOriginals)) {
-					std::cout << "[rbprobe] FAIL: world set-aside refused" << std::endl;
+					{ std::ostringstream line; line <<  "[rbprobe] FAIL: world set-aside refused"; System::PrintDiagnosticLine(line.str()); }
 					System::SetQuit(true);
 					break;
 				}
 				const auto worldRestoreStart = std::chrono::steady_clock::now();
 				if (!g_MovableMan.RestoreWorld(s_rbProbeWorld)) {
-					std::cout << "[rbprobe] FAIL: world restore refused" << std::endl;
+					{ std::ostringstream line; line <<  "[rbprobe] FAIL: world restore refused"; System::PrintDiagnosticLine(line.str()); }
 					g_MovableMan.ReinstateWorld(s_rbProbeOriginals);
 					System::SetQuit(true);
 					break;
@@ -5289,17 +5359,17 @@ void RunGameLoop() {
 				std::string rewindError;
 				if (ScenarioRunner::IsLockstepReplayPlayback() &&
 				    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
-					std::cout << "[rbprobe] FAIL: replay rewind refused: " << rewindError << std::endl;
+					{ std::ostringstream line; line <<  "[rbprobe] FAIL: replay rewind refused: " << rewindError; System::PrintDiagnosticLine(line.str()); }
 					System::SetQuit(true);
 					break;
 				}
 				const double restoreMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
-				std::cout << "[rbprobe] restore_ms=" << restoreMs << " world_ms=" << worldRestoreMs << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] restore_ms=" << restoreMs << " world_ms=" << worldRestoreMs; System::PrintDiagnosticLine(line.str()); }
 				CheckRestoredDeepState();
 				CheckRestoredScriptGraphs();
 				DumpTerrainNow("rb_res");
 				s_rbProbePhase = 3;
-				std::cout << "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount << std::endl;
+				{ std::ostringstream line; line <<  "[rbprobe] restored in memory and rewound to tick " << s_rbProbeSimCount; System::PrintDiagnosticLine(line.str()); }
 			}
 			if (g_ActivityMan.ActivitySetToRestart() || s_rbProbeLaunchRestorePending) {
 				g_LoadingScreen.DrawLoadingSplash();
@@ -5313,7 +5383,7 @@ void RunGameLoop() {
 					if (s_rbProbePhase == 2) {
 						++s_rbProbeFailCount;
 						s_rbProbeFirstFailure = "the saved activity could not restart";
-						std::cout << "[rbprobe] FAIL: " << s_rbProbeFirstFailure << std::endl;
+						{ std::ostringstream line; line <<  "[rbprobe] FAIL: " << s_rbProbeFirstFailure; System::PrintDiagnosticLine(line.str()); }
 						System::SetQuit(true);
 					}
 					break;
@@ -5322,7 +5392,7 @@ void RunGameLoop() {
 					std::string rewindError;
 					if (ScenarioRunner::IsLockstepReplayPlayback() &&
 					    !ScenarioRunner::RewindReplayForProbe(static_cast<uint64_t>(s_rbProbeSimCount) + 1, &rewindError)) {
-						std::cout << "[rbprobe] FAIL: replay rewind refused: " << rewindError << std::endl;
+						{ std::ostringstream line; line <<  "[rbprobe] FAIL: replay rewind refused: " << rewindError; System::PrintDiagnosticLine(line.str()); }
 						System::SetQuit(true);
 						break;
 					}
@@ -5330,7 +5400,7 @@ void RunGameLoop() {
 					CheckRestoredScriptGraphs();
 					DumpTerrainNow("rb_res");
 					s_rbProbePhase = 3;
-					std::cout << "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount << std::endl;
+					{ std::ostringstream line; line <<  "[rbprobe] restored and rewound to tick " << s_rbProbeSimCount; System::PrintDiagnosticLine(line.str()); }
 				}
 			}
 			if (g_ActivityMan.ActivitySetToResume()) {
@@ -5481,7 +5551,7 @@ NetMatchConfig BuildNetMatchCliConfig(bool useLobbyProtocol) {
 
 int RunNetSessionCli() {
 	if (s_netHost && !s_netJoinAddress.empty()) {
-		std::cerr << "[net-session] choose either -net-host or -net-join, not both" << std::endl;
+		{ std::ostringstream line; line <<  "[net-session] choose either -net-host or -net-join, not both"; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
@@ -5493,7 +5563,7 @@ int RunNetSessionCli() {
 	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
 	std::string error;
 	if (!NetIdentity::BuildCurrentManifest(manifest, &error, identityOptions)) {
-		std::cerr << "[net-session] identity build failed: " << error << std::endl;
+		{ std::ostringstream line; line <<  "[net-session] identity build failed: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
@@ -5505,19 +5575,22 @@ int RunNetSessionCli() {
 		: session.StartClient(transport, s_netJoinAddress, std::move(config), &error);
 
 	if (!started) {
-		std::cerr << "[net-session] start failed: " << error << std::endl;
+		{ std::ostringstream line; line <<  "[net-session] start failed: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 		std::string reportError;
 		if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
-			std::cerr << "[net-session] report failed: " << reportError << std::endl;
+			{ std::ostringstream line; line <<  "[net-session] report failed: " << reportError; System::PrintDiagnosticErrorLine(line.str()); }
 		}
 		return 1;
 	}
 
-	std::cout << "[net-session] " << (s_netHost ? "hosting" : "joining")
+	{
+		std::ostringstream line;
+		line <<  "[net-session] " << (s_netHost ? "hosting" : "joining")
 	          << " port=" << s_netPort
 	          << " gns_compiled=" << (GnsTransport::IsCompiledIn() ? "true" : "false")
-	          << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false")
-	          << std::endl;
+	          << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false");
+		System::PrintDiagnosticLine(line.str());
+	}
 
 	const auto startTime = std::chrono::steady_clock::now();
 	constexpr uint64_t c_MaxRunMs = 15000;
@@ -5541,7 +5614,7 @@ int RunNetSessionCli() {
 		if (session.IsReady()) {
 			if (!sawReady) {
 				sawReady = true;
-				std::cout << "[net-session] ready" << std::endl;
+				{ std::ostringstream line; line <<  "[net-session] ready"; System::PrintDiagnosticLine(line.str()); }
 			}
 			if (s_netExitAfterReady && !s_netHost) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(c_ReadySettleMs));
@@ -5549,7 +5622,7 @@ int RunNetSessionCli() {
 			break;
 		}
 		if (nowMs > c_MaxRunMs) {
-			std::cerr << "[net-session] timed out waiting for ready" << std::endl;
+			{ std::ostringstream line; line <<  "[net-session] timed out waiting for ready"; System::PrintDiagnosticErrorLine(line.str()); }
 			break;
 		}
 
@@ -5558,15 +5631,18 @@ int RunNetSessionCli() {
 
 	std::string reportError;
 	if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
-		std::cerr << "[net-session] report failed: " << reportError << std::endl;
+		{ std::ostringstream line; line <<  "[net-session] report failed: " << reportError; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
 	const bool passed = session.IsReady();
-	std::cout << "[net-session] final_state=" << NetSession::StateName(session.GetState())
+	{
+		std::ostringstream line;
+		line <<  "[net-session] final_state=" << NetSession::StateName(session.GetState())
 	          << " accepted=" << (passed ? "true" : "false")
-	          << " report=" << (s_netSessionReportPath.empty() ? "<none>" : s_netSessionReportPath)
-	          << std::endl;
+	          << " report=" << (s_netSessionReportPath.empty() ? "<none>" : s_netSessionReportPath);
+		System::PrintDiagnosticLine(line.str());
+	}
 	return passed ? 0 : 1;
 }
 
@@ -5645,25 +5721,34 @@ bool PrepareNetLockstepScenario(GnsTransport& transport, NetSession& session, Ne
 	runnerConfig.lockstepWaitMs = 5000;
 
 	const char* tag = s_netMatch ? "[net-match]" : "[net-lockstep]";
-	std::cout << tag << " " << (s_netHost ? "hosting" : "joining")
-	          << " port=" << s_netPort
-	          << " gns_compiled=" << (GnsTransport::IsCompiledIn() ? "true" : "false")
-	          << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false")
-	          << " lobby=" << (s_netMatch ? "true" : "false")
-	          << std::endl;
+	{
+		std::ostringstream line;
+		line << tag << " " << (s_netHost ? "hosting" : "joining")
+		     << " port=" << s_netPort
+		     << " gns_compiled=" << (GnsTransport::IsCompiledIn() ? "true" : "false")
+		     << " allow_userdata=" << (s_netAllowUserdata ? "true" : "false")
+		     << " lobby=" << (s_netMatch ? "true" : "false");
+		System::PrintDiagnosticLine(line.str());
+	}
 	if (!runner.Start(transport, session, coordinator, runnerConfig, error)) {
 		return false;
 	}
 	std::string reportError;
 	if (!WriteNetSessionReport(session, s_netSessionReportPath, &reportError)) {
-		std::cerr << tag << " session report failed: " << reportError << std::endl;
+		std::ostringstream line;
+		line << tag << " session report failed: " << reportError;
+		System::PrintDiagnosticErrorLine(line.str());
 	}
 
 	ScenarioRunner::SetLockstepCoordinator(&coordinator);
-	std::cout << tag << " running local_peer=" << static_cast<int>(coordinator.GetConfig().localPeerId)
-	          << " remote_peer=" << static_cast<int>(coordinator.GetConfig().remotePeerId)
-	          << " start_frame=" << coordinator.GetConfig().startFrame
-	          << " match_config_hash=" << NetIdentity::HashHex(runner.GetMatchConfigHash()) << std::endl;
+	{
+		std::ostringstream line;
+		line << tag << " running local_peer=" << static_cast<int>(coordinator.GetConfig().localPeerId)
+		     << " remote_peer=" << static_cast<int>(coordinator.GetConfig().remotePeerId)
+		     << " start_frame=" << coordinator.GetConfig().startFrame
+		     << " match_config_hash=" << NetIdentity::HashHex(runner.GetMatchConfigHash());
+		System::PrintDiagnosticLine(line.str());
+	}
 	return true;
 }
 
@@ -5873,7 +5958,7 @@ bool ConfigureNetMatchActivity(const NetMatchConfig& config, int localTeam, std:
 		if (const GameActivity* gameActivity = dynamic_cast<const GameActivity*>(activity)) {
 			for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 				if (team == localTeam || ScenarioRunner::IsLockstepActiveTeam(team)) {
-					std::cout << "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0) << std::endl;
+					{ std::ostringstream line; line <<  "[e2e] TeamIsCPU team=" << team << " value=" << (gameActivity->TeamIsCPU(team) ? 1 : 0); System::PrintDiagnosticLine(line.str()); }
 				}
 			}
 		}
@@ -5915,8 +6000,12 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 	s_netReplayPreviousFreeRun = g_TimerMan.IsFreeRunSim();
 	ScenarioRunner::ClearControllerReplayError();
 	const NetMatchConfig& replayConfig = ScenarioRunner::GetLockstepReplayConfig();
-	std::cout << "[net-replay] playing back " << path << ": " << replayConfig.activityPreset
-	          << ", " << static_cast<int>(replayConfig.peerCount) << " peers" << std::endl;
+	{
+		std::ostringstream line;
+		line <<  "[net-replay] playing back " << path << ": " << replayConfig.activityPreset
+	          << ", " << static_cast<int>(replayConfig.peerCount) << " peers";
+		System::PrintDiagnosticLine(line.str());
+	}
 
 	static NullNetTransport s_nullTransport;
 	static NetLockstepCoordinator s_replayCoordinator;
@@ -5964,7 +6053,7 @@ static void CloseNetReplayPlayback() {
 int RunNetReplayPlayback() {
 	std::string setupError;
 	if (!StartNetReplayPlayback(s_netReplayInPath, false, &setupError)) {
-		std::cerr << "[net-replay] " << setupError << std::endl;
+		{ std::ostringstream line; line <<  "[net-replay] " << setupError; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
@@ -5995,19 +6084,23 @@ int RunNetReplayPlayback() {
 		g_MetricsCollector.EndRun();
 		const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 		if (!g_MetricsCollector.WriteReport(tracePath)) {
-			std::cerr << "[net-replay] trace write failed: " << tracePath << std::endl;
+			{ std::ostringstream line; line <<  "[net-replay] trace write failed: " << tracePath; System::PrintDiagnosticErrorLine(line.str()); }
 			s_netReplayExitCode = 1;
 		} else {
-			std::cout << "[net-replay] wrote trace: " << tracePath << std::endl;
+			{ std::ostringstream line; line <<  "[net-replay] wrote trace: " << tracePath; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
-	std::cout << "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
+	{
+		std::ostringstream line;
+		line <<  "[net-replay] playback " << (s_netReplayExitCode == 0 ? "finished" : "FAILED") << " in " << playbackMs
 	          << "ms, ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(finalOutcome)
 	          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed() << " last_tick=" << ScenarioRunner::GetLockstepReplayLastTick()
-	          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << " exit=" << s_netReplayExitCode << std::endl;
-	std::cout << "[pace] " << BuildLoopPaceJson() << std::endl;
+	          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << " exit=" << s_netReplayExitCode;
+		System::PrintDiagnosticLine(line.str());
+	}
+	{ std::ostringstream line; line <<  "[pace] " << BuildLoopPaceJson(); System::PrintDiagnosticLine(line.str()); }
 	if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
-		std::cout << "[localpred] " << stats << std::endl;
+		{ std::ostringstream line; line <<  "[localpred] " << stats; System::PrintDiagnosticLine(line.str()); }
 	}
 	CloseNetReplayPlayback();
 	return s_netReplayExitCode;
@@ -6056,14 +6149,22 @@ static void NetChatScriptOnSimTick(uint64_t simTick) {
 	while (s_netChatScriptNext < s_netChatScript.size() && s_netChatScript[s_netChatScriptNext].tick <= simTick) {
 		const NetChatScriptLine& line = s_netChatScript[s_netChatScriptNext++];
 		const bool sent = g_NetMatchService.SendChat(line.scope, line.text);
-		std::cout << "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
-		          << " ok=" << (sent ? 1 : 0) << " text=" << line.text << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[chat-send] tick=" << simTick << " scope=" << (line.scope == c_NetChatScopeTeam ? "team" : "all")
+		          << " ok=" << (sent ? 1 : 0) << " text=" << line.text;
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 	for (const NetChatEntry& entry : g_NetMatchService.TakeChatEntries()) {
-		std::cout << "[chat] tick=" << entry.receivedTick
+		{
+			std::ostringstream line;
+			line <<  "[chat] tick=" << entry.receivedTick
 		          << " from=" << static_cast<int>(entry.senderPeerId)
 		          << " scope=" << (entry.scope == c_NetChatScopeTeam ? "team" : "all")
-		          << " text=" << entry.text << std::endl;
+		          << " text=" << entry.text;
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 }
 
@@ -6202,27 +6303,33 @@ int RunNetMatchServiceE2E() {
 			s_netMatchServiceE2EPreset = activityPreset;
 		}
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		std::cout << "[net-match-service-e2e] lobby_snapshot: state=" << snapshot.serviceState
+		{
+			std::ostringstream line;
+		line << "[net-match-service-e2e] lobby_snapshot: state=" << snapshot.serviceState
 				  << " is_host=" << (snapshot.isHost ? 1 : 0) << " members=" << snapshot.members.size()
 				  << " local_ready=" << (snapshot.localReady ? 1 : 0) << " remote_ready=" << (snapshot.remoteReady ? 1 : 0)
 				  << " activity=" << snapshot.activityPreset << " scene=" << snapshot.sceneName << " mode=" << snapshot.modeName;
 		for (const NetLobbyMember& member: snapshot.members) {
-			std::cout << " | peer" << static_cast<int>(member.peerId) << "=" << member.displayName
+			line << " | peer" << static_cast<int>(member.peerId) << "=" << member.displayName
 					  << "(team" << static_cast<int>(member.team) << (member.isLocal ? ",local" : ",remote")
 					  << (member.ready ? ",ready" : ",notready") << ",ping" << member.pingMs << "ms)";
 		}
-		std::cout << std::endl;
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 
 	if (setupError.empty()) {
 		// A reconnecting peer's first lobby round carried the live match's snapshot; launch from it.
 		if (const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig()) {
-			std::cout << "[net-match-service-e2e] roster:";
+			{
+				std::ostringstream line;
+			line << "[net-match-service-e2e] roster:";
 			for (const NetMatchPlayerSlot& slot : config->players) {
-				std::cout << " peer" << static_cast<int>(slot.peerId) << "=" << slot.displayName
+				line << " peer" << static_cast<int>(slot.peerId) << "=" << slot.displayName
 				          << "(team" << static_cast<int>(slot.team) << (slot.cpu ? ",cpu)" : ",human)");
 			}
-			std::cout << std::endl;
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 		const bool staged = g_NetMatchService.HasPendingResyncLoad()
 			? StageResyncedMatchActivity(&setupError)
@@ -6252,14 +6359,14 @@ int RunNetMatchServiceE2E() {
 			g_MetricsCollector.EndRun();
 			const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 			if (!g_MetricsCollector.WriteReport(tracePath)) {
-				std::cerr << "[net-match-service-e2e] trace write failed: " << tracePath << std::endl;
+				{ std::ostringstream line; line <<  "[net-match-service-e2e] trace write failed: " << tracePath; System::PrintDiagnosticErrorLine(line.str()); }
 				s_netMatchServiceE2EExitCode = 1;
 			} else {
-				std::cout << "[net-match-service-e2e] wrote trace: " << tracePath << std::endl;
+				{ std::ostringstream line; line <<  "[net-match-service-e2e] wrote trace: " << tracePath; System::PrintDiagnosticLine(line.str()); }
 			}
 		}
 	} else {
-		std::cerr << "[net-match-service-e2e] setup failed: " << setupError << std::endl;
+		{ std::ostringstream line; line <<  "[net-match-service-e2e] setup failed: " << setupError; System::PrintDiagnosticErrorLine(line.str()); }
 	}
 
 	std::string reportError;
@@ -6272,15 +6379,15 @@ int RunNetMatchServiceE2E() {
 	}
 	const std::string report = BuildNetMatchServiceE2EReportJson(exitCode, setupError);
 	if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
-		std::cerr << "[net-match-service-e2e] report failed: " << reportError << std::endl;
+		{ std::ostringstream line; line <<  "[net-match-service-e2e] report failed: " << reportError; System::PrintDiagnosticErrorLine(line.str()); }
 		NetA7Journal::Gap("native report write failed");
 		(void)NetA7Journal::Seal("", 1);
 		return 1;
 	}
 	if (!s_netLockstepReportPath.empty()) {
-		std::cout << "[net-match-service-e2e] wrote report: " << s_netLockstepReportPath << std::endl;
+		{ std::ostringstream line; line <<  "[net-match-service-e2e] wrote report: " << s_netLockstepReportPath; System::PrintDiagnosticLine(line.str()); }
 		if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
-			std::cout << "[localpred] " << stats << std::endl;
+			{ std::ostringstream line; line <<  "[localpred] " << stats; System::PrintDiagnosticLine(line.str()); }
 		}
 	}
 	return NetA7Journal::Seal(s_netLockstepReportPath, exitCode) ? exitCode : 1;
@@ -6307,11 +6414,15 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		}
 		out = client.GetResponse();
-		std::cout << "[net-directory-probe] " << method << " " << path << " -> status=" << out.statusCode;
+		{
+			std::ostringstream line;
+		line << "[net-directory-probe] " << method << " " << path << " -> status=" << out.statusCode;
 		if (!out.error.empty()) {
-			std::cout << " error=" << out.error;
+			line << " error=" << out.error;
 		}
-		std::cout << " body=" << out.body << std::endl;
+		line << " body=" << out.body << std::endl;
+			System::PrintDiagnosticLine(line.str());
+		}
 		return out.error.empty();
 	};
 
@@ -6321,7 +6432,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	identityOptions.buildId = "stage2-p2d-local";
 	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
-		std::cerr << "[net-directory-probe] identity manifest failed: " << reason << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-probe] identity manifest failed: " << reason; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
@@ -6357,7 +6468,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	}
 	NetDirectoryRegisterResponse created;
 	if (resp.statusCode != 200 || !NetDirectoryCodec::DecodeRegisterResponse(resp.body, created, reason)) {
-		std::cerr << "[net-directory-probe] register refused: status=" << resp.statusCode << " reason=" << reason << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-probe] register refused: status=" << resp.statusCode << " reason=" << reason; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 	const std::string sessionPath = "/v1/sessions/" + created.sessionId;
@@ -6375,7 +6486,7 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	}
 	NetDirectoryListResponse listed;
 	if (!NetDirectoryCodec::DecodeListResponse(resp.body, listed, reason)) {
-		std::cerr << "[net-directory-probe] list decode failed: " << reason << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-probe] list decode failed: " << reason; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 	const NetDirectorySessionRow* mine = nullptr;
@@ -6385,12 +6496,12 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 		}
 	}
 	if (mine == nullptr) {
-		std::cerr << "[net-directory-probe] registered row not listed" << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-probe] registered row not listed"; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 	std::string joinReason;
 	const bool joinable = NetDirectoryCodec::IsJoinable(*mine, local, &joinReason);
-	std::cout << "[net-directory-probe] listed row joinable=" << (joinable ? "true" : "false") << (joinReason.empty() ? "" : " reason=" + joinReason) << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-probe] listed row joinable=" << (joinable ? "true" : "false") << (joinReason.empty() ? "" : " reason=" + joinReason); System::PrintDiagnosticLine(line.str()); }
 	if (!joinable) {
 		return 1;
 	}
@@ -6406,17 +6517,17 @@ int RunNetDirectoryProbe(const std::string& baseUrlArg, const std::string& certP
 	}
 	NetDirectoryListResponse after;
 	if (!NetDirectoryCodec::DecodeListResponse(resp.body, after, reason)) {
-		std::cerr << "[net-directory-probe] list decode failed: " << reason << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-probe] list decode failed: " << reason; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 	for (const NetDirectorySessionRow& listedRow : after.sessions) {
 		if (listedRow.sessionId == created.sessionId) {
-			std::cerr << "[net-directory-probe] row still listed after delete" << std::endl;
+			{ std::ostringstream line; line <<  "[net-directory-probe] row still listed after delete"; System::PrintDiagnosticErrorLine(line.str()); }
 			return 1;
 		}
 	}
-	std::cout << "[net-directory-probe] deleted row absent from the list" << std::endl;
-	std::cout << "[net-directory-probe] PASS" << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-probe] deleted row absent from the list"; System::PrintDiagnosticLine(line.str()); }
+	{ std::ostringstream line; line <<  "[net-directory-probe] PASS"; System::PrintDiagnosticLine(line.str()); }
 	return 0;
 }
 
@@ -6434,7 +6545,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 	}
 	const std::string installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
 	auto fail = [](const std::string& why) {
-		std::cerr << "[net-directory-signal-probe] FAIL: " << why << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-signal-probe] FAIL: " << why; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	};
 	auto request = [&](const std::string& method, const std::string& path, const std::string& body, NetHttpClient::Response& out) {
@@ -6444,7 +6555,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		}
 		out = client.GetResponse();
-		std::cout << "[net-directory-signal-probe] " << method << " " << path << " -> status=" << out.statusCode << (out.error.empty() ? "" : " error=" + out.error) << " body=" << out.body << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-signal-probe] " << method << " " << path << " -> status=" << out.statusCode << (out.error.empty() ? "" : " error=" + out.error) << " body=" << out.body; System::PrintDiagnosticLine(line.str()); }
 		return out.error.empty();
 	};
 	const auto nowMs = [] {
@@ -6491,10 +6602,10 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 	Channel client;
 	client.ConfigureClient(baseUrl, installKey, certPin, created.sessionId);
 	const std::string nonce = client.GetJoinNonce();
-	std::cout << "[net-directory-signal-probe] joiner nonce=" << nonce << " (" << nonce.size() << " chars, printed so the service log can be searched for it) headers=" << headerNames(client) << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] joiner nonce=" << nonce << " (" << nonce.size() << " chars, printed so the service log can be searched for it) headers=" << headerNames(client); System::PrintDiagnosticLine(line.str()); }
 	Channel host;
 	host.ConfigureHost(baseUrl, installKey, certPin, created.sessionId, created.token);
-	std::cout << "[net-directory-signal-probe] host headers=" << headerNames(host) << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] host headers=" << headerNames(host); System::PrintDiagnosticLine(line.str()); }
 	if (client.GetState() != Channel::State::Open || host.GetState() != Channel::State::Open || nonce.size() != Channel::c_JoinNonceChars) {
 		return fail("a channel did not open");
 	}
@@ -6508,7 +6619,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 	if (!pump(client, [&] { return client.PendingPosts() == 0; })) {
 		return fail("the joiner's posts did not go: " + client.BuildReportJson());
 	}
-	std::cout << "[net-directory-signal-probe] joiner posted 3 signals: " << client.BuildReportJson() << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] joiner posted 3 signals: " << client.BuildReportJson(); System::PrintDiagnosticLine(line.str()); }
 
 	std::vector<Channel::Signal> hostGot;
 	host.SetSink([&hostGot](const Channel::Signal& signal) {
@@ -6520,7 +6631,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 		return fail("the host did not receive 3 signals: " + host.BuildReportJson());
 	}
 	for (size_t i = 0; i < hostGot.size(); ++i) {
-		std::cout << "[net-directory-signal-probe] host received seq=" << hostGot[i].seq << " from=" << hostGot[i].from << " bytes=" << hostGot[i].bytes << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-signal-probe] host received seq=" << hostGot[i].seq << " from=" << hostGot[i].from << " bytes=" << hostGot[i].bytes; System::PrintDiagnosticLine(line.str()); }
 	}
 	for (size_t i = 0; i < posted.size(); ++i) {
 		if (hostGot.size() != posted.size() || hostGot[i].seq != static_cast<int64_t>(i + 1) || hostGot[i].from != client.GetLocalPeer() || hostGot[i].bytes != posted[i]) {
@@ -6536,7 +6647,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 	if (!pump(host, [&] { return host.PendingPosts() == 0; })) {
 		return fail("the host's echoes did not go: " + host.BuildReportJson());
 	}
-	std::cout << "[net-directory-signal-probe] host echoed 2 signals: " << host.BuildReportJson() << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] host echoed 2 signals: " << host.BuildReportJson(); System::PrintDiagnosticLine(line.str()); }
 
 	std::vector<Channel::Signal> clientGot;
 	client.SetSink([&clientGot](const Channel::Signal& signal) {
@@ -6548,7 +6659,7 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 		return fail("the joiner did not receive the 2 echoes: " + client.BuildReportJson());
 	}
 	for (size_t i = 0; i < clientGot.size(); ++i) {
-		std::cout << "[net-directory-signal-probe] joiner received seq=" << clientGot[i].seq << " from=" << clientGot[i].from << " bytes=" << clientGot[i].bytes << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-signal-probe] joiner received seq=" << clientGot[i].seq << " from=" << clientGot[i].from << " bytes=" << clientGot[i].bytes; System::PrintDiagnosticLine(line.str()); }
 	}
 	for (size_t i = 0; i < 2; ++i) {
 		if (clientGot.size() != 2 || clientGot[i].seq != static_cast<int64_t>(i + 1) || clientGot[i].from != "host" || clientGot[i].bytes != "echo:" + posted[i]) {
@@ -6558,8 +6669,8 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 
 	host.Drain();
 	client.Drain();
-	std::cout << "[net-directory-signal-probe] host drained: cursor=" << host.GetCursor() << " " << host.BuildReportJson() << std::endl;
-	std::cout << "[net-directory-signal-probe] joiner drained: cursor=" << client.GetCursor() << " " << client.BuildReportJson() << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] host drained: cursor=" << host.GetCursor() << " " << host.BuildReportJson(); System::PrintDiagnosticLine(line.str()); }
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] joiner drained: cursor=" << client.GetCursor() << " " << client.BuildReportJson(); System::PrintDiagnosticLine(line.str()); }
 	if (host.GetState() != Channel::State::Closed || client.GetState() != Channel::State::Closed || host.GetCursor() != 3 || client.GetCursor() != 2) {
 		return fail("a channel did not drain and close");
 	}
@@ -6572,14 +6683,14 @@ int RunNetDirectorySignalProbe(const std::string& baseUrlArg, const std::string&
 
 	Channel late;
 	late.ConfigureClient(baseUrl, installKey, certPin, created.sessionId);
-	std::cout << "[net-directory-signal-probe] late joiner nonce=" << late.GetJoinNonce() << " polls the deleted row" << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] late joiner nonce=" << late.GetJoinNonce() << " polls the deleted row"; System::PrintDiagnosticLine(line.str()); }
 	late.SetPolling(true);
 	(void)pump(late, [] { return false; });
-	std::cout << "[net-directory-signal-probe] late joiner: " << late.BuildReportJson() << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] late joiner: " << late.BuildReportJson(); System::PrintDiagnosticLine(line.str()); }
 	if (late.GetState() != Channel::State::Failed || late.GetLastError() != "session gone") {
 		return fail("a joiner on the deleted row did not fail with \"session gone\"");
 	}
-	std::cout << "[net-directory-signal-probe] PASS" << std::endl;
+	{ std::ostringstream line; line <<  "[net-directory-signal-probe] PASS"; System::PrintDiagnosticLine(line.str()); }
 	return 0;
 }
 
@@ -6596,7 +6707,7 @@ int RunNetDirectoryList() {
 	identityOptions.sessionRulesTag = "stage2-p2-session-rules";
 	NetIdentity::StampOptionsForTarget(identityOptions, false);
 	if (!NetIdentity::BuildCurrentManifest(manifest, &reason, identityOptions)) {
-		std::cerr << "[net-directory-list] identity manifest failed: " << reason << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-list] identity manifest failed: " << reason; System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 	NetDirectoryLocalIdentity local;
@@ -6641,15 +6752,19 @@ int RunNetDirectoryList() {
 	browser.Stop();
 
 	if (!baseUrl.empty() && (directory.ListReplies() == 0 || !directory.ListError().empty())) {
-		std::cerr << "[net-directory-list] directory unreachable: " << (directory.ListError().empty() ? "no reply in the window" : directory.ListError()) << std::endl;
+		{ std::ostringstream line; line <<  "[net-directory-list] directory unreachable: " << (directory.ListError().empty() ? "no reply in the window" : directory.ListError()); System::PrintDiagnosticErrorLine(line.str()); }
 		return 1;
 	}
 
 	const std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(lan, directory.Rows(), local, worldLocal.lockstepCodecVersion != 0 ? &worldLocal : nullptr);
 	for (const NetDirectoryClient::GameRow& row : rows) {
-		std::cout << "[net-directory-list] source=" << row.source << " name=\"" << row.name << "\" activity=\"" << row.activity << "\" mode=\"" << row.mode
+		{
+			std::ostringstream line;
+			line <<  "[net-directory-list] source=" << row.source << " name=\"" << row.name << "\" activity=\"" << row.activity << "\" mode=\"" << row.mode
 		          << "\" players=" << row.players << " address=" << row.address << ":" << row.port
-		          << " joinable=" << (row.joinable ? "yes" : "no") << " reason=" << (row.reason.empty() ? "-" : row.reason) << std::endl;
+		          << " joinable=" << (row.joinable ? "yes" : "no") << " reason=" << (row.reason.empty() ? "-" : row.reason);
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 	return 0;
 }
@@ -6679,13 +6794,17 @@ int RunNetPortMapProbe() {
 	const NetPortMap::Result& result = mapper.GetResult();
 	const bool mapped = mapper.Mapped();
 	if (mapped) {
-		std::cout << "[net-port-map-probe] mapped " << result.externalIp << ":" << result.externalPort
-		          << " via " << NetPortMap::MethodName(result.method) << " lease_s=" << result.leaseS << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[net-port-map-probe] mapped " << result.externalIp << ":" << result.externalPort
+		          << " via " << NetPortMap::MethodName(result.method) << " lease_s=" << result.leaseS;
+			System::PrintDiagnosticLine(line.str());
+		}
 	} else {
-		std::cout << "[net-port-map-probe] no mapping: " << (result.error.empty() ? "still pending at the budget" : result.error) << std::endl;
+		{ std::ostringstream line; line <<  "[net-port-map-probe] no mapping: " << (result.error.empty() ? "still pending at the budget" : result.error); System::PrintDiagnosticLine(line.str()); }
 	}
 	mapper.Release();
-	std::cout << "[net-port-map-probe] " << (mapped ? "PASS" : "FAIL") << std::endl;
+	{ std::ostringstream line; line <<  "[net-port-map-probe] " << (mapped ? "PASS" : "FAIL"); System::PrintDiagnosticLine(line.str()); }
 	return mapped ? 0 : 1;
 }
 
@@ -6768,7 +6887,7 @@ int main(int argc, char** argv) {
 			int exitCode = 1;
 			if (!browser.StartBrowser(&error) ||
 			    !beacon.StartBeacon(42120, "SelftestHost", "P4 Alpha Duel", "pvp-skirmish", 1, 4, &error)) {
-				std::cerr << "[net-discovery-selftest] FAIL: " << error << std::endl;
+				{ std::ostringstream line; line <<  "[net-discovery-selftest] FAIL: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 				return 1;
 			}
 			for (uint64_t nowMs = 0; nowMs <= 3000 && exitCode != 0; nowMs += 50) {
@@ -6782,7 +6901,7 @@ int main(int argc, char** argv) {
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			}
-			std::cout << "[net-discovery-selftest] " << (exitCode == 0 ? "PASS" : "FAIL") << std::endl;
+			{ std::ostringstream line; line <<  "[net-discovery-selftest] " << (exitCode == 0 ? "PASS" : "FAIL"); System::PrintDiagnosticLine(line.str()); }
 			return exitCode;
 		}
 	}
@@ -6913,7 +7032,7 @@ int main(int argc, char** argv) {
 
 	// The chat script drives session traffic — only a headless e2e match may carry it.
 	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {
-		std::cerr << "[net-chat-script] requires -net-match-service-e2e" << std::endl;
+		{ std::ostringstream line; line <<  "[net-chat-script] requires -net-match-service-e2e"; System::PrintDiagnosticErrorLine(line.str()); }
 		return ShutDown(EXIT_FAILURE);
 	}
 
@@ -6934,13 +7053,13 @@ int main(int argc, char** argv) {
 		// ends or an activity launch fails. With no scene it must do nothing rather than fault, and
 		// this is the one moment the engine is up with nothing loaded.
 		if (g_SceneMan.GetScene() != nullptr) {
-			std::cerr << "[camera-null-scene-selftest] FAIL: this case needs a scene-less engine" << std::endl;
+			{ std::ostringstream line; line <<  "[camera-null-scene-selftest] FAIL: this case needs a scene-less engine"; System::PrintDiagnosticErrorLine(line.str()); }
 			return ShutDown(EXIT_FAILURE);
 		}
 		for (int screenId = 0; screenId < c_MaxScreenCount; ++screenId) {
 			g_CameraMan.Update(screenId);
 		}
-		std::cout << "[camera-null-scene-selftest] PASS" << std::endl;
+		{ std::ostringstream line; line <<  "[camera-null-scene-selftest] PASS"; System::PrintDiagnosticLine(line.str()); }
 		return ShutDown(EXIT_SUCCESS);
 	}
 
@@ -6952,11 +7071,15 @@ int main(int argc, char** argv) {
 		std::string error;
 		const int exitCode = NetIdentity::DumpCurrentManifestJson(s_netIdentityDumpPath, &error, &manifest) ? 0 : 1;
 		if (exitCode == 0) {
-			std::cout << "[net-identity-dump] wrote " << s_netIdentityDumpPath
+			{
+				std::ostringstream line;
+				line <<  "[net-identity-dump] wrote " << s_netIdentityDumpPath
 			          << " session_identity_hash=" << NetIdentity::HashHex(manifest.sessionIdentityHash)
-			          << " hash_duration_ms=" << manifest.hashDurationMs << std::endl;
+			          << " hash_duration_ms=" << manifest.hashDurationMs;
+				System::PrintDiagnosticLine(line.str());
+			}
 		} else {
-			std::cerr << "[net-identity-dump] failed: " << error << std::endl;
+			{ std::ostringstream line; line <<  "[net-identity-dump] failed: " << error; System::PrintDiagnosticErrorLine(line.str()); }
 		}
 		return ShutDown(exitCode);
 	}
@@ -6992,7 +7115,7 @@ int main(int argc, char** argv) {
 		NetReplayVerifyReport report;
 		NetMatchReplayReader::Verify(s_netReplayVerifyPath, report);
 		const std::string json = report.ToJson();
-		std::cout << "[net-replay-verify] " << json << std::endl;
+		{ std::ostringstream line; line <<  "[net-replay-verify] " << json; System::PrintDiagnosticLine(line.str()); }
 		if (s_netReplayDumpTo >= s_netReplayDumpFrom) {
 			// The recorded wire, tick by tick: what every peer's sim applied.
 			NetMatchReplayReader reader;
@@ -7005,30 +7128,37 @@ int main(int argc, char** argv) {
 						continue;
 					}
 					for (const ControllerFrame& frame: record.frames) {
-						std::cout << "[net-replay-dump] frame=" << record.targetFrame << " uid=" << frame.actorUniqueID << " mode=" << static_cast<int>(frame.inputMode)
+						{
+							std::ostringstream line;
+							line <<  "[net-replay-dump] frame=" << record.targetFrame << " uid=" << frame.actorUniqueID << " mode=" << static_cast<int>(frame.inputMode)
 						          << " player=" << static_cast<int>(frame.playerRaw) << " flags=0x" << std::hex << static_cast<int>(frame.flags) << std::dec
 						          << " flip=" << (frame.IsActorHFlipped() ? 1 : 0) << " aim_intent=" << (frame.HasAimIntent() ? 1 : 0) << " flip_intent=" << (frame.HasFlipIntent() ? 1 : 0)
 						          << " aim=" << std::hexfloat << frame.aimAngle << std::defaultfloat << " fg=" << frame.equippedFGUniqueID << " bg=" << frame.equippedBGUniqueID
-						          << " device=" << static_cast<int>(frame.deviceClass) << " aim_speed=" << frame.digitalAimSpeed << std::endl;
+						          << " device=" << static_cast<int>(frame.deviceClass) << " aim_speed=" << frame.digitalAimSpeed;
+							System::PrintDiagnosticLine(line.str());
+						}
 					}
 					for (const NetGameCommand& command: record.commands) {
-						std::cout << "[net-replay-dump] frame=" << record.targetFrame << " command=" << NetGameCommandTypeName(NetGameCommandTypeOf(command.payload)) << " sender=" << static_cast<int>(command.senderPeerId);
+						{
+							std::ostringstream line;
+						line << "[net-replay-dump] frame=" << record.targetFrame << " command=" << NetGameCommandTypeName(NetGameCommandTypeOf(command.payload)) << " sender=" << static_cast<int>(command.senderPeerId);
 						if (const NetGameAIEquip* equip = std::get_if<NetGameAIEquip>(&command.payload)) {
-							std::cout << " uid=" << equip->actorUID << " op=" << static_cast<int>(equip->op) << " group=" << equip->group << " preset=" << equip->presetName;
+							line << " uid=" << equip->actorUID << " op=" << static_cast<int>(equip->op) << " group=" << equip->group << " preset=" << equip->presetName;
 						} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
-							std::cout << " uid=" << order->actorUID << " op=" << static_cast<int>(order->op) << " x=" << order->x << " y=" << order->y << " target=" << order->targetUID;
+							line << " uid=" << order->actorUID << " op=" << static_cast<int>(order->op) << " x=" << order->x << " y=" << order->y << " target=" << order->targetUID;
 						}
-						std::cout << std::endl;
+							System::PrintDiagnosticLine(line.str());
+						}
 					}
 				}
 			} else {
-				std::cerr << "[net-replay-dump] " << openError << std::endl;
+				{ std::ostringstream line; line <<  "[net-replay-dump] " << openError; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 		}
 		if (!ScenarioRunner::GetArgs().outPath.empty()) {
 			std::string writeError;
 			if (!WriteTextFile(ScenarioRunner::GetArgs().outPath, json + "\n", &writeError)) {
-				std::cerr << "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError << std::endl;
+				{ std::ostringstream line; line <<  "[net-replay-verify] could not write " << ScenarioRunner::GetArgs().outPath << ": " << writeError; System::PrintDiagnosticErrorLine(line.str()); }
 				return ShutDown(EXIT_FAILURE);
 			}
 		}
@@ -7083,10 +7213,10 @@ int main(int argc, char** argv) {
 			const Activity* presetActivity = dynamic_cast<const Activity*>(presetEntity);
 			int startResult = -1;
 			if (!controllerLogPrepared) {
-				std::cerr << "[scenario] controller log setup failed: " << controllerLogError << std::endl;
+				{ std::ostringstream line; line <<  "[scenario] controller log setup failed: " << controllerLogError; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 			if (!netLockstepPrepared) {
-				std::cerr << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " setup failed: " << netLockstepSetupError << std::endl;
+				{ std::ostringstream line; line <<  (s_netMatch ? "[net-match]" : "[net-lockstep]") << " setup failed: " << netLockstepSetupError; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 			if (controllerLogPrepared && netLockstepPrepared && presetActivity) {
 				const std::string& sceneName = presetActivity->GetSceneName();
@@ -7095,13 +7225,13 @@ int main(int argc, char** argv) {
 				}
 				startResult = g_ActivityMan.StartActivity("GAScripted", presetName);
 			} else if (controllerLogPrepared && netLockstepPrepared) {
-				std::cerr << "[scenario] no preset \"" << presetName << "\" of class GAScripted" << std::endl;
+				{ std::ostringstream line; line <<  "[scenario] no preset \"" << presetName << "\" of class GAScripted"; System::PrintDiagnosticErrorLine(line.str()); }
 			}
 
 			if (!controllerLogPrepared || !netLockstepPrepared) {
 				scenarioExitCode = 1;
 			} else if (startResult < 0) {
-				std::cerr << "[scenario] failed to start scenario \"" << presetName << "\"" << std::endl;
+				{ std::ostringstream line; line <<  "[scenario] failed to start scenario \"" << presetName << "\""; System::PrintDiagnosticErrorLine(line.str()); }
 				scenarioExitCode = 1;
 			} else {
 				RunGameLoop();
@@ -7120,12 +7250,12 @@ int main(int argc, char** argv) {
 				std::string reportError;
 				const std::string report = BuildNetLockstepReportJson(netLockstepSession, netLockstepCoordinator, netMatchRunner, scenarioExitCode, netLockstepSetupError);
 				if (!WriteTextFile(s_netLockstepReportPath, report, &reportError)) {
-					std::cerr << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " report failed: " << reportError << std::endl;
+					{ std::ostringstream line; line <<  (s_netMatch ? "[net-match]" : "[net-lockstep]") << " report failed: " << reportError; System::PrintDiagnosticErrorLine(line.str()); }
 					scenarioExitCode = 1;
 				} else if (!s_netLockstepReportPath.empty()) {
-					std::cout << (s_netMatch ? "[net-match]" : "[net-lockstep]") << " wrote report: " << s_netLockstepReportPath << std::endl;
+					{ std::ostringstream line; line <<  (s_netMatch ? "[net-match]" : "[net-lockstep]") << " wrote report: " << s_netLockstepReportPath; System::PrintDiagnosticLine(line.str()); }
 					if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
-						std::cout << "[localpred] " << stats << std::endl;
+						{ std::ostringstream line; line <<  "[localpred] " << stats; System::PrintDiagnosticLine(line.str()); }
 					}
 				}
 			}
@@ -7135,7 +7265,7 @@ int main(int argc, char** argv) {
 			bool loadedSavedGame = false;
 			if (!s_loadGameName.empty()) {
 				loadedSavedGame = g_ActivityMan.LoadAndLaunchGame(s_loadGameName);
-				std::cout << "[load-game] " << (loadedSavedGame ? "loaded " : "could not load ") << std::quoted(s_loadGameName) << std::endl;
+				{ std::ostringstream line; line <<  "[load-game] " << (loadedSavedGame ? "loaded " : "could not load ") << std::quoted(s_loadGameName); System::PrintDiagnosticLine(line.str()); }
 				if (!loadedSavedGame) {
 					s_loadGameFailed = true;
 					System::SetQuit(true);
@@ -7160,9 +7290,9 @@ int main(int argc, char** argv) {
 			if (g_NetMatchService.WasEverStarted() && !s_netLockstepReportPath.empty()) {
 				std::string reportError;
 				if (!WriteTextFile(s_netLockstepReportPath, g_NetMatchService.BuildReportJson(), &reportError)) {
-					std::cerr << "[menu-mp] could not write report: " << reportError << std::endl;
+					{ std::ostringstream line; line <<  "[menu-mp] could not write report: " << reportError; System::PrintDiagnosticErrorLine(line.str()); }
 				} else {
-					std::cout << "[menu-mp] wrote report: " << s_netLockstepReportPath << std::endl;
+					{ std::ostringstream line; line <<  "[menu-mp] wrote report: " << s_netLockstepReportPath; System::PrintDiagnosticLine(line.str()); }
 				}
 			}
 
@@ -7170,13 +7300,13 @@ int main(int argc, char** argv) {
 				g_MetricsCollector.EndRun();
 				const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 				if (!s_menuMpTraceError.empty() || g_MetricsCollector.GetTickHashCount() != cap) {
-					std::cerr << "[menu-mp] FAIL: collected " << g_MetricsCollector.GetTickHashCount() << " of " << cap << " requested ticks" << std::endl;
+					{ std::ostringstream line; line <<  "[menu-mp] FAIL: collected " << g_MetricsCollector.GetTickHashCount() << " of " << cap << " requested ticks"; System::PrintDiagnosticErrorLine(line.str()); }
 					g_MetricsCollector.SetResult(false);
 					scenarioExitCode = 1;
 				}
 				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
 				if (g_MetricsCollector.WriteReport(tracePath)) {
-					std::cout << "[menu-mp] wrote trace: " << tracePath << std::endl;
+					{ std::ostringstream line; line <<  "[menu-mp] wrote trace: " << tracePath; System::PrintDiagnosticLine(line.str()); }
 				} else {
 					scenarioExitCode = 1;
 				}
