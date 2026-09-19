@@ -1055,6 +1055,135 @@ namespace RTE {
 			return 0;
 		}
 
+		NetIdentityManifest MakeSessionIdentity() {
+			NetIdentityManifest manifest;
+			manifest.gameVersion = "7.0.0-test";
+			manifest.networkProtocolVersion = NetProtocol::c_Version;
+			manifest.controllerFrameVersion = ControllerFrame::c_Version;
+			manifest.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			manifest.buildId = "stage2-world";
+			manifest.platform = "test";
+			manifest.deterministicConfigHash.fill(1);
+			manifest.moduleManifestHash.fill(2);
+			manifest.sessionRulesHash.fill(3);
+			manifest.sessionIdentityHash.fill(4);
+			manifest.hasUserdataModules = false;
+			return manifest;
+		}
+
+		NetSessionConfig MakeWorldSessionConfig(uint16_t port, uint64_t nonce, const std::string& name) {
+			NetSessionConfig config;
+			config.localIdentity = MakeSessionIdentity();
+			config.displayName = name;
+			config.port = port;
+			config.sessionId = 0x5700000000000000ULL + port;
+			config.localNonce = nonce;
+			config.maxPeers = 4;
+			config.heartbeatIntervalMs = 50;
+			config.timeoutMs = 4000;
+			return config;
+		}
+
+		// A joiner activates inside a sim update: the start has to hand that update back and finish its
+		// handshake over the updates that follow, whatever the remote does.
+		int TestWorldJoinLockstepStartDoesNotHoldTheSimUpdate() {
+			std::string error;
+			const uint16_t port = 47119;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetSession session;
+			NetSession clientSession;
+			NetMatchRunner runner;
+			NetLockstepCoordinator round;
+			NetMatchRunnerConfig config;
+			config.host = true;
+			config.matchConfig = MakeWorldConfig();
+			config.useLobbyProtocol = false;
+			config.sessionConfig = MakeWorldSessionConfig(port, 0x11ULL, "World");
+			config.sessionWaitMs = 2000;
+			config.lobbyWaitMs = 2000;
+			config.lockstepWaitMs = 1500;
+			config.missingFrameGraceMs = 1000000;
+			config.postSessionSettleMs = 0;
+			config.postLobbySettleMs = 0;
+			// A world with no one in it starts alone, so this runner is started without a second thread.
+			if (!runner.Start(hostTransport, session, round, config, &error)) {
+				return Fail("world lockstep start: the empty world host did not start: " + error);
+			}
+			NetSessionConfig clientConfig = MakeWorldSessionConfig(port, 0x22ULL, "Joiner");
+			if (!clientSession.StartClient(clientTransport, "loopback", clientConfig, &error)) {
+				return Fail("world lockstep start: the joining session did not start: " + error);
+			}
+			for (uint64_t now = 0; now <= 2000 && session.GetReadyPeers().empty(); now += 10) {
+				session.Tick(now);
+				clientSession.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (session.GetReadyPeers().empty() || clientSession.GetReadyPeers().empty()) {
+				return Fail("world lockstep start: the joining peer never reached Ready");
+			}
+
+			// The remote is silent from here: nothing answers the lockstep handshake until this case
+			// starts the other side. The sessions are not ticked again, so only the round plane reads the wire.
+			const uint64_t e = 240;
+			NetLockstepCoordinator joinRound;
+			if (runner.StartWorldJoinLockstep(hostTransport, session, joinRound, e, &error)) {
+				return Fail("world-join-lockstep-held-the-sim-update: the start reported a running lockstep while the remote was silent");
+			}
+			if (!runner.IsWorldJoinLockstepStarting()) {
+				return Fail("world-join-lockstep-held-the-sim-update: the start resolved inside 1 update (runner " +
+				            std::string(NetMatchRunner::StateName(runner.GetState())) + ", error \"" + error +
+				            "\") instead of handing the update back");
+			}
+			int updates = 1;
+			for (; updates < 10; ++updates) {
+				if (runner.PumpWorldJoinLockstepStart(joinRound, &error)) {
+					return Fail("world-join-lockstep-held-the-sim-update: the silent remote produced a running lockstep after " +
+					            std::to_string(updates) + " updates");
+				}
+				if (!runner.IsWorldJoinLockstepStarting()) {
+					return Fail("world-join-lockstep-held-the-sim-update: the start gave up after " + std::to_string(updates) +
+					            " updates (" + error + "); a silent remote must cost updates, not one held update");
+				}
+			}
+
+			// Released: the other end answers, and the start finishes over the updates that follow.
+			NetLockstepCoordinator joinerSide;
+			NetLockstepConfig joinerConfig;
+			joinerConfig.sessionId = session.GetSessionId();
+			joinerConfig.localPeerId = 2;
+			joinerConfig.remotePeerId = 1;
+			joinerConfig.remoteTransportPeerId = clientSession.GetReadyPeers().front().transportPeerId;
+			joinerConfig.peerCount = config.matchConfig.peerCount;
+			joinerConfig.timeoutMs = 1000000;
+			joinerConfig.startFrame = e;
+			joinerConfig.matchConfig = config.matchConfig;
+			if (!joinerSide.Start(clientTransport, joinerConfig, &error)) {
+				return Fail("world-join-lockstep-did-not-start: the answering side did not start: " + error);
+			}
+			int released = 0;
+			for (uint64_t now = 3000; released < 400 && !joinRound.IsRunning(); ++released, now += 10) {
+				(void)runner.PumpWorldJoinLockstepStart(joinRound, &error);
+				joinerSide.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (!joinRound.IsRunning() || runner.GetState() != NetMatchRuntimeState::Running) {
+				return Fail("world-join-lockstep-did-not-start: after " + std::to_string(released) +
+				            " updates with the remote answering the round is " + (joinRound.IsRunning() ? "running" : "not running") +
+				            " and the runner is " + NetMatchRunner::StateName(runner.GetState()) + " (" + error + ")");
+			}
+			if (runner.IsWorldJoinLockstepStarting()) {
+				return Fail("world-join-lockstep-did-not-start: the start never closed out after " + std::to_string(released) + " updates");
+			}
+			if (joinRound.GetConfig().startFrame != e) {
+				return Fail("world-join-lockstep-did-not-start: the round started at frame " +
+				            std::to_string(joinRound.GetConfig().startFrame) + ", E is " + std::to_string(e));
+			}
+			return 0;
+		}
+
 		int TestTypedAddressTargetsOnlyItsHost() {
 			std::vector<NetDirectoryClient::GameRow> rows;
 			NetDirectoryClient::GameRow world;
@@ -1801,6 +1930,10 @@ namespace RTE {
 			s_FailTag = "net-world-spectator-ids-selftest";
 			return TestSpectatorLobbyIdsRecycle();
 		}
+		if (std::strcmp(name, "lockstep-start") == 0 || std::strcmp(name, "-net-world-lockstep-start-selftest") == 0) {
+			s_FailTag = "net-world-lockstep-start-selftest";
+			return TestWorldJoinLockstepStartDoesNotHoldTheSimUpdate();
+		}
 		if (std::strcmp(name, "typed-address") == 0 || std::strcmp(name, "-net-world-typed-address-selftest") == 0) {
 			s_FailTag = "net-world-typed-address-selftest";
 			return TestTypedAddressTargetsOnlyItsHost();
@@ -1893,6 +2026,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestTypedAddressTargetsOnlyItsHost(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldJoinLockstepStartDoesNotHoldTheSimUpdate(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSecondJoinAtTheSameTickGetsTheImage(); result != 0) {

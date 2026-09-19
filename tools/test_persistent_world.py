@@ -47,6 +47,8 @@ RED_SPECTATOR_IDS = "spectator-lobby-id-leaked"
 RED_TYPED_ADDRESS = "typed-address-targeted-the-wrong-world"
 RED_SECOND_JOIN = "second-join-had-no-image"
 RED_IMAGE_QUEUE = "joiner-image-replaced"
+RED_LOCKSTEP_START_HELD = "world-join-lockstep-held-the-sim-update"
+RED_LOCKSTEP_START_MISSED = "world-join-lockstep-did-not-start"
 
 CASES = (
     {
@@ -215,13 +217,22 @@ CASES = (
         "red": RED_IMAGE_QUEUE,
         "pass_token": "[net-world-image-queue-selftest] PASS",
     },
+    {
+        # Two arms in one process: the silent remote must cost updates, not one held update, and the
+        # released remote must bring the joiner's lockstep up at E.
+        "name": "world-join-lockstep-start-frees-the-sim-update",
+        "argv": ["-net-world-lockstep-start-selftest"],
+        "red": RED_LOCKSTEP_START_HELD,
+        "also_red": RED_LOCKSTEP_START_MISSED,
+        "pass_token": "[net-world-lockstep-start-selftest] PASS",
+    },
 )
 
 
 def score_stdout(stdout: str, case: dict) -> dict:
-    red = case["red"]
-    if red in (stdout or ""):
-        return {"pass": False, "reason": f"FAIL: {red}"}
+    for red in (case["red"], case.get("also_red")):
+        if red and red in (stdout or ""):
+            return {"pass": False, "reason": f"FAIL: {red}"}
     token = case["pass_token"]
     if token not in (stdout or ""):
         return {"pass": False, "reason": f"missing {token}"}
