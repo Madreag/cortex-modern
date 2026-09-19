@@ -1756,7 +1756,9 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 		script << "player=0 1 10 FIRE\nplayer=0 1 10 START\n";
 	}
 	check("script_drives_across_chat_entry", InputScript::Load(path.string(), &error) && InputScript::DrivesPlayer(Players::PlayerOne));
+	// What an open entry does: the dialog key mask and the seats' own gameplay mappings.
 	DisableKeys(true);
+	TypeIntoSeatInput(true);
 	g_TimerMan.RewindSimTo(5, 0);
 	check("held_fire_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_FIRE, 5) &&
 	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held),
@@ -1765,6 +1767,7 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Held),
 	    "a scripted START was not held while the entry was open");
 	DisableKeys(false);
+	TypeIntoSeatInput(false);
 	// The human half of the same rule: the seat's own keyboard and mouse are typed into while the entry is
 	// open, so none of its gameplay mappings reads through.
 	{
@@ -1793,7 +1796,14 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	const bool buttonDrives = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
 	check("human_mappings_drive_with_the_entry_closed", keyDrives && buttonDrives,
 	    "W read as L_UP " + std::to_string(keyDrives) + " and the left button as fire " + std::to_string(buttonDrives) + " with no entry open");
+	const int wheelDrives = MouseWheelMovedByPlayer(Players::PlayerOne);
+	const Vector aimDrives = AnalogAimValues(Players::PlayerOne);
+	const Vector movementDrives = GetMouseMovement(Players::PlayerOne);
+	check("mouse_axes_drive_with_the_entry_closed", wheelDrives != 0 && !aimDrives.IsZero() && !movementDrives.IsZero(),
+	    "with no entry open the wheel read " + std::to_string(wheelDrives) + ", the aim " + std::to_string(aimDrives.GetX()) + "," +
+	        std::to_string(aimDrives.GetY()) + " and the movement " + std::to_string(movementDrives.GetX()) + "," + std::to_string(movementDrives.GetY()));
 	DisableKeys(true);
+	TypeIntoSeatInput(true);
 	const bool keyWhileTyping = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
 	check("human_key_silent_while_typing", !keyWhileTyping, "W still read as L_UP while the entry was open");
 	const bool buttonWhileTyping = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
@@ -1806,6 +1816,12 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	const Vector movementWhileTyping = GetMouseMovement(Players::PlayerOne);
 	check("mouse_movement_silent_while_typing", movementWhileTyping.IsZero(),
 	    "the mouse moved the aim by " + std::to_string(movementWhileTyping.GetX()) + "," + std::to_string(movementWhileTyping.GetY()) + " while the entry was open");
+	// Losing the window is not a text entry: the seat keeps its own mappings through a plain key disable.
+	TypeIntoSeatInput(false);
+	const bool keyAfterFocusLoss = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	const bool buttonAfterFocusLoss = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("focus_loss_alone_does_not_consume_the_seat", keyAfterFocusLoss && buttonAfterFocusLoss,
+	    "a plain keyboard disable read W as L_UP " + std::to_string(keyAfterFocusLoss) + " and the left button as fire " + std::to_string(buttonAfterFocusLoss));
 	DisableKeys(false);
 	keyboard = savedKeyboard;
 	mouse = savedMouse;
