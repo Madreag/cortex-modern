@@ -4588,16 +4588,11 @@ namespace RTE {
 
 	void NetLockstepCoordinator::ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame) {
 		// The newest restart this frame is at or past; a sender behind two of them takes the newer.
-		uint64_t due = 0;
-		for (const uint64_t epoch: m_ObservationEpochs) {
-			if (epoch > targetFrame) {
-				break;
-			}
-			due = epoch;
-		}
-		if (due == 0) {
+		const auto above = m_ObservationEpochs.upper_bound(targetFrame);
+		if (above == m_ObservationEpochs.begin()) {
 			return;
 		}
+		const uint64_t due = *std::prev(above);
 		const auto applied = m_ObservationEpochApplied.find(senderPeerId);
 		if (applied != m_ObservationEpochApplied.end() && applied->second >= due) {
 			return;
