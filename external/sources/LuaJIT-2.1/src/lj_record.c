@@ -1529,11 +1529,18 @@ static int nommstr(jit_State *J, TRef key)
 /* Record indexed load/store. */
 void lj_record_preview(jit_State *J, TRef tab, GCtab *t)
 {
-  TRef pending;
+  TRef pending, armed;
   if (t->preview & LJ_PREVIEW_PENDING) lj_preview_write(J->L, t);
-  checkpoint_mark(t);
+  checkpoint_mark_state(J->L, t);
   pending = emitir(IRT(IR_FLOAD, IRT_INT), tab, IRFL_TAB_PREVIEW);
   emitir(IRTGI(IR_GE), pending, lj_ir_kint(J, 0));
+  /* A compiled store leaves the trace while the checkpoint trap is armed, so
+  ** the interpreter marks the table the freeze has not seen written yet.
+  */
+  armed = emitir(IRT(IR_XLOAD, IRT_U8),
+		 lj_ir_kptr(J, &J2G(J)->checkpoint_armed), IRXLOAD_VOLATILE);
+  armed = emitir(IRTI(IR_BAND), armed, lj_ir_kint(J, 0xff));
+  emitir(IRTGI(IR_EQ), armed, lj_ir_kint(J, 0));
 }
 
 TRef lj_record_idx(jit_State *J, RecordIndex *ix)

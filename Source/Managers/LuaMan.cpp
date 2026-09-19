@@ -5824,6 +5824,14 @@ LuaStatesArray& LuaMan::GetThreadedScriptStates() {
 	return m_ScriptStates;
 }
 
+void LuaMan::ArmCheckpointWriteTrap() {
+	const auto arm = [](LuaStateWrapper& state) {
+		if (lua_State* luaState = state.GetLuaState()) luaJIT_arm_tab_write_trap(luaState);
+	};
+	arm(m_MasterScriptState);
+	for (LuaStateWrapper& state: m_ScriptStates) arm(state);
+}
+
 int LuaMan::GetStateIndex(const LuaStateWrapper* state) const {
 	if (!state) {
 		return -1;
