@@ -2101,6 +2101,76 @@ int PathFinder::RunHorizonGridSelfTest() {
 		std::cout << Tag << " PASS scene-production-path" << std::endl;
 	}
 
+	// carve-note: a single pixel carved through SceneMan pins the shared grid and commits at T+H like a boxed note.
+	{
+		LoopbackTransport idle;
+		NetLockstepConfig lockstep;
+		lockstep.localPeerId = 1;
+		lockstep.remotePeerId = 2;
+		lockstep.peerCount = 2;
+		lockstep.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+		lockstep.matchConfig.pathHorizonTicks = 4;
+		NetLockstepCoordinator seated;
+		std::string lockstepError;
+		if (!seated.StartReplay(idle, lockstep, &lockstepError)) {
+			return fail("carve fixture lockstep replay did not start");
+		}
+		LockstepBinding lockstepBinding;
+		ScenarioRunner::SetLockstepCoordinator(&seated);
+		ScenarioRunner::SetLockstepAppliedFrame(40);
+		Scene carveScene;
+		SLTerrain carveTerrain;
+		FixtureBinding binding;
+		if (carveTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
+			return fail("carve fixture material bitmap was not installed");
+		}
+		binding.Bind(&carveScene, &carveTerrain);
+		carveScene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		PathFinder& carveFinder = carveScene.GetPathFinder(Activity::Teams::NoTeam);
+		const size_t nodeLimit = std::numeric_limits<size_t>::max();
+		const float carveAirCost = sceneCost(carveScene);
+		// One sand pixel on the ray between two nodes, boxed and committed the ordinary way.
+		const int carveX = 80;
+		const int carveY = 50;
+		carveTerrain.SetMaterialPixel(carveX, carveY, MaterialColorKeys::g_MaterialSand);
+		carveTerrain.AddUpdatedMaterialArea(Box(Vector(static_cast<float>(carveX), static_cast<float>(carveY)), 1.0F, 1.0F));
+		carveFinder.RecalculateAreaCosts(carveTerrain.GetUpdatedMaterialAreas(), nodeLimit);
+		ScenarioRunner::SetLockstepAppliedFrame(44);
+		const float carveBlockedCost = sceneCost(carveScene);
+		if (carveBlockedCost == carveAirCost) {
+			std::cout << Tag << " FAIL carve fixture wall cost=" << carveBlockedCost << std::endl;
+			return 1;
+		}
+		const size_t boxesBeforeCarve = carveScene.TestHorizonBoxCount();
+		float retardation = 0.0F;
+		if (!g_SceneMan.TryPenetrate(carveX, carveY, Vector(1000.0F, 0.0F), Vector(10.0F, 0.0F), retardation, 0.0F)) {
+			return fail("carve fixture penetration did not knock the pixel loose");
+		}
+		if (g_SceneMan.GetTerrMatter(carveX, carveY) != MaterialColorKeys::g_MaterialAir) {
+			std::cout << Tag << " FAIL carved pixel material=" << static_cast<int>(g_SceneMan.GetTerrMatter(carveX, carveY)) << std::endl;
+			return 1;
+		}
+		if (carveScene.TestHorizonBoxCount() <= boxesBeforeCarve) {
+			std::cout << Tag << " FAIL carve note boxes=" << carveScene.TestHorizonBoxCount() << std::endl;
+			return 1;
+		}
+		// The live grid takes the carve in the same tick; the shared grid keeps the pinned wall until T+H.
+		carveFinder.RecalculateAreaCosts(carveTerrain.GetUpdatedMaterialAreas(), nodeLimit);
+		ScenarioRunner::SetLockstepAppliedFrame(47);
+		const float carveAtHorizonMinusOne = sceneCost(carveScene);
+		ScenarioRunner::SetLockstepAppliedFrame(48);
+		const float carveAtHorizon = sceneCost(carveScene);
+		if (carveAtHorizonMinusOne != carveBlockedCost) {
+			std::cout << Tag << " FAIL carve T+H-1 cost=" << carveAtHorizonMinusOne << std::endl;
+			return 1;
+		}
+		if (carveAtHorizon != carveAirCost) {
+			std::cout << Tag << " FAIL carve T+H cost=" << carveAtHorizon << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS carve-note" << std::endl;
+	}
+
 	// wrap-identity: a seam-crossing ray reads the same pixels live and out of a production-sized patch.
 	{
 		Scene wrapScene;
