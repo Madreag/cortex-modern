@@ -674,7 +674,7 @@ namespace {
 			probe.stepRender = probe.renders;
 			probe.stepMs = NowMs();
 			WriteResult();
-			if (probe.done) std::cout << "[net-ui-probe] PASS: completed " << probe.index << " steps" << std::endl;
+			if (probe.done) System::PrintDiagnosticLine("[net-ui-probe] PASS: completed " + std::to_string(probe.index) + " steps");
 		} catch (const std::exception& error) {
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
@@ -683,7 +683,7 @@ namespace {
 			probe.result["error"] = error.what();
 			probe.result["failed_step"] = probe.index;
 			try { if (probe.resultStarted) WriteResult(); } catch (...) {}
-			std::cerr << "[net-ui-probe] FAIL: " << error.what() << std::endl;
+			System::PrintDiagnosticErrorLine(std::string("[net-ui-probe] FAIL: ") + error.what());
 			System::SetQuit(true);
 		}
 	}
