@@ -11,7 +11,6 @@
 #include "RTETools.h"
 
 #include "lua.hpp"
-#include "luabind/detail/object_rep.hpp"
 
 #include <algorithm>
 #include <array>
@@ -427,12 +426,6 @@ int64_t CheckpointCow::P99FreezeUs() const {
 void RTE::ArmLuaCheckpointBarrier() {
 	luaJIT_set_tab_write_callback(&OnLuaTableWrite);
 	ArmLuaCheckpointValueBarrier();
-}
-
-// Lua reaches a native's values only through luabind, so one seam reports every script-side write.
-// It arms apart from the table barrier because it costs nothing until a walk has armed an object.
-void RTE::ArmLuaCheckpointValueBarrier() {
-	luabind::detail::checkpoint_object_write = &OnLuaValueWrite;
 }
 
 void RTE::CheckpointValueWritten(const void* value) {
