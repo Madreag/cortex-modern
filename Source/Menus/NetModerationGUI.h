@@ -33,6 +33,12 @@ namespace RTE {
 		bool IsOpen() const { return m_Open; }
 		bool AutomationModerate(const std::string& action, int stableSeat);
 		GUIControl* GetControl(const std::string& name) const;
+		/// The panel's own control manager, for the script commands that read its rows.
+		GUIControlManager* AutomationManager() const { return m_Controls.get(); }
+		/// Clicks a named panel control the way its own manager's mouse would.
+		bool AutomationPostCommand(const std::string& name);
+		/// Reads a named label's text for a script assert.
+		bool AutomationLabelText(const std::string& name, std::string& text) const;
 
 		/// The area an overlay element drew into on the last frame, in screen pixels.
 		struct OverlayRect {
@@ -116,6 +122,11 @@ namespace RTE {
 		GUILabel* m_Status = nullptr;
 		GUILabel* m_Roster = nullptr;
 		GUIButton* m_Close = nullptr;
+		/// The F6 panel's second view: the match's adopted options, the same read-only panel the pause
+		/// menu's Match Options and the lobby's Details show.
+		GUIButton* m_OptionsToggle = nullptr;
+		GUILabel* m_Options = nullptr;
+		bool m_OptionsView = false;
 		std::array<Controls, 3> m_Seats;
 		std::optional<Press> m_Press;
 		NetModerationUx m_Model;

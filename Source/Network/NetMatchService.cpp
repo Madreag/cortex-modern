@@ -39,6 +39,7 @@
 #include <iostream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <list>
 #include <optional>
 #include <random>
@@ -1166,6 +1167,10 @@ static std::string ResyncSaveName() {
 			m_Dedicated = false;
 			m_HumanSeats = 0;
 			m_MatchConfig = {};
+			// A staged options draft names the session it was accepted under; teardown drops it
+			// with that config so the next lobby never sees its predecessor's edit.
+			m_AdoptedMatchConfig = {};
+			m_PendingHostOptions.reset();
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -1586,7 +1591,10 @@ static std::string ResyncSaveName() {
 				m_CompletedLobbySinceMs = 0;
 				return;
 			}
-			expired = nowMs >= m_CompletedLobbySinceMs + c_CompletedLobbyExpiryMs;
+			// The rematch seating wait is the host's own idle policy, the same one the setup lobby
+			// announced; Never (0) leaves the lobby open until it seats or the host closes it.
+			expired = m_AdoptedMatchConfig.idleWaitMinutes > 0 &&
+			          nowMs >= m_CompletedLobbySinceMs + static_cast<uint64_t>(m_AdoptedMatchConfig.idleWaitMinutes) * 60000;
 			if (expired) {
 				m_CompletedLobbySinceMs = 0;
 			}
@@ -1594,7 +1602,7 @@ static std::string ResyncSaveName() {
 		if (!expired) {
 			return;
 		}
-		std::cout << "[net-match] rematch lobby expired after " << c_CompletedLobbyExpiryMs / 1000 << "s waiting for the other player" << std::endl;
+		std::cout << "[net-match] rematch lobby expired after the host's idle wait" << std::endl;
 		Destroy();
 		SetState(NetMatchServiceState::Idle, "Idle", "The rematch lobby timed out.");
 	}
@@ -1766,6 +1774,9 @@ static std::string ResyncSaveName() {
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
+		// A staged options draft is a lobby-round intent: the launch that ran without it retiring
+		// means its window closed, so it must not surface again in the rematch lobby.
+		m_PendingHostOptions.reset();
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
 		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
@@ -2136,6 +2147,60 @@ static std::string ResyncSaveName() {
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
 		}
 		return snapshot;
+	}
+
+	NetMatchConfig NetMatchService::GetLobbyMatchConfig() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		// A lobby publish names the agreed config on every peer; before one arrives the request's
+		// own build stands in, which is what a client still shows while its lobby starts.
+		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+	}
+
+	bool NetMatchService::SubmitHostOptions(uint64_t expectedRevision, const NetMatchConfig& draft, std::string* error) {
+		auto refuse = [error](const std::string& reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost) {
+			return refuse("only the host submits match options");
+		}
+		// The transaction speaks to a live setup round: the lobby (or its rematch twin) is the only
+		// state whose peers could ever acknowledge a staged edit.
+		if (m_State != NetMatchServiceState::Starting) {
+			return refuse("host options apply while a lobby is open");
+		}
+		const NetMatchConfig& adopted = m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+		if (expectedRevision != adopted.configRevision) {
+			return refuse("the draft names a stale configuration revision");
+		}
+		std::string validation;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(draft, &validation)) {
+			return refuse(validation);
+		}
+		if (draft.sessionId != adopted.sessionId || draft.hostPeerId != adopted.hostPeerId || draft.peerCount != adopted.peerCount) {
+			return refuse("seat capacity and session identity are fixed for the open lobby");
+		}
+		// A live holder's seat is never reallocated by an options edit: every adopted human slot must
+		// still seat the same peer, with its team free to change. CPU seats the draft adds or drops
+		// bind no transport, so they are the host's to edit.
+		for (const NetMatchPlayerSlot& slot : adopted.players) {
+			if (slot.cpu) continue;
+			const auto kept = std::find_if(draft.players.begin(), draft.players.end(), [&slot](const NetMatchPlayerSlot& seat) {
+				return !seat.cpu && seat.peerId == slot.peerId;
+			});
+			if (kept == draft.players.end()) {
+				return refuse("the draft removes a seated player");
+			}
+		}
+		m_PendingHostOptions = draft;
+		m_PendingHostOptions->configRevision = adopted.configRevision + 1;
+		return true;
+	}
+
+	std::optional<NetMatchConfig> NetMatchService::GetPendingHostOptions() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_PendingHostOptions;
 	}
 
 	bool NetMatchService::SendChat(uint8_t scope, const std::string& text) {
@@ -2872,7 +2937,14 @@ static std::string ResyncSaveName() {
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
 		runnerConfig.sessionWaitMs = c_MenuLobbyWaitMs;
-		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
+		// The seating wait is the host's published idle policy. Never takes a day as its practical
+		// bound (this value is also the lobby's message-hearing timeout, which cannot go unbounded),
+		// and the client's own round patience stays the fixed technical deadline the design keeps fixed.
+		runnerConfig.lobbyWaitMs = request.host
+		                               ? (runnerConfig.matchConfig.idleWaitMinutes > 0
+		                                      ? static_cast<uint32_t>(runnerConfig.matchConfig.idleWaitMinutes) * 60000
+		                                      : 24u * 60u * 60000u)
+		                               : c_MenuLobbyWaitMs;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		// The lobby lockstep start takes the activity from the adopted roster.
@@ -2890,6 +2962,9 @@ static std::string ResyncSaveName() {
 			const NetMatchConfig& config = runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
 			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
 			                                   : runnerRaw->GetMatchConfig();
+			// The options view reads the same agreed config on every peer; the mirror sits under the
+			// same lock the snapshot publish already holds.
+			m_AdoptedMatchConfig = config;
 			uint8_t localPeerId = m_LocalPeerId;
 			uint32_t pingMs = 0;
 			for (const NetLobbyMember& member: snapshot.members) {
@@ -3430,7 +3505,7 @@ static std::string ResyncSaveName() {
 		config.dedicated = request.dedicated;
 		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
 		if (request.host) {
-			const uint32_t seconds = std::min(GetAutosaveSeconds(), c_MaxAutosaveIntervalSeconds);
+			const uint32_t seconds = std::min(request.autosaveSeconds.value_or(GetAutosaveSeconds()), c_MaxAutosaveIntervalSeconds);
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.
