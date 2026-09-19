@@ -21,9 +21,13 @@
 struct BITMAP;
 
 namespace RTE {
+	template <typename Value> inline constexpr bool CheckpointArray = false;
+	template <typename Value, size_t Size> inline constexpr bool CheckpointArray<std::array<Value, Size>> = true;
+
 	template <typename Value> auto CheckpointField(const Value& value) {
-		if constexpr (std::is_array_v<Value>) {
-			std::array<decltype(CheckpointField(value[0])), std::extent_v<Value>> copy;
+		if constexpr (std::is_array_v<Value> || CheckpointArray<Value>) {
+			constexpr size_t size = [] { if constexpr (std::is_array_v<Value>) return std::extent_v<Value>; else return std::tuple_size_v<Value>; }();
+			std::array<decltype(CheckpointField(value[0])), size> copy;
 			for (size_t index = 0; index < copy.size(); ++index) copy[index] = CheckpointField(value[index]);
 			return copy;
 		} else if constexpr (requires { value.GetStartSimTimeMS(); value.GetSimTimeLimitTicks(); value.GetStartRealTimeMS(); value.GetRealTimeLimitTicks(); }) {

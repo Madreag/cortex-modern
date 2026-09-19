@@ -190,6 +190,8 @@ MOSRotating* ACraft::Exit::SuckInMOs(ACraft* pExitOwner) {
 }
 
 void ACraft::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AIMode, m_MovementState, m_HatchState, m_HatchTimer, m_HatchDelay, m_NetworkDelivery, m_NetworkDeliveryTimer, m_OffWireHatchTick, m_OffWireHatchOpen, m_HatchOpenSound, m_HatchCloseSound, m_CollectedInventory.empty(), m_Exits.empty(), m_ReadExitIncomingCursor, m_ExitInterval, m_ExitTimer, m_ExitLinePhase, m_HasDelivered, m_LandingCraft, m_FlippedTimer, m_CrashTimer, m_CrashSound, m_DeliveryState, m_AltitudeMoveState, m_AltitudeControl, m_CanEnterOrbit, m_MaxPassengers, m_DeliveryDelayMultiplier, m_ScuttleIfFlippedTime, m_ScuttleOnDeath, m_PersistedACraftRuntime.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedACraftRuntime.clear();
 	m_AIMode = AIMODE_DELIVER;
 
@@ -629,6 +631,7 @@ void ACraft::OpenHatch() {
 }
 
 void ACraft::SetNetworkDelivery(bool networkDelivery) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_NetworkDelivery, m_NetworkDeliveryTimer); });
 	m_NetworkDelivery = networkDelivery;
 	if (networkDelivery) {
 		m_NetworkDeliveryTimer.Reset();
@@ -664,6 +667,7 @@ void ACraft::CloseHatch() {
 }
 
 void ACraft::AddInventoryItem(MovableObject* pItemToAdd) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_CollectedInventory.size(), m_GoldCarried, m_GoldPicked); });
 	if (pItemToAdd) {
 		// If the hatch is open, then only add the new item to the intermediate new inventory list
 		// so that it doesn't get chucked out right away again
@@ -839,6 +843,7 @@ void ACraft::GibThis(const Vector& impactImpulse, MovableObject* movableObjectTo
 }
 
 void ACraft::ResetAllTimers() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FlippedTimer); });
 	MOSRotating::ResetAllTimers();
 
 	m_FlippedTimer.Reset();

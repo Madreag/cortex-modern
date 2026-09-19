@@ -6,6 +6,7 @@
 namespace RTE {
 
 	class Actor;
+	class ADoor;
 
 	/// The ray-casting sensor which triggers the door opening or closing, depending on the team of the Actor that broke the ray.
 	class ADSensor : public Serializable {
@@ -15,6 +16,8 @@ namespace RTE {
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		void SetCheckpointOwner(ADoor* owner) { m_CheckpointOwner = owner; }
+		void TouchCheckpoint();
 
 #pragma region Creation
 		/// Constructor method used to instantiate an ADSensor object in system memory. Create() should be called before using the object.
@@ -46,7 +49,7 @@ namespace RTE {
 
 		/// Sets the starting position offset of this ADSensor from the owning ADoor position.
 		/// @param startOffsetValue The new starting coordinates relative to the m_Pos of this' ADoor.
-		void SetStartOffset(const Vector& startOffsetValue) { m_StartOffset = startOffsetValue; }
+		void SetStartOffset(const Vector& startOffsetValue) { if (m_StartOffset != startOffsetValue) TouchCheckpoint(); m_StartOffset = startOffsetValue; }
 
 		/// Gets the sensor ray vector out from the start offset's position.
 		/// @return The sensor ray vector.
@@ -54,7 +57,7 @@ namespace RTE {
 
 		/// Sets the sensor ray vector out from the start offset's position.
 		/// @param sensorRayValue The new sensor ray vector.
-		void SetSensorRay(const Vector& sensorRayValue) { m_SensorRay = sensorRayValue; }
+		void SetSensorRay(const Vector& sensorRayValue) { if (m_SensorRay != sensorRayValue) TouchCheckpoint(); m_SensorRay = sensorRayValue; }
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -75,6 +78,8 @@ namespace RTE {
 
 	private:
 		static const std::string c_ClassName; //!< A string with the friendly formatted type name of this object.
+		ADoor* m_CheckpointOwner = nullptr;
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this ADSensor, effectively resetting the members of this abstraction level only.
 		void Clear();

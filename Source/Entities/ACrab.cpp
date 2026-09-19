@@ -43,7 +43,7 @@ void ACrab::Clear() {
 			m_AimRangeLowerLimit, m_AimRangeUpperLimit, m_Aiming, m_BackupLBGFootGroup, m_BackupLFGFootGroup, m_BackupRBGFootGroup,
 			m_BackupRFGFootGroup, m_LockMouseAimInput, m_MovementState, m_PersistedACrabRuntime.empty(), m_StrideFrame, m_StrideSound,
 			m_StrideStart, m_pJetpack, m_pLBGFootGroup, m_pLBGLeg, m_pLFGFootGroup, m_pLFGLeg,
-			m_pRBGFootGroup, m_pRBGLeg, m_pRFGFootGroup, m_pRFGLeg, m_pTurret);
+			m_pRBGFootGroup, m_pRBGLeg, m_pRFGFootGroup, m_pRFGLeg, m_pTurret, m_Paths);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
 	m_PersistedACrabRuntime.clear();
@@ -1775,6 +1775,7 @@ float ACrab::GetLimbPathTravelSpeed(MovementState movementState) {
 }
 
 void ACrab::SetLimbPathTravelSpeed(MovementState movementState, float newSpeed) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[LEFTSIDE][FGROUND][movementState].GetTravelSpeed(), m_Paths[RIGHTSIDE][FGROUND][movementState].GetTravelSpeed(), m_Paths[LEFTSIDE][BGROUND][movementState].GetTravelSpeed(), m_Paths[RIGHTSIDE][BGROUND][movementState].GetTravelSpeed()); });
 	m_Paths[LEFTSIDE][FGROUND][movementState].SetTravelSpeed(newSpeed);
 	m_Paths[RIGHTSIDE][FGROUND][movementState].SetTravelSpeed(newSpeed);
 
@@ -1787,6 +1788,7 @@ float ACrab::GetLimbPathPushForce(MovementState movementState) {
 }
 
 void ACrab::SetLimbPathPushForce(MovementState movementState, float newForce) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[LEFTSIDE][FGROUND][movementState].GetPushForce(), m_Paths[RIGHTSIDE][FGROUND][movementState].GetPushForce(), m_Paths[LEFTSIDE][BGROUND][movementState].GetPushForce(), m_Paths[RIGHTSIDE][BGROUND][movementState].GetPushForce()); });
 	m_Paths[LEFTSIDE][FGROUND][movementState].SetPushForce(newForce);
 	m_Paths[RIGHTSIDE][FGROUND][movementState].SetPushForce(newForce);
 

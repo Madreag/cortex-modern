@@ -55,7 +55,7 @@ LimbPath::~LimbPath() {
 void LimbPath::Clear() {
 	CheckpointChange changed(*this, [this] {
 		return CheckpointFields(
-			m_BaseScaleMultiplier, m_BaseTravelSpeedMultiplier, m_CurrentScaleMultiplier, m_CurrentSegment == m_Segments.end(), m_CurrentTravelSpeedMultiplier, m_Ended,
+			m_BaseScaleMultiplier, m_BaseTravelSpeedMultiplier, m_CurrentScaleMultiplier, m_CurrentTravelSpeedMultiplier, m_Ended,
 			m_FootCollisionsDisabledSegment, m_HFlipped, m_JointPos, m_JointVel, m_PathTimer, m_PositionOffset,
 			m_PushForce, m_RegularLength, m_Rotation, m_RotationOffset, m_SegProgress, m_SegTimer,
 			m_SegmentDone, m_SegmentEndedThreshold, m_Segments.empty(), m_Start, m_StartSegCount, m_TimeLeft,

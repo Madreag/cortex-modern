@@ -107,6 +107,8 @@ namespace RTE {
 		void DrawToTerrain(SLTerrain* terrain, BITMAP* bitmapToDraw, const Vector& position) const;
 #pragma endregion
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this TerrainDebris, effectively resetting the members of this abstraction level only.
 		void Clear();
 

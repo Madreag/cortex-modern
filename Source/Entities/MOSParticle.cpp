@@ -21,6 +21,8 @@ MOSParticle::~MOSParticle() {
 }
 
 void MOSParticle::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atom, m_PersistedAtomCheckpoint.empty(), m_SpriteAnimMode, m_PostEffectEnabled); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAtomCheckpoint.clear();
 	m_Atom = nullptr;
 	m_PersistedAtomResidue = 0;
@@ -129,6 +131,7 @@ int MOSParticle::GetDrawPriority() const { return m_Atom->GetMaterial()->GetPrio
 const Material* MOSParticle::GetMaterial() const { return m_Atom->GetMaterial(); }
 
 void MOSParticle::SetAtom(Atom* newAtom) {
+	if (m_Atom != newAtom) TouchCheckpoint();
 	delete m_Atom;
 	m_Atom = newAtom;
 	m_Atom->SetOwner(this);

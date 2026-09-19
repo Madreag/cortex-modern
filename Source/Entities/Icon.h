@@ -96,6 +96,8 @@ namespace RTE {
 		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmapOwners; //!< Keeps restored images alive across icon copies.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Icon, effectively resetting the members of this abstraction level only.
 		void Clear();
 		void SwapCheckpoint(Icon& other) noexcept;

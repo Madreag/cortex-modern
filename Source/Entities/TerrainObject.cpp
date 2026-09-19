@@ -19,6 +19,8 @@ TerrainObject::~TerrainObject() {
 }
 
 void TerrainObject::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FGColorFile, m_BGColorFile, m_MaterialFile, m_BitmapOffset, m_OffsetDefined, m_ChildObjects.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_FGColorFile.Reset();
 	m_FGColorBitmap = nullptr;
 	m_BGColorFile.Reset();

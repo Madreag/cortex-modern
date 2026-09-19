@@ -29,6 +29,8 @@ ACRocket::~ACRocket() {
 }
 
 void ACRocket::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pRLeg, m_pLLeg, m_pBodyAG, m_pRFootGroup, m_pLFootGroup, m_pMThruster, m_pRThruster, m_pLThruster, m_pURThruster, m_pULThruster, m_GearState, m_MaxGimbalAngle, m_PersistedACRocketRuntime.empty(), m_Paths); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedACRocketRuntime.clear();
 	//    m_pCapsule = 0;
 	m_pRLeg = 0;
@@ -633,6 +635,7 @@ void ACRocket::Update() {
 }
 
 void ACRocket::SetRightLeg(Leg* newLeg) {
+	if (m_pRLeg != newLeg) TouchCheckpoint();
 	if (m_pRLeg && m_pRLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRLeg);
 	}
@@ -655,6 +658,7 @@ void ACRocket::SetRightLeg(Leg* newLeg) {
 }
 
 void ACRocket::SetLeftLeg(Leg* newLeg) {
+	if (m_pLLeg != newLeg) TouchCheckpoint();
 	if (m_pLLeg && m_pLLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLLeg);
 	}
@@ -678,6 +682,7 @@ void ACRocket::SetLeftLeg(Leg* newLeg) {
 }
 
 void ACRocket::SetMainThruster(AEmitter* newThruster) {
+	if (m_pMThruster != newThruster) TouchCheckpoint();
 	if (m_pMThruster && m_pMThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pMThruster);
 	}
@@ -701,6 +706,7 @@ void ACRocket::SetMainThruster(AEmitter* newThruster) {
 }
 
 void ACRocket::SetRightThruster(AEmitter* newThruster) {
+	if (m_pRThruster != newThruster) TouchCheckpoint();
 	if (m_pRThruster && m_pRThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRThruster);
 	}
@@ -724,6 +730,7 @@ void ACRocket::SetRightThruster(AEmitter* newThruster) {
 }
 
 void ACRocket::SetLeftThruster(AEmitter* newThruster) {
+	if (m_pLThruster != newThruster) TouchCheckpoint();
 	if (m_pLThruster && m_pLThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLThruster);
 	}
@@ -747,6 +754,7 @@ void ACRocket::SetLeftThruster(AEmitter* newThruster) {
 }
 
 void ACRocket::SetURightThruster(AEmitter* newThruster) {
+	if (m_pURThruster != newThruster) TouchCheckpoint();
 	if (m_pURThruster && m_pURThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pURThruster);
 	}
@@ -770,6 +778,7 @@ void ACRocket::SetURightThruster(AEmitter* newThruster) {
 }
 
 void ACRocket::SetULeftThruster(AEmitter* newThruster) {
+	if (m_pULThruster != newThruster) TouchCheckpoint();
 	if (m_pULThruster && m_pULThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pULThruster);
 	}

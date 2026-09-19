@@ -219,6 +219,8 @@ namespace RTE {
 		std::string SaveACRocketRuntime() const;
 		bool LoadACRocketRuntime(std::string_view text, bool validateOnly = false);
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this ACRocket, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

@@ -30,6 +30,8 @@ SLTerrain::~SLTerrain() {
 }
 
 void SLTerrain::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Width, m_Height, m_FGColorLayer, m_BGColorLayer, m_DefaultBGTextureFile, m_TerrainFrostings.empty(), m_TerrainDebris.empty(), m_TerrainObjects.empty(), m_OrbitDirection); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Width = 0;
 	m_Height = 0;
 	m_LayerToDraw = LayerType::ForegroundLayer;

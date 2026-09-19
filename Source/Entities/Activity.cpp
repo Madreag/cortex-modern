@@ -56,7 +56,7 @@ void Activity::Clear() {
 			m_IsActive, m_IsHuman, m_IsTestActivity, m_MaxPlayerSupport, m_MinTeamsRequired, m_Paused,
 			m_PendingRuntimeCheckpoint.empty(), m_PlayerCount, m_PlayerScreen, m_SavedValues, m_SceneName.empty(), m_Team,
 			m_TeamAISkillLevels, m_TeamActive, m_TeamCount, m_TeamDeaths, m_TeamFunds, m_TeamFundsShare,
-			m_TeamNames, m_ViewState);
+			m_TeamNames, m_ViewState, m_DeathTimer, m_MessageTimer, m_PlayerController, m_TeamIcons);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
 	m_PendingRuntimeCheckpoint.clear();
@@ -2059,6 +2059,7 @@ static bool HoldsNewerBrainBinding(const Actor* slot, const Actor* link) {
 
 void Activity::ClearNonOwnedActorSlots() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] || m_ControlledActor[player] || m_PlayerController[player].GetControlledActor()) TouchCheckpoint();
 		m_Brain[player] = nullptr;
 		m_ControlledActor[player] = nullptr;
 		m_PlayerController[player].SetControlledActor(nullptr);

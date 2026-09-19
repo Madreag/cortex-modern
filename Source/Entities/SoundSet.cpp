@@ -1,5 +1,6 @@
 #include "SoundSet.h"
 #include "SoundContainer.h"
+#include "CheckpointImage.h"
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "AudioMan.h"
@@ -24,6 +25,7 @@ SoundSet::~SoundSet() {
 }
 
 SoundSet& SoundSet::operator=(const SoundSet& reference) {
+	CheckpointChange changed(*this, [this] { return CheckpointStampValue(); });
 	if (this != &reference) {
 		SoundSet copy(reference);
 		std::swap(m_SoundSelectionCycleMode, copy.m_SoundSelectionCycleMode);
@@ -31,11 +33,14 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		std::swap(m_SimulationSelection, copy.m_SimulationSelection);
 		m_SoundData.swap(copy.m_SoundData);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
+		SetOwnerContainer(m_OwnerContainer);
 	}
 	return *this;
 }
 
 void SoundSet::Clear() {
+	if (m_CheckpointInitialized && (m_SoundSelectionCycleMode != RANDOM || m_CurrentSelection != std::pair(false, -1) || m_SimulationSelection != std::pair(false, -1) || !m_SoundData.empty() || !m_SubSoundSets.empty())) TouchCheckpoint();
+	m_CheckpointInitialized = true;
 	m_SoundSelectionCycleMode = SoundSelectionCycleMode::RANDOM;
 	m_CurrentSelection = {false, -1};
 	m_SimulationSelection = {false, -1};
@@ -43,6 +48,20 @@ void SoundSet::Clear() {
 
 	m_SoundData.clear();
 	m_SubSoundSets.clear();
+}
+
+void SoundSet::TouchCheckpoint() {
+	if (m_OwnerContainer) m_OwnerContainer->TouchCheckpoint();
+	CheckpointValueWritten(this);
+}
+
+std::vector<std::pair<bool, int>> SoundSet::CheckpointSelections() const {
+	std::vector<std::pair<bool, int>> selections{m_CurrentSelection, m_SimulationSelection};
+	for (const SoundSet* child: m_SubSoundSets) {
+		const auto nested = child->CheckpointSelections();
+		selections.insert(selections.end(), nested.begin(), nested.end());
+	}
+	return selections;
 }
 
 int SoundSet::Create(const SoundSet& reference) {
@@ -314,6 +333,7 @@ void SoundSet::AddSoundNow(const std::string& soundFilePath, const Vector& offse
 	}
 
 	m_SoundData.push_back({soundFile, soundObject, offset, minimumAudibleDistance, attenuationStartDistance});
+	TouchCheckpoint();
 }
 
 bool SoundSet::RemoveSound(const std::string& soundFilePath, bool removeFromSubSoundSets) {
@@ -344,6 +364,7 @@ bool SoundSet::RemoveSoundNow(const std::string& soundFilePath, bool removeFromS
 	auto soundsToRemove = std::remove_if(m_SoundData.begin(), m_SoundData.end(), [&soundFilePath](const SoundData& soundData) { return soundData.SoundFile.GetDataPath() == soundFilePath; });
 	bool anySoundsToRemove = soundsToRemove != m_SoundData.end();
 	if (anySoundsToRemove) {
+		TouchCheckpoint();
 		m_SoundData.erase(soundsToRemove, m_SoundData.end());
 	}
 	if (removeFromSubSoundSets) {
@@ -421,6 +442,7 @@ bool SoundSet::SelectNextSounds() {
 }
 
 bool SoundSet::SelectNextSoundsNow() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_CurrentSelection, m_SimulationSelection); });
 	if (m_SoundSelectionCycleMode == SoundSelectionCycleMode::ALL) {
 		for (SoundSet* subSoundSet: m_SubSoundSets) {
 			if (!subSoundSet->SelectNextSoundsNow()) {
