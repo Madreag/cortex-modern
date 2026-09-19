@@ -2499,9 +2499,19 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
 	return out;
 }
 
-void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
+static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
+	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+}
+
+bool MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
 	if (!mo) {
-		return;
+		return false;
+	}
+	// NextKey numbers every emission inside its tick, so one live ghost per key: a second would never be reposed or dropped.
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		if (SameGhostKey(ghost.key, key)) {
+			return false;
+		}
 	}
 	mo->SetAsAddedToMovableMan(false);
 	mo->DestroyScriptState();
@@ -2521,10 +2531,7 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
-}
-
-static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
-	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+	return true;
 }
 
 void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick) {
@@ -2754,7 +2761,11 @@ void MovableMan::DisposeSpeculativeSpawns() {
 		}
 		PreviewEventLedger::Insert(key, {});
 		NoteProjectileEvent(key, true);
-		InstallPreviewGhost(mo, key, horizonTick);
+		if (!InstallPreviewGhost(mo, key, horizonTick)) {
+			// The key's ghost is still live from an earlier preview, so this spawn carries it to the new horizon.
+			ReposePreviewGhost(key, *mo, horizonTick);
+			DestroySpeculativeSpawn(mo);
+		}
 	}
 	m_Speculation.spawns.clear();
 	m_Speculation.spawnMeta.clear();
@@ -4355,15 +4366,24 @@ void MovableMan::OverrideMaterialDoors(bool eraseDoorMaterial, int team) const {
 bool MovableMan::TeamHasDoorMaterialInBox(int team, const Box& box) const {
 	const float sceneWidth = static_cast<float>(g_SceneMan.GetSceneWidth());
 	const float sceneHeight = static_cast<float>(g_SceneMan.GetSceneHeight());
-	std::array<Vector, 5> shifts{Vector()};
+	std::array<Vector, 9> shifts{Vector()};
 	int shiftCount = 1;
-	if (g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F) {
+	const bool wrapsX = g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F;
+	const bool wrapsY = g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F;
+	if (wrapsX) {
 		shifts[shiftCount++] = Vector(sceneWidth, 0.0F);
 		shifts[shiftCount++] = Vector(-sceneWidth, 0.0F);
 	}
-	if (g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F) {
+	if (wrapsY) {
 		shifts[shiftCount++] = Vector(0.0F, sceneHeight);
 		shifts[shiftCount++] = Vector(0.0F, -sceneHeight);
+	}
+	if (wrapsX && wrapsY) {
+		// A corner door meets the box only after both seams are crossed.
+		shifts[shiftCount++] = Vector(sceneWidth, sceneHeight);
+		shifts[shiftCount++] = Vector(sceneWidth, -sceneHeight);
+		shifts[shiftCount++] = Vector(-sceneWidth, sceneHeight);
+		shifts[shiftCount++] = Vector(-sceneWidth, -sceneHeight);
 	}
 	for (const std::deque<Actor*>* actorDeque: {&m_Actors, &m_AddedActors}) {
 		for (const Actor* actor: *actorDeque) {

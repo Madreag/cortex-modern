@@ -2405,7 +2405,7 @@ void GameActivity::Update() {
 
 					m_LandingZone[player].m_Y = g_SceneMan.FindAltitude(m_LandingZone[player], g_SceneMan.GetSceneHeight(), 10, true) + lzOffsetY;
 
-					if (m_pBuyGUI[player]->GetTotalOrderCost() > GetTeamFunds(team)) {
+					if (OrderExceedsSeatFunds(player, team, m_pBuyGUI[player]->GetTotalOrderCost())) {
 						g_GUISound.UserErrorSound()->Play(player);
 						m_FundsChanged[team] = true;
 						if (!g_MovableMan.GetNextTeamActor(team)) {
