@@ -6301,6 +6301,48 @@ namespace RTE {
 		return true;
 	}
 
+	// An empty seat is named for the roster it belongs to: a match's seat reads its client id, a
+	// persistent world's seat reads Open, and the world roster the host publishes is unchanged.
+	bool TestUnseatedSlotNameForms(std::string* error) {
+		if (NetMatchConfigUtil::UnseatedSlotName(2, false) != "Client 2" ||
+		    NetMatchConfigUtil::UnseatedSlotName(3, false) != "Client 3" ||
+		    NetMatchConfigUtil::UnseatedSlotName(2, true) != "Open" ||
+		    NetMatchConfigUtil::UnseatedSlotName(4, true) != "Open") {
+			*error = "an unseated seat reads '" + NetMatchConfigUtil::UnseatedSlotName(2, false) + "' in a match and '" +
+			         NetMatchConfigUtil::UnseatedSlotName(2, true) + "' in a world";
+			return false;
+		}
+		NetMatchServiceRequest request;
+		request.host = true;
+		request.dedicated = true;
+		request.persistentWorld = true;
+		request.humans = 0;
+		request.peerCount = 4;
+		request.worldId = "2c3d4e5f-1111-4222-8333-444455556666";
+		request.worldBoot = 1;
+		NetMatchConfig world;
+		if (!NetMatchService::BuildMatchConfig(request, 123, world, error)) {
+			return false;
+		}
+		size_t openSeats = 0;
+		for (const NetMatchPlayerSlot& slot: world.players) {
+			if (slot.cpu) continue;
+			if (slot.displayName != "Open") {
+				*error = "the world roster named an open seat '" + slot.displayName + "'";
+				return false;
+			}
+			++openSeats;
+		}
+		// A dedicated world host seats no human of its own, so peers 2..peerCount are the open seats.
+		if (!world.persistentWorld || openSeats != static_cast<size_t>(world.peerCount - 1)) {
+			*error = "the world roster opened " + std::to_string(openSeats) + " of " +
+			         std::to_string(world.peerCount - 1) + " seats";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS lobby: an unseated seat reads its client id in a match and Open in a world" << std::endl;
+		return true;
+	}
+
 	// A kicked seat is an open seat: the roster the lobby publishes must stop naming the member the
 	// host removed, or the row shows a player holding a seat nobody sits in.
 	bool TestKickedSeatReadsOpen(std::string* error) {
@@ -6314,8 +6356,8 @@ namespace RTE {
 		// Three seats: the host, the member the kick removes, and one that stays to be re-acked.
 		NetMatchConfig matchConfig = MakeConfig();
 		matchConfig.peerCount = 3;
-		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2);
-		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3)});
+		matchConfig.players[1].displayName = NetMatchConfigUtil::UnseatedSlotName(2, false);
+		matchConfig.players.push_back(NetMatchPlayerSlot{3, 2, false, NetMatchConfigUtil::UnseatedSlotName(3, false)});
 		NetSessionConfig hostConfig;
 		hostConfig.port = port;
 		hostConfig.sessionId = matchConfig.sessionId;
@@ -6427,9 +6469,9 @@ namespace RTE {
 			return false;
 		}
 		const std::string opened = slotName(kickedPeerId);
-		if (opened != NetMatchConfigUtil::UnseatedSlotName(kickedPeerId)) {
+		if (opened != NetMatchConfigUtil::UnseatedSlotName(kickedPeerId, false)) {
 			*error = "the kicked seat is named '" + opened + "', not the unseated '" +
-			         NetMatchConfigUtil::UnseatedSlotName(kickedPeerId) + "'";
+			         NetMatchConfigUtil::UnseatedSlotName(kickedPeerId, false) + "'";
 			return false;
 		}
 		// The open seat is a live roster change: one new revision, and the peer that stayed owes a
@@ -6452,7 +6494,7 @@ namespace RTE {
 				seat = &member;
 			}
 		}
-		if (seat == nullptr || seat->connected || seat->displayName != NetMatchConfigUtil::UnseatedSlotName(kickedPeerId)) {
+		if (seat == nullptr || seat->connected || seat->displayName != NetMatchConfigUtil::UnseatedSlotName(kickedPeerId, false)) {
 			*error = std::string("the kicked seat's roster row reads ") +
 			         (seat == nullptr ? std::string("no row at all") : "'" + seat->displayName + "' connected=" + (seat->connected ? "1" : "0"));
 			return false;
@@ -9602,6 +9644,7 @@ namespace RTE {
 		if (!TestServiceKick(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);
+		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);
 		std::string stopCancelError, endedAdmissionError, twoIceRoundsError;
