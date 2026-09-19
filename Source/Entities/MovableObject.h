@@ -460,7 +460,7 @@ namespace RTE {
 
 		/// Sets the current absolute angle of rotation of this MovableObject's effect.
 		/// @param newAngle The new absolute angle in radians.
-		void SetEffectRotAngle(float newAngle) { m_EffectRotAngle = newAngle; }
+		void SetEffectRotAngle(float newAngle) { if (m_EffectRotAngle != newAngle) TouchCheckpoint(); m_EffectRotAngle = newAngle; }
 
 		/// Gets the file path of this MovableObject's current screen effect.
 		/// @return A string containing the file path of the screen effect.
@@ -1556,6 +1556,12 @@ namespace RTE {
 	private:
 		std::string SaveMovableObjectRuntime() const;
 		bool LoadMovableObjectRuntime(std::string_view text, bool validateOnly = false);
+
+		/// What the checkpoint writes for the effect's rotation. An angle the render RNG redraws every
+		/// frame is presentation the next Update replaces anyway, and writing it would put a per-machine
+		/// value in the archive and move the object's text every tick; an angle a script or a preset set
+		/// is the object's own state and is written as it stands.
+		float CheckpointEffectRotAngle() const { return m_RandomizeEffectRotAngleEveryFrame ? 0.0F : m_EffectRotAngle; }
 
 		/// Clears all the member variables of this MovableObject, effectively resetting the members of this abstraction level only.
 		void Clear();

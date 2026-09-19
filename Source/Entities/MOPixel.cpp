@@ -309,6 +309,9 @@ void MOPixel::Update() {
 	// TODO: Rework this once we figure out how we want to handle it
 	if (m_HitsMOs && m_Sharpness > 0) {
 		if (m_DistanceTravelled > m_LethalRange) {
+			// The decay writes sharpness, lifetime and the hit flag, all of them saved, and it draws
+			// the sim RNG to do it, so it is state the archive has to see move.
+			TouchCheckpoint();
 			if (m_Sharpness < m_LethalSharpness) {
 				m_Sharpness = std::max(m_Sharpness * (1.0F - (20.0F * g_TimerMan.GetDeltaTimeSecs())) - 0.1F, 0.0F);
 				if (m_LethalRange > 0) {

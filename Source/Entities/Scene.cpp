@@ -1454,7 +1454,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 					owned.SetCaptureObject(sceneObjectToSave);
 					SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
 				}, writer.GetIndent());
-				RTEAssert(fresh.SameValues(*previous), "checkpoint shadow reused after an unstamped write to " + sceneObjectToSave->GetPresetName());
+				// Every field the archive carries either moves the stamp or is written the same way
+				// every capture, so a difference here names a mutator that forgot TouchCheckpoint.
+				RTEAssert(fresh.SameValues(*previous), "checkpoint shadow reused after an unstamped write to " +
+				                                          sceneObjectToSave->GetPresetName() + " (uid " + std::to_string(identity) +
+				                                          ", channel " + std::to_string(channel) + ")");
 #endif
 				cache->Touch(sceneObjectToSave, channel);
 				writer.Append(*previous);

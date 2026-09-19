@@ -66,6 +66,10 @@ void Atom::Destroy() {
 	Clear();
 }
 
+void Atom::TouchCheckpoint() {
+	if (m_OwnerMO) m_OwnerMO->TouchCheckpoint();
+}
+
 void Atom::Clear() {
     m_CheckpointMaterialReferences.fill({});
     m_HasCheckpointMaterials = false;
@@ -864,6 +868,9 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	Vector segTraj;
 	Vector hitAccel;
 
+	// Both point sets are archived through the owner, and this is the one write of them that a
+	// resting object can still reach.
+	if (!m_TrailPoints.empty() || !m_LastTrailPoints.empty()) TouchCheckpoint();
 	m_LastTrailPoints = m_TrailPoints;
 	m_TrailPoints.clear();
 
