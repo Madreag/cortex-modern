@@ -197,9 +197,17 @@ namespace RTE {
 		bool ResumeSkipsTransfer(uint8_t peerId) const;
 		/// Host: whether that peer still owes its answer, so its chunks wait rather than race it.
 		bool ResumeAwaitsAnswer(uint8_t peerId) const;
+		/// Host: a remote that has not answered the resume offer within the bound is streamed the state,
+		/// the same way a remote without that checkpoint is. Never fails the round.
+		void GiveUpWaitingForResumeAnswers(uint64_t nowMs);
+		std::map<uint8_t, uint64_t> m_ResumeWaitStartedMs; //!< When each remote's answer became due.
 		std::set<uint8_t> m_ResumeHeldPeers;     //!< Host: peers that answered with their own copy.
 		std::set<uint8_t> m_ResumeAnsweredPeers; //!< Host: peers that answered at all; chunks wait for that.
 		bool m_ResumeAnsweredHeld = false;       //!< Client: this peer answered that it holds the checkpoint.
+		/// How long a resumed lobby waits for one remote's held/not-held answer before streaming to it.
+		/// Twenty ordinary resend intervals: long enough for a slow store read, short enough that a
+		/// silent remote never holds the round.
+		static constexpr uint64_t c_ResumeAnswerWaitMs = 5000;
 		bool PrepareMigrationRoster();
 		std::map<uint8_t, NetMatchMigrationPeer> m_MigrationEndpoints;
 		NetHash32 m_OpenedMigrationHash{};
