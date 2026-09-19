@@ -229,6 +229,9 @@ namespace RTE {
 			if (obj.contains("resume_session_id") && !ReadStr(obj, "resume_session_id", out.resumeSessionId, reason)) {
 				return false;
 			}
+			if (obj.contains("resume_token") && !ReadStr(obj, "resume_token", out.resumeToken, reason)) {
+				return false;
+			}
 			return true;
 		}
 
@@ -256,6 +259,10 @@ namespace RTE {
 				obj["world_boot"] = in.worldBoot;
 				if (!in.resumeSessionId.empty()) {
 					obj["resume_session_id"] = in.resumeSessionId;
+					// A resume takes the row over only with its current token; a first register has none.
+					if (!in.resumeToken.empty()) {
+						obj["resume_token"] = in.resumeToken;
+					}
 				}
 			}
 		}

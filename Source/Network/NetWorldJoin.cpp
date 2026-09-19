@@ -132,6 +132,9 @@ namespace RTE {
 		    << "world_id " << identity.worldId << "\n"
 		    << "boot " << identity.boot << "\n"
 		    << "round " << identity.round << "\n";
+		if (!identity.directoryToken.empty()) {
+			out << "directory_token " << identity.directoryToken << "\n";
+		}
 		return out.str();
 	}
 
@@ -151,6 +154,8 @@ namespace RTE {
 				in >> parsed.boot;
 			} else if (key == "round") {
 				in >> parsed.round;
+			} else if (key == "directory_token") {
+				in >> parsed.directoryToken;
 			} else {
 				if (error) *error = "world identity record has an unknown field '" + key + "'";
 				return false;
@@ -195,6 +200,14 @@ namespace RTE {
 		// uncommitted input are then provably stale whatever happens next.
 		++identity.boot;
 		++identity.round;
+		if (!Write(path, identity, error)) {
+			return false;
+		}
+		out = identity;
+		return true;
+	}
+
+	bool NetWorldIdentityFile::Write(const std::string& path, const NetWorldIdentity& identity, std::string* error) {
 		const std::string temporary = path + ".new";
 		{
 			std::ofstream write(temporary, std::ios::binary | std::ios::trunc);
@@ -215,7 +228,6 @@ namespace RTE {
 			if (error) *error = "could not publish the world identity record: " + code.message();
 			return false;
 		}
-		out = identity;
 		return true;
 	}
 

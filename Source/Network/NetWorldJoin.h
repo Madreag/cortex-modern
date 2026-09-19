@@ -19,6 +19,7 @@ namespace RTE {
 		std::string worldId;    //!< Canonical lowercase UUID; the directory registration id too.
 		uint64_t boot = 0;      //!< Host boot incarnation, advanced before the first listen of this process.
 		uint64_t round = 0;     //!< The round this boot opened; a restart opens a new one.
+		std::string directoryToken; //!< The directory row's current token, so a rebooted host resumes its row.
 
 		bool IsValid() const { return NetMatchConfigUtil::IsWorldId(worldId) && boot != 0; }
 		bool operator==(const NetWorldIdentity&) const = default;
@@ -35,6 +36,9 @@ namespace RTE {
 		static bool OpenForBoot(const std::string& path, NetWorldIdentity& out, std::string* error = nullptr);
 		/// Reads without advancing anything; an absent record is not an error and leaves out empty.
 		static bool Peek(const std::string& path, NetWorldIdentity& out, std::string* error = nullptr);
+		/// Rewrites the record in place (temp + rename). The host uses it when the directory issues a
+		/// new row token, so the token outlives the process that earned it.
+		static bool Write(const std::string& path, const NetWorldIdentity& identity, std::string* error = nullptr);
 		/// Renders the record. Exposed so a self-test can round-trip it without touching a disk.
 		static std::string Encode(const NetWorldIdentity& identity);
 		static bool Decode(const std::string& text, NetWorldIdentity& out, std::string* error = nullptr);

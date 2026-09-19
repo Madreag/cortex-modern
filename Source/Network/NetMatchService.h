@@ -383,7 +383,12 @@ namespace RTE {
 		void DriveWorldJoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
 		void PublishWorldJoinImage(uint64_t tick);
-		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error);
+		/// Writes a newly issued directory row token into the world identity record, so a reboot
+		/// resumes the same row instead of leaving a stale one to expire.
+		void PersistWorldDirectoryToken();
+		/// Ships the published image to one bootstrap. `outUnstartable` reports a bootstrap that can
+		/// never start, so the caller ends it instead of retrying it every tick.
+		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable = nullptr);
 		void PumpWorldJoinLobby(uint64_t nowMs);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, std::string& pendingLoad, std::string* error);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);

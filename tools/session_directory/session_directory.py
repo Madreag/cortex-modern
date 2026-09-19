@@ -410,6 +410,11 @@ class SessionDirectory:
     def register(self, data: dict[str, Any], observed_ip: str, now: float) -> dict[str, Any]:
         self.prune(now)
         with self._lock:
+            # Capacity is answered before any field work: a full directory must not spend parsing.
+            resume_id = data.get("resume_session_id")
+            resuming = isinstance(resume_id, str) and resume_id in self._sessions
+            if not resuming and len(self._sessions) >= MAX_ROWS:
+                raise OverflowError("full")
             fields: dict[str, Any] = {}
             for name in REGISTER_STR_FIELDS:
                 fields[name] = require_str(data, name)
@@ -437,8 +442,13 @@ class SessionDirectory:
                 except ValueError:
                     raise FieldError("invalid_field", "resume_session_id")
                 if resume in self._sessions:
-                    token = secrets.token_urlsafe(24)
                     sess = self._sessions[resume]
+                    # The row's own token is the proof of ownership; the session id is public (it is in
+                    # every /list row), so without this any reader could seize a world's row.
+                    presented = data.get("resume_token")
+                    if not isinstance(presented, str) or not tokens_equal(presented, sess.token):
+                        raise PermissionError("forbidden")
+                    token = secrets.token_urlsafe(24)
                     sess.token = token
                     sess.fields = fields
                     sess.observed_ip = observed_ip
@@ -454,8 +464,6 @@ class SessionDirectory:
                 session_id = resume
             else:
                 session_id = str(uuid.uuid4())
-            if len(self._sessions) >= MAX_ROWS:
-                raise OverflowError("full")
             token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
             self._sessions[session_id] = sess
