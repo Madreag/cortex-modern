@@ -3369,6 +3369,22 @@ namespace RTE {
 		if (onThatSlot != 1) {
 			return Fail("reclaim-hold-refused-its-own-holder: " + std::to_string(onThatSlot) + " bootstraps name slot 2");
 		}
+		// A holder that never activated gave its slot back on the way out; the drop still fences it.
+		world.CancelJoin(62, "connection lost");
+		admission.NotifyDisconnect(62, promotedAt);
+		const std::vector<uint8_t> afterUnheld = NetMatchService::WorldReclaimHoldSlots(admission.GetSeatStatuses(), world.Membership());
+		if (std::find(afterUnheld.begin(), afterUnheld.end(), uint8_t{3}) == afterUnheld.end()) {
+			return Fail("reclaim-hold-missed-the-slot: a dropped holder whose bootstrap was released left slot 3 open");
+		}
+		world.NoteReclaimHolds(afterUnheld);
+		for (const NetWorldSlot& slot: world.Membership().Slots()) {
+			if (slot.peerId == 3 && !slot.reclaimHold) {
+				return Fail("reclaim-hold-fenced-the-wrong-slot: the released slot 3 carries no hold for its dropped holder");
+			}
+		}
+		if (world.Membership().FirstFreeSlot() != nullptr) {
+			return Fail("reclaim-hold-let-a-stranger-in: a fenced slot is still offered as the first free one");
+		}
 		return 0;
 	}
 

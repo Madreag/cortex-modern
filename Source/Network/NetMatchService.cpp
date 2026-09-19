@@ -2542,12 +2542,24 @@ static std::string ResyncSaveName() {
 			if (status.stableSeat == 0 || !(status.dropped || status.reclaiming)) {
 				continue;
 			}
+			// The hold belongs on the slot the seat holds, not on the slot its lockstep id names. A
+			// bootstrap cancelled before it activated gave the slot back, and that is the slot the
+			// holder reclaims (SlotOfSeat's own choice), so it is fenced too.
+			const NetWorldSlot* bound = nullptr;
 			for (const NetWorldSlot& slot: membership.Slots()) {
-				// The hold belongs on the slot the seat holds, not on the slot its lockstep id names.
-				if (slot.held && slot.stableSeat == status.stableSeat) {
-					holds.push_back(slot.peerId);
+				if (slot.stableSeat != status.stableSeat) {
+					continue;
+				}
+				if (slot.held) {
+					bound = &slot;
 					break;
 				}
+				if (bound == nullptr) {
+					bound = &slot;
+				}
+			}
+			if (bound != nullptr) {
+				holds.push_back(bound->peerId);
 			}
 		}
 		return holds;
