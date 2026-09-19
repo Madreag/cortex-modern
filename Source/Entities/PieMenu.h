@@ -120,7 +120,7 @@ namespace RTE {
 
 		/// Sets the absolute rotation of this PieMenu.
 		/// @param newRotation A Matrix describing the new rotation of this PieMenu.
-		void SetRotation(const Matrix& newRotation) { m_Rotation = newRotation; }
+		void SetRotation(const Matrix& newRotation) { if (m_Rotation != newRotation) TouchCheckpoint(); m_Rotation = newRotation; }
 
 		/// Sets the absolute rotation of this PieMenu to the specified rad angle.
 		/// @param rotAngle The angle in radians describing the new rotation of this PieMenu.

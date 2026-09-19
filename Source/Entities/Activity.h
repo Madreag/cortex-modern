@@ -161,7 +161,7 @@ namespace RTE {
 
 		/// Overrides the current Activity state. Should not be used much, use dedicated state setting functions instead.
 		/// @param newState The new state to set.
-		void SetActivityState(ActivityState newState) { m_ActivityState = newState; }
+		void SetActivityState(ActivityState newState) { if (m_ActivityState != newState) TouchCheckpoint(); m_ActivityState = newState; }
 
 		/// Indicates whether the Activity is currently running or not (not editing, over or paused)
 		/// @return Whether the Activity is running or not.
@@ -173,7 +173,7 @@ namespace RTE {
 
 		/// Pauses and unpauses the Activity.
 		/// @param pause Whether to pause the Activity or not.
-		virtual void SetPaused(bool pause = true) { m_Paused = pause; }
+		virtual void SetPaused(bool pause = true) { if (m_Paused != pause) TouchCheckpoint(); m_Paused = pause; }
 
 		/// Indicates whether the Activity is over or not.
 		/// @return Whether the Activity is over or not.
@@ -204,7 +204,7 @@ namespace RTE {
 		///
 		/// Sets in which stage of the Campaign this appears.
 		/// @param newStage The new stage to set. -1 means it doesn't appear in the campaign.
-		void SetInCampaignStage(int newStage) { m_InCampaignStage = newStage; }
+		void SetInCampaignStage(int newStage) { if (m_InCampaignStage != newStage) TouchCheckpoint(); m_InCampaignStage = newStage; }
 
 		/// Gets the name of the current scene.
 		/// @return A string with the instance name of the scene.
@@ -220,7 +220,7 @@ namespace RTE {
 
 		/// Sets whether craft must be considered orbited if they reach the map border on non-wrapped maps.
 		/// @param value Whether to consider orbited or not.
-		void SetCraftOrbitAtTheEdge(bool value) { m_CraftOrbitAtTheEdge = value; }
+		void SetCraftOrbitAtTheEdge(bool value) { if (m_CraftOrbitAtTheEdge != value) TouchCheckpoint(); m_CraftOrbitAtTheEdge = value; }
 #pragma endregion
 
 #pragma region Virtual Override Methods
@@ -727,7 +727,7 @@ namespace RTE {
 
 		/// Sets whether or not this Activity can be manually saved be the player.
 		/// @param allowsUserSaving Whether or not this Activity can be manually saved be the player.
-		void SetAllowsUserSaving(bool allowsUserSaving) { m_AllowsUserSaving = allowsUserSaving; }
+		void SetAllowsUserSaving(bool allowsUserSaving) { if (m_AllowsUserSaving != allowsUserSaving) TouchCheckpoint(); m_AllowsUserSaving = allowsUserSaving; }
 
 		/// Gets whether this is a test activity (hidden from the regular scenarios menu).
 		/// @return Whether this is a test activity.

@@ -358,7 +358,7 @@ namespace RTE {
 		/// Sets whether this should be automatically designed by the AI plan
 		/// even if owned by human players.
 		/// @param autoDesigned What to set the setting to. (default: true)
-		void SetAutoDesigned(bool autoDesigned = true) { m_AutoDesigned = autoDesigned; }
+		void SetAutoDesigned(bool autoDesigned = true) { if (m_AutoDesigned != autoDesigned) TouchCheckpoint(); m_AutoDesigned = autoDesigned; }
 
 		/// Tells whether this should be automatically designed by the AI plan
 		/// even if owned by human players.
@@ -368,7 +368,7 @@ namespace RTE {
 		/// Sets the total defense investment this scene has experienced by all
 		/// teams since the metagame started.
 		/// @param totalInvestment What to set the total investment in gold oz) to.
-		void SetTotalInvestment(float totalInvestment) { m_TotalInvestment = totalInvestment; }
+		void SetTotalInvestment(float totalInvestment) { if (m_TotalInvestment != totalInvestment) TouchCheckpoint(); m_TotalInvestment = totalInvestment; }
 
 		/// Gets the total defense investment this scene has experienced by all
 		/// teams since the metagame started.
@@ -608,15 +608,15 @@ namespace RTE {
 
 		/// Sets the specified location of this Scene in the scene
 		/// @param newLocation A Vector with the desired location of this Scene in the scene.
-		void SetLocation(const Vector& newLocation) { m_Location = newLocation; }
+		void SetLocation(const Vector& newLocation) { if (m_Location != newLocation) TouchCheckpoint(); m_Location = newLocation; }
 
 		/// Sets whether this can be played in the Metagame map at all.
 		/// @param isPlayable Whether this is compatible with metagame play at all.
-		void SetMetagamePlayable(bool isPlayable) { m_MetagamePlayable = isPlayable; }
+		void SetMetagamePlayable(bool isPlayable) { if (m_MetagamePlayable != isPlayable) TouchCheckpoint(); m_MetagamePlayable = isPlayable; }
 
 		/// Sets whether this should show up on the Metagame map yet.
 		/// @param isRevealed Whether to reveal this on the metagame map or not.
-		void SetRevealed(bool isRevealed) { m_Revealed = isRevealed; }
+		void SetRevealed(bool isRevealed) { if (m_Revealed != isRevealed) TouchCheckpoint(); m_Revealed = isRevealed; }
 
 		/// Sets the team who owns this Scene in a Metagame
 		/// @param newTeam The team who should now own this Scene
@@ -766,7 +766,7 @@ namespace RTE {
 		/// Sets whether this scene is a temprorary metagame scene and should
 		/// not be used anywhere except in metagame.
 		/// @param newValue New value.
-		void SetMetagameInternal(bool newValue) { m_IsMetagameInternal = newValue; }
+		void SetMetagameInternal(bool newValue) { if (m_IsMetagameInternal != newValue) TouchCheckpoint(); m_IsMetagameInternal = newValue; }
 
 		/// Gets whether this Scene is a saved game Scene copy and should not be used anywhere except for game saving and loading.
 		/// @return Whether this Scene is a saved game Scene copy.

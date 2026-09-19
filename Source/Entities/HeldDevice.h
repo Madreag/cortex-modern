@@ -116,7 +116,7 @@ namespace RTE {
 		/// Sets the current position offset of this HeldDevice's joint relative
 		/// from the parent Actor's position, if attached.
 		/// @param newValue New value.
-		void SetStanceOffset(Vector newValue) { m_StanceOffset = newValue; }
+		void SetStanceOffset(Vector newValue) { if (m_StanceOffset != newValue) TouchCheckpoint(); m_StanceOffset = newValue; }
 
 		/// Sets the current position offset of this HeldDevice's joint relative
 		/// from the parent Actor's position, if attached.
@@ -126,7 +126,7 @@ namespace RTE {
 		/// Sets the current position offset of this HeldDevice's joint relative
 		/// from the parent Actor's position, if attached.
 		/// @param newValue New value.
-		void SetSharpStanceOffset(Vector newValue) { m_SharpStanceOffset = newValue; }
+		void SetSharpStanceOffset(Vector newValue) { if (m_SharpStanceOffset != newValue) TouchCheckpoint(); m_SharpStanceOffset = newValue; }
 
 		/// Gets how much farther an Actor which holds this device can see when
 		/// aiming this HeldDevice sharply.
@@ -136,7 +136,7 @@ namespace RTE {
 		/// Sets how much farther an Actor which holds this device can see when
 		/// aiming this HeldDevice sharply.
 		/// @param newLength The length in world pixel units.
-		void SetSharpLength(float newLength) { m_MaxSharpLength = newLength; }
+		void SetSharpLength(float newLength) { if (m_MaxSharpLength != newLength) TouchCheckpoint(); m_MaxSharpLength = newLength; }
 
 		/// Gets whether this HeldDevice can be supported when held.
 		/// @return Whether this HeldDevice can be supported when held.
@@ -144,7 +144,7 @@ namespace RTE {
 
 		/// Sets whether this HeldDevice can be supported when held.
 		/// @param shouldBeSupportable Whether this HeldDevice can be supported when held.
-		void SetSupportable(bool shouldBeSupportable) { m_Supportable = shouldBeSupportable; }
+		void SetSupportable(bool shouldBeSupportable) { if (m_Supportable != shouldBeSupportable) TouchCheckpoint(); m_Supportable = shouldBeSupportable; }
 
 		/// Gets whether this HeldDevice is currently supported by a second Arm.
 		/// @return Whether this HeldDevice is supported or not.
@@ -168,7 +168,7 @@ namespace RTE {
 
 		/// Sets whether this HeldDevice while be held at the support offset with the off-hand when reloading.
 		/// @param value Whether this HeldDevice while be held at the support offset with the off-hand when reloading.
-		void SetUseSupportOffsetWhileReloading(bool value) { m_UseSupportOffsetWhileReloading = value; }
+		void SetUseSupportOffsetWhileReloading(bool value) { if (m_UseSupportOffsetWhileReloading != value) TouchCheckpoint(); m_UseSupportOffsetWhileReloading = value; }
 
 		/// Returns support offset.
 		/// @return Support offset value.
@@ -176,7 +176,7 @@ namespace RTE {
 
 		/// Sets support offset.
 		/// @param newOffset New support offset value.
-		void SetSupportOffset(Vector newOffset) { m_SupportOffset = newOffset; }
+		void SetSupportOffset(Vector newOffset) { if (m_SupportOffset != newOffset) TouchCheckpoint(); m_SupportOffset = newOffset; }
 
 		/// Gets whether this HeldDevice has any limitations on what can pick it up.
 		/// @return Whether this HeldDevice has any limitations on what can pick it up.
@@ -188,7 +188,7 @@ namespace RTE {
 
 		/// Sets whether this HeldDevice cannot be picked up at all.
 		/// @param shouldBeUnPickupable Whether this HeldDevice cannot be picked up at all. True means it cannot, false means any other limitations will apply normally.
-		void SetUnPickupable(bool shouldBeUnPickupable) { m_IsUnPickupable = shouldBeUnPickupable; }
+		void SetUnPickupable(bool shouldBeUnPickupable) { if (m_IsUnPickupable != shouldBeUnPickupable) TouchCheckpoint(); m_IsUnPickupable = shouldBeUnPickupable; }
 
 		/// Checks whether the given Actor can pick up this HeldDevice.
 		/// @param actor The Actor to check. Ownership is NOT transferred.
@@ -213,7 +213,7 @@ namespace RTE {
 
 		/// Sets the multiplier for how well this HeldDevice can be gripped by Arms.
 		/// @param gripStrengthMultiplier The new grip strength multiplier for this HeldDevice.
-		void SetGripStrengthMultiplier(float gripStrengthMultiplier) { m_GripStrengthMultiplier = gripStrengthMultiplier; }
+		void SetGripStrengthMultiplier(float gripStrengthMultiplier) { if (m_GripStrengthMultiplier != gripStrengthMultiplier) TouchCheckpoint(); m_GripStrengthMultiplier = gripStrengthMultiplier; }
 
 		/// Gets whether this can get hit by MOs when held.
 		/// @return Whether this can get hit by MOs when held.
@@ -221,7 +221,7 @@ namespace RTE {
 
 		/// Sets whether this can get hit by MOs when held.
 		/// @param value Whether this can get hit by MOs when held.
-		void SetGetsHitByMOsWhenHeld(bool value) { m_GetsHitByMOsWhenHeld = value; }
+		void SetGetsHitByMOsWhenHeld(bool value) { if (m_GetsHitByMOsWhenHeld != value) TouchCheckpoint(); m_GetsHitByMOsWhenHeld = value; }
 
 		/// Gets whether this HeldDevice is currently being held or not.
 		/// @return Whether this HeldDevice is currently being held or not.
@@ -233,12 +233,12 @@ namespace RTE {
 
 		/// Sets the visual recoil multiplier.
 		/// @param value The new recoil multiplier scalar.
-		void SetVisualRecoilMultiplier(float value) { m_VisualRecoilMultiplier = value; }
+		void SetVisualRecoilMultiplier(float value) { if (m_VisualRecoilMultiplier != value) TouchCheckpoint(); m_VisualRecoilMultiplier = value; }
 
 		/// Sets the degree to which this is being aimed sharp. This will
 		/// affect the accuracy and what GetParentOffset returns.
 		/// @param sharpAim A normalized scalar between 0 (no sharp aim) to 1.0 (best aim).
-		void SetSharpAim(float sharpAim) { m_SharpAim = sharpAim; }
+		void SetSharpAim(float sharpAim) { if (m_SharpAim != sharpAim) TouchCheckpoint(); m_SharpAim = sharpAim; }
 
 		/// Indicates whether this is an offensive weapon or not.
 		/// @return Offensive weapon or not.
@@ -258,7 +258,7 @@ namespace RTE {
 
 		/// Sets whether this is a dual wieldable weapon or not.
 		/// @param isDualWieldable Dual wieldable or not.
-		void SetDualWieldable(bool isDualWieldable) { m_DualWieldable = isDualWieldable; }
+		void SetDualWieldable(bool isDualWieldable) { if (m_DualWieldable != isDualWieldable) TouchCheckpoint(); m_DualWieldable = isDualWieldable; }
 
 		/// Indicates whether this can be held and operated effectively with one
 		/// hand or not.
@@ -268,7 +268,7 @@ namespace RTE {
 		/// Sets whether this can be held and operated effectively with one
 		/// hand or not.
 		/// @param newValue New value.
-		void SetOneHanded(bool newValue) { m_OneHanded = newValue; }
+		void SetOneHanded(bool newValue) { if (m_OneHanded != newValue) TouchCheckpoint(); m_OneHanded = newValue; }
 
 		/// Calculates the collision response when another MO's Atom collides with
 		/// this MO's physical representation. The effects will be applied

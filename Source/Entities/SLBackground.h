@@ -51,7 +51,7 @@ namespace RTE {
 
 		/// Sets whether this SLBackground is animated manually/externally.
 		/// @param isAnimatedManually Whether this SLBackground is animated manually/externally and should skip animation handling during Update().
-		void SetAnimatedManually(bool isAnimatedManually) { m_IsAnimatedManually = isAnimatedManually; }
+		void SetAnimatedManually(bool isAnimatedManually) { if (m_IsAnimatedManually != isAnimatedManually) TouchCheckpoint(); m_IsAnimatedManually = isAnimatedManually; }
 
 		/// Gets the frame number of this SLBackground that is currently set to be drawn.
 		/// @return The frame number that is currently set to be drawn.
@@ -75,7 +75,7 @@ namespace RTE {
 
 		/// Sets the time it takes to complete a full animation cycle of this SLBackground.
 		/// @param newDuration The new animation cycle duration, in milliseconds.
-		void SetSpriteAnimDuration(int newDuration) { m_SpriteAnimDuration = newDuration; }
+		void SetSpriteAnimDuration(int newDuration) { if (m_SpriteAnimDuration != newDuration) TouchCheckpoint(); m_SpriteAnimDuration = newDuration; }
 
 		/// Gets whether this SLBackground has auto-scrolling enabled and meets the requirements to actually auto-scroll.
 		/// @return Whether this has auto-scrolling enabled and meets the requirements to actually auto-scroll.
@@ -87,7 +87,7 @@ namespace RTE {
 
 		/// Sets whether auto-scrolling is enabled on the X axis.
 		/// @param autoScroll Whether auto-scrolling is enabled on the X axis or not. If requirements aren't met, this will not auto-scroll even if set to true.
-		void SetAutoScrollX(bool autoScroll) { m_CanAutoScrollX = autoScroll; }
+		void SetAutoScrollX(bool autoScroll) { if (m_CanAutoScrollX != autoScroll) TouchCheckpoint(); m_CanAutoScrollX = autoScroll; }
 
 		/// Gets whether auto-scrolling is enabled on the Y axis.
 		/// @return Whether auto-scrolling is enabled on the Y axis. This may be true even if auto-scrolling isn't actually happening due to not meeting requirements.
@@ -95,7 +95,7 @@ namespace RTE {
 
 		/// Sets whether auto-scrolling is enabled on the Y axis.
 		/// @param autoScroll Whether auto-scrolling is enabled on the Y axis or not. If requirements aren't met, this will not auto-scroll even if set to true.
-		void SetAutoScrollY(bool autoScroll) { m_CanAutoScrollY = autoScroll; }
+		void SetAutoScrollY(bool autoScroll) { if (m_CanAutoScrollY != autoScroll) TouchCheckpoint(); m_CanAutoScrollY = autoScroll; }
 
 		/// Gets the duration between auto-scroll steps.
 		/// @return The duration between auto-scroll steps, in milliseconds.
@@ -103,7 +103,7 @@ namespace RTE {
 
 		/// Sets the duration between auto-scroll steps.
 		/// @param newStepInterval The new duration between auto-scroll steps, in milliseconds.
-		void SetAutoScrollStepInterval(int newStepInterval) { m_AutoScrollStepInterval = newStepInterval; }
+		void SetAutoScrollStepInterval(int newStepInterval) { if (m_AutoScrollStepInterval != newStepInterval) TouchCheckpoint(); m_AutoScrollStepInterval = newStepInterval; }
 
 		/// Gets the auto-scroll step (pixels to advance per interval) values.
 		/// @return A Vector with the auto-scroll step values.
@@ -111,7 +111,7 @@ namespace RTE {
 
 		/// Sets the auto-scroll step (pixels to advance per interval) values.
 		/// @param newStep A Vector with the new auto-scroll step values.
-		void SetAutoScrollStep(const Vector& newStep) { m_AutoScrollStep = newStep; }
+		void SetAutoScrollStep(const Vector& newStep) { if (m_AutoScrollStep != newStep) TouchCheckpoint(); m_AutoScrollStep = newStep; }
 
 		/// Gets the auto-scroll step (pixels to advance per interval) value on the X axis.
 		/// @return The auto-scroll step value on the X axis.

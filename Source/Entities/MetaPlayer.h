@@ -66,7 +66,7 @@ namespace RTE {
 
 		/// Sets the Team of the MetaPlayer.
 		/// @param newTeam The new team to set.
-		void SetTeam(int newTeam) { m_Team = newTeam; }
+		void SetTeam(int newTeam) { if (m_Team != newTeam) TouchCheckpoint(); m_Team = newTeam; }
 
 		/// Indicates whether this MetaPlayer is human controlled or not (AI).
 		/// @return Whether this player is human controlled.
