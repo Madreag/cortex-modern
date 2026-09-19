@@ -2710,6 +2710,11 @@ static std::string ResyncSaveName() {
 		m_MigrationAuthority = result.hostPeerId; m_MigrationMembers = result.members;
 		m_MigrationGeneration = result.generation;
 		m_IsHost = result.hostPeerId == m_LocalPeerId;
+		m_PendingModeration.clear();
+		m_PendingHostOptions.reset();
+		m_HostOptionsRequest.Clear();
+		m_LastRemovalIssue = {};
+		m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
 		if (ActiveWireLocked()) ActiveWireLocked()->Stop();
 		m_MigratedTransport = std::move(wire);
 		auto liveTransports = result.transports;
@@ -2732,6 +2737,7 @@ static std::string ResyncSaveName() {
 			m_Session->EnableParticipantProof(nullptr);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			m_ReconnectHost.SetLiveMatch(true); m_ReconnectHost.SetMigrationHold(result.snapshotProviderPeerId != 0, AdmissionNowMs());
+			m_ModerationSeats = m_ReconnectHost.GetModerationView();
 			const SimCensusScope census;
 			m_ReconnectHost.RecordMigrationDepartures(result.boundary + 1);
 			for (const auto& event : m_Coordinator->TakeMigrationAdmissionEvents()) {
@@ -4504,6 +4510,10 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::DrainPendingModeration(NetSession& session) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost) {
+			m_PendingModeration.clear();
+			return;
+		}
 		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting) {
 			return;
 		}
