@@ -1204,7 +1204,8 @@ static std::string ResyncSaveName() {
 		for (const auto& pending: state->pendingPlayerBindings) if (pending.command.senderPeerId == localPeer && (!newestBinding || pending.frame > newestBinding->frame)) {
 			newestBinding = NetResyncPlayerBindings{pending.frame, std::get<NetGamePlayerBindings>(pending.command.payload)};
 		}
-		if (!retainLocal && !newestBinding && !dedicated) {
+		// A resumed peer launches on the carried bindings, so it needs its own entry whatever it kept.
+		if ((!retainLocal || autosave) && !newestBinding && !dedicated) {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
@@ -1245,14 +1246,11 @@ static std::string ResyncSaveName() {
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
 			const NetGamePlayerBindings seatless{};
-			if (ownCheckpoint) {
-				// The world this peer just restored is its own state at that tick, so its bindings are
-				// read back out of it and re-applied: the seats keep their cameras, brains and
-				// controlled actors, and the net-local screens are rebuilt from them.
-				NetGamePlayerBindings own;
-				activity.CaptureNetPlayerBindings(own);
-				if (!activity.ApplyNetPlayerBindings(own)) return false;
-			} else if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
+			// A peer that loaded its own copy of the checkpoint and one that was streamed the host's copy
+			// apply the SAME bindings - the ones the checkpoint's manifest carried - or the two would
+			// resume onto different seats. Only a live heal keeps this machine's own captured state.
+			if (!(keepLocalPlayer && !ownCheckpoint ? activity.RestoreNetLocalPlayerState(local->activity)
+			                                        : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
 				return false;
 			}
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
@@ -3233,8 +3231,17 @@ static std::string ResyncSaveName() {
 		state.e2eFirstTransferUid = sideState.firstTransferUid;
 		// Nothing is in flight across a restart: a command sent but not yet applied when the host died
 		// is lost, and no input, command or binding is pending at the tick the world stands on.
+		// The seats come from the checkpoint's own manifest, so every peer resumes onto the bindings the
+		// match agreed at that tick instead of one derived here and one read out of a restored world.
+		for (const auto& [peer, encoded]: sideState.playerBindings) {
+			uint64_t frame = 0;
+			NetGamePlayerBindings bindings;
+			if (!ScenarioRunner::DecodeAgreedBindings(encoded, frame, bindings)) continue;
+			state.playerBindings[peer] = NetResyncPlayerBindings{std::min(frame, savedTick), bindings};
+		}
+		// A seat the match never heard a binding for still needs one to launch on: its roster slot.
 		for (const NetMatchPlayerSlot& slot: config.players) {
-			if (slot.cpu || slot.peerId == 0) continue;
+			if (slot.cpu || slot.peerId == 0 || state.playerBindings.count(slot.peerId) != 0) continue;
 			NetResyncPlayerBindings binding;
 			binding.frame = savedTick;
 			const size_t seat = static_cast<size_t>(slot.peerId - 1);
@@ -3284,7 +3291,8 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::DeriveRestartKey(std::array<uint8_t, 32>& key) {
-		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		// The store's own path decides: production leaves it at this install's identity, and a caller
+		// that pointed it somewhere else means it, now that a new path unloads the key it held.
 		if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) return false;
 		return m_ParticipantStore.DeriveLocalKey(c_RestartAdmissionKeyLabel, key);
 	}
@@ -3456,14 +3464,14 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {
+	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error, const std::filesystem::path& store) {
 		auto refuse = [&](const std::string& reason) {
 			if (error) *error = reason;
 			return false;
 		};
 		const std::string matchId = request.resumeMatchId;
 		if (!AutosaveStore::ValidMatchId(matchId)) return refuse("resume names no match");
-		const std::filesystem::path directory = AutosaveStore::Directory();
+		const std::filesystem::path directory = store.empty() ? AutosaveStore::Directory() : store;
 		std::string reason;
 		std::optional<AutosaveDescriptor> checkpoint;
 		if (request.resumeTick != 0) {
@@ -3495,6 +3503,7 @@ static std::string ResyncSaveName() {
 		std::string directorySession, directoryToken;
 		uint64_t roundId = checkpoint->roundId;
 		uint32_t interval = checkpoint->intervalSeconds;
+		uint64_t generation = 0;
 		try {
 			const auto body = nlohmann::json::from_cbor(plaintext);
 			if (body.at("version") != 1 || body.at("autosave_match_id").get<std::string>() != matchId) {
@@ -3509,6 +3518,14 @@ static std::string ResyncSaveName() {
 			directoryToken = body.at("directory_token").get<std::string>();
 			roundId = body.at("autosave_round").get<uint64_t>();
 			interval = body.at("autosave_interval").get<uint32_t>();
+			// The SEALED generation is the authority - it is the authenticated one - and the plaintext
+			// line beside it is what the publish guard compares, so the two must agree or the file was
+			// not written whole by this install.
+			generation = body.at("generation").get<uint64_t>();
+			if (generation != admission.generation) {
+				std::fill(plaintext.begin(), plaintext.end(), 0);
+				return refuse("the admission file's generation does not match its sealed export");
+			}
 		} catch (const nlohmann::json::exception& exception) {
 			std::fill(plaintext.begin(), plaintext.end(), 0);
 			return refuse(std::string("the admission file does not decode: ") + exception.what());
@@ -3530,6 +3547,10 @@ static std::string ResyncSaveName() {
 		request.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// The next publish carries on from the generation on disk; without this the restarted host
+			// offers generation 1 and the monotonic guard refuses to replace its own file.
+			m_RestartAdmissionGeneration = generation;
+			m_PublishedAdmissionMatchId = matchId;
 			m_ResumeMatchId = matchId;
 			m_ResumeTick = checkpoint->savedTick;
 			m_ResumeArchiveDigest = checkpoint->worldStructureHash;

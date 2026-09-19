@@ -443,7 +443,11 @@ namespace RTE {
 		/// Whether this peer holds the checkpoint a resumed host offers, and records it as the one to load.
 		bool AnswerResumeOffer(const NetLobbyResume& offer);
 		/// The id every peer of this match writes its checkpoints under.
-		std::string GetAutosaveMatchId() const { return m_AutosaveMatchId; }
+		/// A copy under the lock: a resume and a join both assign this while the main loop reads it.
+		std::string GetAutosaveMatchId() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_AutosaveMatchId;
+		}
 		/// Records the checkpoint the host named for a heal: this peer pins it against retention and says
 		/// whether it holds a restorable copy. The choice is never recomputed locally.
 		/// @param known The descriptor of that same checkpoint when the caller already validated it, so the
@@ -797,7 +801,9 @@ namespace RTE {
 		void WriteFinalWorldCheckpoint();
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
-		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
+		/// @param directory Which checkpoint store to read; empty means this install's own. A caller
+		/// that names one reads exactly that directory, so a row never has to write into the player's.
+		bool PrepareResume(NetMatchServiceRequest& request, std::string* error, const std::filesystem::path& directory = {});
 		/// World host: points the request's resume at the world's own checkpoint chain, so a boot of an
 		/// existing world reopens it through the one resume path instead of a second implementation.
 		/// Runs before PrepareResume and reads the identity record without advancing it.

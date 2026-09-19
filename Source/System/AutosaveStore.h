@@ -46,6 +46,10 @@ namespace RTE {
 		std::map<int64_t, uint8_t> droppedControlOwners;
 		std::map<uint8_t, uint64_t> appliedCommands;
 		int64_t firstTransferUid = 0;
+		/// Each peer's agreed player bindings at that tick - which seat holds which brain, which actor it
+		/// controls and where it is looking - keyed by peer id. The bytes are the network layer's own
+		/// encoding of that binding command, opaque here, so the store adds no second format for them.
+		std::map<uint8_t, std::string> playerBindings;
 		bool operator==(const AutosaveSideState&) const = default;
 	};
 
@@ -129,7 +133,9 @@ namespace RTE {
 		static constexpr const char* c_AdmissionExtension = ".admission";
 		/// A world's recorded segment stands beside the checkpoint it replays from.
 		static constexpr const char* c_SegmentExtension = ".ccreplay";
-		static constexpr int c_ManifestSchema = 1;
+		// 2 carries each peer's agreed player bindings in the side state; a schema-1 manifest cannot
+		// resume, because resuming without them puts a held peer and a streamed peer on different seats.
+		static constexpr int c_ManifestSchema = 2;
 		static constexpr int c_AdmissionSchema = 1;
 		/// The host's sealed admission export is small by construction; anything larger is not one.
 		static constexpr size_t c_MaxAdmissionBytes = 64U * 1024U;
