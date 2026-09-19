@@ -3209,6 +3209,13 @@ do
 	local definesShared = string.find(shareSecond, "T" .. sharedId .. ";P%-;", 1, false) ~= nil
 	local namesShared = select(2, string.gsub(shareSecond, "#" .. sharedId .. ";", "")) >= 1
 	check("shared_node_keeps_its_id_when_the_other_root_is_rewritten", sharedId > 0 and definesShared and namesShared and string.find(shareSecond, "s1:b;", 1, true) ~= nil, tostring(sharedId))
+	-- The root that first reached the shared node is the one written again: its id must not move, and
+	-- exactly one chunk may define it.
+	shareRootOne.tag = "c"
+	local shareThird = _ScriptGraph.serialize(shareRoots)
+	local definitions = select(2, string.gsub(shareThird, "T" .. sharedId .. ";P%-;", ""))
+	local namesAfterOwnerRewrite = select(2, string.gsub(shareThird, "#" .. sharedId .. ";", "")) >= 1
+	check("shared_node_keeps_its_id_when_its_own_root_is_rewritten", definitions == 1 and namesAfterOwnerRewrite and string.find(shareThird, "s1:c;", 1, true) ~= nil, tostring(definitions))
 	-- A restored table answers to the name the archive gave it, so the next capture writes the same bytes.
 	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
 	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
