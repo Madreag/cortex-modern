@@ -301,7 +301,8 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open"), "wait has no predicate");
+			    step.contains("picker_open") || step.contains("chat_entry_open"), "wait has no predicate");
+			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
@@ -339,7 +340,7 @@ namespace {
 			}
 		} else if (op == "key_down" || op == "key_up") {
 			const std::string key = step.at("key");
-			Require(key == "F6" || key == "Escape" || key == "P", "unsupported probe key");
+			Require(key == "F6" || key == "Escape" || key == "P" || key == "CHAT", "unsupported probe key");
 			if (SimRateKey(key)) {
 				Require(step.contains("sim_at") && step["sim_at"].is_number_unsigned(), "sim-rate probe key needs an integer sim_at");
 				const uint64_t simAt = step["sim_at"].get<uint64_t>();
@@ -351,8 +352,10 @@ namespace {
 			SDL_Event event{};
 			event.type = op == "key_down" ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
-			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : SDL_SCANCODE_ESCAPE;
-			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
+			// The chat key is whatever the settings name resolves to, so the script never hardcodes it.
+			const SDL_Scancode chatScancode = static_cast<SDL_Scancode>(NetModerationGUI::ChatKeyScancode());
+			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : key == "CHAT" ? chatScancode : SDL_SCANCODE_ESCAPE;
+			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : key == "CHAT" ? SDL_GetKeyFromScancode(chatScancode, SDL_KMOD_NONE, false) : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
 		} else if (op == "pad_down" || op == "pad_up") {
@@ -507,6 +510,24 @@ namespace {
 			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
 			if (step.value("chat_layout", false)) {
 				Require(observed["net_ui"]["chat"].at("visible") == true, "the match chat band is not on screen");
+				if (step.contains("entry_open")) {
+					Require(observed["net_ui"].at("chat_entry_open") == step["entry_open"],
+					    std::string("the chat entry is ") + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed") + " and the step wanted the other");
+				}
+				// A band measured against nothing proves nothing: the step names how many of the overlay's
+				// own occupiers had to be on screen for this reading to count.
+				int visibleOccupiers = 0;
+				for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+					visibleOccupiers += observed["net_ui"].at(element).at("visible").get<bool>() ? 1 : 0;
+				}
+				for (const auto& other: observed["editor_seats"]) {
+					// screen_text_rect and text_band are one band under two names; counting one is counting it.
+					for (const std::string& area: {"picker", "text_band"}) {
+						if (other.contains(area) && other.at(area).value("visible", false)) ++visibleOccupiers;
+					}
+				}
+				Require(visibleOccupiers >= step.value("occupiers_at_least", 1),
+				    "only " + std::to_string(visibleOccupiers) + " overlay occupiers were on screen for the chat layout reading");
 				const std::string occupiers[] = {"status", "toasts", "seats_panel", "chat"};
 				for (size_t i = 0; i < 4; ++i) {
 					for (size_t j = i + 1; j < 4; ++j) {
