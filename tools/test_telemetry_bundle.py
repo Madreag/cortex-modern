@@ -28,7 +28,7 @@ IDENTITY_FIELDS = {"game_version", "network_protocol_version", "controller_frame
                    "supported_lockstep_codec_version", "supported_world_lockstep_codec_version",
                    "supported_match_config_version", "supported_world_match_config_version",
                    "lobby_protocol_version", "enabled_global_scripts"}
-SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "SessionDirectoryCertSha256")
+SECRET_KEYS = ("SessionDirectoryInstallKey", "NetworkTurnPass", "NetworkTurnUser", "NetworkPlayerTurnPass", "NetworkPlayerTurnUser", "SessionDirectoryCertSha256")
 SECRET_NEEDLES = ("Pass", "Password", "Secret", "Token", "PrivateKey", "Credential", "Ticket")
 
 
@@ -44,6 +44,8 @@ def plant_bundle_secrets(run) -> dict:
         "NetworkTurnPass": f"hunter2-{token}",
         "SessionDirectoryInstallKey": f"fakeinstall{token}",
         "NetworkTurnUser": f"turnuser{token}",
+        "NetworkPlayerTurnUser": f"personaluser{token}",
+        "NetworkPlayerTurnPass": f"personalpass{token}",
         "SessionDirectoryCertSha256": secrets.token_hex(32),
         "NetworkInputDelayFrames": "0",
     }
