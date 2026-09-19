@@ -331,6 +331,7 @@ typedef struct GCudata {
 #endif
   GCRef metatable;	/* Must be at same offset in GCtab. */
   uint32_t align1;	/* To force 8 byte alignment of the payload. */
+  uint64_t serial;	/* Birth order in this state. Keeps the payload 8 byte aligned. */
 } GCudata;
 
 /* Userdata types. */
@@ -445,6 +446,7 @@ typedef struct GCupval {
   };
   MRef v;		/* Points to stack slot (open) or above (closed). */
   uint32_t dhash;	/* Disambiguation hash: dh1 != dh2 => cannot alias. */
+  uint64_t serial;	/* Birth order in this state. */
 } GCupval;
 
 #define uvprev(uv_)	(&gcref((uv_)->prev)->uv)
@@ -456,7 +458,7 @@ typedef struct GCupval {
 /* Common header for functions. env should be at same offset in GCudata. */
 #define GCfuncHeader \
   GCHeader; uint8_t ffid; uint8_t nupvalues; \
-  GCRef env; GCRef gclist; MRef pc
+  GCRef env; GCRef gclist; MRef pc; uint64_t serial
 
 typedef struct GCfuncC {
   GCfuncHeader;
@@ -689,7 +691,7 @@ typedef struct global_State {
   PRNGState prng;	/* Global PRNG state. */
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
   struct LJPreview *preview;
-  uint64_t tabserial;	/* Tables born in this state. Never reused, saved with a checkpoint. */
+  uint64_t objserial;	/* Objects born in this state. Never reused, saved with a checkpoint. */
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)
@@ -731,6 +733,7 @@ struct lua_State {
   GCRef env;		/* Thread environment (table of globals). */
   void *cframe;		/* End of C stack frame chain. */
   MSize stacksize;	/* True stack size (incl. LJ_STACK_EXTRA). */
+  uint64_t serial;	/* Birth order in this state. */
 };
 
 #define G(L)			(mref(L->glref, global_State))

@@ -693,6 +693,11 @@ namespace RTE {
 		/// @param deterministic Whether every tick end runs a full collection on every state.
 		static void SetDeterministicCollection(bool deterministic);
 
+		/// Turns LuaJIT's allocation sinking on or off in every captured state. A sunk table is never
+		/// born, so two peers whose traces differ would number their tables differently.
+		static void SetCheckpointAllocationSinking(bool sinking);
+		static bool IsCheckpointAllocationSinking();
+
 		/// Gets whether every state's tick-end collection is a full cycle.
 		/// @return Whether every tick end runs a full collection on every state.
 		static bool IsDeterministicCollection();

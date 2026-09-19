@@ -89,11 +89,17 @@ LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb);
 LUA_API void luaJIT_arm_tab_write_trap(lua_State *L);
 LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx);
 
-/* Table birth order: the identity a checkpoint names a table by. Not visible to scripts. */
-LUA_API uint64_t luaJIT_tab_serial(lua_State *L, int idx);
-LUA_API void luaJIT_set_tab_serial(lua_State *L, int idx, uint64_t serial);
-LUA_API uint64_t luaJIT_state_tab_serial(lua_State *L);
-LUA_API void luaJIT_set_state_tab_serial(lua_State *L, uint64_t serial);
+/* Allocation sinking off: a captured state must allocate every table its script asks for. */
+LUA_API int luaJIT_set_alloc_sinking(lua_State *L, int on);
+LUA_API int luaJIT_alloc_sinking(lua_State *L);
+
+/* Birth order: the identity a checkpoint names an object by. Not visible to scripts. */
+LUA_API uint64_t luaJIT_value_serial(lua_State *L, int idx);
+LUA_API void luaJIT_set_value_serial(lua_State *L, int idx, uint64_t serial);
+LUA_API uint64_t luaJIT_upvalue_serial(lua_State *L, int idx, int n);
+LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t serial);
+LUA_API uint64_t luaJIT_state_serial(lua_State *L);
+LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial);
 
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
