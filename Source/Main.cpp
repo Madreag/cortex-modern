@@ -409,6 +409,7 @@ static bool s_eventLedgerGhostDumpTaken = false;
 static bool s_eventLedgerGhostDumpIdentical = false;
 static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostMovedKeys;
 static bool s_eventLedgerExpireDroppedGhost = false;
+static std::string s_eventLedgerExpireDetail;
 static long long s_fundsPreviewPress = 0;
 static const int s_fundsPreviewTeam = Activity::TeamOne; //!< The team -net-match-e2e-buy-command grants and buys for.
 static std::string s_netReplayOutPath;
@@ -3125,7 +3126,7 @@ static void CheckPreviewEventLedgerSelfTest() {
 	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
 	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && trackedMoved && s_eventLedgerGhostDumpIdentical,
 	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around a preview that moved a ghost" : (!trackedMoved ? "the tracked round's ghost did not move in that window" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
-	if (!s_eventLedgerExpireDroppedGhost) {
+	if (!s_eventLedgerExpireDroppedGhost && MovableMan::IsConstructed()) {
 		PreviewEventLedger::Key expireKey;
 		expireKey.kind = PreviewEventLedger::Projectile;
 		expireKey.emitterUID = 1;
@@ -3135,10 +3136,16 @@ static void CheckPreviewEventLedgerSelfTest() {
 		MovableMan::InstallPreviewGhostForSelfTest(new MOPixel(), expireKey);
 		const uint64_t expiredBefore = PreviewEventLedger::GetCounters().expired;
 		PreviewEventLedger::ExpireForTick(expireKey.tick + 2);
-		s_eventLedgerExpireDroppedGhost = PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() == 0;
+		const std::vector<MovableMan::PreviewGhostState> left = g_MovableMan.GetPreviewGhostStates();
+		const bool plantedGone = std::none_of(left.begin(), left.end(), [&expireKey](const MovableMan::PreviewGhostState& ghost) {
+			return ghost.key.kind == expireKey.kind && ghost.key.emitterUID == expireKey.emitterUID && ghost.key.tick == expireKey.tick && ghost.key.seq == expireKey.seq;
+		});
+		s_eventLedgerExpireDroppedGhost = PreviewEventLedger::GetCounters().expired > expiredBefore && plantedGone;
+		s_eventLedgerExpireDetail = "expired " + std::to_string(expiredBefore) + " -> " + std::to_string(PreviewEventLedger::GetCounters().expired) +
+		    ", planted ghost " + std::string(plantedGone ? "dropped" : "still installed") + ", " + std::to_string(left.size()) + " ghosts left";
 	}
-	check("expired_ghost_vanishes", s_eventLedgerExpireDroppedGhost,
-	      s_eventLedgerExpireDroppedGhost ? "ledger expire dropped the ghost" : "no ghost dropped at PreviewEventLedger::ExpireForTick");
+	check("expired_ghost_vanishes", MovableMan::IsConstructed() && s_eventLedgerExpireDroppedGhost,
+	      !MovableMan::IsConstructed() ? "MovableMan is not constructed in this host, so no ghost could be planted" : s_eventLedgerExpireDetail);
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
@@ -3915,11 +3922,13 @@ void RunGameLoop() {
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
 			g_AudioMan.RetireFinishedSimulationSounds();
-			const uint64_t expiredBefore = PreviewEventLedger::GetCounters().expired;
-			const size_t ghostsBeforeExpire = g_MovableMan.GetPreviewGhostCount();
+			const bool watchLedgerExpiry = s_eventLedgerPressTick > 0;
+			const uint64_t expiredBefore = watchLedgerExpiry ? PreviewEventLedger::GetCounters().expired : 0;
+			const size_t ghostsBeforeExpire = watchLedgerExpiry ? g_MovableMan.GetPreviewGhostCount() : 0;
 			PreviewEventLedger::ExpireForTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
-			if (PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() < ghostsBeforeExpire) {
+			if (watchLedgerExpiry && PreviewEventLedger::GetCounters().expired > expiredBefore && g_MovableMan.GetPreviewGhostCount() < ghostsBeforeExpire) {
 				s_eventLedgerExpireDroppedGhost = true;
+				s_eventLedgerExpireDetail = "the run's own expiry dropped a ghost at committed tick " + std::to_string(g_TimerMan.GetSimUpdateCount());
 			}
 			if (Activity* activity = g_ActivityMan.GetActivity()) {
 				activity->ExpirePresentationViews(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));

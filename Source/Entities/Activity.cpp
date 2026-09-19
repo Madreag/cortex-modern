@@ -785,7 +785,8 @@ std::string Activity::DescribeFundsReadout(int whichTeam, int player) const {
 }
 
 void Activity::NotePreviewedPurchase(int player, int team, float cost, uint64_t commitTick, uint64_t sequence) {
-	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player)) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || team < Teams::TeamOne || team >= Teams::MaxTeamCount || !IsLocalHumanSeat(player) ||
+	    !std::isfinite(cost) || cost < 0.0F) {
 		return;
 	}
 	PresentationView& view = m_PresentationView[player];
@@ -1716,7 +1717,8 @@ bool Activity::RunNetLocalPlayerStateSelfTest() {
 		check("relaunch_links_follow_seatless_bindings", fixture.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{}) && fixture.Activity::ResolveCheckpointReferences() &&
 			!fixture.m_Brain[0] && !fixture.m_ControlledActor[0] && !fixture.m_PlayerController[0].GetControlledActor());
 	} catch (const std::exception& exception) { check(exception.what(), false); }
-	return passed && RunPresentationViewSelfTest();
+	const bool presentation = RunPresentationViewSelfTest();
+	return passed && presentation;
 }
 
 bool Activity::RunPresentationViewSelfTest() {
@@ -1768,6 +1770,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	fixture.FillPresentationFromPreview(press, press + delay);
 	std::ostringstream worldAfter;
 	g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), worldAfter);
+	// A guard, not a detector: the fill touches the presentation view and the peek, neither of which this dump walks.
 	check("funds_path_dumps_byte_identical", worldBefore.str() == worldAfter.str(), mismatch(worldBefore.str(), worldAfter.str()));
 	check("committed_funds_untouched", fixture.GetTeamFunds(Teams::TeamOne) == 2000.0F,
 	      "committed " + std::to_string(fixture.GetTeamFunds(Teams::TeamOne)));

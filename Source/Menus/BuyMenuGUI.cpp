@@ -2453,8 +2453,7 @@ void BuyMenuGUI::TryPurchase() {
 		m_BlinkTimer.Reset();
 		return;
 	}
-	// Can't afford it :( - against the same tally the cost label prints; a buy the committed funds cannot cover is
-	// rejected at apply, and that reject clears the view.
+	// Can't afford it :( - against the same tally the cost label prints, so the confirm matches what the player reads.
 	else if (GetTotalOrderCost() > g_ActivityMan.GetActivity()->GetTeamFundsForPresentation(m_pController->GetTeam(), m_pController->GetPlayer())) {
 		g_GUISound.UserErrorSound()->Play(player);
 		// Set the notification blinker
