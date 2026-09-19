@@ -596,6 +596,10 @@ namespace RTE {
 		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
 		/// that id would leave its slot open and fence a slot nobody is coming back to.
 		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership);
+		/// The sim id and team the holder of an admission seat plays on. The world plane owns that
+		/// answer: a member plays the slot its seat is bound to, whatever id its seat table names.
+		/// An unbound seat is not the world's, so the caller keeps the seat's own pair.
+		static NetH4SeatSimIdentity WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat);
 		/// Records what the lobby did with a bootstrap's image. A refusal is not a start: the bootstrap
 		/// stays unstarted so the next pump retries it.
 		static bool NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough);
@@ -848,6 +852,9 @@ namespace RTE {
 		/// The drop-frame ownership census. Called by the reconnect host, and only ever from inside
 		/// PumpSessionEvents on the game thread - g_MovableMan is not safe to walk from anywhere else.
 		static std::vector<NetH4LedgerActor> CollectDropOwnership(void* context);
+		/// The world plane's answer for the admission plane, off the one seat-to-slot binding. Called
+		/// by the reconnect host from inside this service's own calls, so it takes no lock of its own.
+		static NetH4SeatSimIdentity SeatSimIdentitySource(void* context, uint16_t stableSeat);
 		/// The H4 seat state the round consults before it adjudicates a lost transport. Called by the
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
