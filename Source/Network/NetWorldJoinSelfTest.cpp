@@ -3632,6 +3632,7 @@ namespace RTE {
 		~WorldRestartScratch() {
 			std::error_code ignored;
 			for (const std::filesystem::path& path: written) std::filesystem::remove(path, ignored);
+			std::filesystem::remove(store / "row-identity.dat", ignored);
 			std::filesystem::remove(identityPath, ignored);
 			if (hadIdentity) {
 				std::ofstream out(identityPath, std::ios::binary | std::ios::trunc);
