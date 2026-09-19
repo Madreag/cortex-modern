@@ -194,6 +194,19 @@ namespace RTE {
 		return requestAddress;
 	}
 
+	/// Polls a configured directory client until it answers a list or the budget runs out; the rows it
+	/// returns are what a rejoin re-resolves against.
+	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled);
+
+	/// A stored ticket belongs to this join only when it names the host this request dials or the session
+	/// it joins; a record left by another host is not a re-resolve of this one.
+	inline bool TicketMatchesRequest(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress) {
+		if (!record.directorySessionId.empty() && record.directorySessionId == requestSessionId) {
+			return true;
+		}
+		return !record.hostAddress.empty() && record.hostAddress == requestAddress;
+	}
+
 	/// The address a ticket rejoin dials: the row the directory browse found for the stored session, else
 	/// the ticket's own address or session id.
 	inline std::string ResolveTicketJoinAddressFromRows(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, bool iceDial) {

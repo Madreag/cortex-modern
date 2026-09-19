@@ -355,6 +355,23 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled) {
+		std::vector<NetDirectorySessionRow> rows;
+		const uint64_t deadline = SteadyNowMs() + budgetMs;
+		while (SteadyNowMs() < deadline && !(cancelled && cancelled())) {
+			const uint64_t nowMs = SteadyNowMs();
+			browse.PollList(nowMs);
+			browse.Update(nowMs);
+			if (browse.ListReplies() > 0) {
+				rows = browse.Rows();
+				break;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		}
+		browse.StopBrowsing();
+		return rows;
+	}
+
 	NetMatchService::NetMatchService() = default;
 
 	NetMatchService::~NetMatchService() {
@@ -2714,34 +2731,43 @@ static std::string ResyncSaveName() {
 		if (!request.host) {
 			const std::string sessionId = request.sessionId;
 			const std::string address = request.address;
-			// The ICE choice is read once under the lock; the retry runs on the worker thread.
-			runnerConfig.resolveJoinAddress = [this, sessionId, address, iceWanted]() {
+			// A browsed row is judged with this build's identity, the way the join path judges one.
+			NetDirectoryLocalIdentity local;
+			local.networkProtocolVersion = manifest.networkProtocolVersion;
+			local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
+			local.controllerFrameVersion = manifest.controllerFrameVersion;
+			local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+			// The store path, the install key, the directory and the ICE choice are read here; the retry
+			// itself runs on the runner's worker.
+			std::string ticketPath;
+			std::string installKey;
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				ticketPath = s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath;
+				installKey = g_SettingsMan.GetOrCreateSessionDirectoryInstallKey();
+			}
+			const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
+			const std::string certPin = g_SettingsMan.GetSessionDirectoryCertSha256();
+			runnerConfig.resolveJoinAddress = [this, sessionId, address, iceWanted, local, ticketPath, installKey, baseUrl, certPin]() {
 				NetH4TicketRecord record;
-				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
-				const bool loaded = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded;
-				if (!loaded) {
+				{
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					m_TicketStore.SetPath(ticketPath);
+					if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) != NetH4TicketLoadResult::Loaded) {
+						record = {};
+					}
+				}
+				// A ticket left by another host is not a re-resolve of this join.
+				if (!TicketMatchesRequest(record, sessionId, address)) {
 					record = {};
 				}
 				std::vector<NetDirectorySessionRow> rows;
-				const NetDirectoryLocalIdentity local;
 				const std::string id = !record.directorySessionId.empty() ? record.directorySessionId : sessionId;
-				if (!id.empty()) {
-					const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
-					if (!baseUrl.empty()) {
-						NetDirectoryClient browse;
-						browse.Configure(baseUrl, g_SettingsMan.GetOrCreateSessionDirectoryInstallKey(), g_SettingsMan.GetSessionDirectoryCertSha256());
-						const uint64_t deadline = SteadyNowMs() + 250;
-						while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
-							browse.PollList(SteadyNowMs());
-							browse.Update(SteadyNowMs());
-							if (browse.ListReplies() > 0) {
-								rows = browse.Rows();
-								break;
-							}
-							std::this_thread::sleep_for(std::chrono::milliseconds(20));
-						}
-						browse.StopBrowsing();
-					}
+				if (!id.empty() && !baseUrl.empty()) {
+					NetDirectoryClient browse;
+					browse.Configure(baseUrl, installKey, certPin);
+					rows = BrowseSessionRows(browse, 250, [this] { return m_CancelRequested.load(); });
 				}
 				return ResolveTicketJoinAddressFromRows(record, sessionId, address, rows, local, iceWanted);
 			};
