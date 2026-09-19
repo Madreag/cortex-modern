@@ -89,11 +89,30 @@ namespace RTE {
 			if (end == std::string::npos) break;
 			begin = end + 1;
 		}
-		server.username = user;
-		server.credential = password;
 		result.matchId = id;
 		result.expiresAt = expiry;
-		result.iceServers.push_back(std::move(server));
+		const auto split = [](const std::string& csv) {
+			std::vector<std::string> parts;
+			size_t begin = 0;
+			do {
+				const size_t end = csv.find(',', begin);
+				parts.push_back(csv.substr(begin, end == std::string::npos ? end : end - begin));
+				if (end == std::string::npos) break;
+				begin = end + 1;
+			} while (begin <= csv.size());
+			return parts;
+		};
+		const auto users = split(user), passwords = split(password);
+		if ((users.size() != 1 && users.size() != server.urls.size()) || (passwords.size() != 1 && passwords.size() != server.urls.size())) return {};
+		if (users.size() == 1 && passwords.size() == 1) {
+			server.username = user;
+			server.credential = password;
+			result.iceServers.push_back(std::move(server));
+		} else {
+			for (size_t index = 0; index < server.urls.size(); ++index) {
+				result.iceServers.push_back({{server.urls[index]}, users[users.size() == 1 ? 0 : index], passwords[passwords.size() == 1 ? 0 : index]});
+			}
+		}
 		return result.Valid() ? result : NetRelayConfig{};
 	}
 

@@ -134,6 +134,8 @@ On the Mac, `brew install coturn`, place the same config at `$(brew --prefix)/et
 
 A private relay using permanent accounts instead of shared-secret authentication is the Fixed alternative. Enter its `host:port` or TURN URL, username and password in Host Options > Network > Connection > Relay (TURN) > Fixed. A player may instead enter their own account in Settings > Network > Connection; a nonempty address overrides the host offer. Do not paste `static-auth-secret`, a TURN key or an API token into either login form.
 
+Existing nonempty TURN settings without the new mode setting load as Fixed. Existing parallel comma-separated username/password lists retain their server mapping; one login can also apply to every listed URL. The `-net-turn` override applies for the current run and does not overwrite the menu's saved relay mode.
+
 ## Player policy and current transport limits
 
 | Connection | Candidate policy | Consequence |
