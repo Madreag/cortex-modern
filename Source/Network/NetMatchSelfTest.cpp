@@ -6992,12 +6992,21 @@ namespace RTE {
 		if (!NetMatchService::BuildMatchConfig(seated, 124, seatedWorld, error)) {
 			return false;
 		}
+		size_t seatedOpen = 0;
 		for (const NetMatchPlayerSlot& slot: seatedWorld.players) {
 			if (slot.cpu || slot.peerId == seatedWorld.hostPeerId) continue;
 			if (slot.displayName != "Open") {
 				*error = "a world with a seated human named its open seat '" + slot.displayName + "'";
 				return false;
 			}
+			++seatedOpen;
+		}
+		// A world's seats are the humans it was authored for, one slot each, all of them unseated until
+		// a peer takes one; the dedicated host holds none of them.
+		if (seatedOpen != static_cast<size_t>(seated.humans.value_or(0))) {
+			*error = "a world authored for " + std::to_string(seated.humans.value_or(0)) + " humans opened " +
+			         std::to_string(seatedOpen) + " seats";
+			return false;
 		}
 		std::cout << "[net-match-selftest] PASS lobby: an unseated seat reads its client id in a match and Open in a world" << std::endl;
 		return true;
