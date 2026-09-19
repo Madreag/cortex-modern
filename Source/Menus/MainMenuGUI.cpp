@@ -1937,8 +1937,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecWaitingLabel->SetText(waiting.empty() ? "" : ("Waiting on: " + waiting));
 	}
-	// H25: the button lights only where a repair can run - the host's own call, a live session,
-	// resync allowed on the running activity, not over, and no restore already in flight.
+	// A repair needs the host's live round and an available snapshot boundary.
 	bool resyncInFlight = false;
 	uint64_t resyncBytes = 0, resyncMs = 0;
 	g_NetMatchService.GetResyncStatus(&resyncInFlight, &resyncBytes, &resyncMs);
@@ -2205,9 +2204,7 @@ void MainMenuGUI::ApplyHostOptions() {
 			g_GUISound.BackButtonPressSound()->Play();
 			return;
 		}
-		// In an open lobby the submission is a live republish: the peers' adopted configs move to
-		// the next revision, and the status row reads their acks until it lands. In the rematch
-		// (closed) lobby the same draft is the staged next-match config instead.
+		// The adopted revision keeps Apply pending until the runner publishes it.
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch

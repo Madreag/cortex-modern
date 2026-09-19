@@ -4081,8 +4081,7 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost) {
 			return refuse("only the host submits match options");
 		}
-		// The transaction speaks to a live setup round: the open lobby, or the rematch lobby a finished
-		// match left up, are the only states whose peers could ever acknowledge an edit.
+		// Only an open or completed lobby can accept the host's next configuration.
 		const bool rematchLobbyUp = m_State == NetMatchServiceState::Completed && !m_LeftMatch && ActiveWireLocked() && m_Session && m_Runner;
 		if (m_State != NetMatchServiceState::Starting && !rematchLobbyUp) {
 			return refuse("host options apply while a lobby is open");
