@@ -568,6 +568,9 @@ namespace RTE {
 			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
 		};
 		std::vector<PendingRemoval> m_PendingRemovals; //!< Starting-state kicks waiting for the setup worker, in order.
+		std::vector<std::string> m_PendingToasts;      //!< Moderation lines a worker produced, for the game thread to show.
+		/// Shows what a worker-side removal produced. Game thread only; never called under the lock.
+		void PushPendingToasts();
 		uint32_t m_LastRoundId = 0;                    //!< The round the peers last played; what a kick between rounds is stamped with.
 		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session);
 		/// Wires the setup worker's host pump. The runner calls it with the session it ticks.

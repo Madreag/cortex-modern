@@ -1149,6 +1149,7 @@ static std::string ResyncSaveName() {
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
 			m_LastRoundId = 0;
+			m_PendingToasts.clear();
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_State = NetMatchServiceState::Idle;
@@ -1382,6 +1383,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_LastUpdateMs = nowMs;
+		PushPendingToasts();
 		JoinWorkerIfDone();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -1896,6 +1898,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
+		PushPendingToasts();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_State == NetMatchServiceState::Completed) {
@@ -1939,7 +1942,7 @@ static std::string ResyncSaveName() {
 		if (m_Coordinator) {
 			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
 		}
-		m_ReconnectClient.SetRound(m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0);
+		m_ReconnectClient.SetRound(m_Coordinator ? m_LastRoundId : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
@@ -2958,8 +2961,21 @@ static std::string ResyncSaveName() {
 			PublishModerationView();
 		}
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
-		ScenarioRunner::PushNetUiToast("moderation", who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
+		// A Starting kick runs on the setup worker, and the toast queue is the game thread's, so the
+		// line waits for the next pump instead of being pushed from here.
+		m_PendingToasts.push_back(who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
 		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::PushPendingToasts() {
+		std::vector<std::string> toasts;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			toasts.swap(m_PendingToasts);
+		}
+		for (const std::string& line : toasts) {
+			ScenarioRunner::PushNetUiToast("moderation", line);
+		}
 	}
 
 	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
