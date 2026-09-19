@@ -2415,7 +2415,7 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 	UnregisterObject(mo);
 	mo->SetAsNoID();
-	m_PreviewGhosts.push_back({mo, key, false});
+	m_PreviewGhosts.push_back({mo, key});
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
@@ -2443,7 +2443,7 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 	out.reserve(m_PreviewGhosts.size());
 	for (const PreviewGhost& ghost: m_PreviewGhosts) {
 		if (ghost.object) {
-			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()});
+			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel()});
 		}
 	}
 	return out;
@@ -2533,36 +2533,6 @@ bool MovableMan::PreviewGhostsAreUnregistered() const {
 		}
 	}
 	return true;
-}
-
-void MovableMan::TravelPreviewGhosts() {
-	const auto begin = std::chrono::steady_clock::now();
-	const float dt = g_TimerMan.GetDeltaTimeSecs();
-	const Vector gravity = g_SceneMan.GetGlobalAcc();
-	for (PreviewGhost& ghost: m_PreviewGhosts) {
-		MovableObject* mo = ghost.object;
-		if (!mo || mo->IsSetToDelete() || mo->GetPinStrength() > 0 || ghost.atHorizon) {
-			continue;
-		}
-		// Close a leftover sub-tick, then hold the preview horizon.
-		Vector vel = mo->GetVel() + gravity * mo->GetGlobalAccScalar() * dt;
-		if (mo->GetAirResistance() > 0 && vel.GetLargest() >= mo->GetAirThreshold()) {
-			vel *= 1.0F - (mo->GetAirResistance() * dt);
-		}
-		Vector pos = mo->GetPos() + vel * dt;
-		g_SceneMan.WrapPosition(pos);
-		const int pixelX = static_cast<int>(std::floor(pos.m_X));
-		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
-		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
-			mo->SetVel(Vector(0, 0));
-			ghost.atHorizon = true;
-			continue;
-		}
-		mo->SetVel(vel);
-		mo->SetPos(pos);
-		ghost.atHorizon = true;
-	}
-	m_LastGhostTravelUs = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - begin).count();
 }
 
 static bool IsNamedSpeculativeSpawn(const MovableObject* mo) {

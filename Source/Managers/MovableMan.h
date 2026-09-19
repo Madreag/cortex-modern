@@ -295,20 +295,14 @@ namespace RTE {
 		/// Drops the ghost that matches this ledger key; the canonical particle takes the pixel.
 		void DropPreviewGhost(const PreviewEventLedger::Key& key);
 		void DropAllPreviewGhosts();
-		/// Installs a preview ghost for a ledger projectile so ExpireForTick can drop it.
-		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
-		/// One committed-tick of leftover ghost motion; ghosts already at the preview horizon hold still.
-		void TravelPreviewGhosts();
-		double GetLastGhostTravelUs() const { return m_LastGhostTravelUs; }
+		/// Plants a ghost for a ledger key so a self-test can observe the drop.
+		static void InstallPreviewGhostForSelfTest(MovableObject* mo, const PreviewEventLedger::Key& key) { Instance().InstallPreviewGhost(mo, key); }
 		struct PreviewGhostState {
 			PreviewEventLedger::Key key;
 			Vector pos;
 			Vector vel;
-			float globalAccScalar = 1.0F;
-			float airResistance = 0;
-			float airThreshold = 0;
 		};
 		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
 		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
@@ -996,14 +990,14 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
+		/// Installs a preview ghost for a ledger projectile at the pose the preview left it; it holds there until the drop.
+		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;
-			bool atHorizon = true;
 		};
 		std::vector<PreviewGhost> m_PreviewGhosts;
 		uint64_t m_PreviewGhostPeak = 0;
-		double m_LastGhostTravelUs = 0;
 		bool m_RestoringSnapshot = false; //!< The Add paths place verbatim and adopt saved identity.
 		bool m_PurgingAllMOs = false;
 		std::vector<MovableObject*> m_PendingLinkResolves; //!< Restored adds whose saved links resolve once the whole world is in.

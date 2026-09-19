@@ -279,7 +279,7 @@ void FrameMan::FeelAfterPresent() {
 	    {"violations", LocalPrediction::GetViolations()}, {"events_started", PreviewEventLedger::GetEventStartCount()},
 	    {"events_retained", PreviewEventLedger::GetEventStarts().size()}, {"played", PreviewEventLedger::GetCounters().playedAtPreview},
 	    {"adopted", PreviewEventLedger::GetCounters().adoptedAtCommit}, {"expired", PreviewEventLedger::GetCounters().expired},
-	    {"ghosts", g_MovableMan.GetPreviewGhostCount()}, {"ghost_travel_us", g_MovableMan.GetLastGhostTravelUs()}};
+	    {"ghosts", g_MovableMan.GetPreviewGhostCount()}};
 	s_Feel.frame["delay"] = ScenarioRunner::GetLockstepLocalInputDelay();
 	s_Feel.frame["input_delay_text"] = g_NetMatchService.GetInputDelayText();
 	s_Feel.frame["peer"] = ScenarioRunner::GetLockstepLocalPeerId();
