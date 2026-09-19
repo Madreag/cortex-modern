@@ -446,7 +446,7 @@ namespace RTE {
 				v1.recordVersion = NetReconnectTicketStore::c_LegacyRecordVersion;
 				v1.directorySessionId.clear();
 				std::vector<uint8_t> v1Bytes;
-				if (!NetReconnectTicketStore::Serialize(v1, v1Bytes) || v1Bytes.size() <= 114) {
+				if (!NetReconnectTicketStore::Serialize(v1, v1Bytes) || v1Bytes.size() <= NetReconnectTicketStore::c_FixedBytes) {
 					return Fail("a v1 ticket body did not serialize");
 				}
 				NetH4TicketRecord parsedV1;
@@ -4955,6 +4955,16 @@ namespace RTE {
 			if (emptyBrowse != "session:sess-re-resolve-1") {
 				return Fail("a browse that found nothing dialled '" + emptyBrowse + "' instead of the stored directory session");
 			}
+			// A record left by the previous host is not this join's: the retry dials what the request named.
+			NetH4TicketRecord otherHost = record;
+			otherHost.directorySessionId = "sess-another-host";
+			otherHost.hostAddress = "10.0.0.9:41010";
+			if (TicketMatchesRequest(otherHost, "sess-re-resolve-1", "10.0.0.8:41010")) {
+				return Fail("a ticket for host 10.0.0.9 was taken for a join to 10.0.0.8");
+			}
+			if (!TicketMatchesRequest(record, "sess-re-resolve-1", "") || !TicketMatchesRequest(record, "", "10.0.0.8:41010")) {
+				return Fail("this join's own ticket was refused by the host and session match");
+			}
 
 			class ScriptedTransport final : public NetDirectoryClient::Transport {
 			public:
@@ -4974,6 +4984,29 @@ namespace RTE {
 				std::shared_ptr<std::deque<NetDirectoryClient::Reply>> m_Replies;
 				std::shared_ptr<std::vector<NetDirectoryClient::Request>> m_Sent;
 			};
+
+			// The SessionFull retry's own browse: the production loop, answered by a scripted list.
+			{
+				auto listReplies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
+				auto listSent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				NetDirectoryListResponse list;
+				list.sessions = {browsed};
+				list.total = 1;
+				listReplies->push_back({200, NetDirectoryCodec::EncodeListResponse(list), ""});
+				NetDirectoryClient browseClient;
+				browseClient.SetTransportFactory([listReplies, listSent] { return std::make_unique<ScriptedTransport>(listReplies, listSent); });
+				browseClient.Configure("https://dir.test", "key0123456789abcd", "");
+				const std::vector<NetDirectorySessionRow> browsedRows = BrowseSessionRows(browseClient, 250, [] { return false; });
+				if (browsedRows.size() != 1 || browsedRows.front().sessionId != record.directorySessionId) {
+					return Fail("the retry's browse returned " + std::to_string(browsedRows.size()) + " rows for the stored session");
+				}
+				if (listSent->empty() || listSent->front().path.find("/v1/sessions") == std::string::npos) {
+					return Fail("the retry's browse asked for '" + (listSent->empty() ? std::string("nothing") : listSent->front().path) + "' instead of the session list");
+				}
+				if (ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", browsedRows, local, false) != "198.51.100.7") {
+					return Fail("the rows the retry browsed did not resolve to the row's address");
+				}
+			}
 
 			auto replies = std::make_shared<std::deque<NetDirectoryClient::Reply>>();
 			auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
