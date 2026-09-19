@@ -1229,9 +1229,15 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			i += 2;
 			continue;
 		}
-		if (!lastArg && currentArg == "-net-resume-match") {
+		if (currentArg == "-net-resume-match") {
 			// Restart a match that ended with its host, from the checkpoints and manifest it left behind.
-			s_netResumeMatchId = argValue[++i];
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			if (value.empty()) {
+				std::cerr << "[autosave] -net-resume-match requires the match id to restart" << std::endl;
+				return false;
+			}
+			s_netResumeMatchId = value;
+			++i;
 			continue;
 		}
 		if (currentArg == "-net-resume-tick") {
