@@ -3286,6 +3286,39 @@ namespace RTE {
 			if (failure.empty()) failure = reason;
 			cancel.store(true);
 		}
+		bool RepairEndsBeforeItsBoundary(std::string* error) {
+			struct ActivityScope {
+				std::unique_ptr<Activity> previous = std::make_unique<Activity>();
+				ActivityScope() {
+					previous->SetActivityState(Activity::Running);
+					g_ActivityMan.SwapCheckpointActivity(previous);
+				}
+				~ActivityScope() { g_ActivityMan.SwapCheckpointActivity(previous); }
+			} activity;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_ResyncOnDesync = true;
+			hostCoordinator.DeferStopsToTickBoundary();
+			if (!service.RequestHostRepair(error)) return false;
+			bool inFlight = false;
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (!inFlight || !hostCoordinator.HasPendingRecoveryStop()) {
+				*error = "the requested repair was not pending at its boundary";
+				return false;
+			}
+			service.Complete("round ended before the repair boundary");
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (inFlight || service.IsMatchResyncing()) {
+				*error = "an ended round retained its queued repair";
+				return false;
+			}
+			service.Destroy();
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (inFlight) {
+				*error = "a destroyed session retained its repair";
+				return false;
+			}
+			return true;
+		}
 		bool Pending() const { return service.m_HostOptionsRequest.pending.load(); }
 		bool Run(std::string* error) {
 			const bool started = runner.Start(tap, hostSession, hostCoordinator, config, error);
@@ -3334,6 +3367,14 @@ namespace RTE {
 	};
 
 	namespace {
+		bool TestHostRepairEndsBeforeItsBoundary(std::string* error) {
+			HostOptionsLobbyRow row(43153);
+			row.observe = [&] {
+				if (row.runner.GetLobbySession().IsConfigAcked(2) && row.runner.GetLobbySession().IsRemoteReady(2)) row.start.store(true);
+			};
+			return row.Run(error) && row.RepairEndsBeforeItsBoundary(error);
+		}
+
 		bool TestLobbyRepublishesHostOptionsRevision(std::string* error) {
 			HostOptionsLobbyRow row(43137);
 			NetHash32 firstHash{};
@@ -10791,6 +10832,7 @@ namespace RTE {
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
+		if (!TestHostRepairEndsBeforeItsBoundary(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);

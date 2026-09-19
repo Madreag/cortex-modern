@@ -1181,6 +1181,7 @@ namespace RTE {
 		LastResyncMetrics m_LastResync;
 		uint64_t m_ResyncHealStartMs = 0;
 		bool m_ResyncHealOpen = false;
+		bool m_HostRepairPending = false;
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
