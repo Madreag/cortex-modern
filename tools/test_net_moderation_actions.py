@@ -21,6 +21,7 @@ KICK_ROWS = (
     "kick: service RemoveParticipant broadcasts, evicts and disconnects",
     "kick: a removed link loses its seat, its transactions and its binding",
     "kick: Starting removals and unbans marshal onto the setup worker in order",
+    "kick: a Starting kick drains through the setup worker and removes the seat",
 )
 
 
