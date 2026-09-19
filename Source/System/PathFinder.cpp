@@ -2486,6 +2486,36 @@ int PathFinder::RunHorizonGridSelfTest() {
 		std::cout << Tag << " PASS note-patch-sharing" << std::endl;
 	}
 
+	// door-diagonal-wrap: on a scene that wraps both ways a door reaches the box across the corner too.
+	{
+		Scene cornerScene;
+		SLTerrain cornerTerrain;
+		FixtureBinding binding;
+		if (cornerTerrain.TestInstallMaterialBitmap(160, 80, true, true) < 0) {
+			return fail("corner fixture material bitmap was not installed");
+		}
+		binding.Bind(&cornerScene, &cornerTerrain);
+		TestDoorPiece cornerPiece;
+		cornerPiece.Arm(Vector(5.0F, 5.0F), 10.0F);
+		TestDoor cornerDoor;
+		cornerDoor.Arm(&cornerPiece, Activity::Teams::TeamOne);
+		BorrowedActor borrowed;
+		borrowed.Lend(&cornerDoor);
+		// Meets the door only after both seams are crossed; the axis boxes meet it across one seam each.
+		const bool cornerSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, Box(Vector(150.0F, 70.0F), 20.0F, 20.0F));
+		const bool xSeamSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, Box(Vector(150.0F, 0.0F), 20.0F, 20.0F));
+		const bool ySeamSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, Box(Vector(0.0F, 70.0F), 20.0F, 20.0F));
+		const bool middleSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, Box(Vector(70.0F, 35.0F), 20.0F, 20.0F));
+		borrowed.Reclaim();
+		cornerDoor.Unarm();
+		if (!cornerSeesDoor || !xSeamSeesDoor || !ySeamSeesDoor || middleSeesDoor) {
+			std::cout << Tag << " FAIL door wrap corner=" << cornerSeesDoor << " x_seam=" << xSeamSeesDoor
+			          << " y_seam=" << ySeamSeesDoor << " middle=" << middleSeesDoor << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS door-diagonal-wrap" << std::endl;
+	}
+
 	// shared-async-tick: both peers publish the same answer on the same applied frame, whatever their solve timing.
 	{
 		PathFinder asyncA;
