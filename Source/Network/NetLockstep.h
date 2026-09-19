@@ -349,6 +349,9 @@ namespace RTE {
 		bool resumeFromSnapshot = false;
 		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
 		uint8_t frameRedundancyTicks = 4;
+		// This round joins one already running: every remote has been producing for a long time and
+		// owes its frames from startFrame on, so none of them ramps in behind the input delay here.
+		bool joinsRunningRound = false;
 	};
 
 	struct NetLockstepReadyFrame {
@@ -488,6 +491,8 @@ namespace RTE {
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
 		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
 		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
+		// A persistent world's membership/spawn/binding transition is encoded only at this version.
+		static constexpr uint16_t c_WorldTransitionVersion = 23;
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
 		static constexpr uint16_t c_ValueObservationVersion = 20;
@@ -617,6 +622,9 @@ namespace RTE {
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
+		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
+		/// The committed ready-frame for that tick, if it is still held or was just advanced.
+		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 
@@ -674,6 +682,31 @@ namespace RTE {
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.
 		void ResolveHeldSeat(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs);
+
+		/// Whether this round is a persistent world: nobody's departure ends it, and its membership is
+		/// admitted one member at a time instead of being derived from the configured peer count.
+		bool IsPersistentWorldRound() const { return m_Config.matchConfig.persistentWorld; }
+		/// Adds an activated world member to the round. Its frames become required at firstRequiredFrame
+		/// and not before, so the announced activation tick is exactly when the world starts waiting on it.
+		/// @param peerId The lockstep id the world's slot table gave the member.
+		/// @param transportPeerId The live connection the member's frames arrive on.
+		/// @param firstRequiredFrame E: the first frame this member must produce.
+		/// @return Whether the member was added.
+		bool AdmitWorldMember(uint8_t peerId, NetPeerId transportPeerId, uint64_t firstRequiredFrame, std::string* error = nullptr);
+		/// The highest target this peer has already put on the wire; 0 before its first input. An
+		/// activation is announced ahead of it so the member is a peer before those frames go out.
+		uint64_t SentInputThrough() const { return m_LastQueuedTargetFrame == UINT64_MAX ? 0 : m_LastQueuedTargetFrame; }
+		/// The frame every sender spells its observation keys out from again, so a member admitted
+		/// there decodes them with the empty table it starts with. 0 when no activation is pending.
+		uint64_t ObservationEpoch() const { return m_ObservationEpochFrame; }
+		/// The announce sets it: from this frame every sender spells its observation keys out again,
+		/// so a member admitted there reads them with the empty table it starts with. A re-announce
+		/// moves it; the live stream restarts again at the new frame.
+		void SetObservationEpoch(uint64_t frame);
+		/// How many frames the last admission replayed to the member it admitted.
+		size_t LastAdmissionReplayFrames() const { return m_LastAdmissionReplayFrames; }
+		/// Whether the peer is a member the round waits on right now.
+		bool IsWorldMember(uint8_t peerId) const { return IsKnownRemotePeer(peerId); }
 		/// Host: remove one remote as a clean leave. A held seat expires; a live seat never opens a hold.
 		void EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs);
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
@@ -719,6 +752,13 @@ namespace RTE {
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		/// Sends one admitted member everything this peer still holds for targets from its first
+		/// required frame to the highest already sent, in target order, own frame before the members'.
+		size_t ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame);
+		/// Rebuilds one sender's pending frame for a target from the stores the commit drains.
+		bool BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const;
+		/// Resets one sender's encode table at the epoch, once, before its first frame at or past it.
+		void ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame);
 		/// The block store of one sender, trimmed to the ticks a window can still repeat.
 		NetLockstepObservationBlocks& ObservationBlocksOf(uint8_t senderPeerId, uint64_t newestTargetFrame);
 		void AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy);
@@ -837,6 +877,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
+		uint64_t m_ObservationEpochFrame = 0;          //!< Where every sender spells its keys out again.
+		std::set<uint8_t> m_ObservationEpochApplied;   //!< The senders whose encode table the epoch has reset.
+		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
 		NetLockstepSeatState (*m_SeatStateSource)(void*, uint8_t, NetPeerId) = nullptr;
 		void* m_SeatStateContext = nullptr;
@@ -898,6 +941,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
+		std::map<uint64_t, NetLockstepReadyFrame> m_ReadyHistory;
 
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
 		bool IsKnownRemotePeer(uint8_t peerId) const;

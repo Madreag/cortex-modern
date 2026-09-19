@@ -4,6 +4,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
 #include "NetResyncState.h"
+#include "NetWorldJoin.h"
 
 #include <algorithm>
 #include <charconv>
@@ -845,6 +846,27 @@ namespace RTE {
 						if (!AppendString(out, place.className, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_class_name", error) ||
 						    !AppendString(out, place.preset, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_preset", error) ||
 						    !AppendString(out, place.module, NetLockstepCodec::c_MaxScenarioBytes, "place_brain_module", error)) {
+							return false;
+						}
+						break;
+					}
+					case NetGameCommandType::WorldTransition: {
+						const NetGameWorldTransition& transition = std::get<NetGameWorldTransition>(command.payload);
+						AppendU16LE(out, transition.schema);
+						AppendU8(out, transition.kind);
+						AppendU8(out, transition.peerId);
+						AppendU32LE(out, transition.holderGeneration);
+						AppendU64LE(out, transition.membershipRevision);
+						AppendU64LE(out, transition.activationFrame);
+						AppendU32LE(out, static_cast<uint32_t>(transition.team));
+						AppendU32LE(out, static_cast<uint32_t>(transition.player));
+						AppendU32LE(out, FloatToBitsLE(transition.posX));
+						AppendU32LE(out, FloatToBitsLE(transition.posY));
+						AppendU32LE(out, static_cast<uint32_t>(transition.aiMode));
+						AppendU8(out, transition.bindBrain ? 1 : 0);
+						if (!AppendString(out, transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
+						    !AppendString(out, transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
+						    !AppendString(out, transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
 							return false;
 						}
 						break;
@@ -1934,6 +1956,52 @@ namespace RTE {
 						command.payload = std::move(place);
 						break;
 					}
+					case NetGameCommandType::WorldTransition: {
+						if (version < NetLockstepCodec::c_WorldTransitionVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world transition needs a newer frame version");
+							return false;
+						}
+						NetGameWorldTransition transition;
+						uint32_t team = 0;
+						uint32_t player = 0;
+						uint32_t xBits = 0;
+						uint32_t yBits = 0;
+						uint32_t aiMode = 0;
+						uint8_t bindBrain = 0;
+						if (!ReadOrTruncated(reader.ReadU16LE(transition.schema), reader, error, "world_transition_schema") ||
+						    !ReadOrTruncated(reader.ReadU8(transition.kind), reader, error, "world_transition_kind") ||
+						    !ReadOrTruncated(reader.ReadU8(transition.peerId), reader, error, "world_transition_peer_id") ||
+						    !ReadOrTruncated(reader.ReadU32LE(transition.holderGeneration), reader, error, "world_transition_generation") ||
+						    !ReadOrTruncated(reader.ReadU64LE(transition.membershipRevision), reader, error, "world_transition_revision") ||
+						    !ReadOrTruncated(reader.ReadU64LE(transition.activationFrame), reader, error, "world_transition_activation_frame") ||
+						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "world_transition_team") ||
+						    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "world_transition_player") ||
+						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "world_transition_pos_x") ||
+						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "world_transition_pos_y") ||
+						    !ReadOrTruncated(reader.ReadU32LE(aiMode), reader, error, "world_transition_ai_mode") ||
+						    !ReadOrTruncated(reader.ReadU8(bindBrain), reader, error, "world_transition_bind_brain") ||
+						    !reader.ReadString(transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
+						    !reader.ReadString(transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
+						    !reader.ReadString(transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
+							return false;
+						}
+						if (transition.schema != c_NetWorldJoinSchema) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
+							return false;
+						}
+						if (transition.kind > NetGameWorldTransition::Release) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_kind is not a known transition");
+							return false;
+						}
+						transition.team = static_cast<int32_t>(team);
+						transition.player = static_cast<int32_t>(player);
+						transition.posX = FloatFromBitsLE(xBits);
+						transition.posY = FloatFromBitsLE(yBits);
+						transition.aiMode = static_cast<int32_t>(aiMode);
+						transition.bindBrain = bindBrain != 0;
+						command.payload = std::move(transition);
+						break;
+					}
 					default:
 						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset() - 2, "game command has invalid type");
 						return false;
@@ -2364,10 +2432,20 @@ namespace RTE {
 			return false;
 		}
 
+		uint16_t encodeVersion = c_Version;
+		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
+			for (const NetGameCommand& command: frame->commands) {
+				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
+					encodeVersion = c_WorldTransitionVersion;
+					break;
+				}
+			}
+		}
+
 		outBytes.clear();
 		outBytes.reserve(c_HeaderBytes + payloadBytes.size());
 		AppendU32LE(outBytes, c_Magic);
-		AppendU16LE(outBytes, c_Version);
+		AppendU16LE(outBytes, encodeVersion);
 		AppendU16LE(outBytes, c_HeaderBytes);
 		AppendU16LE(outBytes, static_cast<uint16_t>(PacketTypeOf(packet.payload)));
 		AppendU16LE(outBytes, 0);
@@ -2406,7 +2484,8 @@ namespace RTE {
 			return false;
 		}
 		NetLockstepPayload payload;
-		if (!DecodeFrame(reader, payload, error, controllerVersion, c_Version, nullptr, true) || !reader.AtEnd()) return false;
+		// Recovery frames may carry WorldTransition; decode them at the world-plane version.
+		if (!DecodeFrame(reader, payload, error, controllerVersion, c_WorldTransitionVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		if (!EncodeRecoveryInput(frame, canonical, error)) return false;
@@ -2446,7 +2525,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_Version) {
+		if (version < c_MinVersion || version > c_WorldTransitionVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2555,7 +2634,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_Version && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_WorldTransitionVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -2572,11 +2651,19 @@ namespace RTE {
 		// The SEND routing is separate (host-star): the host sends directly to every client, but a
 		// client sends only to the host, which relays. So derive the receive set from peerCount, and
 		// take the send targets from the explicit transport map (or the 2-peer single-remote fields).
+		// A persistent world's capacity is configured; its MEMBERSHIP is not. The round waits only on
+		// the members admission has already activated, which at boot is nobody, and grows one at a
+		// time at an announced tick. peerCount stays the capacity so the config hash never moves.
+		const bool worldMembership = config.matchConfig.persistentWorld;
 		std::vector<uint8_t> remotePeerIds;
 		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
-			if (peerId != config.localPeerId) {
-				remotePeerIds.push_back(peerId);
+			if (peerId == config.localPeerId) {
+				continue;
 			}
+			if (worldMembership && config.remoteTransportPeerIds.find(peerId) == config.remoteTransportPeerIds.end()) {
+				continue;
+			}
+			remotePeerIds.push_back(peerId);
 		}
 		std::map<uint8_t, NetPeerId> remoteTransports;
 		if (!config.remoteTransportPeerIds.empty()) {
@@ -2677,7 +2764,14 @@ namespace RTE {
 		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
 			const auto delayIt = config.peerInputDelayFrames.find(peerId);
 			const uint16_t delay = delayIt != config.peerInputDelayFrames.end() ? delayIt->second : config.inputDelayFrames;
-			m_PeerEffectiveStart[peerId] = config.startFrame + (config.resumeFromSnapshot ? 0 : delay);
+			// A round that joins one already running has no ramp-in: every remote has been producing for
+			// a long time and owes this round's first frame, which is why the host replays what it sent
+			// before the admission. Only the local peer, which starts here, ramps in behind its delay.
+			const bool ramps = !config.joinsRunningRound || peerId == config.localPeerId;
+			m_PeerEffectiveStart[peerId] = config.startFrame + (config.resumeFromSnapshot || !ramps ? 0 : delay);
+			if (!ramps) {
+				m_PeerEffectiveStart[peerId] = config.startFrame;
+			}
 			if (m_PeerEffectiveStart[peerId] < firstCommitFrame) {
 				firstCommitFrame = m_PeerEffectiveStart[peerId];
 			}
@@ -2793,6 +2887,7 @@ namespace RTE {
 		m_ObservationEncodeTables.Reset();
 		m_ObservationBlocks.clear();
 		m_ReadyFrames.clear();
+		m_ReadyHistory.clear();
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
 		m_LastStartSentMs = UINT64_MAX;
@@ -3048,6 +3143,7 @@ namespace RTE {
 		m_LocalChecksums.clear();
 		m_RemoteChecksums.clear();
 		m_ReadyFrames.clear();
+		m_ReadyHistory.clear();
 		m_Stats.nextFrame = firstFrame;
 		m_Stats.effectiveStartFrame = firstFrame;
 		m_Stats.timeoutReason.clear();
@@ -3160,6 +3256,9 @@ namespace RTE {
 		size_t observationsEncoded = packet.observations.size();
 		size_t valueObservationsEncoded = packet.valueObservations.size();
 		if (!recovery) {
+			// Every sender spells its keys out again from the epoch, so a member admitted there reads
+			// this frame with the empty table it starts with; the window stops at the epoch too.
+			ApplyObservationEpoch(m_Config.localPeerId, packet.targetFrame);
 			AttachFrameWindow(packet);
 		}
 		if (recovery) {
@@ -3420,6 +3519,13 @@ namespace RTE {
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
 		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
+			// A member admitted mid-round reads the window copies of the ticks before its own start.
+			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
+			if (windowCopy) {
+				++m_Stats.windowCopiesSkipped;
+				++peerStats.windowCopiesSkipped;
+				return;
+			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
 			return;
 		}
@@ -4047,6 +4153,21 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const {
+		for (const NetLockstepReadyFrame& ready: m_ReadyFrames) {
+			if (ready.frame == frame) {
+				outFrame = ready;
+				return true;
+			}
+		}
+		const auto found = m_ReadyHistory.find(frame);
+		if (found == m_ReadyHistory.end()) {
+			return false;
+		}
+		outFrame = found->second;
+		return true;
+	}
+
 	bool NetLockstepCoordinator::PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const {
 		outCommands.clear();
 		if (peerId == m_Config.localPeerId) {
@@ -4383,6 +4504,140 @@ namespace RTE {
 		return std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peerId) != m_RemotePeerIds.end();
 	}
 
+	bool NetLockstepCoordinator::AdmitWorldMember(uint8_t peerId, NetPeerId transportPeerId, uint64_t firstRequiredFrame, std::string* error) {
+		if (!IsPersistentWorldRound()) {
+			if (error) *error = "only a persistent world admits members into a running round";
+			return false;
+		}
+		if (m_State != NetLockstepState::Running) {
+			if (error) *error = "the world round is not running";
+			return false;
+		}
+		if (peerId == 0 || peerId == m_Config.localPeerId || peerId > m_Config.peerCount || transportPeerId == c_InvalidNetPeerId) {
+			if (error) *error = "the world member's identity is invalid";
+			return false;
+		}
+		// A slot whose holder cleanly left is free again: the same lockstep id is re-admitted under the
+		// membership's next generation, which is a fresh admission, not the old holder returning.
+		const bool alreadyListed = IsKnownRemotePeer(peerId);
+		if (alreadyListed && m_PeerLeaveFrames.find(peerId) == m_PeerLeaveFrames.end()) {
+			if (error) *error = "peer " + std::to_string(static_cast<int>(peerId)) + " is already a member of this world";
+			return false;
+		}
+		if (firstRequiredFrame <= m_Stats.nextFrame) {
+			if (error) *error = "a world member's first required frame must be announced ahead of the committed frame";
+			return false;
+		}
+		// A fresh member is not a returning seat: it enters the required set at its announced frame and
+		// never through the dropped-seat hold, so nothing about it can pause the world.
+		m_PeerLeaveFrames.erase(peerId);
+		m_PeerFrameWaivers.erase(peerId);
+		m_DroppedSeats.erase(peerId);
+		m_DroppedSeatResolutions.erase(peerId);
+		// The member's round starts at E, so its own first produced target is E plus its input delay.
+		// The frames before that are the ones this admission replays; the round must not wait on the
+		// member for frames it was never in a position to produce.
+		m_PeerEffectiveStart[peerId] = firstRequiredFrame + NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId);
+		m_RemoteTransports[peerId] = transportPeerId;
+		if (!alreadyListed) {
+			m_RemotePeerIds.push_back(peerId);
+			std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
+		}
+		RefreshLeftSeatHolds();
+		// The epoch was set when this activation was announced, ahead of every frame the round has
+		// sent, so the live stream has already restarted at it for the members that were here.
+		// Everything already on the wire for its first required frames went out before it was a peer.
+		m_LastAdmissionReplayFrames = ReplaySentFramesTo(peerId, firstRequiredFrame);
+		return true;
+	}
+
+	void NetLockstepCoordinator::SetObservationEpoch(uint64_t frame) {
+		if (frame == 0 || frame == m_ObservationEpochFrame) {
+			return;
+		}
+		m_ObservationEpochFrame = frame;
+		m_ObservationEpochApplied.clear();
+	}
+
+	void NetLockstepCoordinator::ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame) {
+		if (m_ObservationEpochFrame == 0 || targetFrame < m_ObservationEpochFrame ||
+		    m_ObservationEpochApplied.find(senderPeerId) != m_ObservationEpochApplied.end()) {
+			return;
+		}
+		// An emptied encode table says so on the wire - the block's binding count reads 0 where the
+		// receiver holds more - and every receiver resets that sender's table before it binds again.
+		m_ObservationEncodeTables.Exactly(senderPeerId).Reset();
+		// A window may not carry a copy from before the epoch: its kept block was spelled against
+		// the table this reset emptied. The encoder leaves a tick off when its block is gone.
+		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
+		blocks.erase(blocks.begin(), blocks.lower_bound(m_ObservationEpochFrame));
+		m_ObservationEpochApplied.insert(senderPeerId);
+	}
+
+	bool NetLockstepCoordinator::BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const {
+		const auto frameIt = m_RemoteFrames.find(targetFrame);
+		if (frameIt == m_RemoteFrames.end()) {
+			return false;
+		}
+		const auto senderIt = frameIt->second.find(senderPeerId);
+		if (senderIt == frameIt->second.end()) {
+			return false;
+		}
+		out = NetLockstepFrame{};
+		out.senderPeerId = senderPeerId;
+		out.targetFrame = targetFrame;
+		out.roundId = m_RoundId;
+		out.frames = senderIt->second;
+		if (const auto commands = m_RemoteCommands.find(targetFrame); commands != m_RemoteCommands.end()) {
+			if (const auto found = commands->second.find(senderPeerId); found != commands->second.end()) out.commands = found->second;
+		}
+		if (const auto observations = m_RemoteObservations.find(targetFrame); observations != m_RemoteObservations.end()) {
+			if (const auto found = observations->second.find(senderPeerId); found != observations->second.end()) out.observations = found->second;
+		}
+		if (const auto values = m_RemoteValueObservations.find(targetFrame); values != m_RemoteValueObservations.end()) {
+			if (const auto found = values->second.find(senderPeerId); found != values->second.end()) out.valueObservations = found->second;
+		}
+		return true;
+	}
+
+	size_t NetLockstepCoordinator::ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame) {
+		const auto transportIt = m_RemoteTransports.find(peerId);
+		if (transportIt == m_RemoteTransports.end() || m_LastQueuedTargetFrame == std::numeric_limits<uint64_t>::max() ||
+		    fromFrame > m_LastQueuedTargetFrame) {
+			return 0;
+		}
+		size_t replayed = 0;
+		// The live tables belong to the members already here: they read the restart the announced
+		// epoch put in the live stream and nothing else may move under them. The replay spells its
+		// own stream out against a table that starts empty, exactly as the admitted member's does,
+		// so when it ends the member holds what the live table holds and the frames after it decode.
+		std::map<uint8_t, NetSoundObservationDictionary> scratch;
+		for (uint64_t target = fromFrame; target <= m_LastQueuedTargetFrame; ++target) {
+			// This peer's own frame first, then the members' in peer id order: the same order every
+			// receiver already read them in, so the member's tables bind the same keys in the same way.
+			NetLockstepFrame own;
+			if (FindLocalInput(target, own)) {
+				own.priorWindow.clear();
+				std::string error;
+				if (SendPacket({own}, m_Config.frameLane, &error, &scratch[m_Config.localPeerId], nullptr, peerId)) ++replayed;
+			}
+			for (uint8_t sender: m_RemotePeerIds) {
+				if (sender == peerId) {
+					continue;
+				}
+				NetLockstepFrame held;
+				if (!BuildPendingRemoteFrame(target, sender, held)) {
+					continue;
+				}
+				std::string error;
+				if (SendPacket({held}, m_Config.frameLane, &error, &scratch[sender], nullptr, peerId)) ++replayed;
+			}
+		}
+		std::cout << "[lockstep] replayed " << replayed << " frames for targets " << fromFrame << ".."
+		          << m_LastQueuedTargetFrame << " to the member admitted as peer " << static_cast<int>(peerId) << std::endl;
+		return replayed;
+	}
+
 	uint8_t NetLockstepCoordinator::LockstepPeerOfTransport(NetPeerId transportPeerId) const {
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
 			if (transportId == transportPeerId) {
@@ -4412,6 +4667,10 @@ namespace RTE {
 		size_t observationsEncoded = 0;
 		size_t valueObservationsEncoded = 0;
 		const NetLockstepFrame* relayed = std::get_if<NetLockstepFrame>(&packet.payload);
+		if (relayed) {
+			// The forwarded sender spells its keys out again from the epoch, on the frame that says so.
+			ApplyObservationEpoch(fromPeerId, relayed->targetFrame);
+		}
 		NetLockstepObservationBlocks* blocks = relayed ? &ObservationBlocksOf(fromPeerId, relayed->targetFrame) : nullptr;
 		bool windowed = relayed && !relayed->priorWindow.empty() && blocks;
 		NetLockstepFrame classic;
@@ -5248,10 +5507,13 @@ namespace RTE {
 			(void)SendPacket({notice}, NetTransportLane::ControlReliable, &ignored);
 		}
 		if (resolution == NetLockstepHoldResolution::Expired) {
-			if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld() && !ReclaimResyncPending()) {
+			if (!IsPersistentWorldRound() && LeftPeersNotRefilling() >= m_RemotePeerIds.size() && !AnyLeftSeatHeld() && !ReclaimResyncPending()) {
 				m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + m_LastLeaveMessage;
 				m_State = NetLockstepState::Stopped;
 			}
+			return;
+		}
+		if (IsPersistentWorldRound()) {
 			return;
 		}
 		std::cout << "[net-match] rejoin: " << DescribePeer(peerId) << " reconnected - resyncing the match" << std::endl;
@@ -5313,7 +5575,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::EndRoundIfNobodyIsComingBack() {
-		if (m_State != NetLockstepState::Running || m_RemotePeerIds.empty() ||
+		if (m_State != NetLockstepState::Running || IsPersistentWorldRound() || m_RemotePeerIds.empty() ||
 		    LeftPeersNotRefilling() < m_RemotePeerIds.size() || AnyLeftSeatHeld() || ReclaimResyncPending()) {
 			return;
 		}
@@ -5370,7 +5632,8 @@ namespace RTE {
 			return;
 		}
 		// A dropped seat pauses commits until the host resolves it; an announced leave still ends a last-player match at once.
-		if (LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
+		// A world outlives its players: the last member leaving frees its slot and the world ticks on.
+		if (!IsPersistentWorldRound() && LeftPeersNotRefilling() >= m_RemotePeerIds.size() && (announced || !AnyLeftSeatHeld()) && !ReclaimResyncPending()) {
 			// Nobody left to play with.
 			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::PeerLeft)) + ":" + message;
 			m_State = NetLockstepState::Stopped;
@@ -5542,6 +5805,10 @@ namespace RTE {
 			}
 			if (remoteIt != m_RemoteFrames.end()) {
 				m_RemoteFrames.erase(remoteIt);
+			}
+			m_ReadyHistory[ready.frame] = ready;
+			while (m_ReadyHistory.size() > 180) {
+				m_ReadyHistory.erase(m_ReadyHistory.begin());
 			}
 			m_ReadyFrames.push_back(std::move(ready));
 			++m_Stats.framesAccepted;

@@ -14,6 +14,7 @@
 #include "NetActorOwnership.h"
 #include "NetMatchReplay.h"
 #include "NetReconnectUx.h"
+#include "NetWorldJoin.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -31,6 +32,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <deque>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
@@ -73,6 +75,14 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
 		std::vector<NetValueObservation> s_DroppedValueObservations;
+		bool s_WorldCatchUpActive = false;
+		bool s_WorldCatchUpHeld = false;
+		int s_WorldCatchUpBudget = 0;
+		uint64_t s_WorldCatchUpAppliedThrough = 0;
+		uint64_t s_WorldCatchUpActivationTick = 0;
+		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
+		std::map<uint8_t, uint32_t> s_WorldHolderGeneration;
+		uint64_t s_WorldMembershipRevision = 0;
 
 		NetValueObservation ToValueObservation(const MovableObject::PendingValueOp& op) {
 			NetValueObservation observation;
@@ -940,6 +950,183 @@ namespace RTE {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().matchConfig.hostPeerId : 0;
 	}
 
+	bool ScenarioRunner::IsPersistentWorld() {
+		const NetMatchConfig* config = GetLockstepMatchConfig();
+		return config != nullptr && config->persistentWorld;
+	}
+
+	bool ScenarioRunner::IsWorldAuthor() {
+		if (!s_LockstepCoordinator) {
+			return true;
+		}
+		const NetLockstepConfig& config = s_LockstepCoordinator->GetConfig();
+		return config.localPeerId != 0 && config.localPeerId == config.matchConfig.hostPeerId;
+	}
+
+	std::string ScenarioRunner::GetWorldId() {
+		const NetMatchConfig* config = GetLockstepMatchConfig();
+		return config != nullptr ? config->worldId : std::string();
+	}
+
+	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
+		if (s_LockstepCoordinator && !IsPersistentWorld()) {
+			return false;
+		}
+		if (!IsWorldAuthor()) {
+			return false;
+		}
+		NetGameCommand command;
+		command.senderPeerId = GetLockstepHostPeerId();
+		command.payload = transition;
+		EnqueueLocalGameCommand(command);
+		return true;
+	}
+
+	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
+		// The mirror of the send gate above: an ordinary round decodes these packets now, so without
+		// this it would spawn an actor and rebind a brain on a host-stamped transition.
+		if (s_LockstepCoordinator && !IsPersistentWorld()) {
+			if (error) *error = "world transition arrived on a round that is not a persistent world";
+			return false;
+		}
+		if (transition.schema != c_NetWorldJoinSchema) {
+			if (error) *error = "world transition schema is not the live world schema";
+			return false;
+		}
+		if (transition.membershipRevision != 0 && transition.membershipRevision < s_WorldMembershipRevision) {
+			if (error) *error = "world transition membership revision is stale";
+			return false;
+		}
+		if (transition.peerId != 0 && transition.holderGeneration != 0) {
+			const auto found = s_WorldHolderGeneration.find(transition.peerId);
+			if (found != s_WorldHolderGeneration.end() && transition.holderGeneration < found->second) {
+				if (error) *error = "world transition holder generation is stale";
+				return false;
+			}
+		}
+		if (transition.membershipRevision != 0) {
+			s_WorldMembershipRevision = transition.membershipRevision;
+		}
+		if (transition.peerId != 0 && transition.holderGeneration != 0) {
+			s_WorldHolderGeneration[transition.peerId] = transition.holderGeneration;
+		}
+		return true;
+	}
+
+	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error) {
+		if (snapshotTick == 0) {
+			if (error) *error = "world catch-up has no snapshot tick";
+			return false;
+		}
+		s_WorldCatchUpTail.clear();
+		for (NetLockstepFrame& frame: tail) {
+			s_WorldCatchUpTail.push_back(std::move(frame));
+		}
+		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_WorldCatchUpActivationTick = 0;
+		s_WorldCatchUpActive = true;
+		s_WorldCatchUpHeld = false;
+		return true;
+	}
+
+	void ScenarioRunner::AppendWorldCatchUp(std::vector<NetLockstepFrame> frames) {
+		for (NetLockstepFrame& frame: frames) {
+			s_WorldCatchUpTail.push_back(std::move(frame));
+		}
+	}
+
+	void ScenarioRunner::SetWorldCatchUpActivation(uint64_t activationTick) {
+		s_WorldCatchUpActivationTick = activationTick;
+	}
+
+	bool ScenarioRunner::WorldCatchUpActive() {
+		return s_WorldCatchUpActive;
+	}
+
+	bool ScenarioRunner::WorldCatchUpHolding() {
+		return s_WorldCatchUpActive && s_WorldCatchUpHeld;
+	}
+
+	void ScenarioRunner::ReleaseWorldCatchUp() {
+		s_WorldCatchUpActive = false;
+		s_WorldCatchUpHeld = false;
+		s_WorldCatchUpTail.clear();
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
+		return s_WorldCatchUpAppliedThrough;
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpActivationTick() {
+		return s_WorldCatchUpActivationTick;
+	}
+
+	bool ScenarioRunner::WorldCatchUpHasFrame(uint64_t simTick) {
+		for (const NetLockstepFrame& frame: s_WorldCatchUpTail) {
+			if (frame.targetFrame == simTick) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	bool ScenarioRunner::WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame) {
+		return s_WorldCatchUpActive && !s_WorldCatchUpHeld && ticksLeftThisFrame > 0 && WorldCatchUpHasFrame(nextSimTick);
+	}
+
+	void ScenarioRunner::BeginWorldCatchUpFrame() {
+		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+	}
+
+	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
+		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
+			return false;
+		}
+		--s_WorldCatchUpBudget;
+		return true;
+	}
+
+	bool ScenarioRunner::LockstepStopHoldsControllers() {
+		// A joiner applying its committed tail has a coordinator that is attached and not yet running.
+		// That is the whole catch-up window, so the stop gate must not read it as a stopped round.
+		return !IsLockstepControllerSyncActive() && HasLockstepCoordinator() && !s_WorldCatchUpActive;
+	}
+
+	bool ScenarioRunner::OfflineCommandsDriveTick() {
+		return !IsLockstepControllerSyncActive() && !s_WorldCatchUpActive;
+	}
+
+	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
+		if (!s_WorldCatchUpActive) {
+			return false;
+		}
+		auto found = std::find_if(s_WorldCatchUpTail.begin(), s_WorldCatchUpTail.end(), [simTick](const NetLockstepFrame& frame) {
+			return frame.targetFrame == simTick;
+		});
+		if (found == s_WorldCatchUpTail.end()) {
+			if (error && s_WorldCatchUpTail.empty()) {
+				*error = "world catch-up has no committed frame for tick " + std::to_string(simTick);
+			}
+			return false;
+		}
+		NetLockstepFrame frame = std::move(*found);
+		s_WorldCatchUpTail.erase(found);
+		outFrame = {};
+		outFrame.frame = simTick;
+		outFrame.remoteFrames = std::move(frame.frames);
+		outFrame.remoteCommands = std::move(frame.commands);
+		outFrame.remoteObservations = std::move(frame.observations);
+		outFrame.remoteValueObservations = std::move(frame.valueObservations);
+		s_WorldCatchUpAppliedThrough = simTick;
+		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
+		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and
+		// carry the sim clock past the frame the round starts the joiner at.
+		if (s_WorldCatchUpActivationTick != 0 && simTick + 1 >= s_WorldCatchUpActivationTick) {
+			s_WorldCatchUpHeld = true;
+		}
+		return true;
+	}
+
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
 		return s_LockstepCoordinator ? s_LockstepCoordinator->ResolveTeamCommandAuthority(team) : 0;
 	}
@@ -957,6 +1144,11 @@ namespace RTE {
 
 	int64_t ScenarioRunner::GetE2eOwnerTransferUid() {
 		return s_E2eFirstTransferUid;
+	}
+
+	uint8_t ScenarioRunner::GetLockstepControlOverrideOwner(int64_t actorUniqueID) {
+		const auto found = s_LockstepControlOverrides.find(actorUniqueID);
+		return found == s_LockstepControlOverrides.end() ? uint8_t{0} : found->second;
 	}
 
 	void ScenarioRunner::SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId) {
@@ -1450,7 +1642,8 @@ namespace RTE {
 			g_MovableMan.ReportSpeculationViolation("queueing a wire command for", nullptr);
 			return;
 		}
-		if (NetGameCommandTypeOf(command.payload) != NetGameCommandType::Reseat) {
+		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
+		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {

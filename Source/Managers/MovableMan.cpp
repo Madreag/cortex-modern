@@ -44,6 +44,7 @@
 #include "ScenarioRunner.h"
 #include "NetActorOwnership.h"
 #include "NetLockstep.h"
+#include "NetWorldJoin.h"
 #include "NetGameCommand.h"
 #include "AIWriteScript.h"
 #include "LuaMan.h"
@@ -485,6 +486,13 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a Reseat command from a peer that is not the host");
 				continue;
 			}
+		} else if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
+			// A world's membership, spawns and bindings are the host's alone; a seatless dedicated host
+			// owns no team, so the team gate cannot vet this one either.
+			if (command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a WorldTransition command from a peer that is not the host");
+				continue;
+			}
 		} else if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 			if (!ScenarioRunner::IsLockstepAIOrderAuthorized(command.senderPeerId, *order)) {
 				const Actor* target = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(order->actorUID)));
@@ -675,6 +683,65 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				++reseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
+		} else if (const NetGameWorldTransition* transition = std::get_if<NetGameWorldTransition>(&command.payload)) {
+			if (transition->team < Activity::Teams::TeamOne || transition->team >= Activity::Teams::MaxTeamCount ||
+			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {
+				continue;
+			}
+			std::string transitionError;
+			if (!ScenarioRunner::AcceptWorldTransition(*transition, &transitionError)) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a stale WorldTransition: " + transitionError);
+				continue;
+			}
+			Actor* seated = nullptr;
+			if (transition->kind == NetGameWorldTransition::Activate) {
+				// The candidates come from lockstep state alone - the committed roster's order and the
+				// synced handoff map - so every peer picks the same actor, and never one a member holds.
+				std::vector<NetWorldBrainCandidate> brains;
+				if (transition->team >= Activity::Teams::TeamOne && transition->team < Activity::Teams::MaxTeamCount) {
+					for (const Actor* candidate: *g_MovableMan.GetTeamRoster(transition->team)) {
+						if (candidate == nullptr || !candidate->HasObjectInGroup("Brains")) {
+							continue;
+						}
+						const int64_t uid = static_cast<int64_t>(candidate->GetUniqueID());
+						brains.push_back(NetWorldBrainCandidate{uid, candidate->GetTeam(), ScenarioRunner::GetLockstepControlOverrideOwner(uid)});
+					}
+				}
+				if (const int64_t chosen = ChooseWorldActivateBrain(brains, *transition); chosen != 0) {
+					seated = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(chosen)));
+				}
+			}
+			if (!seated && !transition->className.empty()) {
+				if (const Entity* preset = g_PresetMan.GetEntityPreset(transition->className, transition->preset, transition->module)) {
+					Entity* clone = preset->Clone();
+					if (Actor* actor = dynamic_cast<Actor*>(clone)) {
+						actor->SetTeam(transition->team);
+						actor->SetPos(Vector(transition->posX, transition->posY));
+						if (transition->aiMode >= 0 && transition->aiMode < Actor::AIMODE_COUNT) {
+							actor->SetAIMode(static_cast<Actor::AIMode>(transition->aiMode));
+						}
+						// Every peer clones at the same committed tick in this order, so the resident's
+						// unique id is the same number on all of them and the binding below can name it.
+						g_MovableMan.AddActor(actor);
+						seated = actor;
+					} else {
+						delete clone;
+					}
+				} else {
+					g_ConsoleMan.PrintString("ERROR: World transition rejected - unknown preset \"" + transition->preset + "\"");
+					continue;
+				}
+			}
+			if (transition->kind == NetGameWorldTransition::Activate && transition->peerId != 0 && seated) {
+				ScenarioRunner::SetLockstepControlOverride(static_cast<int64_t>(seated->GetUniqueID()), transition->peerId);
+			}
+			if (WorldTransitionBindsBrain(*transition, seated != nullptr)) {
+				activity->SetPlayerBrain(seated, transition->player);
+			}
+			std::cout << "[net-match] world transition: kind " << static_cast<int>(transition->kind)
+			          << " peer " << static_cast<int>(transition->peerId) << " team " << transition->team
+			          << " revision " << transition->membershipRevision
+			          << " actor " << (seated ? static_cast<int64_t>(seated->GetUniqueID()) : 0) << std::endl;
 		} else if (const NetGameInventoryOp* inventoryOp = std::get_if<NetGameInventoryOp>(&command.payload)) {
 			Actor* actor = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(inventoryOp->actorUID)));
 			AHuman* human = dynamic_cast<AHuman*>(actor);
@@ -5019,7 +5086,7 @@ void MovableMan::UpdateControllers() {
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
 	// A stopped coordinator still owns the sim: surface its stop reason so the match-level
 	// handling (resync, clean end, error) runs — never silently degrade to per-machine control.
-	if (!lockstepActive && ScenarioRunner::HasLockstepCoordinator()) {
+	if (ScenarioRunner::LockstepStopHoldsControllers()) {
 		const std::string reason = ScenarioRunner::GetLockstepStopReason();
 		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
 		return;
@@ -5277,9 +5344,30 @@ void MovableMan::UpdateControllers() {
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
 
-	if (!lockstepActive) {
+	if (ScenarioRunner::OfflineCommandsDriveTick()) {
 		CommitOfflineValueWrites();
 		ApplyOfflineGameCommands(simTick);
+	}
+
+	if (ScenarioRunner::WorldCatchUpActive()) {
+		std::string error;
+		NetLockstepReadyFrame readyFrame;
+		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			return;
+		}
+		std::unordered_set<int64_t> applied;
+		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error) ||
+		    !ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, applied, error)) {
+			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
+			return;
+		}
+		NeutralizeUnframedLockstepActors(m_Actors, applied);
+		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
+		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
+		CommitValueObservations(readyFrame.frame, readyFrame.localValueObservations, readyFrame.remoteValueObservations);
+		ApplyLockstepGameCommands(readyFrame);
+		ReconcileLockstepControlBindings();
+		return;
 	}
 
 	if (lockstepActive) {
