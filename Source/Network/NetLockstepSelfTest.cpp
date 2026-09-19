@@ -14625,10 +14625,11 @@ namespace RTE {
 					}
 				}
 				if (delayedAnswer) {
+					const auto localDeparture = a.GetPeerLeaveFrames().find(2);
 					if (schedule->delayedAnswers == 0 || schedule->releasedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 4 || b.GetMigrationResult().boundary != 4 || !b.GetConfig().relayToOtherPeers || a.GetConfig().relayToOtherPeers ||
-					    !a.IsPeerGoneAtFrame(2, 5) || !b.IsPeerGoneAtFrame(2, 5)) {
-						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
+					    localDeparture == a.GetPeerLeaveFrames().end() || localDeparture->second != 5 || !b.IsPeerGoneAtFrame(2, 5)) {
+						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " local departures=" + nlohmann::json(a.GetPeerLeaveFrames()).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 						return false;
 					}
 					if (worldB.applied < worldA.applied) {
