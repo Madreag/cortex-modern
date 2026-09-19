@@ -46,6 +46,8 @@ REQUIRED_ROWS = (
 REQUIRED_SCENE_ROWS = (
     "image_ignores_writes_during_worker_traversal",
     "restore_round_trip_matches_synchronous_capture",
+    "autosave_capture_leaves_an_archive",
+    "autosave_capture_follows_another_in_the_same_process",
 )
 
 
