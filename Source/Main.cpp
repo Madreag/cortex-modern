@@ -2186,6 +2186,24 @@ void ProcessMenuScript() {
 		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
 		waitCond = "file:" + path;
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "host_world_lobby") {
+		unsigned port = 0;
+		if (!(iss >> port) || port == 0 || port > UINT16_MAX) return MenuScriptFail("host_world_lobby requires a port");
+		NetMatchServiceRequest request;
+		request.host = request.dedicated = request.persistentWorld = request.worldFresh = true;
+		request.port = static_cast<uint16_t>(port);
+		request.playerName = "World host";
+		request.activityPreset = "Persistent World";
+		request.activityModule = "Base.rte";
+		request.sceneName = "Grasslands";
+		request.sceneModule = "Base.rte";
+		request.peerCount = 4;
+		request.humans = 1;
+		request.cpuSlots = 1;
+		request.autosaveSeconds = 0;
+		std::string error;
+		if (!g_NetMatchService.Start(request, &error)) return MenuScriptFail("host_world_lobby: " + error);
+		MenuScriptPrint("host_world_lobby started");
 	} else if (cmd == "wait_members") {
 		int n = 0;
 		iss >> n;

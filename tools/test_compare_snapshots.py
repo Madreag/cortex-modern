@@ -173,6 +173,16 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(self.compare(base, head + graph_line(odd, 0) + graph_line(even, 1)), 1)
         self.assertEqual(self.compare(base, head + graph_line(even, 0) + graph_line(odd, 1)), 0)
 
+    def test_full_restore_keeps_threaded_birth_counters(self):
+        node = table(2, ((string("k"), "n7;"),))
+        first, second = [birth_graph("SG6", (node,), globals=(("t", "#2;"),), serial=value) for value in (5, 6)]
+        head = BASE.split("LuaStateGraph", 1)[0]
+        master = graph_line(birth_graph("SG6"), 0)
+        self.assertEqual(self.compare(head + master + graph_line(first, 1),
+                                      head + master + graph_line(first, 1), full=True), 0)
+        self.assertEqual(self.compare(head + master + graph_line(first, 1),
+                                      head + master + graph_line(second, 1), full=True), 1)
+
     def test_a_cross_process_failure_says_which_seat_model_it_used(self):
         """Two peers on different seats of one table read as sim state unless the seats are named."""
         changed = BASE.replace("ActivityState = 3", "ActivityState = 4")
@@ -408,6 +418,18 @@ class StateBirthNumberTests(unittest.TestCase):
                     checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second),
                                            lockstep_master=master)
                 self.assertIn(wanted, str(raised.exception))
+
+    def test_a_threaded_state_refuses_an_equal_valued_replacement_on_one_peer(self):
+        first = birth_graph("SG6", (table(2, ((string("k"), "n7;"),)),), globals=(("t", "#2;"),), serial=5)
+        second = birth_graph("SG6", (table(6, ((string("k"), "n7;"),)),), globals=(("t", "#6;"),), serial=6)
+        with self.assertRaisesRegex(checker.GraphMismatch, "shared Lua birth identities differ"):
+            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
+
+    def test_a_threaded_state_refuses_an_extra_shared_object_on_one_peer(self):
+        first = birth_graph("SG6", (table(2, ()),), globals=(("t", "#2;"),), serial=5)
+        second = birth_graph("SG6", (table(2, ()), table(6, ())), globals=(("t", "#2;"), ("extra", "#6;")), serial=6)
+        with self.assertRaises(checker.GraphMismatch):
+            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
 
 
 class RuntimeProjectionTests(unittest.TestCase):

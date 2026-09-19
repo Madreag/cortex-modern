@@ -397,8 +397,7 @@ def masked_timer_tokens(value):
 def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep_master=True):
     """Require a bijection, including table keys, closures, upvalue cells and native aliases.
 
-    lockstep_master says every allocation on this state is lockstep, so the birth numbers must be
-    equal. A threaded script state runs this machine's own AI, so its counter is a local field.
+    A threaded state's allocation counter is local; surviving shared identities still need proof.
     """
     if cross_process:
         first, second = masked_timer_tokens(first), masked_timer_tokens(second)
@@ -521,8 +520,6 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                     "table birth numbers differ across peers (a table was created on one peer and not the other): "
                     + detail)
         else:
-            # Each machine allocates its own AI objects here, so the surviving ids carry a per-peer
-            # offset. What stays shared is the ORDER they were created in: the map must be monotonic.
             order = sorted(mapping.items())
             for (left, right), (next_left, next_right) in zip(order, order[1:]):
                 if right >= next_right:
@@ -530,6 +527,10 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                     raise GraphMismatch(
                         "birth order differs across peers (an object was created in a different order): "
                         f"nodes {left} and {next_left} on a are {right} and {next_right} on b")
+            if moved:
+                raise GraphMismatch(
+                    "shared Lua birth identities differ without allocation provenance: "
+                    f"node {moved[0][0]} on a is node {moved[0][1]} on b")
     return report
 
 
@@ -877,7 +878,7 @@ def compare_main() -> int:
                                 # The capture writes the master state first, then the threaded script
                                 # states (MovableMan::CaptureScriptGraphs, MovableMan.cpp:2225-2226).
                                 details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index],
-                                    None if args.full else actor_uids, args.cross_process, index == 0)
+                                    None if args.full else actor_uids, args.cross_process, args.full or index == 0)
                             except GraphMismatch as error:
                                 failures.append(f"Lua VM {index}: {error}")
                         continue

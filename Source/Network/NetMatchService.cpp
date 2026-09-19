@@ -669,6 +669,10 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_LeftMatch ? "this match was left" : "the rematch lobby queue overflowed";
 				return false;
 			}
+			if (HostOptionsNeedCorrectionLocked()) {
+				if (error) *error = m_ErrorText;
+				return false;
+			}
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
@@ -680,6 +684,7 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_HostRepairPending = false;
 			m_MigrationAuthority = 0;
 			m_MigrationMembers.clear();
 			m_MigrationGeneration = 0;
@@ -809,15 +814,17 @@ static std::string ResyncSaveName() {
 		if (!ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) return refuse("match over");
 		m_Coordinator->RequestResync("host requested repair");
 		m_ResyncHealStartMs = SteadyNowMs();
-		m_ResyncHealOpen = true;
+		m_HostRepairPending = true;
 		return true;
 	}
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (inFlight) *inFlight = m_ResyncHealOpen;
-		if (bytes) *bytes = m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes;
-		if (elapsedMs) *elapsedMs = m_ResyncHealOpen ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
+		const bool queued = m_HostRepairPending && m_State == NetMatchServiceState::Running && m_Coordinator &&
+		                    m_Coordinator->IsRunning() && m_Coordinator->HasPendingRecoveryStop();
+		if (inFlight) *inFlight = m_ResyncHealOpen || queued;
+		if (bytes) *bytes = queued ? 0 : (m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes);
+		if (elapsedMs) *elapsedMs = m_ResyncHealOpen || queued ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
 	}
 
 	int NetMatchService::GetDirectoryVisibility() const {
@@ -904,6 +911,7 @@ static std::string ResyncSaveName() {
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
+			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
 		const bool a7Save = NetA7Journal::Enabled() && isHost && FaultInjected("slow_resync_save");
@@ -1289,7 +1297,9 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
 		std::string error;
-		const bool started = runner->StartNextMatch(*link.Wire(), *session, *coordinator, &error, {}, std::move(link.lobbyEvents));
+		const bool started = runner->StartNextMatch(*link.Wire(), *session, *coordinator, &error, {}, link.lobbyEvents);
+		const bool optionsRefused = !started && runner->HasRefusedHostOptions();
+		if (!optionsRefused) link.lobbyEvents.clear();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (started) {
@@ -1319,6 +1329,11 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
+			} else if (optionsRefused) {
+				m_State = NetMatchServiceState::Completed;
+				m_StatusText = "Correct the host options before starting the rematch";
+				m_ErrorText = error;
+				m_AdoptedMatchConfig = m_Runner->GetMatchConfig();
 			} else {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Rematch setup failed";
@@ -1516,6 +1531,10 @@ static std::string ResyncSaveName() {
 			m_PendingHostOptions.reset();
 			m_HostOptionsRequest.Clear();
 			m_ResyncOnDesync = false;
+			m_ResyncHealOpen = false;
+			m_HostRepairPending = false;
+			m_ResyncHealStartMs = 0;
+			m_LastResync = {};
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
@@ -4133,7 +4152,8 @@ static std::string ResyncSaveName() {
 		snapshot.localPeerId = m_LocalPeerId;
 		snapshot.localTeam = m_LocalTeam;
 		snapshot.active = m_State != NetMatchServiceState::Idle;
-		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
+		snapshot.inLobby = m_State == NetMatchServiceState::Starting || HostOptionsNeedCorrectionLocked();
+		if (HostOptionsNeedCorrectionLocked()) snapshot.remoteReady = false;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
@@ -4194,6 +4214,15 @@ static std::string ResyncSaveName() {
 		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
 	}
 
+	bool NetMatchService::HostOptionsNeedCorrectionLocked() const {
+		return m_State == NetMatchServiceState::Completed && m_Runner && m_Runner->HasRefusedHostOptions() && !m_ErrorText.empty();
+	}
+
+	bool NetMatchService::NeedsHostOptionsCorrection() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return HostOptionsNeedCorrectionLocked();
+	}
+
 	bool NetMatchService::SubmitHostOptions(uint64_t expectedRevision, const NetMatchConfig& draft, std::string* error) {
 		auto refuse = [error](const std::string& reason) {
 			if (error) *error = reason;
@@ -4237,6 +4266,7 @@ static std::string ResyncSaveName() {
 		// round republishes it to every peer at once and a closed one starts its rematch on it. The
 		// draft stays staged here too: it is what the options panel re-seeds from either way.
 		m_HostOptionsRequest.Post(*m_PendingHostOptions);
+		if (m_ErrorText.starts_with("Host options refused: ")) m_ErrorText.clear();
 		return true;
 	}
 

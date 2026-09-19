@@ -3,6 +3,10 @@
 #include "CheckpointArchive.h"
 #include "Base64/base64.h"
 #include "SceneLayer.h"
+#include "Scene.h"
+#include "MOPixel.h"
+#include "Deployment.h"
+#include "Reader.h"
 
 #include <iomanip>
 #include <fstream>
@@ -301,12 +305,13 @@ CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, Ch
 	return Remember(owner, channel, std::move(value), 0);
 }
 
-CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity) {
+CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity, const MovableObject* object) {
 	Entry& entry = m_Entries[owner][channel];
 	++m_Touched;
 	entry.generation = m_Generation;
 	entry.stamp = stamp;
 	entry.identity = identity;
+	entry.object = object;
 	if (entry.text.SameValues(value)) { ++m_Reused; m_Retired.push_back(std::move(value)); return entry.text; }
 	m_Retired.push_back(value);
 	value = value.ReuseChildren(entry.text);
@@ -327,7 +332,7 @@ uint64_t CheckpointCache::Identity(const void* owner, unsigned channel) const {
 	const auto owners = m_Entries.find(owner);
 	if (owners == m_Entries.end()) return 0;
 	const auto entry = owners->second.find(channel);
-	return entry == owners->second.end() ? 0 : entry->second.identity;
+	return entry == owners->second.end() || !entry->second.object.get() ? 0 : entry->second.identity;
 }
 
 uint64_t CheckpointCache::Stamp(const void* owner, unsigned channel) const {
@@ -513,6 +518,39 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		const CheckpointText secondReach = scopeCache.Remember(&cacheOwner, 7, CheckpointWriter::CaptureNative(composeWithNative));
 		check(firstReach.SameValues(secondReach) && secondReach.Text() == composedPlainly && scopeCache.Reused() == 1,
 		      "owned_checkpoint_cache_keeps_the_first_reach_identity_of_nested_writers");
+
+		{
+			CheckpointCache sceneCache;
+			CheckpointWriter::CacheScope cacheScope(&sceneCache);
+			const auto capture = [](const SceneObject& object) {
+				return Writer::Capture([&](Writer& writer) { Scene::SaveSceneObject(writer, &object, false, false); });
+			};
+			MOPixel pixel;
+			pixel.Create();
+			pixel.SetPos(Vector(10, 0));
+			const long identity = pixel.GetUniqueID();
+			const uint64_t stamp = pixel.CheckpointWriteGeneration();
+			const auto before = capture(pixel);
+			const auto unchanged = capture(pixel);
+			pixel.Destroy();
+			pixel.Create();
+			Reader reader(std::make_unique<std::istringstream>(std::to_string(identity)), "checkpoint-identity", true);
+			pixel.ReadProperty("UniqueID", reader);
+			pixel.AdoptPersistedUniqueID();
+			pixel.SetPos(Vector(20, 0));
+			const auto restored = capture(pixel);
+			check(pixel.GetUniqueID() == identity && pixel.CheckpointWriteGeneration() == stamp &&
+			          before.SameValues(unchanged) && !before.SameValues(restored) && before.Text() != restored.Text(),
+			      "owned_checkpoint_does_not_reuse_a_restored_identity_at_the_same_address");
+
+			Deployment deployment;
+			deployment.SetPos(Vector(10, 0));
+			const auto firstDeployment = capture(deployment);
+			deployment.Reset();
+			deployment.SetPos(Vector(20, 0));
+			const auto nextDeployment = capture(deployment);
+			check(firstDeployment.Text() != nextDeployment.Text(), "owned_checkpoint_recaptures_a_scene_object_without_a_lifetime_identity");
+		}
 
 		auto calls = std::make_shared<std::atomic<int>>(0);
 		auto replacements = std::make_shared<std::atomic<int>>(0);
