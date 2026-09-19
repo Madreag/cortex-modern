@@ -1152,6 +1152,7 @@ static std::string ResyncSaveName() {
 			// with that config so the next lobby never sees its predecessor's edit.
 			m_AdoptedMatchConfig = {};
 			m_PendingHostOptions.reset();
+			m_HostOptionsRequest.Clear();
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -1743,6 +1744,7 @@ static std::string ResyncSaveName() {
 		// A staged options draft is a lobby-round intent: the launch that ran without it retiring
 		// means its window closed, so it must not surface again in the rematch lobby.
 		m_PendingHostOptions.reset();
+		m_HostOptionsRequest.Clear();
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
 		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
@@ -2118,9 +2120,10 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost) {
 			return refuse("only the host submits match options");
 		}
-		// The transaction speaks to a live setup round: the lobby (or its rematch twin) is the only
-		// state whose peers could ever acknowledge a staged edit.
-		if (m_State != NetMatchServiceState::Starting) {
+		// The transaction speaks to a live setup round: the open lobby, or the rematch lobby a finished
+		// match left up, are the only states whose peers could ever acknowledge an edit.
+		const bool rematchLobbyUp = m_State == NetMatchServiceState::Completed && !m_LeftMatch && ActiveWireLocked() && m_Session && m_Runner;
+		if (m_State != NetMatchServiceState::Starting && !rematchLobbyUp) {
 			return refuse("host options apply while a lobby is open");
 		}
 		const NetMatchConfig& adopted = m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
@@ -2148,6 +2151,10 @@ static std::string ResyncSaveName() {
 		}
 		m_PendingHostOptions = draft;
 		m_PendingHostOptions->configRevision = adopted.configRevision + 1;
+		// The runner owns the lobby; this posts the accepted revision to its thread, where an open
+		// round republishes it to every peer at once and a closed one starts its rematch on it. The
+		// draft stays staged here too: it is what the options panel re-seeds from either way.
+		m_HostOptionsRequest.Post(*m_PendingHostOptions);
 		return true;
 	}
 
@@ -2783,14 +2790,14 @@ static std::string ResyncSaveName() {
 		runnerConfig.useLobbyProtocol = true;
 		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
 		runnerConfig.sessionWaitMs = c_MenuLobbyWaitMs;
-		// The seating wait is the host's published idle policy. Never takes a day as its practical
-		// bound (this value is also the lobby's message-hearing timeout, which cannot go unbounded),
-		// and the client's own round patience stays the fixed technical deadline the design keeps fixed.
-		runnerConfig.lobbyWaitMs = request.host
-		                               ? (runnerConfig.matchConfig.idleWaitMinutes > 0
-		                                      ? static_cast<uint32_t>(runnerConfig.matchConfig.idleWaitMinutes) * 60000
-		                                      : 24u * 60u * 60000u)
-		                               : c_MenuLobbyWaitMs;
+		// Two different waits: the message-hearing deadline is technical and the same for everyone,
+		// and the seating wait is the host's published idle policy, where Never really is never.
+		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
+		if (request.host) {
+			runnerConfig.lobbySeatingWaitMs = runnerConfig.matchConfig.idleWaitMinutes > 0
+			                                      ? static_cast<uint32_t>(runnerConfig.matchConfig.idleWaitMinutes) * 60000
+			                                      : 0u;
+		}
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		// The lobby lockstep start takes the activity from the adopted roster.
@@ -2799,6 +2806,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.readyRequested = &m_ReadyRequested;
 		runnerConfig.startRequested = &m_StartRequested;
 		runnerConfig.cancelRequested = &m_CancelRequested;
+		runnerConfig.hostOptions = &m_HostOptionsRequest;
 		NetMatchRunner* runnerRaw = runner.get();
 		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
