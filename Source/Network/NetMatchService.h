@@ -3,6 +3,7 @@
 #include "NetDirectoryClient.h"
 #include "NetLanDiscovery.h"
 #include "NetLobbySnapshot.h"
+#include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
 #include "NetHostBanStore.h"
@@ -385,6 +386,20 @@ namespace RTE {
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
 		static NetResyncState BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId, const AutosaveSideState& sideState);
+		/// What a world segment needs before its records can play: the checkpoint it stands on, that
+		/// checkpoint's manifest and the lockstep state the sim stands up with. A non-empty refusal says
+		/// why the segment cannot play here and nothing else is filled.
+		struct WorldSegmentPlayback {
+			std::string refusal;
+			AutosaveDescriptor checkpoint;
+			AutosaveManifest manifest;
+			NetResyncState resumeState;
+			uint64_t startFrame = 0; //!< The checkpoint's tick + 1, where the records begin.
+		};
+		/// Checks a segment header against the checkpoints on this machine and builds that staging. The
+		/// same check answers the first segment and every chain boundary.
+		static WorldSegmentPlayback PrepareWorldSegmentPlayback(const std::filesystem::path& directory, const NetWorldSegmentHeader& header,
+		                                                       const NetMatchConfig& config, uint64_t firstRecordedFrame);
 		/// The hash a resume offer carries and a peer answers against, taken over the one rendering of
 		/// the agreed side state so both sides compare the same bytes.
 		static std::string HashSideState(const AutosaveSideState& sideState);
