@@ -21,9 +21,7 @@ namespace RTE {
 
 	namespace {
 		constexpr char c_Magic[8] = {'C', 'C', 'C', 'P', 'H', '4', 'T', 'K'};
-		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
-		// issuedAt 8 + configHash 32 + address length 2 = 114, then the address, then the 32 B mac.
-		constexpr size_t c_FixedBytes = 114;
+		constexpr size_t c_FixedBytes = NetReconnectTicketStore::c_FixedBytes;
 
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
 			out.push_back(static_cast<uint8_t>(value & 0xFFU));
@@ -108,12 +106,13 @@ namespace RTE {
 	}
 
 	bool NetReconnectTicketStore::Serialize(const NetH4TicketRecord& record, std::vector<uint8_t>& out) {
-		if (record.recordVersion != c_RecordVersion || record.holderGeneration == 0 ||
-		    record.hostAddress.size() > c_MaxHostAddressBytes) {
+		if ((record.recordVersion != c_RecordVersion && record.recordVersion != c_LegacyRecordVersion) ||
+		    record.holderGeneration == 0 || record.hostAddress.size() > c_MaxHostAddressBytes ||
+		    record.directorySessionId.size() > c_MaxDirectorySessionIdBytes) {
 			return false;
 		}
 		out.clear();
-		out.reserve(c_FixedBytes + record.hostAddress.size());
+		out.reserve(c_FixedBytes + record.hostAddress.size() + 2 + record.directorySessionId.size());
 		out.insert(out.end(), std::begin(c_Magic), std::end(c_Magic));
 		AppendU16LE(out, record.recordVersion);
 		out.insert(out.end(), record.epoch.begin(), record.epoch.end());
@@ -125,7 +124,13 @@ namespace RTE {
 		out.insert(out.end(), record.matchConfigHash.begin(), record.matchConfigHash.end());
 		AppendU16LE(out, static_cast<uint16_t>(record.hostAddress.size()));
 		out.insert(out.end(), record.hostAddress.begin(), record.hostAddress.end());
-		return out.size() == c_FixedBytes + record.hostAddress.size();
+		if (record.recordVersion >= c_RecordVersion) {
+			AppendU16LE(out, static_cast<uint16_t>(record.directorySessionId.size()));
+			out.insert(out.end(), record.directorySessionId.begin(), record.directorySessionId.end());
+		}
+		const size_t expected = c_FixedBytes + record.hostAddress.size() +
+		    (record.recordVersion >= c_RecordVersion ? 2 + record.directorySessionId.size() : 0);
+		return out.size() == expected;
 	}
 
 	bool NetReconnectTicketStore::Deserialize(const std::vector<uint8_t>& bytes, NetH4TicketRecord& out) {
@@ -136,7 +141,7 @@ namespace RTE {
 		NetH4TicketRecord record;
 		record.recordVersion = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		if (record.recordVersion != c_RecordVersion) {
+		if (record.recordVersion != c_RecordVersion && record.recordVersion != c_LegacyRecordVersion) {
 			return false;
 		}
 		std::memcpy(record.epoch.data(), bytes.data() + offset, record.epoch.size());
@@ -155,10 +160,24 @@ namespace RTE {
 		offset += record.matchConfigHash.size();
 		const uint16_t addressBytes = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		if (addressBytes > c_MaxHostAddressBytes || bytes.size() != offset + addressBytes) {
+		if (addressBytes > c_MaxHostAddressBytes || bytes.size() < offset + addressBytes) {
 			return false;
 		}
 		record.hostAddress.assign(reinterpret_cast<const char*>(bytes.data() + offset), addressBytes);
+		offset += addressBytes;
+		if (record.recordVersion >= c_RecordVersion) {
+			if (bytes.size() < offset + 2) {
+				return false;
+			}
+			const uint16_t sessionBytes = ReadU16LE(bytes.data() + offset);
+			offset += 2;
+			if (sessionBytes > c_MaxDirectorySessionIdBytes || bytes.size() != offset + sessionBytes) {
+				return false;
+			}
+			record.directorySessionId.assign(reinterpret_cast<const char*>(bytes.data() + offset), sessionBytes);
+		} else if (bytes.size() != offset) {
+			return false;
+		}
 		// Generation 0 names no holder, so it can prove nothing.
 		if (record.holderGeneration == 0) {
 			return false;

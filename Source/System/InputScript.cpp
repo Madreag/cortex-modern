@@ -61,6 +61,9 @@ namespace RTE {
 	std::string InputScript::s_Path;
 
 	int InputScript::ElementFromName(const std::string& name) {
+		if (name == "CHAT") {
+			return c_ChatAction;
+		}
 		for (int element = 0; element < InputElements::INPUT_COUNT; ++element) {
 			if (name == c_ElementNames[element]) {
 				return element;
@@ -70,6 +73,9 @@ namespace RTE {
 	}
 
 	const char* InputScript::ElementName(int element) {
+		if (element == c_ChatAction) {
+			return "CHAT";
+		}
 		return element >= 0 && element < InputElements::INPUT_COUNT ? c_ElementNames[element] : "?";
 	}
 

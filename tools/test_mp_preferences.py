@@ -20,6 +20,7 @@ KEYS = [
     ("NetworkChatNotify", "0"),
     ("NetworkChatSound", "1"),
     ("NetworkChatTextSize", "Large"),
+    ("NetworkChatKey", "Y"),
     ("NetworkAutoReconnect", "0"),
     ("NetworkOfferStoredRejoin", "0"),
     ("NetworkDiagnosticsDirectory", "D:/tmp/telemetry-alt"),

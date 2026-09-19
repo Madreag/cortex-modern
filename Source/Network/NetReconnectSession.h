@@ -640,6 +640,7 @@ namespace RTE {
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
 		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
+		void SetDirectorySessionId(std::string directorySessionId);
 
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
@@ -716,6 +717,7 @@ namespace RTE {
 		NetH4Identity m_Identity;
 		std::string m_DisplayName = "Player";
 		std::string m_HostAddress;
+		std::string m_DirectorySessionId;
 		NetHash32 m_MatchConfigHash{};
 		uint64_t (*m_UnixClock)(void*) = nullptr;
 		void* m_UnixClockContext = nullptr;
