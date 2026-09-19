@@ -533,7 +533,9 @@ static std::string ResyncSaveName() {
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
 			m_SummarySeats.clear();
-			m_LocalPeerId = request.host ? 1 : 2;
+			// A resumed match keeps the seat the agreed configuration gave its host, which a handover
+			// may have moved off peer 1 before the match died.
+			m_LocalPeerId = request.host ? (request.resumeConfig ? matchConfig.hostPeerId : 1) : 2;
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
 			m_HumanSeats = static_cast<int>(std::count_if(matchConfig.players.begin(), matchConfig.players.end(), [](const auto& slot) { return !slot.cpu; }));
@@ -4762,7 +4764,7 @@ static std::string ResyncSaveName() {
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			// The checkpoint's own bytes are the lobby's state: a peer that lacks the archive receives
 			// exactly the file the host is about to load.
-			const std::filesystem::path archivePath = AutosaveStore::ArchivePath(m_ResumeMatchId, m_ResumeTick);
+			const std::filesystem::path archivePath = AutosaveStore::ArchivePath(runnerConfig.resumeMatchId, runnerConfig.resumeTick);
 			std::ifstream in(archivePath, std::ios::binary);
 			std::vector<uint8_t> archive;
 			if (in) archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
@@ -4820,8 +4822,10 @@ static std::string ResyncSaveName() {
 		std::optional<PendingAutosaveLoad> pendingAutosave;
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			// The host's world comes out of its own store, never off the wire it just streamed.
-			pendingAutosave = PendingAutosaveLoad{m_ResumeMatchId, m_ResumeTick};
+			pendingAutosave = PendingAutosaveLoad{runnerConfig.resumeMatchId, runnerConfig.resumeTick};
 			pendingState = resumeState;
+			// The lobby callback that answers a resume offer runs on this thread, so what it recorded
+			// is this thread's to read.
 		} else if (started && !m_ResumeHeldMatchId.empty()) {
 			// A client that answered the host's offer with its own copy loads that copy and derives the
 			// same lockstep state the host put in the envelope it was spared.
