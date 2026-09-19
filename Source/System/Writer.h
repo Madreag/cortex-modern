@@ -21,6 +21,8 @@
 struct BITMAP;
 
 namespace RTE {
+	std::string CheckpointFieldText(const std::function<std::string()>& observe);
+
 	template <typename Value> inline constexpr bool CheckpointArray = false;
 	template <typename Value, size_t Size> inline constexpr bool CheckpointArray<std::array<Value, Size>> = true;
 
@@ -32,12 +34,12 @@ namespace RTE {
 			return copy;
 		} else if constexpr (requires { value.GetStartSimTimeMS(); value.GetSimTimeLimitTicks(); value.GetStartRealTimeMS(); value.GetRealTimeLimitTicks(); }) {
 			return std::tuple(value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks());
-		} else if constexpr (requires { value.GetRadAngle(); value.GetXFlipped(); value.GetYFlipped(); }) {
-			return std::tuple(value.GetRadAngle(), value.GetXFlipped(), value.GetYFlipped());
-		} else if constexpr (requires { value.GetR(); value.GetG(); value.GetB(); }) {
-			return std::tuple(value.GetR(), value.GetG(), value.GetB());
+		} else if constexpr (requires { value.m_Rotation; value.m_Flipped; value.m_Elements; value.m_ElementsUpdated; }) {
+			return std::tuple(value.m_Rotation, CheckpointField(value.m_Flipped), CheckpointField(value.m_Elements), value.m_ElementsUpdated);
+		} else if constexpr (requires { value.GetR(); value.GetG(); value.GetB(); value.GetIndex(); }) {
+			return std::tuple(value.GetR(), value.GetG(), value.GetB(), value.GetIndex());
 		} else if constexpr (requires { value.GetDataPath(); }) {
-			return value.GetDataPath();
+			return CheckpointFieldText([&value] { return value.SaveCheckpoint(); });
 		} else if constexpr (requires { value.get(); }) {
 			return value.get();
 		} else if constexpr (requires { value.CheckpointStampValue(); }) {

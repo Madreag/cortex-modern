@@ -686,6 +686,14 @@ assert(before ~= after, "the wrapped value kept its old archive")
 	}
 	{
 		MOSRotating owner;
+		struct RotationProbe : MOSRotating { void Prime() { m_Rotation.m_ElementsUpdated = true; } } rotation;
+		rotation.Prime();
+		const uint64_t rotationBefore = rotation.CheckpointWriteGeneration();
+		rotation.SetRotAngle(rotation.GetRotAngle());
+		const uint64_t rotationAfter = rotation.CheckpointWriteGeneration();
+		rotation.SetRotAngle(rotation.GetRotAngle());
+		if (rotationAfter > rotationBefore && rotation.CheckpointWriteGeneration() == rotationAfter) pass("an_archived_matrix_cache_write_moves_the_stamp", "only the archived cache flag changed");
+		else fail("an_archived_matrix_cache_write_moves_the_stamp", "the matrix cache flag was not stamped once");
 		SceneObject::SOPlacer placer;
 		placer.SetCheckpointOwner(&owner);
 		const uint64_t placementBefore = owner.CheckpointWriteGeneration();
