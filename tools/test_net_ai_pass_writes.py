@@ -36,6 +36,8 @@ TABLE_SENT = re.compile(r"\[f72b-pass\] table uid=(\d+)")
 TABLE_HEARD = re.compile(r"\[f72b-table-heard\] uid=(\d+) kind=(\w+)")
 # The string the wave tip prints for a context the codec cannot carry; a local call must not produce one.
 MESSAGE_VIOLATION = re.compile(r"\[controller-boundary\] VIOLATION: .*script message.*")
+ONEARG_SENT = re.compile(r"\[f72b-pass\] onearg uid=(\d+)")
+ONEARG_SEEN = re.compile(r"\[f72b-onearg\] uid=(\d+) ms=(\d+)")
 
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
@@ -158,6 +160,16 @@ def main() -> int:
           any(TABLE_SENT.findall(logs[peer]) for peer in ("host", "client")),
           f"host={len(TABLE_SENT.findall(logs['host']))} client={len(TABLE_SENT.findall(logs['client']))}",
           [out / "e2e/ai_pass_writes"])
+    # No context is a context the wire can name, so the one-argument form has to cross: the flag its
+    # OnMessage sets is read by ThreadedUpdate, which runs on every peer, at the same committed tick.
+    seen = {peer: ONEARG_SEEN.findall(logs[peer]) for peer in ("host", "client")}
+    for peer in ("host", "client"):
+        check(checks, f"{peer}_saw_the_one_argument_message", bool(seen[peer]),
+              f"seen={seen[peer][:4]} sent={len(ONEARG_SENT.findall(logs[peer]))}",
+              [out / "e2e/ai_pass_writes" / peer / "stdout.log"])
+    check(checks, "one_argument_message_seen_on_the_same_tick",
+          bool(seen["host"]) and [row[1] for row in seen["host"]] == [row[1] for row in seen["client"]],
+          f"host={seen['host'][:4]} client={seen['client'][:4]}", [out / "e2e/ai_pass_writes"])
     check(checks, "peers_agree", bool(rows["host"]) and rows["host"] == rows["client"],
           f"host rows={len(rows['host'])} client rows={len(rows['client'])} "
           f"first mismatch={next((pair for pair in zip(rows['host'], rows['client']) if pair[0] != pair[1]), None)}",
