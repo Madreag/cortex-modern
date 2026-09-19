@@ -10982,6 +10982,40 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestInternetMenuJoinUsesSession(std::string* error) {
+		NetDirectoryClient::GameRow row;
+		row.source = "NET";
+		row.sessionId = "internet-host";
+		row.address = "192.168.1.9";
+		row.port = 41237;
+		NetMatchServiceRequest request;
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.sessionId != "internet-host" || !request.address.empty()) {
+			*error = "internet menu join bypassed ICE through the directory's private address";
+			return false;
+		}
+		row.address.clear();
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.sessionId != "internet-host") {
+			*error = "internet menu refused an ICE-only row with no direct address";
+			return false;
+		}
+		row.source = "LAN";
+		row.address = "192.168.1.9";
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.address != row.address || !request.sessionId.empty()) {
+			*error = "LAN menu join retained the previous Internet session";
+			return false;
+		}
+		request.SetJoinAddress("203.0.113.9");
+		if (request.address != "203.0.113.9" || !request.sessionId.empty()) {
+			*error = "manual address join retained the previous Internet session";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS internet menu join: session identity survives the selection; LAN and typed IP stay direct" << std::endl;
+		return true;
+	}
+
 	// -net-ice is a run override: it decides this run and never reaches the saved settings.
 	bool TestIceSettingsOverrideIsNotPersisted(std::string* error) {
 		// This selftest runs before the managers are built.
@@ -11073,6 +11107,7 @@ namespace RTE {
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
+		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);

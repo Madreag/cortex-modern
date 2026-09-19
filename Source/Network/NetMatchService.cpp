@@ -155,6 +155,10 @@ namespace RTE {
 		return iceEnabled && (target.joinMode == "ice" || target.joinMode == "either");
 	}
 
+	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row) {
+		return row.source == "NET" && !row.sessionId.empty() ? "session:" + row.sessionId : row.address;
+	}
+
 	void FillDirectoryLocalIdentity(NetDirectoryLocalIdentity& local, const NetIdentityManifest& manifest) {
 		local.networkProtocolVersion = manifest.networkProtocolVersion;
 		local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;

@@ -1120,13 +1120,13 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 				}
 				g_GUISound.BackButtonPressSound()->Play();
 			} else {
-				m_MultiplayerJoinAddressTextBox->SetText(row.address);
-				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
+				m_MultiplayerJoinAddressTextBox->SetText(NetIceMenuJoinAddress(row));
+				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port == 0 ? 41010 : row.port));
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
 				if (m_JoinTargetPersistentWorld) {
-					m_LastWorldJoinAddress = row.address;
-					m_LastWorldJoinPort = row.port;
+					m_LastWorldJoinAddress = m_MultiplayerJoinAddressTextBox->GetText();
+					m_LastWorldJoinPort = row.port == 0 ? 41010 : row.port;
 					g_NetMatchService.NoteJoinTargetPersistentWorld(true);
 				}
 				if (m_MultiplayerLanGamesLabel) {
@@ -2773,7 +2773,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	NetMatchServiceRequest request;
 	request.host = host;
 	if (!host) {
-		request.address = m_MultiplayerJoinAddressTextBox->GetText();
+		request.SetJoinAddress(m_MultiplayerJoinAddressTextBox->GetText());
 	}
 	request.port = static_cast<uint16_t>(parsedPort);
 	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
