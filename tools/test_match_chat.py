@@ -1,11 +1,12 @@
 """In-match chat band: host send appears on the guest, and the band overlaps no occupier.
 
 Writes the network-UI probe scripts the completion pass runs. Does not launch unless --launch
-is set. Viewports 640x360, 960x540 and 1280x720. The host send_chat step is the line; the guest
-waits for LabelMatchChatNewest within 120 renders; both put a seat message on screen and open the
-seats panel, so the layout assertion names two occupiers that are really there, then open the entry
-with the chat key and assert what the carved area holds at that size: a history row above the entry
-at every supported size, 640x360 included, where the entry itself shrinks to make room for it (see
+is set. Viewports 640x360, 960x540 and 1280x720, each at both chat text sizes. The host send_chat
+step is the line; the guest waits for LabelMatchChatNewest within 120 renders; both put a seat
+message on screen and open the seats panel, so the layout assertion names two occupiers that are
+really there, then open the entry with the chat key and assert what the carved run holds at that
+size: a history row above the entry at every supported size and text size, 640x360 with Large
+included, where the entry shrinks and then the panel gives up rows to make room for it (see
 history_row_fits).
 """
 
@@ -20,13 +21,15 @@ import threading
 from pathlib import Path
 
 SIZES = ((640, 360), (960, 540), (1280, 720))
+TEXT_SIZES = ("small", "large")
 # The row rule holds at every size the game supports; the detector launches the three shortest of them.
 SUPPORTED_HEIGHTS = (360, 540, 720, 1080)
 CHAT_LINE = "hello from host"
 SEAT_MESSAGE = "chat layout occupier"
 TICKS = 900
-# This detector owns 48700-48705 (two peers per size). The launch driver owns 48320-48539 and
-# 48630-48649, the menu readback 48270-48279/48380-48399/48530-48559/48840-48859/49180-49199.
+# This detector owns 48700-48711 (two peers per size and text size). The launch driver owns
+# 48320-48539 and 48630-48649, the menu readback 48270-48279/48380-48399/48530-48559/48840-48859/
+# 49180-49199, the autosave restore 48720-48739.
 PORT_BASE = 48700
 
 
@@ -41,7 +44,7 @@ def occupier_steps():
     ]
 
 
-def history_row_fits(height):
+def history_row_fits(height, text_size):
     """One history row rides above the entry at every supported size, the shortest included.
 
     With the seats panel open the band lives above it: available = PanelTop(h) - 8, and at 640x360
@@ -52,13 +55,15 @@ def history_row_fits(height):
     """
     if height not in SUPPORTED_HEIGHTS:
         raise ValueError(f"{height} is not a supported screen height")
+    _ = text_size
     return True
 
 
-def open_entry_steps(size):
+def open_entry_steps(size, text_size):
     """The chat key opens the entry; the band keeps what fits above it and nothing else."""
     width, height = size
-    rows = [{"op": "assert_control", "control": "LabelMatchChat0", "equals": {"visible": history_row_fits(height)}}]
+    rows = [{"op": "assert_control", "control": "LabelMatchChat0",
+             "equals": {"visible": history_row_fits(height, text_size)}}]
     return [
         {"op": "key_down", "key": "CHAT"},
         {"op": "key_up", "key": "CHAT"},
@@ -75,7 +80,7 @@ def open_entry_steps(size):
     ]
 
 
-def host_steps(size):
+def host_steps(size, text_size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
@@ -83,21 +88,26 @@ def host_steps(size):
         {"op": "wait", "renders": 8, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         *occupier_steps(),
-        *open_entry_steps(size),
+        *open_entry_steps(size, text_size),
         {"op": "finish"},
     ]
 
 
-def guest_steps(size):
+def guest_steps(size, text_size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
         {"op": "wait", "renders": 120, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         *occupier_steps(),
-        *open_entry_steps(size),
+        *open_entry_steps(size, text_size),
         {"op": "finish"},
     ]
+
+
+def cases():
+    """Every viewport at every chat text size, in the order their ports are handed out."""
+    return [(size, text_size) for size in SIZES for text_size in TEXT_SIZES]
 
 
 def script(steps):
@@ -106,11 +116,12 @@ def script(steps):
 
 def write_scripts(root: Path) -> dict[str, str]:
     written = {}
-    for width, height in SIZES:
-        for who, steps in (("host", host_steps((width, height))), ("guest", guest_steps((width, height)))):
-            path = root / f"match-chat-{width}x{height}-{who}.json"
+    for (width, height), text_size in cases():
+        for who, steps in (("host", host_steps((width, height), text_size)),
+                           ("guest", guest_steps((width, height), text_size))):
+            path = root / f"match-chat-{width}x{height}-{text_size}-{who}.json"
             path.write_text(json.dumps(script(steps), indent=2) + "\n", encoding="utf-8")
-            written[f"{width}x{height}-{who}"] = str(path)
+            written[f"{width}x{height}-{text_size}-{who}"] = str(path)
     return written
 
 
@@ -139,20 +150,21 @@ def set_settings(runtime, values):
     path.write_text(settings, encoding="utf-8")
 
 
-def launch_size(make_run, repo, root, size, port, timeout):
+def launch_size(make_run, repo, root, size, text_size, port, timeout):
     width, height = size
-    case = root / f"{width}x{height}"
+    case = root / f"{width}x{height}-{text_size}"
     case.mkdir(parents=True, exist_ok=False)
     records, runs = {}, {}
     try:
-        for who, steps in (("host", host_steps(size)), ("guest", guest_steps(size))):
+        for who, steps in (("host", host_steps(size, text_size)), ("guest", guest_steps(size, text_size))):
             inputs = case / f"{who}_inputs"
             inputs.mkdir()
             probe = inputs / "probe.json"
             probe.write_text(json.dumps(script(steps), indent=2) + "\n", encoding="utf-8")
             env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)}
             runs[who] = make_run(repo, peer_args(who, port, case), case / who, timeout, env=env)
-            set_settings(runs[who].cwd, {"ResolutionX": width, "ResolutionY": height, "NetworkChatVisible": 1})
+            set_settings(runs[who].cwd, {"ResolutionX": width, "ResolutionY": height,
+                                         "NetworkChatVisible": 1, "NetworkChatTextSize": text_size})
 
         def drive(who):
             try:
@@ -172,9 +184,9 @@ def launch_size(make_run, repo, root, size, port, timeout):
     return {"records": records, "logs": {who: str(case / who) for who in ("host", "guest")}}
 
 
-def inspect(root: Path, size) -> dict:
+def inspect(root: Path, size, text_size) -> dict:
     width, height = size
-    case = root / f"{width}x{height}"
+    case = root / f"{width}x{height}-{text_size}"
     detail = {"pass": False, "guest_saw_line": False, "layout": {}}
     for who in ("host", "guest"):
         result = case / f"{who}_inputs" / "net-ui-result.json"
@@ -214,10 +226,11 @@ def main() -> int:
     from run_sim_test import make_run  # noqa: PLC0415
     os.environ["CCCP_HEADLESS"] = "1"
     result = {"pass": False, "sizes": {}}
-    for index, size in enumerate(SIZES):
-        outcome = launch_size(make_run, options.repo.resolve(), root, size,
+    for index, (size, text_size) in enumerate(cases()):
+        outcome = launch_size(make_run, options.repo.resolve(), root, size, text_size,
                               PORT_BASE + index * 2, options.timeout)
-        result["sizes"][f"{size[0]}x{size[1]}"] = {"outcome": outcome, "inspect": inspect(root, size)}
+        result["sizes"][f"{size[0]}x{size[1]}-{text_size}"] = {
+            "outcome": outcome, "inspect": inspect(root, size, text_size)}
     result["pass"] = all(row["inspect"]["pass"] for row in result["sizes"].values())
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"pass": result["pass"]}, indent=2))
