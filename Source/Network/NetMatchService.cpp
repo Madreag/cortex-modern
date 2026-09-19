@@ -4118,8 +4118,12 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	std::optional<NetMatchConfig> NetMatchService::GetPendingHostOptions() const {
+	std::optional<NetMatchConfig> NetMatchService::GetPendingHostOptions(std::string* refusal) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (refusal) {
+			std::lock_guard<std::mutex> slotLock(m_HostOptionsRequest.mutex);
+			*refusal = m_HostOptionsRequest.refusal;
+		}
 		return m_PendingHostOptions;
 	}
 

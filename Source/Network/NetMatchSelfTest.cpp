@@ -3440,6 +3440,25 @@ namespace RTE {
 			draft.difficulty = 44;
 			draft.frameRedundancyTicks = 2;
 			draft.configRevision = draft.configRevision + 1;
+			for (int arm = 0; arm < 3; ++arm) {
+				NetMatchConfig refused = draft;
+				if (arm == 0) refused.configRevision = runner.GetMatchConfig().configRevision;
+				if (arm == 1) ++refused.sessionId;
+				if (arm == 2) refused.players.clear();
+				slot.Post(refused);
+				std::string refusal;
+				if (runner.StartNextMatch(tap, hostSession, hostCoordinator, &refusal)) {
+					*error = "the rematch started after refusing draft arm " + std::to_string(arm);
+					return false;
+				}
+				std::lock_guard<std::mutex> lock(slot.mutex);
+				if (!slot.pending.load() || slot.config != refused || slot.refusal != refusal ||
+				    !refusal.starts_with("Host options refused: ") || runner.GetSetupError() != refusal ||
+				    (arm == 0 && refusal != "Host options refused: the draft names a stale configuration revision")) {
+					*error = "the rematch lost its refused draft or status: " + refusal;
+					return false;
+				}
+			}
 			slot.Post(draft);
 			std::string rematchError;
 			if (!runner.StartNextMatch(tap, hostSession, hostCoordinator, &rematchError)) {

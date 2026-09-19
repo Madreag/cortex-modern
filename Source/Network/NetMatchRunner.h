@@ -33,13 +33,15 @@ namespace RTE {
 	/// itself, so the runner never blocks the game thread for the length of a copy.
 	struct NetHostOptionsSlot {
 		std::atomic<bool> pending{false};
-		std::mutex mutex;
+		mutable std::mutex mutex;
 		NetMatchConfig config;
+		std::string refusal;
 
 		/// Service thread: stages the accepted draft for the runner.
 		void Post(const NetMatchConfig& draft) {
 			std::lock_guard<std::mutex> lock(mutex);
 			config = draft;
+			refusal.clear();
 			pending.store(true, std::memory_order_release);
 		}
 		/// Runner thread: takes the staged draft, if one is waiting.
@@ -61,6 +63,7 @@ namespace RTE {
 		void Clear() {
 			std::lock_guard<std::mutex> lock(mutex);
 			config = {};
+			refusal.clear();
 			pending.store(false, std::memory_order_release);
 		}
 	};
@@ -200,9 +203,8 @@ namespace RTE {
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
-		/// Host: takes the staged host-options draft as the config the NEXT round publishes. Runner
-		/// thread only; a draft for another session or behind the played revision is dropped.
-		bool AdoptStagedHostOptions();
+		// A refused draft stays available so the host can see why its rematch did not start.
+		bool AdoptStagedHostOptions(std::string* error);
 		/// Host: takes the seating wait from the published idle policy, so a live edit of it lands.
 		void SyncSeatingWaitToConfig();
 		/// Re-forms the roster the next round is played on and re-seats everything that depends on it.
