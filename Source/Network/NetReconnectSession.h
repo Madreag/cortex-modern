@@ -11,10 +11,12 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
 
+	class NetHostBanStore;
 	class NetSeatAuthRegistry;
 
 	/// One admission reply the session owes a connection.
@@ -76,7 +78,60 @@ namespace RTE {
 	enum class NetH4DisconnectOutcome : uint8_t {
 		Unknown = 0,    //!< No seat ever bound this transport.
 		Fenced = 1,     //!< A superseded incarnation timing out; the seat keeps its current holder.
-		SeatDropped = 2 //!< The seat's active incarnation is gone; the seat is now reclaimable.
+		SeatDropped = 2, //!< The seat's active incarnation is gone; the seat is now reclaimable.
+		Removed = 3,    //!< Host-authored removal; terminal, never reclaimable.
+	};
+
+	/// The binding a removal notice must name. Survivors accept only a matching current holder.
+	struct NetParticipantRemovalBinding {
+		uint64_t sessionId = 0;
+		uint32_t round = 0;
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+	};
+
+	enum class NetParticipantRemovalVerdict : uint8_t {
+		Accept = 0, //!< Terminal: this holder is gone and cannot reclaim.
+		RejectForgedClient = 1,
+		RejectRemappedSeat = 2,
+		RejectWrongEpoch = 3,
+		RejectDuplicate = 4,
+		RejectStaleBinding = 5,
+		RejectOldVersion = 6,
+	};
+
+	const char* NetParticipantRemovalVerdictName(NetParticipantRemovalVerdict verdict);
+	/// Whether the verdict is a terminal removal. Accept only; every reject leaves the holder.
+	inline bool NetParticipantRemovalIsTerminal(NetParticipantRemovalVerdict verdict) {
+		return verdict == NetParticipantRemovalVerdict::Accept;
+	}
+	NetParticipantRemovalVerdict NetAcceptParticipantRemoval(const NetParticipantRemoval& notice, bool fromHost, const NetParticipantRemovalBinding& current, bool alreadyAppliedTx);
+
+	enum class NetKickBanResult : uint8_t {
+		Ok = 0,
+		NotHosting = 1,
+		UnknownSeat = 2,
+		ForbiddenTarget = 3,
+		StaleSelection = 4,
+		ActionUnavailable = 5,
+		PersistenceFailed = 6,
+		UnknownIdentity = 7,
+		/// Marshaled onto the setup worker; the applied result replaces this one at the next drain.
+		Queued = 8,
+	};
+
+	const char* NetKickBanResultName(NetKickBanResult result);
+
+	/// The notice and targeted transport the host confirmation dialog reads after RemoveParticipant.
+	struct NetParticipantRemovalIssue {
+		NetParticipantRemoval notice;
+		NetPeerId connection = c_InvalidNetPeerId;
+		uint8_t lockstepPeerId = 0;
+		NetH4Identity identity;
+		NetAuthBytes32 participantId{};
+		bool hasParticipantId = false;
 	};
 
 	/// A seat that just became this connection's. The session turns it into a ready peer so the
@@ -222,6 +277,7 @@ namespace RTE {
 		uint32_t incarnationsBound = 0;
 		uint32_t seatsDropped = 0;
 		uint32_t seatsClosedByLeave = 0;
+		uint32_t seatsRemoved = 0; //!< Host-authored removals; never a reclaimable drop.
 		uint32_t seatsReleased = 0; //!< Seats handed back to the pool, whichever way their holder went.
 		uint32_t ledgerDropsRecorded = 0;
 		uint32_t reseatsIssued = 0;
@@ -271,6 +327,10 @@ namespace RTE {
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
 		void SetLiveMatch(bool live) { m_LiveMatch = live; if (live) m_MatchEnded = false; }
+		/// A persistent world admits a fresh, ticketless joiner into a LIVE round: its seats are the
+		/// world's gameplay slots, freed by a clean leave under the next generation, never "used up".
+		void SetPersistentWorld(bool persistent) { m_PersistentWorld = persistent; }
+		bool IsPersistentWorld() const { return m_PersistentWorld; }
 		/// Retains credentials between rounds without carrying world ownership into the lobby.
 		void SetMatchEnded();
 		bool IsLiveMatch() const { return m_LiveMatch; }
@@ -329,11 +389,18 @@ namespace RTE {
 		/// Withdraws an approval that has not committed. The provisional record is invalidated and
 		/// removed; the seat was never given away, so there is nothing to take back.
 		NetH4ModerationResult CancelSubstitution(uint16_t stableSeat, uint64_t nowMs);
+		void SetBanStore(NetHostBanStore* store) { m_BanStore = store; }
+		void SetParticipantProofRequired(bool required) { m_ProofRequired = required; }
+		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
+		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
 
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
+		/// The committed H4 seat on this connection; 0 until admission has one.
+		uint16_t StableSeatOfConnection(NetPeerId connection) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
@@ -367,6 +434,8 @@ namespace RTE {
 			uint32_t retiredGeneration = 0; //!< A generation a substitute superseded, kept only to answer it.
 			uint64_t retiredUntilMs = 0;
 			std::string substituteName;
+			NetAuthBytes32 participantId{};
+			bool hasParticipantId = false;
 		};
 
 		/// A pending applicant. It carries an identity because §4 re-validates one on every admission
@@ -454,6 +523,9 @@ namespace RTE {
 		SeatState* FindSeat(uint16_t stableSeat);
 		const SeatState* FindSeat(uint16_t stableSeat) const;
 		SeatState* FindFreeNeverHeldSeat();
+		/// A world's free gameplay slot: not the host's, not committed, not closed and not already being
+		/// offered. Unlike a match seat it may have been held before - a clean leave gives it back.
+		SeatState* FindFreeWorldSeat();
 		Provisional* FindProvisionalByTxId(const NetAuthBytes16& txId);
 		bool BindIncarnation(SeatState& seat, NetPeerId connection);
 		void ReleaseProvisional(uint16_t stableSeat);
@@ -461,6 +533,14 @@ namespace RTE {
 		/// Hands a seat back to the pool. Only in a lobby: nothing has been played, so the player who
 		/// left has nothing to reclaim and the seat must be joinable again.
 		void ReleaseSeat(SeatState& seat);
+		void CloseSeatWithoutHold(SeatState& seat);
+		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
+		/// Ends every transaction a removed link still had open, on every seat.
+		void DropRemovedTransactions(NetPeerId connection);
+		bool RefuseIfBanned(NetPeerId connection);
+		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
+		void UnbindParticipantId(NetPeerId connection);
+		void CaptureParticipant(SeatState& seat, NetPeerId connection);
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
@@ -497,6 +577,7 @@ namespace RTE {
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
 		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
+		bool m_PersistentWorld = false;
 		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;
@@ -517,6 +598,12 @@ namespace RTE {
 		NetReconnectHostStats m_Stats;
 		bool m_MigrationHold = false;
 		std::vector<std::pair<NetPeerId, NetPayload>> m_MigrationHeldMessages;
+		NetAuthBytes16 m_LastRemovalTx{};
+		bool m_HasRemovalTx = false;
+		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
+		NetHostBanStore* m_BanStore = nullptr;
+		bool m_ProofRequired = false;
+		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};
 
 	enum class NetH4ClientState : uint8_t {
@@ -566,12 +653,17 @@ namespace RTE {
 
 		void Configure(NetReconnectTicketStore* store, NetH4Identity identity, std::string displayName);
 		void SetUnixClock(uint64_t (*clock)(void*), void* context);
+		void SetRound(uint32_t round) { m_Round = round; }
+		uint32_t GetRound() const { return m_Round; }
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
 		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
-		void SetDirectorySessionId(std::string sessionId) { m_DirectorySessionId = std::move(sessionId); }
 		bool MigrateHostContext(const std::string& address, const std::string& directorySessionId, const NetHash32& matchConfigHash);
 		bool OpenSuccessorCapsule(const std::vector<uint8_t>& context, const std::vector<uint8_t>& sealed, std::vector<uint8_t>& plaintext) const;
+		/// The host is a persistent world, so the record says so and a relaunch's rejoin hellos on the
+		/// world plane instead of the ordinary one.
+		void SetWorldTarget(bool world) { m_WorldTarget = world; }
+		void SetDirectorySessionId(std::string directorySessionId);
 
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
@@ -600,6 +692,10 @@ namespace RTE {
 		/// The host said the hosted session ended (P22) - the only event other than a LeaveAck that may
 		/// delete the record.
 		void NotifyConfirmedSessionEnd();
+		/// Host-authored removal of this client: the ticket dies and retry stops.
+		void NotifyParticipantRemoved(NetRejectReason reason);
+		bool WasRemoved() const { return m_Removed; }
+		NetAuthBytes16 LastRemovalTx() const { return m_LastRemovalTx; }
 		/// The link died without an answer. The record is exactly what this case exists for: it stays.
 		void NotifyAmbiguousLoss();
 
@@ -646,6 +742,7 @@ namespace RTE {
 		std::string m_HostAddress;
 		std::string m_DirectorySessionId;
 		NetHash32 m_MatchConfigHash{};
+		bool m_WorldTarget = false;
 		uint64_t (*m_UnixClock)(void*) = nullptr;
 		void* m_UnixClockContext = nullptr;
 
@@ -668,8 +765,11 @@ namespace RTE {
 		NetH4TicketRecord m_Record;
 		bool m_HasRecord = false;
 		uint32_t m_Incarnation = 0;
+		uint32_t m_Round = 0;
 		uint8_t m_AssignedPeerId = 0;
 		bool m_WantsLinkClosed = false;
+		bool m_Removed = false;
+		NetAuthBytes16 m_LastRemovalTx{};
 		std::string m_Error;
 		std::vector<NetH4Outbound> m_Outbound;
 		NetReconnectClientStats m_Stats;

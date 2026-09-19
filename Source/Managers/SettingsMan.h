@@ -251,6 +251,9 @@ namespace RTE {
 		/// Chat text size. Default Small.
 		NetworkChatTextSize GetNetworkChatTextSize() const { return m_NetworkChatTextSize; }
 		void SetNetworkChatTextSize(NetworkChatTextSize size) { m_NetworkChatTextSize = size; }
+		/// In-match chat key. Default T; Enter is START and is not the default.
+		const std::string& GetNetworkChatKey() const { return m_NetworkChatKey; }
+		void SetNetworkChatKey(const std::string& key);
 		/// Local automatic rejoin. Default on.
 		bool GetNetworkAutoReconnect() const { return m_NetworkAutoReconnect; } void SetNetworkAutoReconnect(bool enabled) { m_NetworkAutoReconnect = enabled; }
 		/// Startup stored-rejoin offer. Default on.
@@ -268,9 +271,19 @@ namespace RTE {
 		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
 		int GetNetworkHostIdleWaitMinutes() const { return m_NetworkHostIdleWaitMinutes; }
 		void SetNetworkHostIdleWaitMinutes(int minutes);
+		/// Shared path-grid horizon in ticks. Default 30. Out of 0-120 is ignored.
+		int GetNetworkPathHorizonTicks() const { return m_NetworkPathHorizonTicks; }
+		void SetNetworkPathHorizonTicks(int ticks);
 		/// New-session host visibility. Default LAN.
 		NetworkHostVisibility GetNetworkHostVisibility() const { return m_NetworkHostVisibility; }
 		void SetNetworkHostVisibility(NetworkHostVisibility visibility) { m_NetworkHostVisibility = visibility; }
+		/// The host-defaults template beside Settings.ini. "Save As Host Defaults" writes it and a new
+		/// hosted lobby seeds its draft from it; the network layer owns the template's own versioned
+		/// format, so this only carries the text to and from the file.
+		static std::string NetworkHostDefaultsPath();
+		bool HasNetworkHostDefaults() const;
+		bool LoadNetworkHostDefaultsText(std::string& outText, std::string* error = nullptr) const;
+		bool SaveNetworkHostDefaultsText(const std::string& text, std::string* error = nullptr) const;
 		/// Round-trips the Network* preferences through Writer/Reader and checks validation.
 		static int RunNetworkPreferencesSelfTest();
 #pragma endregion
@@ -608,10 +621,12 @@ namespace RTE {
 		NetworkMatchStatusMode m_NetworkMatchStatusMode;
 		NetworkChatDefaultScope m_NetworkChatDefaultScope;
 		NetworkChatTextSize m_NetworkChatTextSize;
+		std::string m_NetworkChatKey;
 		NetworkHostDelayPolicy m_NetworkHostDelayPolicy;
 		NetworkHostVisibility m_NetworkHostVisibility;
 		bool m_NetworkToastsEnabled, m_NetworkChatVisible, m_NetworkChatNotify, m_NetworkChatSound, m_NetworkAutoReconnect, m_NetworkOfferStoredRejoin, m_NetworkRecordReplays, m_NetworkHostAutoRepair;
 		int m_NetworkHostIdleWaitMinutes;
+		int m_NetworkPathHorizonTicks;
 		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 

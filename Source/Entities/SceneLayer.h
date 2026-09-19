@@ -168,6 +168,9 @@ namespace RTE {
 		/// @param clearTo What color to clear the bitmap to.
 		void ClearBitmap(ColorKeys clearTo);
 
+		/// Adopts an 8-bit bitmap without allocating a GL texture.
+		void TestAdoptBitmap(BITMAP* bitmap, bool wrapX, bool wrapY);
+
 		/// Wraps the given position coordinate if it is out of bounds of this SceneLayer and wrapping is enabled on the appropriate axes.
 		/// Does not force the position coordinate within bounds if wrapping is not enabled.
 		/// @param posX The X coordinates of the position to wrap.

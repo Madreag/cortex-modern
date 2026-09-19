@@ -51,7 +51,7 @@ def rules_for(variant):
                      deploy_units=False)
         rules["teams"][1] = dict(technology_intent="-All-", technology_module="", ai_skill=50)
     elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
-                     "brains-shared", "wire-refusal"):
+                     "brains-shared", "wire-refusal", "rendezvous-cap"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -91,7 +91,11 @@ def encode_config(rules, wire, dedicated=False, default=False):
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
-    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, int(dedicated))
+    horizon = int(rules.get("path_horizon_ticks") or 0)
+    reserved = int(dedicated)
+    if horizon:
+        reserved |= 2
+    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, reserved)
     for value in (rules["activity_type"], rules["activity_preset"], rules["scene_name"], "PvP" if default else "CoopPvE"):
         payload += string(value)
     payload += struct.pack("<B", len(roster))
@@ -105,6 +109,8 @@ def encode_config(rules, wire, dedicated=False, default=False):
     for team in rules["teams"]:
         payload += string(team["technology_intent"]) + string(team["technology_module"]) + struct.pack("<B", team["ai_skill"])
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
+    if horizon:
+        payload += struct.pack("<H", horizon)
     return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
                        wire.match_config_type.value, 0, len(payload)) + payload
 
@@ -300,6 +306,12 @@ PLACEMENT_NAMES = "Host, Client"
 # The client's placement waits on this signal from the host's probe, so the waiting window never
 # depends on either peer's pacing.
 WAITING_SEEN_SIGNAL = "host_waiting_seen"
+# rendezvous-cap: the host holds to this tick before it places and signals, and the client holds to the
+# second one after the signal. Each hold is under the engine's 120-tick setup-editor watchdog and the two
+# together are past it, so the run passes only when the watchdog counts from the rendezvous.
+RENDEZVOUS_CAP_HOST_TICK = 80
+RENDEZVOUS_CAP_CLIENT_TICK = 170
+EDITOR_CAP_ERROR = "setup editor did not finish within"
 
 
 def wait_banner(resolution):
@@ -316,7 +328,7 @@ def shots(peer, name):
 
 
 def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
-                  host_signal=None, long_names=False, shared_seat=False):
+                  host_signal=None, long_names=False, shared_seat=False, place_after_signal=0):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -403,6 +415,9 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps.append({"op": "wait", "sim_at_least": place_after})
     if peer != "host" and host_signal:
         steps.append({"op": "wait_file", "path": str(host_signal)})
+        if place_after_signal:
+            # The hold the editor watchdog is allowed to count, taken after the rendezvous ends the wait.
+            steps.append({"op": "wait", "sim_at_least": place_after_signal})
     steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
                "class": seat["cls"], "preset": seat["preset"], "module": "Base.rte"},
               # Placing alone commits nothing: the wire only carries the seat's DONE.
@@ -644,7 +659,7 @@ def launch(options):
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
     editor_driven = options.variant in ("brains", "stock", "stock-scene", "hold-desync", "hold-resync", "resync-skirmish",
-                                       "brains-longname", "brains-shared", "wire-refusal")
+                                       "brains-longname", "brains-shared", "wire-refusal", "rendezvous-cap")
     shared_seat = options.variant == "brains-shared"
     places_brains = editor_driven or options.variant == "brains-auto"
     # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
@@ -698,6 +713,9 @@ def launch(options):
                 # safety net over the shared place phase, not an extra client hold.
                 if options.variant == "wire-refusal":
                     delay = 0
+                elif options.variant == "rendezvous-cap":
+                    # The host is the slow probe: it holds the editor, then places and signals.
+                    delay = RENDEZVOUS_CAP_HOST_TICK if peer == "host" else 0
                 elif options.variant == "resync-skirmish":
                     delay = 90
                 else:
@@ -706,7 +724,9 @@ def launch(options):
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json"),
                                                            long_names=options.variant == "brains-longname",
-                                                           shared_seat=shared_seat),
+                                                           shared_seat=shared_seat,
+                                                           place_after_signal=(RENDEZVOUS_CAP_CLIENT_TICK
+                                                                              if options.variant == "rendezvous-cap" else 0)),
                                              indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
@@ -798,6 +818,26 @@ def launch(options):
                                               for rows in result["commits"].values())
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            # The host signals and the client waits on it: each peer passes exactly one rendezvous, and the
+            # engine's editor watchdog counts its ticks from that line, not from the start of the hold.
+            result["rendezvous"] = {peer: [line for line in log.splitlines() if line.startswith("[net-ui-probe] rendezvous ")]
+                                    for peer, log in logs.items()}
+            checks["rendezvous_counted"] = all(len(lines) == 1 and WAITING_SEEN_SIGNAL in lines[0]
+                                               for lines in result["rendezvous"].values())
+            if not checks["rendezvous_counted"]:
+                for peer, lines in result["rendezvous"].items():
+                    print(f"{root / peer / 'stdout.log'}: rendezvous lines {lines}")
+            if options.variant == "rendezvous-cap":
+                # The editor phase is past the 120-tick watchdog end to end, and under it on either side of
+                # the rendezvous: an engine that counts from the editor's first tick fails here.
+                capped = {peer: [line for line in log.splitlines() if EDITOR_CAP_ERROR in line]
+                          for peer, log in logs.items()}
+                result["editor_cap"] = {"host_hold_tick": RENDEZVOUS_CAP_HOST_TICK,
+                                        "client_hold_tick": RENDEZVOUS_CAP_CLIENT_TICK, "lines": capped}
+                checks["editor_cap_counted_from_the_rendezvous"] = not any(capped.values())
+                if not checks["editor_cap_counted_from_the_rendezvous"]:
+                    for peer, lines in capped.items():
+                        print(f"{root / peer / 'stdout.log'}: {lines}")
             def pad_held(probe):
                 named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
                          if step.get("name") == "pad_held"]
@@ -934,3 +974,155 @@ def launch(options):
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     report_checks(checks, result["config_refusal"])
     return 0 if result["passed"] else 1
+
+
+# Host CreateDelivery at tick 80 for team 0 (-net-match-e2e-buy-command). D=7 is the lockstep input delay.
+FUNDS_PRESS = 80
+FUNDS_DELAY = 7
+FUNDS_TEAM = 0
+FUNDS_FAIL_P1 = "the local readout did not show the previewed buy at P+1"
+FUNDS_FAIL_ABSENT = "the base emits no funds readout at P+1: RED by absence (no preview observed)"
+
+
+def _funds_oz(text):
+    match = re.search(r"(-?[0-9]+(?:\.[0-9]+)?)", text or "")
+    return float(match.group(1)) if match else None
+
+
+def _funds_fields(log, tick):
+    """The driver's fields at this committed tick: the seat this peer presents and its tally of the buying team."""
+    prefix = f"[preview-funds-driver] tick={tick} "
+    for line in log.splitlines():
+        if not line.startswith(prefix):
+            continue
+        head, _, readout = line.partition(" readout=")
+        fields = dict(token.split("=", 1) for token in head.split()[1:] if "=" in token)
+        fields["readout"] = readout
+        return fields
+    return {}
+
+
+def funds_preview(options):
+    """Two-process D=7 funds arm: each peer reads the buying team from its own seat - the host previewed at P+1,
+    the client still committed, both equal at P+D."""
+    if Path("D:/mx/LEAD_FAMILY.lock").exists():
+        raise RuntimeError("family lock exists; launch is deferred")
+    if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
+        raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
+    os.environ["CCCP_HEADLESS"] = "1"
+    repo, root = options.repo.resolve(), options.out.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    rules = rules_for("default")
+    config = root / "launch-config.bin"
+    wire = net_lobby_wire.read(repo)
+    config.write_bytes(encode_config(rules, wire, False, True))
+    exe_hash = sha(repo / "Cortex Command.exe")
+    common = [
+        "-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
+        "-net-match-mode", "pvp", "-net-match-ticks", "120", "-max-ticks", "120",
+        "-net-match-input-delay", str(FUNDS_DELAY), "-seed", "42", "-num-lua-states", "4",
+        "-tick-hashes", "-local-prediction-depth", "7",
+        "-local-prediction-funds-preview", str(FUNDS_PRESS),
+    ]
+    argv_host = [*common, "-net-host", "-net-match-service-config", str(config), "-net-match-e2e-buy-command"]
+    argv_client = [*common, "-net-join", "127.0.0.1"]
+    (root / "argv.json").write_text(json.dumps({"host": argv_host, "client": argv_client, "press": FUNDS_PRESS, "delay": FUNDS_DELAY, "buy_team": FUNDS_TEAM}, indent=2), encoding="utf-8")
+    runs, records = {}, {}
+    try:
+        for peer, flags in (("host", argv_host), ("client", argv_client)):
+            trace, report = root / peer / "trace.json", root / peer / "report.json"
+            runs[peer] = make_run(repo, [*flags, "-out", str(trace), "-net-match-report", str(report)],
+                                  root / peer, options.timeout, env={"CCCP_HEADLESS": "1"}, expected=[report])
+        for run in runs.values():
+            run.start()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = {peer: pool.submit(run.finish) for peer, run in runs.items()}
+            records = {peer: future.result() for peer, future in pending.items()}
+    finally:
+        for run in runs.values():
+            run.close()
+    logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
+    samples = {f"{peer}_{name}": _funds_fields(logs[peer], tick)
+               for peer in ("host", "client")
+               for name, tick in (("p1", FUNDS_PRESS + 1), ("pd", FUNDS_PRESS + FUNDS_DELAY))}
+    # Each peer's tally of the BUYING team, read from the seat that peer presents.
+    oz = {name: _funds_oz(fields.get("buy_team_oz")) for name, fields in samples.items()}
+    committed = {name: _funds_oz(fields.get("buy_team_committed")) for name, fields in samples.items()}
+    both = oz["host_p1"] is not None and oz["client_p1"] is not None
+    ticks = {"host_p1": FUNDS_PRESS + 1, "client_p1": FUNDS_PRESS + 1,
+             "host_pd": FUNDS_PRESS + FUNDS_DELAY, "client_pd": FUNDS_PRESS + FUNDS_DELAY}
+    peeked = {name: _funds_oz(fields.get("peek_tick")) for name, fields in samples.items()}
+    problems = {name: _funds_oz(fields.get("problems")) for name, fields in samples.items()}
+    checks = {
+        "host_p1_readout_present": bool(samples["host_p1"]) and samples["host_p1"]["readout"] != "EMPTY",
+        "client_p1_readout_present": bool(samples["client_p1"]) and samples["client_p1"]["readout"] != "EMPTY",
+        "host_p1_previewed": bool(both and committed["host_p1"] is not None and oz["host_p1"] < committed["host_p1"] and oz["host_p1"] < oz["client_p1"]),
+        "client_p1_committed": bool(committed["client_p1"] is not None and oz["client_p1"] is not None and oz["client_p1"] == committed["client_p1"]),
+        "both_equal_at_commit": bool(oz["host_pd"] is not None and oz["client_pd"] is not None and oz["host_pd"] == oz["client_pd"] and
+                                     committed["host_pd"] is not None and oz["host_pd"] == committed["host_pd"] and oz["client_pd"] == committed["client_pd"]),
+        # The preview must peek the in-flight buys on the committed tick, not on its own advanced clock.
+        "peek_used_the_canonical_tick": all(peeked[name] == ticks[name] for name in samples if samples[name]) and bool(samples["host_p1"]),
+        "no_canonical_problems": all(problems[name] == 0 for name in samples if samples[name]) and bool(samples["host_p1"]),
+    }
+
+    def observed():
+        rows = []
+        for name in ("host_p1", "client_p1", "host_pd", "client_pd"):
+            fields = samples[name]
+            rows.append(f"  {name} tick={ticks[name]} " + (
+                "no [preview-funds-driver] line" if not fields else
+                f"seat={fields.get('seat')} seat_team={fields.get('seat_team')} buy_team={fields.get('buy_team')} "
+                f"buy_team_oz={fields.get('buy_team_oz')} buy_team_committed={fields.get('buy_team_committed')} "
+                f"peek_tick={fields.get('peek_tick')} problems={fields.get('problems')} readout={fields.get('readout')}"))
+        return "\n".join(rows)
+
+    if not samples["host_p1"]:
+        print("FAIL " + FUNDS_FAIL_ABSENT)
+    elif not checks["host_p1_readout_present"]:
+        print("FAIL host readout empty at P+1")
+    if samples["host_p1"] and not checks["host_p1_previewed"]:
+        print("FAIL " + FUNDS_FAIL_P1)
+    if samples["host_p1"] and not checks["peek_used_the_canonical_tick"]:
+        print("FAIL the preview peeked in-flight buys on a tick other than the committed one")
+    if not all(checks.values()):
+        print("observed:\n" + observed())
+    dump_pairs = []
+    # The world dump only: the peers' extras carry a per-process accumulator and are written beside it, not compared.
+    for suffix in ("funds_p1", "funds_pd"):
+        left = root / "host" / f"trace.json.{suffix}.simstate.txt"
+        right = root / "client" / f"trace.json.{suffix}.simstate.txt"
+        same = left.is_file() and right.is_file() and left.read_bytes() == right.read_bytes()
+        checks[f"{suffix}_dumps_byte_identical"] = same
+        dump_pairs.append({"suffix": suffix, "host": str(left), "client": str(right), "identical": same})
+    result = {"records": records, "samples": samples, "buy_team": FUNDS_TEAM,
+              "seats": {name: {"seat": fields.get("seat"), "seat_team": fields.get("seat_team")} for name, fields in samples.items()},
+              "dumps": dump_pairs, "argv": {"host": argv_host, "client": argv_client},
+              "checks": checks, "passed": all(checks.values()), "exe_sha256": exe_hash}
+    (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    report_checks(checks)
+    return 0 if result["passed"] else 1
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--case", choices=["launch", "funds_preview"], default="launch")
+    parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--port", type=int, default=48320)
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "brains-shared", "hold-desync", "hold-resync", "resync-duel", "resync-skirmish", "brains-longname", "wire-refusal", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--dedicated", action="store_true")
+    parser.add_argument("--captures", action="store_true")
+    parser.add_argument("--resolution")
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--offline-repo", type=Path)
+    options = parser.parse_args(argv)
+    if options.case == "funds_preview":
+        return funds_preview(options)
+    return launch(options)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

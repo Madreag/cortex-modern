@@ -31,7 +31,8 @@ NETWORK_PAGE_BOX = NETWORK_BOXES[0]
 # the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
 NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
-                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair",
+                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
+                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
                 "CheckboxNetworkToasts", "CheckboxNetworkPrediction",
                 "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
@@ -39,9 +40,11 @@ MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which 
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
+                "NetworkPathHorizonTicks": "30",
                 "NetworkToastsEnabled": "0", "LocalPrediction": "0", "NetworkMatchStatusMode": "Auto"}
 NETWORK_SAVED = {"NetworkDisplayName": "WingCmd", "NetworkHostDelayPolicy": "Fixed",
                  "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7",
+                 "NetworkPathHorizonTicks": "45",
                  "NetworkToastsEnabled": "1", "LocalPrediction": "1"}
 # The Misc page's own rows; the match-status combo moved to the player page, so a dump of this box
 # must not name it - the absence is asserted against the whole capture, not a missing-control assert.
@@ -51,7 +54,7 @@ MISC_ROWS = ("CheckboxSkipIntro", "CheckboxShowToolTips", "CheckboxShowLoadingSc
              "LabelSceneBackgroundAutoScale", "LabelSceneBackgroundAutoScaleSetting", "SliderSceneBackgroundAutoScale")
 MISC_GONE = ("LabelMatchStatusWidget", "ComboMatchStatusWidget")
 CHAT_SEED = {"NetworkChatVisible": "1", "NetworkChatSound": "0", "NetworkChatNotify": "1",
-             "NetworkChatDefaultScope": "Team", "NetworkChatTextSize": "Large"}
+             "NetworkChatDefaultScope": "Team", "NetworkChatTextSize": "Large", "NetworkChatKey": "T"}
 CHAT_SAVED = {"NetworkChatVisible": "0", "NetworkChatNotify": "0"}
 RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
 RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
@@ -97,6 +100,10 @@ PAUSE_PAGE_FIRST_VALUE = {
 SIZE_GATES = (
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
+    ("lobby-name", "640x360"),
+    ("lobby-name", "960x540"),
+    ("lobby-name", "1280x720"),
+    ("lobby-name", "1920x1080"),
 )
 # CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
 # thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
@@ -151,9 +158,11 @@ INTERNET_REASON = "Replays and connection details come with a later update."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
-HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
-CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
-MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False}
+HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
+                "NetworkPathHorizonTicks": "45"}
+CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
+                  "NetworkPathHorizonTicks": "15"}
+MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -165,7 +174,8 @@ RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible Ta
                "wait 3\npost_command ButtonP3Clear\npost_command ButtonP3Clear\nwait 3\n"
                "post_command ButtonBackToMainMenu\nwait 5\n")
 # The match pause menu's own rows, and the single-player rows it must not carry on any peer.
-MATCH_ROWS = ("ButtonLeaveMatch", "ButtonPauseMatch", "ButtonSettings", "ButtonSaveDiagnostics", "ButtonResume")
+MATCH_ROWS = ("ButtonLeaveMatch", "ButtonMatchOptions", "ButtonPauseMatch", "ButtonSettings",
+              "ButtonSaveDiagnostics", "ButtonEndMatch", "ButtonResume")
 SINGLE_PLAYER_ROWS = ("ButtonBackToMain", "ButtonSaveOrLoadGame", "ButtonModManager")
 # No scripted press: a scripted element reads as pressed on every render frame of its tick, so a START
 # range opens the match pause menu and asks it for the way back out on alternate frames. The probe's
@@ -258,6 +268,18 @@ def pause_probe(who, root):
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
         {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
+        # H33's end and the third host-options origin: the adopted config mid-match, read-only on
+        # every peer; only the host's row lights, and the round keeps running under the dialog.
+        menu_step("activate ButtonMatchOptions"), {"op": "wait", "screen": "PauseMatchOptions"},
+        menu_step("assert_rect_inside MatchOptionsBox viewport"),
+        *row_checks("LabelMatchOptionsTitle", "MatchOptionsBox"),
+        *row_checks("LabelMatchOptions", "MatchOptionsBox"),
+        *row_checks("ButtonMatchOptionsClose", "MatchOptionsBox"),
+        {"op": "assert_control", "scope": "menu", "control": "LabelMatchOptions",
+         "equals": {}, "text_contains": "When every human brain is lost"},
+        menu_step("dump_host_options"),
+        menu_step("activate ButtonMatchOptionsClose"), {"op": "wait", "screen": "Pause"},
+        menu_step(f"assert_enabled ButtonEndMatch {1 if who == 'host' else 0}"),
         menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"}]
     for page in PAUSE_PAGES:
         steps += [menu_step(f"select_settings_page {page}"), {"op": "wait", "renders": 3},
@@ -409,6 +431,7 @@ def scripts(case, port, root):
             text += checks(control, NETWORK_PAGE_BOX)
         text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
                  "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "assert_label TextNetworkPathHorizon " + NETWORK_SEED["NetworkPathHorizonTicks"] + "\n"
                  "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
         # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
         for control in NETWORK_FIXED_ROWS:
@@ -424,6 +447,7 @@ def scripts(case, port, root):
         text += (f"assert_label LabelNetworkFixedDelayHint frames, 0-{MAX_INPUT_DELAY_FRAMES}\n"
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "set_text TextNetworkPathHorizon " + NETWORK_SAVED["NetworkPathHorizonTicks"] + "\n"
                  "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
                  "post_command CheckboxNetworkPrediction\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
@@ -445,7 +469,8 @@ def scripts(case, port, root):
         text = OPTIONS + net_page("Chat")
         for control in ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "LabelNetworkChatScope",
                         "ComboNetworkChatScope", "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
-                        "ComboNetworkChatTextSize", "ButtonNetMutedPlayers", "LabelNetMutedReason"):
+                        "ComboNetworkChatTextSize", "LabelNetworkChatKey", "TextNetworkChatKey",
+                        "ButtonNetMutedPlayers", "LabelNetMutedReason"):
             text += checks(control, "CollectionBoxNetPageChat")
         text += ("assert_enabled ButtonNetMutedPlayers 0\n"
                  "assert_label LabelNetMutedReason managed in the match\n"
@@ -577,6 +602,32 @@ def scripts(case, port, root):
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
+                # The host's options panel edits the adopted config; its Rules page carries the
+                # picked activity/mode and the L33 row the ledger names.
+                "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+                # H09/H10: the remote human seat's Details carries pressable Kick and Ban; a lobby
+                # press names why it cannot arm yet (the admission view is published mid-match),
+                # instead of queueing a selection the drain would refuse.
+                "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgKick\nwait 3\n"
+                "assert_label LabelHostSeatDlgActionHint Kick: the seat's admission row is not published in the lobby.\n"
+                "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
+                "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+                "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+                "assert_enabled ComboHostRulesBrainless 1\n"
+                "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
+                "assert_label ComboHostRulesMode Co-op PvE\n"
+                "dump_host_options\n"
+                # The live republish: the host's Apply moves every peer's adopted config to the
+                # next revision. The status line reads the acknowledge, then the client's Details
+                # below reads the new value off its own mirror.
+                "combo_select ComboHostRulesBrainless End the match\nwait 3\n"
+                "assert_label ComboHostRulesBrainless End the match\n"
+                "activate ButtonHostOptApply\nwait 5\ndump_host_options\n"
+                "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                 "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
@@ -589,6 +640,36 @@ def scripts(case, port, root):
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
+                  # The client's Options button opens the same adopted config as a read-only
+                  # details view: every edit control is disabled, the L33 row reads identically,
+                  # and the title names what it is.
+                  "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                  "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
+                  "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                  "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+                  "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+                  "assert_enabled ComboHostRulesBrainless 0\n"
+                  "assert_enabled ComboHostRulesActivity 0\n"
+                  "assert_label ComboHostRulesActivity Brain vs Brain - Base.rte\n"
+                  "assert_label ComboHostRulesMode Co-op PvE\n"
+                  "assert_enabled ButtonHostOptApply 0\n"
+                  "dump_host_options\n"
+                  "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
+                  # The host applies its L33 edit near the end of its own script; this wait covers
+                  # the republish so the re-opened Details reads revision N+1's value off the
+                  # client's adopted mirror.
+                  "wait_ms 8000\n"
+                  "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                  "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
+                  "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                  "assert_label ComboHostRulesBrainless End the match\n"
+                  "dump_host_options\n"
+                  # A client's Details dialog is read-only: the host's own seat and every other
+                  # seat keep Kick and Ban off - moderation is never the client's call.
+                  "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                  "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                  "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
+                  "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                   "dump_lobby\ndump_host_options\nexit\n")
         return {"host": host, "client": client}, {}
     elif case == "net-options":
@@ -619,7 +700,124 @@ def scripts(case, port, root):
         text += "assert_enabled ButtonMultiplayerModerate 0\n"
         text += "dump_host_options\n"
         text += checks("LabelLobbyPlayersHeader", "MultiplayerLobbyPanel")
-        text += "assert_enabled ButtonMultiplayerStart 0\nexit\n"
+        text += "assert_enabled ButtonMultiplayerStart 0\n"
+        # H01-H35: the six host-options pages behind the lobby's Options button. Each tab shows its
+        # own collection box, every visited control answers the fit checks, and the dump rows land
+        # on each page so the capture names the page's whole surface at this size.
+        text += "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+        text += "assert_visible MultiplayerHostOptionsPanel 1\n"
+        text += "assert_label LabelHostOptionsTitle H O S T   O P T I O N S\n"
+        text += checks("TabHostPageSeats", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageRules", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageNetwork", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageRecovery", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageFiles", "MultiplayerHostOptionsPanel")
+        text += checks("TabHostPageSession", "MultiplayerHostOptionsPanel")
+        # H01-H06 Seats: the header, the seated row, and the footer the apply row sits in.
+        text += "assert_visible CollectionBoxHostPageSeats 1\n"
+        text += checks("ComboHostSeatPlayers", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatHeader", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatName0", "CollectionBoxHostPageSeats")
+        text += checks("ComboHostSeatType0", "CollectionBoxHostPageSeats")
+        text += checks("ComboHostSeatTeam0", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatDelay0", "CollectionBoxHostPageSeats")
+        text += checks("LabelHostSeatState0", "CollectionBoxHostPageSeats")
+        text += checks("ButtonHostSeatDetails0", "CollectionBoxHostPageSeats")
+        # The lobby seats two human slots, so the second row is an open seat and the third is the
+        # closed tail the host reopens from; rows past the roster stay hidden.
+        text += checks("ComboHostSeatType1", "CollectionBoxHostPageSeats")
+        text += checks("ComboHostSeatType2", "CollectionBoxHostPageSeats")
+        text += "assert_visible ComboHostSeatType6 0\n"
+        # A seated human's kind never moves: the host's own row is locked, and the open row's edit
+        # is refused with the reason in the status line instead of silently dropping the seat.
+        text += "assert_enabled ComboHostSeatType0 0\n"
+        text += ("combo_select ComboHostSeatType1 CPU\nwait 3\n"
+                 "assert_label LabelHostOptStatus stays open for its peer\n")
+        # H03: a two-peer lobby has no free peer id, so the closed tail refuses a human seat with
+        # the reason in the status line, then accepts the peerless CPU seat the same row offers.
+        text += ("combo_select ComboHostSeatType2 Open\nwait 3\n"
+                 "assert_label LabelHostOptStatus No free peer seat\n")
+        text += ("combo_select ComboHostSeatType2 CPU\nwait 3\n"
+                 "assert_label LabelHostOptStatus Unsaved changes\n"
+                 "assert_label LabelHostSeatState2 CPU / Skill\n")
+        text += "dump_host_options\n"
+        # H04-H11: the seat's Details dialog - the seat's identity, the reclaim clock's line, the
+        # applicant row and the moderation actions, Kick and Ban among them.
+        text += ("activate ButtonHostSeatDetails0\nwait 3\nassert_visible HostSeatDialog 1\n")
+        for control in ("LabelHostSeatDlgName", "LabelHostSeatDlgSeat", "LabelHostSeatDlgTeam",
+                        "LabelHostSeatDlgState", "LabelHostSeatDlgReclaim", "LabelHostSeatDlgApplicants",
+                        "ButtonHostSeatDlgApplicant", "ButtonHostSeatDlgWait", "ButtonHostSeatDlgApprove",
+                        "ButtonHostSeatDlgCancel", "ButtonHostSeatDlgKick", "ButtonHostSeatDlgBan",
+                        "LabelHostSeatDlgActionHint", "LabelHostSeatDlgStatus", "ButtonHostSeatDlgClose"):
+            text += checks(control, "HostSeatDialog")
+        # H09/H10: the host's own seat is never kickable - the row stays pressable-looking but off.
+        text += ("assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
+                 "dump_host_options\nactivate ButtonHostSeatDlgClose\nwait 3\n"
+                 "assert_visible HostSeatDialog 0\n")
+        # H07-H20 Rules: the L33 row keeps the ledger's exact label and pair of answers.
+        text += "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+        text += "assert_label LabelHostOptionsTitle M A T C H   R U L E S\n"
+        text += checks("ComboHostRulesActivity", "CollectionBoxHostPageRules")
+        text += checks("ComboHostRulesScene", "CollectionBoxHostPageRules")
+        text += checks("ComboHostRulesMode", "CollectionBoxHostPageRules")
+        text += "assert_visible LabelHostRulesBrainless 1\n"
+        text += "assert_rect_inside LabelHostRulesBrainless CollectionBoxHostPageRules\n"
+        text += "assert_label LabelHostRulesBrainless When every human brain is lost\n"
+        text += "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+        text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
+        text += "dump_host_options\n"
+        # H21-H24 Network.
+        text += "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+        text += "assert_label LabelHostOptionsTitle N E T W O R K   O P T I O N S\n"
+        text += checks("ComboHostNetPolicy", "CollectionBoxHostPageNetwork")
+        text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
+        text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
+        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
+        text += "dump_host_options\n"
+        # H25-H28 Recovery.
+        text += "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
+        text += "assert_label LabelHostOptionsTitle M A T C H   R E C O V E R Y\n"
+        text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
+        text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
+        text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
+        text += "dump_host_options\n"
+        # H29-H31 Files and status.
+        text += "activate TabHostPageFiles\nwait 3\nassert_visible CollectionBoxHostPageFiles 1\n"
+        text += "assert_label LabelHostOptionsTitle F I L E S   A N D   S T A T U S\n"
+        text += checks("ButtonHostFilesSaveDiag", "CollectionBoxHostPageFiles")
+        text += checks("ComboHostFilesWidget", "CollectionBoxHostPageFiles")
+        text += "dump_host_options\n"
+        # H32-H35 Session.
+        text += "activate TabHostPageSession\nwait 3\nassert_visible CollectionBoxHostPageSession 1\n"
+        text += "assert_label LabelHostOptionsTitle S E S S I O N\n"
+        text += checks("LabelHostSessHosting", "CollectionBoxHostPageSession")
+        text += checks("ComboHostSessIdle", "CollectionBoxHostPageSession")
+        text += checks("LabelHostSessIdleState", "CollectionBoxHostPageSession")
+        text += checks("LabelHostSessBanned", "CollectionBoxHostPageSession")
+        text += checks("ButtonHostSessBanned", "CollectionBoxHostPageSession")
+        text += checks("ButtonHostSessEnd", "CollectionBoxHostPageSession")
+        # H10's count is the ban store's own rows: none yet, so the session row reads zero.
+        text += "assert_label LabelHostSessBanned 0 banned this session\n"
+        # H11: the banned-player dialog reads the store through GetBanRecords - empty here, so
+        # the pick combo has no row to land Remove on and the button stays off.
+        text += ("activate ButtonHostSessBanned\nwait 3\nassert_visible HostBannedDialog 1\n")
+        for control in ("ComboHostBannedPick", "LabelHostBannedList", "LabelHostBannedStatus",
+                        "ButtonHostBannedRemove", "ButtonHostBannedClose"):
+            text += checks(control, "HostBannedDialog")
+        text += ("assert_label LabelHostBannedList (no banned players)\n"
+                 "assert_enabled ButtonHostBannedRemove 0\n"
+                 "dump_host_options\nactivate ButtonHostBannedClose\nwait 3\n"
+                 "assert_visible HostBannedDialog 0\n")
+        # H31: the seating wait is the host's own policy and editable while the lobby is open - it is
+        # the value a live Apply republishes, and Never leaves the lobby open instead of taking a day.
+        text += "assert_enabled ComboHostSessIdle 1\n"
+        text += checks("LabelHostSessIdle", "CollectionBoxHostPageSession")
+        # H35: Save As Host Defaults is the one origin of the versioned defaults template.
+        text += checks("ButtonHostOptDefaults", "MultiplayerHostOptionsPanel")
+        text += "assert_enabled ButtonHostOptDefaults 1\n"
+        text += "dump_host_options\n"
+        # Back is local navigation: the lobby is still open under the panel when it leaves.
+        text += "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\nexit\n"
     elif case == "input":
         text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 5\n"
                 "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
@@ -1053,13 +1251,13 @@ def run_case(options, case, root, failing=None):
             # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy
             # the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
-                     "LabelNetworkIdleWait", "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts",
-                     "LabelMatchStatusWidget")
+                     "LabelNetworkIdleWait", "LabelNetworkPathHorizon", "CheckboxNetworkAutoRepair",
+                     "CheckboxNetworkToasts", "LabelMatchStatusWidget")
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 6, deltas
+            assert deltas == [20] * 7, deltas
             without_fixed = pitch[:2] + pitch[3:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 5, closed
+            assert closed == [20] * 6, closed
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
@@ -1086,6 +1284,7 @@ def run_case(options, case, root, failing=None):
             rows = {control["name"]: control for control in images[0]["controls"]}
             expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
                                      "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
+                                     "LabelNetworkChatKey", "TextNetworkChatKey",
                                      "ButtonNetMutedPlayers", "LabelNetMutedReason"),
                         "net-recovery": ("CheckboxNetworkAutoReconnect", "CheckboxNetworkOfferRejoin",
                                          "LabelNetLastHost", "LabelNetRecoveryRecord",
@@ -1108,7 +1307,7 @@ def run_case(options, case, root, failing=None):
                 column = rows[f"CollectionBoxNetPage{sub_page.split(':')[1]}"]["rect"][0] + NETWORK_VALUE_COLUMN
                 on_column = {
                     "net-chat": ("CheckboxNetworkChatSound", "ComboNetworkChatScope",
-                                 "ComboNetworkChatTextSize", "LabelNetMutedReason"),
+                                 "ComboNetworkChatTextSize", "TextNetworkChatKey", "LabelNetMutedReason"),
                     "net-recovery": ("CheckboxNetworkOfferRejoin", "LabelNetLastHost",
                                      "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
                                      "ButtonNetRejoin"),
@@ -1122,7 +1321,7 @@ def run_case(options, case, root, failing=None):
                 grid_rows = {
                     "net-chat": ("CheckboxNetworkChatVisible", "LabelNetworkChatScope",
                                  "CheckboxNetworkChatNotify", "LabelNetworkChatTextSize",
-                                 "ButtonNetMutedPlayers"),
+                                 "LabelNetworkChatKey", "ButtonNetMutedPlayers"),
                     "net-recovery": ("CheckboxNetworkAutoReconnect", "LabelNetLastHostTitle",
                                      "LabelNetRecoveryTitle", "LabelNetRecoveryStatusTitle",
                                      "LabelNetRecoveryError", "ButtonNetRejoin"),
@@ -1137,7 +1336,7 @@ def run_case(options, case, root, failing=None):
                 # The internet pin box's own row sits between its label and the status row; the chat
                 # page's muted stub waits one row under its rows.
                 expected_pitch = [20, 20, 40, 20, 20, 20] if case == "net-internet" else \
-                    [20] * 3 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
+                    [20] * 4 + [40] if case == "net-chat" else [20] * (len(grid_rows) - 1)
                 assert deltas == expected_pitch, (case, deltas)
                 if case == "net-files":
                     # The folders' action pairs stack in the same two columns, one row pair apart.
@@ -1210,8 +1409,11 @@ def run_case(options, case, root, failing=None):
                                    ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
             assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
                 (leave["rect"], seats["rect"], panel["rect"])
-            header, row = drawn["LabelLobbyPlayersHeader"], drawn["LabelLobbyPlayer0"]
-            assert header["rect"][0] == row["rect"][0] and header["text_fits"], (header, row)
+            header = drawn["LabelLobbyPlayersHeader"]
+            seat_rows = [control for control in images[-1]["controls"]
+                         if re.fullmatch(r"LabelLobbyPlayer\d", control["name"])]
+            assert seat_rows and header["text_fits"] and all(
+                row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
             start = drawn["ButtonMultiplayerStart"]
             pair_span = seats["rect"][0] + seats["rect"][2] - leave["rect"][0]
             pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
@@ -1407,7 +1609,7 @@ def main():
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
-                        help="also run every SIZE_GATES row; net-chat always does this")
+                        help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -1422,7 +1624,7 @@ def main():
 
     def sizes_for(case):
         sizes = [requested]
-        if options.all_sizes or case == "net-chat":
+        if options.all_sizes or case in ("net-chat", "lobby-name"):
             sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
         return sizes
 

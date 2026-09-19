@@ -194,24 +194,45 @@ namespace RTE {
 
 		// The register body and each list row carry the same named fields.
 		bool ReadRegisterFields(const json& obj, NetDirectoryRegisterRequest& out, std::string& reason) {
-			return ReadStr(obj, "name", out.name, reason) &&
-			       ReadStr(obj, "activity", out.activity, reason) &&
-			       ReadStr(obj, "scene", out.scene, reason) &&
-			       ReadStr(obj, "mode", out.mode, reason) &&
-			       ReadVersionField(obj, "peer_count", out.peerCount, reason) &&
-			       ReadVersionField(obj, "seats_free", out.seatsFree, reason) &&
-			       ReadStr(obj, "game_version", out.gameVersion, reason) &&
-			       ReadStr(obj, "build_id", out.buildId, reason) &&
-			       ReadVersionField(obj, "network_protocol_version", out.networkProtocolVersion, reason) &&
-			       ReadVersionField(obj, "lockstep_codec_version", out.lockstepCodecVersion, reason) &&
-			       ReadVersionField(obj, "controller_frame_version", out.controllerFrameVersion, reason) &&
-			       ReadStr(obj, "match_config_hash", out.matchConfigHash, reason) &&
-			       ReadStr(obj, "session_identity_hash", out.sessionIdentityHash, reason) &&
-			       ReadStr(obj, "module_manifest_hash", out.moduleManifestHash, reason) &&
-			       ReadInt(obj, "listen_port", NetDirectoryLimits::c_MinListenPort, NetDirectoryLimits::c_MaxListenPort, out.listenPort, reason) &&
-			       ReadListenAddrs(obj, out.listenAddrs, reason) &&
-			       ReadStr(obj, "join_mode", out.joinMode, reason) &&
-			       (IsJoinMode(out.joinMode) || Fail(reason, "invalid_field", "join_mode"));
+			if (!(ReadStr(obj, "name", out.name, reason) &&
+			      ReadStr(obj, "activity", out.activity, reason) &&
+			      ReadStr(obj, "scene", out.scene, reason) &&
+			      ReadStr(obj, "mode", out.mode, reason) &&
+			      ReadVersionField(obj, "peer_count", out.peerCount, reason) &&
+			      ReadVersionField(obj, "seats_free", out.seatsFree, reason) &&
+			      ReadStr(obj, "game_version", out.gameVersion, reason) &&
+			      ReadStr(obj, "build_id", out.buildId, reason) &&
+			      ReadVersionField(obj, "network_protocol_version", out.networkProtocolVersion, reason) &&
+			      ReadVersionField(obj, "lockstep_codec_version", out.lockstepCodecVersion, reason) &&
+			      ReadVersionField(obj, "controller_frame_version", out.controllerFrameVersion, reason) &&
+			      ReadStr(obj, "match_config_hash", out.matchConfigHash, reason) &&
+			      ReadStr(obj, "session_identity_hash", out.sessionIdentityHash, reason) &&
+			      ReadStr(obj, "module_manifest_hash", out.moduleManifestHash, reason) &&
+			      ReadInt(obj, "listen_port", NetDirectoryLimits::c_MinListenPort, NetDirectoryLimits::c_MaxListenPort, out.listenPort, reason) &&
+			      ReadListenAddrs(obj, out.listenAddrs, reason) &&
+			      ReadStr(obj, "join_mode", out.joinMode, reason) &&
+			      (IsJoinMode(out.joinMode) || Fail(reason, "invalid_field", "join_mode")))) {
+				return false;
+			}
+			if (obj.contains("persistent_world")) {
+				if (!obj["persistent_world"].is_boolean()) {
+					return Fail(reason, "invalid_field", "persistent_world");
+				}
+				out.persistentWorld = obj["persistent_world"].get<bool>();
+			}
+			if (obj.contains("world_id") && !ReadStr(obj, "world_id", out.worldId, reason)) {
+				return false;
+			}
+			if (obj.contains("world_boot") && !ReadInt(obj, "world_boot", NetDirectoryLimits::c_MinWorldBoot, NetDirectoryLimits::c_MaxWorldBoot, out.worldBoot, reason)) {
+				return false;
+			}
+			if (obj.contains("resume_session_id") && !ReadStr(obj, "resume_session_id", out.resumeSessionId, reason)) {
+				return false;
+			}
+			if (obj.contains("resume_token") && !ReadStr(obj, "resume_token", out.resumeToken, reason)) {
+				return false;
+			}
+			return true;
 		}
 
 		void WriteRegisterFields(json& obj, const NetDirectoryRegisterRequest& in) {
@@ -232,6 +253,11 @@ namespace RTE {
 			obj["listen_port"] = in.listenPort;
 			obj["listen_addrs"] = in.listenAddrs;
 			obj["join_mode"] = in.joinMode;
+			if (in.persistentWorld) {
+				obj["persistent_world"] = true;
+				obj["world_id"] = in.worldId;
+				obj["world_boot"] = in.worldBoot;
+			}
 		}
 
 		bool ReadRowFields(const json& obj, NetDirectorySessionRow& out, std::string& reason) {
@@ -254,6 +280,9 @@ namespace RTE {
 			out.listenPort = fields.listenPort;
 			out.listenAddrs = std::move(fields.listenAddrs);
 			out.joinMode = std::move(fields.joinMode);
+			out.persistentWorld = fields.persistentWorld;
+			out.worldId = std::move(fields.worldId);
+			out.worldBoot = fields.worldBoot;
 			return ReadStr(obj, "session_id", out.sessionId, reason) &&
 			       ReadInt(obj, "age_s", 0, std::numeric_limits<int64_t>::max(), out.ageS, reason) &&
 			       ReadStr(obj, "observed_ip", out.observedIp, reason) &&
@@ -280,6 +309,9 @@ namespace RTE {
 			fields.listenPort = row.listenPort;
 			fields.listenAddrs = row.listenAddrs;
 			fields.joinMode = row.joinMode;
+			fields.persistentWorld = row.persistentWorld;
+			fields.worldId = row.worldId;
+			fields.worldBoot = row.worldBoot;
 			return fields;
 		}
 
@@ -297,7 +329,12 @@ namespace RTE {
 	std::string NetDirectoryCodec::EncodeRegisterRequest(const NetDirectoryRegisterRequest& request) {
 		json obj;
 		WriteRegisterFields(obj, request);
-		if (!request.resumeSessionId.empty()) { obj["resume_session_id"] = request.resumeSessionId; obj["resume_token"] = request.resumeToken; }
+		if (!request.resumeSessionId.empty()) {
+			obj["resume_session_id"] = request.resumeSessionId;
+			if (!request.resumeToken.empty()) {
+				obj["resume_token"] = request.resumeToken;
+			}
+		}
 		return obj.dump();
 	}
 
@@ -305,7 +342,8 @@ namespace RTE {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
 		if (!ReadRegisterFields(obj, out, reason)) return false;
-		return !obj.contains("resume_session_id") || (ReadStr(obj, "resume_session_id", out.resumeSessionId, reason) && ReadStr(obj, "resume_token", out.resumeToken, reason));
+		const bool firstWorld = out.persistentWorld && out.worldId == out.resumeSessionId && out.resumeToken.empty();
+		return firstWorld || obj.contains("resume_session_id") == obj.contains("resume_token");
 	}
 
 	std::string NetDirectoryCodec::EncodeRegisterResponse(const NetDirectoryRegisterResponse& response) {

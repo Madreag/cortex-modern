@@ -10,6 +10,8 @@ sources += files(
 'NetAdmissionSelfTest.cpp',
 'NetAuthCrypto.cpp',
 'NetAuthSelfTest.cpp',
+'NetHostBanStore.cpp',
+'NetParticipantCrypto.cpp',
 'NetDirectoryClient.cpp',
 'NetDirectoryCodec.cpp',
 'NetDirectorySelfTest.cpp',
@@ -48,6 +50,8 @@ sources += files(
 'NetSeatAuth.cpp',
 'NetSession.cpp',
 'NetSessionSelfTest.cpp',
+'NetWorldJoin.cpp',
+'NetWorldJoinSelfTest.cpp',
 'SimChecksum.cpp',
 )
 

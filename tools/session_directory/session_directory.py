@@ -342,6 +342,9 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
+        for key in ("persistent_world", "world_id", "world_boot"):
+            if key in self.fields:
+                row[key] = self.fields[key]
         row["session_id"] = self.session_id
         row["age_s"] = self.age_s(now)
         row["observed_ip"] = self.observed_ip
@@ -416,6 +419,11 @@ class SessionDirectory:
     def register(self, data: dict[str, Any], observed_ip: str, now: float) -> dict[str, Any]:
         self.prune(now)
         with self._lock:
+            # Capacity is answered before any field work: a full directory must not spend parsing.
+            resume_id = data.get("resume_session_id")
+            resuming = isinstance(resume_id, str) and resume_id in self._sessions
+            if not resuming and len(self._sessions) >= MAX_ROWS:
+                raise OverflowError("full")
             fields: dict[str, Any] = {}
             for name in REGISTER_STR_FIELDS:
                 fields[name] = require_str(data, name)
@@ -427,6 +435,14 @@ class SessionDirectory:
                 else:
                     fields[name] = require_int(data, name, 0, 10**9)
             fields["listen_addrs"] = require_listen_addrs(data)
+            if "persistent_world" in data:
+                if not isinstance(data["persistent_world"], bool):
+                    raise FieldError("invalid_field", "persistent_world")
+                fields["persistent_world"] = data["persistent_world"]
+            if "world_id" in data:
+                fields["world_id"] = require_str(data, "world_id")
+            if "world_boot" in data:
+                fields["world_boot"] = require_int(data, "world_boot", 1, 10**9)
             resume = data.get("resume_session_id")
             if resume is not None:
                 session_id = require_str(data, "resume_session_id")
@@ -434,17 +450,21 @@ class SessionDirectory:
                     uuid.UUID(session_id)
                 except ValueError:
                     raise FieldError("invalid_field", "resume_session_id")
-                supplied = require_str(data, "resume_token")
+                presented = data.get("resume_token")
                 previous = self._sessions.get(session_id)
                 retained = self._resume_tokens.get(session_id)
                 token = previous.token if previous else retained[0] if retained else ""
-                if not token or not tokens_equal(supplied, token):
+                world = fields.get("persistent_world") is True and fields.get("world_id") == session_id
+                first_world = world and not token and presented in (None, "")
+                if not first_world and (not token or not isinstance(presented, str) or not tokens_equal(presented, token)):
                     raise PermissionError("forbidden")
+                if world:
+                    token = secrets.token_urlsafe(24)
             else:
+                if "resume_token" in data:
+                    raise PermissionError("forbidden")
                 session_id = str(uuid.uuid4())
                 token = secrets.token_urlsafe(24)
-            if session_id not in self._sessions and len(self._sessions) >= MAX_ROWS:
-                raise OverflowError("full")
             sess = Session(session_id, token, fields, observed_ip, now)
             if resume is not None:
                 sess.state = "running"

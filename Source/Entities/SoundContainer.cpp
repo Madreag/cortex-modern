@@ -204,7 +204,7 @@ int SoundContainer::ReadProperty(const std::string_view& propName, Reader& reade
 		}
 	});
 	MatchProperty("PanningStrengthMultiplier", { reader >> m_PanningStrengthMultiplier; });
-	MatchProperty("LoopSetting", { reader >> m_Loops; });
+	MatchProperty("LoopSetting", { reader >> m_Loops; if (m_Loops < -1) m_Loops = -1; });
 	MatchProperty("Priority", {
 		reader >> m_Priority;
 		if (m_Priority < 0 || m_Priority > 256) {
