@@ -426,6 +426,154 @@ assert(seen > 0, 'no trace event after forced abort path seen='..tostring(seen).
 		return passed;
 	}
 
+#if LJ_HASJIT
+	namespace {
+		// What the leftover abort derived from the frame, read inside the probe the Lua fixture calls.
+		const void* s_LeftoverFunction = nullptr;
+		const void* s_LeftoverProto = nullptr;
+		int s_LeftoverPos = -1;
+		int s_LeftoverState = -1;
+		int s_LeftoverFired = 0;
+
+		// Leaves the recorder mid-trace with a position in another prototype, then drives the leftover abort.
+		int AbortLeftoverProbe(lua_State* luaState) {
+			jit_State* J = L2J(luaState);
+			global_State* g = G(luaState);
+			s_LeftoverFunction = nullptr;
+			s_LeftoverProto = nullptr;
+			s_LeftoverPos = -1;
+			s_LeftoverState = -1;
+			s_LeftoverFired = 0;
+			if (J->state != LJ_TRACE_IDLE || !lua_isfunction(luaState, 1) || lua_iscfunction(luaState, 1)) {
+				return 0;
+			}
+			GCfunc* stale = static_cast<GCfunc*>(const_cast<void*>(lua_topointer(luaState, 1)));
+			if (!isluafunc(stale)) {
+				return 0;
+			}
+			J->pc = proto_bc(funcproto(stale)) + 1;
+			J->fn = stale;
+			J->pt = funcproto(stale);
+			J->parent = 0;
+			J->exitno = 0;
+			J->curfinal = NULL;
+			setgcrefnull(J->cur.startpt);
+			setmrefu(J->cur.startpc, 0);
+			J->cur.startins = BC_RET;
+			J->cur.traceno = static_cast<TraceNo>(J->sizetrace > 1 && !gcref(J->trace[1]) ? 1 : 0);
+			s_LeftoverFired = J->cur.traceno != 0;
+			J->state = LJ_TRACE_RECORD;
+			lj_dispatch_update(g);
+			lj_trace_abort_leftover(luaState);
+			s_LeftoverFunction = J->fn;
+			s_LeftoverProto = J->pt;
+			s_LeftoverPos = J->pt && J->pc ? static_cast<int>(proto_bcpos(J->pt, J->pc)) : -1;
+			s_LeftoverState = static_cast<int>(J->state);
+			return 0;
+		}
+	} // namespace
+#endif
+
+	bool PreviewScriptSelfTest::CheckAbortLeftoverPosition() {
+		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
+		bool passed = true;
+#if LJ_HASJIT
+		// The probe runs one Lua call deep, so the abort's live position is that call, and an attached consumer reads it.
+		static const char* fixture = R"lua(
+_AbortLeftover = {}
+local seen = _AbortLeftover
+-- Opening jit.util writes the package cache and the engine's require list, which this arm leaves as it found them.
+local priorUtil = package.loaded['jit.util']
+local priorRequired = _RequiredPackages and _RequiredPackages['jit.util']
+local util = require('jit.util')
+seen.cleanup = function()
+  package.loaded['jit.util'] = priorUtil
+  if _RequiredPackages then _RequiredPackages['jit.util'] = priorRequired end
+end
+seen.handler = function(what, tr, func, pos, err)
+  if what ~= 'abort' then return end
+  seen.calls = (seen.calls or 0) + 1
+  seen.func, seen.pos = func, pos
+  local info = func and util.funcinfo(func, pos)
+  seen.line = info and info.currentline or -1
+  seen.bytecodes = info and info.bytecodes or -1
+end
+seen.run = function()
+  seen.calls, seen.func, seen.pos, seen.line, seen.bytecodes = 0, nil, -1, -1, -1
+  local where = util.funcinfo(seen.run)
+  seen.first, seen.last = where.linedefined, where.lastlinedefined
+  jit.attach(seen.handler, 'trace')
+  _AbortLeftoverProbe(seen.handler)
+  jit.attach(seen.handler)
+  seen.same = seen.func == seen.run
+end
+)lua";
+		for (int index = 0; index < static_cast<int>(states.size()); ++index) {
+			lua_State* L = states[index]->GetLuaState();
+			if (L2J(L)->state != LJ_TRACE_IDLE) {
+				std::cout << "[script-graph-selftest] FAIL abort_leftover_position state=" << index
+				          << " jstate=" << static_cast<unsigned>(L2J(L)->state) << " expected=0" << std::endl;
+				passed = false;
+				continue;
+			}
+			lua_pushcfunction(L, &AbortLeftoverProbe);
+			lua_setglobal(L, "_AbortLeftoverProbe");
+			const int staged = states[index]->RunScriptString(fixture, false);
+			const int ran = staged >= 0 ? states[index]->RunScriptString("_AbortLeftover.run()", false) : -1;
+			const int top = lua_gettop(L);
+			const auto field = [L](const char* name) {
+				lua_getfield(L, -1, name);
+				const int value = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : -1;
+				lua_pop(L, 1);
+				return value;
+			};
+			int calls = -1, pos = -1, line = -1, bytecodes = -1, first = -1, last = -1;
+			bool sameFunction = false;
+			const void* derivedCaller = nullptr;
+			lua_getglobal(L, "_AbortLeftover");
+			if (lua_istable(L, -1)) {
+				calls = field("calls");
+				pos = field("pos");
+				line = field("line");
+				bytecodes = field("bytecodes");
+				first = field("first");
+				last = field("last");
+				lua_getfield(L, -1, "same");
+				sameFunction = lua_toboolean(L, -1) != 0;
+				lua_pop(L, 1);
+				lua_getfield(L, -1, "run");
+				derivedCaller = lua_topointer(L, -1);
+				lua_pop(L, 1);
+			}
+			lua_settop(L, top);
+			states[index]->RunScriptString("if _AbortLeftover and _AbortLeftover.cleanup then _AbortLeftover.cleanup() end; _AbortLeftover = nil; _AbortLeftoverProbe = nil", false);
+			// The derived position must name the Lua function the probe was called from, not the prototype the recorder was left in.
+			const bool derived = s_LeftoverFunction != nullptr && s_LeftoverFunction == derivedCaller &&
+			                     s_LeftoverProto != nullptr && s_LeftoverPos >= 0 && bytecodes > 0 && s_LeftoverPos < bytecodes;
+			const bool reported = !s_LeftoverFired || (calls == 1 && sameFunction && pos == s_LeftoverPos &&
+			                                           line >= first && line <= last && first > 0);
+			const bool idle = s_LeftoverState == static_cast<int>(LJ_TRACE_IDLE);
+			std::cout << "[abort-leftover] state=" << index << " fired=" << s_LeftoverFired
+			          << " derived_pos=" << s_LeftoverPos << " derived_func=" << s_LeftoverFunction
+			          << " caller=" << derivedCaller << " event_calls=" << calls << " event_pos=" << pos
+			          << " event_line=" << line << " lines=" << first << ".." << last
+			          << " bytecodes=" << bytecodes << " jstate=" << s_LeftoverState << std::endl;
+			const bool rowPassed = staged >= 0 && ran >= 0 && derived && reported && idle;
+			std::cout << "[script-graph-selftest] " << (rowPassed ? "PASS " : "FAIL ")
+			          << "abort_leftover_position state=" << index << " derived_func=" << s_LeftoverFunction
+			          << " caller=" << derivedCaller << " derived_pos=" << s_LeftoverPos
+			          << " event_pos=" << pos << " event_line=" << line;
+			if (ran < 0) std::cout << " " << states[index]->GetLastError();
+			std::cout << std::endl;
+			passed = rowPassed && passed;
+		}
+#else
+		std::cout << "[script-graph-selftest] PASS abort_leftover_position no_jit" << std::endl;
+#endif
+		return passed;
+	}
+
 	bool PreviewScriptSelfTest::CheckAbortPenalizes() {
 		std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
 		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) states.push_back(&state);
