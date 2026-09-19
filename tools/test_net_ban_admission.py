@@ -21,6 +21,7 @@ SCOPE_ROWS = (
     "scopes: persistence failure refuses Until Removed; unban grants no seat",
     "scopes: banned identity refused on the session handshake",
     "scopes: removed identity refused on a fresh join and application",
+    "scopes: the ban store holds its records under a writer and a reader",
 )
 
 

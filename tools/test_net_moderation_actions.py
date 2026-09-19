@@ -19,6 +19,8 @@ KICK_ROWS = (
     "kick: socket-only drop still opens a reclaim hold",
     "kick: targeted peer removed with no reclaim hold",
     "kick: service RemoveParticipant broadcasts, evicts and disconnects",
+    "kick: a removed link loses its seat, its transactions and its binding",
+    "kick: Starting removals and unbans marshal onto the setup worker in order",
 )
 
 
