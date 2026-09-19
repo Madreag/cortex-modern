@@ -348,8 +348,16 @@ void lj_preview_write(lua_State *L, GCtab *t)
   size_t i, abytes, hbytes;
   uint32_t index = t->preview & LJ_PREVIEW_INDEX;
   double started;
-  if (!(t->preview & LJ_PREVIEW_PENDING) || !p || !p->active) return;
-  if (!index || index > p->ntables) return;  /* A stale word addresses no entry. */
+  /* Every caller retries the store once this returns, so no path may leave the word pending. */
+  if (!(t->preview & LJ_PREVIEW_PENDING)) return;
+  if (t->preview == LJ_PREVIEW_PENDING) {  /* The checkpoint's own trap: its mark answers the write. */
+    lj_checkpoint_mark(L, t);
+    return;
+  }
+  if (!p || !p->active || !index || index > p->ntables) {  /* A stale word addresses no entry. */
+    t->preview = 0;
+    return;
+  }
   started = p->timed ? preview_clock() : 0.0;
   e = &p->tables[index-1];
   lj_assertL(e->table == t && !e->captured, "bad preview table");
