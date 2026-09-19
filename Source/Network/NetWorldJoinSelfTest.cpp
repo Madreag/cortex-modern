@@ -3603,6 +3603,72 @@ namespace RTE {
 		return 0;
 	}
 
+	// A dedicated world's roster, the way the service builds it: no host row, ids from the first
+	// non-host peer up. Its first row is the seat this test is about.
+	NetMatchConfig MakeDedicatedWorldRoster() {
+		NetMatchConfig config = MakeWorldConfig();
+		config.peerCount = 3;
+		config.hostPeerId = 1;
+		config.dedicated = true;
+		config.worldTeamCapacity = {1, 1, 0, 0};
+		config.players = {NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		return config;
+	}
+
+	// Seat 0 is the admission plane's "no seat", so a dedicated world may not put a joinable seat there.
+	int TestDedicatedWorldFirstSeatCanBeNamed() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		const NetMatchConfig config = MakeDedicatedWorldRoster();
+		const std::vector<NetH4Seat> table = NetH4BuildSeatTable(config);
+		if (table.size() != config.players.size()) {
+			return Fail("world-first-seat-unnamable: the world's table has " + std::to_string(table.size()) +
+			            " rows for " + std::to_string(config.players.size()) + " roster players");
+		}
+		for (const NetH4Seat& seat: table) {
+			if (seat.stableSeat == 0) {
+				return Fail("world-first-seat-unnamable: the world's roster seat for lockstep " +
+				            std::to_string(static_cast<int>(seat.lockstepPeerId)) +
+				            " is stableSeat 0, which is this plane's \"no seat\"");
+			}
+		}
+		// An ordinary match keeps its own numbering: the sentinel moved for worlds only.
+		NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x4D41544348ULL);
+		match.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Guest"}};
+		const std::vector<NetH4Seat> matchTable = NetH4BuildSeatTable(match);
+		if (matchTable.size() != 2 || matchTable.front().stableSeat != 0 || matchTable.back().stableSeat != 1) {
+			return Fail("world-first-seat-moved-a-match: an ordinary match's seat numbering moved");
+		}
+		// The production admission plane, driven the way the world's pump drives it.
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("world-first-seat-unnamable: the registry did not arm");
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x574400ULL, identity);
+		admission.SetSeatTable(table, config.mode);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		NetH4TicketOffer offer;
+		if (!CommitWorldSeat(admission, identity, 61, "first", offer)) {
+			return Fail("world-first-seat-unnamable: the world refused its first joiner a seat");
+		}
+		if (offer.stableSeat != table.front().stableSeat) {
+			return Fail("world-first-seat-unnamable: the first joiner took seat " +
+			            std::to_string(static_cast<int>(offer.stableSeat)) + ", not the first roster seat " +
+			            std::to_string(static_cast<int>(table.front().stableSeat)));
+		}
+		// This is the read the world's pump makes before it may begin a bootstrap for the connection.
+		const uint16_t named = admission.StableSeatOfConnection(61);
+		if (named != offer.stableSeat) {
+			return Fail("world-first-seat-unnamable: the first joiner's connection reads seat " +
+			            std::to_string(static_cast<int>(named)) + " while it holds seat " +
+			            std::to_string(static_cast<int>(offer.stableSeat)) + ", so its join can never begin");
+		}
+		return 0;
+	}
+
 	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
 	int TestDueSpectatorLeavesTheMemberDue() {
 		NetWorldJoinHost host;
@@ -5428,6 +5494,10 @@ namespace RTE {
 			s_FailTag = "net-world-promoted-seat-id-selftest";
 			return TestWorldPromotedSeatDropsAndReseatsItsSlot();
 		}
+		if (std::strcmp(name, "first-seat") == 0 || std::strcmp(name, "-net-world-first-seat-selftest") == 0) {
+			s_FailTag = "net-world-first-seat-selftest";
+			return TestDedicatedWorldFirstSeatCanBeNamed();
+		}
 		if (std::strcmp(name, "release-control") == 0 || std::strcmp(name, "-net-world-release-control-selftest") == 0) {
 			s_FailTag = "net-world-release-control-selftest";
 			return TestWorldReleaseFreesTheDepartedBrain();
@@ -5638,6 +5708,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldPromotedSeatDropsAndReseatsItsSlot(); result != 0) {
+			return result;
+		}
+		if (const int result = TestDedicatedWorldFirstSeatCanBeNamed(); result != 0) {
 			return result;
 		}
 		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {

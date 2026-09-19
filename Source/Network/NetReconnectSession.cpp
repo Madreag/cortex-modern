@@ -95,7 +95,10 @@ namespace RTE {
 				seat.team = slot.at(2).get<int32_t>();
 				seat.cpu = slot.at(3).get<bool>();
 				seat.local = seat.lockstepPeerId == localPeerId;
-				if (seat.stableSeat >= NetMatchConfigUtil::c_MaxPlayers || (seat.lockstepPeerId != 0 && seat.peerId + 1 != seat.lockstepPeerId) ||
+				// A world numbers its seats from 1, so its last row sits one past a match's bound.
+				const uint16_t seatBound = config.persistentWorld ? NetMatchConfigUtil::c_MaxPlayers : NetMatchConfigUtil::c_MaxPlayers - 1;
+				if (seat.stableSeat > seatBound || (config.persistentWorld && seat.stableSeat == 0) ||
+				    (seat.lockstepPeerId != 0 && seat.peerId + 1 != seat.lockstepPeerId) ||
 				    std::none_of(config.players.begin(), config.players.end(), [&](const auto& player) { return player.cpu == seat.cpu && player.peerId == seat.lockstepPeerId && player.team == seat.team; }))
 					return false;
 				table.push_back(seat);
@@ -294,13 +297,16 @@ namespace RTE {
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config) {
 		std::vector<NetH4Seat> seats;
 		seats.reserve(config.players.size());
+		// Seat 0 is this plane's "no seat" answer, and a dedicated world seats no host, so its first
+		// roster row would be a real seat nothing could name. A world's table starts at 1 instead.
+		const uint16_t firstSeat = config.persistentWorld ? 1 : 0;
 		for (size_t index = 0; index < config.players.size(); ++index) {
 			const NetMatchPlayerSlot& slot = config.players[index];
 			// The match config carries the LOCKSTEP id; the session's is one lower. A commit hands back
 			// the session id, the ledger and the reseat name the lockstep one - the two are not the same
 			// number and swapping them would re-point every actor the returner had.
 			NetH4Seat seat;
-			seat.stableSeat = static_cast<uint16_t>(index);
+			seat.stableSeat = static_cast<uint16_t>(firstSeat + index);
 			seat.peerId = slot.peerId > 0 ? static_cast<uint8_t>(slot.peerId - 1) : 0;
 			seat.team = static_cast<int32_t>(slot.team);
 			seat.cpu = slot.cpu;
