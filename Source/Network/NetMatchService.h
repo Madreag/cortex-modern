@@ -850,6 +850,8 @@ namespace RTE {
 		bool DeriveRestartKey(std::array<uint8_t, 32>& key);
 		/// The session the round is hosted on; the adopted match config carries the seats it offers.
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
+		/// Applies the service's lobby start policy and request controls.
+		void ConfigureLobbyStart(NetMatchRunnerConfig& config);
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.

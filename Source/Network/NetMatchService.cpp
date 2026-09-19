@@ -5238,6 +5238,22 @@ static std::string ResyncSaveName() {
 #endif
 	}
 
+	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
+		config.sessionWaitMs = c_MenuLobbyWaitMs;
+		config.lobbyWaitMs = c_MenuLobbyWaitMs;
+		if (config.host) {
+			config.lobbySeatingWaitMs = !config.matchConfig.persistentWorld && config.matchConfig.idleWaitMinutes > 0
+			                              ? static_cast<uint32_t>(config.matchConfig.idleWaitMinutes) * 60000 : 0u;
+		}
+		config.autoReady = config.host;
+		// A world keeps its start intent when a newly admitted peer refreshes the lobby roster.
+		config.autoStart = config.host && config.matchConfig.persistentWorld;
+		config.readyRequested = &m_ReadyRequested;
+		config.startRequested = &m_StartRequested;
+		config.cancelRequested = &m_CancelRequested;
+		config.hostOptions = &m_HostOptionsRequest;
+	}
+
 	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest) {
 		if (request.host) {
 			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
@@ -5322,16 +5338,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request, runnerConfig.matchConfig);
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
-		// Wait patiently for the other player to connect (host listening / client retrying), not the 15s default.
-		runnerConfig.sessionWaitMs = c_MenuLobbyWaitMs;
-		// Two different waits: the message-hearing deadline is technical and the same for everyone,
-		// and the seating wait is the host's published idle policy, where Never really is never.
-		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
-		if (request.host) {
-			runnerConfig.lobbySeatingWaitMs = runnerConfig.matchConfig.idleWaitMinutes > 0
-			                                      ? static_cast<uint32_t>(runnerConfig.matchConfig.idleWaitMinutes) * 60000
-			                                      : 0u;
-		}
+		ConfigureLobbyStart(runnerConfig);
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
 		// A resumed match starts on the tick after the checkpoint, exactly as a healed round resumes
@@ -5341,13 +5348,6 @@ static std::string ResyncSaveName() {
 		}
 		// Every peer answers whether it holds the checkpoint; one that does is streamed nothing.
 		runnerConfig.resumeHeld = [this](const NetLobbyResume& offer) { return AnswerResumeOffer(offer); };
-		// The lobby lockstep start takes the activity from the adopted roster.
-		runnerConfig.autoReady = request.host;
-		runnerConfig.autoStart = false;
-		runnerConfig.readyRequested = &m_ReadyRequested;
-		runnerConfig.startRequested = &m_StartRequested;
-		runnerConfig.cancelRequested = &m_CancelRequested;
-		runnerConfig.hostOptions = &m_HostOptionsRequest;
 		NetMatchRunner* runnerRaw = runner.get();
 		runnerConfig.publishLobby = [this, runnerRaw](const NetLobbySnapshot& snapshot) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
