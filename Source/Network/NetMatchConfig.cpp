@@ -14,13 +14,15 @@ namespace RTE {
 	bool NetRelayConfig::Valid() const {
 		if (Empty()) return matchId.empty() && expiresAt == 0;
 		if (matchId.empty() || matchId.size() > 128 || expiresAt == 0 || iceServers.size() > 8) return false;
+		if (matchId.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-") != std::string::npos) return false;
 		static const std::regex urlPattern(R"((stun|turn|turns):[A-Za-z0-9.\-\[\]:]+(\?transport=(udp|tcp))?)");
 		const auto textValid = [](const std::string& text) {
-			return !text.empty() && text.size() <= 1024 && std::none_of(text.begin(), text.end(), [](unsigned char ch) { return ch < 32 || ch == ','; });
+			return !text.empty() && text.size() <= 1024 && NetProtocol::IsValidUtf8(text) && std::none_of(text.begin(), text.end(), [](unsigned char ch) { return ch < 32 || ch == 127 || ch == ','; });
 		};
 		bool relay = false;
 		for (const auto& server : iceServers) {
 			if (server.urls.empty() || server.urls.size() > 8) return false;
+			if ((!server.username.empty() && !textValid(server.username)) || (!server.credential.empty() && !textValid(server.credential))) return false;
 			for (const auto& url : server.urls) {
 				if (url.size() > 256 || !std::regex_match(url, urlPattern)) return false;
 				if (!url.starts_with("stun:")) {
