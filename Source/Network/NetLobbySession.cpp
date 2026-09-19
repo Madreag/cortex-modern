@@ -199,6 +199,8 @@ namespace RTE {
 			}
 			SendQueuedStateChunks();
 			SendStartIfReady();
+		} else if (m_Config.snapshotProviderPeerId == m_Config.localPeerId) {
+			SendQueuedStateChunks();
 		}
 		if (!m_Config.host && m_Config.timeoutMs > 0 && nowMs >= m_LastReceiveMs && nowMs - m_LastReceiveMs > m_Config.timeoutMs) {
 			m_HostLost = true;
