@@ -5442,7 +5442,20 @@ namespace RTE {
 			}
 			LoopbackTransport hostTransport, clientTransport;
 			NetSession hostSession, clientSession;
-			if (!hostSession.StartHost(hostTransport, service.BuildSessionConfig(hostIdentity, hostRequest, world), error) ||
+			if (!hostSession.StartHost(hostTransport, service.BuildSessionConfig(hostIdentity, hostRequest, world), error)) return false;
+			NetMatchRunnerConfig runnerConfig;
+			runnerConfig.host = true;
+			runnerConfig.matchConfig = world;
+			service.ConfigureLobbyStart(runnerConfig);
+			NetLobbySession hostLobby, clientLobby;
+			NetLobbySessionConfig hostConfig, clientConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.matchConfig = world;
+			hostConfig.autoStart = wrongStartHash ? false : runnerConfig.autoStart;
+			hostConfig.startFrame = 77;
+			hostConfig.session = &hostSession;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) ||
 			    !clientSession.StartClient(clientTransport, "loopback", service.BuildSessionConfig(clientIdentity, clientRequest, placeholder), error)) return false;
 			for (uint64_t now = 0; now <= 1000 && hostSession.GetReadyPeerCount() != 1; now += 10) {
 				hostSession.Tick(now);
@@ -5454,16 +5467,6 @@ namespace RTE {
 				*error = "a default service joiner failed world admission: " + clientSession.BuildRejectText();
 				return false;
 			}
-			NetLobbySession hostLobby, clientLobby;
-			NetLobbySessionConfig hostConfig, clientConfig;
-			hostConfig.host = true;
-			hostConfig.localPeerId = 1;
-			hostConfig.remotePeerId = 2;
-			hostConfig.remoteTransportPeerId = hostSession.GetReadyPeers().front().transportPeerId;
-			hostConfig.matchConfig = world;
-			hostConfig.autoStart = false;
-			hostConfig.startFrame = 77;
-			hostConfig.session = &hostSession;
 			clientConfig = hostConfig;
 			clientConfig.host = false;
 			clientConfig.localPeerId = 2;
@@ -5471,13 +5474,14 @@ namespace RTE {
 			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
 			clientConfig.matchConfig = placeholder;
 			clientConfig.session = &clientSession;
-			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			if (!clientLobby.Start(clientTransport, clientConfig, error)) return false;
 			for (uint64_t now = 0; now <= 1000 && !hostLobby.IsConfigAcked(2); now += 10) {
 				hostLobby.Tick(now);
 				clientLobby.Tick(now);
 				hostTransport.AdvanceTimeMs(10);
 				clientTransport.AdvanceTimeMs(10);
 			}
+			world.players.front().displayName = "Client";
 			if (!hostLobby.IsConfigAcked(2) || clientLobby.GetMatchConfig() != world ||
 			    clientLobby.GetMatchConfigHash() != NetMatchConfigUtil::HashConfig(world)) {
 				*error = "a default service joiner did not adopt the world's complete lobby config";
@@ -5497,7 +5501,7 @@ namespace RTE {
 				start.matchConfigHash = NetMatchConfigUtil::HashConfig(placeholder);
 				std::vector<uint8_t> bytes;
 				if (!NetLobbyProtocol::Encode({start}, bytes) ||
-				    !hostTransport.Send(hostConfig.remoteTransportPeerId, NetTransportLane::ControlReliable, bytes, error)) return false;
+				    !hostTransport.Send(hostSession.GetReadyPeers().front().transportPeerId, NetTransportLane::ControlReliable, bytes, error)) return false;
 				hostTransport.AdvanceTimeMs(10);
 				clientTransport.AdvanceTimeMs(10);
 				clientLobby.Tick(1010);
@@ -5506,7 +5510,6 @@ namespace RTE {
 					return false;
 				}
 			} else {
-				hostLobby.RequestStart();
 				if (!DriveLobbyPair(hostTransport, clientTransport, hostLobby, clientLobby, error, 1010)) return false;
 			}
 		}
