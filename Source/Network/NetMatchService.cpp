@@ -3245,7 +3245,8 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::DeriveRestartKey(std::array<uint8_t, 32>& key) {
-		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		// The store's own path decides: production leaves it at this install's identity, and a caller
+		// that pointed it somewhere else means it, now that a new path unloads the key it held.
 		if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) return false;
 		return m_ParticipantStore.DeriveLocalKey(c_RestartAdmissionKeyLabel, key);
 	}

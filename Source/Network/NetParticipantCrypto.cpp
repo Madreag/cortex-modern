@@ -206,6 +206,13 @@ namespace RTE {
 	}
 
 	void NetParticipantIdentityStore::SetPath(std::string path) {
+		// A new path is a different identity: the key in memory belongs to the old one and must not be
+		// used, or a caller that points the store at one file keeps answering from another.
+		if (path != m_Path) {
+			m_Private.fill(0);
+			m_Public = {};
+			m_HasKey = false;
+		}
 		m_Path = std::move(path);
 	}
 
