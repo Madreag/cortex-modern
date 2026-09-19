@@ -2907,6 +2907,11 @@ namespace RTE {
 			return Fail("concurrent-joins-shared-an-activation: an E landed behind the input already sent (" +
 			            std::to_string(firstE) + ", " + std::to_string(secondE) + ")");
 		}
+		// Each reports through its own E-1, the gate every member passes before it is admitted.
+		if (!host.NoteCatchUpProgress(31, firstE - 1, 60, 10, firstE - 1, nullptr, &error) ||
+		    !host.NoteCatchUpProgress(32, secondE - 1, 60, 10, secondE - 1, nullptr, &error)) {
+			return Fail("concurrent-joins-shared-an-activation: a joiner could not report through its own E-1 (" + error + ")");
+		}
 		// The due activation is the earlier one, so the members activate in join order.
 		const NetWorldJoinSession* due = host.DueActivation(firstE - 1);
 		if (due == nullptr || due->connection != 31) {
@@ -3089,10 +3094,8 @@ namespace RTE {
 			            std::to_string(holder == nullptr ? 0 : holder->assignedPeerId));
 		}
 		// The holder's transport goes: the admission plane holds its seat, and the world follows.
+		// The bootstrap ends with the connection; the admission plane is what keeps the seat.
 		host.CancelJoin(51, "connection lost");
-		if (!host.Membership().Release(2, &error)) {
-			return Fail("fresh-join-stole-a-held-seat: the fixture could not free the seat (" + error + ")");
-		}
 		host.NoteReclaimHolds({2});
 		if (!host.Membership().HoldsForReclaim(2) || host.Membership().ReclaimHolds() != 1) {
 			return Fail("fresh-join-stole-a-held-seat: the dropped seat opened no reclaim hold");
@@ -3141,16 +3144,34 @@ namespace RTE {
 		if (host.Membership().HoldsForReclaim(2) || host.Membership().ReclaimHolds() != 0) {
 			return Fail("reclaim-was-refused: the hold outlived the reclaim");
 		}
+		// One slot is one bootstrap: the dropped holder's stale one does not survive the reclaim.
+		size_t seatedOnPeerTwo = 0;
+		for (const NetWorldJoinSession& session: host.Sessions()) {
+			if (session.assignedPeerId == 2) {
+				++seatedOnPeerTwo;
+			}
+		}
+		if (seatedOnPeerTwo != 1) {
+			return Fail("reclaim-doubled-the-bootstrap: " + std::to_string(seatedOnPeerTwo) + " bootstraps hold peer 2 after the reclaim");
+		}
 		// The fresh join stays a watcher: a reclaim never hands it the seat it waited beside.
 		const NetWorldJoinSession* stillFresh = host.FindSession(53);
 		if (stillFresh == nullptr || !stillFresh->spectator || stillFresh->assignedPeerId != 0) {
 			return Fail("fresh-join-stole-a-held-seat: the waiting joiner ended on peer " +
 			            std::to_string(stillFresh == nullptr ? 0 : stillFresh->assignedPeerId));
 		}
-		// No double-own: a second connection cannot take a seat a live member holds.
+		// No double-own: a second connection presenting the same seat watches, it never owns it.
 		error.clear();
-		if (host.BeginJoin(56, 51, "impostor", 1130, &error, true)) {
-			return Fail("held-seat-was-substituted: a second connection took a live member's seat");
+		if (!host.BeginJoin(56, 51, "impostor", 1130, &error, true)) {
+			return Fail("held-seat-was-substituted: the second connection was not even admitted to watch (" + error + ")");
+		}
+		const NetWorldJoinSession* impostor = host.FindSession(56);
+		if (impostor == nullptr || !impostor->spectator || impostor->assignedPeerId != 0) {
+			return Fail("held-seat-was-substituted: a second connection took peer " +
+			            std::to_string(impostor == nullptr ? 0 : impostor->assignedPeerId) + " a live member holds");
+		}
+		if (host.Membership().Slots()[0].holderName != "holder") {
+			return Fail("held-seat-was-substituted: the seat now names holder \"" + host.Membership().Slots()[0].holderName + "\"");
 		}
 		// The second row: the hold expires instead, and the waiting watcher is promoted at E.
 		NetWorldJoinHost expiring;

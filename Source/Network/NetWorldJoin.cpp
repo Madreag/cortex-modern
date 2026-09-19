@@ -1203,14 +1203,14 @@ namespace RTE {
 		const NetWorldSlot* slot = m_Membership.SlotOfSeat(stableSeat);
 		bool reclaiming = false;
 		if (slot != nullptr) {
-			if (slot->reclaimHold && credentialedHolder) {
-				reclaiming = true;
-			} else if (slot->held) {
-				if (slot->reclaimHold) {
+			if (slot->reclaimHold) {
+				if (!credentialedHolder) {
 					// The seat is waiting for its own player; this connection is not it.
 					if (error) *error = NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::SeatHeld));
 					return false;
 				}
+				reclaiming = true;
+			} else if (slot->held) {
 				slot = nullptr;
 			}
 		}
@@ -1240,6 +1240,11 @@ namespace RTE {
 		if (reclaiming ? !m_Membership.Reclaim(peerId, stableSeat, holderName, error)
 		               : !m_Membership.Hold(peerId, stableSeat, holderName, error)) {
 			return false;
+		}
+		if (reclaiming) {
+			// The holder that dropped left its bootstrap behind on the connection that is gone. One
+			// slot is one bootstrap: the returning holder's replaces it rather than doubling it.
+			std::erase_if(m_Sessions, [&](const NetWorldJoinSession& entry) { return entry.assignedPeerId == peerId; });
 		}
 		session.assignedPeerId = peerId;
 		session.team = team;
