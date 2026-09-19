@@ -127,19 +127,6 @@ namespace RTE {
 			return hash.Finish();
 		}
 
-		std::string FileDigest(const std::filesystem::path& path) {
-			std::ifstream file(path, std::ios::binary);
-			if (!file) throw std::runtime_error("could not read executable");
-			Sha256 hash;
-			std::array<char, 65536> buffer{};
-			while (file) {
-				file.read(buffer.data(), buffer.size());
-				hash.Add(buffer.data(), static_cast<size_t>(file.gcount()));
-			}
-			if (!file.eof()) throw std::runtime_error("could not hash executable");
-			return hash.Finish();
-		}
-
 		struct LogTail {
 			std::mutex mutex;
 			std::array<char, TelemetryBundle::c_LogTailLimit> bytes{};
@@ -181,23 +168,6 @@ namespace RTE {
 			std::streambuf* m_Original;
 			LogTail& m_Tail;
 		};
-
-		std::filesystem::path ExecutablePath() {
-#ifdef _WIN32
-			std::array<wchar_t, 32768> path{};
-			const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-			if (size && size < path.size()) return std::wstring(path.data(), size);
-#elif defined(__APPLE__)
-			uint32_t size = 0;
-			_NSGetExecutablePath(nullptr, &size);
-			std::vector<char> path(size);
-			if (_NSGetExecutablePath(path.data(), &size) == 0) return path.data();
-#else
-			std::error_code error;
-			return std::filesystem::read_symlink("/proc/self/exe", error);
-#endif
-			return {};
-		}
 
 		json SystemInfo(const std::string& gpu) {
 			std::string os = SDL_GetPlatform(), cpu = "unknown";
@@ -327,7 +297,7 @@ namespace RTE {
 			std::optional<Job> job;
 			bool busy = false, stop = false, captureRequested = false, lastSucceeded = true;
 			std::thread worker;
-			std::filesystem::path runtime, executable;
+			std::filesystem::path runtime;
 			std::string gpu;
 			~State() { TelemetryBundle::Finish(); }
 		} s_State;
@@ -364,7 +334,7 @@ namespace RTE {
 				add("Settings.ini", FilterSettingsMember(bytes, redacted));
 			} else omissions.push_back({{"name", "Settings.ini"}, {"reason", "file unavailable"}});
 			add("SystemInfo.json", SystemInfo(job.gpu).dump(2));
-			add("Executable.json", json{{"sha256", FileDigest(s_State.executable)}, {"version", c_VersionString}}.dump(2));
+			add("Executable.json", json{{"sha256", System::GetThisExeSha256()}, {"version", c_VersionString}}.dump(2));
 			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
 			              {"identity_build_ms", job.snapshot.identityBuildMs}, {"redacted", redacted}};
 			for (const auto& [name, data]: members) {
@@ -414,7 +384,6 @@ namespace RTE {
 	void TelemetryBundle::Initialize(const std::string& gpu) {
 		if (s_State.worker.joinable()) return;
 		s_State.runtime = System::GetWorkingDirectory();
-		s_State.executable = ExecutablePath();
 		s_State.gpu = gpu;
 		s_State.stop = false;
 		s_State.out = std::make_unique<LogMirror>(std::cout.rdbuf(), s_State.log);

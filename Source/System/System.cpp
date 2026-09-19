@@ -8,6 +8,7 @@
 #endif
 
 #include "RTEError.h"
+#include "NetA7Journal.h"
 
 // Convenience macro to not have to write this out.
 #define _LINUX_OR_MACOSX_ (__unix__ || (__APPLE__ && __MACH__))
@@ -22,10 +23,12 @@
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
+#include <mach-o/dyld.h>
 #endif
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -44,6 +47,31 @@ namespace {
 	std::mutex& PrintLock() {
 		static std::mutex lock;
 		return lock;
+	}
+
+	// The path the OS reports for the running image; argv[0] is the fallback when it cannot say.
+	std::filesystem::path ThisExecutablePath() {
+#ifdef _WIN32
+		std::array<wchar_t, 32768> path{};
+		const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+		if (size && size < path.size()) {
+			return std::wstring(path.data(), size);
+		}
+#elif defined(__APPLE__)
+		uint32_t size = 0;
+		_NSGetExecutablePath(nullptr, &size);
+		std::vector<char> path(size);
+		if (size && _NSGetExecutablePath(path.data(), &size) == 0) {
+			return path.data();
+		}
+#else
+		std::error_code error;
+		const std::filesystem::path link = std::filesystem::read_symlink("/proc/self/exe", error);
+		if (!error && !link.empty()) {
+			return link;
+		}
+#endif
+		return System::GetThisExePathAndName();
 	}
 
 	void WriteWholeLine(std::ostream& stream, const std::string& line) {
@@ -400,6 +428,24 @@ void System::PrintToCLI(const std::string& stringToPrint) {
 	// All the fancy formatting doesn't work with the Windows console so just print the string as it is
 	WriteWholeLine(std::cout, "\r" + stringToPrint);
 #endif
+}
+
+const std::string& System::GetThisExeSha256() {
+	static const std::string digest = [] {
+		std::ifstream file(ThisExecutablePath(), std::ios::binary | std::ios::ate);
+		const std::streamoff size = file ? static_cast<std::streamoff>(file.tellg()) : 0;
+		if (!file || size <= 0) {
+			return std::string("unavailable");
+		}
+		std::vector<uint8_t> bytes(static_cast<size_t>(size));
+		file.seekg(0, std::ios::beg);
+		if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) {
+			return std::string("unavailable");
+		}
+		const std::string hash = NetA7Journal::Sha256(bytes.data(), bytes.size());
+		return hash.empty() ? std::string("unavailable") : hash;
+	}();
+	return digest;
 }
 
 void System::PrintDiagnosticLine(const std::string& line) {

@@ -66,17 +66,7 @@ namespace RTE {
 
 	std::string NetMatchSummary::IdentityText() const {
 		if (identityLine.empty()) return {};
-		static const std::string exeHash = [] {
-			std::ifstream file(System::GetThisExePathAndName(), std::ios::binary | std::ios::ate);
-			const auto size = file.tellg();
-			if (!file || size <= 0) return std::string("unavailable");
-			std::vector<uint8_t> bytes(static_cast<size_t>(size));
-			file.seekg(0, std::ios::beg);
-			if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) return std::string("unavailable");
-			const std::string hash = NetA7Journal::Sha256(bytes.data(), bytes.size());
-			return hash.empty() ? std::string("unavailable") : hash;
-		}();
-		return identityLine + "\nSHA256: " + exeHash + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+		return identityLine + "\nSHA256: " + System::GetThisExeSha256() + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
 	}
 
 	std::string NetMatchSummary::DetailsText() const {
