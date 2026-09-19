@@ -194,6 +194,20 @@ namespace RTE {
 		return requestAddress;
 	}
 
+	/// The address a ticket rejoin dials: the row the directory browse found for the stored session, else
+	/// the ticket's own address or session id.
+	inline std::string ResolveTicketJoinAddressFromRows(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, bool iceDial) {
+		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
+		std::string resolved;
+		if (!sessionId.empty() && !rows.empty()) {
+			NetIceJoinTarget target;
+			if (NetIceResolveSessionRow(rows, local, sessionId, &target).empty() && !target.address.empty()) {
+				resolved = target.address;
+			}
+		}
+		return ResolveTicketJoinAddress(record, requestSessionId, requestAddress, resolved, iceDial);
+	}
+
 	/// A presentation-only record of the finished round; never restored into the simulation.
 	struct NetMatchSummary {
 		struct Peer {

@@ -4917,6 +4917,44 @@ namespace RTE {
 			if (ResolveTicketJoinAddress(record, "ignored", "127.0.0.1", "", true) != "session:sess-re-resolve-1") {
 				return Fail("SessionFull resolveJoinAddress ignored the stored directory session id");
 			}
+			// The SessionFull retry's own resolution: the address it dials comes out of the browsed rows.
+			NetDirectoryLocalIdentity local;
+			local.networkProtocolVersion = 1;
+			local.lockstepCodecVersion = 20;
+			local.controllerFrameVersion = 6;
+			local.sessionIdentityHash = std::string(64, 'a');
+			local.moduleManifestHash = std::string(64, 'c');
+			NetDirectorySessionRow browsed;
+			browsed.name = "Erol";
+			browsed.activity = "P4 Alpha Duel";
+			browsed.mode = "pvp-skirmish";
+			browsed.peerCount = 2;
+			browsed.seatsFree = 1;
+			browsed.networkProtocolVersion = local.networkProtocolVersion;
+			browsed.lockstepCodecVersion = local.lockstepCodecVersion;
+			browsed.controllerFrameVersion = local.controllerFrameVersion;
+			browsed.sessionIdentityHash = local.sessionIdentityHash;
+			browsed.moduleManifestHash = local.moduleManifestHash;
+			browsed.listenAddrs = {"198.51.100.7"};
+			browsed.listenPort = 41010;
+			browsed.joinMode = "ip";
+			browsed.sessionId = record.directorySessionId;
+			browsed.state = "lobby";
+			const std::string fromRows = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {browsed}, local, false);
+			if (fromRows != "198.51.100.7") {
+				return Fail("the SessionFull retry dialled '" + fromRows + "' instead of the browsed row's address");
+			}
+			NetDirectorySessionRow otherSession = browsed;
+			otherSession.sessionId = "sess-re-resolve-other";
+			otherSession.listenAddrs = {"198.51.100.9"};
+			const std::string noRow = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {otherSession}, local, false);
+			if (noRow != record.hostAddress) {
+				return Fail("a browse that found another session's row dialled '" + noRow + "' instead of the stored host address");
+			}
+			const std::string emptyBrowse = ResolveTicketJoinAddressFromRows(record, "ignored", "127.0.0.1", {}, local, true);
+			if (emptyBrowse != "session:sess-re-resolve-1") {
+				return Fail("a browse that found nothing dialled '" + emptyBrowse + "' instead of the stored directory session");
+			}
 
 			class ScriptedTransport final : public NetDirectoryClient::Transport {
 			public:
