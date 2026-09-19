@@ -108,6 +108,20 @@ RED_RECLAIM_HOLD_SLOT = "reclaim-hold-missed-the-slot"
 RED_RECLAIM_HOLD_WRONG_SLOT = "reclaim-hold-fenced-the-wrong-slot"
 RED_RECLAIM_HOLD_STRANGER = "reclaim-hold-let-a-stranger-in"
 RED_RECLAIM_HOLD_OWN_HOLDER = "reclaim-hold-refused-its-own-holder"
+RED_PROMOTED_DROP_SEAT_ID = "promoted-drop-named-the-seats-id"
+RED_PROMOTED_DROP_ACTORS = "promoted-drop-took-the-wrong-actors"
+RED_PROMOTED_DROP_PLAIN_SEAT = "promoted-drop-moved-a-plain-seat"
+RED_PROMOTED_FENCE_MISSED = "promoted-fence-missed-the-slot"
+RED_PROMOTED_FENCE_STRANGER = "promoted-fence-held-a-stranger"
+RED_PROMOTED_RESEAT_SEAT_ID = "promoted-reseat-named-the-seats-id"
+RED_PROMOTED_RESEAT_ACTORS = "promoted-reseat-took-the-wrong-actors"
+RED_PROMOTED_RESEAT_HOLD = "promoted-reseat-resolved-the-wrong-hold"
+RED_WORLD_FIRST_SEAT = "world-first-seat-unnamable"
+RED_WORLD_FIRST_SEAT_MATCH = "world-first-seat-moved-a-match"
+RED_WATCHER_NO_SEAT = "watcher-has-no-seat"
+RED_WATCHER_TOOK_MEMBER_SEAT = "watcher-took-a-members-seat"
+RED_WATCHER_PAST_BOUND = "watcher-past-the-bound"
+RED_WATCHER_REFUSED = "watcher-refused-by-a-full-world"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -488,6 +502,39 @@ CASES = (
             RED_RECLAIM_HOLD_OWN_HOLDER,
         ),
         "pass_token": "[net-world-reclaim-hold-selftest] PASS",
+    },
+    {
+        "name": "promoted-seat-drops-and-reseats-its-slot",
+        "argv": ["-net-world-promoted-seat-id-selftest"],
+        "red": RED_PROMOTED_DROP_SEAT_ID,
+        "also_red": (
+            RED_PROMOTED_DROP_ACTORS,
+            RED_PROMOTED_DROP_PLAIN_SEAT,
+            RED_PROMOTED_FENCE_MISSED,
+            RED_PROMOTED_FENCE_STRANGER,
+            RED_PROMOTED_RESEAT_SEAT_ID,
+            RED_PROMOTED_RESEAT_ACTORS,
+            RED_PROMOTED_RESEAT_HOLD,
+        ),
+        "pass_token": "[net-world-promoted-seat-id-selftest] PASS",
+    },
+    {
+        "name": "world-admits-its-configured-watcher",
+        "argv": ["-net-world-watcher-seat-selftest"],
+        "red": RED_WATCHER_NO_SEAT,
+        "also_red": (
+            RED_WATCHER_TOOK_MEMBER_SEAT,
+            RED_WATCHER_PAST_BOUND,
+            RED_WATCHER_REFUSED,
+        ),
+        "pass_token": "[net-world-watcher-seat-selftest] PASS",
+    },
+    {
+        "name": "dedicated-world-first-seat-can-be-named",
+        "argv": ["-net-world-first-seat-selftest"],
+        "red": RED_WORLD_FIRST_SEAT,
+        "also_red": (RED_WORLD_FIRST_SEAT_MATCH,),
+        "pass_token": "[net-world-first-seat-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",
