@@ -587,6 +587,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	image->graphUs = since(graphStart);
 	image->graph = graphIndex.Sample();
+	image->graphBeforeWalk = beforeWalk;
 	// The walk is what the freeze paid for the graph; the worker's formatting is timed where it runs.
 	image->graphWalkUs = image->luaReused ? 0 : image->graphUs;
 	image->graphSerial = g_LuaMan.GetTableBirthCount();

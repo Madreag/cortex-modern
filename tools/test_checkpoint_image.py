@@ -42,6 +42,8 @@ REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
     "one_walk_keeps_every_state_reused_root",
+    "a_partial_walk_answers_the_unknown_table",
+    "barrier_pause_reports_a_foreign_write",
 )
 # Rows that need the live 240-actor scene, printed by the autosave run.
 REQUIRED_SCENE_ROWS = (
@@ -52,6 +54,7 @@ REQUIRED_SCENE_ROWS = (
     "a_stamped_write_is_not_reused_from_the_shadow",
     "image_membership_matches_the_world_structure",
     "archive_describes_the_hashed_instant",
+    "a_saved_field_write_moves_the_stamp",
 )
 
 
