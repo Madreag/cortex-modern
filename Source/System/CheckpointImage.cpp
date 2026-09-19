@@ -51,11 +51,12 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 	return index;
 }
 
-void CheckpointGraphIndex::BeginWalk() {
+void CheckpointGraphIndex::BeginWalk(bool full) {
 	std::lock_guard lock(m_Mutex);
 	m_Walking.clear();
 	m_WalkingRoots.clear();
 	m_Walk = true;
+	m_FullWalk = full;
 	m_Root = 0;
 	m_WalkNoteUs = 0;
 }
@@ -77,16 +78,52 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 
 void CheckpointGraphIndex::EndWalk() {
 	std::lock_guard lock(m_Mutex);
-	m_TableRoots = std::move(m_Walking);
-	m_Roots = std::move(m_WalkingRoots);
+	if (m_FullWalk) {
+		m_TableRoots = std::move(m_Walking);
+		m_Roots = std::move(m_WalkingRoots);
+		m_DirtyRoots.clear();
+		m_UnknownTable = false;
+	} else {
+		// A partial walk keeps what the roots it skipped recorded, so their tables stay known.
+		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
+			entry = m_WalkingRoots.count(entry->second) ? m_TableRoots.erase(entry) : std::next(entry);
+		}
+		for (const auto& [table, root]: m_Walking) m_TableRoots[table] = root;
+		for (uint64_t root: m_WalkingRoots) {
+			m_Roots.insert(root);
+			m_DirtyRoots.erase(root);
+		}
+	}
 	m_Walking.clear();
 	m_WalkingRoots.clear();
-	m_DirtyRoots.clear();
 	m_DirtyTables = 0;
-	m_UnknownTable = false;
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
+	m_FullWalk = true;
 	m_Root = 0;
+}
+
+void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
+	std::lock_guard lock(m_Mutex);
+	m_RootsReused = reused;
+	m_RootsRewritten = rewritten;
+	// A capture that reused a chunk did not walk that root, so the map keeps what it recorded before.
+	m_FullWalk = reused == 0;
+}
+
+std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
+	std::lock_guard lock(m_Mutex);
+	return m_DirtyRoots;
+}
+
+bool CheckpointGraphIndex::UnknownTableWritten() const {
+	std::lock_guard lock(m_Mutex);
+	return m_UnknownTable;
+}
+
+bool CheckpointGraphIndex::HasWalked() const {
+	std::lock_guard lock(m_Mutex);
+	return !m_Roots.empty();
 }
 
 void CheckpointGraphIndex::OnTableWritten(const void* table) {
@@ -109,6 +146,8 @@ GraphDirt CheckpointGraphIndex::Sample() const {
 	dirt.dirtyTables = m_DirtyTables;
 	dirt.unknownTable = m_UnknownTable;
 	dirt.noteUs = m_NoteUs;
+	dirt.rootsReused = m_RootsReused;
+	dirt.rootsRewritten = m_RootsRewritten;
 	return dirt;
 }
 

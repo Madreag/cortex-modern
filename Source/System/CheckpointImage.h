@@ -23,6 +23,8 @@ namespace RTE {
 		size_t dirtyTables = 0;  //!< Tables written since that walk.
 		bool unknownTable = false;  //!< A table no walk has seen was written.
 		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
+		size_t rootsReused = 0;     //!< Roots whose chunk the last capture reused byte for byte.
+		size_t rootsRewritten = 0;  //!< Roots the last capture serialized again.
 	};
 
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
@@ -131,11 +133,16 @@ namespace RTE {
 	public:
 		static CheckpointGraphIndex& Get();
 
-		void BeginWalk();
+		void BeginWalk(bool full = true);
 		void BeginRoot(uint64_t root);
 		void NoteTable(const void* table);
 		void EndWalk();
 		void OnTableWritten(const void* table);
+		void NoteRootReuse(size_t reused, size_t rewritten);
+		/// The roots holding a table written since the walk that recorded them.
+		std::unordered_set<uint64_t> DirtyRoots() const;
+		bool UnknownTableWritten() const;
+		bool HasWalked() const;
 		GraphDirt Sample() const;
 
 	private:
@@ -148,6 +155,9 @@ namespace RTE {
 		size_t m_DirtyTables = 0;
 		bool m_UnknownTable = false;
 		bool m_Walk = false;
+		bool m_FullWalk = true;
+		size_t m_RootsReused = 0;
+		size_t m_RootsRewritten = 0;
 		uint64_t m_Root = 0;
 		int64_t m_NoteUs = 0;
 		int64_t m_WalkNoteUs = 0;
