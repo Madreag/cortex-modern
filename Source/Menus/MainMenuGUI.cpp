@@ -1,4 +1,5 @@
 #include "MainMenuGUI.h"
+#include "NetHostOptionsText.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
