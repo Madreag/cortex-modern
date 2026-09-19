@@ -280,6 +280,7 @@ namespace RTE {
 		/// 0 means the sound is set to only play once. -1 means it loops indefinitely.
 		/// @param loops The new loop count.
 		void SetLoopSetting(int loops) {
+			if (loops < -1) loops = -1;
 			if (DeferProperty(PendingOp::Loops, 0.0F, 0.0F, loops)) return;
 			m_Loops = loops;
 			m_SoundPropertiesUpToDate = false;

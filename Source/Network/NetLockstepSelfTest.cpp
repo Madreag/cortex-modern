@@ -13321,14 +13321,93 @@ namespace RTE {
 				       " produced_jump=" + std::to_string(controller->IsState(ControlState::BODY_JUMP) ? 1 : 0) + "}";
 			};
 			const std::string ended = "{producing=0 committed_fire=1 produced_jump=0}";
-			const std::string untouched = "{producing=1 committed_fire=0 produced_jump=1}";
 			const std::string stayerState = describe(stayer);
 			const std::string moverState = describe(mover);
 			const std::string leaverState = describe(leaver.get());
-			if (stayerState != ended || moverState != ended || leaverState != untouched) {
+			if (stayerState != ended || moverState != ended || leaverState != ended) {
 				return finish(("stayer=" + stayerState + " team_changed=" + moverState + " left_the_world=" + leaverState +
-				               " (expected " + ended + " " + ended + " " + untouched + ")")
+				               " (expected " + ended + " " + ended + " " + ended + ")")
 				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
+		// Two views of one actor: remove inside the window, End, re-add, a second Begin/End. The
+		// re-added view's committed input has to match the view that stayed on the wire.
+		bool TestReaddedActorBeginsFromTheWire(std::string* error) {
+			const char* name = "readded_actor_begins_from_the_wire";
+			bool worldReset = ResetSelfTestWorld();
+			const auto finish = [&](const char* message) {
+				worldReset = ResetSelfTestWorld() && worldReset;
+				if (!message && !worldReset) {
+					message = "the world reset around this arm failed";
+				}
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* ownerView = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* peerView = MakeSwitchTestActor(Activity::TeamOne);
+			if (!ownerView || !peerView) {
+				delete ownerView;
+				delete peerView;
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(ownerView);
+			AddSwitchTestActor(peerView);
+			for (Actor* actor: {ownerView, peerView}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, true);
+			}
+			const auto isLocal = [](const Actor*) { return true; };
+			const std::deque<Actor*> firstActors = {ownerView, peerView};
+			const std::vector<long int> firstProducing = MovableMan::BeginLockstepProducingPass(firstActors, isLocal);
+			if (firstProducing.size() != firstActors.size() || !ownerView->GetController()->IsProducingLocalInput() ||
+			    !peerView->GetController()->IsProducingLocalInput()) {
+				return finish(("the pass began on " + std::to_string(firstProducing.size()) + " of " + std::to_string(firstActors.size()) + " actors").c_str());
+			}
+			for (Actor* actor: {ownerView, peerView}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, false);
+				actor->GetController()->SetState(ControlState::BODY_JUMP, true);
+			}
+			std::unique_ptr<Actor> held(g_MovableMan.RemoveActor(ownerView));
+			if (held.get() != ownerView || g_MovableMan.IsActor(ownerView)) {
+				return finish("the owner view did not leave the world");
+			}
+			MovableMan::EndLockstepProducingPass(firstProducing);
+			AddSwitchTestActor(held.release());
+			const std::deque<Actor*> secondActors = {ownerView, peerView};
+			const std::vector<long int> secondProducing = MovableMan::BeginLockstepProducingPass(secondActors, isLocal);
+			if (secondProducing.size() != secondActors.size()) {
+				return finish(("the second pass began on " + std::to_string(secondProducing.size()) + " of " + std::to_string(secondActors.size()) + " actors").c_str());
+			}
+			MovableMan::EndLockstepProducingPass(secondProducing);
+			const ControllerFrame ownerSnap = ControllerFrameCodec::Snapshot(static_cast<int64_t>(ownerView->GetUniqueID()), *ownerView->GetController(), ownerView);
+			const ControllerFrame peerSnap = ControllerFrameCodec::Snapshot(static_cast<int64_t>(peerView->GetUniqueID()), *peerView->GetController(), peerView);
+			const auto describeSnap = [](const ControllerFrame& frame) {
+				return "{uid=" + std::to_string(frame.actorUniqueID) +
+				       " mask=" + std::to_string(frame.stateMask) +
+				       " fire=" + std::to_string((frame.stateMask >> ControlState::WEAPON_FIRE) & 1) +
+				       " jump=" + std::to_string((frame.stateMask >> ControlState::BODY_JUMP) & 1) + "}";
+			};
+			const std::string ownerText = describeSnap(ownerSnap);
+			const std::string peerText = describeSnap(peerSnap);
+			std::cout << "[net-lockstep-selftest] " << name << " owner=" << ownerText << " peer=" << peerText << std::endl;
+			const bool ownerCarriesProduced = ((ownerSnap.stateMask >> ControlState::BODY_JUMP) & 1) != 0;
+			const bool peerHoldsWire = ((peerSnap.stateMask >> ControlState::WEAPON_FIRE) & 1) != 0 &&
+			                           ((peerSnap.stateMask >> ControlState::BODY_JUMP) & 1) == 0;
+			if (ownerCarriesProduced || !peerHoldsWire ||
+			    ((ownerSnap.stateMask >> ControlState::WEAPON_FIRE) & 1) == 0 ||
+			    ownerSnap.stateMask != peerSnap.stateMask) {
+				return finish(("re-added view committed the produced press owner=" + ownerText + " peer=" + peerText).c_str());
 			}
 			return finish(nullptr);
 		}
@@ -13583,8 +13662,10 @@ namespace RTE {
 		// Runs last and on a world of its own: it empties the world the arms above filled.
 		std::string producingSetError;
 		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
+		std::string readdedError;
+		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
 		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
-		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet) {
+		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;

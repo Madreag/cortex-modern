@@ -433,6 +433,9 @@ namespace RTE {
 
 		/// Ends the producing pass: keeps what the seat produced for the next one and gives the sim its committed input back.
 		void EndLocalProduction();
+
+		/// Drops producing-pass state without keeping the produced buffer; the sim-facing input is the committed frame.
+		void DropLocalProduction();
 #pragma endregion
 
 #pragma region Operator Overloads
