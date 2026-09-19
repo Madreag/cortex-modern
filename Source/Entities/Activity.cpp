@@ -1865,6 +1865,35 @@ bool Activity::RunPresentationViewSelfTest() {
 	const bool rejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(reject, rejectedBuy, 0);
 	check("apply_reject_clears_the_view", rejected && reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 10.0F,
 	      "rejected " + std::to_string(rejected ? 1 : 0) + " presentation " + std::to_string(reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	GameActivity unknownCraft;
+	unknownCraft.SetTeamFunds(2000, Teams::TeamOne);
+	unknownCraft.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	NetGameDeliverCargo unknownBuy = rejectedBuy;
+	unknownBuy.cost = 137;
+	unknownBuy.craftPreset = "No Such Dropship";
+	const bool unknownRejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(unknownCraft, unknownBuy, 0);
+	check("unknown_craft_reject_clears_the_view", unknownRejected && unknownCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
+	      "rejected " + std::to_string(unknownRejected ? 1 : 0) + " presentation " + std::to_string(unknownCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	GameActivity nonCraft;
+	nonCraft.SetTeamFunds(2000, Teams::TeamOne);
+	nonCraft.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	NetGameDeliverCargo nonCraftBuy = rejectedBuy;
+	nonCraftBuy.cost = 137;
+	nonCraftBuy.craftClassName = "MOPixel";
+	nonCraftBuy.craftPreset = "Spark Yellow 1";
+	const bool nonCraftRejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(nonCraft, nonCraftBuy, 0);
+	check("non_craft_reject_clears_the_view", nonCraftRejected && nonCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
+	      "rejected " + std::to_string(nonCraftRejected ? 1 : 0) + " presentation " + std::to_string(nonCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	GameActivity queueFail;
+	queueFail.SetTeamFunds(2000, Teams::TeamOne);
+	queueFail.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	NetGameDeliverCargo refusedBuy = rejectedBuy;
+	// A team QueuePurchaseDelivery refuses, at a cost the funds gate lets through: the apply reaches the queue-fail clear.
+	refusedBuy.cost = 0;
+	refusedBuy.team = Teams::MaxTeamCount;
+	const bool queueRefused = !g_MovableMan.ApplyQueuedPurchaseDelivery(queueFail, refusedBuy, 0);
+	check("queue_fail_reject_keeps_the_pending_view", queueRefused && queueFail.GetTeamFunds(Teams::TeamOne) == 2000.0F && queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      "refused " + std::to_string(queueRefused ? 1 : 0) + " committed " + std::to_string(queueFail.GetTeamFunds(Teams::TeamOne)) + " presentation " + std::to_string(queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
 	GameActivity peekedExpire;
 	peekedExpire.SetTeamFunds(2000, Teams::TeamOne);

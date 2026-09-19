@@ -444,6 +444,15 @@ static void ApplyDeferredSoundOp(const NetGameSoundOp& command) {
 	container->ApplyPendingSoundOp(op);
 }
 
+// A buy order rejected at apply never commits, so the seat that issued it goes back to its committed funds.
+static void ClearRejectedPurchaseView(Activity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId) {
+	if (!delivery.queuedPurchase) {
+		return;
+	}
+	const int player = senderPeerId == ScenarioRunner::GetLockstepLocalPeerId() ? delivery.orderedByPlayer : Players::NoPlayer;
+	activity.ClearPreviewedPurchase(player, delivery.team, delivery.cost);
+}
+
 static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 	if (readyFrame.localCommands.empty() && readyFrame.remoteCommands.empty()) {
 		return;
@@ -530,16 +539,19 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		} else if (const NetGameDeliverCargo* delivery = std::get_if<NetGameDeliverCargo>(&command.payload)) {
 			// Reject an out-of-range team or a non-finite spawn before building the craft.
 			if (delivery->team < Activity::TeamOne || delivery->team >= Activity::MaxTeamCount || !std::isfinite(delivery->posX) || !std::isfinite(delivery->posY)) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				continue;
 			}
 			GameActivity* gameActivity = dynamic_cast<GameActivity*>(activity);
 			if (delivery->queuedPurchase && (!gameActivity || !std::isfinite(delivery->cost) || delivery->cost < 0.0F || !std::isfinite(delivery->waypointX) || !std::isfinite(delivery->waypointY))) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				g_ConsoleMan.PrintString("ERROR: Buy order rejected - bad order fields");
 				std::cout << "[net-match] buy order rejected: bad order fields" << std::endl;
 				continue;
 			}
 			const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery->craftClassName, delivery->craftPreset, delivery->craftModule);
 			if (!craftPreset) {
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery->craftPreset + "\"");
 				continue;
 			}
@@ -547,6 +559,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			ACraft* craft = dynamic_cast<ACraft*>(craftClone);
 			if (!craft) {
 				delete craftClone;
+				ClearRejectedPurchaseView(*activity, *delivery, command.senderPeerId);
 				continue;
 			}
 			if (delivery->queuedPurchase) {
@@ -2440,6 +2453,7 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDe
 	GameActivity* gameActivity = dynamic_cast<GameActivity*>(&activity);
 	if (!gameActivity || !std::isfinite(delivery.cost) || delivery.cost < 0.0F || !std::isfinite(delivery.waypointX) || !std::isfinite(delivery.waypointY)) {
 		delete craft;
+		ClearRejectedPurchaseView(activity, delivery, senderPeerId);
 		g_ConsoleMan.PrintString("ERROR: Buy order rejected - bad order fields");
 		std::cout << "[net-match] buy order rejected: bad order fields" << std::endl;
 		return false;
@@ -2447,6 +2461,7 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDe
 	if (!craft) {
 		const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery.craftClassName, delivery.craftPreset, delivery.craftModule);
 		if (!craftPreset) {
+			ClearRejectedPurchaseView(activity, delivery, senderPeerId);
 			g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery.craftPreset + "\"");
 			return false;
 		}
@@ -2454,6 +2469,7 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDe
 		craft = dynamic_cast<ACraft*>(craftClone);
 		if (!craft) {
 			delete craftClone;
+			ClearRejectedPurchaseView(activity, delivery, senderPeerId);
 			return false;
 		}
 	}
