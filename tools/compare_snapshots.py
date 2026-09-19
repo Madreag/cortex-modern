@@ -152,7 +152,17 @@ def parse_graph(data):
         graph[label] = entries
     if version != "SG1":
         reader.expect("E")
-        graph["patches"] = [tuple(reader.token() for _ in range(3)) for _ in range(reader.count())]
+        patches = []
+        for _ in range(reader.count()):
+            target = reader.token()
+            if version == "SG6":
+                # SG6 carries the changed pairs in the patch itself; the list that held them is not a node.
+                reader.expect("c")
+                pairs = [(reader.token(), reader.token()) for _ in range(reader.count())]
+                patches.append((target, pairs, reader.token()))
+            else:
+                patches.append((target, reader.token(), reader.token()))
+        graph["patches"] = patches
     if version in ("SG3", "SG4", "SG5", "SG6"):
         reader.expect("R")
         graph["rng"] = reader.token()
