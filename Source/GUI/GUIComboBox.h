@@ -162,11 +162,11 @@ namespace RTE {
 		/// Gets the enabled state of the control.
 		bool GetEnabled() override;
 
-		/// Gets text (only if style is DropDown).
-		/// @return Text. Returns empty string is style is not DropDown.
+		/// Gets the text in the box, whatever the drop-down style.
+		/// @return Text. Returns empty string if there is no text panel.
 		std::string GetText();
 
-		/// Sets text (only if style is DropDown).
+		/// Sets the text in the box, whatever the drop-down style. A DropDownList shows it until a row is picked.
 		/// @param Text Text.
 		void SetText(const std::string& Text);
 
