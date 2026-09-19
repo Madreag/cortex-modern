@@ -645,6 +645,19 @@ def scripts(case, port, root):
                 "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                 "assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.\n"
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
+                # H34 on the two-peer fixture: the adopted config names both seated humans, the
+                # lobby sits LAN only, and the bound port refuses the edit mid-session.
+                "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+                "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 2\n"
+                "assert_label ComboHostNetVisibility LAN only\n"
+                "set_text TextHostNetPort 40000\nwait 3\n"
+                "assert_label LabelHostOptStatus End the session to change the port\n"
+                f"assert_label TextHostNetPort {port}\n"
+                # H25: a hosted lobby is still Starting, so even on a connected session the repair
+                # button stays off with the live-session reason until a match is Running.
+                "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
+                "assert_enabled ButtonHostRecRepairNow 0\n"
+                "assert_label LabelHostRecRepairHint Repair needs a live match session\n"
                 "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
                 "assert_label LabelHostRulesBrainless When every human brain is lost\n"
                 "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
@@ -828,6 +841,27 @@ def scripts(case, port, root):
         text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
+        # H34: the host row names mode/capacity/seated humans off the adopted config; the three
+        # visibility states are explicit and a LAN lobby sits on LAN only.
+        text += checks("LabelHostNetMode", "CollectionBoxHostPageNetwork")
+        text += "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 1\n"
+        text += checks("ComboHostNetVisibility", "CollectionBoxHostPageNetwork")
+        text += "assert_label ComboHostNetVisibility LAN only\n"
+        text += checks("TextHostNetPort", "CollectionBoxHostPageNetwork")
+        text += f"assert_label TextHostNetPort {port}\n"
+        # An Internet pick needs a configured directory URL the fixture lacks: it refuses with the
+        # reason and the combo snaps back to the live state.
+        text += ("combo_select ComboHostNetVisibility Internet: Listed\nwait 3\n"
+                 "assert_label LabelHostOptStatus Internet needs a session directory URL\n"
+                 "assert_label ComboHostNetVisibility LAN only\n"
+                 "combo_select ComboHostNetVisibility Internet: Unlisted\nwait 3\n"
+                 "assert_label LabelHostOptStatus Internet needs a session directory URL\n"
+                 "assert_label ComboHostNetVisibility LAN only\n")
+        # A hosted session owns its bound port: the edit refuses, names the end-session path, and
+        # the field resets to the live value.
+        text += (f"set_text TextHostNetPort 40000\nwait 3\n"
+                 "assert_label LabelHostOptStatus End the session to change the port\n"
+                 f"assert_label TextHostNetPort {port}\n")
         text += "dump_host_options\n"
         # H25-H28 Recovery.
         text += "activate TabHostPageRecovery\nwait 3\nassert_visible CollectionBoxHostPageRecovery 1\n"
@@ -835,6 +869,11 @@ def scripts(case, port, root):
         text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
+        # H25: a lobby is not a live match, so the button is off and the hint says why.
+        text += checks("ButtonHostRecRepairNow", "CollectionBoxHostPageRecovery")
+        text += checks("LabelHostRecRepairHint", "CollectionBoxHostPageRecovery")
+        text += ("assert_enabled ButtonHostRecRepairNow 0\n"
+                 "assert_label LabelHostRecRepairHint Repair needs a live match session\n")
         text += "dump_host_options\n"
         # H29-H31 Files and status.
         text += "activate TabHostPageFiles\nwait 3\nassert_visible CollectionBoxHostPageFiles 1\n"

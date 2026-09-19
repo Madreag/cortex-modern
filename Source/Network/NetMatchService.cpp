@@ -780,6 +780,53 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::CanResyncMatch() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_State == NetMatchServiceState::Running && ActiveWireLocked() && m_Session && m_Runner &&
+		       m_Session->IsReady() && !m_ResyncHealOpen && m_PendingResyncLoad.empty() && !m_PendingAutosaveLoad;
+	}
+
+	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (inFlight) *inFlight = m_ResyncHealOpen;
+		if (bytes) *bytes = m_LastResync.envelopeBytes ? m_LastResync.envelopeBytes : m_LastResync.archiveBytes;
+		if (elapsedMs) *elapsedMs = m_ResyncHealOpen ? SteadyNowMs() - m_ResyncHealStartMs : m_LastResync.healMs;
+	}
+
+	int NetMatchService::GetDirectoryVisibility() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return 0;
+		return m_DirectoryHidden ? 1 : 2;
+	}
+
+	bool NetMatchService::SetDirectoryVisibility(int visibility) {
+		if (visibility <= 0) {
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return true; // already LAN-only
+			}
+			RetractDirectoryListing();
+			return true;
+		}
+		NetDirectoryRegisterRequest advertised;
+		bool running;
+		bool listed;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			// A retracted row or a LAN-bound session has no lease to move; relisting is a new session's.
+			if (m_DirectoryRetracted || m_IceBoundSessionId.empty()) return false;
+			advertised = m_DirectoryRow;
+			running = m_State == NetMatchServiceState::Running;
+			listed = visibility >= 2;
+			if (listed == !m_DirectoryHidden) return true;
+			m_DirectoryHidden = !listed;
+			m_DirectoryRelistPending = false;
+		}
+		m_Directory.Advertise(advertised, running, listed);
+		m_Directory.Update(SteadyNowMs());
+		return true;
+	}
+
 	NetMatchService::TransportLink NetMatchService::TakeTransportLinkLocked() {
 		TransportLink link;
 		link.migrated = std::move(m_MigratedTransport);
