@@ -766,7 +766,7 @@ namespace RTE {
 		void DriveWorldJoinClient(uint64_t nowMs);
 		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
 		/// row the world re-registers under on its next boot.
-		void AdoptWorldTicketSession();
+		void AdoptWorldTicketSession(const NetMatchConfig& config);
 		/// Host: watches each seated member's brain and authors one respawn per death.
 		void DriveWorldSeatRespawns(uint64_t nowFrame);
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
@@ -851,6 +851,8 @@ namespace RTE {
 		bool DeriveRestartKey(std::array<uint8_t, 32>& key);
 		/// The session the round is hosted on; the adopted match config carries the seats it offers.
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
+		/// Applies the service's lobby start policy and request controls.
+		void ConfigureLobbyStart(NetMatchRunnerConfig& config);
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
 		/// Match end or the host leaving takes the directory row down now rather than at Destroy.
 		/// Game-thread only, like the client it drives.
@@ -909,6 +911,7 @@ namespace RTE {
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
+		friend bool TestServiceWorldJoinAdoptsConfig(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);

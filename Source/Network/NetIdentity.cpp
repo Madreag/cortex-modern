@@ -121,7 +121,7 @@ namespace RTE {
 
 		NetHash32 HashConfig(const NetIdentityDeterministicConfig& config) {
 			CanonicalHasher hasher;
-			hasher.UpdateLine("NetIdentityDeterministicConfig/v1");
+			hasher.UpdateLine("NetIdentityDeterministicConfig/v2");
 			AppendField(hasher, "game_version", config.gameVersion);
 			AppendInt(hasher, "network_protocol_version", config.networkProtocolVersion);
 			AppendInt(hasher, "controller_frame_version", config.controllerFrameVersion);
@@ -135,8 +135,11 @@ namespace RTE {
 			// The threaded Lua state count does not change the sim, so peers may run different counts.
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
-			AppendInt(hasher, "lockstep_codec_version", config.lockstepCodecVersion);
-			AppendInt(hasher, "match_config_version", config.matchConfigVersion);
+			// Admission checks supported layouts; the lobby agrees on the host's selected layout.
+			AppendInt(hasher, "supported_lockstep_codec_version", config.supportedLockstepCodecVersion);
+			AppendInt(hasher, "supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion);
+			AppendInt(hasher, "supported_match_config_version", config.supportedMatchConfigVersion);
+			AppendInt(hasher, "supported_world_match_config_version", config.supportedWorldMatchConfigVersion);
 			AppendInt(hasher, "lobby_protocol_version", config.lobbyProtocolVersion);
 			AppendField(hasher, "enabled_global_scripts", config.enabledGlobalScripts);
 			return hasher.Finalize();
@@ -319,6 +322,10 @@ namespace RTE {
 				{"scenario_test_module_loaded", config.scenarioTestModuleLoaded},
 				{"lockstep_codec_version", config.lockstepCodecVersion},
 				{"match_config_version", config.matchConfigVersion},
+				{"supported_lockstep_codec_version", config.supportedLockstepCodecVersion},
+				{"supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion},
+				{"supported_match_config_version", config.supportedMatchConfigVersion},
+				{"supported_world_match_config_version", config.supportedWorldMatchConfigVersion},
 				{"lobby_protocol_version", config.lobbyProtocolVersion},
 				{"enabled_global_scripts", config.enabledGlobalScripts},
 			};
@@ -410,7 +417,6 @@ namespace RTE {
 
 	bool NetIdentity::CaptureManifestInputs(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
 		NetIdentityManifest manifest;
-		manifest.schema = 1;
 		manifest.gameVersion = c_VersionString;
 		manifest.networkProtocolVersion = NetProtocol::c_Version;
 		manifest.controllerFrameVersion = ControllerFrame::c_Version;
@@ -434,6 +440,10 @@ namespace RTE {
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
 		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
+		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_Version;
+		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		manifest.deterministicConfig.supportedMatchConfigVersion = NetMatchConfigUtil::c_Version;
+		manifest.deterministicConfig.supportedWorldMatchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
 		manifest.deterministicConfig.lobbyProtocolVersion = NetLobbyProtocol::c_Version;
 		manifest.deterministicConfig.enabledGlobalScripts = g_SettingsMan.GetEnabledGlobalScriptsCSV();
 
