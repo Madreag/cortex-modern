@@ -1,0 +1,66 @@
+{
+  "schema": 1,
+  "name": "mod-void-wanderers",
+  "port_base": 49450,
+  "title": "Void Wanderers unchanged: its campaign activity hosted, joined and played over the lockstep transport",
+  "requires": ["VoidWanderers.rte"],
+  "size": "960x540",
+  "timeout_s": 600,
+  "runs": [
+    {
+      "name": "single",
+      "peers": [
+        {
+          "name": "sp",
+          "args": ["-module", "VoidWanderers.rte", "-max-ticks", "3000",
+                   "-num-lua-states", "4", "-input-script", "{INPUT_SCRIPT}"],
+          "input_script": "play-input.txt",
+          "menu_script": "mod-void-wanderers.menu.txt"
+        }
+      ]
+    },
+    {
+      "name": "paired",
+      "peers": [
+        {
+          "name": "host",
+          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
+                   "-net-match-ticks", "1800", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+                   "-net-match-service-module", "VoidWanderers.rte",
+                   "-net-match-service-preset", "Void Wanderers",
+                   "-net-match-report", "{OUT}/host-match.json",
+                   "-input-script", "{INPUT_SCRIPT}", "-net-host"],
+          "input_script": "play-input.txt"
+        },
+        {
+          "name": "client",
+          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
+                   "-net-match-ticks", "1800", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
+                   "-net-match-service-module", "VoidWanderers.rte",
+                   "-net-match-service-preset", "Void Wanderers",
+                   "-net-match-report", "{OUT}/client-match.json",
+                   "-input-script", "{INPUT_SCRIPT}", "-net-join", "127.0.0.1"],
+          "input_script": "play-input.txt",
+          "start_delay_s": 3.0
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {"id": "vw-not-installed",
+     "what": "the mod is present before this scenario is run",
+     "assert": "driver refuses the run when <repo>/Data/VoidWanderers.rte is absent",
+     "blocked_by": "VoidWanderers.rte is NOT installed on this machine. <repo>/Data holds only Base.rte, Browncoats.rte, Coalition.rte, Dummy.rte, Imperatus.rte, Missions.rte, MuIlaak.rte, Ronin.rte, Techion.rte, Tests.rte, Uzira.rte and the Modding folder; there is no Mods folder in the tree (the runner makes an empty one per run). The lead installs the mod into <repo>/Data before this scenario can run, and confirms its activity and preset names against its Index.ini - the two names below are written from the mod's documented ones and must be checked against the installed copy."},
+    {"id": "vw-loads", "peer": "sp", "screen": "MainScreen",
+     "what": "the engine loads with VoidWanderers.rte and reaches the main menu with no console error and no missing-preset warning",
+     "assert": "menu script: assert_screen MainScreen, assert_console 0 (the error console never opened itself) plus a log scan for ERROR lines"},
+    {"id": "vw-sp-play", "peer": "sp", "screen": "game", "sim_ticks": [60, 3000],
+     "what": "the mod's own activity plays: its Lua runs, its actors and objects behave as they did before this fork's changes",
+     "assert": "input script drives the seat; no Lua traceback in the log"},
+    {"id": "vw-mp-play", "screen": "game", "sim_ticks": [30, 1800],
+     "what": "the same mod activity runs over the lockstep transport on two peers and the two videos agree",
+     "assert": "both match reports and a frame-by-frame compare of the two contact sheets"},
+    {"id": "vw-no-lua-break", "what": "no Lua or native API behaviour the mod relies on has changed",
+     "assert": "logs carry no [lua] error, no RTE Assert and no missing-property warning on either run"}
+  ]
+}
