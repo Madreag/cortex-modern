@@ -136,13 +136,12 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 				Buttons |= 1 << i;
 		}
 
-		// Mouse Up. CloseDropped and several click handlers SetFocus(nullptr) here.
+		// Mouse Up
 		if (Released != GUIPanel::MOUSE_NONE && CurPanel) {
 			CurPanel->OnMouseUp(MouseX, MouseY, Released, Mod);
 		}
 
-		// Double click (on the mouse up). The up handler may have cleared m_FocusPanel; this still
-		// talks to CurPanel, not the focus member.
+		// Double click (on the mouse up)
 		if (Released != GUIPanel::MOUSE_NONE && m_DoubleClickButtons != GUIPanel::MOUSE_NONE) {
 			if (CurPanel) {
 				CurPanel->OnDoubleClick(MouseX, MouseY, m_DoubleClickButtons, Mod);
@@ -150,7 +149,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 			m_LastMouseDown[0] = m_LastMouseDown[1] = m_LastMouseDown[2] = -99999.0f;
 		}
 
-		// Mouse Down. Buttons and lists can take focus, or a click-outside CloseDropped can clear it.
+		// Mouse Down
 		if (Pushed != GUIPanel::MOUSE_NONE) {
 			// Double click settings
 			m_DoubleClickButtons = GUIPanel::MOUSE_NONE;
@@ -184,7 +183,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 			CurPanel->OnMouseMove(MouseX, MouseY, Buttons, Mod);
 		}
 
-		// Mouse Hover. The hover panel can change focus; later work re-reads the live members.
+		// Mouse Hover
 		if (m_HoverTrack && m_HoverTime < CurTime) {
 			// Disable it (panel will have to re-enable it if it wants to continue)
 			m_HoverTrack = false;
@@ -246,7 +245,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 				break;
 			}
 			switch (KeyboardBuffer[i]) {
-				// KeyDown & KeyPress. CloseDropped SetFocus(nullptr) from OnKeyDown; skip the rest of this key.
+				// KeyDown & KeyPress
 				case GUIInput::Pushed:
 					focused->OnKeyDown(i, Mod);
 					if (m_FocusPanel == focused) {
