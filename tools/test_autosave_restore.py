@@ -463,12 +463,6 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     if FAMILY_LOCK.exists():
         raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
     runs, records = {}, {}
-    for who in ("host", "client"):
-        runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, [])),
-                             root / who, 420, env={"CCCP_HEADLESS": "1"})
-        if carry is not None:
-            _carry_world_state(carry, who, Path(runs[who].cwd))
-
     def drive(who: str) -> None:
         try:
             records[who] = runs[who].start().finish()
@@ -478,6 +472,11 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     threads = [threading.Thread(target=drive, args=(who,)) for who in ("host", "client")]
     killed = False
     try:
+        for who in ("host", "client"):
+            runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, [])),
+                                 root / who, 420, env={"CCCP_HEADLESS": "1"})
+            if carry is not None:
+                _carry_world_state(carry, who, Path(runs[who].cwd))
         threads[0].start()
         threading.Event().wait(1)
         threads[1].start()
@@ -485,10 +484,25 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
             waiter = threading.Event()
             for _ in range(4200):
                 waiter.wait(0.1)
-                captures = [int(row[0]) for row in CAPTURE.findall(peer_log(root, "host"))]
-                if any(tick >= kill_past for tick in captures):
+                host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
+                captures = [int(row[0]) for row in CAPTURE.findall(host_log)]
+                activations = re.findall(r"(?m)^\[net-world\] activate peer=\d+ at=(\d+)$", host_log)
+                entered = re.search(r"(?m)^\[net-match-service-e2e\] lobby_snapshot: .*activity=Persistent World\b", client_log)
+                identity = WORLD_IDENTITY.search(host_log)
+                ticket = root / "client/runtime/Userdata/reconnect.ticket"
+                published = []
+                if identity:
+                    store = root / "host/runtime/Autosaves"
+                    published = [int(path.stem.rsplit("-", 1)[1]) for path in store.glob(f"{identity[1]}-*.ccmanifest")
+                                 if path.with_suffix(".ccsave").exists() and (store / f"{identity[1]}.admission").exists()]
+                # A late join must activate before the checkpoint whose seat this restart reclaims.
+                seated = bool(activations) or "[net-world] offer " not in host_log
+                seated_tick = int(activations[-1]) if activations else 1
+                if (any(tick >= kill_past for tick in captures) and entered and seated and ticket.exists()
+                        and any(tick >= seated_tick for tick in published)):
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
+                    records["_kill_capture_tick"] = max(captures)
                     break
                 if not threads[0].is_alive():
                     break
@@ -499,6 +513,32 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
             run.close()
     records["_killed"] = killed
     return records
+
+
+def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick: int) -> dict:
+    """Compare every tick the joiner can simulate, from its agreed checkpoint to the planned end."""
+    from compare_sim_traces import load_trace
+
+    host_path, client_path = root / "host_trace.json", root / "client_trace.json"
+    host_ticks, _ = load_trace(host_path)
+    client_ticks, _ = load_trace(client_path)
+    first_tick = next(iter(client_ticks))
+    assert next(iter(host_ticks)) == resumed_tick + 1, (next(iter(host_ticks)), resumed_tick)
+    assert first_tick >= resumed_tick + 1, (first_tick, resumed_tick)
+    if first_tick != resumed_tick + 1:
+        offers = [json.loads(line) for line in re.findall(r"(?m)^\[net-world\] offer (\{.*\})$", peer_log(root, "host"))]
+        assert any(offer["world_id"] == world_id and offer["tick"] + 1 == first_tick for offer in offers), \
+            f"the joiner's first tick {first_tick} follows no world checkpoint offer"
+        # The host's earlier ticks precede the image the late joiner received; keep the raw trace intact.
+        shared = json.loads(host_path.read_text(encoding="utf-8-sig"))
+        shared["runs"][0]["tick_hashes"] = [row for row in shared["runs"][0]["tick_hashes"] if row["tick"] >= first_tick]
+        host_path = root / "host_joined_trace.json"
+        host_path.write_text(json.dumps(shared) + "\n", encoding="utf-8")
+    passed, compared = strict_compare(host_path, client_path, expected_ticks=last_tick - first_tick + 1,
+                                      first_tick=first_tick, min_ticks=100)
+    assert passed, f"the world's peers diverged: {compared}"
+    compared["joined_first_tick"] = first_tick
+    return compared
 
 
 def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
@@ -515,7 +555,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     root.mkdir(parents=True, exist_ok=False)
     first, second, fresh = root / "boot1", root / "boot2", root / "fresh"
     first.mkdir(parents=True, exist_ok=False)
-    kill_tick, resume_ticks = 400, 600
+    kill_tick, round_ticks = 400, 600
 
     records = _run_world_round(repo, first, port, 1200, {}, kill_past=kill_tick)
     assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
@@ -526,6 +566,7 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     assert held, "the killed world left no checkpoint to resume from"
     assert all(fields["MatchId"] == world_id for fields in held.values()), (world_id, sorted(held))
     autosaves = first / "host" / "runtime/Autosaves"
+    assert (autosaves / f"{world_id}.admission").exists(), "the killed world left no restart admission file"
     resume_tick = max(int(fields["SavedTick"]) for fields in held.values()
                       if (autosaves / f"{world_id}-{fields['SavedTick']}.ccmanifest").exists())
     # D5b: the world's checkpoints carry the tick's agreed lockstep state, not an empty one.
@@ -534,10 +575,13 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     applied = re.findall(r"(?m)^Applied = (\d+),(\d+)$", manifest)
     assert len(applied) >= 1, f"the world's manifest carries no applied command sequence: {manifest}"
     seats_one = _seat_rows(first, "client")
+    assert seats_one, "the client never occupied a seat before the host was killed"
+    assert (first / "client/runtime/Userdata/reconnect.ticket").is_file(), "the killed world's client kept no reconnect ticket"
 
     # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
     second.mkdir(parents=True, exist_ok=False)
-    resumed = _run_world_round(repo, second, port + 2, resume_ticks, {}, carry=first)
+    resume_end = resume_tick + round_ticks
+    resumed = _run_world_round(repo, second, port + 2, resume_end, {}, carry=first)
     host_log = peer_log(second, "host")
     restarted = WORLD_IDENTITY.findall(host_log)
     assert restarted, "the restarted world printed no identity"
@@ -556,29 +600,44 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     assert seats_one.keys() == seats_two.keys(), (sorted(seats_one), sorted(seats_two))
     for seat, before in seats_one.items():
         assert seats_two[seat]["team"] == before["team"], (seat, seats_two[seat], before)
-    passed, compared = strict_compare(second / "host_trace.json", second / "client_trace.json", first_tick=resume_tick + 1)
-    assert passed, f"the resumed world's peers diverged: {compared}"
+    resumed_report = json.loads((second / "client_report.json").read_text(encoding="utf-8"))
+    reconnect = resumed_report["service"]["reconnect"]
+    assert reconnect["client_used_stored_ticket"] and reconnect["client_reclaim_outcome"] == "reclaim_accepted", reconnect
+    compared = _compare_world_round(second, world_id, resume_tick, resume_end)
+    completed = RETAINED.findall(host_log)
+    after_anchor = {int(row[0]) for row in completed if int(row[0]) > resume_tick}
+    assert len(after_anchor) > RETAINED_AUTOSAVES, f"the resumed round never rotated past its anchor: {completed}"
+    assert completed and all(int(row[1]) == RETAINED_AUTOSAVES and int(row[2]) == resume_tick for row in completed), completed
+    held_two = checkpoints(second, "host")
+    expected = set(sorted(after_anchor, reverse=True)[:RETAINED_AUTOSAVES]) | {resume_tick}
+    assert {int(fields["SavedTick"]) for fields in held_two.values()} == expected, (sorted(held_two), sorted(expected))
 
     # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
     fresh.mkdir(parents=True, exist_ok=False)
-    fresh_records = _run_world_round(repo, fresh, port + 4, resume_ticks, {"host": ["-net-world-fresh"]}, carry=second)
+    fresh_records = _run_world_round(repo, fresh, port + 4, round_ticks, {"host": ["-net-world-fresh"]}, carry=second)
     fresh_log = peer_log(fresh, "host")
     assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
     fresh_identity = WORLD_IDENTITY.findall(fresh_log)
     assert fresh_identity and fresh_identity[0][0] == world_id, (fresh_identity, world_id)
     assert int(fresh_identity[0][1]) == boot_one + 2, (fresh_identity[0][1], boot_one)
+    assert int(fresh_identity[0][2]) == round_one + 2, (fresh_identity[0][2], round_one)
     fresh_captures = [int(row[0]) for row in CAPTURE.findall(fresh_log)]
     assert fresh_captures, "the fresh world wrote no checkpoint of its own"
     # A round that resumed would never capture below the checkpoint it stood on; a fresh one starts at 0.
     assert min(fresh_captures) < resume_tick, (min(fresh_captures), resume_tick)
-    assert (fresh / "host" / "runtime/Autosaves" / f"{world_id}-{resume_tick}.ccsave").exists(), \
-        "the fresh boot removed the round it left behind"
     for who in ("host", "client"):
         assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
+        assert not fresh_records[who].get("timed_out"), who
+    fresh_compared = _compare_world_round(fresh, world_id, 0, round_ticks)
+    fresh_held = checkpoints(fresh, "host")
+    old_rounds = {fields["RoundId"] for fields in held_two.values()}
+    assert any(fields["RoundId"] not in old_rounds for fields in fresh_held.values()), \
+        "retention discarded every checkpoint of the fresh world in favor of the previous round's higher ticks"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
+            "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
             "manifest_control_owners": len(owners), "manifest_applied_sequences": len(applied),
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
-            "peer_comparison": compared}
+            "peer_comparison": compared, "fresh_peer_comparison": fresh_compared}
 
 
 def main() -> int:
