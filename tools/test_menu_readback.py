@@ -1244,6 +1244,8 @@ def run_case(options, case, root, failing=None):
                          "-net-match-ticks", "400", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
                          "-input-script", str(inputs), "-net-match-report", str(root / f"{who}-match.json")]
                 args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
+                if case == "repair":
+                    args += ["-net-match-e2e-resync"]
             env = {"CCCP_HEADLESS": "1"}
             if who in probes:
                 directory = probe_root(root, who)
@@ -1320,6 +1322,8 @@ def run_case(options, case, root, failing=None):
         if case == "repair":
             snapshots = re.findall(r"\[net-match\] resync snapshot at tick (\d+)", logs["host"])
             assert len(snapshots) == 1 and int(snapshots[0]) >= 150, logs["host"][-6000:]
+            for who in ("host", "client"):
+                assert logs[who].count("[net-match] resync: match relaunched from the snapshot") == 1, logs[who][-6000:]
             result["repair_snapshot_tick"] = int(snapshots[0])
         if case in ("disabled", "scope-off"):
             first, last = images[0], images[-1]
