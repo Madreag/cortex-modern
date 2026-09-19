@@ -14265,7 +14265,9 @@ namespace RTE {
 			StaleAnswer,
 			AddressFallback,
 			FailureActuals,
-			ZeroStart
+			ZeroStart,
+			SuccessorLostAfterPlan,
+			StalledSuccessor
 		};
 
 		struct MigrationWireSchedule {
@@ -14275,6 +14277,9 @@ namespace RTE {
 			size_t releasedAnswers = 0;
 			size_t plans = 0;
 			bool staleAnswer = false;
+			// The successor stops answering: dropping its wire models a death the survivors get no close for.
+			bool dropSuccessorSends = false;
+			bool dropAfterPlan = false;
 			std::set<uint8_t> successors;
 			std::vector<uint16_t> contactedPorts;
 			std::vector<std::string> contactedAddresses;
@@ -14299,6 +14304,9 @@ namespace RTE {
 				key.fill(0x39);
 				NetHostMigrationMessage message;
 				if (NetHostMigrationCodec::Decode(bytes, key, message)) {
+					if (m_Schedule->dropSuccessorSends && message.senderPeerId == 3 && (!m_Schedule->dropAfterPlan || m_Schedule->plans > 0)) {
+						return true;
+					}
 					if (message.type == NetHostMigrationMessageType::RollCall) {
 						m_Schedule->successors.insert(message.successorPeerId);
 					}
@@ -14500,8 +14508,12 @@ namespace RTE {
 				const bool zeroStart = scenario == MigrationCase::ZeroStart;
 				const bool staleAnswer = scenario == MigrationCase::StaleAnswer;
 				const bool addressFallback = scenario == MigrationCase::AddressFallback;
+				const bool successorLost = scenario == MigrationCase::SuccessorLostAfterPlan;
+				const bool stalledSuccessor = scenario == MigrationCase::StalledSuccessor;
 				const auto schedule = std::make_shared<MigrationWireSchedule>();
 				schedule->staleAnswer = staleAnswer;
+				schedule->dropSuccessorSends = successorLost || stalledSuccessor;
+				schedule->dropAfterPlan = successorLost;
 				using Match = decltype(probe.matchConfig);
 				const uint16_t port = skipSuccessor ? 45794 : midHeal ? 45795
 				                                                      : 45791;
@@ -14533,7 +14545,7 @@ namespace RTE {
 					config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
-					if (delayedAnswer || staleAnswer || skipSuccessor || addressFallback) {
+					if (delayedAnswer || staleAnswer || skipSuccessor || addressFallback || successorLost || stalledSuccessor) {
 						config.migrationTransportFactory = [schedule] { return std::make_unique<ScheduledMigrationTransport>(schedule); };
 					}
 					return config;
@@ -14627,11 +14639,86 @@ namespace RTE {
 						return false;
 					}
 				}
-				if (delayedAnswer) {
+				if (delayedAnswer || successorLost) {
 					schedule->releaseAt = now + 1050;
 				}
 				hostWire.Stop();
 				const uint64_t migrationStarted = now;
+				const uint64_t budget = a.GetConfig().timeoutMs;
+				if (successorLost) {
+					// The successor closes the roster without peer 2, sends it the plan, then stops answering:
+					// the peer it excluded is owed the commit's rejoin and nothing else ever speaks to it.
+					uint64_t excludedAt = 0;
+					for (int turn = 0; turn < 4000 && excludedAt == 0; ++turn) {
+						schedule->now = now;
+						a.Tick(now);
+						b.Tick(now);
+						now += 5;
+						const auto& members = a.GetMigrationResult().members;
+						if (a.GetMigrationPhase() == NetHostMigrationPhase::WaitingForReady && std::find(members.begin(), members.end(), 2) == members.end())
+							excludedAt = now;
+						if (a.IsStopped() || a.IsFailed())
+							break;
+					}
+					if (excludedAt == 0) {
+						*error = "the fixture never excluded peer 2 from the plan: phase=" + std::to_string(static_cast<int>(a.GetMigrationPhase())) + " plans=" + std::to_string(schedule->plans) + " A=" + a.BuildReportJson();
+						return false;
+					}
+					bool left = false;
+					for (int turn = 0; turn < 4000 && now - excludedAt <= 6 * budget; ++turn) {
+						schedule->now = now;
+						a.Tick(now);
+						now += 5;
+						if (a.GetMigrationPhase() != NetHostMigrationPhase::WaitingForReady) {
+							left = true;
+							break;
+						}
+					}
+					if (!left) {
+						*error = "the excluded peer held WaitingForReady for " + std::to_string(now - excludedAt) + " ms after the successor stopped answering: A=" + a.BuildReportJson();
+						return false;
+					}
+					std::cout << "[host-migration-selftest] PASS: an excluded peer leaves WaitingForReady " << (now - excludedAt) << " ms after the successor was lost before the commit" << std::endl;
+					return true;
+				}
+				if (stalledSuccessor) {
+					// Peer 2's handover link to peer 3 is open and peer 3 is hosting; only the exchange stalls.
+					// Electing itself here would put two successors in one generation.
+					uint64_t electionStarted = 0;
+					for (int turn = 0; turn < 4000; ++turn) {
+						schedule->now = now;
+						a.Tick(now);
+						b.Tick(now);
+						if (electionStarted == 0 && a.IsMigrating())
+							electionStarted = now;
+						now += 5;
+						if (a.IsStopped() || a.IsFailed() || (electionStarted != 0 && now - electionStarted > 2 * budget))
+							break;
+					}
+					if (electionStarted == 0) {
+						*error = "the stalled peer never entered an election: A=" + a.BuildReportJson();
+						return false;
+					}
+					if (schedule->successors.find(2) != schedule->successors.end()) {
+						*error = "a stalled exchange elected peer 2 after " + std::to_string(now - electionStarted) + " ms while its link to peer 3 was open: successors=" + nlohmann::json(schedule->successors).dump() + " A=" + a.BuildReportJson();
+						return false;
+					}
+					// The hold is not a new wedge: once the whole election expires the candidate is left behind.
+					for (int turn = 0; turn < 4000 && now - electionStarted <= 5 * budget; ++turn) {
+						schedule->now = now;
+						a.Tick(now);
+						b.Tick(now);
+						now += 5;
+						if (a.IsStopped() || a.IsFailed() || schedule->successors.find(2) != schedule->successors.end())
+							break;
+					}
+					if (schedule->successors.find(2) == schedule->successors.end() && !a.IsStopped() && !a.IsFailed()) {
+						*error = "the stalled peer held peer 3 for " + std::to_string(now - electionStarted) + " ms without leaving it: A=" + a.BuildReportJson();
+						return false;
+					}
+					std::cout << "[host-migration-selftest] PASS: a stalled exchange keeps its live candidate for the election's budget and then leaves it" << std::endl;
+					return true;
+				}
 				bool resumed = false;
 				for (int i = 0; i < 1000; ++i) {
 					schedule->now = now;
@@ -14860,7 +14947,7 @@ namespace RTE {
 		}
 		if (!migrationsPassed)
 			return fail("host migration detecting rows failed");
-		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart}) {
+		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor}) {
 			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
 				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
 			}
