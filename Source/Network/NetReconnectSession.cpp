@@ -145,7 +145,8 @@ namespace RTE {
 				}
 			}
 			for (const auto& ban: bans) {
-				if (!next.m_BanStore || !next.m_BanStore->Ban(ban.identity, ban.scope, ban.displayAlias, ban.reason, config.sessionId, ban.createdUnixMs))
+				// Inherited bans expire with the match.
+				if (!next.m_BanStore || !next.m_BanStore->Ban(ban.identity, NetHostBanScope::Session, ban.displayAlias, ban.reason, config.sessionId, ban.createdUnixMs))
 					return false;
 			}
 			registry = std::move(nextRegistry);
