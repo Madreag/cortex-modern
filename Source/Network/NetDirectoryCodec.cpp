@@ -192,6 +192,19 @@ namespace RTE {
 			return ReadInt(obj, key, 0, NetDirectoryLimits::c_MaxIntField, out, reason);
 		}
 
+		bool ReadOptionalSpectatorFree(const json& obj, std::optional<int64_t>& out, std::string& reason) {
+			if (!obj.contains("spectator_free")) {
+				out.reset();
+				return true;
+			}
+			int64_t value = 0;
+			if (!ReadInt(obj, "spectator_free", 0, NetDirectoryLimits::c_MaxIntField, value, reason)) {
+				return false;
+			}
+			out = value;
+			return true;
+		}
+
 		// The register body and each list row carry the same named fields.
 		bool ReadRegisterFields(const json& obj, NetDirectoryRegisterRequest& out, std::string& reason) {
 			if (!(ReadStr(obj, "name", out.name, reason) &&
@@ -226,6 +239,10 @@ namespace RTE {
 			if (obj.contains("world_boot") && !ReadInt(obj, "world_boot", NetDirectoryLimits::c_MinWorldBoot, NetDirectoryLimits::c_MaxWorldBoot, out.worldBoot, reason)) {
 				return false;
 			}
+			if (obj.contains("spectator_free") &&
+			    !ReadInt(obj, "spectator_free", 0, NetDirectoryLimits::c_MaxIntField, out.spectatorFree, reason)) {
+				return false;
+			}
 			if (obj.contains("resume_session_id") && !ReadStr(obj, "resume_session_id", out.resumeSessionId, reason)) {
 				return false;
 			}
@@ -257,6 +274,8 @@ namespace RTE {
 				obj["persistent_world"] = true;
 				obj["world_id"] = in.worldId;
 				obj["world_boot"] = in.worldBoot;
+				// A full world still takes watchers, so a browser can tell "full" from "closed".
+				obj["spectator_free"] = in.spectatorFree;
 				if (!in.resumeSessionId.empty()) {
 					obj["resume_session_id"] = in.resumeSessionId;
 					// A resume takes the row over only with its current token; a first register has none.
@@ -290,6 +309,7 @@ namespace RTE {
 			out.persistentWorld = fields.persistentWorld;
 			out.worldId = std::move(fields.worldId);
 			out.worldBoot = fields.worldBoot;
+			out.spectatorFree = fields.spectatorFree;
 			return ReadStr(obj, "session_id", out.sessionId, reason) &&
 			       ReadInt(obj, "age_s", 0, std::numeric_limits<int64_t>::max(), out.ageS, reason) &&
 			       ReadStr(obj, "observed_ip", out.observedIp, reason) &&
@@ -374,6 +394,7 @@ namespace RTE {
 		obj["token"] = request.token;
 		obj["peer_count"] = request.peerCount;
 		obj["seats_free"] = request.seatsFree;
+		if (request.spectatorFree.has_value()) obj["spectator_free"] = *request.spectatorFree;
 		if (request.listenAddrs.has_value()) obj["listen_addrs"] = *request.listenAddrs;
 		if (request.state.has_value()) obj["state"] = *request.state;
 		if (request.listed.has_value()) obj["listed"] = *request.listed;
@@ -387,6 +408,7 @@ namespace RTE {
 		    !ReadVersionField(obj, "peer_count", out.peerCount, reason) ||
 		    !ReadVersionField(obj, "seats_free", out.seatsFree, reason) ||
 		    !ReadOptionalListenAddrs(obj, out.listenAddrs, reason) ||
+		    !ReadOptionalSpectatorFree(obj, out.spectatorFree, reason) ||
 		    !ReadOptionalStr(obj, "state", out.state, reason)) {
 			return false;
 		}
