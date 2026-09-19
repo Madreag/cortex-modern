@@ -2688,6 +2688,66 @@ bool AudioMan::RunCheckpointSelfTest() {
 			std::cout << "[audio-checkpoint-selftest] FAIL AudioRuntime voices lists differ at a sound's tail " << error.what() << std::endl;
 			ok = false;
 		}
+		const auto cursorArm = [&ok](const char* name, bool passed, const std::string& detail) {
+			std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << " " << detail << std::endl;
+			ok = ok && passed;
+		};
+		try {
+			// The archived cursor belongs to sim time. The mixer's own runs on the audio thread, so a
+			// save and the re-save of the same tick would disagree, and so would two peers.
+			std::unique_ptr<SoundContainer> cursor(static_cast<SoundContainer*>(preset->Clone()));
+			cursor->SetImmobile(true);
+			cursor->SetLoopSetting(-1);
+			if (!cursor->Play()) throw std::runtime_error("cursor voice did not play");
+			const int cursorId = *cursor->GetPlayingChannels()->begin();
+			FMOD::Channel* cursorChannel = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(cursorId, &cursorChannel));
+			const auto voiceOf = [](const std::string& text, int identity) {
+				AudioRuntime state; std::string refusal;
+				if (!state.Load(text, &refusal)) throw std::runtime_error("could not parse cursor archive: " + refusal);
+				for (const auto& voice: state.voices) {
+					if (voice.identity == identity) return voice;
+				}
+				throw std::runtime_error("the cursor voice is absent from the archive");
+			};
+			const auto mixerCursor = [cursorChannel]() {
+				unsigned int position = 0;
+				AudioCheckpoint::Require(cursorChannel->getPosition(&position, FMOD_TIMEUNIT_PCM));
+				return position;
+			};
+			unsigned int mixerBefore = 0;
+			std::string firstText;
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				mixerBefore = mixerCursor();
+				firstText = SaveCheckpoint();
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(40));
+			AudioCheckpoint::Require(m_AudioSystem->update());
+			unsigned int mixerAfter = 0;
+			std::string secondText;
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				mixerAfter = mixerCursor();
+				secondText = SaveCheckpoint();
+			}
+			const auto first = voiceOf(firstText, cursorId);
+			const auto second = voiceOf(secondText, cursorId);
+			// A run whose mixer did not move proves nothing, so it fails with the rest.
+			const bool mixerAdvanced = mixerAfter != mixerBefore;
+			const bool archiveStable = first.SaveCheckpoint() == second.SaveCheckpoint();
+			const bool notTheMixers = second.position != mixerAfter;
+			cursorArm("voice_cursor_is_sim_times_not_the_mixers", mixerAdvanced && archiveStable && notTheMixers,
+			          "mixer=" + std::to_string(mixerBefore) + "->" + std::to_string(mixerAfter) +
+			              " archived=" + std::to_string(first.position) + "->" + std::to_string(second.position) +
+			              " advanced=" + std::to_string(mixerAdvanced ? 1 : 0) + " stable=" + std::to_string(archiveStable ? 1 : 0) +
+			              " off_the_mixer=" + std::to_string(notTheMixers ? 1 : 0));
+			if (cursor->IsBeingPlayed()) cursor->Stop();
+			if (m_PlayingVoices.contains(cursorId)) RetireVoice(cursorId);
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL voice_cursor_is_sim_times_not_the_mixers " << error.what() << std::endl;
+			ok = false;
+		}
 		try {
 			std::unique_ptr<SoundContainer> loadingOwner(static_cast<SoundContainer*>(preset->Clone()));
 			loadingOwner->SetPaused(true); loadingOwner->SetImmobile(true); loadingOwner->SetLoopSetting(-1);
