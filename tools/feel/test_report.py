@@ -81,6 +81,27 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report.max_in_window([0, 9_999, 20_000], 10_000), 2)
         self.assertEqual(report.max_in_window([0, 10_000, 20_000], 10_000), 1)
 
+    def test_incomplete_canonical_dump_names_the_decided_tick(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            dump = Path(folder) / 'sp_trace.json.simdump.txt'
+            dump.write_text('1 activity running\n356 activity over\n', encoding='utf-8')
+            with self.assertRaises(report.EarlyDecision) as raised:
+                report.canonical_positions(dump, set())
+            self.assertEqual(raised.exception.tick, 356)
+            self.assertEqual(raised.exception.fail_line,
+                             'FAIL: decided at tick 356; measurement window is 1200 ticks')
+
+    def test_early_decision_tick_reads_killall_from_the_run_log(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            run = Path(folder)
+            (run / 'sp').mkdir()
+            (run / 'sp' / 'stdout.log').write_text(
+                '[gib-cause] killall sparing team 0 at tick 356\n'
+                '[scenario] FeelBaseline passed=no ticks=356\n', encoding='utf-8')
+            self.assertEqual(report.early_decision_tick(run, 'sp'), 356)
+
     def test_canonical_voice_repeat_one_tick_later_is_detected(self):
         press = dict(_line=1, tick=10, wall_ms=100, actor=dict(uid=7), changes=[dict(action='FIRE', held=True)])
         shot = dict(_line=4, committed_tick=10, target_tick=14, wall_lower_ms=101, wall_upper_ms=110,
