@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -20,6 +21,7 @@ namespace RTE {
 		std::string matchId;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
+		uint64_t worldBoot = 0; //!< Read from the restart manifest; not part of Restore.ini.
 		uint64_t savedTick = 0;
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
@@ -62,6 +64,7 @@ namespace RTE {
 		std::string matchId;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
+		uint64_t worldBoot = 0;
 		uint64_t savedTick = 0;
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
@@ -84,10 +87,32 @@ namespace RTE {
 		std::filesystem::path path;
 	};
 
+	struct AutosavePin {
+		uint64_t roundId = 0;
+		uint64_t tick = 0;
+	};
+
+	/// The live pin is read as one round/tick pair by the archive worker.
+	class AutosavePinSource {
+	public:
+		void Store(uint64_t roundId, uint64_t tick) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_Pin = {roundId, tick};
+		}
+		AutosavePin Load() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_Pin;
+		}
+	private:
+		mutable std::mutex m_Mutex;
+		AutosavePin m_Pin;
+	};
+
 	/// What the match agreed on while it runs, stamped into every checkpoint it writes.
 	struct AutosaveIdentity {
 		uint64_t sessionId = 0;
 		uint64_t roundId = 0;
+		uint64_t worldBoot = 0;
 		uint32_t intervalSeconds = 0;
 		/// The agreed configuration, as the peers hashed it, so a restart can reopen this very lobby.
 		/// Empty on a match whose configuration was never published (a local activity).
@@ -98,7 +123,7 @@ namespace RTE {
 		AutosaveSideState sideState;
 		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
 		/// anchor named while a capture is in flight still protects its archive.
-		std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource;
+		std::shared_ptr<const AutosavePinSource> pinnedCheckpointSource;
 		std::string buildId;
 		std::string deterministicConfigHash;
 		std::string moduleManifestHash;
@@ -109,6 +134,8 @@ namespace RTE {
 	struct AutosaveCandidate {
 		uint64_t tick = 0;
 		bool restorable = false;
+		uint64_t worldBoot = 0;
+		uint64_t roundId = 0;
 	};
 
 	/// The match checkpoint store: where autosaves live, what makes one restorable, and which ones are kept.
@@ -133,9 +160,8 @@ namespace RTE {
 		static constexpr const char* c_AdmissionExtension = ".admission";
 		/// A world's recorded segment stands beside the checkpoint it replays from.
 		static constexpr const char* c_SegmentExtension = ".ccreplay";
-		// 2 carries each peer's agreed player bindings in the side state; a schema-1 manifest cannot
-		// resume, because resuming without them puts a held peer and a streamed peer on different seats.
-		static constexpr int c_ManifestSchema = 2;
+		// The boot orders fresh worlds ahead of the previous round's higher ticks.
+		static constexpr int c_ManifestSchema = 3;
 		static constexpr int c_AdmissionSchema = 1;
 		/// The host's sealed admission export is small by construction; anything larger is not one.
 		static constexpr size_t c_MaxAdmissionBytes = 64U * 1024U;
@@ -160,7 +186,7 @@ namespace RTE {
 		/// Whether the archive is restorable: every entry a restore reads is complete, a descriptor of a schema
 		/// we know rides along, and the tick in the name, in the descriptor and in the world all agree.
 		static bool Validate(const std::filesystem::path& path, AutosaveDescriptor& out, std::string* error = nullptr);
-		/// This match's restorable checkpoints, newest tick first.
+		/// This match's restorable checkpoints, newest (boot, round, tick) first.
 		static std::vector<AutosaveDescriptor> ListRestorable(const std::filesystem::path& directory, const std::string& matchId);
 		static std::vector<AutosaveDescriptor> ListRestorable(const std::string& matchId);
 		/// The checkpoint a rejoin rewinds to: the newest restorable one this peer holds.
@@ -174,17 +200,18 @@ namespace RTE {
 		/// RetainedAutosaves() restorable checkpoints plus the pinned one whatever its age, and loses
 		/// everything else it wrote. A pinned checkpoint is kept even when it no longer reads, so one
 		/// transient read failure cannot destroy the checkpoint both sides agreed to rewind to.
-		/// @param newestFirst This match's checkpoints, newest tick first.
+		/// @param candidates This match's checkpoints, ordered by (boot, round, tick) before selection.
 		/// @param pinnedTick The tick both sides agreed to rewind to, or c_NoPinnedTick.
+		/// @param pinnedRound The round the pinned checkpoint belongs to.
 		/// @return The ticks that are kept, newest first.
-		static std::vector<uint64_t> RetainedTicks(const std::vector<AutosaveCandidate>& newestFirst, uint64_t pinnedTick);
+		static std::vector<uint64_t> RetainedTicks(std::vector<AutosaveCandidate> candidates, uint64_t pinnedTick, uint64_t pinnedRound = 0);
 
 		/// Applies the policy to this match's archives: what it does not keep is deleted, so what remains is
 		/// exactly what a rejoin can use. Other matches' files and anything that is not one of this match's
 		/// archives are left alone.
 		/// @return How many archives were removed.
-		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick);
-		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick);
+		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick, uint64_t pinnedRound = 0);
+		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick, uint64_t pinnedRound = 0);
 
 		/// The one rendering of the agreed side state: the manifest is written with it and its hash is
 		/// taken over it, so a peer's answer and the host's offer are compared over the same bytes.
