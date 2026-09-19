@@ -8,6 +8,7 @@
 #include "allegro.h"
 
 #include <cstring>
+#include <unordered_set>
 
 namespace RTE {
 
@@ -55,12 +56,24 @@ namespace RTE {
 			scanScheduled[team] = scene->m_ScanScheduled[team];
 		}
 		horizonBoxes = scene->m_HorizonTerrainBoxes;
+		uint64_t copiedBytes = 0;
+		uint64_t sharedPatchBytes = 0;
+		std::unordered_set<const HorizonTerrainPatch*> countedPatches;
+		for (const Scene::HorizonTerrainBox& box: horizonBoxes) {
+			copiedBytes += sizeof(Scene::HorizonTerrainBox) + box.nodes.size() * sizeof(HorizonNodeSnapshot);
+			if (box.patch && countedPatches.insert(box.patch.get()).second) {
+				sharedPatchBytes += box.patch->pixels.size();
+			}
+		}
 		for (size_t index = 0; index < scene->m_pPathFinders.size(); ++index) {
 			horizonFinders[index] = {};
 			if (scene->m_pPathFinders[index]) {
 				scene->m_pPathFinders[index]->CaptureHorizonFence(horizonFinders[index]);
 			}
+			copiedBytes += horizonFinders[index].overlay.size() * (sizeof(int) + sizeof(HorizonFenceState::Cell)) + horizonFinders[index].jobs.size() * sizeof(std::shared_ptr<void>);
 		}
+		// The patches are referenced, not copied; the completion pass reads both numbers out of the horizon report.
+		PathFinder::RecordHorizonFenceBytes(copiedBytes, sharedPatchBytes);
 		horizonHeld = true;
 		return true;
 	}
