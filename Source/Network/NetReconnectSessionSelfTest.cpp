@@ -6491,6 +6491,7 @@ namespace RTE {
 				ScriptedAuthCrypto crypto;
 				ScopedTestCrypto scope(&crypto);
 				uint64_t unixClock = 100000, now = 0;
+				std::string error;
 				const uint16_t port = participant ? 45807 : hold ? 45803
 				                                                 : 45801;
 				NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x45801001);
@@ -6501,6 +6502,18 @@ namespace RTE {
 				NetHostBanStore oldBans, successorBans;
 				const auto holderId = Ramp<32>(0xA7);
 				const auto bannedId = Ramp<32>(0xB8);
+				const auto sessionBannedId = Ramp<32>(0xE0);
+				auto permanentIds = [](const NetHostBanStore& store) {
+					std::vector<NetAuthBytes32> identities;
+					for (const auto& ban: store.List()) {
+						if (ban.scope == NetHostBanScope::UntilRemoved) {
+							identities.push_back(ban.identity);
+						}
+					}
+					std::sort(identities.begin(), identities.end());
+					return identities;
+				};
+				std::vector<NetAuthBytes32> permanentBefore;
 				if (!oldRegistry.BeginHostedSession())
 					return Fail("migration ticket fixture could not draw an epoch");
 				oldHost.Configure(&oldRegistry, match.sessionId, MakeIdentity());
@@ -6511,11 +6524,26 @@ namespace RTE {
 					oldHost.BindParticipantId(1, holderId);
 					nextHost.SetBanStore(&successorBans);
 					nextHost.SetParticipantProofRequired(true);
-					if (!oldBans.Ban(bannedId, NetHostBanScope::Session, "banned", "old host ban", match.sessionId, unixClock))
-						return Fail("old host did not record the fixture ban");
+					oldBans.SetPath((LaneDirectory() / "migration-old.bans").string());
+					successorBans.SetPath((LaneDirectory() / "migration-successor.bans").string());
+					if (!oldBans.Load(&error) || !successorBans.Load(&error)) {
+						return Fail("migration ban stores did not load: " + error);
+					}
+					if (!oldBans.Ban(bannedId, NetHostBanScope::UntilRemoved, "banned", "old host permanent ban", match.sessionId, unixClock) ||
+					    !oldBans.Ban(sessionBannedId, NetHostBanScope::Session, "session banned", "old host session ban", match.sessionId, unixClock)) {
+						return Fail("old host did not record both fixture ban scopes");
+					}
+					for (const auto& identity: {Ramp<32>(0xC9), Ramp<32>(0xDA)}) {
+						if (!successorBans.Ban(identity, NetHostBanScope::UntilRemoved, "own ban", "successor policy", match.sessionId + 1, unixClock)) {
+							return Fail("successor did not record its own permanent bans");
+						}
+					}
+					permanentBefore = permanentIds(successorBans);
+					if (permanentBefore.size() != 2) {
+						return Fail("successor fixture does not contain two permanent identities");
+					}
 				}
 				LoopbackTransport oldWire, oldClientWire, newWire, newClientWire;
-				std::string error;
 				if (!oldWire.StartHost(port, &error) || !oldClientWire.Connect("loopback", port, &error))
 					return Fail(error);
 				NetReconnectTicketStore store;
@@ -6585,6 +6613,18 @@ namespace RTE {
 				const auto survivors = participant ? std::map<uint8_t, NetPeerId>{{2, 1}} : std::map<uint8_t, NetPeerId>{};
 				if (!nextHost.ImportMigrationState(admission, nextRegistry, match, 3, survivors, now))
 					return Fail("successor did not import the match ticket registry");
+				if (participant) {
+					const auto imported = successorBans.List();
+					for (const auto& identity: {bannedId, sessionBannedId}) {
+						const auto ban = std::find_if(imported.begin(), imported.end(), [&](const auto& record) { return record.identity == identity; });
+						if (ban == imported.end() || ban->scope != NetHostBanScope::Session || ban->sessionId != match.sessionId || successorBans.IsBanned(identity, match.sessionId + 1)) {
+							return Fail("an imported old-host ban escaped this match's Session scope");
+						}
+					}
+					if (permanentIds(successorBans) != permanentBefore) {
+						return Fail("host import changed the successor's own permanent ban count or identities");
+					}
+				}
 				if (!newWire.StartHost(port + 1, &error) || !newClientWire.Connect("loopback", port + 1, &error))
 					return Fail(error);
 				Client returning;
@@ -6612,27 +6652,33 @@ namespace RTE {
 					    !removal.hasParticipantId || removal.participantId != holderId || !successorBans.IsBanned(holderId, match.sessionId))
 						return Fail("imported seat lost its participant identity or ban-store pointer");
 					nextHost.TakeOutbound();
-					nextHost.BindParticipantId(1, bannedId);
 					NetH4NewJoin request;
-					request.txId = Ramp<16>(0x63);
 					request.identity = MakeIdentity();
 					request.displayName = "banned returner";
-					std::vector<uint8_t> bytes;
-					if (!NetProtocol::Encode({++sequence, 0, request}, bytes) || !newClientWire.Send(1, NetTransportLane::ControlReliable, bytes, &error))
-						return Fail(error);
-					for (const auto& event: newWire.PollEvents())
-						if (event.type == NetTransportEventType::PacketReceived) {
-							const auto decoded = NetProtocol::Decode(event.bytes);
-							if (!decoded.ok)
-								return Fail("ban probe did not decode");
-							nextHost.HandleMessage(event.peerId, decoded.message.payload, now);
+					for (const auto& identity: {bannedId, sessionBannedId}) {
+						nextHost.BindParticipantId(1, identity);
+						request.txId = Ramp<16>(identity.front());
+						std::vector<uint8_t> bytes;
+						if (!NetProtocol::Encode({++sequence, 0, request}, bytes) || !newClientWire.Send(1, NetTransportLane::ControlReliable, bytes, &error)) {
+							return Fail(error);
 						}
-					const auto refusals = nextHost.TakeOutbound();
-					if (std::none_of(refusals.begin(), refusals.end(), [](const auto& message) {
-						const auto* refusal = std::get_if<NetJoinRejected>(&message.payload);
-						return refusal && refusal->rejectReason == NetRejectReason::ParticipantBanned;
-					}))
-						return Fail("old-host ban did not refuse the same identity on the successor");
+						for (const auto& event: newWire.PollEvents()) {
+							if (event.type == NetTransportEventType::PacketReceived) {
+								const auto decoded = NetProtocol::Decode(event.bytes);
+								if (!decoded.ok) {
+									return Fail("ban probe did not decode");
+								}
+								nextHost.HandleMessage(event.peerId, decoded.message.payload, now);
+							}
+						}
+						const auto refusals = nextHost.TakeOutbound();
+						if (std::none_of(refusals.begin(), refusals.end(), [](const auto& message) {
+							const auto* refusal = std::get_if<NetJoinRejected>(&message.payload);
+							return refusal && refusal->rejectReason == NetRejectReason::ParticipantBanned;
+						})) {
+							return Fail("old-host ban did not refuse the same identity on the successor");
+						}
+					}
 					NetH4NewJoin unbound = request;
 					unbound.txId = Ramp<16>(0x74);
 					nextHost.HandleMessage(77, unbound, now);
@@ -6642,7 +6688,11 @@ namespace RTE {
 						return refusal && refusal->rejectReason == NetRejectReason::IdentityUnproven;
 					}))
 						return Fail("host import lost the participant proof requirement");
-					std::cout << "[host-migration-selftest] PASS: imported participant identity and old-host ban remain authoritative" << std::endl;
+					successorBans.EndSession(match.sessionId);
+					if (successorBans.IsBanned(bannedId, match.sessionId) || successorBans.IsBanned(sessionBannedId, match.sessionId) || permanentIds(successorBans) != permanentBefore) {
+						return Fail("ending the migrated match retained an inherited ban or changed personal policy");
+					}
+					std::cout << "[host-migration-selftest] PASS: imported bans stay in this match and preserve the successor's permanent policy" << std::endl;
 					return 0;
 				}
 				std::cout << "[host-migration-selftest] PASS: " << (hold ? "rejoin is held during handover and admitted after Running" : "old-host ticket is honored by the successor without reissue") << std::endl;
