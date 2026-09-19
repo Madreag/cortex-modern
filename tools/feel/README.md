@@ -17,9 +17,11 @@ All traces request 1200 ticks. The service's stop/drain tail is retained separat
 in the raw records; trace coverage must be exactly ticks 1 through 1200.
 
 There is one local SP baseline per render cap. It wraps the stock P4 Alpha Duel
-activity, keeps its scene, actors and loadout, seats one human on team 1, and leaves
-team 0 to local AI. It uses the same input script and records the controller log.
-The network runs use that script for each peer's local player. The input seam is
+activity, keeps its scene and loadout, seats two humans on teams 0 and 1, and
+clears every CPU team (no funds, no brains). Human brains are parked out of
+Battle Rifle reach so the 1200-tick window cannot be decided. It uses the same
+input script and records the controller log. Network runs launch that same
+fixture with `-net-match-humans 2 -net-match-cpu-slots 0`. The input seam is
 the same one used by `record_ak47_fire.py`; no desktop input is synthesized.
 Each three-tick firing pulse shares its press and release with a distinct aim
 change, so those input packets have an operationally defined render-pose probe.
