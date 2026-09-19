@@ -203,6 +203,7 @@ namespace {
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat_entry_open", panel && panel->IsChatEntryOpen()},
+		    {"seat_input_typed_into", g_UInputMan.SeatInputTypedInto()},
 		    {"seats_panel", seats}};
 		return observed;
 	}
@@ -479,6 +480,10 @@ namespace {
 			const std::string text = step.at("text").get<std::string>();
 			const uint8_t scope = step.value("scope", std::string("all")) == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
 			Require(g_NetMatchService.SendChat(scope, text), "SendChat refused the probe line");
+		} else if (op == "screen_message") {
+			// A seat's own message band is an occupier the overlay must clear; a running match has none
+			// of its own, so the script puts one on the seat it is about to measure against.
+			g_FrameMan.SetScreenText(step.at("text").get<std::string>(), step.value("screen", 0), 0, step.value("duration_ms", 10000), true);
 		} else if (op == "assert_net_ui_clear") {
 			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's
 			// message band. In a running match ("match") the open seats panel is the surface it owes instead.
@@ -513,21 +518,24 @@ namespace {
 				if (step.contains("entry_open")) {
 					Require(observed["net_ui"].at("chat_entry_open") == step["entry_open"],
 					    std::string("the chat entry is ") + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed") + " and the step wanted the other");
+					// The entry is what consumes the seat's own input, and only for as long as it is open.
+					Require(observed["net_ui"].at("seat_input_typed_into") == step["entry_open"],
+					    std::string("the seats' input is ") + (observed["net_ui"].at("seat_input_typed_into").get<bool>() ? "consumed" : "free") +
+					        " while the entry is " + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed"));
 				}
-				// A band measured against nothing proves nothing: the step names how many of the overlay's
-				// own occupiers had to be on screen for this reading to count.
-				int visibleOccupiers = 0;
-				for (const std::string& element: {"status", "toasts", "seats_panel"}) {
-					visibleOccupiers += observed["net_ui"].at(element).at("visible").get<bool>() ? 1 : 0;
-				}
-				for (const auto& other: observed["editor_seats"]) {
-					// screen_text_rect and text_band are one band under two names; counting one is counting it.
-					for (const std::string& area: {"picker", "text_band"}) {
-						if (other.contains(area) && other.at(area).value("visible", false)) ++visibleOccupiers;
+				// A band measured against nothing proves nothing: the step names the occupiers that had to
+				// be on screen for this reading to count.
+				for (const std::string& element: step.value("occupiers", std::vector<std::string>{})) {
+					if (element == "picker" || element == "text_band") {
+						const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+						    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+						Require(seat != observed["editor_seats"].end() && seat->at(element).value("visible", false),
+						    "the seat's " + element + " is not on screen, so the chat layout reading proves nothing about it");
+						continue;
 					}
+					Require(observed["net_ui"].at(element).value("visible", false),
+					    "the network " + element + " is not on screen, so the chat layout reading proves nothing about it");
 				}
-				Require(visibleOccupiers >= step.value("occupiers_at_least", 1),
-				    "only " + std::to_string(visibleOccupiers) + " overlay occupiers were on screen for the chat layout reading");
 				const std::string occupiers[] = {"status", "toasts", "seats_panel", "chat"};
 				for (size_t i = 0; i < 4; ++i) {
 					for (size_t j = i + 1; j < 4; ++j) {
