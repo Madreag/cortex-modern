@@ -370,6 +370,8 @@ namespace RTE {
 	}
 
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
+		// Addresses the service did not acknowledge are still owed to it.
+		const bool listenAddrsAnswered = std::exchange(m_ListenAddrsInFlight, false);
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("heartbeat: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -394,6 +396,9 @@ namespace RTE {
 				}
 				m_ConfirmedListed = *response.listed;
 				m_InFlightListed.reset();
+			}
+			if (listenAddrsAnswered) {
+				m_ListenAddrsDirty = false;
 			}
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
@@ -524,9 +529,9 @@ namespace RTE {
 		} else {
 			m_InFlightListed.reset();
 		}
+		m_ListenAddrsInFlight = m_ListenAddrsDirty;
 		if (m_ListenAddrsDirty) {
 			heartbeat.listenAddrs = m_Row.listenAddrs;
-			m_ListenAddrsDirty = false;
 		}
 		Request request;
 		request.method = "POST";
