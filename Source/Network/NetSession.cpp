@@ -935,9 +935,6 @@ namespace RTE {
 	}
 
 	void NetSession::DeliverChat(NetChatEntry entry) {
-		if (entry.receivedAtMs == 0) {
-			entry.receivedAtMs = m_NowMs;
-		}
 		m_ChatHistory.push_back(entry);
 		while (m_ChatHistory.size() > 32) {
 			m_ChatHistory.pop_front();
