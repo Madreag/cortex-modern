@@ -983,7 +983,7 @@ namespace RTE {
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
 		/// The agreed rewind point; a worker thread names it, and every capture in flight shares it so
 		/// retention reads the live value instead of the one the capture started with.
-		std::shared_ptr<std::atomic<uint64_t>> m_PinnedAutosaveTick = std::make_shared<std::atomic<uint64_t>>(0);
+		std::shared_ptr<AutosavePinSource> m_PinnedAutosave = std::make_shared<AutosavePinSource>();
 		std::string m_RewindAnchorMatchId;
 		uint64_t m_RewindAnchorTick = 0;
 		bool m_RewindAnchorHeld = false;

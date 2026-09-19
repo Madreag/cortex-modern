@@ -4434,13 +4434,15 @@ namespace RTE {
 
 	// One world checkpoint on disk: the archive, its restart manifest and the match's sealed admission.
 	bool PublishWorldCheckpoint(const std::filesystem::path& directory, const std::string& worldId, uint64_t tick, uint64_t roundId,
-	                            const NetMatchConfig& config, const std::array<uint8_t, 32>& key, uint64_t generation, std::string* error) {
+	                            const NetMatchConfig& config, const std::array<uint8_t, 32>& key, uint64_t generation, std::string* error,
+	                            bool publishAdmission = true) {
 		if (!WriteWorldCheckpointArchive(directory, WorldCheckpointDescriptor(worldId, tick, roundId, config), error)) return false;
 		AutosaveManifest manifest;
 		manifest.schema = AutosaveStore::c_ManifestSchema;
 		manifest.matchId = worldId;
 		manifest.sessionId = config.sessionId;
 		manifest.roundId = roundId;
+		manifest.worldBoot = config.worldBoot;
 		manifest.savedTick = tick;
 		manifest.simTimeTicks = static_cast<long long>(tick);
 		manifest.intervalSeconds = 45;
@@ -4455,6 +4457,7 @@ namespace RTE {
 			return false;
 		}
 		if (!AutosaveStore::PublishManifest(directory, manifest, error)) return false;
+		if (!publishAdmission) return true;
 		const auto body = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", std::vector<uint8_t>{7, 7, 7}}, {"directory_row", std::string()},
 		                                                         {"directory_session", worldId}, {"directory_token", std::string("boot-n-token")},
 		                                                         {"autosave_match_id", worldId}, {"autosave_round", roundId}, {"autosave_interval", 45},
@@ -4667,8 +4670,30 @@ namespace RTE {
 		// The fresh round runs and checkpoints under its own round; the old round's ticks are history.
 		NetWorldIdentity second;
 		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), second, error)) return false;
-		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 1500, 5151, stored, key, 4, error)) return false;
-		scratch.Note(first.worldId, 1500);
+		NetMatchConfig freshConfig = stored;
+		freshConfig.worldBoot = second.boot;
+		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 120, 5151, freshConfig, key, 4, error, false)) return false;
+		scratch.Note(first.worldId, 120);
+		if (!writer.m_SeatAuth.BeginHostedSession()) return false;
+		writer.m_ReconnectHost.Configure(&writer.m_SeatAuth, freshConfig.sessionId, MakeH4Identity());
+		writer.m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(freshConfig), freshConfig.mode);
+		writer.m_ReconnectHost.SetPersistentWorld(true);
+		writer.m_IsHost = true;
+		writer.m_AdmissionAttached = true;
+		writer.m_AutosaveMatchId = first.worldId;
+		writer.m_MatchAutosaveSeconds = 45;
+		writer.m_AutosaveIdentity.roundId = 5151;
+		writer.m_AutosaveIdentity.intervalSeconds = 45;
+		writer.m_RestartAdmissionDue.store(true);
+		writer.PublishRestartAdmission();
+		AutosaveAdmission published;
+		std::vector<uint8_t> opened;
+		const std::vector<uint8_t> context(first.worldId.begin(), first.worldId.end());
+		if (!AutosaveStore::ReadAdmission(scratch.store, first.worldId, published, error) || published.generation != 4 ||
+		    !NetAuthOpen(key, context, published.sealed, opened) || nlohmann::json::from_cbor(opened).value("autosave_round", uint64_t{0}) != 5151) {
+			*error = "world-fresh-kept-the-previous-admission: the fresh round did not replace the prior generation and round";
+			return false;
+		}
 		NetMatchServiceRequest named;
 		named.host = true;
 		named.persistentWorld = true;
@@ -4687,8 +4712,8 @@ namespace RTE {
 		newest.host = true;
 		newest.persistentWorld = true;
 		newest.activityPreset = "Persistent World";
-		newest.resumeTick = 1500;
-		if (!writer.ResolveWorldResume(newest, error) || newest.resumeMatchId != first.worldId) {
+		if (!writer.ResolveWorldResume(newest, error) || newest.resumeMatchId != first.worldId ||
+		    !writer.PrepareResume(newest, error, scratch.store) || newest.resumeTick != 120 || newest.resumeConfig->worldBoot != second.boot) {
 			*error = "world-fresh-resumed-anyway: the newest checkpoint of the live round was refused: " + *error;
 			return false;
 		}
