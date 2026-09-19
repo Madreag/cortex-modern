@@ -57,6 +57,8 @@ namespace RTE {
 			int entryHeight = 0;
 			int rows = 0;
 			bool historyVisible = false;
+			/// Set when the run left to the band could not hold the chosen size's history row and it drew the smaller one.
+			bool reducedTextSize = false;
 		};
 		const ChatBand& GetChatBand() const { return m_ChatBand; }
 		/// The SDL scancode the entry opens on, as the settings key name resolves it.
