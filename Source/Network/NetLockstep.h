@@ -721,6 +721,8 @@ namespace RTE {
 		bool IsMigrationCatchUp() const { return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
 		NetHostMigrationPhase GetMigrationPhase() const { return m_MigrationPhase; }
 		const NetHostMigrationResult& GetMigrationResult() const { return m_MigrationResult; }
+		const std::string& GetMigrationAddress() const { return m_MigrationAddress; }
+		static bool ConnectMigrationEndpoint(INetTransport& transport, const NetMatchMigrationPeer& peer, size_t& nextAddress, std::string& connectedAddress, std::string* error = nullptr);
 		bool NeedsMigrationSnapshot() const { return m_MigrationResult.snapshotProviderPeerId != 0 && m_Config.localPeerId == GetHostPeerId(); }
 		std::unique_ptr<INetTransport> TakeMigrationTransport() { return std::move(m_MigrationTransport); }
 		bool TakeMigrationNotice() { return std::exchange(m_MigrationNotice, false); }
@@ -833,6 +835,7 @@ namespace RTE {
 		bool ContactMigrationSuccessor(uint64_t nowMs);
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
+		void ApplyMigrationMembership(uint64_t nowMs);
 		void FailHostMigration(const std::string& reason);
 		bool EncodeMigrationFrame(const NetLockstepReadyFrame& frame, std::vector<uint8_t>& bytes) const;
 		bool DecodeMigrationFrame(const std::vector<uint8_t>& bytes, uint64_t frame, NetLockstepReadyFrame& ready) const;
@@ -842,7 +845,16 @@ namespace RTE {
 		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
 		std::unique_ptr<INetTransport> m_MigrationListener;
-		std::map<uint8_t, std::unique_ptr<INetTransport>> m_MigrationProbes;
+		struct MigrationProbe {
+			std::unique_ptr<INetTransport> transport;
+			size_t nextAddress = 0;
+			uint64_t lastDialMs = 0;
+			std::string address;
+			bool answered = false;
+		};
+		std::map<uint8_t, MigrationProbe> m_MigrationProbes;
+		size_t m_MigrationNextAddress = 0;
+		std::string m_MigrationAddress;
 		uint64_t m_MigrationGeneration = 0;
 		uint64_t m_MigrationWireRound = 0;
 		uint64_t m_MigrationSinceMs = 0;
@@ -856,7 +868,9 @@ namespace RTE {
 		bool m_MigrationNotice = false;
 		bool m_MigrationNeedsResync = false;
 		bool m_MigrationCommitQueued = false;
+		bool m_MigrationAuthoritySeen = false;
 		NetHostMigrationResult m_MigrationResult;
+		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
 		std::map<uint8_t, NetPeerId> m_MigrationPeers;
 		std::set<uint8_t> m_MigrationReady;
@@ -923,7 +937,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);

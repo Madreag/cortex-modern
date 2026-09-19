@@ -303,6 +303,19 @@ namespace RTE {
 		return BanLocked(identity, scope, alias, reason, sessionId, nowUnixMs, error);
 	}
 
+	bool NetHostBanStore::ImportSessionBan(const NetAuthBytes32& identity, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!BanLocked(identity, NetHostBanScope::Session, alias, reason, sessionId, nowUnixMs, error)) {
+			return false;
+		}
+		NetHostBanRecord* record = FindRecord(m_Records, identity);
+		if (record->scope == NetHostBanScope::Session) {
+			// A migrated session replaces stale session policy under the same lock.
+			*record = {identity, NetHostBanScope::Session, nowUnixMs, sessionId, alias, reason};
+		}
+		return true;
+	}
+
 	bool NetHostBanStore::BanLocked(const NetAuthBytes32& identity, NetHostBanScope scope, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error) {
 		if (scope == NetHostBanScope::UntilRemoved && !m_PersistentReady) {
 			if (error) *error = "the host ban store is not loaded";

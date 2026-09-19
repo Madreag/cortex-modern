@@ -6539,6 +6539,9 @@ namespace RTE {
 						}
 					}
 					permanentBefore = permanentIds(successorBans);
+					if (!successorBans.Ban(bannedId, NetHostBanScope::Session, "old match", "stale session row", match.sessionId + 1, unixClock - 1)) {
+						return Fail("stale session ban write=false");
+					}
 					if (permanentBefore.size() != 2) {
 						return Fail("successor fixture does not contain two permanent identities");
 					}
@@ -6617,8 +6620,9 @@ namespace RTE {
 					const auto imported = successorBans.List();
 					for (const auto& identity: {bannedId, sessionBannedId}) {
 						const auto ban = std::find_if(imported.begin(), imported.end(), [&](const auto& record) { return record.identity == identity; });
-						if (ban == imported.end() || ban->scope != NetHostBanScope::Session || ban->sessionId != match.sessionId || successorBans.IsBanned(identity, match.sessionId + 1)) {
-							return Fail("an imported old-host ban escaped this match's Session scope");
+						if (ban == imported.end() || ban->scope != NetHostBanScope::Session || ban->sessionId != match.sessionId || !successorBans.IsBanned(identity, match.sessionId) || successorBans.IsBanned(identity, match.sessionId + 1)) {
+							return Fail("imported ban identity=" + HexOf(identity.data(), identity.size(), false) + " scope=" + (ban == imported.end() ? "absent" : std::to_string(static_cast<uint8_t>(ban->scope))) +
+							            " session=" + (ban == imported.end() ? "absent" : std::to_string(ban->sessionId)) + " bannedHere=" + std::to_string(successorBans.IsBanned(identity, match.sessionId)) + " bannedOther=" + std::to_string(successorBans.IsBanned(identity, match.sessionId + 1)));
 						}
 					}
 					if (permanentIds(successorBans) != permanentBefore) {
@@ -6676,7 +6680,13 @@ namespace RTE {
 							const auto* refusal = std::get_if<NetJoinRejected>(&message.payload);
 							return refusal && refusal->rejectReason == NetRejectReason::ParticipantBanned;
 						})) {
-							return Fail("old-host ban did not refuse the same identity on the successor");
+							std::vector<int> reasons;
+							for (const auto& message: refusals) {
+								if (const auto* refusal = std::get_if<NetJoinRejected>(&message.payload)) {
+									reasons.push_back(static_cast<int>(refusal->rejectReason));
+								}
+							}
+							return Fail("ban identity=" + HexOf(identity.data(), identity.size(), false) + " outbound=" + std::to_string(refusals.size()) + " rejectReasons=" + nlohmann::json(reasons).dump());
 						}
 					}
 					NetH4NewJoin unbound = request;
