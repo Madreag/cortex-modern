@@ -71,9 +71,14 @@ namespace RTE {
 		void WatchForHostReturn(std::string matchName, std::string directorySessionId);
 		/// The directory poll's answer for the watched row; a returned host enables the rejoin.
 		void NoteHostReturn(bool present);
+		/// There is no directory to watch, or it cannot be reached: the prompt stops waiting on a row it
+		/// will never see and leaves the player the address route it always had.
+		void NoteHostUnwatchable(std::string reason);
 		void StopWatchingForHostReturn();
 		bool IsAwaitingHostReturn() const { return m_AwaitingHostReturn; }
 		bool HasHostReturned() const { return m_AwaitingHostReturn && m_HostReturned; }
+		/// Whether the watch can say anything at all about that host. False leaves the rejoin pressable.
+		bool CanWatchHostReturn() const { return m_AwaitingHostReturn && !m_AwaitSessionId.empty() && m_WatchReason.empty(); }
 		const std::string& GetWatchedSessionId() const { return m_AwaitSessionId; }
 		/// The prompt's own line: waiting for the host, or the host is back.
 		std::string GetHostReturnText() const;
@@ -118,6 +123,7 @@ namespace RTE {
 		bool m_HostReturned = false;
 		std::string m_AwaitMatchName;
 		std::string m_AwaitSessionId;
+		std::string m_WatchReason; //!< Why the row cannot be watched; empty while it can be.
 	};
 
 	/// The seats panel's title line. The hold it reports is the ROUND's pause state, so the panel and
