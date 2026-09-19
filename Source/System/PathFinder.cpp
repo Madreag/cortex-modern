@@ -1162,7 +1162,7 @@ int PathFinder::ConvertCoordsToNodeId(int x, int y) const {
 	return (y * m_GridWidth) + x;
 }
 
-std::array<const Material*, PathNode::c_MaxAdjacentNodeCount> PathFinder::ViewNodeMaterials(const PathNode* node) const {
+std::array<const Material*, RTE::PathNode::c_MaxAdjacentNodeCount> PathFinder::ViewNodeMaterials(const PathNode* node) const {
 	if (!node) {
 		return {};
 	}
