@@ -380,13 +380,15 @@ namespace RTE {
 		GUIButton* m_HostSeatDlgWait = nullptr;      //!< H05.
 		GUIButton* m_HostSeatDlgApprove = nullptr;   //!< H06.
 		GUIButton* m_HostSeatDlgCancel = nullptr;    //!< H07.
-		GUIButton* m_HostSeatDlgKick = nullptr;      //!< H09 (L20 contract call site).
-		GUIButton* m_HostSeatDlgBan = nullptr;       //!< H10 (L20 contract call site).
+		GUIButton* m_HostSeatDlgKick = nullptr;      //!< H09: RemoveParticipant(Kick).
+		GUIButton* m_HostSeatDlgBan = nullptr;       //!< H10: RemoveParticipant(BanSession).
 		GUILabel* m_HostSeatDlgActionHint = nullptr;
 		GUILabel* m_HostSeatDlgStatus = nullptr;
 		GUICollectionBox* m_HostBannedDialog = nullptr; //!< H11's session ban list.
+		GUIComboBox* m_HostBannedPick = nullptr;          //!< Which ban row Remove acts on.
 		GUILabel* m_HostBannedListLabel = nullptr;
 		GUILabel* m_HostBannedStatusLabel = nullptr;
+		std::vector<NetHostBanRecord> m_HostBannedRecords; //!< The store's rows, indexed like the pick combo.
 		NetMatchConfig m_HostOptionsDraft;              //!< The complete config the panel edits.
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
@@ -397,6 +399,9 @@ namespace RTE {
 		std::string m_HostLastSaveText;                   //!< Its latest .ccsave observation, or empty for none.
 		int m_HostOptionsSeatRow = -1;                  //!< The seat row the details dialog describes.
 		int m_HostSeatDlgModerationRow = -1;            //!< The dialog's row in m_ModerationUx, or -1 when the seat has none.
+		std::optional<NetH4ModerationSeat> m_HostSeatDlgRemovalSeat; //!< The seat's admission row a Kick/Ban selection rides, when published.
+		bool m_HostKickBanWatch = false;                //!< A Queued removal's applied result lands in GetLastKickBanResult.
+		std::string m_HostKickBanVerb;                  //!< "Kick"/"Ban" - the action the watch is reporting.
 		std::vector<std::string> m_HostOptionsScenes;   //!< Scene presets the Site combo offers.
 		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
@@ -570,6 +575,7 @@ namespace RTE {
 		void ShowHostSeatDetails(int row);
 		/// Re-fills the open seat dialog's live rows: hold seconds, applicants, action availability.
 		void RefreshHostSeatDialog();
+		void RefreshHostBannedDialog();
 		/// H03: applies one row's Open/Closed/CPU pick to the draft roster, refusing the illegal ones.
 		void ChangeHostSeatType(int row, int typeIndex);
 		/// H11: opens the banned-players list dialog.
