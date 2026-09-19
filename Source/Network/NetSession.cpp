@@ -1260,13 +1260,17 @@ namespace RTE {
 				// The one signal, other than a LeaveAck, that lets the recovery record be deleted.
 				m_ReconnectClient->NotifyConfirmedSessionEnd();
 			}
-			if (m_ReconnectClient && (disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
-			                          disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned))) {
+			const bool removal = disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
+			                     disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned);
+			if (m_ReconnectClient && removal) {
 				m_ReconnectClient->NotifyParticipantRemoved(static_cast<NetRejectReason>(disconnect->disconnectReason));
 			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 				if (!m_HasReject && !disconnect->message.empty()) {
-					RecordReject(NetRejectReason::InternalError, "", "", "", disconnect->message);
+					// A removal is why this link closed; the kicked player is owed that word rather than a
+					// generic fault. Every other disconnect reason stays unattributed as before.
+					RecordReject(removal ? static_cast<NetRejectReason>(disconnect->disconnectReason) : NetRejectReason::InternalError,
+					             "", "", "", disconnect->message);
 				}
 				m_State = NetSessionState::Closed;
 			}
