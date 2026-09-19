@@ -462,10 +462,7 @@ static std::string ResyncSaveName() {
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
 			if (request.resumeConfig) {
-				// The resumed round belongs to THIS boot, so nothing the previous boot signed is live
-				// under it; the roster, seats and delay policy stay the checkpoint's own.
-				request.resumeConfig->worldId = m_WorldIdentity.worldId;
-				request.resumeConfig->worldBoot = m_WorldIdentity.boot;
+				SeatResumedWorldConfig(*request.resumeConfig, m_WorldIdentity);
 			}
 			// A world keeps the capacity its first boot authored; a later boot only names one when the record has none.
 			if (!request.worldTeamCapacity.has_value() && WorldIdentityCarriesCapacity(m_WorldIdentity)) {
@@ -3178,11 +3175,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::WriteFinalWorldCheckpoint() {
-		if (m_FinalCheckpointWritten || !m_IsHost || !m_WorldJoin.IsConfigured() || m_AutosaveMatchId.empty()) return;
-		if (m_MatchAutosaveSeconds == 0 || !m_Coordinator || !m_Coordinator->IsRunning()) return;
-		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_ActivityMan.ActivityRunning()) return;
-		const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
-		if (tick == 0) return;
+		if (m_AutosaveMatchId.empty() || !m_Coordinator || !m_Coordinator->IsRunning()) return;
+		uint64_t tick = 0;
+		if (!FinalCheckpointTick(m_IsHost, m_WorldJoin.IsConfigured(), m_FinalCheckpointWritten, m_MatchAutosaveSeconds,
+		                         ScenarioRunner::IsLockstepControllerSyncActive(), g_ActivityMan.ActivityRunning(),
+		                         m_Coordinator->GetStats().nextFrame, tick)) {
+			return;
+		}
 		m_FinalCheckpointWritten = true;
 		if (!SaveStampedAutosave(tick)) {
 			std::cout << "[net-world] final checkpoint refused at tick=" << tick << std::endl;
@@ -3214,6 +3213,22 @@ static std::string ResyncSaveName() {
 			m_PublishedDirectorySession.clear();
 			m_PublishedDirectoryToken.clear();
 		}
+	}
+
+	void NetMatchService::SeatResumedWorldConfig(NetMatchConfig& config, const NetWorldIdentity& identity) {
+		// The resumed round belongs to THIS boot, so nothing the previous boot signed is live under it;
+		// the roster, the seats and the delay policy stay the checkpoint's own.
+		config.worldId = identity.worldId;
+		config.worldBoot = identity.boot;
+	}
+
+	bool NetMatchService::FinalCheckpointTick(bool host, bool worldConfigured, bool alreadyWritten, uint32_t autosaveSeconds,
+	                                          bool lockstepActive, bool activityRunning, uint64_t nextFrame, uint64_t& outTick) {
+		outTick = 0;
+		if (!host || !worldConfigured || alreadyWritten || autosaveSeconds == 0 || !lockstepActive || !activityRunning) return false;
+		if (nextFrame == 0) return false;
+		outTick = nextFrame - 1;
+		return outTick != 0;
 	}
 
 	bool NetMatchService::ResolveWorldResume(NetMatchServiceRequest& request, std::string* error) {
@@ -5635,7 +5650,7 @@ static std::string ResyncSaveName() {
 		// The row must be the same session, listed as a lobby or a running match.
 		const auto& rows = m_ReturnWatch.Rows();
 		m_ReconnectUx.NoteHostReturn(std::any_of(rows.begin(), rows.end(), [&](const NetDirectorySessionRow& row) {
-			return row.sessionId == sessionId && (row.state == "running" || row.state == "lobby");
+			return NetDirectoryRowIsWatchedHost(row, sessionId);
 		}));
 	}
 
