@@ -387,6 +387,7 @@ namespace RTE {
 		GUILabel* m_HostRecWaitingLabel = nullptr;
 		GUILabel* m_HostRecRepairHintLabel = nullptr;    //!< H25: repair row's own status - hint, confirm line, or live progress.
 		bool m_HostRecRepairArmed = false;             //!< H25: first press arms; the second calls ResyncMatch.
+		std::string m_HostRecRepairRefusal;
 		GUILabel* m_HostFilesSavePathLabel = nullptr;
 		GUILabel* m_HostFilesDiagPathLabel = nullptr;
 		GUILabel* m_HostFilesDiagResultLabel = nullptr;
