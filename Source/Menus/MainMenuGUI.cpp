@@ -1384,6 +1384,9 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
 	m_HostNetIceCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetIce"));
 	m_HostNetIceHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetIceHint"));
+	if (m_HostNetIceHintLabel) {
+		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	}
 	m_HostNetPortBox = dynamic_cast<GUITextBox*>(get("TextHostNetPort"));
 	m_HostRecRepairHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRepairHint"));
 	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
