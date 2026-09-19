@@ -211,16 +211,8 @@ namespace RTE {
 		}
 
 		std::string Stamp() {
-			const std::time_t now = std::time(nullptr) - 7 * 60 * 60;
-			std::tm local{};
-#ifdef _WIN32
-			gmtime_s(&local, &now);
-#else
-			gmtime_r(&now, &local);
-#endif
-			std::array<char, 32> text{};
-			std::strftime(text.data(), text.size(), "%Y%m%d-%H%M%S", &local);
-			return text.data();
+			// The bundle's name carries the player's own local time, not ours.
+			return System::LocalTimeText(std::time(nullptr), "%Y%m%d-%H%M%S");
 		}
 
 		struct Job {

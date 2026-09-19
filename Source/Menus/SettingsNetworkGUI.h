@@ -92,6 +92,9 @@ namespace RTE {
 		GUILabel* m_AutosaveLabel;
 		GUILabel* m_AutosaveIntervalLabel;
 		GUILabel* m_AutosaveInfoLabel;
+		GUILabel* m_AutosavesKeptLabel;
+		GUILabel* m_AutosavesKeptHintLabel;
+		GUITextBox* m_AutosavesKeptTextbox;
 		GUITextBox* m_DiagDirTextbox;
 		GUIButton* m_SaveDiagButton;
 		GUICheckbox* m_RecordReplaysCheckbox;

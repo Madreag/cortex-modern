@@ -58,8 +58,10 @@ CHAT_SEED = {"NetworkChatVisible": "1", "NetworkChatSound": "0", "NetworkChatNot
 CHAT_SAVED = {"NetworkChatVisible": "0", "NetworkChatNotify": "0"}
 RECOVERY_SEED = {"NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"}
 RECOVERY_SAVED = {"NetworkAutoReconnect": "0", "NetworkOfferStoredRejoin": "0"}
-FILES_SEED = {"AutosaveSeconds": "45", "NetworkRecordReplays": "0"}
-FILES_SAVED = {"NetworkDiagnosticsDirectory": "D:/diag-lane", "NetworkRecordReplays": "1"}
+FILES_SEED = {"AutosaveSeconds": "45", "NetworkRecordReplays": "0", "NetworkAutosavesKept": "3"}
+FILES_SAVED = {"NetworkDiagnosticsDirectory": "D:/diag-lane", "NetworkRecordReplays": "1", "NetworkAutosavesKept": "5"}
+# AutosaveStore::c_MinRetainedAutosaves-c_MaxRetainedAutosaves, as the page writes the hint from them.
+AUTOSAVES_KEPT_HINT = "1-10, this machine"
 # The settings reader cuts values at "//", so the directory url persists scheme-less;
 # NetDirectoryClient puts https:// back on (NetDirectoryClient.cpp:117).
 INTERNET_SEED = {"SessionDirectoryUrl": "dir.example.test/serve",
@@ -524,6 +526,7 @@ def scripts(case, port, root):
         text = OPTIONS + net_page("Files")
         for control in ("LabelNetAutosaveTitle", "LabelNetAutosave", "LabelNetAutosaveHost",
                         "LabelNetAutosaveIntTitle", "LabelNetAutosaveInterval", "LabelNetAutosaveIntervalHost",
+                        "LabelNetAutosavesKeptTitle", "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint",
                         "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
                         "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
@@ -532,9 +535,17 @@ def scripts(case, port, root):
                  "assert_label LabelNetAutosaveInterval 45 s\n"
                  "assert_label LabelNetAutosaveHost Set by the host\n"
                  "assert_label LabelNetAutosaveIntervalHost Set by the host\n"
+                 "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
+                 "assert_label LabelNetAutosavesKeptHint " + AUTOSAVES_KEPT_HINT + "\n"
+                 "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
                  "assert_enabled ButtonNetOpenAutosaves 1\nassert_enabled ButtonNetCopyAutosavesPath 1\n"
                  "assert_enabled ButtonNetOpenDiagnostics 1\nassert_enabled ButtonNetCopyDiagPath 1\n"
                  "assert_enabled ButtonNetSaveDiagnostics 1\n"
+                 # A count outside the bounds keeps the stored one; the page reverts the box to it.
+                 "set_text TextNetworkAutosavesKept 11\n"
+                 "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
+                 "set_text TextNetworkAutosavesKept " + FILES_SAVED["NetworkAutosavesKept"] + "\n"
+                 "assert_label TextNetworkAutosavesKept " + FILES_SAVED["NetworkAutosavesKept"] + "\n"
                  "set_text TextNetworkDiagDir " + FILES_SAVED["NetworkDiagnosticsDirectory"] + "\n"
                  "post_command CheckboxNetworkRecordReplays\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n")
@@ -1335,7 +1346,8 @@ def run_case(options, case, root, failing=None):
                                          "LabelNetRecoveryStatusTitle", "LabelNetRecoveryStatus",
                                          "ButtonNetRejoin", "ButtonNetCancelRecovery"),
                         "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "LabelNetAutosaveHost",
-                                      "LabelNetAutosaveIntervalHost", "LabelNetAutosaveInfo",
+                                      "LabelNetAutosaveIntervalHost", "LabelNetAutosavesKeptTitle",
+                                      "TextNetworkAutosavesKept", "LabelNetAutosavesKeptHint", "LabelNetAutosaveInfo",
                                       "ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath",
                                       "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
                                       "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics",
@@ -1355,7 +1367,7 @@ def run_case(options, case, root, failing=None):
                     "net-recovery": ("CheckboxNetworkOfferRejoin", "LabelNetLastHost",
                                      "LabelNetRecoveryRecord", "LabelNetRecoveryStatus",
                                      "ButtonNetRejoin"),
-                    "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval",
+                    "net-files": ("LabelNetAutosave", "LabelNetAutosaveInterval", "TextNetworkAutosavesKept",
                                   "ButtonNetOpenAutosaves", "TextNetworkDiagDir",
                                   "ButtonNetOpenDiagnostics", "ButtonNetSaveDiagnostics"),
                     "net-internet": ("TextNetworkDirUrl", "LabelNetDirUrlHint", "LabelNetDirStatus",
@@ -1370,6 +1382,7 @@ def run_case(options, case, root, failing=None):
                                      "LabelNetRecoveryTitle", "LabelNetRecoveryStatusTitle",
                                      "LabelNetRecoveryError", "ButtonNetRejoin"),
                     "net-files": ("LabelNetAutosaveTitle", "LabelNetAutosaveIntTitle",
+                                  "LabelNetAutosavesKeptTitle",
                                   "LabelNetAutosaveInfo", "ButtonNetOpenAutosaves",
                                   "LabelNetDiagDirTitle", "ButtonNetOpenDiagnostics",
                                   "CheckboxNetworkRecordReplays", "LabelNetFilesMessage"),

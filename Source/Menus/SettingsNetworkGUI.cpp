@@ -193,6 +193,13 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_AutosaveLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosave"));
 	m_AutosaveIntervalLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInterval"));
 	m_AutosaveInfoLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInfo"));
+	m_AutosavesKeptLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosavesKeptTitle"));
+	m_AutosavesKeptHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosavesKeptHint"));
+	m_AutosavesKeptTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkAutosavesKept"));
+	m_AutosavesKeptTextbox->SetNumericOnly(true);
+	m_AutosavesKeptTextbox->SetMaxTextLength(2);
+	// The bounds belong to the store, so the hint reads them instead of restating them in the layout.
+	m_AutosavesKeptHintLabel->SetText(std::to_string(AutosaveStore::c_MinRetainedAutosaves) + "-" + std::to_string(AutosaveStore::c_MaxRetainedAutosaves) + ", this machine");
 	m_DiagDirTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDiagDir"));
 	m_SaveDiagButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetSaveDiagnostics"));
 	m_RecordReplaysCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkRecordReplays"));
@@ -252,6 +259,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
 	m_AutoReconnectCheckbox->SetCheck(g_SettingsMan.GetNetworkAutoReconnect());
 	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
+	m_AutosavesKeptTextbox->SetText(std::to_string(g_SettingsMan.GetNetworkAutosavesKept()));
 	m_DiagDirTextbox->SetText(g_SettingsMan.GetNetworkDiagnosticsDirectory());
 	m_RecordReplaysCheckbox->SetCheck(g_SettingsMan.GetNetworkRecordReplays());
 	m_DirUrlTextbox->SetText(g_SettingsMan.GetSessionDirectoryUrl());
@@ -269,6 +277,9 @@ void SettingsNetworkGUI::ApplyTextboxes() {
 	}
 	if (int ticks = 0; ParseWholeNumber(m_PathHorizonTextbox->GetText(), ticks)) {
 		g_SettingsMan.SetNetworkPathHorizonTicks(ticks);
+	}
+	if (int kept = 0; ParseWholeNumber(m_AutosavesKeptTextbox->GetText(), kept)) {
+		g_SettingsMan.SetNetworkAutosavesKept(kept);
 	}
 	if (int frames = 0; ParseWholeNumber(m_FixedDelayTextbox->GetText(), frames)) {
 		g_SettingsMan.SetNetworkInputDelayFrames(std::clamp(frames, 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
@@ -463,7 +474,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
 		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_PathHorizonTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_PathHorizonTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_AutosavesKeptTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&

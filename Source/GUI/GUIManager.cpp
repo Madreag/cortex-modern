@@ -1,5 +1,7 @@
 #include "GUI.h"
 #include "Timer.h"
+#include "BuyMenuGUI.h"
+#include "PresetMan.h"
 
 #include <cassert>
 #include <iostream>
@@ -460,6 +462,19 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		input.PushEnter();
 		manager.Update();
 		check("kept_focus_still_presses", holder.m_Downs == 1 && holder.m_Presses == 1 && manager.GetFocusPanel() == &holder);
+	}
+	{
+		// The buy menu's module flags are owned for the menu's life: Destroy clears them where it used to
+		// hand the menu a fresh array, which left the one it had just deleted behind on every cycle.
+		if (!PresetMan::IsConstructed()) {
+			PresetMan::Construct();
+		}
+		BuyMenuGUI menu;
+		const uint64_t created = BuyMenuGUI::GetModuleFlagAllocations();
+		menu.Destroy();
+		menu.Destroy();
+		menu.Destroy();
+		check("buy_menu_flags_survive_a_destroy_cycle", BuyMenuGUI::GetModuleFlagAllocations() == created);
 	}
 	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;

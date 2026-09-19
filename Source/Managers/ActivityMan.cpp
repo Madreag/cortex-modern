@@ -360,7 +360,7 @@ namespace {
 			const uint64_t pinnedTick = pinnedTickSource ? pinnedTickSource->load() : AutosaveStore::c_NoPinnedTick;
 			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
 			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
-			                         published.savedTick, AutosaveStore::c_RetainedAutosaves, pinnedTick, removed) << std::flush;
+			                         published.savedTick, AutosaveStore::RetainedAutosaves(), pinnedTick, removed) << std::flush;
 		}
 	}
 }
