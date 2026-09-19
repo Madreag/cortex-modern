@@ -669,6 +669,10 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_LeftMatch ? "this match was left" : "the rematch lobby queue overflowed";
 				return false;
 			}
+			if (HostOptionsNeedCorrectionLocked()) {
+				if (error) *error = m_ErrorText;
+				return false;
+			}
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
@@ -4105,7 +4109,8 @@ static std::string ResyncSaveName() {
 		snapshot.localPeerId = m_LocalPeerId;
 		snapshot.localTeam = m_LocalTeam;
 		snapshot.active = m_State != NetMatchServiceState::Idle;
-		snapshot.inLobby = m_State == NetMatchServiceState::Starting;
+		snapshot.inLobby = m_State == NetMatchServiceState::Starting || HostOptionsNeedCorrectionLocked();
+		if (HostOptionsNeedCorrectionLocked()) snapshot.remoteReady = false;
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
@@ -4164,6 +4169,15 @@ static std::string ResyncSaveName() {
 		// A lobby publish names the agreed config on every peer; before one arrives the request's
 		// own build stands in, which is what a client still shows while its lobby starts.
 		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
+	}
+
+	bool NetMatchService::HostOptionsNeedCorrectionLocked() const {
+		return m_State == NetMatchServiceState::Completed && m_Runner && m_Runner->HasRefusedHostOptions() && !m_ErrorText.empty();
+	}
+
+	bool NetMatchService::NeedsHostOptionsCorrection() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return HostOptionsNeedCorrectionLocked();
 	}
 
 	bool NetMatchService::SubmitHostOptions(uint64_t expectedRevision, const NetMatchConfig& draft, std::string* error) {
