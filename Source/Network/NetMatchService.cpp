@@ -2009,7 +2009,10 @@ static std::string ResyncSaveName() {
 				if (m_Session->IsReady()) m_Coordinator->FinishMigrationAdmission();
 				else if (m_Session->IsFailed() || m_Session->IsRejected()) m_Coordinator->Complete("handover snapshot admission failed");
 			}
-			if (m_MigrationStatusUntilMs != 0 && SteadyNowMs() >= m_MigrationStatusUntilMs) { m_StatusText = "LIVE"; m_MigrationStatusUntilMs = 0; }
+			if (m_MigrationStatusUntilMs != 0 && SteadyNowMs() >= m_MigrationStatusUntilMs) {
+				m_StatusText = "LIVE"; m_MigrationStatusUntilMs = 0;
+				ScenarioRunner::PushNetUiToast("host_handover_live", m_StatusText);
+			}
 			return;
 		}
 		const auto& result = m_Coordinator->GetMigrationResult();
@@ -2953,6 +2956,7 @@ static std::string ResyncSaveName() {
 		auto coordinator = std::make_unique<NetLockstepCoordinator>();
 		auto runner = std::make_unique<NetMatchRunner>();
 		bool iceWanted = false;
+		const bool resolveDirectory = !request.host && !request.sessionId.empty();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			iceWanted = m_IceEnabled;
@@ -2961,7 +2965,7 @@ static std::string ResyncSaveName() {
 		}
 		std::unique_ptr<NetMuxTransport> mux;
 		INetTransport* wire = transport.get();
-		if (iceWanted) {
+		if (iceWanted || resolveDirectory) {
 			mux = std::make_unique<NetMuxTransport>();
 			wire = mux.get();
 		}
@@ -3049,7 +3053,7 @@ static std::string ResyncSaveName() {
 			}
 		};
 
-		if (started && iceWanted) {
+		if (started && (iceWanted || resolveDirectory)) {
 			started = SetUpIceTransport(request, manifest, *mux, runnerConfig.sessionConfig, runnerConfig.joinAddress, &error);
 #ifdef CCCP_WITH_GNS
 			if (started && m_Dispatcher) {
