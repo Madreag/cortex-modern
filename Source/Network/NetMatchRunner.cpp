@@ -661,8 +661,10 @@ namespace RTE {
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
 		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
-		// because a wait loop would hold the sim update it runs inside.
-		m_WorldJoinStartMs = std::max<uint64_t>(1, NetLockstepNowMs());
+		// because a wait loop would hold the sim update it runs inside. The deadline counts those
+		// updates; this runs inside the tick, where a wall clock is a per-machine decision.
+		m_WorldJoinStarting = true;
+		m_WorldJoinStartTicks = 0;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
 			return false;
 		}
@@ -673,22 +675,22 @@ namespace RTE {
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}
-		const uint64_t nowMs = NetLockstepNowMs();
-		coordinator.Tick(nowMs);
+		++m_WorldJoinStartTicks;
+		coordinator.Tick(NetLockstepNowMs());
 		if (coordinator.IsRunning()) {
 			m_State = NetMatchRuntimeState::Running;
-			m_WorldJoinStartMs = 0;
+			m_WorldJoinStarting = false;
 			return true;
 		}
 		if (coordinator.IsFailed() || coordinator.IsStopped()) {
-			m_WorldJoinStartMs = 0;
+			m_WorldJoinStarting = false;
 			SetFailed(coordinator.GetStats().timeoutReason);
 			if (error) *error = m_SetupError;
 			return false;
 		}
-		if (nowMs - m_WorldJoinStartMs > m_Config.lockstepWaitMs) {
-			m_WorldJoinStartMs = 0;
-			SetFailed("timed out waiting for lockstep start");
+		if (m_WorldJoinStartTicks > m_Config.worldJoinStartWaitTicks) {
+			m_WorldJoinStarting = false;
+			SetFailed("timed out waiting for lockstep start after " + std::to_string(m_WorldJoinStartTicks) + " updates");
 			if (error) *error = m_SetupError;
 			return false;
 		}
