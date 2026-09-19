@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -167,8 +167,13 @@ MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": F
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
 WATCHED = ("ComboBrainlessHumansSpectate", "ComboMatchStatusWidget")
+# The landing panel's focus ring, in the (y, x) order MenuAutomation builds it in: the three action
+# buttons of the first row, then Resume on the second, then the footer.
 ORDER = ("TextMultiplayerName", "ButtonMultiplayerHostGame", "ButtonMultiplayerJoinGame",
-         "ButtonBackToMain", "ButtonSaveDiagnostics")
+         "ButtonMultiplayerReplays", "ButtonMultiplayerResumeGame", "ButtonBackToMain", "ButtonSaveDiagnostics")
+# The resume screen's own rows, measured where they are drawn.
+RESUME_ROWS = ("LabelResumeTitle", "LabelResumeBlurb", "ListResumeMatches", "LabelResumeSelected",
+               "LabelResumeStatus", "ButtonResumeStart", "ButtonResumeBack")
 RESET_INPUT = ("wait 40\nactivate ButtonMainToOptions\nwait 5\nassert_visible TabInputSettings 1\n"
                "activate TabInputSettings\nwait 3\npost_command ButtonP2Clear\npost_command ButtonP2Clear\n"
                "wait 3\npost_command ButtonP3Clear\npost_command ButtonP3Clear\nwait 3\n"
@@ -394,6 +399,24 @@ def scripts(case, port, root):
                  "assert_substate Landing\n"
                  "assert_label LabelMultiplayerLandingStatus limited to 64 bytes\n"
                  "exit\n")
+    elif case == "net-resume":
+        # The resume entry sits on the landing panel and opens a screen of its own. With no resumable
+        # match on this private runtime the list is empty, the status says so in its own words and
+        # Resume cannot be pressed - the state a player meets before any match has been checkpointed.
+        text = LANDING + checks("ButtonMultiplayerResumeGame", "MultiplayerLandingPanel")
+        text += "assert_label ButtonMultiplayerResumeGame Resume Match\n"
+        text += "activate ButtonMultiplayerResumeGame\nwait 5\nassert_substate ResumeSetup\n"
+        for name in RESUME_ROWS:
+            text += checks(name, "MultiplayerResumePanel")
+        text += "assert_label LabelResumeTitle R E S U M E   M A T C H\n"
+        text += "assert_label LabelResumeSelected Select a match to restart it\n"
+        text += "assert_label LabelResumeStatus No match here can be restarted\n"
+        text += "assert_enabled ButtonResumeStart 0\n"
+        text += "assert_enabled ButtonResumeBack 1\n"
+        # The rejoin prompt is not an offer here: this runtime has no ticket, so it stays off the screen.
+        text += "activate ButtonResumeBack\nwait 5\nassert_substate Landing\n"
+        text += "assert_visible ButtonMultiplayerReconnect 0\nassert_visible ButtonMultiplayerCancelReconnect 0\n"
+        text += "exit\n"
     elif case == "settings":
         text = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\nassert_visible TabVideoSettings 1\n"
         for tab in PAGES:
