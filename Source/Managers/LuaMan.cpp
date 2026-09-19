@@ -3500,12 +3500,13 @@ static int ScriptGraphBeginRoot(lua_State* L) {
 }
 
 // The scratch tables a capture allocates are its own, so the state's counter is put back afterwards.
-static uint64_t s_SerialBeforeCapture = 0;
+// The counter belongs to the state, so the saved value does too: another state's capture must not move it.
+static std::unordered_map<lua_State*, uint64_t> s_SerialBeforeCapture;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
 	// The walk the index records is the capture itself, so every caller gets one, nested or not.
 	CheckpointGraphIndex::Get().BeginWalk();
-	s_SerialBeforeCapture = luaJIT_state_serial(L);
+	s_SerialBeforeCapture[L] = luaJIT_state_serial(L);
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
@@ -3531,8 +3532,10 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 }
 
 static int ScriptGraphEndCapture(lua_State* L) {
-	if (s_SerialBeforeCapture > 0) luaJIT_set_state_serial(L, s_SerialBeforeCapture);
-	s_SerialBeforeCapture = 0;
+	if (const auto saved = s_SerialBeforeCapture.find(L); saved != s_SerialBeforeCapture.end()) {
+		if (saved->second > 0) luaJIT_set_state_serial(L, saved->second);
+		s_SerialBeforeCapture.erase(saved);
+	}
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	CheckpointGraphIndex::Get().EndWalk();
