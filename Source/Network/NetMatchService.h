@@ -41,6 +41,7 @@ namespace RTE {
 	class Activity;
 	class GnsDirectorySignalDispatcher;
 	class GnsTransport;
+	class SettingsMan;
 
 	enum class NetRejoinAnswer : uint8_t {
 		Resync = 0,
@@ -869,6 +870,8 @@ namespace RTE {
 		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
 		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, std::string* error);
+		/// Builds the candidate policy from the saved settings and run overrides.
+		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort);
 		/// The ICE virtual port a host listens on and a joiner dials.
 		static constexpr int c_IceVirtualPort = 41011;
 		static constexpr uint64_t c_IceRegisterBudgetMs = 30000;
@@ -907,6 +910,7 @@ namespace RTE {
 		friend bool TestGnsStopCancelContracts(std::string* error);
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
+		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
