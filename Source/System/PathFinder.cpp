@@ -26,6 +26,7 @@
 #include <execution>
 #include <fstream>
 #include <iostream>
+#include <sstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -72,6 +73,7 @@ thread_local uint64_t s_PinnedHorizonGeneration = 0;
 
 namespace {
 	constexpr size_t c_HorizonWaitRing = 256;
+	constexpr uint64_t c_HorizonReportEveryApplies = 600;
 
 	struct HorizonWaitStats {
 		std::mutex mutex;
@@ -80,6 +82,15 @@ namespace {
 		std::array<int64_t, c_HorizonWaitRing> ring{};
 		size_t ringCount = 0;
 		size_t ringNext = 0;
+		uint64_t noteCount = 0;
+		uint64_t noteCaptures = 0;
+		int64_t noteMaxCaptures = 0;
+		int64_t noteUs = 0;
+		int64_t noteMaxUs = 0;
+		uint64_t fenceBytes = 0;
+		uint64_t fenceBytesMax = 0;
+		uint64_t fenceSharedPatchBytes = 0;
+		uint64_t appliesSinceReport = 0;
 	};
 
 	HorizonWaitStats& HorizonStats() {
@@ -159,29 +170,29 @@ namespace {
 		return distance;
 	}
 
-	unsigned char SamplePatchUnwrapped(const std::vector<HorizonTerrainPatch>& patches, int x, int y) {
-		for (const HorizonTerrainPatch& patch: patches) {
-			if (patch.ContainsUnwrapped(x, y)) {
-				return patch.Sample(x, y);
+	unsigned char SamplePatchUnwrapped(const std::vector<HorizonPatchRef>& patches, int x, int y) {
+		for (const HorizonPatchRef& patch: patches) {
+			if (patch && patch->ContainsUnwrapped(x, y)) {
+				return patch->Sample(x, y);
 			}
 		}
 		return MaterialColorKeys::g_MaterialAir;
 	}
 
-	bool PatchesContainUnwrapped(const std::vector<HorizonTerrainPatch>& patches, int x, int y) {
-		for (const HorizonTerrainPatch& patch: patches) {
-			if (patch.ContainsUnwrapped(x, y)) {
+	bool PatchesContainUnwrapped(const std::vector<HorizonPatchRef>& patches, int x, int y) {
+		for (const HorizonPatchRef& patch: patches) {
+			if (patch && patch->ContainsUnwrapped(x, y)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
-	bool HorizonRayStaysInPatches(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches) {
-		if (patches.empty()) {
+	bool HorizonRayStaysInPatches(const Vector& start, const Vector& end, const std::vector<HorizonPatchRef>& patches) {
+		if (patches.empty() || !patches.front()) {
 			return false;
 		}
-		const HorizonTerrainPatch& meta = patches.front();
+		const HorizonTerrainPatch& meta = *patches.front();
 		const Vector ray = HorizonShortestDistance(start, end, meta.sceneWidth, meta.sceneHeight, meta.wrapsX, meta.wrapsY);
 		int intPos[2] = {static_cast<int>(std::floor(start.m_X)), static_cast<int>(std::floor(start.m_Y))};
 		int delta[2] = {static_cast<int>(std::floor(start.m_X + ray.m_X)) - intPos[0], static_cast<int>(std::floor(start.m_Y + ray.m_Y)) - intPos[1]};
@@ -300,6 +311,7 @@ bool PathFinder::LoadCheckpoint(std::string_view text, bool validateOnly) {
 
 void PathFinder::ClearHorizonState() {
 	WaitForPathingRequests();
+	FlushDeferredPathRequests();
 	{
 		std::lock_guard lock(m_HorizonMutex);
 		for (const auto& job: m_HorizonJobs) {
@@ -329,6 +341,8 @@ void PathFinder::ClearHorizonState() {
 	m_HorizonWorkerDelayMs = 0;
 	m_HorizonWorkerLate = false;
 	m_HorizonWorkerHold.store(false);
+	m_PathRequestDelayMs = 0;
+	m_LastPathRequestWaitUs = 0;
 }
 
 void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
@@ -365,7 +379,7 @@ void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 	m_HorizonGeneration.store(in.generation);
 }
 
-void PathFinder::TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) const {
+void PathFinder::TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials) const {
 	ComputeHorizonMaterialsFromSnapshots(nodes, patches, materials);
 }
 
@@ -549,7 +563,7 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 	return result;
 }
 
-std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback, bool committedHorizon) {
+std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback, bool committedHorizon, uint64_t completeTick) {
 	std::shared_ptr<volatile PathRequest> pathRequest = std::make_shared<PathRequest>();
 
 	const_cast<Vector&>(pathRequest->startPos) = start;
@@ -563,12 +577,35 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		held = true;
 	}
 
+	std::shared_ptr<DeferredPathRequest> deferred;
+	if (completeTick != 0) {
+		// A shared request is published on its commit tick, so every peer sees it complete on the same applied frame.
+		deferred = std::make_shared<DeferredPathRequest>();
+		deferred->request = pathRequest;
+		deferred->callback = callback;
+		deferred->completeTick = completeTick;
+		std::lock_guard lock(m_DeferredPathMutex);
+		deferred->sequence = ++m_DeferredPathSequence;
+		m_DeferredPathRequests.push_back(deferred);
+	}
+
+	const int delayMs = m_PathRequestDelayMs;
 	++m_CurrentPathingRequests;
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
-		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held](std::shared_ptr<volatile PathRequest> volRequest) {
+		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held, deferred, delayMs](std::shared_ptr<volatile PathRequest> volRequest) {
 			    PathingRequestScope scope{m_CurrentPathingRequests};
 			    HorizonReadScope horizon(this, committedHorizon, pinned, held);
+
+			    if (deferred) {
+				    deferred->status = CalculatePathImpl(start, end, deferred->path, deferred->totalCost, jumpHeight, digStrength);
+				    if (delayMs > 0) {
+					    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+				    }
+				    deferred->solved.store(true, std::memory_order_release);
+				    return;
+			    }
+
 			    // Cast away the volatile-ness - only matters outside (and complicates the API otherwise)
 			    PathRequest& request = const_cast<PathRequest&>(*volRequest);
 
@@ -587,6 +624,10 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		    },
 		    pathRequest);
 	} catch (...) {
+		if (deferred) {
+			std::lock_guard lock(m_DeferredPathMutex);
+			m_DeferredPathRequests.erase(std::remove(m_DeferredPathRequests.begin(), m_DeferredPathRequests.end(), deferred), m_DeferredPathRequests.end());
+		}
 		if (held) {
 			EndCommittedHorizonRead(pinned);
 		}
@@ -595,6 +636,82 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 	}
 
 	return pathRequest;
+}
+
+void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
+	int64_t waitUs = 0;
+	if (!deferred.solved.load(std::memory_order_acquire)) {
+		// A solve that is not finished at its commit tick stalls this tick, the same as a horizon job that is not ready.
+		const auto started = std::chrono::steady_clock::now();
+		while (!deferred.solved.load(std::memory_order_acquire)) {
+			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			std::this_thread::yield();
+		}
+	}
+	m_LastPathRequestWaitUs = waitUs;
+	RecordHorizonWait(waitUs);
+	if (waitUs > 0) {
+		std::cout << "[horizon-path] request_wait_us=" << waitUs << " commit=" << deferred.completeTick << std::endl;
+	}
+	PathRequest& request = const_cast<PathRequest&>(*deferred.request);
+	request.path = std::move(deferred.path);
+	request.totalCost = deferred.totalCost;
+	request.status = deferred.status;
+	request.pathLength = request.path.size();
+	if (deferred.callback) {
+		deferred.callback(deferred.request);
+	}
+	// Same order as the immediate path: the callback runs first, so anything blocking on complete knows it has run.
+	request.complete = true;
+}
+
+void PathFinder::CommitPathRequestsThrough(uint64_t nowTick) {
+	std::vector<std::shared_ptr<DeferredPathRequest>> due;
+	{
+		std::lock_guard lock(m_DeferredPathMutex);
+		for (const auto& deferred: m_DeferredPathRequests) {
+			if (deferred->completeTick <= nowTick) {
+				due.push_back(deferred);
+			}
+		}
+	}
+	if (due.empty()) {
+		return;
+	}
+	std::stable_sort(due.begin(), due.end(), [](const auto& lhs, const auto& rhs) {
+		if (lhs->completeTick != rhs->completeTick) {
+			return lhs->completeTick < rhs->completeTick;
+		}
+		return lhs->sequence < rhs->sequence;
+	});
+	for (const auto& deferred: due) {
+		PublishDeferredPathRequest(*deferred);
+		std::lock_guard lock(m_DeferredPathMutex);
+		m_DeferredPathRequests.erase(std::remove(m_DeferredPathRequests.begin(), m_DeferredPathRequests.end(), deferred), m_DeferredPathRequests.end());
+	}
+}
+
+void PathFinder::FlushDeferredPathRequests() {
+	std::deque<std::shared_ptr<DeferredPathRequest>> pending;
+	{
+		std::lock_guard lock(m_DeferredPathMutex);
+		pending.swap(m_DeferredPathRequests);
+	}
+	std::stable_sort(pending.begin(), pending.end(), [](const auto& lhs, const auto& rhs) {
+		if (lhs->completeTick != rhs->completeTick) {
+			return lhs->completeTick < rhs->completeTick;
+		}
+		return lhs->sequence < rhs->sequence;
+	});
+	// The grid is going away on every peer at the same tick, so publish what is outstanding rather than leave a script polling forever.
+	for (const auto& deferred: pending) {
+		PublishDeferredPathRequest(*deferred);
+	}
+}
+
+size_t PathFinder::TestDeferredPathRequestCount() const {
+	std::lock_guard lock(m_DeferredPathMutex);
+	return m_DeferredPathRequests.size();
 }
 
 void PathFinder::WaitForPathingRequests() const {
@@ -1053,12 +1170,12 @@ std::array<const Material*, PathNode::c_MaxAdjacentNodeCount> PathFinder::ViewNo
 	return node->AdjacentNodeBlockingMaterials;
 }
 
-const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches) {
+const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonPatchRef>& patches) {
 	const Material* strongest = g_SceneMan.GetMaterialFromID(MaterialColorKeys::g_MaterialAir);
-	if (!strongest || patches.empty()) {
+	if (!strongest || patches.empty() || !patches.front()) {
 		return strongest;
 	}
-	const HorizonTerrainPatch& meta = patches.front();
+	const HorizonTerrainPatch& meta = *patches.front();
 	const Vector ray = HorizonShortestDistance(start, end, meta.sceneWidth, meta.sceneHeight, meta.wrapsX, meta.wrapsY);
 	int intPos[2] = {static_cast<int>(std::floor(start.m_X)), static_cast<int>(std::floor(start.m_Y))};
 	int delta[2] = {static_cast<int>(std::floor(start.m_X + ray.m_X)) - intPos[0], static_cast<int>(std::floor(start.m_Y + ray.m_Y)) - intPos[1]};
@@ -1091,7 +1208,7 @@ const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, con
 	return strongest;
 }
 
-void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) {
+void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials) {
 	materials.assign(nodes.size(), {});
 	std::unordered_map<int, std::array<const Material*, 8>> computed;
 	computed.reserve(nodes.size());
@@ -1300,7 +1417,7 @@ void PathFinder::CaptureHorizonPatch(const Box& box, HorizonTerrainPatch& patch)
 	}
 }
 
-void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonTerrainPatch>& patches, const std::vector<HorizonNodeSnapshot>& nodes) {
+void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonPatchRef>& patches, const std::vector<HorizonNodeSnapshot>& nodes) {
 	if (boxes.empty() || horizonTicks == 0 || m_NodeGrid.empty()) {
 		return;
 	}
@@ -1467,9 +1584,56 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		m_HorizonApplyPending = false;
 	}
 	m_HorizonApplyCv.notify_all();
-	if (stalled) {
+	// The completion pass reads this file to size H; a stall writes it at once, otherwise it is throttled off the tick's hot path.
+	bool report = stalled;
+	if (!report) {
+		auto& stats = HorizonStats();
+		std::lock_guard lock(stats.mutex);
+		stats.appliesSinceReport += 1;
+		if (stats.appliesSinceReport >= c_HorizonReportEveryApplies) {
+			stats.appliesSinceReport = 0;
+			report = true;
+		}
+	}
+	if (report) {
 		WriteHorizonWaitReport();
 	}
+}
+
+void PathFinder::RecordHorizonNote(int captures, int64_t microseconds) {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	stats.noteCount += 1;
+	stats.noteCaptures += static_cast<uint64_t>(captures);
+	stats.noteMaxCaptures = std::max(stats.noteMaxCaptures, static_cast<int64_t>(captures));
+	stats.noteUs += microseconds;
+	stats.noteMaxUs = std::max(stats.noteMaxUs, microseconds);
+}
+
+void PathFinder::RecordHorizonFenceBytes(uint64_t copiedBytes, uint64_t sharedPatchBytes) {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	stats.fenceBytes = copiedBytes;
+	stats.fenceBytesMax = std::max(stats.fenceBytesMax, copiedBytes);
+	stats.fenceSharedPatchBytes = sharedPatchBytes;
+}
+
+int64_t PathFinder::HorizonNoteCount() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	return static_cast<int64_t>(stats.noteCount);
+}
+
+int64_t PathFinder::HorizonNoteCaptures() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	return static_cast<int64_t>(stats.noteCaptures);
+}
+
+int64_t PathFinder::HorizonNoteMaxCaptures() {
+	auto& stats = HorizonStats();
+	std::lock_guard lock(stats.mutex);
+	return stats.noteMaxCaptures;
 }
 
 int64_t PathFinder::HorizonWaitCount() {
@@ -1492,25 +1656,42 @@ void PathFinder::ResetHorizonWaitStats() {
 	stats.ringCount = 0;
 	stats.ringNext = 0;
 	stats.ring.fill(0);
+	stats.noteCount = 0;
+	stats.noteCaptures = 0;
+	stats.noteMaxCaptures = 0;
+	stats.noteUs = 0;
+	stats.noteMaxUs = 0;
+	stats.fenceBytes = 0;
+	stats.fenceBytesMax = 0;
+	stats.fenceSharedPatchBytes = 0;
+	stats.appliesSinceReport = 0;
 }
 
 void PathFinder::WriteHorizonWaitReport() {
 	auto& stats = HorizonStats();
-	int64_t count = 0;
-	int64_t p99 = 0;
-	int64_t last = 0;
+	std::ostringstream json;
 	{
 		std::lock_guard lock(stats.mutex);
-		count = static_cast<int64_t>(stats.count);
-		p99 = HorizonP99Locked(stats);
-		last = stats.lastUs;
+		const double notes = static_cast<double>(std::max<uint64_t>(stats.noteCount, 1));
+		json << "{\"count\":" << stats.count
+		     << ",\"p99_us\":" << HorizonP99Locked(stats)
+		     << ",\"last_wait_us\":" << stats.lastUs
+		     << ",\"notes\":" << stats.noteCount
+		     << ",\"note_captures\":" << stats.noteCaptures
+		     << ",\"note_captures_per_note\":" << (static_cast<double>(stats.noteCaptures) / notes)
+		     << ",\"note_captures_max\":" << stats.noteMaxCaptures
+		     << ",\"note_us_per_note\":" << (static_cast<double>(stats.noteUs) / notes)
+		     << ",\"note_us_max\":" << stats.noteMaxUs
+		     << ",\"fence_bytes\":" << stats.fenceBytes
+		     << ",\"fence_bytes_max\":" << stats.fenceBytesMax
+		     << ",\"fence_shared_patch_bytes\":" << stats.fenceSharedPatchBytes << "}\n";
 	}
 	const std::string path = System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json";
 	std::ofstream out(path, std::ios::trunc);
 	if (!out) {
 		return;
 	}
-	out << "{\"count\":" << count << ",\"p99_us\":" << p99 << ",\"last_wait_us\":" << last << "}\n";
+	out << json.str();
 }
 
 void PathFinder::TestInstallGrid(int width, int height, int nodeDimension, const Material* fill) {
@@ -1598,7 +1779,7 @@ size_t PathFinder::TestHorizonOverlayCount() const {
 }
 
 int PathFinder::TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const {
-	const Material* fromPatch = StrongestMaterialAlongPatch(start, end, {patch});
+	const Material* fromPatch = StrongestMaterialAlongPatch(start, end, {TestSharePatch(patch)});
 	return fromPatch ? static_cast<int>(fromPatch->GetIndex()) : -1;
 }
 
@@ -1818,7 +1999,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		sceneFinder.CaptureHorizonPatch(sceneBox, scenePatch);
 		sceneFinder.CaptureHorizonNodeSnapshots(sceneBox, sceneNodes);
 		std::vector<std::array<const Material*, 8>> sceneExpected;
-		sceneFinder.TestComputeHorizon(sceneNodes, {scenePatch}, sceneExpected);
+		sceneFinder.TestComputeHorizon(sceneNodes, {TestSharePatch(scenePatch)}, sceneExpected);
 		const float beforeShared = sceneCost(scene);
 		sceneFinder.TestApplyLiveUpdate(sceneWall, blocked);
 		ScenarioRunner::SetLockstepAppliedFrame(11);
@@ -1947,10 +2128,10 @@ int PathFinder::RunHorizonGridSelfTest() {
 			return 1;
 		}
 		std::vector<std::array<const Material*, 8>> snapExpected;
-		snapFinder.TestComputeHorizon(snapNodes, {snapPatch}, snapExpected);
+		snapFinder.TestComputeHorizon(snapNodes, {TestSharePatch(snapPatch)}, snapExpected);
 		snapFinder.TestHoldHorizonWorker();
 		snapFinder.PinHorizonFromLive(snapBox);
-		snapFinder.QueueHorizonUpdate(30, 4, {snapBox}, {snapPatch}, snapNodes);
+		snapFinder.QueueHorizonUpdate(30, 4, {snapBox}, {TestSharePatch(snapPatch)}, snapNodes);
 		snapFinder.TestSetNodeMaterials(wall, blocked);
 		for (int y = 30; y < 70; ++y) {
 			for (int x = 50; x < 90; ++x) {

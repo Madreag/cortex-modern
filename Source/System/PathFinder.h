@@ -53,6 +53,9 @@ namespace RTE {
 		bool ContainsUnwrapped(int x, int y) const;
 	};
 
+	/// A captured patch is shared by every pathfinder whose door override does not change it.
+	using HorizonPatchRef = std::shared_ptr<const HorizonTerrainPatch>;
+
 	/// One path node as it stood at the origin tick. The worker never reads the live grid.
 	struct HorizonNodeSnapshot {
 		int nodeId = -1;
@@ -159,10 +162,14 @@ namespace RTE {
 		/// @param digStrength What material strength the search is capable of digging through.
 		/// @param callback The callback function to be run when the path calculation is completed.
 		/// @return A shared pointer to the volatile PathRequest to be used to track whether the asynchronous path calculation has been completed, and check its results.
-		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false);
+		/// @param completeTick The lockstep tick the request is published on; 0 completes as soon as the solve does, as it always has.
+		std::shared_ptr<volatile PathRequest> CalculatePathAsync(Vector start, Vector end, float jumpHeight, float digStrength, PathCompleteCallback callback = nullptr, bool committedHorizon = false, uint64_t completeTick = 0);
+
+		/// Publishes every deferred shared request whose commit tick is due. One not solved yet stalls the tick until it is.
+		void CommitPathRequestsThrough(uint64_t nowTick);
 
 		/// Queues a committed-horizon recompute for terrain that landed at originTick.
-		void QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonTerrainPatch>& patches = {}, const std::vector<HorizonNodeSnapshot>& nodes = {});
+		void QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, const std::vector<Box>& boxes, const std::vector<HorizonPatchRef>& patches = {}, const std::vector<HorizonNodeSnapshot>& nodes = {});
 
 		/// Copies live cells into the overlay at Note time, before any live rewrite of the box.
 		void PinHorizonFromLive(const Box& box);
@@ -184,6 +191,9 @@ namespace RTE {
 		void EndCommittedHorizonRead(uint64_t generation);
 
 		void SetHorizonWorkerDelayMs(int milliseconds) { m_HorizonWorkerDelayMs = milliseconds; }
+		void TestSetPathRequestDelayMs(int milliseconds) { m_PathRequestDelayMs = milliseconds; }
+		int64_t LastPathRequestWaitUs() const { return m_LastPathRequestWaitUs; }
+		size_t TestDeferredPathRequestCount() const;
 		void TestSetHorizonWorkerLate(bool late) { m_HorizonWorkerLate = late; }
 		void TestHoldHorizonWorker() { m_HorizonWorkerHold.store(true); }
 		void TestReleaseHorizonWorker();
@@ -193,14 +203,23 @@ namespace RTE {
 		uint64_t TestHorizonGeneration() const { return m_HorizonGeneration.load(); }
 		size_t TestHorizonOverlayCount() const;
 		int TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
+		static HorizonPatchRef TestSharePatch(const HorizonTerrainPatch& patch) { return std::make_shared<const HorizonTerrainPatch>(patch); }
 		int TestLiveRayMaterialId(const Vector& start, const Vector& end) const;
 		std::array<const Material*, 8> TestViewMaterials(int nodeId, uint64_t generation) const;
-		void TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) const;
+		void TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials) const;
 
 		static int64_t HorizonWaitCount();
 		static int64_t HorizonWaitP99Us();
 		static void ResetHorizonWaitStats();
 		static void WriteHorizonWaitReport();
+
+		/// Records what one Note cost: how many terrain patches it captured and how long the capture took.
+		static void RecordHorizonNote(int captures, int64_t microseconds);
+		/// Records what a preview-tick terrain fence copied, and the patch pixels it referenced instead of copying.
+		static void RecordHorizonFenceBytes(uint64_t copiedBytes, uint64_t sharedPatchBytes);
+		static int64_t HorizonNoteCount();
+		static int64_t HorizonNoteCaptures();
+		static int64_t HorizonNoteMaxCaptures();
 		static int RunHorizonGridSelfTest();
 
 		void TestInstallGrid(int width, int height, int nodeDimension, const Material* fill);
@@ -304,7 +323,7 @@ namespace RTE {
 			std::vector<int> nodeIds;
 			std::vector<HorizonNodeSnapshot> nodes;
 			std::vector<std::array<const Material*, 8>> materials;
-			std::vector<HorizonTerrainPatch> patches;
+			std::vector<HorizonPatchRef> patches;
 			int delayMs = 0;
 			bool late = false;
 			std::atomic<bool> hold{false};
@@ -322,14 +341,33 @@ namespace RTE {
 		int m_HorizonWorkerDelayMs = 0;
 		bool m_HorizonWorkerLate = false;
 		std::atomic<bool> m_HorizonWorkerHold{false};
+		/// A shared async solve held until its commit tick, so every peer publishes it on the same applied frame.
+		struct DeferredPathRequest {
+			std::shared_ptr<volatile PathRequest> request;
+			PathCompleteCallback callback;
+			uint64_t completeTick = 0;
+			uint64_t sequence = 0;
+			std::atomic<bool> solved{false};
+			std::list<Vector> path;
+			float totalCost = 0.0F;
+			int status = MicroPather::NO_SOLUTION;
+		};
+		std::deque<std::shared_ptr<DeferredPathRequest>> m_DeferredPathRequests;
+		mutable std::mutex m_DeferredPathMutex;
+		uint64_t m_DeferredPathSequence = 0;
+		int m_PathRequestDelayMs = 0;
+		int64_t m_LastPathRequestWaitUs = 0;
+		void PublishDeferredPathRequest(DeferredPathRequest& deferred);
+		void FlushDeferredPathRequests();
+
 		int64_t m_LastHorizonWaitUs = 0;
 		int64_t m_LastHorizonReaderWaitUs = 0;
 		int64_t m_LastHorizonExpired = 0;
 
 		/// The transition Materials a query sees: the committed overlay under lockstep, this machine's live grid otherwise.
 		std::array<const Material*, PathNode::c_MaxAdjacentNodeCount> ViewNodeMaterials(const PathNode* node) const;
-		static const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches);
-		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials);
+		static const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonPatchRef>& patches);
+		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials);
 		HorizonNodeSnapshot SnapshotNode(int nodeId) const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job, uint64_t generation);
