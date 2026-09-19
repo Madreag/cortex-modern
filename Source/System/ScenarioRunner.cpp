@@ -1399,7 +1399,7 @@ namespace RTE {
 	}
 
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
-		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->InputDelayAt(s_LockstepCoordinator->GetConfig().localPeerId, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) : 0;
 	}
 
 	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
@@ -1595,7 +1595,15 @@ namespace RTE {
 			}
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
-		const auto& config = s_LockstepCoordinator->GetConfig();
+		NetLockstepCoordinator* producing = s_LockstepCoordinator;
+		while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
+			producing->Tick(NetLockstepNowMs());
+			if (s_SessionPump) s_SessionPump();
+			if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
+			if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		const auto& config = producing->GetConfig();
+		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
 			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
 			for (size_t index = 0; index < batches.size(); ++index) {
@@ -1620,7 +1628,7 @@ namespace RTE {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
 		}
 		std::vector<NetGameCommand> commands;
-		const uint64_t targetFrame = tick + config.inputDelayFrames;
+		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
 		if ((!s_RequeuedCommands.empty() && s_RequeuedCommands.begin()->first < targetFrame) ||
 			(!s_RequeuedPlayerBindings.empty() && s_RequeuedPlayerBindings.begin()->first < targetFrame) ||
 			(!s_RequeuedInputs.empty() && s_RequeuedInputs.begin()->first < targetFrame)) {
@@ -1727,7 +1735,7 @@ namespace RTE {
 	}
 
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
-		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
 
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {

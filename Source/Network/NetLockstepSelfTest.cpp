@@ -1285,6 +1285,70 @@ namespace RTE {
 			return config;
 		}
 
+		bool TestTimingDecisionCodec(std::string* error) {
+			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold}) {
+				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status}) {
+					NetLockstepTiming timing;
+					timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
+					timing.sessionId = 88; timing.roundId = 99; timing.applyFrame = 120; timing.nextFrame = 50;
+					timing.delayFrames = 26; timing.pingMs = 401; timing.jitterMs = 17;
+					timing.revision = phase == NetTimingPhase::Status ? 0 : 4;
+					timing.requiredPeers = phase == NetTimingPhase::Status ? 0 : 3;
+					if (!RoundTrip({timing}, error)) return false;
+					std::vector<uint8_t> bytes;
+					if (!EncodePacket({timing}, bytes, error)) return false;
+					bytes[4] = static_cast<uint8_t>(NetLockstepCodec::c_TimingVersion - 1);
+					if (!ExpectDecodeError(bytes, NetLockstepErrorCode::UnsupportedVersion, error)) return false;
+				}
+			}
+			return true;
+		}
+
+		bool TestLiveDelayChangesAtOneFrame(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A01, 2, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A01, 2, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 17;
+			hostConfig.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(48891, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto pump = [&] {
+				++now;
+				hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			};
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (!host.IsRunning() || !client.IsRunning()) { *error = "live delay fixture did not start"; return false; }
+			if (!host.ProposeInputDelay(2, 5, 20, error)) return false;
+			if (!host.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 20) != 2) {
+				*error = "delay changed before the remote acknowledged its frame"; return false;
+			}
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (host.TimingDecisionPendingAt(20) || client.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 19) != 2 ||
+			    client.InputDelayAt(2, 19) != 2 || host.InputDelayAt(2, 20) != 5 || client.InputDelayAt(2, 20) != 5) {
+				*error = "the peers installed different live delay boundaries"; return false;
+			}
+			for (uint64_t tick = 0; tick <= 24; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error) || !client.QueueLocalInput(tick, {MakeFrame(200, uint64_t{1} << PRESS_PRIMARY)}, {}, error)) return false;
+				pump(); pump();
+			}
+			NetLockstepReadyFrame first, second;
+			for (uint64_t frame = 2; frame <= 26; ++frame) {
+				if (!host.PopReadyFrame(first) || !client.PopReadyFrame(second) || first.frame != frame || second.frame != frame) {
+					*error = "raising the delay left a hole in the committed stream"; return false;
+				}
+				if (first.remoteFrames.empty() || second.localFrames.empty()) { *error = "live delay lost a sender's controllers"; return false; }
+				if (frame >= 22 && frame <= 24 && (first.remoteFrames.front().stateMask & (uint64_t{1} << PRESS_PRIMARY)) != 0) {
+					*error = "delay padding repeated a controller press"; return false;
+				}
+			}
+			if (client.GetStats().delayPaddingFrames != 3 || host.GetStats().delayChangesCommitted != 1 || client.GetStats().delayChangesCommitted != 1) {
+				*error = "the live delay counters did not count one boundary and its three padding frames"; return false;
+			}
+			return true;
+		}
+
 		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -15032,6 +15096,8 @@ namespace RTE {
 		    !TestSoundRegistrySurvivesConcurrentRegistration(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
+		    !TestTimingDecisionCodec(&error) ||
+		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||
