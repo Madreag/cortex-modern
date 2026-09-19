@@ -254,6 +254,7 @@ static bool s_netMatchServiceE2E = false;
 static bool s_netDedicated = false;
 static bool s_netWorldDaemon = false;
 static bool s_netPersistentWorld = false;
+static bool s_netWorldFresh = false; //!< -net-world-fresh: open a new round from the scene instead of the world's newest checkpoint.
 static bool s_netMatchServicePresetExplicit = false;
 static bool s_netMatchTicksExplicit = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
@@ -1073,6 +1074,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-net-persistent-world") {
 			s_netPersistentWorld = true;
+			continue;
+		}
+
+		if (currentArg == "-net-world-fresh") {
+			s_netWorldFresh = true;
 			continue;
 		}
 
@@ -6150,6 +6156,7 @@ int RunNetMatchServiceE2E() {
 		if (s_netPersistentWorld && e2eHost) {
 			request.persistentWorld = true;
 			request.dedicated = true;
+			request.worldFresh = s_netWorldFresh;
 		}
 		if (e2eHost && !s_netResumeMatchId.empty()) {
 			// The checkpoint's own manifest authors the roster, so nothing above steers this round.
