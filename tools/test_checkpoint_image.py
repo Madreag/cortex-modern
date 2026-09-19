@@ -68,6 +68,7 @@ REQUIRED_SCENE_ROWS = (
     "a_controller_write_moves_its_owner_stamp",
     "an_exit_reset_moves_its_owner_stamp",
     "a_soundset_write_moves_its_owner_stamp",
+    "an_archived_matrix_cache_write_moves_the_stamp",
     "captured_graphs_parse_in_their_own_state",
 )
 

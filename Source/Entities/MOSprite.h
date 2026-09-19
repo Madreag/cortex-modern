@@ -264,7 +264,7 @@ namespace RTE {
 
 		/// Sets the current absolute angle of rotation of this MovableObject.
 		/// @param m_Rotation.SetRadAngle(newAngle The new absolute angle in radians.
-		void SetRotAngle(float newAngle) override { if (m_Rotation.GetRadAngle() != newAngle) TouchCheckpoint(); m_Rotation.SetRadAngle(newAngle); }
+		void SetRotAngle(float newAngle) override { if (m_Rotation.GetRadAngle() != newAngle || m_Rotation.m_ElementsUpdated) TouchCheckpoint(); m_Rotation.SetRadAngle(newAngle); }
 
 		/// Sets the current angular velocity of this MovableObject. Positive is
 		/// a counter clockwise rotation.

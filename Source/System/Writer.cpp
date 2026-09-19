@@ -22,6 +22,10 @@
 
 using namespace RTE;
 
+std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe) {
+	return CheckpointWriter::CaptureNative(observe).Text();
+}
+
 namespace {
 	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property };
 	template<class T> T ReadCaptureValue(std::string_view values, size_t& cursor) {
