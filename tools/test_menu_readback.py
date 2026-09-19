@@ -234,6 +234,8 @@ def seeds(case):
         return {"host": FILES_SEED}
     if case == "net-internet":
         return {"host": INTERNET_SEED}
+    if case == "live":
+        return {"host": {"NetworkRecordReplays": "1"}, "client": {"NetworkRecordReplays": "1"}}
     return {}
 
 
@@ -1330,6 +1332,13 @@ def run_case(options, case, root, failing=None):
             silent = [who for who, script in scripted.items()
                       if "dump_" in script and not any(image["peer"] == who for image in images)]
             assert not silent, f"no readback capture from {silent}"
+        if case == "live":
+            # The host's own option records the round under its session and round, in the directory
+            # the replay browser lists; a client records nothing.
+            recorded = sorted((runs["host"].cwd / "Userdata/Replays").glob("match-*-r1.ccreplay"))
+            assert len(recorded) == 1 and recorded[0].stat().st_size > 0, recorded
+            assert not list((runs["client"].cwd / "Userdata/Replays").glob("*.ccreplay")) if (runs["client"].cwd / "Userdata/Replays").exists() else True
+            result["replay_recorded"] = recorded[0].name
         for who in probes:
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation

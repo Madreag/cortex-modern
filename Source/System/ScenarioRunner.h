@@ -353,6 +353,9 @@ namespace RTE {
 		/// Match replay: the recorder captures every committed tick (all peers' frames + commands)
 		/// behind the synced config header; playback feeds them through the identical apply path.
 		static void ArmLockstepReplayRecord(const std::string& path);
+		/// Arms one round's recording: the path is forgotten when that recording closes, so the next
+		/// round names its own file instead of a numbered copy of this one.
+		static void ArmLockstepReplayRecordForRound(const std::string& path);
 
 		/// Whether a recording path has been armed, by the flag or by the host's own option.
 		static bool IsLockstepReplayRecordArmed();

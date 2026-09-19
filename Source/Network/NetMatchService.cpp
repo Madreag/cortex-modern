@@ -2165,8 +2165,9 @@ static std::string ResyncSaveName() {
 				std::error_code directoryError;
 				const std::filesystem::path replays = std::filesystem::path("Userdata") / "Replays";
 				std::filesystem::create_directories(replays, directoryError);
-				const std::string name = "match-" + std::to_string(m_Runner->GetMatchConfig().sessionId) + AutosaveStore::c_SegmentExtension;
-				ScenarioRunner::ArmLockstepReplayRecord((replays / name).string());
+				const std::string name = "match-" + std::to_string(m_Runner->GetMatchConfig().sessionId) + "-r" +
+				                         std::to_string(m_Coordinator->GetRoundId()) + AutosaveStore::c_SegmentExtension;
+				ScenarioRunner::ArmLockstepReplayRecordForRound((replays / name).string());
 			}
 			// A heal stands on the checkpoint the host named for it, so its round chains as well.
 			uint64_t healTick = 0;
