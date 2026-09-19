@@ -5216,6 +5216,15 @@ namespace RTE {
 		std::error_code code;
 		std::filesystem::remove_all(lane, code);
 		std::filesystem::create_directories(lane, code);
+		// The seat has to carry a proven identity for a ban to name one, and the host's own store is
+		// what both the queued ban and the queued unban write.
+		service.m_BanStore.SetPath((lane / "NetworkBans").string());
+		service.m_ReconnectHost.SetBanStore(&service.m_BanStore);
+		NetAuthBytes32 holderId{};
+		for (size_t i = 0; i < holderId.size(); ++i) {
+			holderId[i] = static_cast<uint8_t>(0xC0 + i);
+		}
+		service.m_ReconnectHost.BindParticipantId(transport, holderId);
 		NetReconnectTicketStore store;
 		store.SetPath((lane / "kick.ticket").string());
 		NetReconnectClient admission;
@@ -5264,14 +5273,34 @@ namespace RTE {
 		}
 		// A lobby between rounds has no coordinator, and the peers still hold the round they played.
 		service.m_LastRoundId = 7;
-		const NetKickBanResult queued = service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick);
+		// The host asks for the unban FIRST and the ban of the same identity second: applied in that
+		// order the identity ends up banned, and a drain that ran the unbans last would clear it.
+		if (!service.m_BanStore.Ban(holderId, NetHostBanScope::Session, "holder", "pre-banned", workerSession->GetSessionId(), 1'700'000'000'000ULL)) {
+			*error = "the Starting kick fixture could not pre-ban the holder";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const NetKickBanResult unbanQueued = service.UnbanParticipant(holderId);
+		if (unbanQueued != NetKickBanResult::Queued) {
+			*error = std::string("Starting UnbanParticipant answered ") + NetKickBanResultName(unbanQueued) + " instead of queueing the unban";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const std::vector<NetHostBanRecord> queuedRecords = service.m_BanStore.List();
+		if (queuedRecords.size() != 1 || queuedRecords.front().reason != "pre-banned") {
+			*error = "Starting UnbanParticipant wrote the ban store on the caller: " + std::to_string(queuedRecords.size()) +
+			         " records, first reason " + (queuedRecords.empty() ? std::string("none") : queuedRecords.front().reason);
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const NetKickBanResult queued = service.RemoveParticipant(selected, NetParticipantRemovalAction::BanSession);
 		if (queued != NetKickBanResult::Queued) {
 			*error = std::string("Starting RemoveParticipant answered ") + NetKickBanResultName(queued) + " instead of queueing the kick";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		if (service.m_PendingRemovals.size() != 1) {
-			*error = "the Starting kick left " + std::to_string(service.m_PendingRemovals.size()) + " kicks queued for the setup worker";
+		if (service.m_PendingModeration.size() != 2) {
+			*error = "the Starting actions left " + std::to_string(service.m_PendingModeration.size()) + " entries queued for the setup worker";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
@@ -5289,8 +5318,8 @@ namespace RTE {
 			return false;
 		}
 		runnerConfig.pumpHost(*workerSession);
-		if (!service.m_PendingRemovals.empty()) {
-			*error = "the host pump left " + std::to_string(service.m_PendingRemovals.size()) + " kicks queued";
+		if (!service.m_PendingModeration.empty()) {
+			*error = "the host pump left " + std::to_string(service.m_PendingModeration.size()) + " actions queued";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
@@ -5326,9 +5355,17 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		// Unban then ban, in that order: one record, written by the worker's ban, not the pre-ban.
+		const std::vector<NetHostBanRecord> drainedRecords = service.m_BanStore.List();
+		if (drainedRecords.size() != 1 || drainedRecords.front().reason != "host ban" || !(drainedRecords.front().identity == holderId)) {
+			*error = "the marshaled unban and ban did not keep the host's order: " + std::to_string(drainedRecords.size()) +
+			         " records, first reason " + (drainedRecords.empty() ? std::string("none") : drainedRecords.front().reason);
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
 		SetNetAuthCryptoForTest(nullptr);
 		std::filesystem::remove_all(lane, code);
-		std::cout << "[net-match-selftest] PASS kick: Starting RemoveParticipant marshals onto the setup worker" << std::endl;
+		std::cout << "[net-match-selftest] PASS kick: Starting removals and unbans marshal onto the setup worker in order" << std::endl;
 		return true;
 	}
 
