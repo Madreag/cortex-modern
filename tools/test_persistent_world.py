@@ -97,6 +97,7 @@ RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
+RED_DUE_WALK_SKIPPED = "due-walk-skipped-the-member"
 RED_RESPAWN_DELAY_SOURCES = "world-respawn-delay-has-two-sources"
 RED_RESPAWN_DELAY_NOT_CONFIG = "world-respawn-delay-is-not-the-config"
 RED_RELEASE_KEPT_CONTROL = "release-kept-the-departed-control"
@@ -454,6 +455,12 @@ CASES = (
         "red": RED_CLEAN_LEAVE_WRONG_SEAT,
         "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
         "pass_token": "[net-world-clean-leave-selftest] PASS",
+    },
+    {
+        "name": "due-spectator-leaves-the-member-due",
+        "argv": ["-net-world-due-walk-selftest"],
+        "red": RED_DUE_WALK_SKIPPED,
+        "pass_token": "[net-world-due-walk-selftest] PASS",
     },
     {
         "name": "world-respawn-delay-has-one-source",

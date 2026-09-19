@@ -3372,6 +3372,82 @@ namespace RTE {
 		return 0;
 	}
 
+	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
+	int TestDueSpectatorLeavesTheMemberDue() {
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("due-walk-skipped-the-member: the world plane refused its config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		host.PublishImage(image);
+		// Both slots filled, then the watcher; one member then leaves and a new one takes its slot, so
+		// the watcher sits ahead of a member in the order the walk reads.
+		if (!host.BeginJoin(69, 69, "seat-a", 1000, &error) || !host.BeginJoin(70, 70, "seat-b", 1005, &error) ||
+		    !host.BeginJoin(71, 71, "watcher", 1010, &error)) {
+			return Fail("due-walk-skipped-the-member: the fixture could not fill the world (" + error + ")");
+		}
+		host.CancelJoin(69, "clean leave");
+		if (!host.Membership().Release(2, &error) || !host.BeginJoin(72, 72, "member", 1020, &error)) {
+			return Fail("due-walk-skipped-the-member: the freed slot took no new member (" + error + ")");
+		}
+		const NetWorldJoinSession* watcher = host.FindSession(71);
+		const NetWorldJoinSession* member = host.FindSession(72);
+		if (watcher == nullptr || member == nullptr || !watcher->spectator || member->spectator) {
+			return Fail("due-walk-skipped-the-member: the fixture did not open one watcher and one member");
+		}
+		const uint64_t nowFrame = 440;
+		uint64_t watcherE = 0;
+		uint64_t memberE = 0;
+		if (!host.NoteTransferStarted(71, 7, 1, 400) || !host.ScheduleSpectatorActivation(71, nowFrame, &watcherE, &error) ||
+		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error)) {
+			return Fail("due-walk-skipped-the-member: the fixture could not announce both activations (" + error + ")");
+		}
+		if (watcherE == 0 || watcherE != memberE) {
+			return Fail("due-walk-skipped-the-member: the fixture announced " + std::to_string(watcherE) + " and " +
+			            std::to_string(memberE) + " instead of one frame");
+		}
+		if (!host.NoteCatchUpProgress(72, memberE - 1, 1, 1, memberE - 1, nullptr, &error)) {
+			return Fail("due-walk-skipped-the-member: the member never applied through E-1 (" + error + ")");
+		}
+		// One pump reads one frame: the walk the service runs over it must reach both.
+		const uint64_t nextFrame = watcherE - 1;
+		const NetWorldJoinSession* first = host.DueActivation(nextFrame);
+		if (first == nullptr || first->connection != 71) {
+			return Fail("due-walk-skipped-the-member: the watcher is not the first due bootstrap of the pump");
+		}
+		const NetWorldActivationPlan watcherPlan = PlanWorldActivation(*first, nextFrame, false);
+		if (watcherPlan.admit) {
+			return Fail("due-walk-skipped-the-member: a watcher's plan admitted it to a seat");
+		}
+		if (!host.CompleteActivation(first->connection, watcherPlan.firstRequired, &error)) {
+			return Fail("due-walk-skipped-the-member: the watcher's stream was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* second = host.DueActivation(nextFrame);
+		if (second == nullptr || second->connection != 72) {
+			return Fail("due-walk-skipped-the-member: the member is not due behind the streamed watcher at frame " +
+			            std::to_string(nextFrame));
+		}
+		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*second, nextFrame, false);
+		if (!memberPlan.admit || memberPlan.firstRequired != memberE) {
+			return Fail(std::string("due-walk-skipped-the-member: the member's plan reads admit ") +
+			            (memberPlan.admit ? "true" : "false") + " at frame " + std::to_string(memberPlan.firstRequired));
+		}
+		if (!host.CompleteActivation(second->connection, memberPlan.firstRequired - 1, &error)) {
+			return Fail("due-walk-skipped-the-member: the member's activation was refused (" + error + ")");
+		}
+		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr) {
+			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump walked both");
+		}
+		return 0;
+	}
+
 	// The preset's respawn clock and the engine's seat respawn read one configured number.
 	int TestWorldRespawnDelayHasOneSource() {
 		NetMatchConfig config = MakeWorldConfig();
@@ -5125,6 +5201,10 @@ namespace RTE {
 			s_FailTag = "net-world-respawn-delay-selftest";
 			return TestWorldRespawnDelayHasOneSource();
 		}
+		if (std::strcmp(name, "due-walk") == 0 || std::strcmp(name, "-net-world-due-walk-selftest") == 0) {
+			s_FailTag = "net-world-due-walk-selftest";
+			return TestDueSpectatorLeavesTheMemberDue();
+		}
 		if (std::strcmp(name, "reclaim") == 0 || std::strcmp(name, "-net-world-reclaim-selftest") == 0) {
 			s_FailTag = "net-world-reclaim-selftest";
 			return TestReclaimOutranksAFreshJoin();
@@ -5326,6 +5406,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldRespawnDelayHasOneSource(); result != 0) {
+			return result;
+		}
+		if (const int result = TestDueSpectatorLeavesTheMemberDue(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReclaimOutranksAFreshJoin(); result != 0) {
