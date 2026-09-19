@@ -379,6 +379,9 @@ namespace RTE {
 		/// §9b's moderation API: every seat, whether it may be reassigned, and who is asking for it.
 		/// The host UI renders this and calls one of the three verbs below; nothing here is a secret.
 		std::vector<NetH4ModerationSeat> GetModerationView() const;
+		/// Folds every field GetModerationView shows into one stamp, without allocating, so a caller
+		/// polling at the lobby's cadence rebuilds the view only when a row actually changed.
+		uint64_t GetModerationSignature() const;
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action, uint64_t nowMs);
 		/// Keep waiting for the original holder. Explicit, so "wait" is a recorded decision rather
 		/// than the absence of one.
