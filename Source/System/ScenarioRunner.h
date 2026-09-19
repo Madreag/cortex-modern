@@ -353,6 +353,9 @@ namespace RTE {
 		/// checkpoint's world-structure digest, which the archive thread writes after the capture, so the
 		/// frames the sim commits meanwhile wait here until the header can be named.
 		static constexpr size_t c_MaxPendingSegmentFrames = 3600;
+		/// A round that opens ON a checkpoint records a segment from its first frame: the digest is
+		/// already known, so the segment is armed and sealed in one breath and no frame is ever held.
+		static bool BeginLockstepWorldSegmentRecord(const NetMatchConfig& config, const NetWorldSegmentHeader& header, const std::string& path, std::string* error = nullptr);
 		/// Closes the open recording with its end marker and holds the next segment until it is sealed.
 		static void ArmLockstepWorldSegment(const NetWorldSegmentHeader& header, const std::string& path);
 		static bool HasPendingLockstepWorldSegment();

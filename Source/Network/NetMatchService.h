@@ -966,6 +966,9 @@ namespace RTE {
 		uint64_t m_RestartAdmissionGeneration = 0;
 		std::atomic<bool> m_RestartAdmissionDue{false};
 		bool m_FinalCheckpointWritten = false; //!< One final world checkpoint per teardown, never two.
+		/// The checkpoint this world's round opened on, until the launch has recorded its segment. One
+		/// shot: a later heal of the same round records the ordinary way.
+		uint64_t m_ResumeSegmentTick = 0;
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
 		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.
