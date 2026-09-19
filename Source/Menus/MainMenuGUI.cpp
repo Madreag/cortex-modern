@@ -1678,8 +1678,11 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				m_HostOptionsBaseRevision = adopted.configRevision;
 			}
 		}
-		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions();
-		if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
+		std::string refusal;
+		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions(&refusal);
+		if (!refusal.empty()) {
+			m_HostOptionsStatusLabel->SetText(refusal);
+		} else if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
 			// A rematch lobby's draft is staged for the next match; an open lobby's Apply is a live
 			// republish the peers acknowledge before it counts. "Applied" lands when the adopted
 			// mirror reaches the awaited revision - the runner queue publishes it for every peer.

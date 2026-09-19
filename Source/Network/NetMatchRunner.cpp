@@ -127,19 +127,24 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetMatchRunner::AdoptStagedHostOptions() {
+	bool NetMatchRunner::AdoptStagedHostOptions(std::string* error) {
+		if (!m_Config.host || !m_Config.hostOptions) return true;
+		NetHostOptionsSlot& slot = *m_Config.hostOptions;
+		std::lock_guard<std::mutex> lock(slot.mutex);
+		if (!slot.pending.load(std::memory_order_acquire)) return true;
+		auto refuse = [&](const std::string& reason) {
+			slot.refusal = "Host options refused: " + reason;
+			SetFailed(slot.refusal);
+			if (error) *error = slot.refusal;
+			return false;
+		};
+		// Keep the peek and take under one lock so a newer Apply cannot replace the validated draft.
+		if (slot.config.sessionId != m_MatchConfig.sessionId) return refuse("the draft names another session");
+		if (slot.config.configRevision <= m_MatchConfig.configRevision) return refuse("the draft names a stale configuration revision");
+		std::string validation;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(slot.config, &validation)) return refuse(validation);
 		NetMatchConfig staged;
-		if (!m_Config.host || !m_Config.hostOptions || !m_Config.hostOptions->Take(staged)) {
-			return false;
-		}
-		// The draft names the session and revision it was accepted against; one from another session,
-		// or behind the config the last round played, is a transaction this round already passed.
-		if (staged.sessionId != m_MatchConfig.sessionId || staged.configRevision <= m_MatchConfig.configRevision ||
-		    !NetMatchConfigUtil::ValidateLocalAlpha(staged, nullptr)) {
-			return false;
-		}
-		// Only the rules and policy are certain to survive: the roster below is re-derived from the
-		// peers still here, which is what a rematch is played on.
+		slot.TakeLocked(staged);
 		m_MatchConfig = staged;
 		m_Config.matchConfig = staged;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
@@ -373,8 +378,8 @@ namespace RTE {
 		rematchRoster.swap(m_RematchRoster);
 		// The rematch is played on the options the host staged while the last round's lobby was up. A
 		// resync keeps the running world's config instead: its snapshot was taken on that one.
-		if (!m_ResyncRound) {
-			AdoptStagedHostOptions();
+		if (!m_ResyncRound && !AdoptStagedHostOptions(error)) {
+			return false;
 		}
 		if (!m_ResyncRound && (m_Config.host || !rematchRoster.empty()) && !PrepareRematchRoster(session, rematchRoster, error)) {
 			return false;
