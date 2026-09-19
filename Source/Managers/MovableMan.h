@@ -303,6 +303,9 @@ namespace RTE {
 			PreviewEventLedger::Key key;
 			Vector pos;
 			Vector vel;
+			float globalAccScalar = 1.0F;
+			float airResistance = 0;
+			float airThreshold = 0;
 		};
 		std::vector<PreviewGhostState> GetPreviewGhostStates() const;
 		/// True when every ghost is unregistered: no MOID, not in the world lists the dump walks.
@@ -990,8 +993,10 @@ namespace RTE {
 		void DestroySpeculativeSpawn(MovableObject* mo);
 		void DisposeSpeculativeSpawns();
 		void TakePreviewSpawn(MovableObject* particle);
-		/// Installs a preview ghost for a ledger projectile at the pose the preview left it; it holds there until the drop.
+		/// Installs a preview ghost for a ledger projectile at the pose the preview left it.
 		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key);
+		/// Moves an installed ghost to the pose a later preview's re-run of the same event left its spawn at.
+		void ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn);
 		struct PreviewGhost {
 			MovableObject* object = nullptr;
 			PreviewEventLedger::Key key;

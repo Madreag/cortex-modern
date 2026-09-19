@@ -1,7 +1,7 @@
 """Compare argv-identical dumps for optimistic preview ghosts.
 
 Same argv on the tip and on the base tree (both binaries already emit the -out
-tick-hash file; the base has no event_ledger_ghost_install probe):
+tick-hash file; the base has no event_ledger_ghost_travel probe):
 
   -net-replay <fixtures>/pickup_fire.ccreplay
   -input-script <fixtures>/pickup_fire.txt

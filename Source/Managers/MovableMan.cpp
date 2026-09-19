@@ -2421,9 +2421,23 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 }
 
+static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
+	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+}
+
+void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn) {
+	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		if (ghost.object && SameGhostKey(ghost.key, key)) {
+			ghost.object->SetPos(spawn.GetPos());
+			ghost.object->SetVel(spawn.GetVel());
+			return;
+		}
+	}
+}
+
 void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
 	for (auto ghost = m_PreviewGhosts.begin(); ghost != m_PreviewGhosts.end(); ++ghost) {
-		if (ghost->key.kind == key.kind && ghost->key.emitterUID == key.emitterUID && ghost->key.presetHash == key.presetHash && ghost->key.tick == key.tick && ghost->key.seq == key.seq) {
+		if (SameGhostKey(ghost->key, key)) {
 			delete ghost->object;
 			m_PreviewGhosts.erase(ghost);
 			return;
@@ -2443,7 +2457,7 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 	out.reserve(m_PreviewGhosts.size());
 	for (const PreviewGhost& ghost: m_PreviewGhosts) {
 		if (ghost.object) {
-			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel()});
+			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()});
 		}
 	}
 	return out;
@@ -2578,6 +2592,8 @@ void MovableMan::DisposeSpeculativeSpawns() {
 		const uint64_t presetHash = Hash(mo->GetPresetName() + "@" + std::to_string(mo->GetModuleID()));
 		const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, spawn.emitterUID, 0, presetHash, spawn.tick);
 		if (PreviewEventLedger::AlreadyPlayed(key)) {
+			// A later preview re-runs the same shot: its spawn carries the ghost to the new horizon.
+			ReposePreviewGhost(key, *mo);
 			DestroySpeculativeSpawn(mo);
 			continue;
 		}

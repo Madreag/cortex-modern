@@ -399,12 +399,15 @@ struct GhostSample {
 	bool any = false;
 	Vector pos;
 	Vector vel;
+	float globalAccScalar = 1.0F;
+	float airResistance = 0;
+	float airThreshold = 0;
 };
 static std::vector<GhostSample> s_eventLedgerGhostSamples; //!< Per-committed-tick ghost kinematics keyed to the ledger event.
 static bool s_eventLedgerGhostRegistered = false;
 static bool s_eventLedgerGhostDumpTaken = false;
 static bool s_eventLedgerGhostDumpIdentical = false;
-static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostInstalledKeys;
+static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostMovedKeys;
 static bool s_eventLedgerExpireDroppedGhost = false;
 static long long s_fundsPreviewPress = 0;
 static const int s_fundsPreviewTeam = Activity::TeamOne; //!< The team -net-match-e2e-buy-command grants and buys for.
@@ -2871,31 +2874,34 @@ static void PreviewEventLedgerFrameOnTick() {
 			}
 		}
 	}
-	std::string dumpBeforeInstall;
+	std::string dumpBeforePreview;
 	std::vector<std::string> dumpProblemsBefore;
-	const bool snapshotInstall = s_eventLedgerPressTick > 0 && !s_eventLedgerGhostDumpTaken;
-	if (snapshotInstall) {
-		dumpBeforeInstall = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsBefore);
+	std::vector<MovableMan::PreviewGhostState> ghostsBeforePreview;
+	const bool snapshotGhostWindow = s_eventLedgerPressTick > 0 && !s_eventLedgerGhostDumpTaken;
+	if (snapshotGhostWindow) {
+		ghostsBeforePreview = g_MovableMan.GetPreviewGhostStates();
+		dumpBeforePreview = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsBefore);
 	}
 	LocalPrediction::RunPreview();
-	if (snapshotInstall && g_MovableMan.GetPreviewGhostCount() > 0) {
-		const std::vector<MovableMan::PreviewGhostState> installed = g_MovableMan.GetPreviewGhostStates();
-		const uint64_t installTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-		for (const MovableMan::PreviewGhostState& ghost: installed) {
-			GhostSample sample;
-			sample.tick = installTick;
-			sample.key = ghost.key;
-			sample.any = true;
-			sample.pos = ghost.pos;
-			sample.vel = ghost.vel;
-			s_eventLedgerGhostSamples.push_back(sample);
-			s_eventLedgerGhostInstalledKeys.push_back(ghost.key);
+	if (snapshotGhostWindow && g_MovableMan.GetPreviewGhostCount() > 0) {
+		// A ghost that this preview installed or carried forward: the dump around that window must not move.
+		std::vector<PreviewEventLedger::Key> moved;
+		for (const MovableMan::PreviewGhostState& ghost: g_MovableMan.GetPreviewGhostStates()) {
+			const auto before = std::find_if(ghostsBeforePreview.begin(), ghostsBeforePreview.end(), [&ghost](const MovableMan::PreviewGhostState& was) {
+				return was.key.kind == ghost.key.kind && was.key.emitterUID == ghost.key.emitterUID && was.key.presetHash == ghost.key.presetHash && was.key.tick == ghost.key.tick && was.key.seq == ghost.key.seq;
+			});
+			if (before == ghostsBeforePreview.end() || (ghost.pos - before->pos).GetMagnitude() > 0.01) {
+				moved.push_back(ghost.key);
+			}
 		}
-		std::vector<std::string> dumpProblemsAfter;
-		const std::string dumpAfterInstall = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsAfter);
-		WriteProbeText("event_ledger_ghost_install", dumpAfterInstall);
-		s_eventLedgerGhostDumpIdentical = dumpProblemsBefore.empty() && dumpProblemsAfter.empty() && dumpBeforeInstall == dumpAfterInstall;
-		s_eventLedgerGhostDumpTaken = true;
+		if (!moved.empty()) {
+			s_eventLedgerGhostMovedKeys = moved;
+			std::vector<std::string> dumpProblemsAfter;
+			const std::string dumpAfterPreview = DumpSimStateToString() + DescribeCanonicalExtras(dumpProblemsAfter);
+			WriteProbeText("event_ledger_ghost_travel", dumpAfterPreview);
+			s_eventLedgerGhostDumpIdentical = dumpProblemsBefore.empty() && dumpProblemsAfter.empty() && dumpBeforePreview == dumpAfterPreview;
+			s_eventLedgerGhostDumpTaken = true;
+		}
 	}
 	if (s_eventLedgerPressTick > 0) {
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
@@ -2912,6 +2918,9 @@ static void PreviewEventLedgerFrameOnTick() {
 				sample.any = true;
 				sample.pos = ghost.pos;
 				sample.vel = ghost.vel;
+				sample.globalAccScalar = ghost.globalAccScalar;
+				sample.airResistance = ghost.airResistance;
+				sample.airThreshold = ghost.airThreshold;
 				s_eventLedgerGhostSamples.push_back(sample);
 			}
 		}
@@ -3037,52 +3046,85 @@ static void CheckPreviewEventLedgerSelfTest() {
 	uint64_t lastGhostTick = 0;
 	Vector lastGhostVel;
 	bool ghostAtOrAfterAdoption = false;
-	size_t heldSamples = 0;
-	double worstDrift = 0.0;
-	GhostSample installedPose;
+	bool prevValid = false;
+	GhostSample prev;
+	size_t travelTicks = 0;
+	size_t frozenTicks = 0;
+	size_t heldTicks = 0;
+	double worstMotionError = 0.0;
 	const float sampleDt = g_TimerMan.GetDeltaTimeSecs();
 	const Vector gravity = g_SceneMan.GetGlobalAcc();
-	// The preview travelled the spawn whole ticks to its horizon, so any later motion is integration past it;
-	// one leftover step moves the ghost by at least the gravity dt^2 term, twice this slack.
+	// The canonical motion the adopted particle will run: gravity, air drag, wrap, terrain stop-and-hold.
+	const auto applyForcesCopy = [&](GhostSample state) {
+		Vector vel = state.vel + gravity * state.globalAccScalar * sampleDt;
+		if (state.airResistance > 0 && vel.GetLargest() >= state.airThreshold) {
+			vel *= 1.0F - (state.airResistance * sampleDt);
+		}
+		Vector pos = state.pos + vel * sampleDt;
+		g_SceneMan.WrapPosition(pos);
+		const int pixelX = static_cast<int>(std::floor(pos.m_X));
+		const int pixelY = static_cast<int>(std::floor(pos.m_Y));
+		if (g_SceneMan.IsWithinBounds(pixelX, pixelY, 0) && g_SceneMan.GetTerrMatter(pixelX, pixelY) != g_MaterialAir) {
+			state.vel = Vector(0, 0);
+			return state;
+		}
+		state.vel = vel;
+		state.pos = pos;
+		return state;
+	};
 	const double gravityTerm = gravity.GetMagnitude() * static_cast<double>(sampleDt) * static_cast<double>(sampleDt);
 	const double motionSlack = gravityTerm * 0.5;
 	for (const GhostSample& sample: s_eventLedgerGhostSamples) {
 		if (!isTracked(sample)) {
+			if (!sample.any) {
+				prevValid = false;
+			}
 			continue;
 		}
 		if (!sawGhost) {
 			sawGhost = true;
 			firstGhostTick = sample.tick;
-			installedPose = sample;
-		} else {
-			++heldSamples;
-			worstDrift = std::max(worstDrift, static_cast<double>((sample.pos - installedPose.pos).GetMagnitude()));
 		}
 		lastGhostTick = sample.tick;
 		lastGhostVel = sample.vel;
 		if (adoptionTick != 0 && sample.tick >= adoptionTick) {
 			ghostAtOrAfterAdoption = true;
 		}
+		if (prevValid && sample.tick == prev.tick + 1) {
+			const GhostSample expected = applyForcesCopy(prev);
+			worstMotionError = std::max(worstMotionError, static_cast<double>((sample.pos - expected.pos).GetMagnitude()));
+			if ((sample.pos - prev.pos).GetMagnitude() > 0.01) {
+				++travelTicks;
+			} else if (sample.vel.GetMagnitude() <= 0.01 && travelTicks >= 1) {
+				++heldTicks;
+			} else {
+				++frozenTicks;
+			}
+		}
+		prev = sample;
+		prevValid = true;
 	}
-	bool trackedInstalled = false;
-	for (const PreviewEventLedger::Key& key: s_eventLedgerGhostInstalledKeys) {
-		GhostSample planted;
-		planted.any = true;
-		planted.key = key;
-		if (isTracked(planted)) {
-			trackedInstalled = true;
+	bool trackedMoved = false;
+	for (const PreviewEventLedger::Key& key: s_eventLedgerGhostMovedKeys) {
+		GhostSample moved;
+		moved.any = true;
+		moved.key = key;
+		if (isTracked(moved)) {
+			trackedMoved = true;
 		}
 	}
 	check("the_ghost_appears_on_the_preview_tick", sawGhost && firstGhostTick <= press + 1,
 	      sawGhost ? "first ghost at committed tick " + std::to_string(firstGhostTick) + ", expected <= " + std::to_string(press + 1) : "no ghost sampled in the run");
-	check("the_ghost_holds_the_preview_horizon", sawGhost && heldSamples >= 1 && worstDrift < motionSlack,
-	      !sawGhost ? "no ghost sampled in the run" : std::to_string(heldSamples) + " samples after the install, worst |sample - installed pose| " + std::to_string(worstDrift) + " px, slack " + std::to_string(motionSlack) + " (half |g|dt^2=" + std::to_string(gravityTerm) + "; a committed-tick leftover step differs by at least that term and fails), last vel " + std::to_string(lastGhostVel.GetMagnitude()));
+	check("the_ghost_travels_every_committed_tick", sawGhost && travelTicks >= 1 && frozenTicks == 0,
+	      !sawGhost ? "no ghost sampled in the run" : std::to_string(travelTicks) + " travelled ticks, " + std::to_string(heldTicks) + " stop-and-hold ticks, " + std::to_string(frozenTicks) + " frozen ticks (a frozen tick is a ghost that neither moved nor stopped on terrain), last vel " + std::to_string(lastGhostVel.GetMagnitude()));
+	check("the_ghost_matches_the_canonical_motion", sawGhost && travelTicks >= 1 && worstMotionError < motionSlack,
+	      "worst |sample - ApplyForces copy of the previous sample| " + std::to_string(worstMotionError) + " px over " + std::to_string(travelTicks + heldTicks + frozenTicks) + " scored steps, slack " + std::to_string(motionSlack) + " (half |g|dt^2=" + std::to_string(gravityTerm) + "; a gravity-less step differs by that term and fails)");
 	check("the_ghost_is_gone_the_tick_the_canonical_adopts", adoptionTick != 0 && sawGhost && !ghostAtOrAfterAdoption && lastGhostTick < adoptionTick,
 	      "last ghost at committed tick " + std::to_string(lastGhostTick) + ", adoption at " + std::to_string(adoptionTick) + (ghostAtOrAfterAdoption ? " (a ghost outlived its adoption)" : ""));
 	check("the_ghost_stays_off_the_moid_grid", !s_eventLedgerGhostRegistered,
 	      s_eventLedgerGhostRegistered ? "a ghost had a MOID or stayed in the world lists the dump walks" : "ghosts stayed unregistered");
-	check("ghost_install_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && trackedInstalled && s_eventLedgerGhostDumpIdentical,
-	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around an installing preview" : (!trackedInstalled ? "the tracked round left no ghost in that window" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged with the ghost installed" : "dump or extras changed with the ghost installed")));
+	check("ghost_travel_leaves_dumps_byte_identical", s_eventLedgerGhostDumpTaken && trackedMoved && s_eventLedgerGhostDumpIdentical,
+	      !s_eventLedgerGhostDumpTaken ? "no dump snapshot around a preview that moved a ghost" : (!trackedMoved ? "the tracked round's ghost did not move in that window" : (s_eventLedgerGhostDumpIdentical ? "dump+extras unchanged after the ghost moved" : "dump or extras changed after the ghost moved")));
 	if (!s_eventLedgerExpireDroppedGhost) {
 		PreviewEventLedger::Key expireKey;
 		expireKey.kind = PreviewEventLedger::Projectile;
