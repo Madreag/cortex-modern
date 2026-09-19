@@ -443,7 +443,11 @@ namespace RTE {
 		/// Whether this peer holds the checkpoint a resumed host offers, and records it as the one to load.
 		bool AnswerResumeOffer(const NetLobbyResume& offer);
 		/// The id every peer of this match writes its checkpoints under.
-		std::string GetAutosaveMatchId() const { return m_AutosaveMatchId; }
+		/// A copy under the lock: a resume and a join both assign this while the main loop reads it.
+		std::string GetAutosaveMatchId() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_AutosaveMatchId;
+		}
 		/// Records the checkpoint the host named for a heal: this peer pins it against retention and says
 		/// whether it holds a restorable copy. The choice is never recomputed locally.
 		/// @param known The descriptor of that same checkpoint when the caller already validated it, so the
