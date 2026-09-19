@@ -64,6 +64,7 @@
 #include "MOPixel.h"
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
+#include "FrameRecorder.h"
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
 #include "PrimitiveMan.h"
@@ -125,6 +126,8 @@
 
 #include "imgui_impl_sdl3.h"
 
+#include "nlohmann/json.hpp"
+
 #ifdef _WIN32
 #include "windows.h"
 #include <crtdbg.h>
@@ -184,6 +187,9 @@ static bool s_loadGameFailed = false;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
 static bool s_cameraNullSceneSelfTest = false;
+static std::string s_recordVideoDirectory;
+static int s_recordVideoFps = FrameRecorder::c_DefaultFps;
+static bool s_frameRecorderSelfTest = false;
 static bool s_saveIoSelfTest = false;
 static bool s_saveIoSelfTestQueued = false;
 static std::string s_saveIoSelfTestName;
@@ -659,6 +665,8 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	// The writer holds frames the run has already presented, so it drains while SDL is still up.
+	FrameRecorder::Instance().Finish();
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
@@ -769,6 +777,47 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-camera-null-scene-selftest") {
 			s_cameraNullSceneSelfTest = true;
 			++i;
+			continue;
+		}
+		if (currentArg == "-frame-recorder-selftest") {
+			s_frameRecorderSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-record-video") {
+			if (lastArg) {
+				{
+					std::ostringstream line;
+					line << "[record-video] usage: -record-video <existing empty directory>; add -record-video-fps N for a rate other than " << FrameRecorder::c_DefaultFps;
+					System::PrintDiagnosticErrorLine(line.str());
+				}
+				return false;
+			}
+			s_recordVideoDirectory = argValue[++i];
+			++i;
+			continue;
+		}
+		if (currentArg == "-record-video-fps") {
+			if (lastArg) {
+				{
+					std::ostringstream line;
+					line << "[record-video] usage: -record-video-fps <1-" << FrameRecorder::c_MaxFps << ">";
+					System::PrintDiagnosticErrorLine(line.str());
+				}
+				return false;
+			}
+			const std::string rate = argValue[++i];
+			++i;
+			const long value = rate.empty() || rate.find_first_not_of("0123456789") != std::string::npos ? 0 : std::strtol(rate.c_str(), nullptr, 10);
+			if (value < 1 || value > FrameRecorder::c_MaxFps) {
+				{
+					std::ostringstream line;
+					line << "[record-video] frame rate '" << rate << "' is outside 1-" << FrameRecorder::c_MaxFps;
+					System::PrintDiagnosticErrorLine(line.str());
+				}
+				return false;
+			}
+			s_recordVideoFps = static_cast<int>(value);
 			continue;
 		}
 		if (currentArg == "-save-callback-selftest") {
@@ -1721,6 +1770,130 @@ bool HandleMainArgs(int argCount, char** argValue) {
 	return true;
 }
 
+static bool FrameRecorderSelfTestFail(const std::string& reason) {
+	std::ostringstream line;
+	line << "[frame-recorder-selftest] FAIL: " << reason;
+	System::PrintDiagnosticErrorLine(line.str());
+	return false;
+}
+
+/// Feeds an argument vector through the real parser, so a handler that does not advance the loop
+/// is caught where the loop lives rather than in a run that hangs.
+static bool FrameRecorderParse(std::vector<std::string> arguments) {
+	std::vector<char*> argv;
+	argv.reserve(arguments.size());
+	for (std::string& argument: arguments) argv.push_back(argument.data());
+	return HandleMainArgs(static_cast<int>(argv.size()), argv.data());
+}
+
+/// The recorder's own rows: the flag parses and advances, and the capture rate and the queue bound
+/// account for every frame the manifest reports.
+static bool RunFrameRecorderSelfTest() {
+	const std::string savedDirectory = s_recordVideoDirectory;
+	const int savedFps = s_recordVideoFps;
+	const std::filesystem::path scratch = std::filesystem::temp_directory_path() / "frame-recorder-selftest";
+	std::error_code code;
+	std::filesystem::remove_all(scratch, code);
+	if (!std::filesystem::create_directories(scratch, code) || code) return FrameRecorderSelfTestFail("could not create " + scratch.string());
+
+	const std::string armed = (scratch / "armed").generic_string();
+	s_recordVideoDirectory.clear();
+	s_recordVideoFps = FrameRecorder::c_DefaultFps;
+	if (!FrameRecorderParse({"exe", "-record-video", armed, "-record-video-fps", "5", "-record-video-fps", "7"})) {
+		return FrameRecorderSelfTestFail("the parser refused a well-formed -record-video pair");
+	}
+	if (s_recordVideoDirectory != armed) return FrameRecorderSelfTestFail("-record-video kept '" + s_recordVideoDirectory + "' instead of '" + armed + "'");
+	// The second rate is only reached if the first pair advanced the loop past its own value.
+	if (s_recordVideoFps != 7) return FrameRecorderSelfTestFail("-record-video-fps kept " + std::to_string(s_recordVideoFps) + " instead of 7");
+	for (const std::string& rate: {std::string("0"), std::string("61"), std::string("half")}) {
+		if (FrameRecorderParse({"exe", "-record-video-fps", rate})) return FrameRecorderSelfTestFail("-record-video-fps accepted '" + rate + "'");
+	}
+	if (FrameRecorderParse({"exe", "-record-video"})) return FrameRecorderSelfTestFail("-record-video accepted a missing directory");
+	s_recordVideoDirectory = savedDirectory;
+	s_recordVideoFps = savedFps;
+
+	const int width = 4;
+	const int height = 2;
+	const std::size_t bytes = static_cast<std::size_t>(width) * height * 3;
+	// One synthetic frame per fake 100 ms, ten of them across one fake second.
+	const auto feed = [&](FrameRecorder& recorder) {
+		for (int index = 0; index < 10; ++index) {
+			FrameRecorder::FrameMeta meta;
+			meta.wallMS = index * 100;
+			meta.simTick = static_cast<unsigned long long>(index);
+			meta.screen = "game";
+			meta.width = width;
+			meta.height = height;
+			if (unsigned char* pixels = recorder.BeginFrame(meta.wallMS, bytes)) {
+				std::fill(pixels, pixels + bytes, static_cast<unsigned char>(index * 20));
+				recorder.EndFrame(meta);
+			}
+		}
+	};
+	const auto manifestOf = [](const std::filesystem::path& directory, nlohmann::json& parsed) {
+		std::ifstream in(directory / "manifest.json");
+		if (!in) return false;
+		parsed = nlohmann::json::parse(in, nullptr, false);
+		return !parsed.is_discarded();
+	};
+
+	const std::filesystem::path paced = scratch / "paced";
+	if (!std::filesystem::create_directory(paced, code) || code) return FrameRecorderSelfTestFail("could not create " + paced.string());
+	std::string error;
+	FrameRecorder pacedRecorder;
+	if (!pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("the paced recorder refused to start: " + error);
+	if (pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("a second Start on the same recorder was accepted");
+	feed(pacedRecorder);
+	pacedRecorder.Finish();
+	nlohmann::json manifest;
+	if (!manifestOf(paced, manifest)) return FrameRecorderSelfTestFail("no readable manifest in " + paced.string());
+	if (manifest.value("schema", 0) != 1 || manifest.value("fps", 0) != 5) return FrameRecorderSelfTestFail("manifest schema/fps: " + manifest.dump());
+	if (manifest.value("frames_saved", -1) != 5) return FrameRecorderSelfTestFail("at 5 fps over a fake second the manifest saved " + manifest.dump());
+	if (manifest.value("frames_rate_limited", -1) != 5) return FrameRecorderSelfTestFail("the rate limit did not account for the rest: " + manifest.dump());
+	if (manifest.value("frames_dropped", -1) != 0 || manifest.value("write_failures", -1) != 0) return FrameRecorderSelfTestFail("unexpected drops or write failures: " + manifest.dump());
+	if (manifest.value("first_sim_tick", -1) != 0 || manifest.value("last_sim_tick", -1) != 8) return FrameRecorderSelfTestFail("sim tick span: " + manifest.dump());
+	if (manifest.value("exe_sha256", std::string()).size() != 64) return FrameRecorderSelfTestFail("manifest carries no executable hash: " + manifest.dump());
+	std::size_t pngs = 0;
+	for (const auto& entry: std::filesystem::directory_iterator(paced / "frames")) pngs += entry.path().extension() == ".png" ? 1 : 0;
+	if (pngs != 5) return FrameRecorderSelfTestFail("wrote " + std::to_string(pngs) + " PNGs, expected 5");
+	std::ifstream index(paced / "frames.jsonl");
+	std::size_t lines = 0;
+	for (std::string line; std::getline(index, line);) {
+		const nlohmann::json parsed = nlohmann::json::parse(line, nullptr, false);
+		if (parsed.is_discarded() || !parsed.contains("frame") || !parsed.contains("wall_ms") || !parsed.contains("sim_tick") ||
+		    !parsed.contains("screen") || !parsed.contains("resolution")) {
+			return FrameRecorderSelfTestFail("frame index line " + std::to_string(lines) + " is incomplete: " + line);
+		}
+		if (parsed.value("frame", std::size_t(99)) != lines) return FrameRecorderSelfTestFail("frame numbers are not contiguous at " + line);
+		++lines;
+	}
+	if (lines != 5) return FrameRecorderSelfTestFail("frame index has " + std::to_string(lines) + " lines, expected 5");
+
+	// A recorder with no room to fall behind drops every frame it admits, and says so.
+	const std::filesystem::path starved = scratch / "starved";
+	if (!std::filesystem::create_directory(starved, code) || code) return FrameRecorderSelfTestFail("could not create " + starved.string());
+	FrameRecorder starvedRecorder;
+	if (!starvedRecorder.Start(starved.string(), FrameRecorder::c_MaxFps, 0, &error)) return FrameRecorderSelfTestFail("the starved recorder refused to start: " + error);
+	feed(starvedRecorder);
+	starvedRecorder.Finish();
+	if (!manifestOf(starved, manifest)) return FrameRecorderSelfTestFail("no readable manifest in " + starved.string());
+	if (manifest.value("frames_saved", -1) != 0 || manifest.value("frames_dropped", -1) != 10) return FrameRecorderSelfTestFail("a full queue must drop and count: " + manifest.dump());
+
+	FrameRecorder refuser;
+	if (refuser.Start((scratch / "missing").string(), 30, &error)) return FrameRecorderSelfTestFail("a missing directory was accepted");
+	if (error.find((scratch / "missing").string()) == std::string::npos) return FrameRecorderSelfTestFail("the refusal does not name the directory: " + error);
+	if (refuser.Start(paced.string(), 30, &error)) return FrameRecorderSelfTestFail("a non-empty directory was accepted");
+	if (error.find(paced.string()) == std::string::npos) return FrameRecorderSelfTestFail("the refusal does not name the directory: " + error);
+
+	std::filesystem::remove_all(scratch, code);
+	{
+		std::ostringstream line;
+		line << "[frame-recorder-selftest] PASS";
+		System::PrintDiagnosticLine(line.str());
+	}
+	return true;
+}
+
 /// <summary>
 /// Polls the SDL event queue and passes events to be handled by the relevant managers.
 /// </summary>
@@ -2648,6 +2821,14 @@ static bool NetMatchScreenshotDue() {
 	       s_netMatchScreenshotTicks.contains(ScenarioRunner::GetLockstepCompletedFrame());
 }
 
+/// The screen name a recorded frame is stamped with, read from the seam the menu probes read.
+static std::string RecordedScreenName() {
+	if (PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationActiveScreenName();
+	if (!g_MenuMan.IsMainMenuInteractive()) return "game";
+	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+	return menu ? menu->AutomationActiveScreenName() : "game";
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -2665,6 +2846,9 @@ static void DrawFrameWithPreviews() {
 	FrameMan::FeelBeforePresent();
 	g_WindowMan.UploadFrame();
 	g_FrameMan.FeelAfterPresent();
+	if (FrameRecorder::Instance().Enabled()) {
+		g_FrameMan.RecordVideoFrame(RecordedScreenName(), g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
@@ -7852,6 +8036,24 @@ int main(int argc, char** argv) {
 	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
 	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
 
+	// The managers are up, so the recorder takes the run's own resolution from the first frame on.
+	if (!s_recordVideoDirectory.empty()) {
+		std::string recorderError;
+		if (!FrameRecorder::Instance().Start(s_recordVideoDirectory, s_recordVideoFps, &recorderError)) {
+			{
+				std::ostringstream line;
+				line << "[record-video] refused: " << recorderError;
+				System::PrintDiagnosticErrorLine(line.str());
+			}
+			return ShutDown(EXIT_FAILURE);
+		}
+		{
+			std::ostringstream line;
+			line << "[record-video] recording to " << s_recordVideoDirectory << " at " << s_recordVideoFps << " fps";
+			System::PrintDiagnosticLine(line.str());
+		}
+	}
+
 	// The chat script drives session traffic — only a headless e2e match may carry it.
 	if (!s_netChatScriptPath.empty() && !s_netMatchServiceE2E) {
 		{
@@ -7872,6 +8074,10 @@ int main(int argc, char** argv) {
 	}
 	if (ScenarioRunner::GetArgs().textWrapSelfTest) {
 		return ShutDown(g_FrameMan.RunTextWrapSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
+	}
+
+	if (s_frameRecorderSelfTest) {
+		return ShutDown(RunFrameRecorderSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
 
 	if (s_cameraNullSceneSelfTest) {
