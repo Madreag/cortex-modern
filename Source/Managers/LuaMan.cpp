@@ -5028,8 +5028,10 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms
 	    << " caller_copies_rolled_back=" << m_PreviewCallerCopiesRolledBack
 	    << " caller_copies_kept=" << m_PreviewCallerCopiesKept
+	    << " caller_copies_emptied=" << m_PreviewCallerCopiesEmptied
 	    << " upvalue_slots=" << stats.upvalues << " upvalue_writes=" << stats.upvalue_writes
-	    << " registry_root=" << (LuaMan::PreviewRegistryRootEnabled() ? 1 : 0);
+	    << " measure_ms=" << stats.measure_ms
+	    << " registry_root=" << (m_PreviewRegistryRooted ? 1 : 0);
 	if (std::isfinite(stats.p99_ms)) {
 		row << " p99_ms=" << stats.p99_ms;
 	}
@@ -7221,6 +7223,8 @@ void LuaMan::Destroy() {
 	for (LuaStateWrapper& state: m_ScriptStates) {
 		state.ReportPreviewBarrierStats();
 	}
+	// Past this point a wrapper's destructor has no preview window to report to, and the map it would read is going.
+	LuabindObjectWrapper::SetPreviewDeletionHook(nullptr);
 	for (int i = 0; i < c_MaxOpenFiles; ++i) {
 		FileClose(i);
 	}
@@ -9048,27 +9052,21 @@ namespace {
 		LuaStateWrapper* state;
 		std::string scriptPath;
 		std::string functionName;
+		uint64_t serial;
 	};
 	// The function objects preview windows handed to callers, so a release can point them back at what they named.
 	std::mutex s_PreviewBornMutex;
 	std::unordered_map<LuabindObjectWrapper*, PreviewBornWrapper> s_PreviewBornWrappers;
 	std::atomic<size_t> s_PreviewBornCount{0};
+	uint64_t s_PreviewBornSerial = 0;
 
-	// Takes the entries of one state, and with them the state's claim on the wrappers.
-	std::vector<PreviewBornWrapper> TakePreviewBornWrappers(LuaStateWrapper* state, std::vector<LuabindObjectWrapper*>& wrappers) {
-		std::vector<PreviewBornWrapper> taken;
+	// Drops one state's claim on the wrappers it tracked, without touching the wrappers themselves.
+	void DropPreviewBornWrappers(LuaStateWrapper* state) {
 		std::lock_guard<std::mutex> lock(s_PreviewBornMutex);
 		for (auto entry = s_PreviewBornWrappers.begin(); entry != s_PreviewBornWrappers.end();) {
-			if (entry->second.state != state) {
-				++entry;
-				continue;
-			}
-			wrappers.push_back(entry->first);
-			taken.push_back(entry->second);
-			entry = s_PreviewBornWrappers.erase(entry);
+			entry = entry->second.state == state ? s_PreviewBornWrappers.erase(entry) : std::next(entry);
 		}
 		s_PreviewBornCount.store(s_PreviewBornWrappers.size(), std::memory_order_release);
-		return taken;
 	}
 } // namespace
 
@@ -9087,7 +9085,7 @@ void LuaStateWrapper::TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, con
 		return;
 	}
 	std::lock_guard<std::mutex> lock(s_PreviewBornMutex);
-	s_PreviewBornWrappers[wrapper] = PreviewBornWrapper{this, scriptPath, functionName};
+	s_PreviewBornWrappers[wrapper] = PreviewBornWrapper{this, scriptPath, functionName, ++s_PreviewBornSerial};
 	s_PreviewBornCount.store(s_PreviewBornWrappers.size(), std::memory_order_release);
 }
 
@@ -9100,8 +9098,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
 	if (m_PreviewGlobalFenceArmed) {
 		return;
 	}
-	std::vector<LuabindObjectWrapper*> stale;
-	TakePreviewBornWrappers(this, stale);
+	DropPreviewBornWrappers(this);
 	// Preview holds and graph bookkeeping have their own lifetime at this boundary.
 	static const char* const skipped[] = {
 		"_ScriptedObjects", "_ScriptGraph", "_ScriptGraphBaseline", "_ScriptGraphNative",
@@ -9116,7 +9113,8 @@ void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
 		RTEAbort("Unable to arm the native preview table barrier.");
 	}
 	m_PreviewGlobalFenceArmed = true;
-	m_PreviewRegistryRooted = rootRegistry;
+	// From the VM, not from the argument: it says whether the window really took the registry as a root.
+	m_PreviewRegistryRooted = m_PreviewRegistryRooted || luaJIT_preview_registry_rooted(m_State) != 0;
 }
 
 bool LuaMan::PreviewRegistryRootEnabled() {
@@ -9128,28 +9126,45 @@ bool LuaMan::PreviewRegistryRootEnabled() {
 	return enabled;
 }
 
-int LuaStateWrapper::ReleasePreviewGlobalFence() {
+int LuaStateWrapper::DropPreviewWindowReferences() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	if (!m_PreviewGlobalFenceArmed) {
 		return 0;
 	}
 	m_PreviewGlobalFenceArmed = false;
-	m_PreviewRegistryRooted = false;
+	m_PreviewReferencesDropped = true;
 	int changes = 0;
-	// A copy the window handed a caller names the window's own function, so it drops that one here and takes the
-	// function the caller had before the window once the cache is back. Its wrapper keeps its address either way.
-	std::vector<LuabindObjectWrapper*> callerCopies;
-	std::vector<PreviewBornWrapper> callerSources = TakePreviewBornWrappers(this, callerCopies);
-	std::vector<size_t> rollBack;
-	for (size_t index = 0; index < callerSources.size(); ++index) {
-		const auto held = m_PreviewScriptCacheHeld.find(callerSources[index].scriptPath);
-		if (held != m_PreviewScriptCacheHeld.end() && held->second.count(callerSources[index].functionName) > 0) {
-			rollBack.push_back(index);
-			callerCopies[index]->ResetLuabindObject(nullptr);
-		} else if (m_PreviewScriptCacheKeys.count(callerSources[index].scriptPath) == 0) {
-			// A script file no state had before the window: there is no earlier function to name.
-			++m_PreviewCallerCopiesKept;
+	m_PreviewCallerCopies.clear();
+	// A copy the window handed a caller names the window's own function, so it gives that one up here, before any
+	// rollback, and takes the function the caller had before the window once the cache is back. It holds an empty
+	// object in between: that pushes nil and holds no reference, so the wrapper stays usable and keeps its address.
+	{
+		std::lock_guard<std::mutex> born(s_PreviewBornMutex);
+		for (auto entry = s_PreviewBornWrappers.begin(); entry != s_PreviewBornWrappers.end();) {
+			if (entry->second.state != this) {
+				++entry;
+				continue;
+			}
+			const auto held = m_PreviewScriptCacheHeld.find(entry->second.scriptPath);
+			const bool reloaded = held != m_PreviewScriptCacheHeld.end();
+			if (reloaded && held->second.count(entry->second.functionName) > 0) {
+				entry->first->ResetLuabindObject(new luabind::object());
+				// It stays tracked until the release points it back, so a wrapper that dies meanwhile is still forgotten.
+				m_PreviewCallerCopies.push_back(PreviewCallerCopy{entry->first, entry->second.serial, entry->second.scriptPath, entry->second.functionName});
+				++entry;
+				continue;
+			}
+			if (reloaded || m_PreviewScriptCacheKeys.count(entry->second.scriptPath) == 0) {
+				// The window itself made this function and the rollback takes it away: there is no earlier one to name.
+				entry->first->ResetLuabindObject(new luabind::object());
+				++m_PreviewCallerCopiesEmptied;
+			} else {
+				// A function the window never reloaded: the copy names what it named before, and the rollback keeps it.
+				++m_PreviewCallerCopiesKept;
+			}
+			entry = s_PreviewBornWrappers.erase(entry);
 		}
+		s_PreviewBornCount.store(s_PreviewBornWrappers.size(), std::memory_order_release);
 	}
 	// The cache holds function objects the Lua heap no longer names, so the window's own go and the held ones come back.
 	for (auto& [path, held]: m_PreviewScriptCacheHeld) {
@@ -9179,27 +9194,47 @@ int LuaStateWrapper::ReleasePreviewGlobalFence() {
 		++changes;
 	}
 	m_PreviewScriptCacheKeys.clear();
-	// The window's own references go back on luabind's free list before the rollback, not after it.
-	LuabindObjectWrapper::ApplyQueuedDeletions();
+	return changes;
+}
+
+int LuaStateWrapper::ReleasePreviewGlobalFence() {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	int changes = 0;
+	if (m_PreviewGlobalFenceArmed) {
+		// This state alone: its own references go back on luabind's free list before its rollback, not after it.
+		changes += DropPreviewWindowReferences();
+		LuabindObjectWrapper::ApplyQueuedDeletions();
+	}
+	if (!m_PreviewReferencesDropped) {
+		return changes;
+	}
+	m_PreviewReferencesDropped = false;
 	changes += static_cast<int>(luaJIT_preview_end(m_State));
-	for (size_t index: rollBack) {
+	std::lock_guard<std::mutex> born(s_PreviewBornMutex);
+	for (const PreviewCallerCopy& copy: m_PreviewCallerCopies) {
+		const auto entry = s_PreviewBornWrappers.find(copy.wrapper);
+		if (entry == s_PreviewBornWrappers.end() || entry->second.serial != copy.serial) {
+			continue; // The caller's copy died inside the window and took itself off the list.
+		}
 		luabind::object* restored = nullptr;
-		if (const auto cached = m_ScriptCache.find(callerSources[index].scriptPath); cached != m_ScriptCache.end()) {
-			const auto function = cached->second.functionNamesAndObjects.find(callerSources[index].functionName);
+		if (const auto cached = m_ScriptCache.find(copy.scriptPath); cached != m_ScriptCache.end()) {
+			const auto function = cached->second.functionNamesAndObjects.find(copy.functionName);
 			if (function != cached->second.functionNamesAndObjects.end()) {
 				restored = new luabind::object(*function->second->GetLuabindObject());
 			}
 		}
 		if (restored) {
-			callerCopies[index]->ResetLuabindObject(restored);
+			copy.wrapper->ResetLuabindObject(restored);
 			++m_PreviewCallerCopiesRolledBack;
 		} else {
-			// Nothing to name: an empty object pushes nil, which the caller's pcall reports.
-			callerCopies[index]->ResetLuabindObject(new luabind::object());
-			++m_PreviewCallerCopiesKept;
+			// Nothing to name: the empty object it took at the drop pushes nil, which the caller's pcall reports.
+			++m_PreviewCallerCopiesEmptied;
 		}
+		s_PreviewBornWrappers.erase(entry);
 		++changes;
 	}
+	s_PreviewBornCount.store(s_PreviewBornWrappers.size(), std::memory_order_release);
+	m_PreviewCallerCopies.clear();
 	return changes;
 }
 
@@ -9465,6 +9500,10 @@ void LuaMan::EndPreviewScripts() {
 	// Last, so a global the drops themselves make is undone too: a preview leaves every state's globals as it found them.
 	if (PreviewGlobalFenceEnabled()) {
 		s_PreviewFenceWindow = false;
+		// Every state gives up its window's references first and the queue is drained once, so no state's rollback
+		// undoes an unref that belongs to another state's window.
+		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.DropPreviewWindowReferences(); });
+		LuabindObjectWrapper::ApplyQueuedDeletions();
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
 		g_LuaMan.SetScriptStateCursor(s_PreviewScriptStateCursor);
 		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
