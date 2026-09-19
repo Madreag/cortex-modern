@@ -94,6 +94,9 @@ RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
 RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
 RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
 RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
+RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
+RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -435,6 +438,13 @@ CASES = (
             RED_PROMOTION_BEHIND_INPUT,
         ),
         "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "clean-leave-releases-only-the-seat-that-left",
+        "argv": ["-net-world-clean-leave-selftest"],
+        "red": RED_CLEAN_LEAVE_WRONG_SEAT,
+        "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
+        "pass_token": "[net-world-clean-leave-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",
