@@ -2830,6 +2830,20 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::AdoptWorldTicketSession() {
+		// A world's directory row is registered under the world's own UUID, so the ticket this client
+		// keeps must name that id: it is the same every boot, and it is what the return watch browses
+		// for while the host is away.
+		if (m_IsHost || !m_Runner) {
+			return;
+		}
+		const NetMatchConfig& config = m_Runner->GetLobbySession().GetMatchConfig();
+		if (!config.persistentWorld || !NetMatchConfigUtil::IsWorldId(config.worldId)) {
+			return;
+		}
+		m_ReconnectClient.AdoptDirectorySessionId(config.worldId);
+	}
+
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) {
 			return;
@@ -3715,6 +3729,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && m_Coordinator->IsPersistentWorldRound()) {
 			DriveWorldJoins(nowMs);
 		}
+		AdoptWorldTicketSession();
 		DriveWorldJoinClient(nowMs);
 		if (events.empty()) {
 			return;
