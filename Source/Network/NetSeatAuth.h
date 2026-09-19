@@ -69,6 +69,10 @@ namespace RTE {
 
 		/// Revokes the seat's active credential (clean leave, substitution); generations never rewind.
 		void RevokeSeat(uint16_t seat);
+		/// Transfers admission state only inside a successor's authenticated capsule.
+		std::vector<uint8_t> ExportMigrationState() const;
+		bool ImportMigrationState(const std::vector<uint8_t>& bytes);
+		bool SealForSeat(uint16_t seat, const std::vector<uint8_t>& context, const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& sealed) const;
 
 	private:
 		struct SeatEntry {
