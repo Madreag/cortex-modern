@@ -1,6 +1,7 @@
 #include "AutosaveStore.h"
 
 #include "SaveGameArchive.h"
+#include "NetLobbyProtocol.h"
 #include "System.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@
 namespace RTE {
 	namespace {
 		const char* c_RequiredEntries[] = {"Index.ini", "Save Mat.png", "Save FG.png", "Save BG.png"};
+		bool FromHex(const std::string& hex, std::vector<uint8_t>& out);
 
 		std::string Trim(std::string_view text) {
 			const size_t first = text.find_first_not_of(" \t\r\n");
@@ -367,11 +369,11 @@ namespace RTE {
 				parsed.sideState.firstTransferUid = transfer;
 			}
 		}
-		if (!hasSchema || parsed.schema != c_ManifestSchema) {
+		if (!hasSchema || (parsed.schema != c_ManifestSchema && parsed.schema != c_PreviousManifestSchema)) {
 			if (error) *error = "unsupported manifest schema " + std::to_string(parsed.schema);
 			return false;
 		}
-		if (!hasWorldBoot) {
+		if (!hasWorldBoot && parsed.schema == c_ManifestSchema) {
 			if (error) *error = "manifest has no world boot";
 			return false;
 		}
@@ -382,6 +384,18 @@ namespace RTE {
 		if (parsed.configPayload.size() % 2 != 0 || parsed.configPayload.find_first_not_of("0123456789abcdef") != std::string::npos) {
 			if (error) *error = "manifest configuration is not hex";
 			return false;
+		}
+		if (parsed.schema == c_PreviousManifestSchema) {
+			// Older manifests carry the boot inside the agreed lobby payload.
+			std::vector<uint8_t> bytes;
+			if (!FromHex(parsed.configPayload, bytes)) return false;
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* config = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!config) {
+				if (error) *error = "legacy manifest has no readable lobby configuration";
+				return false;
+			}
+			parsed.worldBoot = config->config.persistentWorld ? config->config.worldBoot : 0;
 		}
 		out = std::move(parsed);
 		return true;

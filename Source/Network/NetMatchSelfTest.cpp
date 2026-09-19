@@ -2180,7 +2180,7 @@ namespace RTE {
 			}
 			if (AutosaveStore::ParseManifest("ManifestSchema = 2\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused) ||
 			    AutosaveStore::ParseManifest("ManifestSchema = 3\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused)) {
-				*error = "a manifest without an ordered boot was accepted";
+				*error = "a manifest without a readable boot was accepted";
 				return false;
 			}
 			// A manifest from before the seats were carried cannot resume: a peer reading it would start
@@ -2335,6 +2335,25 @@ namespace RTE {
 				return AutosaveStore::PublishManifest(scratch.path, manifest, error);
 			};
 			if (!publish(7, 9000, 900) || !publish(7, 9000, 800) || !publish(8, 1, 60) || !publish(8, 1, 120) || !publish(8, 1, 180)) return false;
+			AutosaveManifest oldManifest;
+			if (!AutosaveStore::ReadManifest(scratch.path, worldId, 900, oldManifest, error)) return false;
+			std::string legacy = AutosaveStore::WriteManifest(oldManifest);
+			const std::string schemaLine = "ManifestSchema = 3\n", bootLine = "WorldBoot = 7\n";
+			if (!legacy.starts_with(schemaLine) || legacy.find(bootLine) == std::string::npos) {
+				*error = "the schema-2 fixture could not find the schema-3 boot field";
+				return false;
+			}
+			legacy.replace(0, schemaLine.size(), "ManifestSchema = 2\n");
+			legacy.erase(legacy.find(bootLine), bootLine.size());
+			{
+				std::ofstream out(AutosaveStore::ManifestPath(scratch.path, worldId, 900), std::ios::binary | std::ios::trunc);
+				out << legacy;
+			}
+			if (!AutosaveStore::ReadManifest(scratch.path, worldId, 900, oldManifest, error) ||
+			    oldManifest.schema != 2 || oldManifest.worldBoot != 7 || oldManifest.roundId != 9000) {
+				*error = "the prior manifest lost the world boot its lobby payload already carried";
+				return false;
+			}
 			AutosaveAdmission admission;
 			admission.matchId = worldId;
 			admission.generation = 1;
@@ -2347,7 +2366,7 @@ namespace RTE {
 				return result;
 			};
 			if (ticks(held) != std::vector<uint64_t>{180, 120, 60, 900, 800} || held.front().worldBoot != 8 ||
-			    held.front().roundId != 1 || !held.front().resumable) {
+			    held.front().roundId != 1 || !held.front().resumable || held[3].worldBoot != 7) {
 				*error = "world checkpoint ordering preferred an old round's higher tick";
 				return false;
 			}

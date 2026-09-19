@@ -55,10 +55,7 @@ namespace RTE {
 		bool operator==(const AutosaveSideState&) const = default;
 	};
 
-	/// What a restarted host needs beside the world to reopen the match the checkpoints were written
-	/// under: the agreed configuration exactly as the peers hashed it, and who was playing it. The
-	/// payload is opaque here - the network layer owns the lobby encoding - so the store keeps the bytes
-	/// and the hash the peers agreed on and never interprets either.
+	/// The agreed lobby configuration and side state beside one checkpoint.
 	struct AutosaveManifest {
 		int schema = 0;
 		std::string matchId;
@@ -162,6 +159,7 @@ namespace RTE {
 		static constexpr const char* c_SegmentExtension = ".ccreplay";
 		// The boot orders fresh worlds ahead of the previous round's higher ticks.
 		static constexpr int c_ManifestSchema = 3;
+		static constexpr int c_PreviousManifestSchema = 2;
 		static constexpr int c_AdmissionSchema = 1;
 		/// The host's sealed admission export is small by construction; anything larger is not one.
 		static constexpr size_t c_MaxAdmissionBytes = 64U * 1024U;
