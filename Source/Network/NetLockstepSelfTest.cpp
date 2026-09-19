@@ -14677,6 +14677,9 @@ namespace RTE {
 						a.Tick(now);
 						now += 5;
 					}
+					if (!b.PrimeResyncInputs({}, error) || !a.PrimeResyncInputs({}, error)) {
+						return false;
+					}
 				}
 				if (skipSuccessor) {
 					const bool contactedGone = std::find(schedule->contactedPorts.begin(), schedule->contactedPorts.end(), port + 3) != schedule->contactedPorts.end();
