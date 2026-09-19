@@ -671,7 +671,7 @@ def scripts(case, port, root):
         text += ("assert_enabled ButtonNetReplays 0\nassert_enabled ButtonNetConnDetails 0\n"
                  "assert_enabled ButtonNetNatRelay 0\nassert_label LabelNetDirStatus Configured\n"
                  "assert_label LabelNetDirUrlHint " + INTERNET_HINT + "\n"
-                 "assert_label ButtonNetNatRelay NAT and Relay\n"
+                 "assert_label ButtonNetNatRelay NAT setup\n"
                  "assert_label LabelNetInternetReason " + INTERNET_REASON + "\n"
                  "set_text TextNetworkDirPin nothex\n"
                  "assert_label LabelNetInternetError 64 hexadecimal\n"
