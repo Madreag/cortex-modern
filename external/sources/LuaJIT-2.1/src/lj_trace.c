@@ -630,9 +630,10 @@ static int trace_abort(jit_State *J)
       setstrV(V, V->top++, lj_str_newlit(V, "abort"));
       setintV(V->top++, traceno);
       /* Find original Lua function call to generate a better error message. */
-      for (frame = L->base-1, pc = J->pc; ; frame = frame_prev(frame)) {
+      for (frame = L->base-1, pc = J->pc; frame > bot; frame = frame_prev(frame)) {
 	if (isluafunc(frame_func(frame))) {
-	  pos = proto_bcpos(funcproto(frame_func(frame)), pc);
+	  /* An abort at a C boundary has no bytecode position of its own. */
+	  pos = pc ? proto_bcpos(funcproto(frame_func(frame)), pc) : 0;
 	  break;
 	} else if (frame_prev(frame) <= bot) {
 	  break;
@@ -642,7 +643,10 @@ static int trace_abort(jit_State *J)
 	  pc = frame_pc(frame) - 1;
 	}
       }
-      setfuncV(V, V->top++, frame_func(frame));
+      if (frame > bot)
+	setfuncV(V, V->top++, frame_func(frame));
+      else
+	setnilV(V->top++);
       setintV(V->top++, pos);
       copyTV(V, V->top++, L->top-1);
       copyTV(V, V->top++, &J->errinfo);
@@ -780,6 +784,34 @@ void lj_trace_ins(jit_State *J, const BCIns *pc)
     J->state = LJ_TRACE_ERR;
 }
 
+/* The recorder's own pc names the instruction it was left at, which is not where a leftover abort runs.
+** The live position is the frame below the boundary; a boundary with no Lua frame under it has none.
+*/
+static void trace_leftover_pos(jit_State *J, lua_State *L)
+{
+  cTValue *bot = tvref(L->stack)+LJ_FR2;
+  cTValue *frame;
+  const BCIns *pc = NULL;
+  J->pc = NULL;
+  J->fn = NULL;
+  J->pt = NULL;
+  for (frame = L->base-1; frame > bot; frame = frame_prev(frame)) {
+    if (pc && isluafunc(frame_func(frame))) {
+      J->pc = pc;
+      J->fn = frame_func(frame);
+      J->pt = funcproto(J->fn);
+      return;
+    }
+    /* Only a Lua call frame and a continuation carry the caller's pc; a C boundary frame carries a size. */
+    if (frame_islua(frame))
+      pc = frame_pc(frame) - 1;
+    else if (frame_iscont(frame))
+      pc = frame_contpc(frame) - 1;
+    else
+      return;
+  }
+}
+
 /* A leftover 1..6 is driven through trace_state so the real abort runs. */
 void lj_trace_abort_leftover(lua_State *L)
 {
@@ -790,6 +822,7 @@ void lj_trace_abort_leftover(lua_State *L)
     return;
   }
   J->L = L;
+  trace_leftover_pos(J, L);
   while (lj_vm_cpcall(L, NULL, (void *)J, trace_state) != 0)
     J->state = LJ_TRACE_ERR;
 }

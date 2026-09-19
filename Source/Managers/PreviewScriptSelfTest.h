@@ -28,6 +28,8 @@ namespace RTE {
 		static bool CheckGlobalWriteBarrier();
 		/// A leftover recorder abort must not leave the state interpreter-only.
 		static bool CheckHotcountAfterAbort();
+		/// A leftover abort reports the frame it runs at, not the prototype the recorder was left in.
+		static bool CheckAbortLeftoverPosition();
 		/// A runtime error while recording still runs the real abort, penalty and slot release.
 		static bool CheckAbortPenalizes();
 		/// Exercises retirement ownership and observes links before and after disposal.
