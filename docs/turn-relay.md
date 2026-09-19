@@ -142,7 +142,7 @@ A private relay using permanent accounts instead of shared-secret authentication
 | Direct only | No local relay credentials/candidates; a reported relay route is refused | Lowest latency when reachable; failure when direct routes are blocked. |
 | Relay only | Relay candidates only; no IP listener/fallback | Every accepted route must be relayed; unavailable credentials or blocked UDP fail explicitly. |
 
-Native ICE prioritizes host candidates at 126, server-reflexive at 100 and relayed at 0 in `CSteamNetworkingICESession::CalcCandidatePriority`, before shifting the type preference by 24 bits. This is source evidence, not a WAN measurement of this binary. [GNS native ICE source](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp).
+Native ICE prioritizes host candidates at 126, server-reflexive at 100 and relayed at 0 in `ICESessionInterface::NotifyLocalCandidateDiscovered` (lines 2664-2670 of the inspected source), before shifting the type preference by 24 bits. This is source evidence, not a WAN measurement of this binary. [GNS native ICE source](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp#L2664).
 
 STUN settings contain comma-separated `host:port` values: `stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443`. An empty list deliberately removes server-reflexive gathering. NAT Off uses LAN or a forwarded host UDP port. Relay Off only removes the host's offer; player policy is a separate choice.
 
