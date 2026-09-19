@@ -10897,6 +10897,7 @@ namespace RTE {
 			*error = "relay offer did not round-trip or remained usable at expiry";
 			return false;
 		}
+		if (!NetRelayConfig::Fixed("relay.example:3478", "user", std::string(1, '\xFF'), "match:1", now + 3600).Empty()) { *error = "invalid UTF-8 relay login reached the JSON encoder"; return false; }
 		auto injected = nlohmann::json::parse(relay.ToJson());
 		injected["static_auth_secret"] = "backend-only";
 		if (NetRelayConfig::FromJson(injected.dump(), decoded)) {
