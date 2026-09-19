@@ -157,6 +157,7 @@ namespace RTE {
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
 		bool m_ListenAddrsDirty = false;
+		bool m_ListenAddrsInFlight = false; //!< The dirty flag clears on the reply, so a failed heartbeat republishes.
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;
