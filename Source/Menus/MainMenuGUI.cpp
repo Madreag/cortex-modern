@@ -1601,7 +1601,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
 	}
 	if (m_HostNetEffectiveLabel) {
-		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " frames";
+		// H22: the floor in ticks and in milliseconds, then the announced per-sender figure.
+		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
+		                        std::to_string(m_HostOptionsDraft.inputDelayFrames * 1000 / 60) + " ms)";
 		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (auto, follows ping)";
 		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
 		m_HostNetEffectiveLabel->SetText(effective);
