@@ -668,9 +668,9 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 
 		// The match has accepted the object at index 1 as this overload's self, so it is one of ours.
 		// A non-const overload may write it, which is what the checkpoint's trap wants to hear.
-		if (!o.is_const() && lua_type(L, 1) == LUA_TUSERDATA)
+		if (!o.is_const())
 		{
-			checkpoint_object_mutated(static_cast<object_rep*>(lua_touserdata(L, 1)));
+			checkpoint_object_mutated(is_class_object(L, 1));
 		}
 
         if (force_static_call && !o.has_static())

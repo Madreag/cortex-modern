@@ -12,9 +12,8 @@ msbuild Source\CLI\cccp-ctl.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
 Output: `Source/CLI/_BinTests/x64/Release/cccp-ctl.exe`
 
-There is no Meson target — the binary is MSBuild-only for now. On Linux/macOS
-drive the game binary's `-determinism-check` mode directly; it is the same
-engine under both.
+**Build (Linux/macOS, Meson):** the game's Meson build also produces `cccp-ctl`
+beside the engine binary (`Source/CLI/meson.build`).
 
 **Run:**
 ```
