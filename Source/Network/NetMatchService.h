@@ -490,6 +490,8 @@ namespace RTE {
 		/// and no restore already in flight. CanResyncLocked's conditions without its failure
 		/// side-effects, so a per-frame UI poll never moves the service state.
 		bool CanResyncMatch() const;
+		// The shared stop lets the game loop own snapshot capture and relaunch on both peers.
+		bool RequestHostRepair(std::string* error = nullptr);
 		/// Read-only repair progress for the Recovery page: inFlight while the heal is open, the
 		/// snapshot bytes moved so far, and the open (or last finished) heal's elapsed ms.
 		void GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const;

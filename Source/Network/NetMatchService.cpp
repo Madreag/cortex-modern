@@ -788,7 +788,28 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::CanResyncMatch() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_State == NetMatchServiceState::Running && ActiveWireLocked() && m_Session && m_Runner &&
-		       m_Session->IsReady() && !m_ResyncHealOpen && m_PendingResyncLoad.empty() && !m_PendingAutosaveLoad;
+		       m_Session->IsReady() && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->HasPendingRecoveryStop() &&
+		       !m_ResyncHealOpen && m_PendingResyncLoad.empty() && !m_PendingAutosaveLoad;
+	}
+
+	bool NetMatchService::RequestHostRepair(std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		auto refuse = [error](const char* reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!m_IsHost) return refuse("only the host repairs the match");
+		if (!CanResyncLocked(error)) return false;
+		if (!m_Coordinator || !m_Coordinator->IsRunning() || m_Coordinator->HasPendingRecoveryStop() ||
+		    m_ResyncHealOpen || !m_PendingResyncLoad.empty() || m_PendingAutosaveLoad) {
+			return refuse("a recovery is already pending");
+		}
+		if (!m_ResyncOnDesync) return refuse("this session cannot reload a live snapshot");
+		if (!ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) return refuse("match over");
+		m_Coordinator->RequestResync("host requested repair");
+		m_ResyncHealStartMs = SteadyNowMs();
+		m_ResyncHealOpen = true;
+		return true;
 	}
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
