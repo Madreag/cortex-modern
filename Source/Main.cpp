@@ -54,6 +54,7 @@
 #include "GLResourceMan.h"
 #include "CameraMan.h"
 #include "ActivityMan.h"
+#include "AutosaveStore.h"
 #include "Actor.h"
 #include "AHuman.h"
 #include "Attachable.h"
@@ -415,15 +416,16 @@ static bool RunAutosaveRestoreCheck() {
 		std::cout << "[autosave] restore_check FAIL match=" << matchId << " reason=no restorable checkpoint" << std::endl;
 		return false;
 	}
+	const bool policy = AutosaveStore::RunSelfTest(matchId);
 	if (!g_ActivityMan.LoadAutosaveToRestart(matchId, newest->savedTick) || !g_ActivityMan.RestartActivity()) {
 		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << newest->savedTick << " reason=restore refused" << std::endl;
 		return false;
 	}
 	const std::string worldHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", g_MovableMan.SaveWorldStructure()}}));
 	const auto restoredTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	const bool passed = worldHash == newest->worldStructureHash && restoredTick == newest->savedTick;
-	std::cout << std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={}\n",
-	                         passed ? "PASS" : "FAIL", matchId, newest->savedTick, restoredTick, worldHash, newest->worldStructureHash) << std::flush;
+	const bool passed = policy && worldHash == newest->worldStructureHash && restoredTick == newest->savedTick;
+	std::cout << std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={} policy={}\n",
+	                         passed ? "PASS" : "FAIL", matchId, newest->savedTick, restoredTick, worldHash, newest->worldStructureHash, policy) << std::flush;
 	return passed;
 }
 
