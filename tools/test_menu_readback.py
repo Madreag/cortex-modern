@@ -97,6 +97,10 @@ PAUSE_PAGE_FIRST_VALUE = {
 SIZE_GATES = (
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
+    ("lobby-name", "640x360"),
+    ("lobby-name", "960x540"),
+    ("lobby-name", "1280x720"),
+    ("lobby-name", "1920x1080"),
 )
 # CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
 # thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
@@ -1119,8 +1123,11 @@ def run_case(options, case, root, failing=None):
                                    ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
             assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
                 (leave["rect"], seats["rect"], panel["rect"])
-            header, row = drawn["LabelLobbyPlayersHeader"], drawn["LabelLobbyPlayer0"]
-            assert header["rect"][0] == row["rect"][0] and header["text_fits"], (header, row)
+            header = drawn["LabelLobbyPlayersHeader"]
+            seat_rows = [control for control in images[-1]["controls"]
+                         if re.fullmatch(r"LabelLobbyPlayer\d", control["name"])]
+            assert seat_rows and header["text_fits"] and all(
+                row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
             start = drawn["ButtonMultiplayerStart"]
             pair_span = seats["rect"][0] + seats["rect"][2] - leave["rect"][0]
             pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
@@ -1265,7 +1272,7 @@ def main():
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
     parser.add_argument("--all-sizes", action="store_true",
-                        help="also run every SIZE_GATES row; net-chat always does this")
+                        help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -1280,7 +1287,7 @@ def main():
 
     def sizes_for(case):
         sizes = [requested]
-        if options.all_sizes or case == "net-chat":
+        if options.all_sizes or case in ("net-chat", "lobby-name"):
             sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
         return sizes
 
