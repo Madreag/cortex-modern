@@ -3315,6 +3315,15 @@ namespace RTE {
 				*error = "the host defaults template did not seed a new draft";
 				return false;
 			}
+			NetMatchServiceRequest request;
+			request.host = true;
+			request.frameRedundancyTicks = fresh.frameRedundancyTicks;
+			NetMatchConfig built;
+			if (!NetMatchService::BuildMatchConfig(request, fresh.sessionId, built, error)) return false;
+			if (built.frameRedundancyTicks != 6) {
+				*error = "the hosted request lost the seeded redundancy: " + std::to_string(built.frameRedundancyTicks);
+				return false;
+			}
 			return true;
 		}
 

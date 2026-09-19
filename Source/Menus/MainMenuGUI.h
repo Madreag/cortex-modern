@@ -370,6 +370,7 @@ namespace RTE {
 		GUISlider* m_HostRulesSkillSlider = nullptr;
 		GUILabel* m_HostRulesSkillValue = nullptr;
 		GUIComboBox* m_HostNetPolicyCombo = nullptr;
+		GUIComboBox* m_HostNetRedundancyCombo = nullptr;
 		GUITextBox* m_HostNetMinDelayBox = nullptr;
 		GUILabel* m_HostNetEffectiveLabel = nullptr;
 		std::array<GUILabel*, 4> m_HostNetPeerLabels{};

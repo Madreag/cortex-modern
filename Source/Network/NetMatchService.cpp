@@ -5949,6 +5949,7 @@ static std::string ResyncSaveName() {
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
+			config.frameRedundancyTicks = request.frameRedundancyTicks.value_or(config.frameRedundancyTicks);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
