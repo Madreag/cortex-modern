@@ -5,7 +5,8 @@ is set. Viewports 640x360, 960x540 and 1280x720. The host send_chat step is the 
 waits for LabelMatchChatNewest within 120 renders; both put a seat message on screen and open the
 seats panel, so the layout assertion names two occupiers that are really there, then open the entry
 with the chat key and assert what the carved area holds at that size: a history row above the entry
-at 960 and 1280, the entry alone at 640x360 (see history_row_fits).
+at every supported size, 640x360 included, where the entry itself shrinks to make room for it (see
+history_row_fits).
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import threading
 from pathlib import Path
 
 SIZES = ((640, 360), (960, 540), (1280, 720))
+# The row rule holds at every size the game supports; the detector launches the three shortest of them.
+SUPPORTED_HEIGHTS = (360, 540, 720, 1080)
 CHAT_LINE = "hello from host"
 SEAT_MESSAGE = "chat layout occupier"
 TICKS = 900
@@ -39,14 +42,17 @@ def occupier_steps():
 
 
 def history_row_fits(height):
-    """One history row rides above the entry only where the carved area holds both.
+    """One history row rides above the entry at every supported size, the shortest included.
 
-    With the seats panel open the band lives above it: available = PanelTop(h) - 8, and a row plus the
-    entry need lineH + inputH = 2F + 14 for a font height F (12 for the small font). At 640x360
-    PanelTop is F + 32, so available is F + 24 and only the entry fits; at 960x540 and 1280x720 the
-    panel is centred and the space above it holds rows.
+    With the seats panel open the band lives above it: available = PanelTop(h) - 8, and at 640x360
+    PanelTop is F + 32, so available is F + 24 = 36 for the small font's F = 12. A row is lineH = F + 4
+    and the entry takes F + 10 where the band still holds a row above it and F + 8 where those two
+    pixels are what buys the row, so 640x360 seats 16 + 20 in its 36 exactly and the taller sizes keep
+    the roomy entry with rows to spare.
     """
-    return height > 360
+    if height not in SUPPORTED_HEIGHTS:
+        raise ValueError(f"{height} is not a supported screen height")
+    return True
 
 
 def open_entry_steps(size):
