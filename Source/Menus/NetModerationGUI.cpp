@@ -151,6 +151,16 @@ namespace {
 		return area;
 	}
 
+	/// The first row the chat may use: under every message band that sits in the top half, which the band
+	/// keeps clear of rather than draw across, and the window's own margin where there is no message.
+	int ChatTopLimit(const EditorArea& area, int screenHeight) {
+		int top = 4;
+		for (const auto& band: area.textBands) {
+			if (band.y + band.h <= screenHeight / 2) top = std::max(top, band.y + band.h + 4);
+		}
+		return top;
+	}
+
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
 		return text;
@@ -975,12 +985,16 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 		area.occupiers.push_back({panelX, panelTop, panelWidth, panelHeight});
 		lower(panelTop - 4);
 	}
+	// A message band is a ceiling as much as a floor: the band stays under one in the top half and above
+	// one in the bottom half, and shares the rows it does keep with none of them.
 	for (const auto& band: area.textBands) {
 		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
+		area.occupiers.push_back(band);
 	}
+	const int topLimit = ChatTopLimit(area, backbuffer->h);
 
 	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
-	const int available = std::max(0, bottom - 4);
+	const int available = std::max(0, bottom - topLimit);
 	// The entry gives up its two spare pixels before the history gives up a row: a roomy entry takes the whole
 	// carved band at 640x360 with the panel open, where the tight one leaves exactly one row above it.
 	const int roomyInputH = lineH + 6;
