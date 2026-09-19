@@ -159,6 +159,7 @@ void LuabindObjectWrapper::SetPreviewDeletionHook(void (*hook)(LuabindObjectWrap
 }
 
 void LuabindObjectWrapper::ResetLuabindObject(luabind::adl::object* newLuabindObject, bool ownsObject) {
+	RTEAssert(s_OnSimThread, "A luabind object was replaced off the sim thread, where luabind may not touch the state.");
 	if (m_OwnsObject) {
 		delete m_LuabindObject;
 	}
