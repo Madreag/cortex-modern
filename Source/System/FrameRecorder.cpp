@@ -147,7 +147,8 @@ namespace RTE {
 		nlohmann::json line = {{"frame", frame.index}, {"wall_ms", frame.meta.wallMS}, {"sim_tick", frame.meta.simTick},
 		    {"screen", frame.meta.screen}, {"resolution", {frame.meta.width, frame.meta.height}}, {"saved", saved}};
 		if (!frame.meta.serviceState.empty()) line["service_state"] = frame.meta.serviceState;
-		m_Index << line.dump() << '\n';
+		// Flushed per frame: a scenario that kills a peer still keeps the index of what it saw.
+		m_Index << line.dump() << '\n' << std::flush;
 
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (saved) {
