@@ -4441,6 +4441,7 @@ namespace RTE {
 		manifest.matchId = worldId;
 		manifest.sessionId = config.sessionId;
 		manifest.roundId = roundId;
+		manifest.worldBoot = config.worldBoot;
 		manifest.savedTick = tick;
 		manifest.simTimeTicks = static_cast<long long>(tick);
 		manifest.intervalSeconds = 45;
@@ -4667,8 +4668,10 @@ namespace RTE {
 		// The fresh round runs and checkpoints under its own round; the old round's ticks are history.
 		NetWorldIdentity second;
 		if (!NetWorldIdentityFile::OpenForBoot(scratch.identityPath.string(), second, error)) return false;
-		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 1500, 5151, stored, key, 4, error)) return false;
-		scratch.Note(first.worldId, 1500);
+		NetMatchConfig freshConfig = stored;
+		freshConfig.worldBoot = second.boot;
+		if (!PublishWorldCheckpoint(scratch.store, first.worldId, 120, 5151, freshConfig, key, 4, error)) return false;
+		scratch.Note(first.worldId, 120);
 		NetMatchServiceRequest named;
 		named.host = true;
 		named.persistentWorld = true;
@@ -4687,8 +4690,8 @@ namespace RTE {
 		newest.host = true;
 		newest.persistentWorld = true;
 		newest.activityPreset = "Persistent World";
-		newest.resumeTick = 1500;
-		if (!writer.ResolveWorldResume(newest, error) || newest.resumeMatchId != first.worldId) {
+		if (!writer.ResolveWorldResume(newest, error) || newest.resumeMatchId != first.worldId ||
+		    !writer.PrepareResume(newest, error, scratch.store) || newest.resumeTick != 120 || newest.resumeConfig->worldBoot != second.boot) {
 			*error = "world-fresh-resumed-anyway: the newest checkpoint of the live round was refused: " + *error;
 			return false;
 		}

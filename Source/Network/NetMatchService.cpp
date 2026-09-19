@@ -611,8 +611,8 @@ static std::string ResyncSaveName() {
 				m_AutosaveIdentity.sessionId = matchConfig.sessionId;
 				m_AutosaveIdentity.roundId = m_ResumeRoundId;
 				m_AutosaveIdentity.intervalSeconds = m_ResumeIntervalSeconds;
-				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
-				m_PinnedAutosaveTick->store(m_ResumeTick);
+				m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
+				m_PinnedAutosave->Store(m_ResumeRoundId, m_ResumeTick);
 				m_MatchAutosaveSeconds = MatchAutosaveSeconds(matchConfig);
 				// This world's round opens ON that checkpoint, so its recording is a segment standing on
 				// it from the first frame instead of a file that names no world.
@@ -1184,8 +1184,8 @@ static std::string ResyncSaveName() {
 		m_AutosaveIdentity.sessionId = held->sessionId;
 		m_AutosaveIdentity.roundId = held->roundId;
 		m_AutosaveIdentity.intervalSeconds = held->intervalSeconds;
-		m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
-		m_PinnedAutosaveTick->store(held->savedTick);
+		m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
+		m_PinnedAutosave->Store(held->roundId, held->savedTick);
 		return true;
 	}
 
@@ -2195,9 +2195,9 @@ static std::string ResyncSaveName() {
 			m_AutosaveIdentity.sessionId = m_Runner ? m_Runner->GetMatchConfig().sessionId : 0;
 			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
 			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
-			m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+			m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
 			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
-			m_PinnedAutosaveTick->store(0);
+			m_PinnedAutosave->Store(0, 0);
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -2287,6 +2287,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::SeatRestartConfigLocked(const NetMatchConfig& config) {
+		m_AutosaveIdentity.worldBoot = config.persistentWorld ? config.worldBoot : 0;
 		// The exact bytes the peers hashed, so a restart republishes that configuration rather than one
 		// rebuilt from today's settings.
 		std::string payload;
@@ -3127,11 +3128,13 @@ static std::string ResyncSaveName() {
 		std::string refusal;
 		// The caller that already validated this checkpoint does not pay for a second read of it.
 		const bool knownCheckpoint = known && known->matchId == matchId && known->savedTick == tick;
-		const bool held = knownCheckpoint || AutosaveStore::Find(matchId, tick, &refusal).has_value();
+		const std::optional<AutosaveDescriptor> found = knownCheckpoint ? std::nullopt : AutosaveStore::Find(matchId, tick, &refusal);
+		const AutosaveDescriptor* checkpoint = knownCheckpoint ? known : (found ? &*found : nullptr);
+		const bool held = checkpoint != nullptr;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			// Retention keeps the agreed checkpoint whatever its age, so the rejoin still finds it.
-			if (matchId == m_AutosaveMatchId) m_PinnedAutosaveTick->store(tick);
+			if (matchId == m_AutosaveMatchId) m_PinnedAutosave->Store(checkpoint ? checkpoint->roundId : m_AutosaveIdentity.roundId, tick);
 			m_RewindAnchorMatchId = matchId;
 			m_RewindAnchorTick = tick;
 			m_RewindAnchorHeld = held;
@@ -3582,6 +3585,9 @@ static std::string ResyncSaveName() {
 		if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config)) != manifest.configHash) {
 			return refuse("the restart manifest's configuration does not match the hash the peers agreed");
 		}
+		if (manifest.worldBoot != (config.persistentWorld ? config.worldBoot : 0)) {
+			return refuse("the restart manifest's world boot does not match its configuration");
+		}
 		AutosaveAdmission admission;
 		if (!AutosaveStore::ReadAdmission(directory, matchId, admission, &reason)) return refuse("admission file refused: " + reason);
 		std::array<uint8_t, 32> key{};
@@ -3706,7 +3712,7 @@ static std::string ResyncSaveName() {
 				m_AutosaveIdentity.sessionId = m_ReconnectClient.GetRecord().hostSessionId;
 				m_AutosaveIdentity.roundId = body.at("autosave_round").get<uint64_t>();
 				m_AutosaveIdentity.intervalSeconds = body.at("autosave_interval").get<uint32_t>();
-				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+				m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
 			}
 			m_MigrationDirectorySession = directorySession;
 			m_MigrationDirectoryToken = directoryToken;
