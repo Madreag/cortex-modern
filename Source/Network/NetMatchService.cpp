@@ -789,7 +789,28 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::CanResyncMatch() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_State == NetMatchServiceState::Running && ActiveWireLocked() && m_Session && m_Runner &&
-		       m_Session->IsReady() && !m_ResyncHealOpen && m_PendingResyncLoad.empty() && !m_PendingAutosaveLoad;
+		       m_Session->IsReady() && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->HasPendingRecoveryStop() &&
+		       !m_ResyncHealOpen && m_PendingResyncLoad.empty() && !m_PendingAutosaveLoad;
+	}
+
+	bool NetMatchService::RequestHostRepair(std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		auto refuse = [error](const char* reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!m_IsHost) return refuse("only the host repairs the match");
+		if (!CanResyncLocked(error)) return false;
+		if (!m_Coordinator || !m_Coordinator->IsRunning() || m_Coordinator->HasPendingRecoveryStop() ||
+		    m_ResyncHealOpen || !m_PendingResyncLoad.empty() || m_PendingAutosaveLoad) {
+			return refuse("a recovery is already pending");
+		}
+		if (!m_ResyncOnDesync) return refuse("this session cannot reload a live snapshot");
+		if (!ResyncSnapshotAllowed(g_ActivityMan.GetActivity())) return refuse("match over");
+		m_Coordinator->RequestResync("host requested repair");
+		m_ResyncHealStartMs = SteadyNowMs();
+		m_ResyncHealOpen = true;
+		return true;
 	}
 
 	void NetMatchService::GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const {
@@ -4139,8 +4160,7 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost) {
 			return refuse("only the host submits match options");
 		}
-		// The transaction speaks to a live setup round: the open lobby, or the rematch lobby a finished
-		// match left up, are the only states whose peers could ever acknowledge an edit.
+		// Only an open or completed lobby can accept the host's next configuration.
 		const bool rematchLobbyUp = m_State == NetMatchServiceState::Completed && !m_LeftMatch && ActiveWireLocked() && m_Session && m_Runner;
 		if (m_State != NetMatchServiceState::Starting && !rematchLobbyUp) {
 			return refuse("host options apply while a lobby is open");
@@ -6042,6 +6062,7 @@ static std::string ResyncSaveName() {
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
+			config.frameRedundancyTicks = request.frameRedundancyTicks.value_or(config.frameRedundancyTicks);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
