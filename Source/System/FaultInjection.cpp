@@ -33,11 +33,11 @@ namespace RTE {
 	}
 
 	bool FaultInjected(const char* name) {
-		if (FaultListHas(g_TestArmedFaults, name)) {
-			return true;
-		}
-		const char* env = std::getenv("CC_FAULT_INJECT");
-		return FaultListHas(env ? env : "", name);
+		static const std::string armed = [] {
+			const char* env = std::getenv("CC_FAULT_INJECT");
+			return std::string(env ? env : "");
+		}();
+		return FaultListHas(g_TestArmedFaults, name) || FaultListHas(armed, name);
 	}
 
 } // namespace RTE

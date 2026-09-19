@@ -730,7 +730,6 @@ namespace RTE {
 		};
 
 		void NoteHorizonTerrainBox(const Box& newArea);
-		void RestoreHorizonAfterPreview();
 		size_t TestHorizonBoxCount() const { return m_HorizonTerrainBoxes.size(); }
 		void TestSetTerrain(SLTerrain* terrain) { m_pTerrain = terrain; }
 		void TestInstallHorizonPathFinders(int width, int height, int nodeDimension, const Material* fill);
