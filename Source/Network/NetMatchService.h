@@ -5,6 +5,8 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
+#include "NetHostBanStore.h"
+#include "NetParticipantCrypto.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
@@ -144,6 +146,20 @@ namespace RTE {
 		Failed,
 	};
 
+	/// One compatible scene for the host's activity picker, in scene-manager order.
+	struct NetHostSceneChoice {
+		std::string name;
+		std::string module;
+	};
+
+	/// A GameActivity the host picker may list: not a test, and at least one compatible loaded scene.
+	struct NetHostActivityChoice {
+		std::string preset;
+		std::string module;
+		std::string activityType;
+		std::vector<NetHostSceneChoice> scenes;
+	};
+
 	struct NetMatchServiceRequest {
 		bool host = false;
 		std::string address = "127.0.0.1";
@@ -151,6 +167,9 @@ namespace RTE {
 		std::string playerName = "Player";
 		std::string activityPreset = "Skirmish Defense";
 		std::string activityModule; // The module that defines the preset; empty resolves to the module defining it.
+		std::string activityType; // Empty keeps MakeDefault's GAScripted.
+		std::string sceneName; // Empty resolves to the first compatible scene (Grasslands when the activity allows it).
+		std::string sceneModule;
 		std::optional<NetMatchStandardRules> standardRules;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		uint16_t inputDelayFrames = 0; // Lockstep input-delay buffer; the host picks it, the client agrees at the start handshake.
@@ -164,12 +183,41 @@ namespace RTE {
 		std::optional<NetMatchDelayPolicy> delayPolicy;
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
+		std::optional<uint16_t> pathHorizonTicks;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
+	};
+
+	/// A presentation-only record of the finished round; never restored into the simulation.
+	struct NetMatchSummary {
+		struct Peer {
+			uint8_t peerId = 0;
+			std::string name;
+			int team = -1;
+			uint16_t seat = 0;
+			uint16_t inputDelayFrames = 0;
+		};
+		std::string result;
+		int winnerTeam = -1;
+		uint64_t runningTicks = 0;
+		std::vector<Peer> peers;
+		uint32_t resyncs = 0;
+		uint32_t drops = 0;
+		uint32_t reclaims = 0;
+		uint32_t substitutions = 0;
+		std::string paceJson = "{}";
+		std::string identityLine;
+		/// Formats the recorded duration at 60 ticks per second.
+		std::string DurationText() const;
+		/// Formats the single lobby line and the complete dialog body.
+		std::string LineText() const;
+		std::string DetailsText() const;
+		/// Formats the identity, reading and caching the executable hash on first use.
+		std::string IdentityText() const;
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
@@ -270,6 +318,12 @@ namespace RTE {
 		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
 		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
+		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
+		NetKickBanResult GetLastKickBanResult() const;
+		NetParticipantRemovalIssue GetLastRemovalIssue() const;
+		NetKickBanResult UnbanParticipant(const NetAuthBytes32& identity);
+		std::vector<NetHostBanRecord> GetBanRecords() const;
 
 		/// Remembers whether the last join target was a persistent world, so a ticket rejoin hellos 5/23.
 		void NoteJoinTargetPersistentWorld(bool world) { m_LastJoinTargetPersistentWorld = world; }
@@ -329,6 +383,8 @@ namespace RTE {
 		};
 		PortMapStatus GetPortMapStatus() const;
 		NetLobbySnapshot GetLobbySnapshot() const;
+		/// Returns a copy that survives returning to the lobby and expires at the next match start.
+		std::optional<NetMatchSummary> GetLastMatchSummary() const;
 		/// Local chat send, presentation only. Reaches the session whether the lobby is still running
 		/// on the worker or the match has handed it back; false when no session link exists.
 		bool SendChat(uint8_t scope, const std::string& text);
@@ -345,17 +401,38 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		std::string BuildReportJson() const;
-		/// Builds the match roster from the request alone; it reads no manager, so a self-test can build one.
+		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
+		/// already resolved one; a named scene overwrites the default after any launch-config rules.
 		static bool BuildMatchConfig(const NetMatchServiceRequest& request, uint64_t sessionId, NetMatchConfig& outConfig, std::string* error = nullptr);
 		/// The module a module-less activity preset belongs to, from the modules that define it. Reads no
 		/// manager: the caller lists the candidates.
 		static bool ResolveActivityModule(const std::string& preset, const std::vector<std::string>& definingModules, std::string& outModule, std::string* error = nullptr);
 		/// Fills an unset request module with the loaded module that defines the preset.
 		static bool SeatActivityModule(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// Every loaded non-test GameActivity, including those with no compatible scene.
+		static std::vector<NetHostActivityChoice> ListLoadedGameActivities();
+		/// The scenario-menu walk: every non-test GameActivity with at least one compatible loaded scene.
+		static std::vector<NetHostActivityChoice> ListHostActivities();
+		/// Compatible scenes for one activity, in the same scene order the scenario menu uses.
+		static std::vector<NetHostSceneChoice> ListHostScenes(const std::string& preset, const std::string& module);
+		/// First compatible scene, Grasslands when the activity allows it.
+		static bool ResolveHostScene(const std::string& preset, const std::string& module, std::string& sceneName, std::string& sceneModule);
+		/// Fills an empty host scene from the loaded modules the way SeatActivityModule fills a module.
+		static bool SeatHostScene(NetMatchServiceRequest& request, std::string* error = nullptr);
+		/// Empty picker: the request still names P4 Alpha Duel and Base.rte.
+		static void ApplyHostActivityFallback(NetMatchServiceRequest& request);
 		/// Fills the request's unset options from the saved settings, where a real host starts a match.
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
 		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
+		/// Reads the identity's live manager inputs and keeps them for a build off this thread. Cheap:
+		/// the module hashing that costs the second is left to the build below.
+		bool CaptureDiagnosticIdentityInputs(std::string* error = nullptr);
+		/// Hashes the captured inputs and caches the identity. Reads no manager, so the diagnostics
+		/// worker runs it while the game thread keeps drawing.
+		bool BuildCapturedDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
+		/// Forgets captured inputs no bundle will build, so a refused request strands nothing.
+		void DropCapturedDiagnosticIdentityInputs();
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
 		std::string ExportDiagnosticIdentity() const;
 		/// Returns the last runtime error and heal record without exposing reconnect credentials.
@@ -449,6 +526,8 @@ namespace RTE {
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestServiceKick(std::string* error);
+		friend bool TestStartingKickMarshals(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
@@ -459,6 +538,7 @@ namespace RTE {
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
+		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
@@ -500,10 +580,18 @@ namespace RTE {
 		void CaptureA7SeatView();
 		void CacheDiagnosticIdentity(const NetIdentityManifest& manifest);
 		bool WaitForA7ConnectGate(std::string* error);
+		/// Captures the round before its coordinator or activity is torn down. Caller holds the lock.
+		void CaptureMatchSummaryLocked(const std::string& result);
+		/// Counts public seat transitions independently of the bounded diagnostic history.
+		void UpdateSummarySeatsLocked();
 
 
 		mutable std::mutex m_Mutex;
 		std::string m_DiagnosticIdentity;
+		NetIdentityManifest m_DiagnosticIdentityInputs; //!< The manager reads a captured build is waiting on.
+		bool m_DiagnosticIdentityInputsPending = false;
+		uint64_t m_DiagnosticIdentityGeneration = 0; //!< Bumped by every cached identity, so an older build knows it lost.
+		uint64_t m_DiagnosticIdentityInputsGeneration = 0;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
 		static bool s_AutosaveSecondsOverridden;
@@ -516,6 +604,8 @@ namespace RTE {
 		std::string m_ErrorText;
 		std::string m_ActivityPreset;
 		std::string m_ActivityModule;
+		std::string m_SceneName;
+		std::string m_SceneModule;
 		std::thread m_Worker;
 		bool m_WorkerDone = false;
 		bool m_IsHost = false;
@@ -534,12 +624,17 @@ namespace RTE {
 		std::atomic<uint64_t> m_ResyncBoundaryTick{UINT64_MAX};
 		std::string m_LocalName;
 		NetLobbySnapshot m_LobbySnapshot;
+		std::optional<NetMatchSummary> m_LastMatchSummary;
+		NetMatchSummary m_CurrentMatchSummary;
+		std::map<uint8_t, NetSeatPresenceEntry> m_SummarySeats;
 		NetSeatAuthRegistry m_SeatAuth; //!< Hosted-session reconnect-auth material (off-sim epoch + seat credentials); survives resync/rejoin/rematch.
 		// The admission plane lives on the service, not on a session or a match round, so a seat and its
 		// ledger survive resync, rejoin and rematch exactly as the registry does (§3).
 		NetReconnectHost m_ReconnectHost;
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
+		NetParticipantIdentityStore m_ParticipantStore;
+		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
 		NetSeatPresence m_SeatPresence;
 		struct RosterTransition {
@@ -553,6 +648,27 @@ namespace RTE {
 		uint32_t m_RosterTransitionsDropped = 0;
 		std::map<uint8_t, std::pair<std::string, std::string>> m_LastRosterPair;
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
+		NetKickBanResult m_LastKickBanResult = NetKickBanResult::NotHosting;
+		NetParticipantRemovalIssue m_LastRemovalIssue;
+		/// One host moderation action waiting for the setup worker: a removal, or an unban of an identity.
+		struct PendingModeration {
+			bool unban = false;
+			NetModerationSelection selection;
+			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
+			NetAuthBytes32 identity{};
+		};
+		std::vector<PendingModeration> m_PendingModeration; //!< Starting-state kicks and unbans, in the order the host asked for them.
+		std::vector<std::string> m_PendingToasts;      //!< Moderation lines a worker produced, for the game thread to show.
+		/// Shows what a worker-side removal produced. Game thread only; never called under the lock.
+		void PushPendingToasts();
+		uint32_t m_LastRoundId = 0;                    //!< The round the peers last played; what a kick between rounds is stamped with.
+		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session);
+		NetKickBanResult ApplyUnbanLocked(const NetAuthBytes32& identity);
+		/// Queues a Starting-state action for the setup worker, or refuses a flood no lobby could produce.
+		NetKickBanResult QueueModerationLocked(const PendingModeration& pending);
+		/// Wires the setup worker's host pump. The runner calls it with the session it ticks.
+		void AttachHostPump(NetMatchRunnerConfig& config);
+		void DrainPendingModeration(NetSession& session);
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.

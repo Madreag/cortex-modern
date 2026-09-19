@@ -380,16 +380,17 @@ void GUIListPanel::BuildDrawBitmap() {
 				m_DrawBitmap->DrawRectangle(1, itemY, itemWidth - 2, m_Font->GetFontHeight(), m_SelectedColorIndex, (m_GotFocus || m_HighlightAsIfAlwaysFocused)); // Filled if we have focus
 			}
 
+			const std::string name = RegularFittedName(I->m_Name, I->m_OffsetX);
 			if (I->m_Selected && (m_GotFocus || m_HighlightAsIfAlwaysFocused)) {
 				m_Font->SetColor(m_FontSelectColor);
 				m_Font->DrawAligned(m_DrawBitmap, itemX - 3 + itemWidth - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0), itemY, I->m_RightText, GUIFont::Right);
-				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, I->m_Name);
+				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, name);
 			} else {
 				// Unselected
 				m_Font->SetColor(m_FontColor);
 				m_Font->SetKerning(m_FontKerning);
 				m_Font->DrawAligned(m_DrawBitmap, itemX - 3 + itemWidth - (m_VertScroll->_GetVisible() ? m_VertScroll->GetWidth() : 0), itemY, I->m_RightText, GUIFont::Right, GUIFont::Top, itemWidth, m_FontShadow);
-				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, I->m_Name, m_FontShadow);
+				m_Font->Draw(m_DrawBitmap, 4 - itemX, itemY, name, m_FontShadow);
 			}
 
 			y += GetItemHeight(I);
@@ -1036,6 +1037,27 @@ GUIListPanel::Item* GUIListPanel::GetItem(int X, int Y) {
 	}
 
 	return nullptr;
+}
+
+int GUIListPanel::RegularItemNameRoom(int itemOffsetX) const {
+	const int itemWidth = m_Width + itemOffsetX;
+	const int scroll = (m_VertScroll && m_VertScroll->_GetVisible()) ? m_VertScroll->GetWidth() : 0;
+	return itemWidth - 8 - scroll;
+}
+
+std::string GUIListPanel::RegularFittedName(const std::string& name, int itemOffsetX) const {
+	if (!m_Font || (m_HorzScroll && m_HorzScroll->_GetVisible())) {
+		return name;
+	}
+	const int nameRoom = RegularItemNameRoom(itemOffsetX);
+	if (m_Font->CalculateWidth(name) <= nameRoom) {
+		return name;
+	}
+	std::string fitted = name;
+	while (!fitted.empty() && m_Font->CalculateWidth(fitted + "...") > nameRoom) {
+		fitted.pop_back();
+	}
+	return fitted + "...";
 }
 
 int GUIListPanel::GetItemHeight(Item* pItem) {

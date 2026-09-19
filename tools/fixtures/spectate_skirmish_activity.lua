@@ -18,6 +18,7 @@ end
 
 local BRAIN_X = 880;
 local KILL_AT_MS = options.killAtMs or 5000;
+local KILL_FOLLOW_AT_MS = options.killFollowAtMs or 0;
 
 local function HumanTeam(activity, team)
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
@@ -96,6 +97,18 @@ function SpectateSkirmish:UpdateActivity()
 			end
 		end
 		self.spectateKilled = true;
+	end
+
+	if KILL_FOLLOW_AT_MS > 0 and not self.followKilled and self.spectateClock:IsPastSimMS(KILL_FOLLOW_AT_MS) then
+		for actor in MovableMan.Actors do
+			if not actor:IsInGroup("Brains") and actor.Health > 0 then
+				print("[spectate-follow] kill simms=" .. math.floor(self.spectateClock.ElapsedSimTimeMS) ..
+					" uid=" .. actor.UniqueID);
+				actor:GibThis();
+				self.followKilled = true;
+				break;
+			end
+		end
 	end
 
 	stockUpdate(self);

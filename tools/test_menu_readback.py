@@ -31,7 +31,8 @@ NETWORK_PAGE_BOX = NETWORK_BOXES[0]
 # the fixed policy, so it is drawn only there - the cue the video page's resolution rows already use.
 NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
-                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "CheckboxNetworkAutoRepair",
+                "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
+                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
                 "CheckboxNetworkToasts", "CheckboxNetworkPrediction",
                 "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
@@ -39,9 +40,11 @@ MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which 
 # The saved preferences a case starts from, and what the page must have written when it ends.
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
+                "NetworkPathHorizonTicks": "30",
                 "NetworkToastsEnabled": "0", "LocalPrediction": "0", "NetworkMatchStatusMode": "Auto"}
 NETWORK_SAVED = {"NetworkDisplayName": "WingCmd", "NetworkHostDelayPolicy": "Fixed",
                  "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7",
+                 "NetworkPathHorizonTicks": "45",
                  "NetworkToastsEnabled": "1", "LocalPrediction": "1"}
 # The Misc page's own rows; the match-status combo moved to the player page, so a dump of this box
 # must not name it - the absence is asserted against the whole capture, not a missing-control assert.
@@ -66,15 +69,100 @@ INTERNET_SAVED = {"SessionDirectoryUrl": "newdir.example.test/serve",
 # One value column across the five network pages: every page's value/second-column control starts at
 # this offset from its page box, and every row rides the Misc page's 20px pitch.
 NETWORK_VALUE_COLUMN = 190
+# The same page-relative column on every settings page (Video through Network).
+SETTINGS_VALUE_COLUMN = 190
+PAGE_FIRST_VALUE = {
+    "Video": "ComboPresetResolution",
+    "Audio": "SliderMasterVolume",
+    "Input": "LabelP1SelectedDevice",
+    "Gameplay": "CheckboxBlipOnRevealUnseen",
+    "Misc": "CheckboxShowToolTips",
+    "Network": "TextNetworkDisplayName",
+}
+FILES_BUTTONS = ("ButtonNetOpenAutosaves", "ButtonNetCopyAutosavesPath", "ButtonNetOpenDiagnostics",
+                 "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics")
+# Video and Input rows that must stand 20 px tall.
+VIDEO_INPUT_FIT = (
+    "ComboPresetResolution",
+    "LabelP1DeviceType", "LabelP1SelectedDevice",
+    "LabelP2DeviceType", "LabelP2SelectedDevice",
+    "LabelP3DeviceType", "LabelP3SelectedDevice",
+    "LabelP4DeviceType", "LabelP4SelectedDevice",
+)
+PAUSE_PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc")
+PAUSE_PAGE_FIRST_VALUE = {
+    "Video": "ComboPresetResolution",
+    "Audio": "SliderMasterVolume",
+    "Input": "LabelP1SelectedDevice",
+    "Gameplay": "CheckboxBlipOnRevealUnseen",
+    "Misc": "CheckboxShowToolTips",
+}
+SIZE_GATES = (
+    ("net-chat", "960x540"),
+    ("net-chat", "1280x720"),
+    ("lobby-name", "640x360"),
+    ("lobby-name", "960x540"),
+    ("lobby-name", "1280x720"),
+    ("lobby-name", "1920x1080"),
+)
+# CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
+# thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
+FONT_SMALL_MIN_GLYPH = 2
+SHARE_STATUS_ROW = 276
+WIDE_SHARE_HOST = "2001:" + "0" * 140
+assert len(WIDE_SHARE_HOST) * FONT_SMALL_MIN_GLYPH > SHARE_STATUS_ROW, (
+    len(WIDE_SHARE_HOST), FONT_SMALL_MIN_GLYPH, SHARE_STATUS_ROW)
+
+
+def page_value_columns(captures, first_value):
+    rows = []
+    for capture in captures:
+        page = capture["settings_page"].split(":")[0]
+        if page not in first_value:
+            continue
+        box = next(c for c in capture["controls"] if c["name"] == f"CollectionBox{page}Settings")
+        value = next(c for c in capture["controls"] if c["name"] == first_value[page])
+        rel_x = value["rect"][0] - box["rect"][0]
+        rows.append([page, value["name"], rel_x])
+        assert rel_x == SETTINGS_VALUE_COLUMN, (page, value["name"], rel_x, SETTINGS_VALUE_COLUMN)
+    return rows
+
+
+def video_input_fit_rows(captures, required):
+    rows = [[capture["settings_page"], control["name"], control["rect"][3], control.get("text_fits"), control.get("text")]
+            for capture in captures for control in capture["controls"] if control["name"] in VIDEO_INPUT_FIT]
+    names = {row[1] for row in rows}
+    assert required <= names, (required - names, rows)
+    assert rows and all(row[2] == 20 and row[3] for row in rows), rows
+    return rows
+
+
+def share_status_row(capture, port, host=None):
+    status = next(c for c in capture["controls"] if c["name"] == "LabelMultiplayerStatus")
+    text = status["text"]
+    assert f":{port}" in text, status
+    assert "\n" in text, status
+    address = text.split("\n", 1)[1]
+    assert address.endswith(f":{port}"), status
+    if host is not None:
+        assert address.startswith(host + ":") or address == f"{host}:{port}", status
+    row = status["row_width"]
+    word = status["word_width"]
+    scroll = status["overflow_scroll"]
+    assert row == status["rect"][2], status
+    assert scroll == (word > row), status
+    return status
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Replays and connection details come with a later update."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
-HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0"}
-CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1"}
-MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False}
+HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
+                "NetworkPathHorizonTicks": "45"}
+CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
+                  "NetworkPathHorizonTicks": "15"}
+MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -179,12 +267,15 @@ def pause_probe(who, root):
         {"op": "wait", "sim_at_least": 150},
         {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
         {"op": "wait", "screen": "Pause"}, running, *pause_rows(), menu_step("dump_host_options"),
-        menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"},
-        menu_step("assert_visible CollectionBoxGameplaySettings 1"),
-        *row_checks("TabGameplaySettings", "CollectionBoxSettingsBase"), menu_step("dump_player_options"),
-        # The pause twin of the page op: the same reach on the settings menu the pause screen owns.
-        menu_step("select_settings_page Misc"), {"op": "wait", "renders": 3},
-        menu_step("assert_settings_page Misc"), menu_step("dump_player_options"),
+        menu_step("activate ButtonSettings"), {"op": "wait", "screen": "PauseSettings"}]
+    for page in PAUSE_PAGES:
+        steps += [menu_step(f"select_settings_page {page}"), {"op": "wait", "renders": 3},
+                  menu_step(f"assert_settings_page {page}"),
+                  menu_step(f"assert_visible CollectionBox{page}Settings 1"),
+                  menu_step("dump_player_options")]
+        if page == "Gameplay":
+            steps += row_checks("TabGameplaySettings", "CollectionBoxSettingsBase")
+    steps += [
         menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
         *pause_rows(), menu_step("dump_host_options"), running]
     if who == "client":
@@ -209,6 +300,66 @@ def pause_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
 
+def host_activity_label(row):
+    module = row.get("module") or ""
+    return row["preset"] + (f" - {module}" if module else "")
+
+
+def combo_name(text):
+    return text.rsplit(" - ", 1)[0] if " - " in (text or "") else (text or "")
+
+
+def host_scenes(dump):
+    show = dump.get("show_metascenes")
+    scenes = []
+    for scene in dump.get("loaded_scenes") or []:
+        if scene.get("location_zero") or scene.get("metagame_internal") or scene.get("saved_game_internal"):
+            continue
+        if scene.get("metascene_parent") and not show:
+            continue
+        scenes.append(scene)
+    return scenes
+
+
+def scene_is_compatible(activity, scene, teams=-1):
+    if not scene:
+        return False
+    if teams > int(activity.get("min_teams") or 0):
+        return False
+    if (activity.get("activity_type") or "") == "GATutorial":
+        return scene.get("name") == "Tutorial Bunker"
+    areas = set(scene.get("areas") or [])
+    return all(area in areas for area in (activity.get("required_areas") or []))
+
+
+def allowed_host_activities(dump):
+    # Missing census keys stay empty so a base-tip combo fails as an extra row.
+    scenes = host_scenes(dump)
+    return [row for row in (dump.get("game_activities") or [])
+            if any(scene_is_compatible(row, scene) for scene in scenes)]
+
+
+def combo_item_names(picker):
+    if "items" not in picker:
+        name = picker.get("text") or "unknown"
+        return [name] * max(1, int(picker.get("item_count") or 1))
+    # The dump writes a row per item with its drawn measurements; the name is the row's text.
+    return [item["text"] if isinstance(item, dict) else item for item in (picker.get("items") or [])]
+
+
+def assert_combo_matches_loaded_activities(picker, dump):
+    allowed = [host_activity_label(row) for row in allowed_host_activities(dump)]
+    items = combo_item_names(picker)
+    extras = [item for item in items if item not in allowed]
+    missing = [label for label in allowed if label not in items]
+    if extras:
+        raise AssertionError("extra combo row: " + extras[0])
+    if missing:
+        raise AssertionError("missing combo row: " + missing[0])
+    if picker.get("item_count") != len(allowed):
+        raise AssertionError(("item_count", picker.get("item_count"), len(allowed)))
+
+
 def scripts(case, port, root):
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
@@ -216,7 +367,8 @@ def scripts(case, port, root):
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
     if case == "landing":
-        text = LANDING + checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
+        text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
+        text += checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
         text += "assert_visible ButtonMultiplayerCreate 0\n"
         for name in (*ORDER, ORDER[0]):
             text += f"focus_next\nassert_focus {name}\n"
@@ -241,7 +393,15 @@ def scripts(case, port, root):
         for page in PAGES:
             text += f"select_settings_page {page}\nwait 3\nassert_settings_page {page}\n"
             text += f"assert_visible CollectionBox{page}Settings 1\n"
-            text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase") + "dump_player_options\n"
+            text += checks(f"Tab{page}Settings", "CollectionBoxSettingsBase")
+            if page == "Gameplay":
+                # Enter drops, Down moves, Enter commits: the same pad/keyboard path the host combos use.
+                text += ("focus ComboBrainlessHumansSpectate\n"
+                         "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                         "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                         "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                         "assert_label ComboBrainlessHumansSpectate End the match\n")
+            text += "dump_player_options\n"
         text += "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\nexit\n"
     elif case == "network":
         # The saved preferences reach the player page, an edit on the page reaches the settings, and the
@@ -258,6 +418,7 @@ def scripts(case, port, root):
             text += checks(control, NETWORK_PAGE_BOX)
         text += ("assert_label TextNetworkDisplayName " + NETWORK_SEED["NetworkDisplayName"] + "\n"
                  "assert_label TextNetworkIdleWait " + NETWORK_SEED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "assert_label TextNetworkPathHorizon " + NETWORK_SEED["NetworkPathHorizonTicks"] + "\n"
                  "assert_label ComboMatchStatusWidget " + NETWORK_SEED["NetworkMatchStatusMode"] + "\n")
         # The saved policy is automatic here, so the fixed-delay row is not on the page at all.
         for control in NETWORK_FIXED_ROWS:
@@ -273,6 +434,7 @@ def scripts(case, port, root):
         text += (f"assert_label LabelNetworkFixedDelayHint frames, 0-{MAX_INPUT_DELAY_FRAMES}\n"
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
+                 "set_text TextNetworkPathHorizon " + NETWORK_SAVED["NetworkPathHorizonTicks"] + "\n"
                  "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
                  "post_command CheckboxNetworkPrediction\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
@@ -384,40 +546,57 @@ def scripts(case, port, root):
                  "assert_label TextHostInputDelay auto\nassert_enabled TextHostInputDelay 0\n"
                  f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
+                 "dump_host_options\n"
+                 f"set_share_address {WIDE_SHARE_HOST}\nwait 5\n"
                  "dump_host_options\nexit\n")
     elif case == "net-activity":
-        # A menu-driven pair in the lobby itself: the host's combo picks off the default activity
-        # and every lobby surface on both peers must name the same preset and its module.
+        # A vanished pick needs a module unload the menu harness cannot drive; the native
+        # host_request_fallback row covers the empty-list Base.rte request fields instead.
+        # The keyboard commits the activity and scene combos and the mouse the mode combo; Create
+        # uses those picks, not a later mouse Select.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
                 "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
                 "assert_text_fits ComboHostActivity\n"
-                "assert_label LabelHostInfo Grasslands - PvP\ndump_host_options\n"
+                "dump_host_options\n"
+                "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
+                "assert_visible ComboHostScene 1\n"
+                "assert_text_fits ComboHostScene\n"
+                "assert_visible ComboHostMode 1\nassert_label ComboHostMode PvP\n"
+                "assert_label LabelHostInfo Grasslands - PvP\n"
+                "focus ComboHostActivity\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
+                "focus ComboHostScene\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
+                "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
+                "key_down Return\nwait 2\nkey_up Return\nwait 3\n"
+                "assert_label ComboHostScene Fredeleig Bunkers\ndump_host_options\n"
                 # combo_drop is the same panel-level click a user makes; the dumped capture shows the
                 # list open. combo_select picks the row by its text the way a click on it would.
-                "combo_drop ComboHostActivity\nwait 3\ndump_host_options\n"
-                "combo_select ComboHostActivity Brain vs Brain - Base.rte\nwait 3\n"
-                "assert_label ComboHostActivity Brain vs Brain - Base.rte\ndump_host_options\n"
+                "combo_drop ComboHostMode\nwait 3\ndump_host_options\n"
+                "combo_select ComboHostMode Co-op PvE\nwait 3\n"
+                "assert_label ComboHostMode Co-op PvE\n"
+                "assert_label LabelHostInfo Fredeleig Bunkers - Co-op PvE\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
                 "wait_connected 2\nwait 12\n"
                 "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                 "assert_text_fits LabelLobbyPlayersHeader\n"
-                # A seat row elides inside the fixed panel rather than wrap or widen it (UX-42).
                 "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
                 "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
                   f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
-                  # The joiner's own placeholder config already lists two seats, so the link wait
-                  # alone cannot prove the host's config landed - the activity name can.
                   "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
-                  "assert_label LabelLobbyMatchMode Grasslands - PvP\n"
+                  "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
                   "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
                   "assert_text_fits LabelLobbyPlayersHeader\n"
                   "assert_text_fits LabelLobbyPlayer0\nassert_text_fits LabelLobbyPlayer1\n"
@@ -528,6 +707,113 @@ def scripts(case, port, root):
     return texts, {"host": probe} if probe else {}
 
 
+def pixel_luma(rgb):
+    r, g, b = rgb[:3]
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+# TabBlue.png on 6447c4c2e3: Base and MouseOver RGB slice identity. Selected
+# fill was panel grey (59, 65, 83), luma 65.024; the floor sits above that.
+TABBLUE_SIZE = (63, 59)
+TABBLUE_BASE_SHA256 = "4f8ea8767d5c1762dcc9e2adea0f0cffeeee72ca770211ed855095ab2be14a4b"
+TABBLUE_MOUSEOVER_SHA256 = "d832a67b1bebd77870ba53071ec36af04c4a2261b387950d1265630d4571752a"
+PANEL_GREY_FILL_LUMA = 65.024
+SELECTED_FILL_LUMA_FLOOR = 80.0
+TABBLUE_CHROME = (24, 28, 55)
+TABBLUE_COLOR_KEY = (0, 0, 0)
+
+
+def tabblue_slice_sha256(image, box):
+    return hashlib.sha256(image.crop(box).convert("RGB").tobytes()).hexdigest()
+
+
+def settings_tab_selected_fill_luma(repo):
+    """Mean luma of the Selected slice interior fill, not chrome or the key."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
+        image = source.convert("RGB")
+    pixels = []
+    for y in range(42, 57):
+        for x in range(2, 61):
+            rgb = image.getpixel((x, y))[:3]
+            if rgb in (TABBLUE_CHROME, TABBLUE_COLOR_KEY):
+                continue
+            pixels.append(rgb)
+    return (sum(pixel_luma(rgb) for rgb in pixels) / len(pixels)) if pixels else 0.0
+
+
+def assert_tabblue_selected_fill(repo):
+    """Base TabBlue fails (fill luma 65.024); the lightened Selected fill passes."""
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/TabBlue.png"
+    with Image.open(path) as source:
+        assert source.size == TABBLUE_SIZE, source.size
+        image = source.convert("RGB")
+    base = tabblue_slice_sha256(image, (0, 0, 63, 19))
+    mouseover = tabblue_slice_sha256(image, (0, 20, 63, 39))
+    assert base == TABBLUE_BASE_SHA256, (base, TABBLUE_BASE_SHA256)
+    assert mouseover == TABBLUE_MOUSEOVER_SHA256, (mouseover, TABBLUE_MOUSEOVER_SHA256)
+    skin = (Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/MainMenuSubMenuSkin.ini").read_text(encoding="utf-8")
+    assert "ColorKeyIndex = 0" in skin.split("[Tab]", 1)[1].split("[", 1)[0]
+    fill = settings_tab_selected_fill_luma(repo)
+    assert fill > PANEL_GREY_FILL_LUMA and fill >= SELECTED_FILL_LUMA_FLOOR, (
+        fill, PANEL_GREY_FILL_LUMA, SELECTED_FILL_LUMA_FLOOR)
+    return fill
+
+
+def cell_ink_signature(cell, red, bg):
+    return tuple((x, y) for y, row in enumerate(cell.rows)
+                 for x, pixel in enumerate(row) if pixel != red and pixel != bg)
+
+
+def assert_fontsmall_latin1_ink(repo):
+    """Menus FontSmall 0xC0 and 0xD7 have ink; À/É/Ñ have distinct signatures.
+
+    The base atlas paints those letters as one placeholder blob, so the
+    signature set has size 1 and this fails. The extended atlas passes.
+    """
+    import sys
+    fonts = str(Path(__file__).resolve().parent / "fonts")
+    if fonts not in sys.path:
+        sys.path.insert(0, fonts)
+    from extend_font import ink_count, parse_font
+
+    path = Path(repo) / "Data/Base.rte/GUIs/Skins/Menus/FontSmall.png"
+    font = parse_font(path)
+    red, bg = font["red"], font["bg"]
+    for code in (0xC0, 0xD7):
+        assert ink_count(font["cells"][code], red, bg) > 0, (hex(code), "no ink")
+    sigs = [cell_ink_signature(font["cells"][code], red, bg) for code in (0xC0, 0xC9, 0xD1)]
+    assert all(sigs) and len(set(sigs)) == 3, ("À/É/Ñ signatures collide", [len(s) for s in sigs])
+    return {
+        "ink_0xC0": ink_count(font["cells"][0xC0], red, bg),
+        "ink_0xD7": ink_count(font["cells"][0xD7], red, bg),
+    }
+
+
+def frame_luma(png, rect, border=2):
+    """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state lane."""
+    with Image.open(png) as source:
+        image = source.convert("RGB")
+    x, y, w, h = rect
+    pixels = []
+    for i in range(max(0, w)):
+        for t in range(border):
+            if 0 <= y + t < image.size[1] and 0 <= x + i < image.size[0]:
+                pixels.append(image.getpixel((x + i, y + t)))
+            if 0 <= y + h - 1 - t < image.size[1] and 0 <= x + i < image.size[0]:
+                pixels.append(image.getpixel((x + i, y + h - 1 - t)))
+    for j in range(border, max(border, h - border)):
+        for t in range(border):
+            if 0 <= y + j < image.size[1] and 0 <= x + t < image.size[0]:
+                pixels.append(image.getpixel((x + t, y + j)))
+            if 0 <= y + j < image.size[1] and 0 <= x + w - 1 - t < image.size[0]:
+                pixels.append(image.getpixel((x + w - 1 - t, y + j)))
+    if not pixels:
+        return 0.0
+    return sum(0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in pixels) / len(pixels)
+
+
 def inside(rect, parent):
     x, y, w, h = rect
     px, py, pw, ph = parent
@@ -547,10 +833,11 @@ def captures(runtime, metadata):
             names = {control["name"]: control for control in value["controls"]}
             assert len(names) == len(value["controls"]), f"duplicate control: {path}"
             for control in value["controls"]:
-                assert control["visible"] is True, (path, control)
+                hidden_preset = control["name"] == "ComboPresetResolution" and control.get("visible") is False
+                assert control["visible"] is True or hidden_preset, (path, control)
                 assert inside(control["rect"], value["viewport"]), (path, control)
                 assert inside(control["rect"], control["parent_rect"]), (path, control)
-                if control["parent"]:
+                if control["parent"] and not hidden_preset:
                     assert control["parent"] in names, (path, control)
                     assert names[control["parent"]]["rect"] == control["parent_rect"], (path, control)
                 x, y, w, h = control["rect"]
@@ -630,13 +917,25 @@ def run_case(options, case, root, failing=None):
                 assert f"[menu-script] FAILED: {assertion.split()[0]}" in logs[who], logs[who][-3000:]
                 assert "unknown command" not in logs[who], logs[who][-3000:]
             else:
-                assert record.get("exit_code") == 0, record
-                assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
                 images += captures(run.cwd, {"source_revision": options.revision,
                     "executable": str(options.repo / "Cortex Command.exe"), "exe_sha256": options.exe_sha,
                     "os": os.name, "configuration": "Final", "argv": record.get("argv", argv[who]),
                     "peer": who, "case": case, "logical_size": options.size})
+                if case == "net-activity" and who == "host":
+                    host_setup = [image for image in images if image["peer"] == "host"
+                                  and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+                    if host_setup:
+                        picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
+                        assert_combo_matches_loaded_activities(picker, host_setup[0])
+                assert record.get("exit_code") == 0, record
+                assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
         if not failing:
+            if case == "net-activity":
+                host_setup = [image for image in images if image["peer"] == "host"
+                              and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+                assert host_setup, "ComboHostActivity missing from host dumps"
+                picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
+                assert_combo_matches_loaded_activities(picker, host_setup[0])
             assert images, "no paired dumps/PNGs"
             # A peer scripted to dump must have written one: the global count passed on its peer's captures.
             scripted = {who: texts[who] + json.dumps(probes.get(who, {})) for who in runs}
@@ -666,17 +965,23 @@ def run_case(options, case, root, failing=None):
         if case == "pause":
             # Both peers read the same menu: the match rows, no single-player row, and the two settings
             # pages. The client goes on to drive the leave-confirm surface its match rows open.
-            expected_screens = {"host": ["Pause", "PauseSettings", "PauseSettings", "Pause"],
-                                "client": ["Pause", "PauseSettings", "PauseSettings", "Pause", "PauseLeaveConfirm"]}
+            expected_screens = {"host": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause"],
+                                "client": ["Pause"] + ["PauseSettings"] * len(PAUSE_PAGES) + ["Pause", "PauseLeaveConfirm"]}
             for who in ("host", "client"):
                 peer = [capture for capture in images if capture["peer"] == who]
                 assert [capture["screen"] for capture in peer] == expected_screens[who], (who, peer)
-                assert [capture["settings_page"] for capture in peer[1:3]] == ["Gameplay", "Misc"], (who, peer)
+                pause_settings = [capture for capture in peer if capture["screen"] == "PauseSettings"]
+                assert [capture["settings_page"].split(":")[0] for capture in pause_settings] == list(PAUSE_PAGES), (who, pause_settings)
+                result.setdefault("pause_page_value_columns", {})[who] = page_value_columns(pause_settings, PAUSE_PAGE_FIRST_VALUE)
+                result.setdefault("pause_video_input_fit", {})[who] = video_input_fit_rows(
+                    pause_settings, set(VIDEO_INPUT_FIT))
                 pauses = [capture for capture in peer if capture["screen"] == "Pause"]
                 for capture in (pauses[0], pauses[-1]):
                     drawn = {control["name"] for control in capture["controls"]}
                     assert set(MATCH_ROWS) <= drawn, (who, sorted(drawn))
                     assert not set(SINGLE_PLAYER_ROWS) & drawn, (who, sorted(drawn))
+                    resume = next(control for control in capture["controls"] if control["name"] == "ButtonResume")
+                    assert "back to game" in resume["text"].lower(), resume["text"]
             confirm = [capture for capture in images if capture["screen"] == "PauseLeaveConfirm"]
             assert len(confirm) == 1 and confirm[0]["peer"] == "client", confirm
             drawn = {control["name"] for control in confirm[0]["controls"]}
@@ -696,10 +1001,34 @@ def run_case(options, case, root, failing=None):
             result["watched"] = [[capture["settings_page"], control["name"], control["text_fits"], control["text_measure"]]
                                  for capture in images for control in capture["controls"] if control["name"] in WATCHED]
             assert all(row[2] for row in result["watched"]), result["watched"]
-            # Recorded, not asserted: the stock skin's own content box is what overflows, and it is not this detector's to change.
             result["text_overflow"] = [[capture["settings_page"], control["name"], control["text_measure"]]
                                        for capture in images for control in capture["controls"]
                                        if control.get("text_fits") is False]
+            assert not result["text_overflow"], result["text_overflow"]
+            result["video_input_fit"] = video_input_fit_rows(images, set(VIDEO_INPUT_FIT))
+            result["page_value_columns"] = page_value_columns(images, PAGE_FIRST_VALUE)
+            result["fontsmall_latin1"] = assert_fontsmall_latin1_ink(options.repo)
+            fill = assert_tabblue_selected_fill(options.repo)
+            result["tab_luma"] = {
+                "selected_fill": fill,
+                "panel_grey": PANEL_GREY_FILL_LUMA,
+                "floor": SELECTED_FILL_LUMA_FLOOR,
+            }
+            gameplay = next((capture for capture in images if capture["settings_page"] == "Gameplay"), None)
+            assert gameplay, [capture["settings_page"] for capture in images]
+            rows = {control["name"]: control for control in gameplay["controls"]}
+            label, combo = rows["LabelBrainlessHumansSpectate"], rows["ComboBrainlessHumansSpectate"]
+            smart, unheld = rows["CheckboxSmartBuyMenuNavigation"], rows["LabelMaxUnheldItems"]
+            assert combo["text"] == "End the match", combo
+            assert combo["rect"][1] == label["rect"][1], (combo["rect"], label["rect"])
+            assert label["rect"][1] - smart["rect"][1] == 20, (smart["rect"], label["rect"])
+            assert unheld["rect"][1] - label["rect"][1] == 20, (label["rect"], unheld["rect"])
+            def overlap(left, right):
+                ax, ay, aw, ah = left["rect"]
+                bx, by, bw, bh = right["rect"]
+                return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+            assert not overlap(label, smart) and not overlap(label, unheld), (label["rect"], smart["rect"], unheld["rect"])
+            assert not overlap(combo, smart) and not overlap(combo, unheld), (combo["rect"], smart["rect"], unheld["rect"])
         if case == "combo-fit":
             result["combo_fit"] = [[match[0], [int(v) for v in match[1:5]], [int(v) for v in match[5:7]]]
                                    for log in logs.values() for match in FIT_LINE.findall(log)]
@@ -735,13 +1064,13 @@ def run_case(options, case, root, failing=None):
             # The page sits on the Misc page's grid: a 20px row pitch, and under the automatic policy
             # the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
-                     "LabelNetworkIdleWait", "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts",
-                     "LabelMatchStatusWidget")
+                     "LabelNetworkIdleWait", "LabelNetworkPathHorizon", "CheckboxNetworkAutoRepair",
+                     "CheckboxNetworkToasts", "LabelMatchStatusWidget")
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 6, deltas
+            assert deltas == [20] * 7, deltas
             without_fixed = pitch[:2] + pitch[3:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 5, closed
+            assert closed == [20] * 6, closed
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
@@ -762,6 +1091,9 @@ def run_case(options, case, root, failing=None):
                         "net-files": "Network:Files", "net-internet": "Network:Internet",
                         "misc-page": "Misc"}[case]
             assert [capture["settings_page"] for capture in images] == [sub_page], [c["settings_page"] for c in images]
+            if case == "net-chat":
+                result["size_gates"] = [list(row) for row in SIZE_GATES]
+                result["net_chat_size"] = options.size
             rows = {control["name"]: control for control in images[0]["controls"]}
             expected = {"net-chat": ("CheckboxNetworkChatVisible", "CheckboxNetworkChatSound", "ComboNetworkChatScope",
                                      "CheckboxNetworkChatNotify", "ComboNetworkChatTextSize",
@@ -828,6 +1160,9 @@ def run_case(options, case, root, failing=None):
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
                     for name in ("LabelNetAutosaveHost", "LabelNetAutosaveIntervalHost"):
                         assert rows[name]["text"] == "Set by the host", rows[name]
+                        assert rows[name]["enabled"] is False, rows[name]
+                    widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
+                    assert len(widths) == 1, {name: rows[name]["rect"][2] for name in FILES_BUTTONS}
             captioned = [control for control in images[0]["controls"] if control["text"]]
             assert captioned and all("text_fits" in control for control in captioned), "a caption carries no fit measurement"
             result["unfit"] = [control["name"] for control in captioned if control["text_fits"] is False]
@@ -871,6 +1206,8 @@ def run_case(options, case, root, failing=None):
             # A first visit owes the player no reconnect verdict: the record probe's negative stays silent.
             status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
             assert status["text"] == "", status
+            prompt = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerNamePrompt")
+            assert prompt["text"] == "Multiplayer name:", prompt
             # The over-cap name was refused twice: once on the command line, once at the host's create.
             assert "-net-player-name over the 64-byte cap" in logs["host"], logs["host"][-2000:]
             refused = {c["name"]: c for c in images[-1]["controls"]}
@@ -884,8 +1221,22 @@ def run_case(options, case, root, failing=None):
                                    ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
             assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
                 (leave["rect"], seats["rect"], panel["rect"])
-            header, row = drawn["LabelLobbyPlayersHeader"], drawn["LabelLobbyPlayer0"]
-            assert header["rect"][0] == row["rect"][0] and header["text_fits"], (header, row)
+            header = drawn["LabelLobbyPlayersHeader"]
+            seat_rows = [control for control in images[-1]["controls"]
+                         if re.fullmatch(r"LabelLobbyPlayer\d", control["name"])]
+            assert seat_rows and header["text_fits"] and all(
+                row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
+            start = drawn["ButtonMultiplayerStart"]
+            pair_span = seats["rect"][0] + seats["rect"][2] - leave["rect"][0]
+            pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
+            back = next((c for c in drawn.values() if c["name"] == "ButtonBackToMain"), None)
+            save = next((c for c in drawn.values() if c["name"] == "ButtonSaveDiagnostics"), None)
+            assert pair_span == start["rect"][2], (pair_span, start["rect"], leave["rect"], seats["rect"])
+            if back and save:
+                footer_gap = save["rect"][0] - back["rect"][0] - back["rect"][2]
+                assert pair_gap == footer_gap, (pair_gap, footer_gap)
+            else:
+                assert pair_gap == 8, pair_gap
         if case == "lobby-name":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SEED["NetworkDisplayName"]
             result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", {"NetworkDisplayName"})
@@ -894,12 +1245,27 @@ def run_case(options, case, root, failing=None):
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
             assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
             # The host screen under the seeded policy: the box says auto, and is not an editable count.
-            host_setup = {c["name"]: c for c in images[-2]["controls"]}
+            host_setup = {c["name"]: c for c in images[-3]["controls"]}
             assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
             assert host_setup["TextHostInputDelay"]["enabled"] is False, host_setup["TextHostInputDelay"]
             assert host_setup["LabelHostInputDelayPolicy"]["text"] == "(auto)", host_setup["LabelHostInputDelayPolicy"]
+            assert host_setup["ComboHostActivity"]["rect"][0] == host_setup["TextHostPort"]["rect"][0], (
+                host_setup["ComboHostActivity"]["rect"], host_setup["TextHostPort"]["rect"])
+            # The disabled delay box's frame is DimRect at 55% of an enabled TextBox frame.
+            delay_luma = frame_luma(images[-3]["png"], host_setup["TextHostInputDelay"]["rect"])
+            port_luma = frame_luma(images[-3]["png"], host_setup["TextHostPort"]["rect"])
+            result["delay_frame_luma"] = delay_luma
+            result["port_frame_luma"] = port_luma
+            assert port_luma > 0, (delay_luma, port_luma)
+            ratio = delay_luma / port_luma
+            result["delay_frame_luma_ratio"] = ratio
+            assert 0.45 <= ratio <= 0.65, (delay_luma, port_luma, ratio)
             # The disabled Seats control sits in the lobby capture for the visual review.
             assert drawn["ButtonMultiplayerModerate"]["enabled"] is False, drawn["ButtonMultiplayerModerate"]
+            ipv4_status = share_status_row(images[-2], options.port)
+            ipv6_status = share_status_row(images[-1], options.port, WIDE_SHARE_HOST)
+            assert ipv6_status["word_width"] > ipv6_status["row_width"], ipv6_status
+            result["share_status"] = {"ipv4": ipv4_status, "ipv6": ipv6_status}
             # The multiplayer screen's panel centres vertically too; an odd height shifts one pixel,
             # and a panel taller than the viewport clamps to its top edge instead of centring.
             screen_rect = drawn["MultiplayerScreen"]["rect"]
@@ -928,26 +1294,88 @@ def run_case(options, case, root, failing=None):
             assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
         if case == "net-activity":
             # The combo's picked row is what the lobby carries, and both peers read the same
-            # preset and module off the wire - the client's label is the proof a bare name never was.
+            # preset, module and scene off the wire - the client's label is the proof a bare name never was.
             dumped = {}
             for who, log in logs.items():
-                rows = re.findall(r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"', log)
+                rows = re.findall(
+                    r'dump_lobby state=\S+ members=\d+ activity="([^"]*)" module="([^"]*)"'
+                    r' scene="([^"]*)" scene_module="([^"]*)"',
+                    log)
                 assert rows, (who, log[-2000:])
                 dumped[who] = rows[-1]
             assert dumped["host"] == dumped["client"], dumped
-            preset, module = dumped["host"]
+            preset, module, scene, scene_module = dumped["host"]
             assert module, dumped
-            result["lobby_activity"] = {"preset": preset, "module": module, "dumps": dumped}
-            # Three host captures carry the combo: closed on the default, dropped open, then picked.
-            picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity")
-                      for image in images if image["peer"] == "host"
-                      and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
-            assert len(picker) == 3, picker
+            assert scene and scene != "Grasslands", dumped
+            result["lobby_activity"] = {"preset": preset, "module": module, "scene": scene,
+                                        "scene_module": scene_module, "dumps": dumped}
+            host_setup = [image for image in images if image["peer"] == "host"
+                          and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
+            assert host_setup, "ComboHostActivity missing from host dumps"
+            picker = [next(c for c in image["controls"] if c["name"] == "ComboHostActivity") for image in host_setup]
+            scenes = [next(c for c in image["controls"] if c["name"] == "ComboHostScene")
+                      for image in host_setup if any(c["name"] == "ComboHostScene" for c in image["controls"])]
+            assert scenes, "ComboHostScene missing from host dumps"
             assert picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker[0]
             assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
-            assert picker[2]["text"] == f"{preset} - {module}" and picker[2]["dropped"] is False, picker[2]
+            assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
+            assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
+            assert picker[0]["item_count"] == len(picker[0].get("items", [])), picker[0]
+            # Every drawn row of the dropped list fits its name room, and only an overlong name is ellipsized.
+            for combo in (picker, scenes):
+                dropped = next(row for row in combo if row["dropped"])
+                items = dropped.get("items")
+                assert isinstance(items, list) and items, dropped
+                for item in items:
+                    room = item["name_room"]
+                    display = item["display"]
+                    assert item["drawn_width"] <= room, item
+                    if item.get("raw_width", 0) > room:
+                        assert display.endswith("...") and item["text"].startswith(display[:-3]), item
+                assert dropped["fit_width"] == min(dropped["fit_needed"], dropped["fit_clamp"]), dropped
+                assert dropped["rect"][2] == dropped["fit_width"], dropped
+            # SceneIsCompatible lives on the unfiltered census; the combo is scored against that filter.
+            assert_combo_matches_loaded_activities(picker[0], host_setup[0])
+            tutorial = next((row for row in (host_setup[0].get("game_activities") or [])
+                             if row.get("preset") == "Tutorial Mission"), None)
+            if tutorial:
+                assert tutorial.get("activity_type") == "GATutorial", tutorial
+            table = host_setup[0]["activity_table"]
+            assert table and all(row["scenes"] for row in table), table
+            brain = next(row for row in table if row["preset"] == "Brain vs Brain" and row["module"] == "Base.rte")
+            assert all(entry["name"] != "Grasslands" for entry in brain["scenes"]), brain
+            bvb_closed = []
+            for image in host_setup:
+                controls = {c["name"]: c for c in image["controls"]}
+                activity = controls.get("ComboHostActivity") or {}
+                scene_row = controls.get("ComboHostScene")
+                if (activity.get("text") == "Brain vs Brain - Base.rte" and activity.get("dropped") is False
+                        and scene_row and not scene_row["dropped"]):
+                    bvb_closed.append(scene_row)
+            assert bvb_closed, "no closed Brain vs Brain scene dump"
+            brain_scene = bvb_closed[0]
+            listed = [entry["name"] + (f" - {entry['module']}" if sum(1 for other in brain["scenes"] if other["name"] == entry["name"]) > 1
+                                       else "") for entry in brain["scenes"]]
+            assert combo_item_names(brain_scene) == listed, (combo_item_names(brain_scene), listed)
+            assert "Grasslands" not in combo_item_names(brain_scene), brain_scene
+            assert any(row["dropped"] is True for row in scenes), scenes
+            assert any(row["dropped"] is True for row in picker), picker
+            assert len(bvb_closed) >= 2, bvb_closed
+            assert bvb_closed[-1]["text"] and bvb_closed[-1]["text"] != bvb_closed[0]["text"], bvb_closed
+            assert "Grasslands" not in bvb_closed[-1]["text"], bvb_closed[-1]
+            assert all(row["text"] == "Brain vs Brain - Base.rte" or row["dropped"] for row in picker[2:]), picker
             result["picker_cycle"] = picker
+            result["scene_cycle"] = scenes
+            picked_scene = bvb_closed[-1]["text"]
+            result["picked_scene"] = picked_scene
+            key_scene = combo_name(picked_scene)
+            assert scene == key_scene, (scene, key_scene, dumped)
+            modes = [next(c for c in image["controls"] if c["name"] == "ComboHostMode")
+                     for image in images if image["peer"] == "host"
+                     and any(c["name"] == "ComboHostMode" for c in image["controls"])]
+            assert any(row["text"] == "Co-op PvE" for row in modes), modes
+            result["mode_cycle"] = modes
             # The two header rows carry the friendly mode label, and both peers' panels are the
             # same rectangle for the same lobby state - no peer's own status text widens its panel.
             panels = {}
@@ -957,14 +1385,17 @@ def run_case(options, case, root, failing=None):
                 assert len(matches) == 1, (who, [image["json"] for image in matches])
                 shot = matches[0]
                 assert [shot["activity_preset"], shot["activity_module"]] == [preset, module], shot["json"]
+                assert shot.get("scene_name") == key_scene, (who, shot.get("scene_name"), key_scene)
                 controls = {c["name"]: c for c in shot["controls"]}
                 assert controls["LabelLobbyMatch"]["text"] == f"{preset} - {module}", (who, controls["LabelLobbyMatch"])
-                assert controls["LabelLobbyMatchMode"]["text"] == "Grasslands - PvP", (who, controls["LabelLobbyMatchMode"])
+                assert controls["LabelLobbyMatchMode"]["text"] == key_scene + " - Co-op PvE", (who, controls["LabelLobbyMatchMode"], key_scene)
+                assert "Grasslands" not in controls["LabelLobbyMatchMode"]["text"], (who, controls["LabelLobbyMatchMode"])
                 for name in ("LabelLobbyMatch", "LabelLobbyMatchMode", "LabelLobbyPlayersHeader"):
                     assert controls[name]["text_fits"] is True, (who, name, controls[name])
                 panels[who] = controls["MultiplayerLobbyPanel"]["rect"]
             assert panels["host"] == panels["client"], panels
             result["lobby_panel_rects"] = panels
+            result["key_committed"] = {"preset": preset, "scene": key_scene, "combo": picked_scene}
         if case == "input":
             assert next(c["text"] for c in images[0]["controls"] if c["name"] == "TextMultiplayerName") == "ab"
         if case == "input-parity":
@@ -989,6 +1420,8 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--case", choices=(*CASES, "all"), required=True)
     parser.add_argument("--size", choices=("640x360", "960x540", "1280x720", "1920x1080"), required=True)
+    parser.add_argument("--all-sizes", action="store_true",
+                        help="also run every SIZE_GATES row; net-chat and lobby-name always do this")
     parser.add_argument("--port", type=int, required=True)
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
@@ -999,9 +1432,18 @@ def main():
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
     options.exe_sha = sha(options.repo / "Cortex Command.exe")
+    requested = options.size
+
+    def sizes_for(case):
+        sizes = [requested]
+        if options.all_sizes or case in ("net-chat", "lobby-name"):
+            sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
+        return sizes
+
     rows = []
     for case in CASES if options.case == "all" else (options.case,):
         if case == "oracles":
+            options.size = requested
             for name, command in {"visible": (LANDING, "", "assert_visible ButtonMultiplayerHostGame 0"),
                                   "focus": (LANDING, "", "assert_focus ButtonMultiplayerJoinGame"),
                                   "rect": (LANDING, "", "assert_rect_inside ButtonMultiplayerHostGame ButtonMultiplayerJoinGame"),
@@ -1009,8 +1451,10 @@ def main():
                                   "page": (OPTIONS, "select_settings_page Misc\nwait 3\n", "assert_settings_page Gameplay"),
                                   "page-name": (OPTIONS, "", "select_settings_page Nowhere")}.items():
                 rows.append(run_case(options, "landing", options.out / f"oracle-{name}" / options.size, command))
-        else:
-            rows.append(run_case(options, case, options.out / case / options.size))
+            continue
+        for size in sizes_for(case):
+            options.size = size
+            rows.append(run_case(options, case, options.out / case / size))
     result = {"pass": all(row["pass"] for row in rows), "driver_sha256": sha(__file__),
               "source_revision": options.revision, "exe_sha256": options.exe_sha, "port": options.port, "cases": rows}
     (options.out / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")

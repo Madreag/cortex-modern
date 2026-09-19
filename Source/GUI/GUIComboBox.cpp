@@ -1,6 +1,7 @@
 #include "GUI.h"
 #include "GUIComboBox.h"
 
+#include <algorithm>
 #include <cassert>
 
 using namespace RTE;
@@ -202,6 +203,82 @@ GUIPanel* GUIComboBox::GetPanel() {
 	return this;
 }
 
+void GUIComboBox::DropList() {
+	if (!m_ListPanel || m_ListPanel->_GetVisible()) {
+		return;
+	}
+	m_ListPanel->_SetVisible(true);
+	m_ListPanel->SetFocus();
+	m_ListPanel->CaptureMouse();
+	m_ListPanel->EndUpdate();
+	m_ListPanel->ChangeZPosition(TopMost);
+	if (m_ListPanel->GetSelectedIndex() >= 0 && m_ListPanel->GetSelectedIndex() < static_cast<int>(m_ListPanel->GetItemList()->size())) {
+		m_OldSelection = m_ListPanel->GetSelectedIndex();
+	}
+	AddEvent(GUIEvent::Notification, Dropped, 0);
+}
+
+void GUIComboBox::CloseDropped(bool commit) {
+	if (!m_ListPanel || !m_ListPanel->_GetVisible()) {
+		return;
+	}
+	m_ListPanel->_SetVisible(false);
+	m_ListPanel->ReleaseMouse();
+	if (m_Manager) {
+		m_Manager->SetFocus(0);
+	}
+	if (m_Button) {
+		m_Button->SetPushed(false);
+	}
+	if (!commit) {
+		m_ListPanel->SetSelectedIndex(m_OldSelection);
+	}
+	if (const GUIListPanel::Item* Item = m_ListPanel->GetSelected()) {
+		m_TextPanel->SetText(Item->m_Name);
+	} else if (commit) {
+		m_ListPanel->SetSelectedIndex(m_OldSelection);
+		if (const GUIListPanel::Item* restored = m_ListPanel->GetSelected()) {
+			m_TextPanel->SetText(restored->m_Name);
+		}
+	}
+	AddEvent(GUIEvent::Notification, Closed, 0);
+}
+
+void GUIComboBox::OnKeyDown(int KeyCode, int Modifier) {
+	if (m_ListPanel && m_ListPanel->_GetVisible()) {
+		return;
+	}
+	if (KeyCode == GUIInput::Key_Enter) {
+		DropList();
+	}
+}
+
+void GUIComboBox::OnKeyPress(int KeyCode, int Modifier) {
+	if (m_ListPanel && m_ListPanel->_GetVisible()) {
+		return;
+	}
+	if (KeyCode != GUIInput::Key_DownArrow && KeyCode != GUIInput::Key_UpArrow) {
+		return;
+	}
+	const int count = GetCount();
+	if (count <= 0) {
+		return;
+	}
+	int index = GetSelectedIndex();
+	if (index < 0) {
+		index = 0;
+	} else if (KeyCode == GUIInput::Key_DownArrow) {
+		index = std::min(index + 1, count - 1);
+	} else {
+		index = std::max(index - 1, 0);
+	}
+	if (index == GetSelectedIndex()) {
+		return;
+	}
+	SetSelectedIndex(index);
+	AddEvent(GUIEvent::Notification, Closed, 0);
+}
+
 void GUIComboBox::ReceiveSignal(GUIPanel* Source, int Code, int Data) {
 	assert(Source);
 
@@ -211,44 +288,13 @@ void GUIComboBox::ReceiveSignal(GUIPanel* Source, int Code, int Data) {
 	if (sourcePanelID == m_Button->GetPanelID()) {
 		// Clicked and list panel is not visible. open the list panel.
 		if (Code == GUIComboBoxButton::Clicked && !m_ListPanel->_GetVisible()) {
-			m_ListPanel->_SetVisible(true);
-			m_ListPanel->SetFocus();
-			m_ListPanel->CaptureMouse();
-
-			// Force a redraw
-			m_ListPanel->EndUpdate();
-
-			// Make this panel go above the rest
-			m_ListPanel->ChangeZPosition(TopMost);
-
-			// Save the current selection
-			if (m_ListPanel->GetSelectedIndex() >= 0 && m_ListPanel->GetSelectedIndex() < m_ListPanel->GetItemList()->size()) {
-				m_OldSelection = m_ListPanel->GetSelectedIndex();
-			}
-
-			AddEvent(GUIEvent::Notification, Dropped, 0);
+			DropList();
 		}
 	} else if (sourcePanelID == m_TextPanel->GetPanelID()) {
 		// Textbox
 		// MouseDown
 		if (Code == GUITextPanel::MouseDown && m_DropDownStyle == DropDownList && Data & MOUSE_LEFT) {
-			// Drop
-			m_ListPanel->_SetVisible(true);
-			m_ListPanel->SetFocus();
-			m_ListPanel->CaptureMouse();
-
-			// Force a redraw
-			m_ListPanel->EndUpdate();
-
-			// Make this panel go above the rest
-			m_ListPanel->ChangeZPosition(TopMost);
-
-			// Save the current selection
-			if (m_ListPanel->GetSelectedIndex() >= 0 && m_ListPanel->GetSelectedIndex() < m_ListPanel->GetItemList()->size()) {
-				m_OldSelection = m_ListPanel->GetSelectedIndex();
-			}
-
-			AddEvent(GUIEvent::Notification, Dropped, 0);
+			DropList();
 		}
 
 	} else if (sourcePanelID == m_ListPanel->GetPanelID()) {
@@ -259,39 +305,24 @@ void GUIComboBox::ReceiveSignal(GUIPanel* Source, int Code, int Data) {
 			return;
 		}
 
+		if (Code == GUIListPanel::KeyDown) {
+			if (Data == GUIInput::Key_Enter) {
+				CloseDropped(true);
+			} else if (Data == GUIInput::Key_Escape) {
+				CloseDropped(false);
+			}
+			return;
+		}
+
 		int mouseX = 0;
 		int mouseY = 0;
 		m_Manager->GetInputController()->GetMousePosition(&mouseX, &mouseY);
 		// Mouse down anywhere outside the list panel.
 		if (Code == GUIListPanel::Click) {
-			// Hide the list panel
-			m_ListPanel->_SetVisible(false);
-			m_ListPanel->ReleaseMouse();
-			m_Manager->SetFocus(0);
-			m_Button->SetPushed(false);
-
-			// Restore the old selection
-			m_ListPanel->SetSelectedIndex(m_OldSelection);
-
-			AddEvent(GUIEvent::Notification, Closed, 0);
+			CloseDropped(false);
 		} else if (Code == GUIListPanel::MouseUp && m_ListPanel->PointInsideList(mouseX, mouseY)) {
 			// Select on mouse up instead of down so we don't accidentally click stuff behind the disappearing listbox immediately after. Also only work if inside the actual list, and not its scrollbars.
-			// Hide the list panel
-			m_ListPanel->_SetVisible(false);
-			m_ListPanel->ReleaseMouse();
-			m_Manager->SetFocus(0);
-			m_Button->SetPushed(false);
-
-			AddEvent(GUIEvent::Notification, Closed, 0);
-
-			// Set the text to the item in the list panel
-			GUIListPanel::Item* Item = m_ListPanel->GetSelected();
-			if (Item) {
-				m_TextPanel->SetText(Item->m_Name);
-			} else {
-				// Restore the old selection
-				m_ListPanel->SetSelectedIndex(m_OldSelection);
-			}
+			CloseDropped(true);
 		}
 
 		if (m_DropDownStyle == DropDownList) {
@@ -462,9 +493,6 @@ bool GUIComboBox::GetEnabled() {
 }
 
 std::string GUIComboBox::GetText() {
-	if (m_DropDownStyle != DropDown) {
-		return "";
-	}
 	if (m_TextPanel) {
 		return m_TextPanel->GetText();
 	}
@@ -472,7 +500,7 @@ std::string GUIComboBox::GetText() {
 }
 
 void GUIComboBox::SetText(const std::string& Text) {
-	if (m_DropDownStyle == DropDown && m_TextPanel) {
+	if (m_TextPanel) {
 		m_TextPanel->SetText(Text);
 	}
 }

@@ -266,9 +266,16 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// The reserved word carries the dedicated flag and the persistent world; old builds refuse the nonzero word.
-			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0) |
-			                                      (config.persistentWorld ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0)));
+			// Reserved bit 0 is dedicated; bit 1 means the path-horizon U16 follows the host-options
+			// tail; bit 2 is the persistent world. An older build refuses a word it does not know.
+			uint16_t reserved = config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0;
+			if (config.version >= 3 && config.pathHorizonTicks != 0) {
+				reserved |= NetMatchConfigUtil::c_ReservedPathHorizonBit;
+			}
+			if (config.persistentWorld) {
+				reserved |= NetMatchConfigUtil::c_ReservedPersistentWorldBit;
+			}
+			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -310,6 +317,9 @@ namespace RTE {
 				AppendU8(out, config.idleWaitMinutes);
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
+				if (config.pathHorizonTicks != 0) {
+					AppendU16LE(out, config.pathHorizonTicks);
+				}
 				if (config.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
 					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
 					AppendU64LE(out, config.worldBoot);
@@ -403,6 +413,14 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+				out.pathHorizonTicks = 0;
+				if ((reserved & NetMatchConfigUtil::c_ReservedPathHorizonBit) != 0) {
+					if (!ReadOrTruncated(reader.ReadU16LE(out.pathHorizonTicks), reader, error, "path horizon")) return false;
+					if (out.pathHorizonTicks == 0) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "path horizon present bit requires a nonzero horizon");
+						return false;
+					}
+				}
 				out.worldId.clear();
 				out.worldBoot = 0;
 				if (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
@@ -513,6 +531,14 @@ namespace RTE {
 			return true;
 		}
 
+		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
+			if (peerId > NetLobbyProtocol::c_MaxPeers) {
+				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error, bool allowRecordedVersions) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
@@ -521,6 +547,7 @@ namespace RTE {
 					if (!ReadOrTruncated(reader.ReadU16LE(payload.minProtocolVersion), reader, error, "min_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU16LE(payload.maxProtocolVersion), reader, error, "max_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "reserved field must be zero");
@@ -535,6 +562,7 @@ namespace RTE {
 					NetLobbyPeerState payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU32LE(payload.pingMs), reader, error, "ping_ms") ||
@@ -559,6 +587,7 @@ namespace RTE {
 					NetLobbyConfigAck payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.accepted), reader, error, "accepted") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadHash(payload.matchConfigHash), reader, error, "match_config_hash")) return false;
@@ -574,6 +603,7 @@ namespace RTE {
 					NetLobbyReady payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
@@ -603,6 +633,7 @@ namespace RTE {
 					uint8_t reserved8 = 0;
 					uint16_t reserved16 = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved8), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved")) return false;
 					if (reserved8 != 0 || reserved16 != 0) {

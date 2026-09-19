@@ -69,6 +69,8 @@ namespace RTE {
 
 		/// Draws the MainMenuGUI to the screen.
 		void Draw();
+		/// Reopens the browser after playback releases its activity and input stream.
+		void ReturnToReplayBrowser(const std::string& status);
 
 		/// §11: reads the recovery record on the way into the main menu and, when one applies, opens the
 		/// multiplayer screen's landing panel on the offer instead of leaving the player to find it.
@@ -91,6 +93,9 @@ namespace RTE {
 
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
+
+		/// Pins the lobby share-address host the status row draws.
+		void AutomationSetShareAddress(const std::string& address);
 
 		/// Sets a checkbox's state by control name, then runs the same change path a click would.
 		bool AutomationSetCheck(const std::string& controlName, bool checked);
@@ -164,6 +169,14 @@ namespace RTE {
 			MultiplayerModerateButton,
 			MultiplayerModerationBackButton,
 			SaveDiagnosticsButton,
+			LastMatchDetailsButton,
+			LastMatchCloseButton,
+			MultiplayerReplaysButton,
+			ReplayPlayButton,
+			ReplayDeleteButton,
+			ReplayBackButton,
+			ReplayDeleteConfirmButton,
+			ReplayDeleteCancelButton,
 			PlayTutorialButton,
 			MetaGameContinueButton,
 			QuitConfirmButton,
@@ -182,7 +195,8 @@ namespace RTE {
 			HostSetup,
 			JoinSetup,
 			Lobby,
-			Moderation
+			Moderation,
+			ReplayBrowser
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -219,19 +233,39 @@ namespace RTE {
 		GUILabel* m_MultiplayerLandingStatusLabel;
 		GUILabel* m_MultiplayerLobbyMatchLabel;
 		GUILabel* m_MultiplayerLobbyMatchModeLabel = nullptr; //!< The header's second row: scene and friendly mode.
+		GUILabel* m_LastMatchSummaryLabel;
+		GUILabel* m_LastMatchDetailsLabel;
+		GUICollectionBox* m_LastMatchDialog;
+		GUICollectionBox* m_ReplayBrowserPanel;
+		GUICollectionBox* m_ReplayDeleteDialog;
+		GUIListBox* m_ReplayList;
+		GUILabel* m_ReplaySelectedLabel;
+		GUILabel* m_ReplayStatusLabel;
+		GUILabel* m_ReplayDeleteLabel;
+		struct ReplayRow {
+			std::string path;
+			std::string text;
+			std::string error;
+		};
+		std::vector<ReplayRow> m_ReplayRows;
+		std::string m_ReplayDeletePath;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
-		GUIButton* m_MultiplayerHostModeButton;
+		GUIComboBox* m_MultiplayerHostModeCombo = nullptr; //!< PvP / Co-op PvE / PvPvE for request.mode.
 		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
+		GUIComboBox* m_MultiplayerHostSceneCombo = nullptr; //!< Compatible scenes for the picked activity.
 		GUILabel* m_MultiplayerHostInfoLabel;
-		// (preset, defining module) for each scripted activity a lockstep match can run; the module is
+		// (preset, defining module) for each GameActivity a lockstep match can run; the module is
 		// carried so a same-named preset in another module cannot swap in silently.
 		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostActivities;
 		size_t m_MultiplayerHostActivityIndex = 0;
+		std::vector<std::pair<std::string, std::string>> m_MultiplayerHostScenes;
+		size_t m_MultiplayerHostSceneIndex = 0;
+		std::string m_MultiplayerHostPickNotice; //!< Vanished-pick line; empty when the current row still exists.
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
@@ -386,6 +420,16 @@ namespace RTE {
 
 		/// Refreshes the multiplayer sub-panels, labels, and button states from the lobby snapshot.
 		void RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot);
+		/// Opens the finished round's summary using the menu's modal overlay.
+		void ShowLastMatchDetails();
+		/// Restricts input to a multiplayer dialog until it closes.
+		void OpenMultiplayerDialog(GUICollectionBox* dialog, const GUICollectionBox* owner);
+		void CloseMultiplayerDialog();
+		/// Enumerates replay headers and preserves the selected filename across refreshes.
+		void RefreshReplayList();
+		void RefreshReplayBrowserControls();
+		void PlaySelectedReplay();
+		void ConfirmReplayDelete();
 		/// Rebuilds §9b's moderation panel from the host's live seat view.
 		void RefreshModerationControls(const NetLobbySnapshot& snapshot);
 		/// The one path a moderation action takes, whether a player clicked it or a gate drove it.
@@ -409,7 +453,11 @@ namespace RTE {
 
 		/// Rebuilds the host activity picker's choices from the loaded presets, keeping the current pick.
 		void RefreshMultiplayerHostActivities();
-		/// Writes the picked activity's preset and module onto the setup screen's own display.
+		/// Rebuilds the scene list for the picked activity, keeping the current scene when it is still compatible.
+		void RefreshMultiplayerHostScenes();
+		/// Sizes the activity and scene combos to their own longest row plus the list pad and scrollbar, clipped to the panel's right pad; the mode combo follows the activity's width.
+		void FitHostActivityCombo();
+		/// Writes the picked activity and scene onto the setup screen's own display.
 		void ApplyMultiplayerHostActivity();
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.
 		void StartMultiplayer(bool host);

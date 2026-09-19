@@ -10,6 +10,7 @@
 #include "NetActivitySetup.h"
 #include "NetMatchService.h"
 #include "NetIdentity.h"
+#include "NetMatchReplay.h"
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
@@ -17,6 +18,7 @@
 #include "TelemetryBundle.h"
 
 #include "Activity.h"
+#include "AllegroTools.h"
 #include "Entity.h"
 #include "GameVersion.h"
 
@@ -30,20 +32,132 @@
 #include "GUITextBox.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
+#include "GUIListPanel.h"
 
 #include "Resources/Credits.h"
 
 #include <algorithm>
+#include <map>
 #include <chrono>
+#include <charconv>
+#include <cctype>
 #include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 using namespace RTE;
 
+// Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+static bool Cp1252FromCodepoint(int codepoint, char& out) {
+	if (codepoint < 0) {
+		return false;
+	}
+	if (codepoint < 0x80 || (codepoint >= 0xA0 && codepoint <= 0xFF)) {
+		out = static_cast<char>(codepoint);
+		return true;
+	}
+	switch (codepoint) {
+		case 0x20AC: out = static_cast<char>(0x80); return true;
+		case 0x201A: out = static_cast<char>(0x82); return true;
+		case 0x0192: out = static_cast<char>(0x83); return true;
+		case 0x201E: out = static_cast<char>(0x84); return true;
+		case 0x2026: out = static_cast<char>(0x85); return true;
+		case 0x2020: out = static_cast<char>(0x86); return true;
+		case 0x2021: out = static_cast<char>(0x87); return true;
+		case 0x02C6: out = static_cast<char>(0x88); return true;
+		case 0x2030: out = static_cast<char>(0x89); return true;
+		case 0x0160: out = static_cast<char>(0x8A); return true;
+		case 0x2039: out = static_cast<char>(0x8B); return true;
+		case 0x0152: out = static_cast<char>(0x8C); return true;
+		case 0x017D: out = static_cast<char>(0x8E); return true;
+		case 0x2018: out = static_cast<char>(0x91); return true;
+		case 0x2019: out = static_cast<char>(0x92); return true;
+		case 0x201C: out = static_cast<char>(0x93); return true;
+		case 0x201D: out = static_cast<char>(0x94); return true;
+		case 0x2022: out = static_cast<char>(0x95); return true;
+		case 0x2013: out = static_cast<char>(0x96); return true;
+		case 0x2014: out = static_cast<char>(0x97); return true;
+		case 0x02DC: out = static_cast<char>(0x98); return true;
+		case 0x2122: out = static_cast<char>(0x99); return true;
+		case 0x0161: out = static_cast<char>(0x9A); return true;
+		case 0x203A: out = static_cast<char>(0x9B); return true;
+		case 0x0153: out = static_cast<char>(0x9C); return true;
+		case 0x017E: out = static_cast<char>(0x9E); return true;
+		case 0x0178: out = static_cast<char>(0x9F); return true;
+		default: return false;
+	}
+}
+
+static int NextUtf8Codepoint(const std::string& text, size_t& index) {
+	const unsigned char lead = static_cast<unsigned char>(text[index]);
+	if (lead < 0x80) {
+		++index;
+		return lead;
+	}
+	size_t need = 0;
+	int codepoint = 0;
+	if ((lead & 0xE0) == 0xC0) {
+		need = 1;
+		codepoint = lead & 0x1F;
+	} else if ((lead & 0xF0) == 0xE0) {
+		need = 2;
+		codepoint = lead & 0x0F;
+	} else if ((lead & 0xF8) == 0xF0) {
+		need = 3;
+		codepoint = lead & 0x07;
+	} else {
+		++index;
+		return -1;
+	}
+	if (index + 1 + need > text.size()) {
+		++index;
+		return -1;
+	}
+	for (size_t trail = 1; trail <= need; ++trail) {
+		const unsigned char byte = static_cast<unsigned char>(text[index + trail]);
+		if ((byte & 0xC0) != 0x80) {
+			++index;
+			return -1;
+		}
+		codepoint = (codepoint << 6) | (byte & 0x3F);
+	}
+	index += 1 + need;
+	return codepoint;
+}
+
+static std::string Utf8ToCp1252(const std::string& utf8) {
+	std::string out;
+	out.reserve(utf8.size());
+	for (size_t index = 0; index < utf8.size();) {
+		char mapped = '?';
+		if (!Cp1252FromCodepoint(NextUtf8Codepoint(utf8, index), mapped)) {
+			mapped = '?';
+		}
+		out.push_back(mapped);
+	}
+	return out;
+}
+
 // The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
 static std::string SavedMultiplayerName() {
 	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
+}
+
+bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
+
+static std::string s_ShareAddress;
+static bool s_ShareResolved = false;
+
+static std::optional<size_t> ReplayRowIndex(const std::string& name) {
+	const std::string prefix = "LabelReplayRow";
+	if (!name.starts_with(prefix)) return std::nullopt;
+	size_t index = 0;
+	const auto [end, error] = std::from_chars(name.data() + prefix.size(), name.data() + name.size(), index);
+	return error == std::errc{} && end == name.data() + name.size() ? std::optional<size_t>(index) : std::nullopt;
 }
 
 void MainMenuGUI::Clear() {
@@ -72,17 +186,32 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerErrorLabel = nullptr;
 	m_MultiplayerLandingStatusLabel = nullptr;
 	m_MultiplayerLobbyMatchLabel = nullptr;
+	m_LastMatchSummaryLabel = nullptr;
+	m_LastMatchDetailsLabel = nullptr;
+	m_LastMatchDialog = nullptr;
+	m_ReplayBrowserPanel = nullptr;
+	m_ReplayDeleteDialog = nullptr;
+	m_ReplayList = nullptr;
+	m_ReplaySelectedLabel = nullptr;
+	m_ReplayStatusLabel = nullptr;
+	m_ReplayDeleteLabel = nullptr;
+	m_ReplayRows.clear();
+	m_ReplayDeletePath.clear();
 	m_MultiplayerNameTextBox = nullptr;
 	m_MultiplayerHostPortTextBox = nullptr;
 	m_MultiplayerHostPlayersTextBox = nullptr;
 	m_MultiplayerHostInputDelayTextBox = nullptr;
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
-	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostModeCombo = nullptr;
 	m_MultiplayerHostActivityCombo = nullptr;
+	m_MultiplayerHostSceneCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
 	m_MultiplayerHostActivities.clear();
 	m_MultiplayerHostActivityIndex = 0;
+	m_MultiplayerHostScenes.clear();
+	m_MultiplayerHostSceneIndex = 0;
+	m_MultiplayerHostPickNotice.clear();
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
@@ -225,9 +354,17 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
-	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
+	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
 	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
+	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostScene"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->ClearList();
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::CoopPvE));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPvE));
+		m_MultiplayerHostModeCombo->SetSelectedIndex(0);
+	}
 	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
@@ -242,6 +379,24 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerLandingStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelMultiplayerLandingStatus"));
 	m_MultiplayerLobbyMatchLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatch"));
 	m_MultiplayerLobbyMatchModeLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyMatchMode"));
+	m_LastMatchSummaryLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLastMatchSummary"));
+	m_LastMatchDetailsLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLastMatchDetails"));
+	m_LastMatchDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("LastMatchDialog"));
+	m_MainMenuButtons[MenuButton::LastMatchDetailsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchDetails"));
+	m_MainMenuButtons[MenuButton::LastMatchCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLastMatchClose"));
+	m_ReplayBrowserPanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayBrowserPanel"));
+	m_ReplayDeleteDialog = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("ReplayDeleteDialog"));
+	m_ReplayList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListReplays"));
+	m_ReplaySelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplaySelected"));
+	m_ReplayStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayStatus"));
+	m_ReplayDeleteLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelReplayDelete"));
+	m_MainMenuButtons[MenuButton::MultiplayerReplaysButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReplays"));
+	m_MainMenuButtons[MenuButton::ReplayPlayButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayPlay"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDelete"));
+	m_MainMenuButtons[MenuButton::ReplayBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayBack"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteConfirm"));
+	m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonReplayDeleteCancel"));
+	m_ReplayList->SetHighlightAsIfAlwaysFocused(true);
 	m_MultiplayerLobbyPlayerLabels[0] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer0"));
 	m_MultiplayerLobbyPlayerLabels[1] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer1"));
 	m_MultiplayerLobbyPlayerLabels[2] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelLobbyPlayer2"));
@@ -256,6 +411,15 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	// They are created here rather than in the ini so the panel can grow for them without touching
 	// the skin the other sub-screens share.
 	GUIFont* chatFont = m_SubMenuScreenGUIControlManager->GetSkin() ? m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png") : nullptr;
+	if (chatFont) {
+		m_LastMatchSummaryLabel->SetFont(chatFont);
+		m_LastMatchDetailsLabel->SetFont(chatFont);
+		m_ReplaySelectedLabel->SetFont(chatFont);
+		m_ReplayStatusLabel->SetFont(chatFont);
+		m_ReplayDeleteLabel->SetFont(chatFont);
+	}
+	m_LastMatchSummaryLabel->SetHorizontalOverflowScroll(true);
+	m_LastMatchSummaryLabel->ActivateDeactivateOverflowScroll(true);
 	for (size_t row = 0; row < m_MultiplayerLobbyChatLabels.size(); ++row) {
 		m_MultiplayerLobbyChatLabels[row] = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->AddControl(
 		    "LabelLobbyChat" + std::to_string(row), "LABEL", m_MultiplayerLobbyPanel, 8, 0, 284, 10));
@@ -336,16 +500,11 @@ void MainMenuGUI::CreateCreditsScreen() {
 
 	m_CreditsTextLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("CreditsLabel"));
 
-	// TODO: Get Unicode going!
-	// Hack here to change the special characters over 128 in the ANSI ASCII table to match our font files
-	for (char& stringChar: s_CreditsText) {
-		if (stringChar == -60) {
-			stringChar = static_cast<unsigned char>(142); //'Ä'
-		} else if (stringChar == -42) {
-			stringChar = static_cast<unsigned char>(153); //'Ö'
-		} else if (stringChar == -87) {
-			stringChar = static_cast<unsigned char>(221); //'©'
-		}
+	// Credits.h is UTF-8; transcode to cp1252 so the menu Latin-1 atlas draws the letters.
+	static bool s_CreditsAreCp1252 = false;
+	if (!s_CreditsAreCp1252) {
+		s_CreditsText = Utf8ToCp1252(s_CreditsText);
+		s_CreditsAreCp1252 = true;
 	}
 	m_CreditsTextLabel->SetText(s_CreditsText);
 	m_CreditsTextLabel->ResizeHeightToFit();
@@ -360,6 +519,7 @@ void MainMenuGUI::CreateQuitScreen() {
 }
 
 void MainMenuGUI::HideAllScreens() {
+	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog)) CloseMultiplayerDialog();
 	for (GUICollectionBox* menuScreen: m_MainMenuScreens) {
 		if (menuScreen) {
 			menuScreen->SetVisible(false);
@@ -592,6 +752,14 @@ void MainMenuGUI::OfferRematchLobbyOnEntry() {
 }
 
 void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_ActiveDialogBox && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
+		CloseMultiplayerDialog();
+		return;
+	}
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser && g_UInputMan.KeyPressed(SDLK_ESCAPE)) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		return;
+	}
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {
 			if (m_ActiveMenuScreen == MenuScreen::SettingsScreen || m_ActiveMenuScreen == MenuScreen::ModManagerScreen) {
@@ -630,6 +798,11 @@ bool MainMenuGUI::HandleInputEvents() {
 
 	GUIEvent guiEvent;
 	while (m_ActiveGUIControlManager->GetEvent(&guiEvent)) {
+		if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_ActiveDialogBox) {
+			GUIControl* node = guiEvent.GetControl();
+			while (node && node != m_ActiveDialogBox) node = node->GetParent();
+			if (!node) continue;
+		}
 		if (guiEvent.GetType() == GUIEvent::Notification && dynamic_cast<GUIButton*>(guiEvent.GetControl())) {
 			for (size_t row = 0; row < m_ModerationSeatLabels.size(); ++row) {
 				const auto* control = guiEvent.GetControl();
@@ -667,9 +840,11 @@ bool MainMenuGUI::HandleInputEvents() {
 			}
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetMsg() == GUIButton::Focused && dynamic_cast<GUIButton*>(guiEvent.GetControl()))) {
 			g_GUISound.SelectionChangeSound()->Play();
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetControl() == m_MultiplayerLanGamesList) {
+		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed && guiEvent.GetControl() == m_MultiplayerHostActivityCombo) {
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed &&
+		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostSceneCombo ||
+		            guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -736,6 +911,40 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
 	if (guiEventControl == m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]) {
 		if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::LastMatchDetailsButton]) {
+		ShowLastMatchDetails();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::LastMatchCloseButton]) {
+		CloseMultiplayerDialog();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReplaysButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::ReplayBrowser;
+		RefreshReplayBrowserControls();
+		RefreshReplayList();
+		m_ReplayList->SetFocus();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayPlayButton]) {
+		PlaySelectedReplay();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteButton]) {
+		const int selected = m_ReplayList->GetSelectedIndex();
+		if (selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size()) {
+			m_ReplayDeletePath = m_ReplayRows[selected].path;
+			m_ReplayDeleteLabel->SetText("Delete " + std::filesystem::path(m_ReplayDeletePath).filename().string() + "?\nThis removes the replay file.");
+			const int width = m_ReplayBrowserPanel->GetWidth();
+			m_ReplayDeleteLabel->Resize(width - 24, 88);
+			const int height = std::max(104, m_ReplayDeleteLabel->GetTextHeight() + 64);
+			m_ReplayDeleteDialog->Resize(width, height);
+			m_ReplayDeleteLabel->Resize(width - 24, height - 64);
+			m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]->SetPositionRel(width / 2 - 132, height - 34);
+			m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton]->SetPositionRel(width / 2 + 12, height - 34);
+			OpenMultiplayerDialog(m_ReplayDeleteDialog, m_ReplayBrowserPanel);
+			m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]->SetFocus();
+		}
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteConfirmButton]) {
+		ConfirmReplayDelete();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayDeleteCancelButton]) {
+		CloseMultiplayerDialog();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ReplayBackButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+	} else if (guiEventControl == m_ReplayList) {
+		RefreshReplayBrowserControls();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostGameButton]) {
 		m_MultiplayerLandingStatusLabel->SetText("");
 		// The saved policy is re-read here, the way the port-map box is, so a settings change is not stale.
@@ -760,19 +969,29 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_SettingsMan.SetNetworkPortMapEnable(m_MultiplayerHostPortMapCheckbox->GetCheck() == GUICheckbox::Checked);
 		g_SettingsMan.UpdateSettingsFile();
 		g_GUISound.ItemChangeSound()->Play();
-	} else if (guiEventControl == m_MultiplayerHostModeButton) {
-		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
-		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
-		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
-		m_MultiplayerHostModeButton->SetText(modeText);
+	} else if (guiEventControl == m_MultiplayerHostModeCombo) {
+		const int selected = m_MultiplayerHostModeCombo ? m_MultiplayerHostModeCombo->GetSelectedIndex() : -1;
+		static const NetMatchMode modes[] = {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE};
+		if (selected >= 0 && selected < 3) {
+			m_MultiplayerHostMode = modes[selected];
+		}
 		ApplyMultiplayerHostActivity();
-		g_GUISound.ButtonPressSound()->Play();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MultiplayerHostActivityCombo) {
 		// A closed pick-list carries its selection; the index is the request fields' source.
 		const int selected = m_MultiplayerHostActivityCombo ? m_MultiplayerHostActivityCombo->GetSelectedIndex() : -1;
 		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostActivities.size()) {
 			m_MultiplayerHostActivityIndex = static_cast<size_t>(selected);
 		}
+		m_MultiplayerHostPickNotice.clear();
+		RefreshMultiplayerHostScenes();
+		g_GUISound.ItemChangeSound()->Play();
+	} else if (guiEventControl == m_MultiplayerHostSceneCombo) {
+		const int selected = m_MultiplayerHostSceneCombo ? m_MultiplayerHostSceneCombo->GetSelectedIndex() : -1;
+		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostScenes.size()) {
+			m_MultiplayerHostSceneIndex = static_cast<size_t>(selected);
+		}
+		m_MultiplayerHostPickNotice.clear();
 		ApplyMultiplayerHostActivity();
 		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
@@ -866,25 +1085,28 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 }
 
 void MainMenuGUI::RefreshMultiplayerHostActivities() {
-	// The host's picker offers the scripted activities a lockstep match can run, each pinned to the
-	// module that defines it so a same-named preset elsewhere cannot swap in silently. The presets do
-	// not exist until the modules load, so the list is built on entry to the host setup screen.
+	// Same walk as the scenario menu: every GameActivity that is not a test and has a compatible scene.
 	const std::pair<std::string, std::string> current =
 		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"P4 Alpha Duel", "Base.rte"};
+	const bool hadPick = !m_MultiplayerHostActivities.empty();
 	m_MultiplayerHostActivities.clear();
-	std::list<Entity*> presets;
-	if (g_PresetMan.GetAllOfType(presets, "Activity")) {
-		for (const Entity* entity: presets) {
-			const auto* activity = dynamic_cast<const Activity*>(entity);
-			if (!activity || activity->GetClassName() != "GAScripted" || activity->IsTestActivity()) continue;
-			m_MultiplayerHostActivities.emplace_back(activity->GetPresetName(), g_PresetMan.GetDataModuleName(activity->GetModuleID()));
-		}
+	for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+		m_MultiplayerHostActivities.emplace_back(row.preset, row.module);
 	}
 	m_MultiplayerHostActivityIndex = 0;
+	bool found = false;
 	for (size_t i = 0; i < m_MultiplayerHostActivities.size(); ++i) {
 		if (m_MultiplayerHostActivities[i] == current) {
 			m_MultiplayerHostActivityIndex = i;
+			found = true;
 		}
+	}
+	if (hadPick && !found && !m_MultiplayerHostActivities.empty()) {
+		m_MultiplayerHostPickNotice = current.first + " is no longer loaded; picked " +
+		                             m_MultiplayerHostActivities[0].first +
+		                             (m_MultiplayerHostActivities[0].second.empty() ? "" : " - " + m_MultiplayerHostActivities[0].second);
+	} else if (found) {
+		m_MultiplayerHostPickNotice.clear();
 	}
 	if (m_MultiplayerHostActivityCombo) {
 		m_MultiplayerHostActivityCombo->ClearList();
@@ -892,7 +1114,102 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
+	RefreshMultiplayerHostScenes();
+}
+
+void MainMenuGUI::RefreshMultiplayerHostScenes() {
+	const std::pair<std::string, std::string> current =
+		m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size() ? m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : std::pair<std::string, std::string>{};
+	const std::string preset = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first : "P4 Alpha Duel";
+	const std::string module = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second : "Base.rte";
+	m_MultiplayerHostScenes.clear();
+	for (const NetHostSceneChoice& row: g_NetMatchService.ListHostScenes(preset, module)) {
+		m_MultiplayerHostScenes.emplace_back(row.name, row.module);
+	}
+	m_MultiplayerHostSceneIndex = 0;
+	bool found = false;
+	for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+		if (!current.first.empty() && m_MultiplayerHostScenes[i] == current) {
+			m_MultiplayerHostSceneIndex = i;
+			found = true;
+		}
+	}
+	if (!found) {
+		for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+			if (m_MultiplayerHostScenes[i].first == "Grasslands") {
+				m_MultiplayerHostSceneIndex = i;
+				break;
+			}
+		}
+	}
+	if (m_MultiplayerHostSceneCombo) {
+		m_MultiplayerHostSceneCombo->ClearList();
+		std::map<std::string, int> names;
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			++names[name];
+		}
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			m_MultiplayerHostSceneCombo->AddItem(name + (names[name] > 1 && !sceneModule.empty() ? " - " + sceneModule : ""));
+		}
+	}
+	FitHostActivityCombo();
 	ApplyMultiplayerHostActivity();
+}
+
+void MainMenuGUI::FitHostActivityCombo() {
+	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
+		return;
+	}
+	constexpr int namePad = 8;
+	constexpr int scrollThickness = 17;
+	constexpr int panelPad = 12;
+	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX - panelPad);
+	// Every picker in the value column is measured the same way: its own longest row plus the list
+	// pad and, when the rows overflow the drop, the scrollbar.
+	const auto fit = [&](GUIComboBox* combo) {
+		GUIListPanel* list = combo->GetListPanel();
+		GUIFont* font = list ? list->GetFont() : nullptr;
+		if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
+			GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
+			std::string fontName;
+			if (skin->GetValue("Listbox", "Font", &fontName)) {
+				font = skin->GetFont(fontName);
+			}
+			if (!font) {
+				font = skin->GetFont("FontLarge.png");
+			}
+		}
+		int longest = 0;
+		if (font) {
+			for (int i = 0; i < combo->GetCount(); ++i) {
+				if (const GUIListPanel::Item* item = combo->GetItem(i)) {
+					longest = std::max(longest, font->CalculateWidth(item->m_Name));
+				}
+			}
+		}
+		const int rowHeight = font ? font->GetFontHeight() : 0;
+		const int stackHeight = std::max(list ? list->GetStackHeight() : 0, rowHeight * combo->GetCount());
+		const int scroll = (rowHeight > 0 && stackHeight > combo->GetDropHeight()) ? scrollThickness : 0;
+		const int needed = longest > 0 ? longest + namePad + scroll : combo->GetWidth();
+		const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
+		combo->SetPositionRel(valueX, combo->GetRelYPos());
+		if (combo->GetWidth() != width) {
+			combo->Resize(width, combo->GetHeight());
+		}
+		return width;
+	};
+	const int activityWidth = fit(m_MultiplayerHostActivityCombo);
+	if (m_MultiplayerHostSceneCombo) {
+		fit(m_MultiplayerHostSceneCombo);
+	}
+	// The mode rows are short words, so the mode picker follows the activity picker's width.
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->SetPositionRel(valueX, m_MultiplayerHostModeCombo->GetRelYPos());
+		if (m_MultiplayerHostModeCombo->GetWidth() != activityWidth) {
+			m_MultiplayerHostModeCombo->Resize(activityWidth, m_MultiplayerHostModeCombo->GetHeight());
+		}
+	}
 }
 
 void MainMenuGUI::ApplyMultiplayerHostActivity() {
@@ -908,8 +1225,26 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
+	const auto* scene = m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()
+	                        ? &m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : nullptr;
+	const std::string sceneName = scene ? scene->first : "Grasslands";
+	if (m_MultiplayerHostSceneCombo) {
+		if (scene) {
+			m_MultiplayerHostSceneCombo->SetSelectedIndex(static_cast<int>(m_MultiplayerHostSceneIndex));
+		} else {
+			m_MultiplayerHostSceneCombo->SetText(sceneName);
+		}
+	}
+	if (m_MultiplayerHostModeCombo) {
+		const int modeIndex = m_MultiplayerHostMode == NetMatchMode::CoopPvE ? 1 : (m_MultiplayerHostMode == NetMatchMode::PvPvE ? 2 : 0);
+		m_MultiplayerHostModeCombo->SetSelectedIndex(modeIndex);
+	}
 	if (m_MultiplayerHostInfoLabel) {
-		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+		if (!m_MultiplayerHostPickNotice.empty()) {
+			m_MultiplayerHostInfoLabel->SetText(m_MultiplayerHostPickNotice);
+		} else {
+			m_MultiplayerHostInfoLabel->SetText(sceneName + " - " + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+		}
 	}
 }
 
@@ -949,6 +1284,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
+	request.activityModule = "Base.rte";
 	if (!host) {
 		bool targetWorld = m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World";
 		if (!targetWorld) {
@@ -973,6 +1309,19 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// The host's picker names both fields, so the lobby never resolves a bare preset name.
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+			if (row.preset == request.activityPreset && row.module == request.activityModule) {
+				request.activityType = row.activityType;
+				break;
+			}
+		}
+	}
+	if (host && m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
+		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;
+		request.sceneModule = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].second;
+	}
+	if (host) {
+		NetMatchService::ApplyHostActivityFallback(request);
 	}
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
@@ -1210,12 +1559,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
+	const auto summary = g_NetMatchService.GetLastMatchSummary();
+	m_LastMatchSummaryLabel->SetText(summary ? summary->LineText() : "");
+	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
+	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
+	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetEnabled(summary.has_value());
+	if (!summary) m_LastMatchDetailsLabel->SetText("");
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
 	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
 	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
 	m_MultiplayerModerationPanel->SetVisible(moderating);
+	m_ReplayBrowserPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
 	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
@@ -1228,8 +1584,15 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (m_MultiplayerLobbyChatInput) {
 			m_MultiplayerLobbyChatInput->SetVisible(false);
 		}
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) {
+			RefreshReplayBrowserControls();
+			return;
+		}
 		int contentWidth = 300;
 		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
+			contentHeight = m_MultiplayerHostPanel->GetHeight();
+		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
 			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
@@ -1316,8 +1679,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowTailBare[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
-	static std::string s_shareAddress;
-	static bool s_shareResolved = false;
+	const int contentWidth = 300;
+	const int rowBoxWidth = contentWidth - 24;
+	bool addressOnOwnRow = false;
 	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
 	// a played match already carries its own line - the result and the rematch offer - like the client's.
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
@@ -1328,15 +1692,36 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 		if (connectedCount < 2) {
-			if (!s_shareResolved) {
-				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
-				s_shareResolved = true;
+			if (!s_ShareResolved) {
+				s_ShareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+				s_ShareResolved = true;
 			}
-			m_MultiplayerStatusLabel->SetText(s_shareAddress.empty()
-			                                      ? "Waiting for a player to join..."
-			                                      : "Waiting for a player to join... share " + s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
+			if (s_ShareAddress.empty()) {
+				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+			} else {
+				const std::string address = s_ShareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
+				std::string prose = "Waiting for a player to join... share";
+				// The status label's skin font is FontLarge; draw and measure the share row in FontSmall.
+				if (m_MultiplayerLobbyPlayerRowFallbackFont) {
+					m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+					m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
+				}
+				if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont) {
+					if (font->CalculateWidth(prose) > rowBoxWidth) {
+						while (!prose.empty() && font->CalculateWidth(prose + "...") > rowBoxWidth) {
+							prose.pop_back();
+						}
+						prose += "...";
+					}
+				}
+				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
+				addressOnOwnRow = true;
+				const bool addressScrolls = m_MultiplayerStatusLabel->GetMaxWordWidth() > rowBoxWidth;
+				m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(addressScrolls);
+				m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(addressScrolls);
+			}
 		} else {
-			s_shareResolved = false;
+			s_ShareResolved = false;
 			if (connectedCount < snapshot.members.size()) {
 				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
 			} else {
@@ -1344,14 +1729,17 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 	} else {
-		s_shareResolved = false;
+		s_ShareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	}
+	if (!addressOnOwnRow) {
+		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
+		m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(false);
 	}
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
-	const int contentWidth = 300;
-	const int rowBoxWidth = contentWidth - 24;
-	if (m_MultiplayerLobbyPlayerRowFont) {
+	if (!addressOnOwnRow && m_MultiplayerLobbyPlayerRowFont) {
+		m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFont);
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
 		while (!statusText.empty() &&
 		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
@@ -1361,7 +1749,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
-	// The status line can wrap; reserve its real height and let everything below slide with it.
 	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
 		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
@@ -1372,7 +1759,11 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyPortMapLabel->SetText(snapshot.portMap);
 	}
 	m_MultiplayerLobbyPortMapLabel->SetVisible(!snapshot.portMap.empty());
-	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra);
+	const int summaryHeight = summary ? 20 : 0;
+	m_LastMatchSummaryLabel->SetPositionRel(12, 178 + statusExtra);
+	m_LastMatchSummaryLabel->Resize(contentWidth - 90, 18);
+	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetPositionRel(contentWidth - 74, 178 + statusExtra);
+	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra + summaryHeight);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
 	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
@@ -1411,12 +1802,12 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		label->EnsureDrawableTextFont("FontSmall.png");
 	}
 	// The port-map row sits under the wrapped status, so the error starts below both.
-	m_MultiplayerErrorLabel->SetPositionRel(12, 178 + statusExtra + portMapHeight);
+	m_MultiplayerErrorLabel->SetPositionRel(12, 178 + statusExtra + portMapHeight + summaryHeight);
 	// The screen must stay inside the viewport. Error, status and port-map rows keep every pixel
 	// their room allows (overflow scrolls); the chat block is the one piece that yields - a row at
 	// a time - before any of them do.
 	const int backReserve = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5;
-	const int fixedExtra = statusExtra + portMapHeight;
+	const int fixedExtra = statusExtra + portMapHeight + summaryHeight;
 	const int panelCap = g_WindowMan.GetResY() - 24; // the Back button's band sits under the panel
 	const int inputBlock = 25;                     // textbox 13 px + a bottom margin matching its sides
 	// The Leave/Seats row ends at rel 240; the first chat row keeps a 4px gap under it and the
@@ -1429,13 +1820,16 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	    std::max(0, panelCap - (c_LobbyChatTop - 4) - fixedExtra - inputBlock));
 	const bool scrollWide = desiredWidth > contentWidth;
 	m_MultiplayerErrorLabel->SetHorizontalOverflowScroll(scrollWide);
-	const int errorHeight = std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
+	// A finished round uses the vacant error band before taking room from chat.
+	const int errorHeight = summary ? (snapshot.errorText.empty() ? 0 : std::min(std::max(24, m_MultiplayerErrorLabel->GetTextHeight() + 4), errorRoom))
+	                                : std::max(24, std::min(m_MultiplayerErrorLabel->GetTextHeight() + 4, errorRoom));
+	m_MultiplayerErrorLabel->SetVisible(errorHeight > 0);
 	const bool scrollTall = !scrollWide && m_MultiplayerErrorLabel->GetTextHeight() + 4 > errorRoom;
 	m_MultiplayerErrorLabel->SetVerticalOverflowScroll(scrollTall);
 	m_MultiplayerErrorLabel->ActivateDeactivateOverflowScroll(scrollWide || scrollTall);
 	const int extraHeight = fixedExtra + errorHeight - 24;
-	if (m_MultiplayerErrorLabel->GetHeight() != errorHeight) {
-		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), errorHeight);
+	if (m_MultiplayerErrorLabel->GetHeight() != std::max(1, errorHeight)) {
+		m_MultiplayerErrorLabel->Resize(m_MultiplayerErrorLabel->GetWidth(), std::max(1, errorHeight));
 	}
 	// A shrunken box still reads top-down: Middle would anchor a tall error on its middle lines.
 	m_MultiplayerErrorLabel->SetVAlignment(
@@ -1500,11 +1894,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	FitMultiplayerScreen(contentWidth, screenHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
-	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
-	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
-	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
-	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 236 + extraHeight);
+	// Leave 100 + Seats 82 + 8 matches Start Match's 190: Leave keeps the wider half as the exit.
+	GUIButton* leave = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton];
+	GUIButton* seats = m_MainMenuButtons[MenuButton::MultiplayerModerateButton];
+	constexpr int pairGap = 8;
+	if (leave->GetWidth() != 100) {
+		leave->Resize(100, leave->GetHeight());
+	}
+	if (seats->GetWidth() != 82) {
+		seats->Resize(82, seats->GetHeight());
+	}
+	const int pairLeft = (contentWidth - leave->GetWidth() - pairGap - seats->GetWidth()) / 2;
+	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1514,7 +1915,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 236 + extraHeight);
+	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
@@ -1542,6 +1943,180 @@ void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
 		m_ModerationSubstituteButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Substitute));
 		m_ModerationCancelButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Cancel));
 	}
+}
+
+void MainMenuGUI::OpenMultiplayerDialog(GUICollectionBox* dialog, const GUICollectionBox* owner) {
+	dialog->SetPositionAbs(owner->GetXPos() + (owner->GetWidth() - dialog->GetWidth()) / 2,
+	                       owner->GetYPos() + (owner->GetHeight() - dialog->GetHeight()) / 2);
+	m_ActiveDialogBox = dialog;
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->SetEnabled(false);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetEnabled(false);
+	dialog->SetVisible(true);
+	dialog->SetEnabled(true);
+	dialog->SetZPos(100);
+}
+
+void MainMenuGUI::CloseMultiplayerDialog() {
+	if (m_ActiveDialogBox) m_ActiveDialogBox->SetVisible(false);
+	m_ActiveDialogBox = nullptr;
+	m_MainMenuScreens[MenuScreen::MultiplayerScreen]->SetEnabled(true);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetEnabled(true);
+	m_ReplayDeletePath.clear();
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) m_ReplayList->SetFocus();
+	else m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetFocus();
+}
+
+void MainMenuGUI::ShowLastMatchDetails() {
+	const auto summary = g_NetMatchService.GetLastMatchSummary();
+	if (!summary) return;
+	const int width = m_MultiplayerLobbyPanel->GetWidth();
+	m_LastMatchDetailsLabel->SetText(summary->DetailsText());
+	m_LastMatchDetailsLabel->Resize(width - 24, 240);
+	const int height = std::min(g_WindowMan.GetResY() - 24, m_LastMatchDetailsLabel->GetTextHeight() + 72);
+	m_LastMatchDialog->Resize(width, height);
+	m_LastMatchDetailsLabel->Resize(width - 24, height - 72);
+	m_LastMatchDetailsLabel->SetVerticalOverflowScroll(true);
+	m_LastMatchDetailsLabel->ActivateDeactivateOverflowScroll(true);
+	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetPositionRel((width - 80) / 2, height - 32);
+	OpenMultiplayerDialog(m_LastMatchDialog, m_MultiplayerLobbyPanel);
+	m_MainMenuButtons[MenuButton::LastMatchCloseButton]->SetFocus();
+}
+
+void MainMenuGUI::RefreshReplayList() {
+	namespace fs = std::filesystem;
+	const int selected = m_ReplayList->GetSelectedIndex();
+	const std::string keep = selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size() ? m_ReplayRows[selected].path : "";
+	m_ReplayRows.clear();
+	m_ReplayList->ClearList();
+	std::error_code error;
+	const fs::path directory = fs::path("Userdata") / "Replays";
+	fs::directory_iterator entries(directory, error);
+	if (error) {
+		m_ReplayStatusLabel->SetText(error == std::errc::no_such_file_or_directory ? "No replays in Userdata/Replays." : "Could not read Userdata/Replays: " + error.message());
+		RefreshReplayBrowserControls();
+		return;
+	}
+	for (const auto end = fs::directory_iterator(); entries != end; entries.increment(error)) {
+		if (error) break;
+		const auto& entry = *entries;
+		std::error_code fileError;
+		if (fs::is_symlink(entry.symlink_status(fileError)) || !entry.is_regular_file(fileError) || fileError) continue;
+		std::string extension = entry.path().extension().string();
+		std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+		if (extension != ".ccreplay") continue;
+		ReplayRow row;
+		row.path = entry.path().string();
+		row.text = entry.path().filename().string();
+		const auto written = entry.last_write_time(fileError);
+		if (!fileError) {
+#ifdef _MSC_VER
+			const auto convertedTime = std::chrono::clock_cast<std::chrono::system_clock>(written);
+#else
+			const auto convertedTime = fs::file_time_type::clock::to_sys(written);
+#endif
+			const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(convertedTime);
+			const std::time_t time = std::chrono::system_clock::to_time_t(systemTime) - 7 * 60 * 60;
+			std::tm local{};
+#ifdef _WIN32
+			gmtime_s(&local, &time);
+#else
+			gmtime_r(&time, &local);
+#endif
+			std::ostringstream date;
+			date << std::put_time(&local, "%Y-%m-%d %H:%M MST");
+			row.text += " | " + date.str();
+		}
+		NetMatchReplayReader reader;
+		if (reader.Open(row.path, &row.error)) {
+			const auto& config = reader.GetConfig();
+			row.text += " | " + config.activityPreset + " / " + config.sceneName + " | " + std::to_string(config.peerCount) + " peers";
+			reader.Close();
+			NetReplayVerifyReport scan;
+			if (NetMatchReplayReader::Verify(row.path, scan)) {
+				NetMatchSummary duration;
+				duration.runningTicks = scan.lastFrame;
+				row.text += " | " + duration.DurationText();
+			} else {
+				row.error = scan.error;
+			}
+		}
+		if (!row.error.empty()) row.text += " | Unavailable: " + row.error;
+		m_ReplayRows.push_back(std::move(row));
+	}
+	std::sort(m_ReplayRows.begin(), m_ReplayRows.end(), [](const auto& a, const auto& b) { return a.path < b.path; });
+	m_ReplayList->BeginUpdate();
+	int restore = m_ReplayRows.empty() ? -1 : 0;
+	for (size_t i = 0; i < m_ReplayRows.size(); ++i) {
+		m_ReplayList->AddItem(m_ReplayRows[i].text);
+		if (m_ReplayRows[i].path == keep) restore = static_cast<int>(i);
+	}
+	m_ReplayList->EndUpdate();
+	m_ReplayList->SetSelectedIndex(restore);
+	m_ReplayStatusLabel->SetText(error ? "Replay listing stopped: " + error.message() : std::to_string(m_ReplayRows.size()) + " replays in Userdata/Replays");
+	RefreshReplayBrowserControls();
+}
+
+void MainMenuGUI::RefreshReplayBrowserControls() {
+	const int width = std::min(600, m_RootBoxMaxWidth - 24);
+	constexpr int height = 360 - 24; // The lobby's minimum-viewport budget leaves a band for Back.
+	const int selected = m_ReplayList->GetSelectedIndex();
+	const bool hasSelection = selected >= 0 && static_cast<size_t>(selected) < m_ReplayRows.size();
+	if (m_ReplayBrowserPanel->GetWidth() != width || m_ReplayBrowserPanel->GetHeight() != height) m_ReplayBrowserPanel->Resize(width, height);
+	if (m_ReplayList->GetWidth() != width - 24 || m_ReplayList->GetHeight() != height - 146) {
+		m_ReplayList->Resize(width - 24, height - 146);
+	}
+	m_ReplaySelectedLabel->SetPositionRel(12, height - 92);
+	m_ReplaySelectedLabel->Resize(width - 24, 42);
+	m_ReplaySelectedLabel->SetText(hasSelection ? m_ReplayRows[selected].text : "Select a replay to play or delete.");
+	m_ReplaySelectedLabel->SetVerticalOverflowScroll(true);
+	m_ReplaySelectedLabel->ActivateDeactivateOverflowScroll(true);
+	m_ReplayStatusLabel->Resize(width - 24, 16);
+	m_ReplayStatusLabel->ActivateDeactivateOverflowScroll(true);
+	m_MainMenuButtons[MenuButton::ReplayPlayButton]->SetEnabled(hasSelection && m_ReplayRows[selected].error.empty());
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton]->SetEnabled(hasSelection);
+	m_MainMenuButtons[MenuButton::ReplayPlayButton]->SetPositionRel(12, height - 34);
+	m_MainMenuButtons[MenuButton::ReplayDeleteButton]->SetPositionRel(104, height - 34);
+	m_MainMenuButtons[MenuButton::ReplayBackButton]->SetPositionRel(width - 92, height - 34);
+	const int backHeight = m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight();
+	FitMultiplayerScreen(width, height + backHeight + 5);
+	m_MainMenuButtons[MenuButton::BackToMainButton]->SetPositionRel((width - m_MainMenuButtons[MenuButton::BackToMainButton]->GetWidth()) / 2, height);
+}
+
+void MainMenuGUI::PlaySelectedReplay() {
+	const int selected = m_ReplayList->GetSelectedIndex();
+	if (selected < 0 || static_cast<size_t>(selected) >= m_ReplayRows.size() || !m_ReplayRows[selected].error.empty()) return;
+	std::string error;
+	if (!StartNetReplayPlayback(m_ReplayRows[selected].path, true, &error)) {
+		m_ReplayStatusLabel->SetText(error);
+		return;
+	}
+	m_UpdateResult = MainMenuUpdateResult::ActivityStarted;
+	SetActiveMenuScreen(MenuScreen::MainScreen, false);
+}
+
+void MainMenuGUI::ReturnToReplayBrowser(const std::string& status) {
+	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
+	ShowMultiplayerScreen();
+	m_MultiplayerSubScreen = MultiplayerSubScreen::ReplayBrowser;
+	RefreshReplayList();
+	m_ReplayStatusLabel->SetText(status);
+	RefreshMultiplayerScreenControls(g_NetMatchService.GetLobbySnapshot());
+	m_ReplayList->SetFocus();
+}
+
+void MainMenuGUI::ConfirmReplayDelete() {
+	namespace fs = std::filesystem;
+	const fs::path path(m_ReplayDeletePath);
+	std::error_code error;
+	const fs::path directory = fs::weakly_canonical(fs::path("Userdata") / "Replays", error);
+	const fs::path parent = error ? fs::path() : fs::weakly_canonical(path.parent_path(), error);
+	const auto statusBeforeDelete = error ? fs::file_status() : fs::symlink_status(path, error);
+	const bool allowed = !m_ReplayDeletePath.empty() && !error && directory == parent && fs::is_regular_file(statusBeforeDelete);
+	const bool removed = allowed && !error && fs::remove(path, error);
+	const std::string status = removed ? "Deleted " + path.filename().string() : "Could not delete replay: " + (error ? error.message() : "file unavailable");
+	CloseMultiplayerDialog();
+	RefreshReplayList();
+	m_ReplayStatusLabel->SetText(status);
 }
 
 void MainMenuGUI::ActivateModerationRow(const GUIControl* control, NetModerationAction action) {
@@ -1578,6 +2153,12 @@ static bool IsControlClickable(GUIControl* control) {
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	if (const auto index = ReplayRowIndex(controlName)) {
+		if (*index >= m_ReplayRows.size() || !IsControlClickable(m_ReplayList) || m_ActiveDialogBox) return false;
+		m_ReplayList->SetSelectedIndex(static_cast<int>(*index));
+		HandleMultiplayerScreenInputEvents(m_ReplayList);
+		return true;
+	}
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationPostCommand(controlName);
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
@@ -1633,6 +2214,11 @@ bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::s
 	return false;
 }
 
+void MainMenuGUI::AutomationSetShareAddress(const std::string& address) {
+	s_ShareAddress = address;
+	s_ShareResolved = true;
+}
+
 bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
 	GUICheckbox* checkbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
 	if (!checkbox) {
@@ -1650,6 +2236,11 @@ bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checke
 }
 
 bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::string& text) const {
+	if (const auto index = ReplayRowIndex(controlName)) {
+		if (*index >= m_ReplayRows.size()) return false;
+		text = m_ReplayRows[*index].text;
+		return true;
+	}
 	if (auto* manager = AutomationManager()) {
 		if (MenuAutomation::Text(manager->GetControl(controlName), text)) return true;
 		if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return false;
@@ -1729,6 +2320,7 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 		case MultiplayerSubScreen::JoinSetup: return "JoinSetup";
 		case MultiplayerSubScreen::Lobby: return "Lobby";
 		case MultiplayerSubScreen::Moderation: return "Moderation";
+		case MultiplayerSubScreen::ReplayBrowser: return "ReplayBrowser";
 		default: return "Unknown";
 	}
 }
@@ -1738,12 +2330,14 @@ void MainMenuGUI::AutomationGoToMainScreen() {
 }
 
 bool MainMenuGUI::AutomationControlExists(const std::string& controlName) const {
+	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size();
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return m_SettingsMenu->AutomationManager()->GetControl(controlName) != nullptr;
 	return m_SubMenuScreenGUIControlManager->GetControl(controlName) != nullptr ||
 	       m_MainMenuScreenGUIControlManager->GetControl(controlName) != nullptr;
 }
 
 bool MainMenuGUI::AutomationControlEnabled(const std::string& controlName) const {
+	if (const auto index = ReplayRowIndex(controlName)) return *index < m_ReplayRows.size() && IsControlClickable(m_ReplayList);
 	if (m_ActiveMenuScreen == MenuScreen::SettingsScreen) return MenuAutomation::Enabled(m_SettingsMenu->AutomationManager()->GetControl(controlName));
 	GUIControl* control = m_SubMenuScreenGUIControlManager->GetControl(controlName);
 	if (!control) {
@@ -1921,6 +2515,11 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 	if (!g_NetMatchService.ConsumeReadyToLaunch(activityPreset)) {
 		return;
 	}
+	m_LastMatchSummaryLabel->SetText("");
+	m_LastMatchDetailsLabel->SetText("");
+	std::cout << "[menu-mp] report at launch summary=\"" << m_LastMatchSummaryLabel->GetText()
+	          << "\" details=\"" << m_LastMatchDetailsLabel->GetText() << "\" retained="
+	          << (g_NetMatchService.GetLastMatchSummary().has_value() ? 1 : 0) << std::endl;
 	// A joiner whose lobby round carried a live match's snapshot launches from it instead.
 	if (g_NetMatchService.HasPendingResyncLoad()) {
 		std::string stageError;
@@ -1942,11 +2541,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
-		g_NetMatchService.Destroy();
-		return;
-	}
+	(void)activityPreset; // ConsumeReadyToLaunch already adopted this preset into the roster.
 	const int localTeam = g_NetMatchService.GetLocalTeam();
 	std::string setupError;
 	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);
@@ -1983,8 +2578,11 @@ void MainMenuGUI::Draw() {
 			break;
 	}
 	if (m_ActiveDialogBox) {
-		set_trans_blender(128, 128, 128, 128);
+		// The menu compositor needs the overlay's alpha as well as its black colour.
+		SetTrueAlphaBlender();
+		clear_to_color(g_FrameMan.GetOverlayBitmap32(), makeacol32(0, 0, 0, 128));
 		draw_trans_sprite(g_FrameMan.GetBackBuffer32(), g_FrameMan.GetOverlayBitmap32(), 0, 0);
+		clear_to_color(g_FrameMan.GetOverlayBitmap32(), 0);
 		// Whatever this box may be at this point it's already been drawn by the owning GUIControlManager, but we need to draw it again on top of the overlay so it's not affected by it.
 		m_ActiveDialogBox->Draw(m_ActiveGUIControlManager->GetScreen());
 	}

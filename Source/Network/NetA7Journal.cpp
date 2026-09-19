@@ -1,6 +1,7 @@
 #include "NetA7Journal.h"
 
 #include "System/FaultInjection.h"
+#include "System.h"
 
 #include <algorithm>
 #include <array>
@@ -97,22 +98,6 @@ namespace RTE {
 			if (value.empty()) return false;
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
 			return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && result > 0;
-		}
-
-		std::filesystem::path ExecutablePath() {
-		#ifdef _WIN32
-			std::array<wchar_t, 32768> path{};
-			const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-			return size && size < path.size() ? std::filesystem::path(std::wstring(path.data(), size)) : std::filesystem::path();
-		#elif defined(__APPLE__)
-			uint32_t size = 0;
-			_NSGetExecutablePath(nullptr, &size);
-			std::vector<char> path(size);
-			return _NSGetExecutablePath(path.data(), &size) == 0 ? std::filesystem::path(path.data()) : std::filesystem::path();
-		#else
-			std::error_code error;
-			return std::filesystem::read_symlink("/proc/self/exe", error);
-		#endif
 		}
 
 		std::string FileSha(const std::filesystem::path& path) {
@@ -218,7 +203,7 @@ namespace RTE {
 		auto fail = [error](const char* message) { if (error) *error = message; return false; };
 		if (!Token(run) || !Token(peer) || log.empty() || expected.size() != 64 || s_State.file) return fail("A7 requires one fresh E2E journal and complete process identity");
 		for (char c: expected) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return fail("A7 binary identity must be lowercase SHA-256");
-		s_State.exeSha = FileSha(ExecutablePath());
+		s_State.exeSha = System::GetThisExeSha256();
 		if (s_State.exeSha != expected) return fail("A7 executable hash differs from the guarded launch identity, or SHA-256 is unavailable");
 		s_State.fault = Env("CC_FAULT_INJECT");
 		if (!s_State.fault.empty()) {
@@ -327,14 +312,29 @@ namespace RTE {
 		if (!HasConnectGate()) return true;
 		Emit("connect_waiting", {{"ticket_sha256", loadedTicketSha}, {"load_phase", "preconnect_validation"}});
 		const auto opened = Clock::now();
+		bool exists = false, parseOk = false, runIdMatch = false, peerListed = false;
+		unsigned long long fileSize = 0;
 		while (Clock::now() - opened < std::chrono::milliseconds(c_GateBudgetMs)) {
 			if (s_State.cancelled && s_State.cancelled()) { if (error) *error = "A7 connect gate cancelled"; return false; }
 			std::error_code fsError;
-			if (std::filesystem::exists(s_State.gate, fsError) && !fsError) {
-				if (std::filesystem::file_size(s_State.gate, fsError) > 16384 || fsError) break;
+			exists = std::filesystem::exists(s_State.gate, fsError) && !fsError;
+			if (exists) {
+				parseOk = false;
+				runIdMatch = false;
+				peerListed = false;
+				fileSize = static_cast<unsigned long long>(std::filesystem::file_size(s_State.gate, fsError));
+				if (fileSize > 16384 || fsError) break;
 				std::ifstream input(s_State.gate, std::ios::binary);
 				const json gate = json::parse(input, nullptr, false);
-				if (!gate.is_object() || !gate.contains("schema") || !gate["schema"].is_number_integer() || gate["schema"] != 1 || !gate.contains("run_id") || !gate["run_id"].is_string() || gate["run_id"] != s_State.run || !gate.contains("peers") || !gate["peers"].is_array()) break;
+				parseOk = !gate.is_discarded();
+				// Incomplete gate bytes are not a verdict while the wait budget remains.
+				if (!parseOk || !gate.is_object() || !gate.contains("schema") || !gate.contains("run_id")) {
+					std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					continue;
+				}
+				if (!gate["schema"].is_number_integer() || gate["schema"] != 1 || !gate["run_id"].is_string()) break;
+				runIdMatch = gate["run_id"] == s_State.run;
+				if (!runIdMatch || !gate.contains("peers") || !gate["peers"].is_array()) break;
 				bool includesPeer = false;
 				std::vector<std::string> seen;
 				for (const auto& entry: gate["peers"]) {
@@ -344,13 +344,24 @@ namespace RTE {
 					seen.push_back(name);
 					includesPeer = includesPeer || name == s_State.peer;
 				}
+				peerListed = includesPeer;
 				if (!seen.empty() && includesPeer) { s_State.gateReleased.store(true); Emit("connect_released"); return true; }
 				break;
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
-		Gap("connect gate invalid or its bounded wait expired");
-		if (error) *error = "A7 connect gate invalid or timed out";
+		const unsigned long long elapsedMs = static_cast<unsigned long long>(
+			std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - opened).count());
+		char gap[320];
+		std::snprintf(gap, sizeof(gap),
+			"connect gate invalid or its bounded wait expired exists=%d file_size=%llu parse_ok=%d run_id_match=%d peer_listed=%d elapsed_ms=%llu",
+			exists ? 1 : 0, fileSize, parseOk ? 1 : 0, runIdMatch ? 1 : 0, peerListed ? 1 : 0, elapsedMs);
+		Gap(gap);
+		char fail[320];
+		std::snprintf(fail, sizeof(fail),
+			"A7 connect gate invalid or timed out exists=%d file_size=%llu parse_ok=%d run_id_match=%d peer_listed=%d elapsed_ms=%llu",
+			exists ? 1 : 0, fileSize, parseOk ? 1 : 0, runIdMatch ? 1 : 0, peerListed ? 1 : 0, elapsedMs);
+		if (error) *error = fail;
 		return false;
 	}
 

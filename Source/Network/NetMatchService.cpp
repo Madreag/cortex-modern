@@ -4,6 +4,8 @@
 #include "ActivityMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
+#include "Scene.h"
+#include "GameVersion.h"
 #include "FrameMan.h"
 #include "GUIInput.h"
 #include "GnsTransport.h"
@@ -36,13 +38,94 @@
 #include <fstream>
 #include <iterator>
 #include <iostream>
+#include <iomanip>
+#include <iterator>
+#include <list>
 #include <optional>
 #include <random>
 #include <string>
+#include <sstream>
 #include <thread>
 #include <utility>
 
+std::string BuildLoopPaceJson();
+
 namespace RTE {
+
+	std::string NetMatchSummary::DurationText() const {
+		const uint64_t seconds = runningTicks / 60;
+		std::ostringstream text;
+		text << std::setfill('0') << std::setw(2) << seconds / 60 << ':' << std::setw(2) << seconds % 60;
+		return text.str();
+	}
+
+	std::string NetMatchSummary::LineText() const {
+		std::string text = "Last match: " + (winnerTeam < 0 ? std::string("draw") : "Team " + std::to_string(winnerTeam + 1) + " wins");
+		text += " | " + DurationText() + " | ";
+		for (size_t i = 0; i < peers.size(); ++i) text += (i ? ", " : "") + peers[i].name;
+		std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }, ' ');
+		return text;
+	}
+
+	std::string NetMatchSummary::IdentityText() const {
+		if (identityLine.empty()) return {};
+		return identityLine + "\nSHA256: " + System::GetThisExeSha256() + "\nCodec: Controller " + std::to_string(ControllerFrame::c_Version) + " | Lockstep " + std::to_string(NetLockstepCodec::c_Version);
+	}
+
+	std::string NetMatchSummary::DetailsText() const {
+		std::ostringstream text;
+		text << "Result: " << result << "\nWinner: " << (winnerTeam < 0 ? "draw" : "Team " + std::to_string(winnerTeam + 1));
+		text << "\nDuration: " << DurationText() << " (" << runningTicks << " ticks at 60 tps)\n\nPeers";
+		for (const Peer& peer : peers) {
+			text << '\n' << peer.name << " | team " << peer.team + 1 << " | seat " << peer.seat << " | delay " << peer.inputDelayFrames;
+		}
+		text << "\n\nResyncs: " << resyncs << " | Drops: " << drops << " | Reclaims: " << reclaims << " | Substitutions: " << substitutions;
+		const auto pace = nlohmann::json::parse(paceJson, nullptr, false);
+		if (pace.is_object()) {
+			text << std::fixed << std::setprecision(1) << "\nFinal pace: " << pace.value("wall_tps", 0.0) << " tps, "
+			     << pace.value("sim_ms_per_tick", 0.0) << " ms/tick";
+		}
+		text << "\n\n" << IdentityText();
+		return text.str();
+	}
+
+	std::optional<NetMatchSummary> NetMatchService::GetLastMatchSummary() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastMatchSummary;
+	}
+
+	void NetMatchService::UpdateSummarySeatsLocked() {
+		for (const auto& [peerId, seat] : m_SeatPresence.GetSeats()) {
+			auto& previous = m_SummarySeats[peerId];
+			const auto away = [](NetSeatPresenceState state) {
+				return state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting || state == NetSeatPresenceState::Left;
+			};
+			if (away(seat.state) && !away(previous.state)) ++m_CurrentMatchSummary.drops;
+			if (previous.peerId && seat.holderGeneration > previous.holderGeneration) {
+				++m_CurrentMatchSummary.substitutions;
+			} else if (previous.peerId && !away(seat.state) && (away(previous.state) || seat.incarnation > previous.incarnation)) {
+				++m_CurrentMatchSummary.reclaims;
+			}
+			for (auto& peer : m_CurrentMatchSummary.peers) {
+				if (peer.peerId != peerId) continue;
+				peer.seat = seat.stableSeat;
+				if (!seat.holderName.empty()) peer.name = seat.holderName;
+			}
+			previous = seat;
+		}
+	}
+
+	void NetMatchService::CaptureMatchSummaryLocked(const std::string& result) {
+		// The first terminal result owns this round; Main's Complete paths quit after capturing it.
+		if (m_State != NetMatchServiceState::Running || m_LastMatchSummary || m_CurrentMatchSummary.identityLine.empty()) return;
+		UpdateSummarySeatsLocked();
+		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
+		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
+		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
+		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
+		m_LastMatchSummary = m_CurrentMatchSummary;
+	}
 
 	std::string NetIceHostIdentity(const std::string& sessionId) {
 		// Kept in step with GnsDirectorySignalDispatcher::HostIdentity; the selftest asserts they agree.
@@ -316,12 +399,24 @@ static std::string ResyncSaveName() {
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
 		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
 		SeatSavedOptions(request);
+		if (request.playerName.size() > NetProtocol::c_MaxDisplayNameBytes) {
+			const std::string configError = "display_name exceeds max encoded length";
+			if (error) *error = configError;
+			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
+			return false;
+		}
 		// A launch config names its own module; any other request resolves one here, where the loaded
 		// modules are known and both roster builds see the answer.
 		std::string moduleError;
 		if (!request.standardRules && !SeatActivityModule(request, &moduleError)) {
 			if (error) *error = moduleError;
 			SetState(NetMatchServiceState::Failed, "Match activity refused", moduleError);
+			return false;
+		}
+		std::string sceneError;
+		if (!request.standardRules && !SeatHostScene(request, &sceneError)) {
+			if (error) *error = sceneError;
+			SetState(NetMatchServiceState::Failed, "Match scene refused", sceneError);
 			return false;
 		}
 		NetMatchConfig matchConfig;
@@ -370,6 +465,8 @@ static std::string ResyncSaveName() {
 
 		m_ActivityPreset = request.activityPreset;
 		m_ActivityModule = request.activityModule;
+		m_SceneName = request.sceneName;
+		m_SceneModule = request.sceneModule;
 		SetState(NetMatchServiceState::Starting, request.host ? "Hosting direct-IP match" : "Joining direct-IP match");
 		// The directory row advertises the same identity fields the probe registers; only the counts
 		// move afterwards. Only a host ever lists itself.
@@ -390,6 +487,8 @@ static std::string ResyncSaveName() {
 			m_DirectoryRegistered = false;
 			m_WorkerDone = false;
 			m_IsHost = request.host;
+			m_CurrentMatchSummary = {};
+			m_SummarySeats.clear();
 			m_LocalPeerId = request.host ? 1 : 2;
 			m_LocalTeam = request.dedicated ? Activity::NoTeam : (request.host ? 0 : 1);
 			m_Dedicated = request.dedicated;
@@ -948,6 +1047,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::RecordRosterTransitions(uint64_t observedAtMs) {
+		UpdateSummarySeatsLocked();
 		const uint64_t appliedFrame = ScenarioRunner::GetLockstepAppliedFrame();
 		for (const NetLobbyMember& member: m_LobbySnapshot.members) {
 			const std::string state = NetSeatPresence::StateName(m_SeatPresence.StateOf(member.peerId));
@@ -997,6 +1097,8 @@ static std::string ResyncSaveName() {
 		m_SeatPresence.Clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
+		// An action queued for a setup worker that is gone belongs to no session and is dropped here.
+		m_PendingModeration.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -1111,8 +1213,12 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_LastRoundId = 0;
+			m_PendingToasts.clear();
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
+			m_SceneName.clear();
+			m_SceneModule.clear();
 			m_State = NetMatchServiceState::Idle;
 			m_StatusText = "Idle";
 			m_ErrorText.clear();
@@ -1144,6 +1250,10 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(true);
 		if (m_Worker.joinable()) {
 			m_Worker.join();
+		}
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(error);
 		}
 		RetractDirectoryListing();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -1240,6 +1350,12 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::Complete(const std::string& reason) {
+		std::string displayReason = reason;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(reason);
+			if (m_LastMatchSummary) displayReason = m_LastMatchSummary->result;
+		}
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
 		if (ShouldKeepIceDirectoryLease()) {
@@ -1253,19 +1369,23 @@ static std::string ResyncSaveName() {
 			m_Coordinator->Complete(reason);
 		}
 		if (m_State == NetMatchServiceState::Running) {
-			m_StatusText = reason.empty() ? "Match complete" : reason;
+			m_StatusText = displayReason.empty() ? "Match complete" : displayReason;
 			m_ErrorText.clear();
 		}
 	}
 
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			DrainPendingSessionEventsLocked(false);
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		ScenarioRunner::ResetRetiredChecksumCounters();
 		ScenarioRunner::SetSessionPump(nullptr);
 		if (ShouldKeepIceDirectoryLease()) {
 			HideDirectoryListing();
@@ -1280,14 +1400,17 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Completed;
 			// The rematch lobby this end opens starts waiting for the other peers here.
 			m_CompletedLobbySinceMs = SteadyNowMs();
-			m_StatusText = result.empty() ? "Match complete" : result;
+			m_StatusText = displayResult.empty() ? "Match complete" : displayResult;
 			m_ErrorText.clear();
 		}
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		std::string displayResult = result;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			CaptureMatchSummaryLocked(result);
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
@@ -1308,7 +1431,7 @@ static std::string ResyncSaveName() {
 			}
 			if (m_State == NetMatchServiceState::Running) {
 				m_State = NetMatchServiceState::Completed;
-				m_StatusText = result.empty() ? "Left the match" : result;
+				m_StatusText = displayResult.empty() ? "Left the match" : displayResult;
 				m_ErrorText.clear();
 			}
 		}
@@ -1328,6 +1451,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_LastUpdateMs = nowMs;
+		PushPendingToasts();
 		JoinWorkerIfDone();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -1663,6 +1787,23 @@ static std::string ResyncSaveName() {
 			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+		}
+		if (!m_PendingResyncState.has_value() || m_CurrentMatchSummary.peers.empty()) {
+			m_LastMatchSummary.reset();
+			m_CurrentMatchSummary = {};
+			m_SummarySeats = m_SeatPresence.GetSeats();
+			const auto& config = m_Coordinator->GetConfig().matchConfig;
+			for (const auto& slot : config.players) {
+				if (slot.cpu) continue;
+				std::string name = slot.displayName;
+				for (const auto& member : m_LobbySnapshot.members) {
+					if (member.peerId == slot.peerId) name = member.displayName;
+				}
+				m_CurrentMatchSummary.peers.push_back({slot.peerId, name, slot.team, static_cast<uint16_t>(slot.peerId - 1), NetMatchConfigUtil::PeerInputDelay(config, slot.peerId)});
+			}
+			m_CurrentMatchSummary.identityLine = "Exe: " + std::filesystem::path(System::GetThisExePathAndName()).filename().string() + " v" + c_GameVersion.str();
+		} else {
+			++m_CurrentMatchSummary.resyncs;
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
@@ -2336,6 +2477,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
+		PushPendingToasts();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_State == NetMatchServiceState::Completed) {
@@ -2350,6 +2492,8 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
+				m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+				m_ReconnectClient.SetRound(m_LastRoundId);
 				// The coordinator owns the transport queue mid-match, so this pump is the only
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
@@ -2375,6 +2519,10 @@ static std::string ResyncSaveName() {
 		const SimCensusScope censusScope;
 		// Chat entries stamp the frame they arrived on, on every peer, not only the host's plane.
 		m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+		if (m_Coordinator) {
+			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+		}
+		m_ReconnectClient.SetRound(m_Coordinator ? m_LastRoundId : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
@@ -2514,6 +2662,12 @@ static std::string ResyncSaveName() {
 		if (snapshot.activityModule.empty()) {
 			snapshot.activityModule = m_ActivityModule;
 		}
+		if (snapshot.sceneName.empty()) {
+			snapshot.sceneName = m_SceneName;
+		}
+		if (snapshot.sceneModule.empty()) {
+			snapshot.sceneModule = m_SceneModule;
+		}
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;
 			local.peerId = m_LocalPeerId;
@@ -2621,18 +2775,76 @@ static std::string ResyncSaveName() {
 			{"session_identity_hash", NetIdentity::HashHex(manifest.sessionIdentityHash)}};
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
+		++m_DiagnosticIdentityGeneration;
 	}
+
+	namespace {
+		NetIdentityBuildOptions DiagnosticIdentityOptions() {
+			NetIdentityBuildOptions options;
+			options.buildId = "stage2-p2d-local";
+			options.sessionRulesTag = "stage2-p2-session-rules";
+			return options;
+		}
+	} // namespace
 
 	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
-		NetIdentityBuildOptions options;
-		options.buildId = "stage2-p2d-local";
-		options.sessionRulesTag = "stage2-p2-session-rules";
+		NetIdentityBuildOptions options = DiagnosticIdentityOptions();
 		NetIdentity::StampOptionsForTarget(options, m_MatchConfig.persistentWorld);
 		const auto started = std::chrono::steady_clock::now();
 		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 		if (!built) return false;
+		CacheDiagnosticIdentity(manifest);
+		return true;
+	}
+
+	bool NetMatchService::CaptureDiagnosticIdentityInputs(std::string* error) {
+		NetIdentityManifest inputs;
+		if (!NetIdentity::CaptureManifestInputs(inputs, error, DiagnosticIdentityOptions())) return false;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputs = std::move(inputs);
+		m_DiagnosticIdentityInputsPending = true;
+		m_DiagnosticIdentityInputsGeneration = m_DiagnosticIdentityGeneration;
+		return true;
+	}
+
+	void NetMatchService::DropCapturedDiagnosticIdentityInputs() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputsPending = false;
+		m_DiagnosticIdentityInputs = NetIdentityManifest{};
+	}
+
+	bool NetMatchService::BuildCapturedDiagnosticIdentity(std::string* error, double* buildMs) {
+		NetIdentityManifest manifest;
+		uint64_t capturedGeneration = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_DiagnosticIdentityInputsPending) {
+				if (error) *error = "no captured identity inputs";
+				return false;
+			}
+			manifest = m_DiagnosticIdentityInputs;
+			capturedGeneration = m_DiagnosticIdentityInputsGeneration;
+			m_DiagnosticIdentityInputsPending = false;
+			m_DiagnosticIdentityInputs = NetIdentityManifest{};
+		}
+		const NetIdentityManifest captured = manifest;
+		const auto started = std::chrono::steady_clock::now();
+		// The game thread can write a module tree while this walk reads it, so one failed walk is retried
+		// from the captured inputs before it is reported.
+		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		if (!built) {
+			manifest = captured;
+			built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		}
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (!built) return false;
+		{
+			// A newer identity was cached while this one hashed: that one is the current build, not this.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_DiagnosticIdentityGeneration != capturedGeneration) return true;
+		}
 		CacheDiagnosticIdentity(manifest);
 		return true;
 	}
@@ -2654,6 +2866,13 @@ static std::string ResyncSaveName() {
 			record["saved_tick"] = m_ResyncSavedTick.load();
 			record["boundary_tick"] = m_ResyncBoundaryTick.load();
 		}
+		json refusals = json::array();
+		for (const ActivityMan::SaveRefusalRecord& row: g_ActivityMan.GetSaveRefusalRecords()) {
+			refusals.push_back({{"kind", row.kind}, {"class", row.objectClass}, {"preset", row.presetName},
+			                    {"script", row.scriptFile}, {"function", row.functionName}, {"segment", row.lastSegment},
+			                    {"path", row.path}, {"player_line", row.playerLine}, {"problem", row.problem}});
+		}
+		record["save_refusals"] = std::move(refusals);
 		return record.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
@@ -2684,7 +2903,7 @@ static std::string ResyncSaveName() {
 			{"state", StateName(m_State)},
 			{"status", m_StatusText},
 			{"error", m_ErrorText.empty() ? m_LobbySnapshot.errorText : m_ErrorText},
-			{"activity_preset", m_ActivityPreset},
+			{"activity_preset", roster.activityPreset},
 			{"is_host", m_IsHost},
 			{"local_peer_id", static_cast<int>(m_LocalPeerId)},
 			{"local_team", m_LocalTeam},
@@ -2913,6 +3132,18 @@ static std::string ResyncSaveName() {
 				 {{"admission", AdmissionJsonFromHost(m_ReconnectHost)},
 				  {"stats", {{"fenced_disconnects", stats.fencedDisconnects}, {"fenced_packets", stats.fencedPackets}}}}},
 			};
+		}
+		if (m_LastMatchSummary) {
+			const auto& summary = *m_LastMatchSummary;
+			json peers = json::array();
+			for (const auto& peer : summary.peers) {
+				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames}});
+			}
+			report["last_match"] = {{"result", summary.result}, {"winner_team", summary.winnerTeam}, {"running_ticks", summary.runningTicks},
+			    {"duration", summary.DurationText()}, {"peers", peers}, {"resyncs", summary.resyncs}, {"drops", summary.drops},
+			    {"reclaims", summary.reclaims}, {"substitutions", summary.substitutions}, {"pace", json::parse(summary.paceJson)}, {"identity", summary.IdentityText()}};
+		} else {
+			report["last_match"] = nullptr;
 		}
 		// A remote display name rides the roster and is only checked for control characters, so a
 		// strict dump would throw on its first invalid byte.
@@ -3153,7 +3384,7 @@ static std::string ResyncSaveName() {
 		runnerConfig.lobbyWaitMs = c_MenuLobbyWaitMs;
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
-		runnerConfig.scenario = request.activityPreset;
+		// The lobby lockstep start takes the activity from the adopted roster.
 		runnerConfig.autoReady = request.host;
 		runnerConfig.autoStart = false;
 		runnerConfig.readyRequested = &m_ReadyRequested;
@@ -3200,6 +3431,7 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.Start(SteadyNowMs());
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
+		AttachHostPump(runnerConfig);
 
 		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
 		if (started && runnerConfig.matchConfig.persistentWorld && m_WorldIdentity.IsValid()) {
@@ -3272,7 +3504,8 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Network setup failed";
+				m_StatusText = (m_Session && m_Session->HasReject() && m_Session->GetRejectSummary() == "Match roster refused")
+					? "Match roster refused" : "Network setup failed";
 				m_ErrorText = error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
@@ -3378,6 +3611,144 @@ static std::string ResyncSaveName() {
 		return result;
 	}
 
+	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session) {
+		const uint64_t nowMs = AdmissionNowMs();
+		const uint64_t sessionId = session.GetSessionId();
+		// Between rounds the coordinator is gone and both peers still hold the round they played, so
+		// that is what the notice is stamped with; a fresh stamp of 0 would read as stale on the client.
+		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : m_LastRoundId;
+		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
+		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
+		if (m_LastKickBanResult != NetKickBanResult::Ok) {
+			return m_LastKickBanResult;
+		}
+		session.BroadcastControl(m_LastRemovalIssue.notice);
+		if (m_Coordinator && m_State == NetMatchServiceState::Running && m_LastRemovalIssue.lockstepPeerId != 0) {
+			const char* why = action == NetParticipantRemovalAction::Kick ? "removed from the session" : "banned from the session";
+			m_Coordinator->EvictRemovedPeer(m_LastRemovalIssue.lockstepPeerId, why, nowMs);
+		}
+		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
+			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
+			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
+			session.DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
+		}
+		session.TickAdmissionPlane(nowMs);
+		if (m_State == NetMatchServiceState::Running) {
+			PublishModerationView();
+		}
+		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
+		// A Starting kick runs on the setup worker, and the toast queue is the game thread's, so the
+		// line waits for the next pump instead of being pushed from here.
+		m_PendingToasts.push_back(who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
+		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::PushPendingToasts() {
+		std::vector<std::string> toasts;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			toasts.swap(m_PendingToasts);
+		}
+		for (const std::string& line : toasts) {
+			ScenarioRunner::PushNetUiToast("moderation", line);
+		}
+	}
+
+	NetKickBanResult NetMatchService::ApplyUnbanLocked(const NetAuthBytes32& identity) {
+		std::string error;
+		m_LastKickBanResult = m_BanStore.Unban(identity, &error) ? NetKickBanResult::Ok : NetKickBanResult::PersistenceFailed;
+		return m_LastKickBanResult;
+	}
+
+	NetKickBanResult NetMatchService::QueueModerationLocked(const PendingModeration& pending) {
+		// A queue no lobby could fill is a flood, and it is refused rather than grown.
+		constexpr size_t c_MaxPendingModeration = 16;
+		if (m_PendingModeration.size() >= c_MaxPendingModeration) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		m_PendingModeration.push_back(pending);
+		m_LastKickBanResult = NetKickBanResult::Queued;
+		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
+		config.pumpHost = [this](NetSession& session) { DrainPendingModeration(session); };
+	}
+
+	void NetMatchService::DrainPendingModeration(NetSession& session) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting) {
+			return;
+		}
+		std::vector<PendingModeration> pending;
+		pending.swap(m_PendingModeration);
+		NetKickBanResult issue = NetKickBanResult::Ok;
+		for (const PendingModeration& action : pending) {
+			// In the order the host asked for them: a ban queued after an unban of the same identity
+			// must still leave that identity banned.
+			const NetKickBanResult result = action.unban ? ApplyUnbanLocked(action.identity)
+			                                             : ApplyRemovalLocked(action.selection, action.action, session);
+			if (issue == NetKickBanResult::Ok) {
+				issue = result;
+			}
+		}
+		// The host is told about the first action that was refused, not the last one that worked.
+		m_LastKickBanResult = issue;
+	}
+
+	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_LastRemovalIssue = {};
+		if (!m_AdmissionAttached || !m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		if (m_State == NetMatchServiceState::Starting) {
+			// The setup worker owns the session for the whole of Start, so the kick is applied there and
+			// the result is not known yet.
+			return QueueModerationLocked(PendingModeration{false, selection, action, {}});
+		}
+		if (!m_Session) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		return ApplyRemovalLocked(selection, action, *m_Session);
+	}
+
+	NetKickBanResult NetMatchService::GetLastKickBanResult() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastKickBanResult;
+	}
+
+	NetParticipantRemovalIssue NetMatchService::GetLastRemovalIssue() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastRemovalIssue;
+	}
+
+	NetKickBanResult NetMatchService::UnbanParticipant(const NetAuthBytes32& identity) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (m_State == NetMatchServiceState::Starting) {
+			// The setup worker owns admission for the whole of Start, so the store is written there and
+			// never from this thread; the unban keeps its place among the queued kicks.
+			return QueueModerationLocked(PendingModeration{true, {}, NetParticipantRemovalAction::Kick, identity});
+		}
+		return ApplyUnbanLocked(identity);
+	}
+
+	std::vector<NetHostBanRecord> NetMatchService::GetBanRecords() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_BanStore.List();
+	}
+
 	void NetMatchService::RecordModerationAction(uint16_t stableSeat, NetModerationAction action) {
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
 		const std::string seat = " for seat " + std::to_string(stableSeat);
@@ -3473,10 +3844,19 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetPersistentWorld(matchConfig.persistentWorld);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			session.SetReconnectHost(&m_ReconnectHost);
+			session.EnableParticipantProof(nullptr);
+			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
+			if (!m_BanStore.Load(nullptr)) {
+				// Last-good persistents stay; Until Removed writes stay closed until a later load.
+			}
+			m_ReconnectHost.SetBanStore(&m_BanStore);
+			session.SetHostBanStore(&m_BanStore);
 			m_AdmissionAttached = true;
 			return;
 		}
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		(void)m_ParticipantStore.LoadOrCreate(nullptr);
 		m_ReconnectClient.Configure(&m_TicketStore, identity, request.playerName.empty() ? "Client" : request.playerName);
 		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
@@ -3486,6 +3866,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
+		session.EnableParticipantProof(&m_ParticipantStore);
 		m_AdmissionAttached = true;
 	}
 
@@ -3564,9 +3945,18 @@ static std::string ResyncSaveName() {
 		if (!request.activityModule.empty()) {
 			config.activityModule = request.activityModule;
 		}
-		config.sceneName = "Grasslands";
 		if (request.standardRules) {
 			static_cast<NetMatchStandardRules&>(config) = *request.standardRules;
+		}
+		// A named class seats CreateConfiguredActivity; empty keeps MakeDefault's GAScripted.
+		if (!request.activityType.empty()) {
+			config.activityType = request.activityType;
+		}
+		if (!request.sceneName.empty()) {
+			config.sceneName = request.sceneName;
+			if (!request.sceneModule.empty()) {
+				config.sceneModule = request.sceneModule;
+			}
 		}
 		config.mode = mode;
 		config.modePreset = NetMatchConfigUtil::ModeName(mode);
@@ -3597,6 +3987,7 @@ static std::string ResyncSaveName() {
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
+			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
 		}
 		// CPU teams follow human teams and consume no peer identity.
 		config.players.clear();
@@ -3649,6 +4040,123 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	namespace {
+		std::vector<Scene*> CollectHostScenes() {
+			std::list<Entity*> presets;
+			g_PresetMan.GetAllOfType(presets, "Scene");
+			std::vector<Scene*> scenes;
+			for (Entity* entity: presets) {
+				Scene* scene = dynamic_cast<Scene*>(entity);
+				if (scene && !scene->GetLocation().IsZero() && !scene->IsMetagameInternal() && !scene->IsSavedGameInternal() &&
+				    (scene->GetMetasceneParent().empty() || g_SettingsMan.ShowMetascenes())) {
+					scenes.push_back(scene);
+				}
+			}
+			return scenes;
+		}
+
+		GameActivity* FindHostActivity(const std::string& preset, const std::string& module) {
+			std::list<Entity*> presets;
+			g_PresetMan.GetAllOfType(presets, "Activity");
+			for (Entity* entity: presets) {
+				auto* activity = dynamic_cast<GameActivity*>(entity);
+				if (!activity || activity->GetPresetName() != preset) {
+					continue;
+				}
+				const std::string defined = g_PresetMan.GetDataModuleName(activity->GetModuleID());
+				if (module.empty() || defined == module) {
+					return activity;
+				}
+			}
+			return nullptr;
+		}
+
+		std::vector<NetHostSceneChoice> ScenesForActivity(GameActivity* activity, const std::vector<Scene*>& scenes) {
+			std::vector<NetHostSceneChoice> out;
+			if (!activity) {
+				return out;
+			}
+			for (Scene* scene: scenes) {
+				if (activity->SceneIsCompatible(scene)) {
+					out.push_back({scene->GetPresetName(), g_PresetMan.GetDataModuleName(scene->GetModuleID())});
+				}
+			}
+			return out;
+		}
+	}
+
+	std::vector<NetHostActivityChoice> NetMatchService::ListLoadedGameActivities() {
+		const std::vector<Scene*> scenes = CollectHostScenes();
+		std::list<Entity*> presets;
+		g_PresetMan.GetAllOfType(presets, "Activity");
+		std::vector<NetHostActivityChoice> out;
+		for (Entity* entity: presets) {
+			auto* activity = dynamic_cast<GameActivity*>(entity);
+			if (!activity || activity->IsTestActivity()) {
+				continue;
+			}
+			NetHostActivityChoice row;
+			row.preset = activity->GetPresetName();
+			row.module = g_PresetMan.GetDataModuleName(activity->GetModuleID());
+			row.activityType = activity->GetClassName();
+			row.scenes = ScenesForActivity(activity, scenes);
+			out.push_back(std::move(row));
+		}
+		return out;
+	}
+
+	std::vector<NetHostActivityChoice> NetMatchService::ListHostActivities() {
+		std::vector<NetHostActivityChoice> out;
+		for (NetHostActivityChoice& row: ListLoadedGameActivities()) {
+			if (!row.scenes.empty()) {
+				out.push_back(std::move(row));
+			}
+		}
+		return out;
+	}
+
+	std::vector<NetHostSceneChoice> NetMatchService::ListHostScenes(const std::string& preset, const std::string& module) {
+		return ScenesForActivity(FindHostActivity(preset, module), CollectHostScenes());
+	}
+
+	bool NetMatchService::ResolveHostScene(const std::string& preset, const std::string& module, std::string& sceneName, std::string& sceneModule) {
+		const std::vector<NetHostSceneChoice> scenes = ListHostScenes(preset, module);
+		if (scenes.empty()) {
+			return false;
+		}
+		for (const NetHostSceneChoice& scene: scenes) {
+			if (scene.name == "Grasslands") {
+				sceneName = scene.name;
+				sceneModule = scene.module;
+				return true;
+			}
+		}
+		sceneName = scenes.front().name;
+		sceneModule = scenes.front().module;
+		return true;
+	}
+
+	bool NetMatchService::SeatHostScene(NetMatchServiceRequest& request, std::string* error) {
+		if (!request.sceneName.empty()) {
+			return true;
+		}
+		const std::string preset = request.activityPreset.empty() ? "P4 Alpha Duel" : request.activityPreset;
+		if (!ResolveHostScene(preset, request.activityModule, request.sceneName, request.sceneModule)) {
+			if (error) *error = "match activity " + preset + " has no compatible scene";
+			return false;
+		}
+		return true;
+	}
+
+	void NetMatchService::ApplyHostActivityFallback(NetMatchServiceRequest& request) {
+		if (request.activityPreset.empty()) {
+			request.activityPreset = "P4 Alpha Duel";
+		}
+		if (request.activityModule.empty()) {
+			request.activityModule = "Base.rte";
+		}
+	}
+
 	bool NetMatchService::SeatActivityModule(NetMatchServiceRequest& request, std::string* error) {
 		if (!request.activityModule.empty()) {
 			return true;
@@ -3675,6 +4183,7 @@ static std::string ResyncSaveName() {
 		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
 		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
 		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
+		if (!request.pathHorizonTicks) request.pathHorizonTicks = saved.pathHorizonTicks;
 	}
 
 	void NetMatchService::SetState(NetMatchServiceState state, std::string status, std::string error) {

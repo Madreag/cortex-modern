@@ -95,7 +95,7 @@ def probe_rows(text: str) -> list[dict]:
     return rows
 
 
-def stage_user_module(runtime: Path, settings_value=None, arm_trace: bool = False) -> Path:
+def stage_user_module(runtime: Path, settings_value=None, arm_trace: bool = False, kill_follow_ms: int = 0) -> Path:
     """The staged UserScenes module: the three-team preset, its activity script and the arm options."""
     module = Path(runtime) / "Userdata/UserScenes.rte"
     module.mkdir(parents=True, exist_ok=True)
@@ -105,7 +105,8 @@ def stage_user_module(runtime: Path, settings_value=None, arm_trace: bool = Fals
     # per-tick recording the match harness already armed (BeginRun re-reads the scenario runner).
     (module / "SpectateOptions.lua").write_text(
         "return { armTrace = " + ("true" if arm_trace else "false") +
-        ", killAtMs = " + str(KILL_MS) + " }\n", encoding="utf-8")
+        ", killAtMs = " + str(KILL_MS) +
+        ", killFollowAtMs = " + str(kill_follow_ms) + " }\n", encoding="utf-8")
     if settings_value is not None:
         set_setting(Path(runtime) / "Userdata/Settings.ini", settings_value)
     return module
@@ -208,7 +209,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     human_seats = 1 if dedicated else 2
     for peer, text in logs.items():
         kills = KILL.findall(text)
-        check(checks, f"{peer}_brains_destroyed", len(kills) >= human_seats,
+        check(checks, f"{peer}_brains_destroyed", len(kills) == human_seats,
               f"brain-kill lines={len(kills)} human seats={human_seats}",
               [out / "e2e/brainless_spectate" / peer / "stdout.log"])
         seat_rows = [row for row in rows[peer] if row["simms"] > 6000]
@@ -259,7 +260,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
     return result
 
 
-def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: float) -> dict:
+def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: float, kill_follow_ms: int = 0) -> dict:
     """One process on the same stock script, the Gameplay setting deciding the end rule."""
     sys.path.insert(0, str(REPO / "tools"))
     from run_sim_test import prepare_runtime  # noqa: E402
@@ -267,7 +268,7 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
 
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(REPO, out)
-    stage_user_module(runtime, setting_on, arm_trace=True)
+    stage_user_module(runtime, setting_on, arm_trace=True, kill_follow_ms=kill_follow_ms)
 
     # Run past the end so BOTH arms report the same number of rows: the round that ends prints its
     # Over rows instead of simply stopping, which is what tells the two arms apart.
@@ -313,6 +314,14 @@ def sp_arm(out: Path, setting_on: bool, cycle_input: bool, ticks: int, timeout: 
               f"first row after the death={first_after}", [out / "stdout.log"])
         check(checks, "winner_named", bool(first_after) and first_after["winner"] >= 0,
               f"winner={first_after['winner'] if first_after else None}", [out / "stdout.log"])
+    if kill_follow_ms:
+        # The follow name is gone once the spectated unit dies; the engine prints the clear.
+        check(checks, "follow_label_empty_after_death",
+              "[spectate-follow] kill " in text and "[spectate-follow] cleared player=" in text,
+              "follow kill and clear lines", [out / "stdout.log"])
+    exit_ok = record.get("exit_code") == 0 and not record.get("timed_out")
+    check(checks, "process_completed", exit_ok,
+          f"exit_code={record.get('exit_code')} timed_out={record.get('timed_out')}", [out / "stdout.log"])
     return {"exe": str(exe), "exe_sha256": sha256(exe), "argv": argv, "out": str(out),
             "exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "trace": str(out / "trace.json"), "probe_rows": rows,
@@ -358,7 +367,8 @@ def main() -> int:
         passed = bool(result.get("pass", True)) and result.get("spectate_pass", False)
     elif args.arm == "sp_view_is_local":
         plain = sp_arm(out / "plain", True, False, args.ticks, args.timeout)
-        cycled = sp_arm(out / "cycled", True, True, args.ticks, args.timeout)
+        # Cycle onto a unit, then gib it past 9 s so the follow label's empty-after-death line can fire.
+        cycled = sp_arm(out / "cycled", True, True, args.ticks, args.timeout, kill_follow_ms=9000)
         compare = subprocess.run(
             [sys.executable, str(REPO / "tools/compare_sim_traces.py"), plain["trace"], cycled["trace"],
              "--expected-ticks", str(args.ticks)],

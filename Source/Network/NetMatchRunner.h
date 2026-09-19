@@ -53,6 +53,9 @@ namespace RTE {
 		// The session's clock. Supplied by the service so setup, play and every resync share one elapsed
 		// time; without it each wait clocks from its own start, which the admission deadlines cannot use.
 		std::function<uint64_t()> nowMs;
+		/// Host: apply a Starting-state kick on this worker after the session tick, never from the game thread.
+		/// The runner hands back the session it just ticked, which the worker owns for the whole setup.
+		std::function<void(NetSession&)> pumpHost;
 	};
 
 	/// What a setup round clocks each of its parts with.
