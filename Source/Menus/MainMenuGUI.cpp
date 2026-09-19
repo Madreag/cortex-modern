@@ -1679,8 +1679,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				m_HostOptionsBaseRevision = adopted.configRevision;
 			}
 		}
-		std::string refusal;
-		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions(&refusal);
+		std::string refusal = g_NetMatchService.GetErrorText();
+		if (!refusal.starts_with("Host options refused: ")) refusal.clear();
+		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions();
 		if (!refusal.empty()) {
 			m_HostOptionsStatusLabel->SetText(refusal);
 		} else if ((pending && pending->configRevision > adopted.configRevision) || m_HostOptionsAwaitedRevision > adopted.configRevision) {

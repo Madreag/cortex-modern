@@ -33,7 +33,7 @@ namespace RTE {
 	/// itself, so the runner never blocks the game thread for the length of a copy.
 	struct NetHostOptionsSlot {
 		std::atomic<bool> pending{false};
-		mutable std::mutex mutex;
+		std::mutex mutex;
 		NetMatchConfig config;
 		std::string refusal;
 
