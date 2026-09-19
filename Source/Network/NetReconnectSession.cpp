@@ -51,6 +51,7 @@ namespace RTE {
 			case NetKickBanResult::ActionUnavailable: return "ActionUnavailable";
 			case NetKickBanResult::PersistenceFailed: return "PersistenceFailed";
 			case NetKickBanResult::UnknownIdentity: return "UnknownIdentity";
+			case NetKickBanResult::Queued: return "Queued";
 		}
 		return "Unknown";
 	}
@@ -430,6 +431,11 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleTicketStoredAck(NetPeerId connection, const NetH4TicketStoredAck& message, uint64_t nowMs) {
+		// The ack is what commits the seat, so it is admission: the acking connection has to be the
+		// proven one, and it has to be admitted now, not when the offer went out.
+		if (RefuseIfBanned(connection)) {
+			return;
+		}
 		// The ack carries no identity block, so the seat's own recorded identity rebuilds the key the
 		// commit was cached against - a lost JoinCommitted must never read as a failure.
 		if (const SeatState* seat = FindSeat(message.stableSeat); seat != nullptr && seat->committed && seat->holderGeneration == message.holderGeneration) {
@@ -764,6 +770,14 @@ namespace RTE {
 			}
 		}
 		m_ConnectionIds.push_back({connection, id});
+	}
+
+	void NetReconnectHost::UnbindParticipantId(NetPeerId connection) {
+		// A proof binds one live connection. Transport ids are reused, so a dead one must not leave an
+		// identity behind for whoever takes the number next.
+		m_ConnectionIds.erase(std::remove_if(m_ConnectionIds.begin(), m_ConnectionIds.end(), [connection](const std::pair<NetPeerId, NetAuthBytes32>& entry) {
+			return entry.first == connection;
+		}), m_ConnectionIds.end());
 	}
 
 	bool NetReconnectHost::LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const {
@@ -1339,6 +1353,11 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleSubstitutionAck(NetPeerId connection, const NetH4SubstitutionAck& message, uint64_t nowMs) {
+		// The ack takes the seat, so it is re-admitted here: an identity banned since the offer went
+		// out never commits, and an unbound connection never commits while proof is required.
+		if (RefuseIfBanned(connection)) {
+			return;
+		}
 		const NetH4TxKey key = SubstitutionKey(message.stableSeat, message.holderGeneration);
 		// A lost commit result, or an ack that arrives after the transaction ended, replays the
 		// terminal result it already earned - success or refusal.
@@ -1434,10 +1453,34 @@ namespace RTE {
 		});
 	}
 
+	void NetReconnectHost::DropRemovedTransactions(NetPeerId connection) {
+		DropApplicantsFor(connection);
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].connection == connection) {
+				m_Substitutions[index].connection = c_InvalidNetPeerId;
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitute was removed from the session", m_NowMs);
+				continue;
+			}
+			++index;
+		}
+		m_PendingReclaims.erase(std::remove_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [connection](const PendingReclaim& pending) {
+			return pending.connection == connection;
+		}), m_PendingReclaims.end());
+		// Unlike an ordinary drop there is no resume window: a removal ends every transaction this link
+		// had open, on every seat, not only the one it was removed from.
+		m_Provisionals.erase(std::remove_if(m_Provisionals.begin(), m_Provisionals.end(), [connection](const Provisional& pending) {
+			return pending.connection == connection;
+		}), m_Provisionals.end());
+	}
+
 	NetH4DisconnectOutcome NetReconnectHost::NotifyDisconnect(NetPeerId connection, uint64_t frame) {
+		if (connection != c_InvalidNetPeerId) {
+			UnbindParticipantId(connection);
+		}
 		if (connection != c_InvalidNetPeerId && connection == m_LastRemovedConnection) {
 			m_LastRemovedConnection = c_InvalidNetPeerId;
 			m_Admission.DropConnection(connection);
+			DropRemovedTransactions(connection);
 			return NetH4DisconnectOutcome::Removed;
 		}
 		const auto fence = std::find_if(m_Fences.begin(), m_Fences.end(), [connection](const Fence& entry) {
