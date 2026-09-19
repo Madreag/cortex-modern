@@ -10,6 +10,8 @@
 #include "System.h"
 #include "Controller.h"
 #include "Actor.h"
+#include "ADoor.h"
+#include "Attachable.h"
 #include "LoopbackTransport.h"
 #include "MovableMan.h"
 #include "NetLockstep.h"
@@ -91,6 +93,9 @@ namespace {
 		uint64_t fenceBytesMax = 0;
 		uint64_t fenceSharedPatchBytes = 0;
 		uint64_t appliesSinceReport = 0;
+		uint64_t requestWaitCount = 0;
+		int64_t requestWaitLastUs = 0;
+		int64_t requestWaitMaxUs = 0;
 	};
 
 	HorizonWaitStats& HorizonStats() {
@@ -649,7 +654,14 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 		}
 	}
 	m_LastPathRequestWaitUs = waitUs;
-	RecordHorizonWait(waitUs);
+	{
+		// Request stalls are counted apart from horizon-job stalls so the p99 that sizes H stays clean.
+		auto& stats = HorizonStats();
+		std::lock_guard lock(stats.mutex);
+		stats.requestWaitCount += waitUs > 0 ? 1 : 0;
+		stats.requestWaitLastUs = waitUs;
+		stats.requestWaitMaxUs = std::max(stats.requestWaitMaxUs, waitUs);
+	}
 	if (waitUs > 0) {
 		std::cout << "[horizon-path] request_wait_us=" << waitUs << " commit=" << deferred.completeTick << std::endl;
 	}
@@ -1665,6 +1677,9 @@ void PathFinder::ResetHorizonWaitStats() {
 	stats.fenceBytesMax = 0;
 	stats.fenceSharedPatchBytes = 0;
 	stats.appliesSinceReport = 0;
+	stats.requestWaitCount = 0;
+	stats.requestWaitLastUs = 0;
+	stats.requestWaitMaxUs = 0;
 }
 
 void PathFinder::WriteHorizonWaitReport() {
@@ -1684,7 +1699,10 @@ void PathFinder::WriteHorizonWaitReport() {
 		     << ",\"note_us_max\":" << stats.noteMaxUs
 		     << ",\"fence_bytes\":" << stats.fenceBytes
 		     << ",\"fence_bytes_max\":" << stats.fenceBytesMax
-		     << ",\"fence_shared_patch_bytes\":" << stats.fenceSharedPatchBytes << "}\n";
+		     << ",\"fence_shared_patch_bytes\":" << stats.fenceSharedPatchBytes
+		     << ",\"request_stalls\":" << stats.requestWaitCount
+		     << ",\"request_wait_last_us\":" << stats.requestWaitLastUs
+		     << ",\"request_wait_max_us\":" << stats.requestWaitMaxUs << "}\n";
 	}
 	const std::string path = System::GetWorkingDirectory() + "Userdata/horizon_path_grid.json";
 	std::ofstream out(path, std::ios::trunc);
@@ -1839,6 +1857,41 @@ int PathFinder::RunHorizonGridSelfTest() {
 	palette.Seat(5, &rock);
 	palette.Seat(MaterialColorKeys::g_MaterialSand, &sand);
 
+	// A door fixture: only the terrain draw is stubbed, the door query and the override branch are the production ones.
+	struct TestDoorPiece : Attachable {
+		void Arm(const Vector& pos, float radius) {
+			m_Pos = pos;
+			m_SpriteRadius = radius;
+			m_SpriteDiameter = radius * 2.0F;
+		}
+		void Draw(BITMAP*, const Vector& = Vector(), DrawMode = g_DrawColor, bool = false) const override {}
+	};
+	struct TestDoor : ADoor {
+		void Arm(Attachable* piece, int team) {
+			m_Door = piece;
+			m_DoorMaterialDrawn = true;
+			SetTeam(team);
+		}
+		void Unarm() {
+			m_DoorMaterialDrawn = false;
+			m_Door = nullptr;
+		}
+	};
+	struct BorrowedActor {
+		Actor* actor = nullptr;
+		void Lend(Actor* borrowed) {
+			actor = borrowed;
+			g_MovableMan.TestAddBorrowedActor(borrowed);
+		}
+		void Reclaim() {
+			if (actor) {
+				g_MovableMan.TestRemoveBorrowedActor(actor);
+				actor = nullptr;
+			}
+		}
+		~BorrowedActor() { Reclaim(); }
+	};
+
 	// A fixture Scene does not own its stack terrain, and SceneMan must not keep it after the row.
 	struct FixtureBinding {
 		Scene* scene = nullptr;
@@ -1877,6 +1930,10 @@ int PathFinder::RunHorizonGridSelfTest() {
 		TestArmFaultInject("");
 		return 1;
 	};
+
+	if (!ThreadMan::IsConstructed()) {
+		ThreadMan::Construct(); // the async rows push onto the background pool
+	}
 
 	ResetHorizonWaitStats();
 	PathFinder peerA;
@@ -2292,6 +2349,133 @@ int PathFinder::RunHorizonGridSelfTest() {
 			return 1;
 		}
 		std::cout << Tag << " PASS speculation-fence" << std::endl;
+	}
+
+	// note-patch-sharing: one capture covers every pathfinder unless a team's door material sits in the noted box.
+	{
+		LoopbackTransport idleNote;
+		NetLockstepConfig lockstepNote;
+		lockstepNote.localPeerId = 1;
+		lockstepNote.remotePeerId = 2;
+		lockstepNote.peerCount = 2;
+		lockstepNote.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+		lockstepNote.matchConfig.pathHorizonTicks = 4;
+		NetLockstepCoordinator seatedNote;
+		std::string noteError;
+		if (!seatedNote.StartReplay(idleNote, lockstepNote, &noteError)) {
+			return fail("note lockstep replay did not start");
+		}
+		LockstepBinding lockstepBinding;
+		ScenarioRunner::SetLockstepCoordinator(&seatedNote);
+		ScenarioRunner::SetLockstepAppliedFrame(60);
+		Scene noteScene;
+		SLTerrain noteTerrain;
+		FixtureBinding binding;
+		if (noteTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
+			return fail("note fixture material bitmap was not installed");
+		}
+		binding.Bind(&noteScene, &noteTerrain);
+		noteScene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		const Box noteBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
+		ResetHorizonWaitStats();
+		noteTerrain.AddUpdatedMaterialArea(noteBox);
+		const int64_t sharedCaptures = HorizonNoteCaptures();
+		const size_t sharedBoxes = noteScene.TestHorizonBoxCount();
+
+		TestDoorPiece piece;
+		piece.Arm(Vector(70.0F, 50.0F), 10.0F);
+		TestDoor door;
+		door.Arm(&piece, Activity::Teams::TeamOne);
+		BorrowedActor borrowed;
+		borrowed.Lend(&door);
+		const bool ownerSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, noteBox);
+		const bool otherSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamTwo, noteBox);
+		const bool farBoxSeesDoor = g_MovableMan.TeamHasDoorMaterialInBox(Activity::Teams::TeamOne, Box(Vector(0.0F, 0.0F), 8.0F, 8.0F));
+		noteScene.FlushHorizonTerrainBoxes();
+		ResetHorizonWaitStats();
+		noteTerrain.AddUpdatedMaterialArea(noteBox);
+		const int64_t doorCaptures = HorizonNoteCaptures();
+		const int64_t doorMaxCaptures = HorizonNoteMaxCaptures();
+		const int64_t noteCount = HorizonNoteCount();
+		borrowed.Reclaim();
+		door.Unarm();
+		noteScene.FlushHorizonTerrainBoxes();
+
+		if (sharedCaptures != 1 || sharedBoxes == 0) {
+			std::cout << Tag << " FAIL shared note captures=" << sharedCaptures << " boxes=" << sharedBoxes << std::endl;
+			return 1;
+		}
+		if (!ownerSeesDoor || otherSeesDoor || farBoxSeesDoor) {
+			std::cout << Tag << " FAIL door query owner=" << ownerSeesDoor << " other=" << otherSeesDoor << " far=" << farBoxSeesDoor << std::endl;
+			return 1;
+		}
+		if (doorCaptures != 2 || doorMaxCaptures != 2 || noteCount != 1) {
+			std::cout << Tag << " FAIL door note captures=" << doorCaptures << " max=" << doorMaxCaptures << " notes=" << noteCount << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS note-patch-sharing" << std::endl;
+	}
+
+	// shared-async-tick: both peers publish the same answer on the same applied frame, whatever their solve timing.
+	{
+		PathFinder asyncA;
+		PathFinder asyncB;
+		asyncA.TestInstallGrid(8, 4, 20, &air);
+		asyncB.TestInstallGrid(8, 4, 20, &air);
+		asyncB.TestSetPathRequestDelayMs(40);
+		auto requestA = asyncA.CalculatePathAsync(Vector(10, 50), Vector(150, 50), FLT_MAX, 1.0F, nullptr, true, 74);
+		auto requestB = asyncB.CalculatePathAsync(Vector(10, 50), Vector(150, 50), FLT_MAX, 1.0F, nullptr, true, 74);
+		asyncA.CommitPathRequestsThrough(73);
+		asyncB.CommitPathRequestsThrough(73);
+		const bool earlyA = requestA->complete;
+		const bool earlyB = requestB->complete;
+		asyncA.CommitPathRequestsThrough(74);
+		asyncB.CommitPathRequestsThrough(74);
+		const bool lateA = requestA->complete;
+		const bool lateB = requestB->complete;
+		const int statusA = requestA->status;
+		const int statusB = requestB->status;
+		const float costA = requestA->totalCost;
+		const float costB = requestB->totalCost;
+		const float lengthA = requestA->pathLength;
+		const float lengthB = requestB->pathLength;
+		asyncB.TestSetPathRequestDelayMs(0);
+		if (earlyA || earlyB) {
+			std::cout << Tag << " FAIL async T+H-1 complete_a=" << earlyA << " complete_b=" << earlyB << std::endl;
+			return 1;
+		}
+		if (!lateA || !lateB) {
+			std::cout << Tag << " FAIL async T+H complete_a=" << lateA << " complete_b=" << lateB << std::endl;
+			return 1;
+		}
+		if (statusA != statusB || costA != costB || lengthA != lengthB) {
+			std::cout << Tag << " FAIL async answer status_a=" << statusA << " status_b=" << statusB << " cost_a=" << costA
+			          << " cost_b=" << costB << " len_a=" << lengthA << " len_b=" << lengthB << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS shared-async-tick" << std::endl;
+	}
+
+	// shared-async-stall: a solve that is not finished at its commit tick is waited for, never skipped.
+	{
+		PathFinder stallFinder;
+		stallFinder.TestInstallGrid(8, 4, 20, &air);
+		stallFinder.TestSetPathRequestDelayMs(50);
+		auto stallRequest = stallFinder.CalculatePathAsync(Vector(10, 50), Vector(150, 50), FLT_MAX, 1.0F, nullptr, true, 80);
+		stallFinder.CommitPathRequestsThrough(80);
+		stallFinder.TestSetPathRequestDelayMs(0);
+		const bool stallComplete = stallRequest->complete;
+		const int64_t stallWaitUs = stallFinder.LastPathRequestWaitUs();
+		const size_t stallPending = stallFinder.TestDeferredPathRequestCount();
+		if (!stallComplete || stallPending != 0) {
+			std::cout << Tag << " FAIL async stall complete=" << stallComplete << " pending=" << stallPending << std::endl;
+			return 1;
+		}
+		if (stallWaitUs < 25000) {
+			std::cout << Tag << " FAIL async stall wait_us=" << stallWaitUs << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS shared-async-stall" << std::endl;
 	}
 
 	// (iv) wait_us is zero when ready before wait, and the late fault is 50 ms plus slack.
