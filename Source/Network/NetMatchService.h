@@ -362,6 +362,8 @@ namespace RTE {
 		/// Hashes the captured inputs and caches the identity. Reads no manager, so the diagnostics
 		/// worker runs it while the game thread keeps drawing.
 		bool BuildCapturedDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
+		/// Forgets captured inputs no bundle will build, so a refused request strands nothing.
+		void DropCapturedDiagnosticIdentityInputs();
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
 		std::string ExportDiagnosticIdentity() const;
 		/// Returns the last runtime error and heal record without exposing reconnect credentials.
@@ -506,6 +508,8 @@ namespace RTE {
 		std::string m_DiagnosticIdentity;
 		NetIdentityManifest m_DiagnosticIdentityInputs; //!< The manager reads a captured build is waiting on.
 		bool m_DiagnosticIdentityInputsPending = false;
+		uint64_t m_DiagnosticIdentityGeneration = 0; //!< Bumped by every cached identity, so an older build knows it lost.
+		uint64_t m_DiagnosticIdentityInputsGeneration = 0;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
 		static bool s_AutosaveSecondsOverridden;
