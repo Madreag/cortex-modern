@@ -353,6 +353,15 @@ void RTE::ArmLuaCheckpointBarrier() {
 	luaJIT_set_tab_write_callback(&OnLuaTableWrite);
 }
 
+// A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
+RTE::LuaCheckpointBarrierPause::LuaCheckpointBarrierPause() {
+	luaJIT_set_tab_write_callback(nullptr);
+}
+
+RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
+	luaJIT_set_tab_write_callback(&OnLuaTableWrite);
+}
+
 uint64_t RTE::LuaCheckpointWriteGeneration() {
 	return s_LuaWrites.load(std::memory_order_relaxed);
 }

@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "Constants.h"
 #include "OwnedMovableObjects.h"
 #include "MovableMan.h"
@@ -2202,6 +2203,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 
 bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
+	LuaCheckpointBarrierPause barrierPause;
 	struct PathCapture {
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
