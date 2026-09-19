@@ -129,8 +129,9 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
     that ignored the name and took the store's own pick would be red here. The two peers' world digests
     are NOT compared against each other: a checkpoint carries per-peer locals, so each peer is only held
     to the world its own checkpoint recorded."""
-    # Two checkpoints are the bare minimum the policy self-test accepts, so the restore runs well past the
-    # retention limit: at a 2 s cadence (120 ticks) tick 700 is the fifth checkpoint or later.
+    # With two checkpoints the policy self-test cannot tell its own sub-results apart, so the restore fires
+    # well past the retention limit: at a 2 s cadence (120 ticks) at least four stand behind tick 700, and
+    # the row asserts the count it actually observed.
     ticks, restore_at = 800, 700
     extra = {who: ["-net-autosave-restore", "oldest", "-net-autosave-restore-at", str(restore_at)]
              for who in ("host", "client")}
