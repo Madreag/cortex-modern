@@ -1225,25 +1225,49 @@ namespace RTE {
 				return Fail("an ordinary ticket rejoin targeted a world");
 			}
 			// The flag has to survive the record's own round trip: a relaunch reads it off disk.
+			record.directorySessionId = "sess-world-1";
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+			if (record.recordVersion != NetReconnectTicketStore::c_RecordVersion) {
+				return Fail("ticket-rejoin-did-not-target-the-world: a world ticket asked for record version " +
+				            std::to_string(record.recordVersion) + ", the world body is version " +
+				            std::to_string(NetReconnectTicketStore::c_RecordVersion));
+			}
 			std::vector<uint8_t> bytes;
 			if (!NetReconnectTicketStore::Serialize(record, bytes)) {
 				return Fail("ticket-rejoin-did-not-target-the-world: the world record did not serialize");
 			}
 			NetH4TicketRecord decoded;
 			if (!NetReconnectTicketStore::Deserialize(bytes, decoded) || !decoded.persistentWorld || !(decoded == record)) {
-				return Fail("ticket-rejoin-did-not-target-the-world: the stored record lost its world flag");
+				return Fail("ticket-rejoin-did-not-target-the-world: the stored record read back world " +
+				            std::string(decoded.persistentWorld ? "true" : "false") + " version " +
+				            std::to_string(decoded.recordVersion) + " session \"" + decoded.directorySessionId + "\"");
 			}
-			// A record written before the flag existed still proves its seat.
-			std::vector<uint8_t> legacy = bytes;
-			legacy[8] = 1;
-			legacy[9] = 0;
-			legacy.pop_back();
-			NetH4TicketRecord legacyDecoded;
-			if (!NetReconnectTicketStore::Deserialize(legacy, legacyDecoded)) {
-				return Fail("a version 1 ticket record no longer loads");
+			// An ordinary ticket on this build stops at the directory session id: no build is handed a
+			// version it cannot read for a flag the record does not carry.
+			NetH4TicketRecord ordinaryRecord = record;
+			ordinaryRecord.persistentWorld = false;
+			ordinaryRecord.recordVersion = NetReconnectTicketStore::RecordVersionFor(false);
+			std::vector<uint8_t> ordinaryBytes;
+			if (ordinaryRecord.recordVersion != NetReconnectTicketStore::c_DirectoryRecordVersion ||
+			    !NetReconnectTicketStore::Serialize(ordinaryRecord, ordinaryBytes) || ordinaryBytes.size() + 1 != bytes.size()) {
+				return Fail("ticket-rejoin-did-not-target-the-world: an ordinary ticket wrote version " +
+				            std::to_string(ordinaryRecord.recordVersion) + " and " + std::to_string(ordinaryBytes.size()) +
+				            " bytes against the world's " + std::to_string(bytes.size()));
 			}
-			if (legacyDecoded.persistentWorld || legacyDecoded.stableSeat != record.stableSeat) {
-				return Fail("a version 1 ticket record did not decode as an ordinary host's");
+			NetH4TicketRecord ordinaryDecoded;
+			if (!NetReconnectTicketStore::Deserialize(ordinaryBytes, ordinaryDecoded) || ordinaryDecoded.persistentWorld ||
+			    ordinaryDecoded.directorySessionId != ordinaryRecord.directorySessionId) {
+				return Fail("ticket-rejoin-did-not-target-the-world: an ordinary ticket read back world " +
+				            std::string(ordinaryDecoded.persistentWorld ? "true" : "false") + " session \"" +
+				            ordinaryDecoded.directorySessionId + "\"");
+			}
+			// A world record cannot be written into a body that has no flag byte to carry it.
+			NetH4TicketRecord mislabelled = record;
+			mislabelled.recordVersion = NetReconnectTicketStore::c_DirectoryRecordVersion;
+			std::vector<uint8_t> refused;
+			if (NetReconnectTicketStore::Serialize(mislabelled, refused)) {
+				return Fail("ticket-rejoin-did-not-target-the-world: a world record serialized into a version " +
+				            std::to_string(mislabelled.recordVersion) + " body that cannot carry its flag");
 			}
 			return 0;
 		}
