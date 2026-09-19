@@ -3653,7 +3653,7 @@ void RunGameLoop() {
 		while (true) {
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 			if (ScenarioRunner::WorldCatchUpActive()) {
-				if (worldCatchUpBudget <= 0 || !ScenarioRunner::WorldCatchUpHasFrame(nextSimTick)) {
+				if (!ScenarioRunner::WorldCatchUpMayGrant(nextSimTick, worldCatchUpBudget)) {
 					break;
 				}
 				if (!g_TimerMan.TimeForSimUpdate()) {

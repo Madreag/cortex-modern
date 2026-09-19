@@ -160,8 +160,7 @@ namespace RTE {
 		void NoteCapture(double stallMs, uint64_t bytes);
 		void NoteCatchUp(uint64_t ticks, uint64_t elapsedMs);
 		void NoteTransfer(uint64_t bytes);
-		/// Unhooked: no production caller supplies a with/without-capture pair. The completion pass
-		/// reads this only after that pair is wired; do not invent one on the capture path.
+		/// Records one tick hashed with and without a capture. No capture path produces that pair yet.
 		void NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture);
 
 		double CapturePercentileMs(double percentile) const;
@@ -250,7 +249,17 @@ namespace RTE {
 		return session.spectatorLobbyPeer;
 	}
 
-	/// The catch-up report DriveWorldJoinClient sends: Take's appliedThrough, never the host nowFrame.
+	/// The joiner's own bootstrap state: the image it restored, the tail it holds and the E it was given.
+	struct NetWorldCatchUpClient {
+		bool active = false;
+		uint64_t snapshotTick = 0;        //!< B, the tick the restored image froze at.
+		uint64_t appliedThrough = 0;      //!< The last committed tail frame the sim has applied.
+		uint64_t activationTick = 0;      //!< E, once the host has announced it.
+		std::string digest;
+		std::vector<NetLockstepFrame> tail;
+	};
+
+	/// The catch-up report a joiner sends: what its sim has applied, never the host's frame.
 	NetLobbyStateChunk MakeJoinerCatchUpReport();
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
@@ -283,6 +292,15 @@ namespace RTE {
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
+
+	/// What a bootstrap whose E has arrived gets: a member is admitted and its Activate is committed;
+	/// an overflow spectator only keeps streaming.
+	struct NetWorldActivationPlan {
+		bool admit = false;
+		bool submitTransition = false;
+		uint64_t firstRequired = 0;
+	};
+	NetWorldActivationPlan PlanWorldActivation(const NetWorldJoinSession& session, uint64_t nextFrame, bool late);
 
 	/// The host's join plane: the slot table, the image in flight, the tail, the per-connection
 	/// bootstraps and the measurements. It authors transitions; it never polls a transport.

@@ -1717,6 +1717,7 @@ namespace RTE {
 			record.hostAddress = m_Record.hostAddress;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
+			record.persistentWorld = m_WorldTarget;
 			std::string storeError;
 			// The ack must never be sent before the record is durable: the host commits the seat on it.
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
@@ -1798,6 +1799,7 @@ namespace RTE {
 			record.hostAddress = m_Record.hostAddress;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
+			record.persistentWorld = m_WorldTarget;
 			std::string storeError;
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
 			NetAuthBytes16 nonce{};

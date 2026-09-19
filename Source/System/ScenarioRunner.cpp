@@ -1014,6 +1014,10 @@ namespace RTE {
 		return false;
 	}
 
+	bool ScenarioRunner::WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame) {
+		return s_WorldCatchUpActive && ticksLeftThisFrame > 0 && WorldCatchUpHasFrame(nextSimTick);
+	}
+
 	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
 		if (!s_WorldCatchUpActive) {
 			return false;
