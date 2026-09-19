@@ -201,6 +201,8 @@ namespace RTE {
 		bool PreviewGlobalFenceArmed() const { return m_PreviewGlobalFenceArmed; }
 		/// Arms the native barrier for tables reachable from this state's globals and require caches.
 		/// It undoes table writes only: upvalue slots, setfenv envs, registry-only tables and stack-only tables keep what a preview wrote.
+		/// The globals a preview window never arms: preview holds and graph bookkeeping own their own lifetime.
+		static const std::array<const char*, 6>& PreviewGlobalFenceSkips();
 		void CapturePreviewGlobalFence();
 		/// Arms it with the registry as a rollback root as well, which the release's reference order makes safe.
 		/// @param rootRegistry Whether the registry rolls back with the globals.

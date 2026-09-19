@@ -6583,6 +6583,29 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	                                    luaJIT_state_serial(m_State) == birthsBeforeWindow;
 	std::cout << "[script-graph-selftest] " << (windowGivesNumbersBack ? "PASS" : "FAIL") << " preview_window_returns_table_numbers" << std::endl;
 	checkpointValues = windowGivesNumbersBack && checkpointValues;
+	// A capture pays no preview images: its own tables are born after the arm and the codec's are skipped.
+	RunScriptString("_F105PreviewRoot = { probe = { 1, 2, 3 } }");
+	const auto& fenceSkips = LuaStateWrapper::PreviewGlobalFenceSkips();
+	luaJIT_PreviewStats beforeCapture{}, afterCapture{};
+	std::vector<std::string> barrierProblems;
+	std::string insideWindow, outsideWindow;
+	const bool readBefore = luaJIT_preview_stats(m_State, &beforeCapture) != 0;
+	const bool barrierWindow = luaJIT_preview_begin(m_State, fenceSkips.data(), fenceSkips.size(), 0) != 0;
+	if (barrierWindow) {
+		SerializeScriptGraph(insideWindow, barrierProblems);
+		luaJIT_preview_end(m_State);
+	}
+	SerializeScriptGraph(outsideWindow, barrierProblems);
+	const bool readAfter = luaJIT_preview_stats(m_State, &afterCapture) != 0;
+	RunScriptString("_F105PreviewRoot = nil");
+	const bool capturePaidNoImages = barrierWindow && readBefore && readAfter && barrierProblems.empty() &&
+	                                 !insideWindow.empty() && insideWindow == outsideWindow &&
+	                                 afterCapture.saves == beforeCapture.saves;
+	std::cout << "[script-graph-selftest] " << (capturePaidNoImages ? "PASS" : "FAIL")
+	          << " capture_pays_no_preview_images saves_before=" << beforeCapture.saves
+	          << " saves_after=" << afterCapture.saves << " inside=" << insideWindow.size()
+	          << " outside=" << outsideWindow.size() << std::endl;
+	checkpointValues = capturePaidNoImages && checkpointValues;
 	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
 	// A Lua class left in a global is what a mod checkpoint has to carry.
 	RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
@@ -10269,6 +10292,15 @@ void LuaStateWrapper::TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, con
 	s_PreviewBornCount.store(s_PreviewBornWrappers.size(), std::memory_order_release);
 }
 
+// Preview holds and graph bookkeeping have their own lifetime at this boundary.
+const std::array<const char*, 6>& LuaStateWrapper::PreviewGlobalFenceSkips() {
+	static const std::array<const char*, 6> skips = {
+		"_ScriptedObjects", "_ScriptGraph", "_ScriptGraphBaseline", "_ScriptGraphNative",
+		"_ScriptGraphProgress", "_ScriptFieldsStash"
+	};
+	return skips;
+}
+
 void LuaStateWrapper::CapturePreviewGlobalFence() {
 	CapturePreviewGlobalFence(LuaMan::PreviewRegistryRootEnabled());
 }
@@ -10279,17 +10311,13 @@ void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
 		return;
 	}
 	DropPreviewBornWrappers(this);
-	// Preview holds and graph bookkeeping have their own lifetime at this boundary.
-	static const char* const skipped[] = {
-		"_ScriptedObjects", "_ScriptGraph", "_ScriptGraphBaseline", "_ScriptGraphNative",
-		"_ScriptGraphProgress", "_ScriptFieldsStash"
-	};
+	const auto& skipped = PreviewGlobalFenceSkips();
 	m_PreviewScriptCacheKeys.clear();
 	m_PreviewScriptCacheHeld.clear();
 	for (const auto& [path, cached]: m_ScriptCache) {
 		m_PreviewScriptCacheKeys.insert(path);
 	}
-	if (!luaJIT_preview_begin(m_State, skipped, std::size(skipped), rootRegistry ? LUAJIT_PREVIEW_REGISTRY_ROOT : 0u)) {
+	if (!luaJIT_preview_begin(m_State, skipped.data(), skipped.size(), rootRegistry ? LUAJIT_PREVIEW_REGISTRY_ROOT : 0u)) {
 		RTEAbort("Unable to arm the native preview table barrier.");
 	}
 	m_PreviewGlobalFenceArmed = true;
