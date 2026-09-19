@@ -34,6 +34,17 @@ def graph(nodes=(), roots=(), globals=()):
     return ("SG4;r" + named(roots) + "G" + named(globals) + "L0;E0;Rz;X0;N" + str(len(nodes)) + ";" + "".join(nodes)).encode()
 
 
+def path(*segments):
+    return "g" + str(len(segments)) + ";" + "".join(string(segment) for segment in segments)
+
+
+def birth_graph(version, nodes=(), roots=(), globals=(), patches=(), serial=1):
+    """A birth-numbered graph: SG6 carries an engine patch's pairs inline, SG5 as one node token."""
+    named = lambda entries: str(len(entries)) + ";" + "".join(string(key) + value for key, value in entries)
+    return (version + ";S" + str(serial) + ";r" + named(roots) + "G" + named(globals) + "L0;E" + str(len(patches)) + ";"
+            + "".join(patches) + "Rz;X0;N" + str(len(nodes)) + ";" + "".join(nodes)).encode()
+
+
 def graph_line(data, index=0):
     return f"LuaStateGraph = {index}|" + base64.urlsafe_b64encode(data).decode().replace("=", ".") + "\n"
 
@@ -243,6 +254,26 @@ class SnapshotComparisonTests(unittest.TestCase):
 class GraphIdentityTests(unittest.TestCase):
     def compare(self, first, second):
         return checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
+
+    def test_sg6_engine_patch_carries_its_pairs_inline(self):
+        node = table(1, ((string("k"), "n7;"),))
+        data = birth_graph("SG6", (node,), roots=(("1", "#1;"),),
+                           patches=(path("string") + "c1;" + string("trim") + "#1;" + "z;",))
+        parsed = checker.parse_graph(data)
+        target, pairs, meta = parsed["patches"][0]
+        self.assertEqual(target, ("g", (b"string",)))
+        self.assertEqual(pairs, [(("s", b"trim"), ("#", 1))])
+        self.assertEqual(meta, ("z",))
+        self.assertIn(1, list(checker.graph_references(parsed["patches"])))
+        self.assertEqual(self.compare(data, data)["matched_nodes"], 1)
+
+    def test_sg5_engine_patch_still_reads_three_tokens(self):
+        node = table(1, ((string("k"), "n7;"),))
+        data = birth_graph("SG5", (node,), roots=(("1", "#1;"),), patches=(path("string") + "#1;" + "z;",))
+        parsed = checker.parse_graph(data)
+        self.assertEqual(parsed["patches"][0], (("g", (b"string",)), ("#", 1), ("z",)))
+        self.assertIn(1, list(checker.graph_references(parsed["patches"])))
+        self.assertEqual(self.compare(data, data)["matched_nodes"], 1)
 
     def test_distinct_equal_values_cannot_merge_or_split(self):
         alias = graph((table(1, ((string("a"), "#2;"), (string("b"), "#2;"))), table(2, ())), globals=(("test", "#1;"),))
