@@ -46,6 +46,9 @@ namespace RTE {
 
 		bool HasPendingCheckpoint() const { return !m_PendingCheckpoint.empty(); }
 		bool IsCheckpointInitialized() const { return m_CheckpointInitialized; }
+		/// How many times the module-expansion flags have had to take storage. The flags are owned for the
+		/// menu's life and cleared in place, so a destroy and create cycle must not move this.
+		static uint64_t GetModuleFlagAllocations() { return s_ModuleFlagAllocations; }
 		/// Whether the cached control pointers are the ones the loaded control manager owns.
 		bool HasLiveCachedControls();
 		std::string SaveCheckpoint() const;
@@ -443,7 +446,7 @@ namespace RTE {
 		// The multiplier of costs of any foreign tech items
 		float m_ForeignCostMult;
 		// Arry of bools showing which modules that have been expanded in the item list
-		bool* m_aExpandedModules;
+		std::vector<bool> m_aExpandedModules;
 		// Notification blink timer
 		Timer m_BlinkTimer;
 		// What we're blinking
@@ -523,6 +526,8 @@ namespace RTE {
 		int m_DeliveryWidth; //!< The width of the currently selected delivery craft, which will determine the width of the LZ marker.
 		// The cursor image shared by all buy menus
 		static BITMAP* s_pCursor;
+		// How many times a buy menu has had to take storage for its module flags, over every menu in the process.
+		static uint64_t s_ModuleFlagAllocations;
 
 		// If true UI won't afford to order a craft with more passengers than allowed by craft
 		bool m_EnforceMaxPassengersConstraint;
