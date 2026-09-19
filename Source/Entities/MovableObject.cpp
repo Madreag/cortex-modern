@@ -1498,7 +1498,20 @@ void MovableObject::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode
 }
 
 int MovableObject::UpdateScripts() {
-	m_SimUpdatesSinceLastScriptedUpdate++;
+	// The counter is a saved field and every read of it is the comparison against the interval below,
+	// so it stops once it is there: counting past it changed the archived text of every object in the
+	// scene every tick and no shadow could be reused. The stamp follows the net change, which is none
+	// on a tick that counts up and resets again.
+	struct ScriptedUpdateCounterStamp {
+		MovableObject* object;
+		int before;
+		~ScriptedUpdateCounterStamp() {
+			if (object->m_SimUpdatesSinceLastScriptedUpdate != before) object->TouchCheckpoint();
+		}
+	} counterStamp{this, m_SimUpdatesSinceLastScriptedUpdate};
+	if (m_SimUpdatesSinceLastScriptedUpdate < m_SimUpdatesBetweenScriptedUpdates) {
+		m_SimUpdatesSinceLastScriptedUpdate++;
+	}
 	if (LuaMan::AreScriptsFrozen()) {
 		return 1;
 	}
