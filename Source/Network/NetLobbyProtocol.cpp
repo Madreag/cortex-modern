@@ -266,8 +266,11 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			// Reserved bit 0x1 carries the dedicated flag and bit 0x8 says a redundancy window trails the
+			// body; old builds refuse the nonzero word. Only a host's non-default window sets its bit, so
+			// every config published before this option keeps its exact bytes.
+			const bool carriesRedundancy = config.frameRedundancyTicks != NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? 1 : 0) | (carriesRedundancy ? 8 : 0)));
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -310,6 +313,10 @@ namespace RTE {
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
 			}
+			// The window trails every versioned block, so a config recorded before the bit still reads.
+			if (carriesRedundancy) {
+				AppendU16LE(out, config.frameRedundancyTicks);
+			}
 			return true;
 		}
 
@@ -332,7 +339,8 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			const bool carriesRedundancy = (reserved & 8) != 0;
+			if (reserved & ~static_cast<uint16_t>(1 | 8)) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -392,6 +400,17 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+			}
+			// Without the bit the config carries the default window, whatever the out parameter held.
+			out.frameRedundancyTicks = NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			if (carriesRedundancy) {
+				uint16_t redundancyTicks = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(redundancyTicks), reader, error, "config.frame_redundancy_ticks")) return false;
+				if (redundancyTicks == 0 || redundancyTicks > NetMatchConfigUtil::c_MaxFrameRedundancyTicks) {
+					SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "frame_redundancy_ticks is out of range");
+					return false;
+				}
+				out.frameRedundancyTicks = static_cast<uint8_t>(redundancyTicks);
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
