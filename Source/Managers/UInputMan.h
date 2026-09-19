@@ -229,6 +229,11 @@ namespace RTE {
 		/// @param disable Whether to disable most keys or not.
 		void DisableKeys(bool disable = true) { m_DisableKeyboard = disable; }
 
+		/// Whether a text entry holds this player's own keyboard and mouse, so none of it drives its actor.
+		/// @param whichPlayer The player to ask about.
+		/// @return Whether the player's device input is being typed into instead.
+		bool SeatInputTypedInto(int whichPlayer) const;
+
 		/// Gets whether a key is being held right now, by scancode.
 		/// @param scancodeToTest A scancode to test. See SDL_Scancode enumeration.
 		/// @return Whether the key is held or not.
