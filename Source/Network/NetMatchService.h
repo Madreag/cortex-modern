@@ -142,6 +142,8 @@ namespace RTE {
 	std::string NetIceRowJoinMode(bool iceEnabled, bool hasDirectAddress, const std::string& boundSessionId, const std::string& rowSessionId);
 	/// Prefers NAT traversal when both the setting and the directory row allow it.
 	bool NetIcePrefersP2P(const NetIceJoinTarget& target, bool iceEnabled);
+	/// Keeps an Internet selection attached to its directory session.
+	std::string NetIceMenuJoinAddress(const NetDirectoryClient::GameRow& row);
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
@@ -218,6 +220,13 @@ namespace RTE {
 		// manifest (the agreed roster, the seats and the admission), so the request's roster is ignored.
 		std::string resumeMatchId;
 		uint64_t resumeTick = 0; // 0 takes the newest resumable checkpoint of that match.
+
+		/// Accepts a direct address or the session address shown by the Internet game list.
+		void SetJoinAddress(const std::string& value) {
+			const bool session = value.starts_with("session:");
+			address = session ? std::string() : value;
+			sessionId = session ? value.substr(8) : std::string();
+		}
 	};
 
 	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
