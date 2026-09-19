@@ -65,13 +65,21 @@ enum {
 LUA_API int luaJIT_setmode(lua_State *L, int idx, int mode);
 
 /* Native preview boundary; no Lua library entry points. */
-LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t nskip);
+#define LUAJIT_PREVIEW_REGISTRY_ROOT	0x0001	/* Roll the registry back with the globals. */
+LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t nskip,
+				 unsigned int flags);
 LUA_API size_t luaJIT_preview_end(lua_State *L);
 typedef struct luaJIT_PreviewStats {
-  size_t windows, tables, saves, bytes;
-  double capture_ms, write_ms, restore_ms, max_ms, p99_ms;
+  size_t windows, tables, saves, bytes, upvalues, upvalue_writes;
+  double capture_ms, write_ms, restore_ms, max_ms, p99_ms, measure_ms;
 } luaJIT_PreviewStats;
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats);
+/* Upvalue-slot measurement: on = 1 enables, 0 disables, -1 only reads. Returns the setting before the call. */
+LUA_API int luaJIT_preview_measure(lua_State *L, int on);
+/* Slots are matched by address, so an upvalue freed and its address reused inside a window is mis-attributed. */
+LUA_API size_t luaJIT_preview_upvalue_writes(lua_State *L);
+/* Whether the armed window holds the registry as a rollback root. */
+LUA_API int luaJIT_preview_registry_rooted(lua_State *L);
 LUA_API int luaJIT_preview_faultcheck(lua_State *L);
 
 /* Low-overhead profiling API. */
