@@ -6,9 +6,50 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <set>
 
 namespace RTE {
+
+	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
+		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
+			m_Samples.clear();
+			m_BelowSince.reset();
+		}
+		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
+		m_Samples.emplace_back(nowMs, rttMs);
+		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+	}
+
+	uint32_t NetInputDelayEstimator::Percentile(unsigned percent) const {
+		if (m_Samples.empty()) return 0;
+		std::vector<uint32_t> values;
+		values.reserve(m_Samples.size());
+		for (const auto& [when, rtt]: m_Samples) values.push_back(rtt);
+		std::sort(values.begin(), values.end());
+		return values[(values.size() * percent + 99) / 100 - 1];
+	}
+
+	uint32_t NetInputDelayEstimator::P95Ms() const { return Percentile(95); }
+	uint32_t NetInputDelayEstimator::JitterMs() const { return P95Ms() - Percentile(50); }
+
+	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
+		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
+		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
+		const double frames = std::ceil(rtt / tickMs) + 1 + std::ceil(JitterMs() / tickMs);
+		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
+	}
+
+	std::optional<uint16_t> NetInputDelayEstimator::Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor) {
+		const uint16_t needed = static_cast<uint16_t>(std::min<uint32_t>(RequiredFrames(tickMs, floor), NetMatchConfigUtil::c_MaxInputDelayFrames));
+		if (needed >= current) {
+			m_BelowSince.reset();
+			return needed > current ? std::optional<uint16_t>{needed} : std::nullopt;
+		}
+		if (!m_BelowSince || nowMs < *m_BelowSince) m_BelowSince = nowMs;
+		return nowMs - *m_BelowSince >= c_WindowMs ? std::optional<uint16_t>{needed} : std::nullopt;
+	}
 
 	namespace {
 		using json = nlohmann::json;

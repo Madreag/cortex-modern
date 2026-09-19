@@ -58,6 +58,28 @@
 namespace RTE {
 
 	namespace {
+		bool TestInputDelayUsesTheSimTick(std::string* error) {
+			NetInputDelayEstimator estimate;
+			estimate.Observe(0, 401);
+			if (estimate.RequiredFrames(1000.0 / 60.0) != 26 || estimate.RequiredFrames(1000.0 / 120.0) != 50) {
+				*error = "401ms RTT did not cover the actual simulation tick length";
+				return false;
+			}
+			for (uint64_t now = 100; now <= 5000; now += 100) estimate.Observe(now, now >= 4700 ? 501 : 401);
+			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 38 ||
+			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{38}) {
+				*error = "the five-second RTT tail did not raise the delay with its jitter margin";
+				return false;
+			}
+			for (uint64_t now = 5100; now <= 10100; now += 100) estimate.Observe(now, 100);
+			if (estimate.Change(10100, 38, 1000.0 / 60.0) || estimate.Change(15099, 38, 1000.0 / 60.0) ||
+			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{7}) {
+				*error = "a lower delay did not wait for five settled seconds";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestRollbackSnapshotRing(std::string* error) {
 			MovableMan::WorldSnapshotRing ring;
 			int formats = 0;
@@ -11245,6 +11267,7 @@ namespace RTE {
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
 		if (!TestRewindAnchorRecord(&error)) return fail(error);
 		if (!TestRollbackSnapshotRing(&error)) return fail(error);
+		if (!TestInputDelayUsesTheSimTick(&error)) return fail(error);
 		if (!TestOverlongJoinNameSurfaces(&error)) return fail(error);
 		if (!TestServiceReportCarriesActivityPreset(&error)) return fail(error);
 		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);
