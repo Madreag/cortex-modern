@@ -21,9 +21,16 @@ Three rows, each with the statement that is red without the engine change:
               copy of the checkpoint or was sent the host's.
               RED before the change: no restart manifest is written, -net-resume-match does not exist,
               and a host that dies takes its match with it.
+  world-restart - a PERSISTENT WORLD host is killed and started again on the same install with no
+              -net-resume-match at all: it comes back as the same world (same UUID, boot and round
+              advanced by one) standing on its own newest checkpoint, and the client's ticket still
+              admits it to its own seat. A second half runs the same restart with -net-world-fresh and
+              requires a new round from the scene with the old checkpoints untouched.
+              RED before the change: a world boot resolves no resume, so the restarted host opens the
+              scene and prints no `[autosave] resuming` line; -net-world-fresh does not parse.
 
-Ports: this driver owns 48720-48729; the first three arms take consecutive ports from its base and the
-resume arm takes 48725-48728 (two rounds of two peers), so it never
+Ports: this driver owns 48720-48739; the first three arms take consecutive ports from its base, the
+resume arm takes 48725-48728 and the world-restart arm 48730-48735 (three rounds of two peers), so it never
 overlaps tools/test_autosave.py (48211-48219, 48500-48519), tools/test_post_match_report.py or
 tools/test_post_match_combined.py (48215) or tools/test_match_chat.py (48700-48705) and can run beside them.
 
@@ -56,6 +63,21 @@ HELD_LAUNCH = re.compile(r"^\[net-match\] launching from the held checkpoint: (\
 RECEIVED_LAUNCH = re.compile(r"^\[net-match\] launching from the received snapshot: (\S+)$", re.MULTILINE)
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
 RETAINED_AUTOSAVES = 3  # AutosaveStore::c_RetainedAutosaves; the engine's own keep= value is held to it below.
+
+
+WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d+)$", re.MULTILINE)
+
+
+def _seat_rows(root: Path, who: str) -> dict:
+    """The seats the peer's own match report names, keyed by stable seat."""
+    path = root / f"{who}_report.json"
+    if not path.exists():
+        return {}
+    report = json.loads(path.read_text(encoding="utf-8"))
+    summary = report.get("last_match") or report.get("service", {}).get("last_match")
+    if not summary:
+        return {}
+    return {peer["seat"]: peer for peer in summary.get("peers", [])}
 
 
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict) -> dict:
@@ -396,29 +418,182 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
             "resumed_captures_to": reached, "peer_comparison": compared}
 
 
+def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list) -> list:
+    """One peer of a persistent world: the host is the dedicated world daemon, the client an ordinary join."""
+    args = ["-net-port", str(port), "-net-match-peers", "2", "-net-match-input-delay", "3",
+            "-net-autosave-seconds", "1", "-net-match-ticks", str(ticks),
+            "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
+            "-net-match-report", str(root / f"{who}_report.json")]
+    if who == "host":
+        args = ["-net-dedicated", "-net-persistent-world", *args]
+    else:
+        args = ["-net-match-service-e2e", "-net-join", "127.0.0.1", *args]
+    return args + extra
+
+
+def _carry_world_state(source: Path, target: Path, who: str) -> None:
+    """What a restarted process finds on its own disk: the world's identity record, its checkpoints,
+    its manifests and admission file, and - for the client - the ticket it still holds."""
+    for relative in ("runtime/Autosaves", "runtime/Worlds"):
+        if (source / who / relative).exists():
+            shutil.copytree(source / who / relative, target / who / relative, dirs_exist_ok=True)
+    for name in ("reconnect.ticket", "NetworkIdentity.key", "ParticipantIdentity.key"):
+        carried = source / who / "runtime/Userdata" / name
+        if carried.exists():
+            (target / who / "runtime/Userdata").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(carried, target / who / "runtime/Userdata" / name)
+
+
+def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0) -> dict:
+    if FAMILY_LOCK.exists():
+        raise RuntimeError(f"engine launch prohibited while {FAMILY_LOCK} exists")
+    runs, records = {}, {}
+    for who in ("host", "client"):
+        runs[who] = make_run(repo, _world_peer_args(root, who, port, ticks, extra.get(who, [])),
+                             root / who, 420, env={"CCCP_HEADLESS": "1"})
+
+    def drive(who: str) -> None:
+        try:
+            records[who] = runs[who].start().finish()
+        except Exception as error:
+            records[who] = {"error": repr(error)}
+
+    threads = [threading.Thread(target=drive, args=(who,)) for who in ("host", "client")]
+    killed = False
+    try:
+        threads[0].start()
+        threading.Event().wait(1)
+        threads[1].start()
+        if kill_past:
+            waiter = threading.Event()
+            for _ in range(4200):
+                waiter.wait(0.1)
+                captures = [int(row[0]) for row in CAPTURE.findall(peer_log(root, "host"))]
+                if any(tick >= kill_past for tick in captures):
+                    runs["host"].terminate(code=137, reason="world host process killed")
+                    killed = True
+                    break
+                if not threads[0].is_alive():
+                    break
+        for thread in threads:
+            thread.join()
+    finally:
+        for run in runs.values():
+            run.close()
+    records["_killed"] = killed
+    return records
+
+
+def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
+    """A persistent world host is KILLED and started again on the same install: same UUID, same
+    directory row, the seats the checkpoint held, and the client's ticket still admits it.
+
+    The restart names no match: a world boot resumes its own newest checkpoint by default. The second
+    half runs the same restart with -net-world-fresh and requires a NEW round from the scene instead.
+
+    RED before the change (written, not run): a world boot never resolves a resume, so the restarted
+    host opens the scene at tick 0 and prints no `[autosave] resuming` line at all; -net-world-fresh
+    does not parse, so the fresh half ends before a lobby exists.
+    """
+    root.mkdir(parents=True, exist_ok=False)
+    first, second, fresh = root / "boot1", root / "boot2", root / "fresh"
+    first.mkdir(parents=True, exist_ok=False)
+    kill_tick, resume_ticks = 400, 600
+
+    records = _run_world_round(repo, first, port, 1200, {}, kill_past=kill_tick)
+    assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
+    identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
+    assert identity, "the world host never printed its identity"
+    world_id, boot_one, round_one = identity[0][0], int(identity[0][1]), int(identity[0][2])
+    held = checkpoints(first, "host")
+    assert held, "the killed world left no checkpoint to resume from"
+    assert all(fields["MatchId"] == world_id for fields in held.values()), (world_id, sorted(held))
+    autosaves = first / "host" / "runtime/Autosaves"
+    resume_tick = max(int(fields["SavedTick"]) for fields in held.values()
+                      if (autosaves / f"{world_id}-{fields['SavedTick']}.ccmanifest").exists())
+    # D5b: the world's checkpoints carry the tick's agreed lockstep state, not an empty one.
+    manifest = (autosaves / f"{world_id}-{resume_tick}.ccmanifest").read_text(encoding="utf-8")
+    owners = re.findall(r"(?m)^ControlOwner = (-?\d+),(\d+)$", manifest)
+    applied = re.findall(r"(?m)^Applied = (\d+),(\d+)$", manifest)
+    assert len(applied) >= 1, f"the world's manifest carries no applied command sequence: {manifest}"
+    seats_one = _seat_rows(first, "client")
+
+    # Boot two: the same install, no -net-resume-match. The world reopens on its own newest checkpoint.
+    second.mkdir(parents=True, exist_ok=False)
+    for who in ("host", "client"):
+        (second / who).mkdir(parents=True, exist_ok=True)
+        _carry_world_state(first, second, who)
+    resumed = _run_world_round(repo, second, port + 2, resume_ticks, {})
+    host_log = peer_log(second, "host")
+    restarted = WORLD_IDENTITY.findall(host_log)
+    assert restarted, "the restarted world printed no identity"
+    assert restarted[0][0] == world_id, (restarted[0][0], world_id)
+    assert int(restarted[0][1]) == boot_one + 1, (restarted[0][1], boot_one)
+    assert int(restarted[0][2]) == round_one + 1, (restarted[0][2], round_one)
+    resuming = RESUMING.search(host_log)
+    assert resuming, "the restarted world never reported which checkpoint it opened on"
+    assert resuming[1] == world_id and int(resuming[2]) == resume_tick, (resuming[1], resuming[2], world_id, resume_tick)
+    for who in ("host", "client"):
+        assert resumed[who].get("exit_code") == 0, (who, resumed[who].get("exit_code"), resumed[who].get("error"))
+        assert not resumed[who].get("timed_out"), who
+    # The returning player lands on its OWN seat with the units the checkpoint held.
+    seats_two = _seat_rows(second, "client")
+    assert seats_two, "the rejoining client reported no seat of its own"
+    assert seats_one.keys() == seats_two.keys(), (sorted(seats_one), sorted(seats_two))
+    for seat, before in seats_one.items():
+        assert seats_two[seat]["team"] == before["team"], (seat, seats_two[seat], before)
+    passed, compared = strict_compare(second / "host_trace.json", second / "client_trace.json", first_tick=resume_tick + 1)
+    assert passed, f"the resumed world's peers diverged: {compared}"
+
+    # The fresh flag: the same install and the same checkpoints, a NEW round from the scene.
+    fresh.mkdir(parents=True, exist_ok=False)
+    for who in ("host", "client"):
+        (fresh / who).mkdir(parents=True, exist_ok=True)
+        _carry_world_state(second, fresh, who)
+    fresh_records = _run_world_round(repo, fresh, port + 4, resume_ticks, {"host": ["-net-world-fresh"]})
+    fresh_log = peer_log(fresh, "host")
+    assert not RESUMING.search(fresh_log), "a fresh world boot resumed a checkpoint anyway"
+    fresh_identity = WORLD_IDENTITY.findall(fresh_log)
+    assert fresh_identity and fresh_identity[0][0] == world_id, (fresh_identity, world_id)
+    assert int(fresh_identity[0][1]) == boot_one + 2, (fresh_identity[0][1], boot_one)
+    fresh_captures = [int(row[0]) for row in CAPTURE.findall(fresh_log)]
+    assert fresh_captures, "the fresh world wrote no checkpoint of its own"
+    # A round that resumed would never capture below the checkpoint it stood on; a fresh one starts at 0.
+    assert min(fresh_captures) < resume_tick, (min(fresh_captures), resume_tick)
+    assert (fresh / "host" / "runtime/Autosaves" / f"{world_id}-{resume_tick}.ccsave").exists(), \
+        "the fresh boot removed the round it left behind"
+    for who in ("host", "client"):
+        assert fresh_records[who].get("exit_code") == 0, (who, fresh_records[who].get("exit_code"))
+    return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
+            "manifest_control_owners": len(owners), "manifest_applied_sequences": len(applied),
+            "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
+            "peer_comparison": compared}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48720)
-    parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume"), default="all")
+    parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
     args = parser.parse_args()
     if not 48720 <= args.port <= 48724:
-        parser.error("this detector owns 48720-48729; its arms' ports must fit inside it")
+        parser.error("this detector owns 48720-48739; its arms' ports must fit inside it")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
     with (repo / "Cortex Command.exe").open("rb") as exe:
         exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
     result = {"exe_sha256": exe_sha, "arms": {}}
-    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume}
+    arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
+            "world-restart": arm_world_restart}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
     for index, (arm, run) in enumerate(arms.items()):
         details = {}
         result["arms"][arm] = details
-        # The resume arm runs two rounds of two peers, on its own pair of ports inside the block.
-        armPort = 48725 if arm == "resume" else args.port + index
+        # The resume and world-restart arms run several rounds of two peers, each on its own ports.
+        armPort = {"resume": 48725, "world-restart": 48730}.get(arm, args.port + index)
         try:
             details.update(run(repo, root / arm, armPort), passed=True)
             print(f"PASS {arm}", flush=True)
