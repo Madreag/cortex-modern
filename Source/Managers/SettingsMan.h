@@ -605,7 +605,7 @@ namespace RTE {
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
 		bool m_NetworkPortMapEnable; //!< Whether a hosted match requests a router UDP port mapping and advertises the public endpoint.
 		int m_NetworkPortMapEnableOverride; //!< -net-port-map on|off run override (-1 unset); consulted by the getter, never persisted.
-		bool m_NetworkIceEnable = false; //!< Whether a host also offers a session-id (ICE) join beside its direct address.
+		bool m_NetworkIceEnable = true; //!< Whether a host also offers a session-id (ICE) join beside its direct address.
 		std::string m_NetworkStunServers; //!< Comma-separated host:port; empty means ICE gathers host candidates only.
 		std::string m_NetworkTurnServers;
 		std::string m_NetworkTurnUser;

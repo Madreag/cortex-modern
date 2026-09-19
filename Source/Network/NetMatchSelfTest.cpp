@@ -10851,6 +10851,45 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestIceDefaultsAndOverrides(std::string* error) {
+		SettingsMan settings;
+		const std::string defaults = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
+		const GnsP2PConfig config = NetMatchService::BuildIceConfig(settings, "str:h-default", 41011);
+		if (!settings.GetNetworkIceEnable() || settings.GetNetworkStunServers() != defaults ||
+		    config.stunServerList != defaults || (config.iceEnable & 4) == 0 ||
+		    config.localIdentity != "str:h-default" || config.localVirtualPort != 41011) {
+			*error = "ice defaults: a fresh install does not gather public STUN candidates";
+			return false;
+		}
+		if (!settings.GetNetworkTurnServers().empty() || !settings.GetNetworkTurnUser().empty() || !settings.GetNetworkTurnPass().empty()) {
+			*error = "ice defaults: a relay or its credentials shipped enabled";
+			return false;
+		}
+		settings.SetNetworkStunServers("");
+		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 2) {
+			*error = "ice settings: an explicitly empty STUN list did not keep LAN-only candidates";
+			return false;
+		}
+		settings.SetNetworkTurnServers("turn.example:3478");
+		settings.SetNetworkTurnUser("user");
+		settings.SetNetworkTurnPass("password");
+		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 0x7fffffff ||
+		    settings.GetNetworkTurnUser() != "user" || settings.GetNetworkTurnPass() != "password") {
+			*error = "ice settings: a user-supplied relay was disabled by the empty STUN list";
+			return false;
+		}
+		settings.SetNetworkIceEnable(false);
+		settings.SetNetworkIceEnableOverride(true);
+		settings.SetNetworkStunServersOverride(defaults);
+		settings.ClearNetworkIceOverrides();
+		if (settings.GetNetworkIceEnable() || !settings.GetNetworkStunServers().empty()) {
+			*error = "ice settings: run overrides changed the saved Off or empty-list choices";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS ice defaults: public STUN on, TURN empty, explicit LAN-only and relay choices retained" << std::endl;
+		return true;
+	}
+
 	// -net-ice is a run override: it decides this run and never reaches the saved settings.
 	bool TestIceSettingsOverrideIsNotPersisted(std::string* error) {
 		// This selftest runs before the managers are built.
@@ -10860,7 +10899,7 @@ namespace RTE {
 		g_SettingsMan.SetNetworkIceEnable(false);
 		g_SettingsMan.SetNetworkStunServers("");
 		if (g_SettingsMan.GetNetworkIceEnable()) {
-			*error = "ice settings: the default was not off";
+			*error = "ice settings: the explicit Off setting was ignored";
 			return false;
 		}
 		g_SettingsMan.SetNetworkIceEnableOverride(true);
@@ -10880,7 +10919,7 @@ namespace RTE {
 		}
 		g_SettingsMan.SetNetworkIceEnable(savedEnable);
 		g_SettingsMan.SetNetworkStunServers(savedStun);
-		std::cout << "[net-match-selftest] PASS ice settings: NetworkIceEnable defaults off; -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice settings: -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
 		return true;
 	}
 
@@ -10940,6 +10979,7 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);

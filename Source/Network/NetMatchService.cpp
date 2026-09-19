@@ -5106,18 +5106,18 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
+	GnsP2PConfig NetMatchService::BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort) {
+		GnsP2PConfig config;
+		config.stunServerList = settings.GetNetworkStunServers();
+		// An empty STUN list keeps private candidates unless the user supplies a relay.
+		config.iceEnable = config.stunServerList.empty() && settings.GetNetworkTurnServers().empty() ? 2 : 0x7fffffff;
+		config.localIdentity = localIdentity;
+		config.localVirtualPort = localVirtualPort;
+		return config;
+	}
+
 #ifdef CCCP_WITH_GNS
 	namespace {
-		GnsP2PConfig BuildIceConfig(const std::string& localIdentity, int localVirtualPort) {
-			GnsP2PConfig config;
-			config.stunServerList = g_SettingsMan.GetNetworkStunServers();
-			// Any STUN server means reflexive candidates are wanted, so ICE runs in its default mode.
-			config.iceEnable = config.stunServerList.empty() ? 2 : 0x7fffffff;
-			config.localIdentity = localIdentity;
-			config.localVirtualPort = localVirtualPort;
-			return config;
-		}
-
 		// TURN has no per-connection config value, so the lists go on the global interface.
 		void ApplyGlobalIceServers() {
 			if (!SteamNetworkingUtils()) {
@@ -5167,7 +5167,7 @@ static std::string ResyncSaveName() {
 			}
 			const std::string iceSeed = (request.persistentWorld && !request.worldId.empty()) ? request.worldId : sessionId;
 			const std::string identity = NetIceHostIdentity(iceSeed);
-			mux.SetHostP2P(c_IceVirtualPort, BuildIceConfig(identity, c_IceVirtualPort));
+			mux.SetHostP2P(c_IceVirtualPort, BuildIceConfig(g_SettingsMan, identity, c_IceVirtualPort));
 			m_Dispatcher->SetPolling(true, SteadyNowMs());
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -5246,7 +5246,7 @@ static std::string ResyncSaveName() {
 		NetMuxTransport::JoinSpec spec;
 		spec.peerIdentity = target.identity;
 		spec.remoteVirtualPort = c_IceVirtualPort;
-		spec.p2p = BuildIceConfig(std::string(), c_IceVirtualPort);
+		spec.p2p = BuildIceConfig(g_SettingsMan, std::string(), c_IceVirtualPort);
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };
 		mux.SetJoinSpec(std::move(spec));

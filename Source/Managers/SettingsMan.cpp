@@ -170,8 +170,8 @@ void SettingsMan::Clear() {
 	m_SessionDirectoryCertSha256.clear();
 	m_NetworkPortMapEnable = false;
 	m_NetworkPortMapEnableOverride = -1;
-	m_NetworkIceEnable = false;
-	m_NetworkStunServers.clear();
+	m_NetworkIceEnable = true;
+	m_NetworkStunServers = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
 	m_NetworkTurnServers.clear();
 	m_NetworkTurnUser.clear();
 	m_NetworkTurnPass.clear();
