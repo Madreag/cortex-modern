@@ -39,7 +39,9 @@ namespace luabind { namespace detail
 	class LUABIND_API object_rep
 	{
 	public:
-		enum { constant = 1, owner = 2, lua_class = 4, call_super = 8 };
+		// checkpoint_trap: a checkpoint walk wrote this object's values into a cached chunk and wants
+		// the next mutation reported, once.
+		enum { constant = 1, owner = 2, lua_class = 4, call_super = 8, checkpoint_trap = 16 };
 
 		// dest is a function that is called to delete the c++ object this struct holds
 		object_rep(void* obj, class_rep* crep, int flags, void(*dest)(void*));
@@ -110,6 +112,20 @@ namespace luabind { namespace detail
 		}
 	};
 
+
+	typedef void (*checkpoint_object_write_cb)(void*);
+	extern LUABIND_API checkpoint_object_write_cb checkpoint_object_write;
+
+	// The trap only has to fire once per armed window: the mark is the answer. An object with no trap
+	// is in no cached chunk, so its mutations cost nothing but the flag test.
+	inline void checkpoint_object_mutated(object_rep* obj)
+	{
+		if (obj && (obj->flags() & object_rep::checkpoint_trap))
+		{
+			obj->set_flags(obj->flags() & ~object_rep::checkpoint_trap);
+			if (checkpoint_object_write) checkpoint_object_write(obj->ptr());
+		}
+	}
 
 	inline object_rep* is_class_object(lua_State* L, int index)
 	{

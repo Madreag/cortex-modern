@@ -76,6 +76,9 @@ namespace luabind { namespace detail
 
 		bool has_static() const { return !call_fun_static.empty(); }
 
+		// A const overload cannot write the object it is called on; everything else may.
+		bool is_const() const { return m_const; }
+
 	private:
 
 		// this is the normal function pointer that may be a virtual

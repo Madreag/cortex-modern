@@ -95,8 +95,17 @@ namespace RTE {
 		};
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
-		virtual void TouchCheckpoint() { ++m_CheckpointWriteGeneration; }
+		virtual void TouchCheckpoint() {
+			++m_CheckpointWriteGeneration;
+			// A script-owned copy is serialized into a cached Lua chunk, so its root goes stale here too.
+			if (m_CheckpointValueTrap) ReportCheckpointValueWrite();
+		}
 		uint64_t CheckpointWriteGeneration() const { return m_CheckpointWriteGeneration; }
+		/// Arms this object to report its next archived write to the script graph's root cache.
+		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
+		/// Tells the script graph's root cache that this object's archived text moved. One report per
+		/// arming is the whole answer: the root is rewritten and armed again by the walk that does it.
+		void ReportCheckpointValueWrite();
 		SerializableOverrideMethods;
 
 #pragma region ClassInfo
@@ -416,6 +425,7 @@ namespace RTE {
 
 		int m_RandomWeight; //!< Random weight used when picking item using PresetMan::GetRandomBuyableOfGroupFromTech. From 0 to 100. 0 means item won't be ever picked.
 		uint64_t m_CheckpointWriteGeneration = 0;
+		bool m_CheckpointValueTrap = false; //!< Set while a cached script graph chunk carries this object's text.
 
 		// Forbidding copying
 		Entity(const Entity& reference) {}

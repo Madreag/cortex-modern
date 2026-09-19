@@ -153,7 +153,7 @@ namespace RTE {
 
 		/// Sets whether or not this Actor can be controlled by human players.
 		/// @param playerControllable Whether or not this Actor should be able to be controlled by human players.
-		void SetPlayerControllable(bool playerControllable) { m_PlayerControllable = playerControllable; }
+		void SetPlayerControllable(bool playerControllable) { if (m_PlayerControllable != playerControllable) TouchCheckpoint(); m_PlayerControllable = playerControllable; }
 
 		/// Returns the current Status of this.
 		/// @return The status.
@@ -176,7 +176,7 @@ namespace RTE {
 
 		/// Gets this Actor's maximum health value.
 		/// @param newValue New max health value.
-		void SetMaxHealth(int newValue) { m_MaxHealth = newValue; }
+		void SetMaxHealth(int newValue) { if (m_MaxHealth != newValue) TouchCheckpoint(); m_MaxHealth = newValue; }
 
 		/// Gets the distance between the actor and the view point when not
 		/// sharp aiming.
@@ -186,7 +186,7 @@ namespace RTE {
 		/// Gets the distance between the actor and the view point when not
 		/// sharp aiming.
 		/// @return A const int describing how far this actor aims/looks by default.
-		void SetAimDistance(int newValue) { m_AimDistance = newValue; }
+		void SetAimDistance(int newValue) { if (m_AimDistance != newValue) TouchCheckpoint(); m_AimDistance = newValue; }
 
 		/// Gets how many ounces of gold this Actor is carrying.
 		/// @return The current amount of carried gold, in Oz.
@@ -251,7 +251,7 @@ namespace RTE {
 
 		/// Sets the offset position of the holster where this Actor draws his devices from.
 		/// @param newOffset A new holster offset.
-		void SetHolsterOffset(Vector newOffset) { m_HolsterOffset = newOffset; }
+		void SetHolsterOffset(Vector newOffset) { if (m_HolsterOffset != newOffset) TouchCheckpoint(); m_HolsterOffset = newOffset; }
 
 		/// Gets the offset position of where this Actor reloads his devices from.
 		/// @return The offset position of the where this Actor reloads his devices from.
@@ -259,7 +259,7 @@ namespace RTE {
 
 		/// Sets the offset position of the where this Actor reloads his devices from.
 		/// @param newOffset The new offset position of where this Actor reloads his devices from.
-		void SetReloadOffset(Vector newOffset) { m_ReloadOffset = newOffset; }
+		void SetReloadOffset(Vector newOffset) { if (m_ReloadOffset != newOffset) TouchCheckpoint(); m_ReloadOffset = newOffset; }
 
 		/// Gets the point at which this actor is viewing, or that the scene frame
 		/// should be centered on if tracking this Actor's view. In absolute scene
@@ -339,7 +339,7 @@ namespace RTE {
 
 		/// Sets this Actor's MovementState to the new state.
 		/// @param newMovementState This Actor's new MovementState.
-		void SetMovementState(MovementState newMovementState) { m_MovementState = newMovementState; }
+		void SetMovementState(MovementState newMovementState) { if (m_MovementState != newMovementState) TouchCheckpoint(); m_MovementState = newMovementState; }
 
 		/// Sets which team this Actor belongs to.
 		/// @param team The assigned team number.
@@ -347,7 +347,7 @@ namespace RTE {
 
 		/// Sets how many ounces of gold this Actor is carrying.
 		/// @param goldOz The new amount of carried gold, in Oz.
-		void SetGoldCarried(float goldOz) { m_GoldCarried = goldOz; }
+		void SetGoldCarried(float goldOz) { if (m_GoldCarried != goldOz) TouchCheckpoint(); m_GoldCarried = goldOz; }
 
 		/// Sets this Actor's aim angle.
 		/// @param newAngle A new angle, in radians.
@@ -376,13 +376,13 @@ namespace RTE {
 
 		/// Sets this Actor's passenger slots.
 		/// @param newPassengerSlots A new amount of passenger slots.
-		void SetPassengerSlots(int newPassengerSlots) { m_PassengerSlots = newPassengerSlots; }
+		void SetPassengerSlots(int newPassengerSlots) { if (m_PassengerSlots != newPassengerSlots) TouchCheckpoint(); m_PassengerSlots = newPassengerSlots; }
 
 		/// Sets the point at which this actor is viewing, or that the scene frame
 		/// should be centered on if tracking this Actor's view. In absolute scene
 		/// coordinates.
 		/// @param newPoint A new point in absolute scene coords.
-		void SetViewPoint(Vector newPoint) { m_ViewPoint = newPoint; }
+		void SetViewPoint(Vector newPoint) { if (m_ViewPoint != newPoint) TouchCheckpoint(); m_ViewPoint = newPoint; }
 
 		/// Sets the item that is within reach of the Actor at this frame, so that
 		/// it may be picked up. Ownership is NOT transferred!
@@ -654,7 +654,7 @@ namespace RTE {
 
 		/// Sets this' perceptiveness to alarming events going on around him.
 		/// @param newPerceptiveness The current perceptiveness, 0.0 - 1.0
-		void SetPerceptiveness(float newPerceptiveness) { m_Perceptiveness = newPerceptiveness; }
+		void SetPerceptiveness(float newPerceptiveness) { if (m_Perceptiveness != newPerceptiveness) TouchCheckpoint(); m_Perceptiveness = newPerceptiveness; }
 
 		/// Gets this' perceptiveness to alarming events going on around him.
 		/// @return The current perceptiveness, 0.0 - 1.0
@@ -666,11 +666,11 @@ namespace RTE {
 
 		/// Sets whether this actor can reveal unseen areas by looking.
 		/// @param newCanRevealUnseen Whether this actor can reveal unseen areas.
-		void SetCanRevealUnseen(bool newCanRevealUnseen) { m_CanRevealUnseen = newCanRevealUnseen; }
+		void SetCanRevealUnseen(bool newCanRevealUnseen) { if (m_CanRevealUnseen != newCanRevealUnseen) TouchCheckpoint(); m_CanRevealUnseen = newCanRevealUnseen; }
 
 		/// Sets this' PainThreshold value above which it will play PainSound
 		/// @param newPainThreshold Desired PainThreshold value
-		void SetPainThreshold(float newPainThreshold) { m_PainThreshold = newPainThreshold; }
+		void SetPainThreshold(float newPainThreshold) { if (m_PainThreshold != newPainThreshold) TouchCheckpoint(); m_PainThreshold = newPainThreshold; }
 
 		/// Gets this' PainThreshold value above which it will play PainSound
 		/// @return The current PainThreshold
@@ -793,7 +793,7 @@ namespace RTE {
 		/// Sets the limit of this actors aiming angle, in each direction, in radians.
 		/// @param range The arc range of the aiming angle in radians.
 		/// Eg if HalfPI, it means full 180 degree range
-		void SetAimRange(float range) { m_AimRange = range; }
+		void SetAimRange(float range) { if (m_AimRange != range) TouchCheckpoint(); m_AimRange = range; }
 
 		/// Makes this draw its current waypoints and related data on the scene in
 		/// its HUD drawing stage.
@@ -826,7 +826,7 @@ namespace RTE {
 
 		/// Sets this' AI's move path to be updated. Will update the path to the
 		/// current waypoint, if any.
-		void SetMovePathToUpdate() { m_UpdateMovePath = true; }
+		void SetMovePathToUpdate() { if (m_UpdateMovePath != true) TouchCheckpoint(); m_UpdateMovePath = true; }
 
 		/// Gets whether a move-path update is still armed.
 		bool IsMovePathUpdatePending() const { return m_UpdateMovePath; }
@@ -878,7 +878,7 @@ namespace RTE {
 
 		/// Sets this Actor's base dig strength, or the strength of terrain they can expect to walk through without tools.
 		/// @param newAIBaseDigStrength The new base dig strength for this Actor.
-		void SetAIBaseDigStrength(float newAIBaseDigStrength) { m_AIBaseDigStrength = newAIBaseDigStrength; }
+		void SetAIBaseDigStrength(float newAIBaseDigStrength) { if (m_AIBaseDigStrength != newAIBaseDigStrength) TouchCheckpoint(); m_AIBaseDigStrength = newAIBaseDigStrength; }
 
 		/// Update called prior to controller update. Ugly hack. Supposed to be done every frame.
 		virtual void PreControllerUpdate();
@@ -917,7 +917,7 @@ namespace RTE {
 
 		/// Description:		Sets deployment ID for this actor
 		/// @param newID New deployment id.
-		void SetDeploymentID(unsigned int newID) { m_DeploymentID = newID; }
+		void SetDeploymentID(unsigned int newID) { if (m_DeploymentID != newID) TouchCheckpoint(); m_DeploymentID = newID; }
 
 		/// Description:		Gets deployment ID of this actor
 		/// @return Returns deployment id of this actor.
@@ -929,7 +929,7 @@ namespace RTE {
 
 		/// Description:		Sets actor's sight distance.
 		/// @param newValue New sight distance value.
-		void SetSightDistance(float newValue) { m_SightDistance = newValue; }
+		void SetSightDistance(float newValue) { if (m_SightDistance != newValue) TouchCheckpoint(); m_SightDistance = newValue; }
 
 		/// Draws this Actor's current graphical HUD overlay representation to a
 		/// BITMAP of choice.
@@ -948,7 +948,7 @@ namespace RTE {
 
 		/// Sets Threshold for taking damage from travel impulses, in kg * m/s
 		/// @param value Threshold for taking damage from travel impulses, in kg * m/s
-		void SetTravelImpulseDamage(float value) { m_TravelImpulseDamage = value; }
+		void SetTravelImpulseDamage(float value) { if (m_TravelImpulseDamage != value) TouchCheckpoint(); m_TravelImpulseDamage = value; }
 
 		/// Gets this Actor's body hit sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this Actor's body hit sound.
@@ -956,7 +956,7 @@ namespace RTE {
 
 		/// Sets this Actor's body hit sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this Actor's body hit sound.
-		void SetBodyHitSound(SoundContainer* newSound) { m_BodyHitSound = newSound; }
+		void SetBodyHitSound(SoundContainer* newSound) { if (m_BodyHitSound != newSound) TouchCheckpoint(); m_BodyHitSound = newSound; }
 
 		/// Gets this Actor's alarm sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this Actor's alarm sound.
@@ -964,7 +964,7 @@ namespace RTE {
 
 		/// Sets this Actor's alarm sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this Actor's alarm sound.
-		void SetAlarmSound(SoundContainer* newSound) { m_AlarmSound = newSound; }
+		void SetAlarmSound(SoundContainer* newSound) { if (m_AlarmSound != newSound) TouchCheckpoint(); m_AlarmSound = newSound; }
 
 		/// Gets this Actor's pain sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this Actor's pain sound.
@@ -972,7 +972,7 @@ namespace RTE {
 
 		/// Sets this Actor's pain sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this Actor's pain sound.
-		void SetPainSound(SoundContainer* newSound) { m_PainSound = newSound; }
+		void SetPainSound(SoundContainer* newSound) { if (m_PainSound != newSound) TouchCheckpoint(); m_PainSound = newSound; }
 
 		/// Gets this Actor's death sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this Actor's death sound.
@@ -980,7 +980,7 @@ namespace RTE {
 
 		/// Sets this Actor's death sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this Actor's death sound.
-		void SetDeathSound(SoundContainer* newSound) { m_DeathSound = newSound; }
+		void SetDeathSound(SoundContainer* newSound) { if (m_DeathSound != newSound) TouchCheckpoint(); m_DeathSound = newSound; }
 
 		/// Gets this Actor's device switch sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this Actor's device switch sound.
@@ -988,7 +988,7 @@ namespace RTE {
 
 		/// Sets this Actor's device switch sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this Actor's device switch sound.
-		void SetDeviceSwitchSound(SoundContainer* newSound) { m_DeviceSwitchSound = newSound; }
+		void SetDeviceSwitchSound(SoundContainer* newSound) { if (m_DeviceSwitchSound != newSound) TouchCheckpoint(); m_DeviceSwitchSound = newSound; }
 
 		/// Gets the X and Y thresholds for how fast the actor can travel before losing stability.
 		/// @return A Vector with the X and Y thresholds for how fast the actor can travel before losing stability.
@@ -1001,7 +1001,7 @@ namespace RTE {
 
 		/// Sets the X and Y thresholds for how fast the actor can travel before losing stability.
 		/// @param newVelVector Vector with new values for how fast the actor can travel before losing stability on both axis.
-		void SetStableVel(Vector newVelVector) { m_StableVel = newVelVector; }
+		void SetStableVel(Vector newVelVector) { if (m_StableVel != newVelVector) TouchCheckpoint(); m_StableVel = newVelVector; }
 
 		/// Gets the recovery delay from UNSTABLE to STABLE, in MS.
 		/// @return The recovery delay, in MS.
@@ -1009,7 +1009,7 @@ namespace RTE {
 
 		/// Sets the recovery delay from UNSTABLE to STABLE, in MS.
 		/// @param newRecoverDelay The recovery delay, in MS.
-		void SetStableRecoverDelay(int newRecoverDelay) { m_StableRecoverDelay = newRecoverDelay; }
+		void SetStableRecoverDelay(int newRecoverDelay) { if (m_StableRecoverDelay != newRecoverDelay) TouchCheckpoint(); m_StableRecoverDelay = newRecoverDelay; }
 
 		/// Gets whether this can run or not.
 		/// @return Whether this can run or not.
@@ -1017,7 +1017,7 @@ namespace RTE {
 
 		/// Sets whether this can run or not.
 		/// @param newCanRun The new value for whether this can run or not.
-		void SetCanRun(bool newCanRun) { m_CanRun = newCanRun; }
+		void SetCanRun(bool newCanRun) { if (m_CanRun != newCanRun) TouchCheckpoint(); m_CanRun = newCanRun; }
 
 		/// Gets the crouch walk speed multiplier.
 		/// @return The crouch walk speed multiplier.
@@ -1025,7 +1025,7 @@ namespace RTE {
 
 		/// Sets the crouch walk speed multiplier.
 		/// @param newSpeed The new value for the crouch walk speed multiplier.
-		void SetCrouchWalkSpeedMultiplier(float newSpeed) { m_CrouchWalkSpeedMultiplier = newSpeed; }
+		void SetCrouchWalkSpeedMultiplier(float newSpeed) { if (m_CrouchWalkSpeedMultiplier != newSpeed) TouchCheckpoint(); m_CrouchWalkSpeedMultiplier = newSpeed; }
 
 		/// Gets the distance in which the Actor will have considered itself to have reached it's waypoint.
 		/// @return The move proximity limit.
@@ -1033,7 +1033,7 @@ namespace RTE {
 
 		/// Sets the distance in which the Actor will have considered itself to have reached it's waypoint.
 		/// @param newProximityLimit The move proximity limit.
-		void SetMoveProximityLimit(float newProximityLimit) { m_MoveProximityLimit = newProximityLimit; }
+		void SetMoveProximityLimit(float newProximityLimit) { if (m_MoveProximityLimit != newProximityLimit) TouchCheckpoint(); m_MoveProximityLimit = newProximityLimit; }
 
 		/// Gets whether or not this Actor has the organic flag set and should be considered as organic.
 		/// @return Whether or not this Actor has the organic flag set and should be considered as organic.
@@ -1049,7 +1049,7 @@ namespace RTE {
 
 		/// Sets whether or not this Actor's limb push forces should be disabled.
 		/// @param newLimbPushForcesAndCollisionsDisabled Whether or not this Actor's limb push forces should be disabled.
-		void SetLimbPushForcesAndCollisionsDisabled(bool newLimbPushForcesAndCollisionsDisabled) { m_LimbPushForcesAndCollisionsDisabled = newLimbPushForcesAndCollisionsDisabled; }
+		void SetLimbPushForcesAndCollisionsDisabled(bool newLimbPushForcesAndCollisionsDisabled) { if (m_LimbPushForcesAndCollisionsDisabled != newLimbPushForcesAndCollisionsDisabled) TouchCheckpoint(); m_LimbPushForcesAndCollisionsDisabled = newLimbPushForcesAndCollisionsDisabled; }
 
 		/// Gets the default PieMenu name for this type.
 		/// @return The default PieMenu name for this type.

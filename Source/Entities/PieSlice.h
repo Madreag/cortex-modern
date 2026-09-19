@@ -113,7 +113,7 @@ namespace RTE {
 
 		/// Sets whether or not this PieSlice can be the middle PieSlice of a PieQuadrant.
 		/// @param newCanBeMiddleSlice Whether or not this PieSlice can be the middle PieSlice of a PieQuadrant.
-		void SetCanBeMiddleSlice(bool newCanBeMiddleSlice) { m_CanBeMiddleSlice = newCanBeMiddleSlice; }
+		void SetCanBeMiddleSlice(bool newCanBeMiddleSlice) { if (m_CanBeMiddleSlice != newCanBeMiddleSlice) TouchCheckpoint(); m_CanBeMiddleSlice = newCanBeMiddleSlice; }
 
 		/// Gets the original Entity source of this PieSlice, if there is one.
 		/// @return A pointer to the original Entity source of this PieSlice, if there is one.
@@ -129,7 +129,7 @@ namespace RTE {
 
 		/// Sets whether or not this PieSlice should be enabled.
 		/// @param enabled Whether or not this PieSlice should be enabled.
-		void SetEnabled(bool enabled) { m_Enabled = enabled; }
+		void SetEnabled(bool enabled) { if (m_Enabled != enabled) TouchCheckpoint(); m_Enabled = enabled; }
 
 		/// Gets whether or not this PieSlice has a valid Icon.
 		/// @return Whether or not this PieSlice has a valid Icon.
@@ -217,7 +217,7 @@ namespace RTE {
 
 		/// Sets whether or not this PieSlice should draw itself flipped to match its absolute angle (i.e. its angle accounting for its PieMenu's rotation).
 		/// @param shouldDrawFlippedToMatchAbsoluteAngle Whether or not this PieSlice should draw itself flipped to match its absolute angle.
-		void SetDrawFlippedToMatchAbsoluteAngle(bool shouldDrawFlippedToMatchAbsoluteAngle) { m_DrawFlippedToMatchAbsoluteAngle = shouldDrawFlippedToMatchAbsoluteAngle; }
+		void SetDrawFlippedToMatchAbsoluteAngle(bool shouldDrawFlippedToMatchAbsoluteAngle) { if (m_DrawFlippedToMatchAbsoluteAngle != shouldDrawFlippedToMatchAbsoluteAngle) TouchCheckpoint(); m_DrawFlippedToMatchAbsoluteAngle = shouldDrawFlippedToMatchAbsoluteAngle; }
 #pragma endregion
 
 		/// Reloads the the script on this PieSlice.

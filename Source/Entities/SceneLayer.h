@@ -168,7 +168,7 @@ namespace RTE {
 
 		/// Sets the scroll offset of this SceneLayer. Observe that this offset will be modified by the scroll ratio before applied.
 		/// @param newOffset The new offset Vector.
-		void SetOffset(const Vector& newOffset) { m_Offset = newOffset; }
+		void SetOffset(const Vector& newOffset) { if (m_Offset != newOffset) TouchCheckpoint(); m_Offset = newOffset; }
 
 		/// Set the depth this scenelayer will be drawn at.
 		/// @param z The depth to draw at, negative values are further to the front in the range c_NearDepth to c_FarDepth.

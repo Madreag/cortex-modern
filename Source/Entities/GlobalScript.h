@@ -59,7 +59,7 @@ namespace RTE {
 
 		/// Sets whether or not this GlobalScript should be active.
 		/// @param active Whether or not this GlobalScript should be active.
-		void SetActive(bool active) { m_IsActive = active; }
+		void SetActive(bool active) { if (m_IsActive != active) TouchCheckpoint(); m_IsActive = active; }
 
 		/// Gets whether or not this GlobalScript should be updated late, i.e. after the standard MovableMan update.
 		/// @return Whether or not this GlobalScript should be updated late.

@@ -140,7 +140,7 @@ namespace RTE {
 
 		/// Sets max engine rotation angle in degrees.
 		/// @param newAngle Max engine angle in degrees.
-		void SetMaxEngineAngle(float newAngle) { m_MaxEngineAngle = newAngle; }
+		void SetMaxEngineAngle(float newAngle) { if (m_MaxEngineAngle != newAngle) TouchCheckpoint(); m_MaxEngineAngle = newAngle; }
 
 		/// Gets the abstract rate of LateralControl change. Default is 6
 		/// @return Current lateral control speed value.
@@ -148,7 +148,7 @@ namespace RTE {
 
 		/// Sets the abstract rate of LateralControl change. Default is 6
 		/// @param newSpeed New lateral control speed value.
-		void SetLateralControlSpeed(float newSpeed) { m_LateralControlSpeed = newSpeed; }
+		void SetLateralControlSpeed(float newSpeed) { if (m_LateralControlSpeed != newSpeed) TouchCheckpoint(); m_LateralControlSpeed = newSpeed; }
 
 		/// Sets lateral control value -1.0 to 1.0 control of sideways movement. 0 means try to stand still in X.
 		/// @return Current lateral control value.
@@ -160,7 +160,7 @@ namespace RTE {
 
 		/// Sets the modifier for height at which this ACDropShip should hover above terrain.
 		/// @param newHoverHeightModifier The new modifier for height at which this ACDropShip should hover above terrain.
-		void SetHoverHeightModifier(float newHoverHeightModifier) { m_HoverHeightModifier = newHoverHeightModifier; }
+		void SetHoverHeightModifier(float newHoverHeightModifier) { if (m_HoverHeightModifier != newHoverHeightModifier) TouchCheckpoint(); m_HoverHeightModifier = newHoverHeightModifier; }
 
 		/// Protected member variable and method declarations
 	protected:

@@ -101,7 +101,7 @@ namespace RTE {
 
 		/// Sets the offset of the emission point from this' sprite center, which gets rotated with this.
 		/// @param newOffset The new emission offset.
-		void SetEmitOffset(const Vector& newOffset) { m_EmissionOffset = newOffset; }
+		void SetEmitOffset(const Vector& newOffset) { if (m_EmissionOffset != newOffset) TouchCheckpoint(); m_EmissionOffset = newOffset; }
 
 		/// A vector in the direction, including the rotation of the emitter, that
 		/// the emitted particles will be shot at.
@@ -191,33 +191,33 @@ namespace RTE {
 
 		/// Sets the negative throttle multiplier of this AEmitter.
 		/// @param newValue The new throttle multiplier of this AEmitter.
-		void SetNegativeThrottleMultiplier(float newValue) { m_NegativeThrottleMultiplier = newValue; }
+		void SetNegativeThrottleMultiplier(float newValue) { if (m_NegativeThrottleMultiplier != newValue) TouchCheckpoint(); m_NegativeThrottleMultiplier = newValue; }
 
 		/// Sets the positive throttle multiplier of this AEmitter.
 		/// @param newValue The new throttle multiplier of this AEmitter.
-		void SetPositiveThrottleMultiplier(float newValue) { m_PositiveThrottleMultiplier = newValue; }
+		void SetPositiveThrottleMultiplier(float newValue) { if (m_PositiveThrottleMultiplier != newValue) TouchCheckpoint(); m_PositiveThrottleMultiplier = newValue; }
 
 		/*
 		/// Sets the rate at which this AEmitter emits its particles.
 		/// @param rate A float with the rate in #/min.
-		    void SetEmitRate(const float rate) { m_PPM = rate; }
+		    void SetEmitRate(const float rate) { if (m_PPM != rate) TouchCheckpoint(); m_PPM = rate; }
 
 
 		/// Sets the number of particles that will be emitted in one shot upon
 		/// a triggered burst of this AEmitter.
 		/// @param count The number of emitted particles a burst should have. 0 means burst
 		/// are disabled.
-		    void SetBurstCount(const int count) { m_BurstSize = count; }
+		    void SetBurstCount(const int count) { if (m_BurstSize != count) TouchCheckpoint(); m_BurstSize = count; }
 		*/
 
 		/// Sets the scale factor that will be applied to the regular spread and
 		/// emission velocity to get the burst particle parameters.
 		/// @param scale The scale factor.
-		void SetBurstScale(const float scale) { m_BurstScale = scale; }
+		void SetBurstScale(const float scale) { if (m_BurstScale != scale) TouchCheckpoint(); m_BurstScale = scale; }
 
 		/// Sets the BurstSpacing for this emitter.
 		/// @param spacing The BurstSpacing in ms.
-		void SetBurstSpacing(const float spacing) { m_BurstSpacing = spacing; }
+		void SetBurstSpacing(const float spacing) { if (m_BurstSpacing != spacing) TouchCheckpoint(); m_BurstSpacing = spacing; }
 
 		/// Gets the flash of this AEmitter.
 		/// @return A pointer to the AEmitter's flash. Ownership is NOT transferred!
@@ -235,7 +235,7 @@ namespace RTE {
 		/// Sets the display scale factor of the flash effect. This is purely
 		/// visual.
 		/// @param flashScale The scale factor of the flash draw. (default: 1.0f)
-		void SetFlashScale(float flashScale = 1.0f) { m_FlashScale = flashScale; }
+		void SetFlashScale(float flashScale = 1.0f) { if (m_FlashScale != flashScale) TouchCheckpoint(); m_FlashScale = flashScale; }
 
 		/// Sets the angle of direction that the emitted particles will be shot at.
 		/// @param m_EmitAngle.SetRadAngle(angle A float with the angle in radians.
@@ -253,19 +253,19 @@ namespace RTE {
 		/// @param spread A float with the spread in r's. PI/2 would mean that MO's fly out to
 		/// one side only, with the m_EmitAngle defining the middle of that half
 		/// circle.
-		    void SetEmitSpread(const float spread) { m_Spread = spread; }
+		    void SetEmitSpread(const float spread) { if (m_Spread != spread) TouchCheckpoint(); m_Spread = spread; }
 
 
 		/// Sets the min end of the range the velocity of a particle being emitted
 		/// by this AEmitter can have.
 		/// @param minVel A float with the min vel possible for an emitted particle.
-		    void SetEmitVelMin(const float minVel) { m_MinVelocity = minVel; }
+		    void SetEmitVelMin(const float minVel) { if (m_MinVelocity != minVel) TouchCheckpoint(); m_MinVelocity = minVel; }
 
 
 		/// Sets the max end of the range the velocity of a particle being emitted
 		/// by this AEmitter can have.
 		/// @param maxVel A float with the max vel possible for an emitted particle.
-		    void SetEmitVelMax(const float maxVel) { m_MaxVelocity = maxVel; }
+		    void SetEmitVelMax(const float maxVel) { if (m_MaxVelocity != maxVel) TouchCheckpoint(); m_MaxVelocity = maxVel; }
 		*/
 
 		/// Triggers a one-shot burst of emissions in the number that has
@@ -307,7 +307,7 @@ namespace RTE {
 
 		/// Sets burst damage of this emitter.
 		/// @param newValue Burst damage of emitter.
-		void SetBurstDamage(float newValue) { m_BurstDamage = newValue; }
+		void SetBurstDamage(float newValue) { if (m_BurstDamage != newValue) TouchCheckpoint(); m_BurstDamage = newValue; }
 
 		/// Returns emit damage of this emitter.
 		/// @return Emit damage of emitter.
@@ -315,7 +315,7 @@ namespace RTE {
 
 		/// Sets emit damage of this emitter.
 		/// @param newValue Emit damage of emitter.
-		void SetEmitDamage(float newValue) { m_EmitDamage = newValue; }
+		void SetEmitDamage(float newValue) { if (m_EmitDamage != newValue) TouchCheckpoint(); m_EmitDamage = newValue; }
 
 		/// Returns whether this emitter will play its burst sound when appropriate or not.
 		/// @return Whether this emitter will play its burst sound when appropriate or not.
@@ -323,7 +323,7 @@ namespace RTE {
 
 		/// Sets whether this emitter will play its burst sound when appropriate or not.
 		/// @param playBurstSound Whether this emitter should play its burst sound when appropriate or not.
-		void SetPlayBurstSound(bool playBurstSound) { m_PlayBurstSound = playBurstSound; }
+		void SetPlayBurstSound(bool playBurstSound) { if (m_PlayBurstSound != playBurstSound) TouchCheckpoint(); m_PlayBurstSound = playBurstSound; }
 
 		/// Returns damage multiplier of this emitter.
 		/// @return Damage multiplier of emitter.
@@ -331,7 +331,7 @@ namespace RTE {
 
 		/// Sets damage multiplier of this emitter.
 		/// @param newValue New damage multiplier of emitter
-		void SetEmitterDamageMultiplier(float newValue) { m_EmitterDamageMultiplier = newValue; }
+		void SetEmitterDamageMultiplier(float newValue) { if (m_EmitterDamageMultiplier != newValue) TouchCheckpoint(); m_EmitterDamageMultiplier = newValue; }
 
 		/// Draws this AEmitter's current graphical representation to a
 		/// BITMAP of choice.
@@ -356,7 +356,7 @@ namespace RTE {
 
 		/// Sets the number of emissions left before emitter is disabled.
 		/// @param newValue New number of emissions left
-		void SetEmitCountLimit(long newValue) { m_EmitCountLimit = newValue; }
+		void SetEmitCountLimit(long newValue) { if (m_EmitCountLimit != newValue) TouchCheckpoint(); m_EmitCountLimit = newValue; }
 
 		/// Gets this AEmitter's emission sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this AEmitter's emission sound.
@@ -364,7 +364,7 @@ namespace RTE {
 
 		/// Sets this AEmitter's emission sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this AEmitter's emission sound.
-		void SetEmissionSound(SoundContainer* newSound) { m_EmissionSound = newSound; }
+		void SetEmissionSound(SoundContainer* newSound) { if (m_EmissionSound != newSound) TouchCheckpoint(); m_EmissionSound = newSound; }
 
 		/// Gets this AEmitter's burst sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this AEmitter's burst sound.
@@ -372,7 +372,7 @@ namespace RTE {
 
 		/// Sets this AEmitter's burst sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this AEmitter's burst sound.
-		void SetBurstSound(SoundContainer* newSound) { m_BurstSound = newSound; }
+		void SetBurstSound(SoundContainer* newSound) { if (m_BurstSound != newSound) TouchCheckpoint(); m_BurstSound = newSound; }
 
 		/// Gets this AEmitter's end sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this AEmitter's end sound.
@@ -380,7 +380,7 @@ namespace RTE {
 
 		/// Sets this AEmitter's end sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this AEmitter's end sound.
-		void SetEndSound(SoundContainer* newSound) { m_EndSound = newSound; }
+		void SetEndSound(SoundContainer* newSound) { if (m_EndSound != newSound) TouchCheckpoint(); m_EndSound = newSound; }
 
 		/// Returns whether this emitter just started emitting this frame.
 		/// @return Whether this emitter just started emitting this frame.

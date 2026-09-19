@@ -63,7 +63,7 @@ namespace RTE {
 
 		/// Sets the index of this Material in the material palette to the next specified value.
 		/// @param newIndex The new index of this Material in the material palette. 0 - 255.
-		void SetIndex(unsigned char newIndex) { m_Index = newIndex; }
+		void SetIndex(unsigned char newIndex) { if (m_Index != newIndex) TouchCheckpoint(); m_Index = newIndex; }
 
 		/// Gets the drawing priority of this Material. The higher the number, the higher chances that a pixel of this material will be drawn on top of others. Will default to Integrity if no Priority has been defined.
 		/// @return The drawing priority of this Material.

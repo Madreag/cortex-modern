@@ -4,12 +4,14 @@
 #include "Scene.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "Atom.h"
 #include "Actor.h"
 #include "AudioMan.h"
 #include "LuaMan.h"
 #include "RTETools.h"
 
 #include "lua.hpp"
+#include "luabind/detail/object_rep.hpp"
 
 #include <algorithm>
 #include <array>
@@ -54,6 +56,20 @@ namespace {
 		CheckpointGraphIndex::Get().OnTableWritten(table);
 	}
 
+	// A mutated native whose engine values a chunk carries stales that chunk exactly as a table write
+	// does, so it is counted and attributed the same way. The write generation moves too: a capture
+	// that reuses the whole Lua half keys on it.
+	void OnLuaValueWrite(void* value) {
+		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
+			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+				return;
+			}
+			s_PausedForeignWrites.fetch_add(1, std::memory_order_relaxed);
+		}
+		s_LuaWrites.fetch_add(1, std::memory_order_relaxed);
+		CheckpointGraphIndex::Get().OnValueWritten(value);
+	}
+
 	int64_t Percentile99(std::vector<int64_t> samples) {
 		if (samples.empty()) return 0;
 		std::sort(samples.begin(), samples.end());
@@ -96,11 +112,25 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
+void CheckpointGraphIndex::NoteValue(const void* value) {
+	std::lock_guard lock(m_Mutex);
+	if (!m_Walk || !value) return;
+	// A native's engine values are written into the chunk of the first root that reached it, so that
+	// root is the one a mutation of those values makes stale.
+	m_WalkingValues.emplace(value, m_Root);
+}
+
+void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
+	std::lock_guard lock(m_Mutex);
+	m_UncacheableRoots = roots;
+}
+
 void CheckpointGraphIndex::EndWalk() {
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
 	if (m_FullWalk) {
 		m_TableRoots = std::move(m_Walking);
+		m_ValueRoots = std::move(m_WalkingValues);
 		m_Roots = std::move(m_WalkingRoots);
 		m_DirtyRoots.clear();
 		m_UnknownTable = false;
@@ -112,15 +142,21 @@ void CheckpointGraphIndex::EndWalk() {
 		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
 			entry = m_WalkingRoots.count(entry->second) ? m_TableRoots.erase(entry) : std::next(entry);
 		}
+		for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
+			entry = m_WalkingRoots.count(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
+		}
 		for (const auto& [table, root]: m_Walking) m_TableRoots[table] = root;
+		for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
 		for (uint64_t root: m_WalkingRoots) {
 			m_Roots.insert(root);
 			m_DirtyRoots.erase(root);
 		}
 	}
 	m_Walking.clear();
+	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
 	m_DirtyTables = 0;
+	m_DirtyValues = 0;
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
 	m_FullWalk = true;
@@ -162,9 +198,20 @@ void CheckpointGraphIndex::OnTableWritten(const void* table) {
 	if (const auto found = m_TableRoots.find(table); found != m_TableRoots.end()) {
 		m_DirtyRoots.insert(found->second);
 	} else if (!m_TableRoots.empty()) {
+		// A table the walk never recorded is in no chunk, so it stales none. The flag stays as the
+		// count of writes that named no root; the root cache no longer refuses itself over it.
 		m_UnknownTable = true;
 	}
 	++m_DirtyTables;
+}
+
+void CheckpointGraphIndex::OnValueWritten(const void* value) {
+	std::lock_guard lock(m_Mutex);
+	if (m_Walk || !value) return;  // The walk reads every value it records.
+	if (const auto found = m_ValueRoots.find(value); found != m_ValueRoots.end()) {
+		m_DirtyRoots.insert(found->second);
+		++m_DirtyValues;
+	}
 }
 
 GraphDirt CheckpointGraphIndex::Sample() const {
@@ -174,6 +221,9 @@ GraphDirt CheckpointGraphIndex::Sample() const {
 	dirt.tables = m_TableRoots.size();
 	dirt.dirtyRoots = m_DirtyRoots.size();
 	dirt.dirtyTables = m_DirtyTables;
+	dirt.values = m_ValueRoots.size();
+	dirt.dirtyValues = m_DirtyValues;
+	dirt.uncacheableRoots = m_UncacheableRoots;
 	dirt.unknownTable = m_UnknownTable;
 	dirt.noteUs = m_NoteUs;
 	dirt.rootsReused = m_RootsReused;
@@ -288,8 +338,10 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	                         tick, reused, captured, graph.roots, graph.tables, before.dirtyRoots, before.dirtyTables,
 	                         before.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0, LuaCheckpointPausedWrites());
 	// The walk is the freeze's share and the text the worker's; the counter is the archive's numbering.
-	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={}\n",
-	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial) << std::flush;
+	// A root barred from reuse reached an upvalue cell or a coroutine, which no barrier watches.
+	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}\n",
+	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
+	                         graph.values, before.dirtyValues, graph.uncacheableRoots) << std::flush;
 }
 
 void CheckpointCow::WriteMetricsJson(const std::string& path) const {
@@ -374,6 +426,17 @@ int64_t CheckpointCow::P99FreezeUs() const {
 
 void RTE::ArmLuaCheckpointBarrier() {
 	luaJIT_set_tab_write_callback(&OnLuaTableWrite);
+	ArmLuaCheckpointValueBarrier();
+}
+
+// Lua reaches a native's values only through luabind, so one seam reports every script-side write.
+// It arms apart from the table barrier because it costs nothing until a walk has armed an object.
+void RTE::ArmLuaCheckpointValueBarrier() {
+	luabind::detail::checkpoint_object_write = &OnLuaValueWrite;
+}
+
+void RTE::CheckpointValueWritten(const void* value) {
+	OnLuaValueWrite(const_cast<void*>(value));
 }
 
 // A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
@@ -518,6 +581,36 @@ bool RTE::RunCheckpointSceneRows() {
 			fail(row, "generation " + std::to_string(after) + " after NotResting wrote three saved fields");
 		} else {
 			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
+		}
+	}
+	// An Atom is archived through its owner and is not an Entity, so a write to one has to reach the
+	// owner's stamp or the owner's whole shadow is served again with the old trail.
+	{
+		Atom borrowed;
+		borrowed.SetOwner(live);
+		const uint64_t before = live->CheckpointWriteGeneration();
+		borrowed.SetTrailLength(borrowed.GetTrailLength() + 1);
+		const uint64_t after = live->CheckpointWriteGeneration();
+		const char* row = "an_atom_write_moves_its_owner_stamp";
+		if (after == before) {
+			fail(row, "generation " + std::to_string(after) + " after the trail length moved");
+		} else {
+			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
+		}
+	}
+	// The scripted-update counter is saved and used to change every tick for every object, which no
+	// shadow survives. A tick that leaves it where it started must leave the stamp alone.
+	{
+		live->UpdateScripts();
+		const uint64_t before = live->CheckpointWriteGeneration();
+		live->UpdateScripts();
+		live->UpdateScripts();
+		const uint64_t after = live->CheckpointWriteGeneration();
+		const char* row = "a_quiet_scripted_update_counter_leaves_the_stamp";
+		if (after != before) {
+			fail(row, "generation moved " + std::to_string(after - before) + " times over two script updates");
+		} else {
+			pass(row, "generation " + std::to_string(after) + " held");
 		}
 	}
 	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.

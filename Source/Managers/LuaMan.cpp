@@ -1256,11 +1256,17 @@ local function userdataNode(value, ctx, payload)
 	return reference(ctx, id)
 end
 
+-- The script-owned natives whose engine values the chunk carries as text.
+local VALUE_KINDS = { vector = true, timer = true, alarm = true, ["path-request"] = true, ["controller-value"] = true, copy = true }
+
 local function visitUserdata(value, ctx)
 	local id = ctx.ids[value]
 	if id then return reference(ctx, id) end
 	local native = _ScriptGraphNative and { _ScriptGraphNative(value, ctx.paths[value] ~= nil) } or {}
 	local kind = native[1]
+	-- These kinds write the object's own engine values into the chunk; every other kind writes a
+	-- reference its owner carries. Only the first sort can go stale without a table being written.
+	if VALUE_KINDS[kind] and _ScriptGraphNoteValue then _ScriptGraphNoteValue(value) end
 	if kind == "copy" and native[6] then ctx.ownedPointers[native[6]] = value end
 	if kind == "area-ref" or (kind == "copy" and native[2] == "Area") then
 		for index, address in ipairs(_ScriptGraphAreaBoxes(value)) do ctx.areaBoxes[address] = { owner = value, index = index } end
@@ -1456,6 +1462,8 @@ local function visitFunction(value, ctx)
 			cellId = _ScriptGraphUpvalueSerial(value, i)
 			if cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
+			-- A store into this cell reports nothing, so the chunk that carries it is rewritten every capture.
+			ctx.rootUnwatched = true
 			local open = ctx.openUpvalues[cellKey]
 			if open then
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
@@ -1517,6 +1525,8 @@ local function visitThread(value, ctx)
 		elseif cont then entries[#entries + 1] = "K" .. stringToken(cont)
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
+	-- A coroutine's stack slots move with no write barrier behind them, so this chunk is never reused.
+	ctx.rootUnwatched = true
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return reference(ctx, id)
 end
@@ -1556,11 +1566,13 @@ serializeGraph = function(roots, rebuildEverything)
 	-- A root is serialized again only when the write barrier saw one of its tables move.
 	local dirt = (not rebuildEverything) and _ScriptGraphDirtyRoots and _ScriptGraphDirtyRoots() or nil
 	-- A chunk written under a counter this capture has not reached names ids it would call unborn.
-	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base and graphCache.base <= base) and graphCache or nil
-	local reused, rewritten = 0, 0
+	-- A table no walk recorded is in no chunk, so a write to one stales nothing and does not count here.
+	local cache = (dirt and dirt.walked and graphCache and graphCache.base and graphCache.base <= base) and graphCache or nil
+	local reused, rewritten, uncacheable = 0, 0, 0
 	for _, uid in ipairs(uids) do
 		local key = tostring(tonumber(uid) or uid)
 		local kept = cache and not (dirt.roots[uid] or dirt.roots[key]) and cache.chunks[uid] or nil
+		if kept and not kept.cacheable then kept = nil end
 		if kept then
 			ctx.chunks[#ctx.chunks + 1] = kept.text
 			for _, id in ipairs(kept.order) do ctx.defined[id] = true end
@@ -1577,6 +1589,9 @@ serializeGraph = function(roots, rebuildEverything)
 			local rootRefs = {}
 			local outerRefs = ctx.refs
 			ctx.refs = rootRefs
+			-- Nothing reports a store into an upvalue cell or a coroutine's stack, so a chunk that
+			-- carries either cannot be trusted to still be true at the next capture.
+			ctx.rootUnwatched = false
 			local token = stringToken(uid) .. visitAt(roots[uid], ctx, "object[" .. uid .. "]")
 			ctx.refs = outerRefs
 			local chunk, order = {}, {}
@@ -1589,9 +1604,11 @@ serializeGraph = function(roots, rebuildEverything)
 			ctx.chunks[#ctx.chunks + 1] = concatenate(chunk)
 			ctx.written = ctx.written or {}
 			ctx.written[uid] = { token = token, order = order, refs = rootRefs, text = ctx.chunks[#ctx.chunks],
+			                     cacheable = not ctx.rootUnwatched,
 			                     values = setmetatable({}, { __mode = "v" }) }
 			rootIds[#rootIds + 1] = token
 			rewritten = rewritten + 1
+			if ctx.rootUnwatched then uncacheable = uncacheable + 1 end
 		end
 	end
 	if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot("0") end
@@ -1685,6 +1702,7 @@ serializeGraph = function(roots, rebuildEverything)
 	for uid, chunk in pairs(ctx.cachedChunks or {}) do chunks[uid] = chunk end
 	for uid, chunk in pairs(ctx.written or {}) do chunks[uid] = chunk end
 	graphCache = { base = base, chunks = chunks }
+	if _ScriptGraphNoteUncacheable then _ScriptGraphNoteUncacheable(uncacheable) end
 	if _ScriptGraphNoteRootReuse then _ScriptGraphNoteRootReuse(reused, rewritten) end
 	-- A number is never handed out twice, so a label an earlier capture left names the same object.
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
@@ -3237,6 +3255,46 @@ do
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
 	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved", 1, true) ~= nil and string.find(cacheFirst, "s5:moved", 1, true) == nil)
 	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
+)lua"
+    R"lua(
+	-- A table no walk recorded is in no chunk, so a write to one stales nothing. The gate used to
+	-- refuse the whole cache over it, and on a live match a fresh table is born every interval.
+	local unknownDirt = _ScriptGraphDirtyRoots
+	local unknownReused, unknownRewritten
+	_ScriptGraphDirtyRoots = function() local seen = unknownDirt() seen.unknown = true return seen end
+	_ScriptGraphNoteRootReuse = function(r, w) unknownReused, unknownRewritten = r, w return noteReuse(r, w) end
+	local cacheFourth = _ScriptGraph.serialize(cacheRoots)
+	_ScriptGraphDirtyRoots = unknownDirt
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("a_new_table_does_not_disable_the_cache", unknownReused == 2 and unknownRewritten == 0 and cacheFourth == cacheThird,
+	      "reused=" .. tostring(unknownReused) .. " rewritten=" .. tostring(unknownRewritten))
+	-- A Vector's X and a Timer's ticks are written into the chunk as text and no table store carries
+	-- them, so the mutating setter is what has to move the root.
+	local valueVector, valueTimer = Vector(3, 4), Timer()
+	local valueRoot = { v = valueVector, t = valueTimer }
+	_ScriptGraph.serialize({ ["41"] = valueRoot })
+	valueVector.X = 9
+	local afterProperty = _ScriptGraphDirtyRoots().roots["41"] ~= nil
+	_ScriptGraph.serialize({ ["41"] = valueRoot })
+	valueTimer:Reset()
+	local afterCall = _ScriptGraphDirtyRoots().roots["41"] ~= nil
+	check("userdata_write_marks_its_root", afterProperty and afterCall,
+	      "property=" .. tostring(afterProperty) .. " call=" .. tostring(afterCall))
+	-- A chunk that reached an upvalue cell or a coroutine carries state no barrier watches, so it is
+	-- written again every capture however quiet the barrier was.
+	local unwatchedRoot = (function()
+		local held = 0
+		return { read = function() return held end, bump = function(to) held = to end }
+	end)()
+	local unwatchedRoots = { ["51"] = unwatchedRoot }
+	local unwatchedFirst = _ScriptGraph.serialize(unwatchedRoots)
+	local unwatchedReused
+	_ScriptGraphNoteRootReuse = function(r, w) unwatchedReused = r return noteReuse(r, w) end
+	unwatchedRoot.bump(7)
+	local unwatchedText = _ScriptGraph.serialize(unwatchedRoots)
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("an_upvalue_cell_keeps_its_root_out_of_the_cache", unwatchedReused == 0 and unwatchedText ~= unwatchedFirst,
+	      "reused=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst))
 	-- A node one root defines and another names keeps its id when the other root is written again.
 	local sharedLeaf = { shared = true }
 	local shareRootOne, shareRootTwo = { leaf = sharedLeaf }, { leaf = sharedLeaf, tag = "a" }
@@ -3492,6 +3550,35 @@ static int ScriptGraphNoteTable(lua_State* L) {
 		// The next write to this table reports it, once, through the preview trap.
 		luaJIT_arm_tab_write(L, 1);
 	}
+	return 0;
+}
+
+// An Entity stamps itself on every archived write, so its stamp is also where the graph hears about
+// engine-side writes to a script-owned copy - the ones that never pass through luabind.
+static Entity* ScriptGraphCheckpointEntity(luabind::detail::object_rep* rep) {
+	if (rep && rep->crep() && ClassDerivesFrom(rep->crep(), "Entity")) return static_cast<Entity*>(rep->ptr());
+	return nullptr;
+}
+
+// (userdata) -> nothing. The chunk carries this native's engine values as text, so the root that
+// holds it is stale the moment anything writes them. The write barrier sees tables only.
+static int ScriptGraphNoteValue(lua_State* L) {
+	auto* rep = luabind::detail::is_class_object(L, 1);
+	if (!rep || !rep->ptr()) return 0;
+	CheckpointGraphIndex::Get().NoteValue(rep->ptr());
+	rep->set_flags(rep->flags() | luabind::detail::object_rep::checkpoint_trap);
+	if (auto* entity = ScriptGraphCheckpointEntity(rep)) {
+		// The stamp reports the Entity by its own pointer, which a base cast need not leave where
+		// luabind holds it, so both names of the object lead to the same root.
+		CheckpointGraphIndex::Get().NoteValue(entity);
+		entity->ArmCheckpointValueTrap();
+	}
+	return 0;
+}
+
+// (count) -> nothing. How many roots the walk barred from reuse, for the capture's guard line.
+static int ScriptGraphNoteUncacheable(lua_State* L) {
+	CheckpointGraphIndex::Get().NoteUncacheableRoots(static_cast<size_t>(luaL_optnumber(L, 1, 0)));
 	return 0;
 }
 
@@ -5269,6 +5356,10 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphRandomState");
 		lua_pushcfunction(m_State, ScriptGraphNoteTable);
 		lua_setglobal(m_State, "_ScriptGraphNoteTable");
+		lua_pushcfunction(m_State, ScriptGraphNoteValue);
+		lua_setglobal(m_State, "_ScriptGraphNoteValue");
+		lua_pushcfunction(m_State, ScriptGraphNoteUncacheable);
+		lua_setglobal(m_State, "_ScriptGraphNoteUncacheable");
 		lua_pushcfunction(m_State, ScriptGraphBeginRoot);
 		lua_setglobal(m_State, "_ScriptGraphBeginRoot");
 		lua_pushcfunction(m_State, ScriptGraphDirtyRoots);
@@ -6579,6 +6670,8 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	LoadScriptGraphHelper();
+	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
+	ArmLuaCheckpointValueBarrier();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
 	// a birth number an identity every peer agrees on.

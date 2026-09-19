@@ -56,7 +56,7 @@ namespace RTE {
 
 		/// Sets the start throw offset for this ThrownDevice.
 		/// @param startOffset The new start throw offset.
-		void SetStartThrowOffset(Vector startOffset) { m_StartThrowOffset = startOffset; }
+		void SetStartThrowOffset(Vector startOffset) { if (m_StartThrowOffset != startOffset) TouchCheckpoint(); m_StartThrowOffset = startOffset; }
 
 		/// Gets the end throw offset of this ThrownDevice's joint relative from the parent Actor's position, if attached.
 		/// @return A const reference to the current end throw parent offset.
@@ -64,7 +64,7 @@ namespace RTE {
 
 		/// Sets the end throw offset for this ThrownDevice.
 		/// @param endOffset The new end throw offset.
-		void SetEndThrowOffset(Vector endOffset) { m_EndThrowOffset = endOffset; }
+		void SetEndThrowOffset(Vector endOffset) { if (m_EndThrowOffset != endOffset) TouchCheckpoint(); m_EndThrowOffset = endOffset; }
 
 		/// Gets the minimum throw velocity of this when thrown.
 		/// @return The minimum throw velocity of this, in m/s.
@@ -72,7 +72,7 @@ namespace RTE {
 
 		/// Sets the minimum throw velocity of this when thrown.
 		/// @param minThrowVel The minimum throw velocity of this, in m/s.
-		void SetMinThrowVel(float minThrowVel) { m_MinThrowVel = minThrowVel; }
+		void SetMinThrowVel(float minThrowVel) { if (m_MinThrowVel != minThrowVel) TouchCheckpoint(); m_MinThrowVel = minThrowVel; }
 
 		/// Gets the maximum throw velocity of this when thrown.
 		/// @return The maximum throw velocity of this, in m/s.
@@ -80,7 +80,7 @@ namespace RTE {
 
 		/// Sets the maximum throw velocity of this when thrown.
 		/// @param maxThrowVel The maximum throw velocity of this, in m/s.
-		void SetMaxThrowVel(float maxThrowVel) { m_MaxThrowVel = maxThrowVel; }
+		void SetMaxThrowVel(float maxThrowVel) { if (m_MaxThrowVel != maxThrowVel) TouchCheckpoint(); m_MaxThrowVel = maxThrowVel; }
 
 		/// Ugly method to deal with lua AI bullshit, by pulling the max throwvel calculation based on arm strength into here.
 		/// If throw velocity is decided by the Arm and not by the ThrownDevice, then the mass of the ThrownDevice and the angular velocity of the root parent Actor will be taken into account.

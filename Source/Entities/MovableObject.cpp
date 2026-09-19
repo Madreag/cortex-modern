@@ -787,7 +787,7 @@ std::string MovableObject::SaveMovableObjectRuntime() const {
 		m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
 	archive(static_cast<bool>(m_RequestedSyncedUpdate), m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile,
 		m_pScreenEffect != nullptr, m_ScreenEffectHash, m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength,
-		m_EffectAlwaysShows, m_EffectRotAngle, m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
+		m_EffectAlwaysShows, CheckpointEffectRotAngle(), m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
 		m_RandomizeEffectRotAngleEveryFrame, m_PostEffectEnabled, m_RemoveOrphanTerrainRadius, m_RemoveOrphanTerrainMaxArea,
 		m_RemoveOrphanTerrainRate, m_DamageOnCollision, m_DamageOnPenetration, m_WoundDamageMultiplier,
 		m_ApplyWoundDamageOnCollision, m_ApplyWoundBurstDamageOnCollision, m_IgnoreTerrain, m_MOIDHit, m_TerrainMatHit,
@@ -860,7 +860,7 @@ void MovableObject::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_EffectStartStrengthRaw", m_EffectStartStrength);
 	writer.NewPropertyWithValue("SpecialBehaviour_EffectStopStrengthRaw", m_EffectStopStrength);
 	writer.NewPropertyWithValue("EffectAlwaysShows", m_EffectAlwaysShows);
-	writer.NewPropertyWithValue("EffectRotAngle", m_EffectRotAngle);
+	writer.NewPropertyWithValue("EffectRotAngle", CheckpointEffectRotAngle());
 	writer.NewPropertyWithValue("InheritEffectRotAngle", m_InheritEffectRotAngle);
 	writer.NewPropertyWithValue("RandomizeEffectRotAngle", m_RandomizeEffectRotAngle);
 	writer.NewPropertyWithValue("RandomizeEffectRotAngleEveryFrame", m_RandomizeEffectRotAngleEveryFrame);
@@ -1498,7 +1498,20 @@ void MovableObject::Draw(BITMAP* targetBitmap, const Vector& targetPos, DrawMode
 }
 
 int MovableObject::UpdateScripts() {
-	m_SimUpdatesSinceLastScriptedUpdate++;
+	// The counter is a saved field and every read of it is the comparison against the interval below,
+	// so it stops once it is there: counting past it changed the archived text of every object in the
+	// scene every tick and no shadow could be reused. The stamp follows the net change, which is none
+	// on a tick that counts up and resets again.
+	struct ScriptedUpdateCounterStamp {
+		MovableObject* object;
+		int before;
+		~ScriptedUpdateCounterStamp() {
+			if (object->m_SimUpdatesSinceLastScriptedUpdate != before) object->TouchCheckpoint();
+		}
+	} counterStamp{this, m_SimUpdatesSinceLastScriptedUpdate};
+	if (m_SimUpdatesSinceLastScriptedUpdate < m_SimUpdatesBetweenScriptedUpdates) {
+		m_SimUpdatesSinceLastScriptedUpdate++;
+	}
 	if (LuaMan::AreScriptsFrozen()) {
 		return 1;
 	}

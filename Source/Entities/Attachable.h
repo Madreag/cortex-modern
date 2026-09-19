@@ -94,7 +94,7 @@ namespace RTE {
 
 		/// Sets the stored offset between this Attachable's parent's Pos and the joint position. This should be maintained by the parent.
 		/// @param newParentOffset A const reference to the new parent offset.
-		void SetParentOffset(const Vector& newParentOffset) { m_ParentOffset = newParentOffset; }
+		void SetParentOffset(const Vector& newParentOffset) { if (m_ParentOffset != newParentOffset) TouchCheckpoint(); m_ParentOffset = newParentOffset; }
 
 		/// Gets whether this Attachable is to be drawn after (in front of) or before (behind) its parent.
 		/// @return Whether this Attachable is to be drawn after its parent or not.
@@ -102,7 +102,7 @@ namespace RTE {
 
 		/// Sets whether this Attachable is to be drawn after (in front of) or before (behind) its parent.
 		/// @param drawAfterParent Whether this Attachable is to be drawn after its parent.
-		void SetDrawnAfterParent(bool drawAfterParent) { m_DrawAfterParent = drawAfterParent; }
+		void SetDrawnAfterParent(bool drawAfterParent) { if (m_DrawAfterParent != drawAfterParent) TouchCheckpoint(); m_DrawAfterParent = drawAfterParent; }
 
 		/// Gets whether this Attachable should be drawn normally by its parent.
 		/// Some attachables (e.g. AEmitter flashes) require custom handling for when they should or shouldn't draw, to be done by the specific parent class.
@@ -112,7 +112,7 @@ namespace RTE {
 		/// Sets whether this Attachable should be drawn normally by its parent.
 		/// Some attachables (e.g. AEmitter flashes) require custom handling for when they should or shouldn't draw, to be done by the specific parent class.
 		/// @param drawnNormallyByParent Whether this Attachable should be drawn normally by its parent.
-		void SetDrawnNormallyByParent(bool drawnNormallyByParent) { m_DrawnNormallyByParent = drawnNormallyByParent; }
+		void SetDrawnNormallyByParent(bool drawnNormallyByParent) { if (m_DrawnNormallyByParent != drawnNormallyByParent) TouchCheckpoint(); m_DrawnNormallyByParent = drawnNormallyByParent; }
 
 		/// Gets whether this Attachable will be deleted when removed from its parent. Has no effect until the Attachable has been added to a parent.
 		/// @return Whether this Attachable is marked to be deleted when removed from its parent or not.
@@ -120,7 +120,7 @@ namespace RTE {
 
 		/// Sets whether this Attachable will be deleted when removed from its parent.
 		/// @param deleteWhenRemovedFromParent Whether this Attachable should be deleted when removed from its parent.
-		void SetDeleteWhenRemovedFromParent(bool deleteWhenRemovedFromParent) { m_DeleteWhenRemovedFromParent = deleteWhenRemovedFromParent; }
+		void SetDeleteWhenRemovedFromParent(bool deleteWhenRemovedFromParent) { if (m_DeleteWhenRemovedFromParent != deleteWhenRemovedFromParent) TouchCheckpoint(); m_DeleteWhenRemovedFromParent = deleteWhenRemovedFromParent; }
 
 		/// Gets whether this Attachable will gib when removed from its parent. Has no effect until the Attachable has been added to a parent.
 		/// @return Whether this Attachable is marked to gib when removed from its parent or not.
@@ -128,7 +128,7 @@ namespace RTE {
 
 		/// Sets whether this Attachable will gib when removed from its parent.
 		/// @param gibWhenRemovedFromParent Whether this Attachable should gib when removed from its parent.
-		void SetGibWhenRemovedFromParent(bool gibWhenRemovedFromParent) { m_GibWhenRemovedFromParent = gibWhenRemovedFromParent; }
+		void SetGibWhenRemovedFromParent(bool gibWhenRemovedFromParent) { if (m_GibWhenRemovedFromParent != gibWhenRemovedFromParent) TouchCheckpoint(); m_GibWhenRemovedFromParent = gibWhenRemovedFromParent; }
 
 		/// Gets whether forces transferred from this Attachable should be applied at its parent's offset (rotated to match the parent) where they will produce torque, or directly at its parent's position.
 		/// @return Whether forces transferred from this Attachable should be applied at an offset.
@@ -136,7 +136,7 @@ namespace RTE {
 
 		/// Sets whether forces transferred from this Attachable should be applied at its parent's offset (rotated to match the parent) where they will produce torque, or directly at its parent's position.
 		/// @param appliesTransferredForcesAtOffset Whether forces transferred from this Attachable should be applied at an offset.
-		void SetApplyTransferredForcesAtOffset(bool appliesTransferredForcesAtOffset) { m_ApplyTransferredForcesAtOffset = appliesTransferredForcesAtOffset; }
+		void SetApplyTransferredForcesAtOffset(bool appliesTransferredForcesAtOffset) { if (m_ApplyTransferredForcesAtOffset != appliesTransferredForcesAtOffset) TouchCheckpoint(); m_ApplyTransferredForcesAtOffset = appliesTransferredForcesAtOffset; }
 #pragma endregion
 
 #pragma region Parent Gib Handling Getters and Setters
@@ -146,7 +146,7 @@ namespace RTE {
 
 		/// Sets the percentage chance that this Attachable will gib when its parent does. 0 means never, 1 means always.
 		/// @param gibWithParentChance A float describing the percentage chance this Attachable will gib when its parent gibs.
-		void SetGibWithParentChance(float gibWithParentChance) { m_GibWithParentChance = gibWithParentChance; }
+		void SetGibWithParentChance(float gibWithParentChance) { if (m_GibWithParentChance != gibWithParentChance) TouchCheckpoint(); m_GibWithParentChance = gibWithParentChance; }
 
 		/// Gets the multiplier for how strongly this Attachable's parent's gib blast strength will be applied to it when its parent's gibs
 		/// @return A float with the parent gib blast strength multiplier of this Attachable.
@@ -154,7 +154,7 @@ namespace RTE {
 
 		/// Sets the multiplier for how strongly this Attachable's parent's gib blast strength will be applied to it when its parent's gibs
 		/// @param parentGibBlastStrengthMultiplier A float describing the parent gib blast strength multiplier of this Attachable.
-		void SetParentGibBlastStrengthMultiplier(float parentGibBlastStrengthMultiplier) { m_ParentGibBlastStrengthMultiplier = parentGibBlastStrengthMultiplier; }
+		void SetParentGibBlastStrengthMultiplier(float parentGibBlastStrengthMultiplier) { if (m_ParentGibBlastStrengthMultiplier != parentGibBlastStrengthMultiplier) TouchCheckpoint(); m_ParentGibBlastStrengthMultiplier = parentGibBlastStrengthMultiplier; }
 #pragma endregion
 
 #pragma region Temporary Handling for Wounds, to be Replaced by a Wound Object in Future
@@ -164,7 +164,7 @@ namespace RTE {
 
 		/// Sets whether or not this Attachable is a wound, to be done by its parent MOSR.
 		/// @param isWound Whether or not this Attachable should be a wound.
-		void SetIsWound(bool isWound) { m_IsWound = isWound; }
+		void SetIsWound(bool isWound) { if (m_IsWound != isWound) TouchCheckpoint(); m_IsWound = isWound; }
 #pragma endregion
 
 #pragma region Joint Getters and Setters
@@ -174,7 +174,7 @@ namespace RTE {
 
 		/// Sets the amount of impulse force the joint of this Attachable can handle before breaking.
 		/// @param jointStrength A float describing the max tolerated impulse force in Newtons (kg * m/s).
-		void SetJointStrength(float jointStrength) { m_JointStrength = jointStrength; }
+		void SetJointStrength(float jointStrength) { if (m_JointStrength != jointStrength) TouchCheckpoint(); m_JointStrength = jointStrength; }
 
 		/// Gets the stiffness scalar of the joint of this Attachable, normalized between 0 and 1.0.
 		/// 1.0 means impulse forces on this attachable will be transferred to the parent with 100% strength, 0 means they will not transfer at all.
@@ -192,7 +192,7 @@ namespace RTE {
 
 		/// Sets the offset of the joint (the point around which this Attachable and its parent hinge) from this Attachable's center of mass/origin.
 		/// @param newJointOffset A Vector describing the offset of the joint relative to the this Attachable's origin/center of mass position.
-		void SetJointOffset(const Vector& newJointOffset) { m_JointOffset = newJointOffset; }
+		void SetJointOffset(const Vector& newJointOffset) { if (m_JointOffset != newJointOffset) TouchCheckpoint(); m_JointOffset = newJointOffset; }
 
 		/// Gets the absolute position of the joint that the parent of this Attachable sets upon Update().
 		/// @return A Vector describing the current absolute position of the joint.
@@ -240,7 +240,7 @@ namespace RTE {
 
 		/// Sets the AEmitter that represents the wound added to this Attachable when it gets detached from its parent. OWNERSHIP IS NOT TRANSFERRED!
 		/// @param breakWound The AEmitter to use for this Attachable's breakwound.
-		void SetBreakWound(AEmitter* breakWound) { m_BreakWound = breakWound; }
+		void SetBreakWound(AEmitter* breakWound) { if (m_BreakWound != breakWound) TouchCheckpoint(); m_BreakWound = breakWound; }
 
 		/// Gets the AEmitter that represents the wound added to this Attachable's parent when this Attachable gets detached from its parent. OWNERSHIP IS NOT TRANSFERRED!
 		/// @return A const pointer to the parent break wound AEmitter.
@@ -248,7 +248,7 @@ namespace RTE {
 
 		/// Sets the AEmitter that represents the wound added to this Attachable's parent when this Attachable gets detached from its parent. OWNERSHIP IS NOT TRANSFERRED!
 		/// @param breakWound The AEmitter to use for the parent's breakwound.
-		void SetParentBreakWound(AEmitter* breakWound) { m_ParentBreakWound = breakWound; }
+		void SetParentBreakWound(AEmitter* breakWound) { if (m_ParentBreakWound != breakWound) TouchCheckpoint(); m_ParentBreakWound = breakWound; }
 
 		/// Takes ownership of the private copies made by the Lua setters.
 		void SetOwnedBreakWound(AEmitter* wound);
@@ -273,7 +273,7 @@ namespace RTE {
 		/// Sets whether or not this Attachable inherits its parent's HFlipped value, i.e. whether it has its HFlipped value reset to match/reverse its parent's every frame, if attached.
 		/// 0 means no inheritance, 1 means normal inheritance, anything else means reversed inheritance (i.e. if the parent's HFlipped value is true, this Attachable's HFlipped value will be false).
 		/// @param inheritsRotAngle Whether or not to inherit its parent's HFlipped value.
-		void SetInheritsHFlipped(int inheritsHFlipped) { m_InheritsHFlipped = inheritsHFlipped; }
+		void SetInheritsHFlipped(int inheritsHFlipped) { if (m_InheritsHFlipped != inheritsHFlipped) TouchCheckpoint(); m_InheritsHFlipped = inheritsHFlipped; }
 
 		/// Gets whether or not this Attachable inherits its RotAngle from its parent, i.e. whether it has its RotAngle reset to match its parent every frame, if attached.
 		/// @return Whether or not this Attachable inherits its parent's RotAngle.
@@ -281,7 +281,7 @@ namespace RTE {
 
 		/// Sets whether or not this Attachable inherits its RotAngle from its parent, i.e. whether it has its RotAngle reset to match its parent every frame, if attached.
 		/// @param inheritsRotAngle Whether or not to inherit its parent's RotAngle.
-		void SetInheritsRotAngle(bool inheritsRotAngle) { m_InheritsRotAngle = inheritsRotAngle; }
+		void SetInheritsRotAngle(bool inheritsRotAngle) { if (m_InheritsRotAngle != inheritsRotAngle) TouchCheckpoint(); m_InheritsRotAngle = inheritsRotAngle; }
 
 		/// Gets the offset of this Attachable's rotation angle from its parent. Only actually applied if the Attachable is set to inherit its parent's rotation angle.
 		/// @return This Attachable's inherited rotation angle offset.
@@ -289,7 +289,7 @@ namespace RTE {
 
 		/// Sets the offset of this Attachable's rotation angle from its parent. Only actually applied if the Attachable is set to inherit its parent's rotation angle.
 		/// @param inheritedRotAngleOffset Thee new rotation angle offset for this Attachable.
-		void SetInheritedRotAngleOffset(float inheritedRotAngleOffset) { m_InheritedRotAngleOffset = inheritedRotAngleOffset; }
+		void SetInheritedRotAngleOffset(float inheritedRotAngleOffset) { if (m_InheritedRotAngleOffset != inheritedRotAngleOffset) TouchCheckpoint(); m_InheritedRotAngleOffset = inheritedRotAngleOffset; }
 
 		/// Gets the Turret-specific offset in radians for this HeldDevice's rotation.
 		/// @return The rotation void Update() override;ooffset in radians.
@@ -297,7 +297,7 @@ namespace RTE {
 
 		/// Sets the Turret-specific offset in radians for this HeldDevice's rotation.
 		/// @param mountedRotationOffset The new rotation offset in radians.
-		void SetMountedRotAngleOffset(float mountedRotationOffset) { m_MountedRotAngleOffset = mountedRotationOffset; }
+		void SetMountedRotAngleOffset(float mountedRotationOffset) { if (m_MountedRotAngleOffset != mountedRotationOffset) TouchCheckpoint(); m_MountedRotAngleOffset = mountedRotationOffset; }
 		
 		/// Gets whether or not this Attachable inherits its Frame from its parent, if attached.
 		/// @return Whether or not this Attachable inherits its parent's Frame.
@@ -305,7 +305,7 @@ namespace RTE {
 
 		/// Sets whether or not this Attachable inherits its Frame from its parent, if attached.
 		/// @param inheritsFrame Whether or not to inherit its parent's Frame.
-		void SetInheritsFrame(bool inheritsFrame) { m_InheritsFrame = inheritsFrame; }
+		void SetInheritsFrame(bool inheritsFrame) { if (m_InheritsFrame != inheritsFrame) TouchCheckpoint(); m_InheritsFrame = inheritsFrame; }
 
 		/// How much of the root parent's velocity this attachable inherits when detached
 		/// @return The proportion of the velocity inherited. 0.1 = 10% inheritance.
@@ -317,11 +317,11 @@ namespace RTE {
 
 		/// Sets how much of the root parent's velocity this attachable inherits when detached
 		/// @param The proportion of the velocity inherited. 0.1 = 10% inheritance.
-		void SetInheritsVelocityWhenDetached(float newValue) { m_InheritsVelWhenDetached = newValue; }
+		void SetInheritsVelocityWhenDetached(float newValue) { if (m_InheritsVelWhenDetached != newValue) TouchCheckpoint(); m_InheritsVelWhenDetached = newValue; }
 
 		/// Sets how much of the root parent's angular velocity this attachable inherits when detached
 		/// @param The proportion of the angular velocity inherited. 0.1 = 10% inheritance.
-		void SetInheritsAngularVelocityWhenDetached(float newValue) { m_InheritsAngularVelWhenDetached = newValue; }
+		void SetInheritsAngularVelocityWhenDetached(float newValue) { if (m_InheritsAngularVelWhenDetached != newValue) TouchCheckpoint(); m_InheritsAngularVelWhenDetached = newValue; }
 
 #pragma endregion
 
@@ -332,7 +332,7 @@ namespace RTE {
 
 		/// Sets the subgroup ID of this' Atoms
 		/// @param newID A long describing the new subgroup id of this' Atoms.
-		void SetAtomSubgroupID(long subgroupID = 0) { m_AtomSubgroupID = subgroupID; }
+		void SetAtomSubgroupID(long subgroupID = 0) { if (m_AtomSubgroupID != subgroupID) TouchCheckpoint(); m_AtomSubgroupID = subgroupID; }
 
 		/// Gets whether this Attachable currently has terrain collisions enabled and it's atoms are present in the parent AtomGroup.
 		/// Attachables with Attachable parents that don't collide with terrain will not collide with terrain. This chains up to the root parent.
@@ -361,7 +361,7 @@ namespace RTE {
 
 		/// Sets whether this Attachable currently ignores collisions with single-atom particles.
 		/// @param collidesWithTerrainWhileAttached Whether this attachable ignores collisions with single-atom particles.
-		void SetIgnoresParticlesWhileAttached(bool ignoresParticlesWhileAttached) { m_IgnoresParticlesWhileAttached = ignoresParticlesWhileAttached; }
+		void SetIgnoresParticlesWhileAttached(bool ignoresParticlesWhileAttached) { if (m_IgnoresParticlesWhileAttached != ignoresParticlesWhileAttached) TouchCheckpoint(); m_IgnoresParticlesWhileAttached = ignoresParticlesWhileAttached; }
 #pragma endregion
 
 #pragma region Override Methods
