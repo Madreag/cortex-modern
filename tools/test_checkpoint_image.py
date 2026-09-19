@@ -258,7 +258,15 @@ def score_root_reuse(stdout: str) -> dict:
             "whose chunk was reused byte for byte (the per-root text cache never fired)")
     if all(count == 0 for count in rewritten_all):
         failures.append("actual roots_rewritten=0 everywhere required a moved root to be written again")
-    return {"pass": not failures, "failures": failures, "rows": rows}
+    objects = re.findall(
+        r"^\[autosave\] tick=(\d+) graph_vm=(\d+) graph_part=object graph_root=(\d+) "
+        r"graph_part_us=(\d+) graph_chunk_reused=([01])", stdout, re.MULTILINE)
+    later = [row for row in objects if int(row[0]) > int(rows[0][0])]
+    if not any(row[4] == "1" for row in later):
+        failures.append("no object chunk was reused after the first capture")
+    if not any(row[4] == "0" for row in later):
+        failures.append("no object chunk was rewritten after the first capture; globals cannot satisfy this row")
+    return {"pass": not failures, "failures": failures, "rows": rows, "objects": objects}
 
 
 def score_walk_attribution(stdout: str) -> dict:
@@ -271,11 +279,13 @@ def score_walk_attribution(stdout: str) -> dict:
     failures = []
     for tick in sorted(walked):
         rows = [row for row in parts if int(row[0]) == tick]
-        names = {row[2] for row in rows}
-        missing = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish"} - names
-        if missing:
-            failures.append(f"tick {tick} missing walk parts {sorted(missing)}; actual {sorted(names)}")
-        if "object" not in names:
+        required = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish"}
+        for vm in sorted({row[1] for row in rows}):
+            names = {row[2] for row in rows if row[1] == vm}
+            missing = required - names
+            if missing:
+                failures.append(f"tick {tick} VM {vm} missing walk parts {sorted(missing)}; actual {sorted(names)}")
+        if not any(row[2] == "object" for row in rows):
             failures.append(f"tick {tick} has no per-object walk attribution")
     if not walked:
         failures.append("no walked capture")

@@ -169,7 +169,7 @@ void MovableObject::Clear() {
 			m_RemoveOrphanTerrainRate, m_RequestedSyncedUpdate, m_RestThreshold, m_RestTimer, m_RootMOID, m_Scale,
 			m_ScreenEffectFile, m_ScreenEffectHash, m_Sharpness, m_SimUpdatesBetweenScriptedUpdates, m_SimUpdatesSinceLastScriptedUpdate, m_StringValueMap.empty(),
 			m_TerrainMatHit, m_ToDelete, m_ToSettle, m_Vel, m_VelOscillations, m_WoundDamageMultiplier,
-			m_WrapDoubleDraw, m_pScreenEffect);
+			m_WrapDoubleDraw, m_pScreenEffect, m_EffectRotAngle, m_UniqueID, m_PersistedUniqueID);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
 	MovableObjectReference::Expire(this);
