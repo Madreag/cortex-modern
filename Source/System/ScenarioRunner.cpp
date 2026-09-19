@@ -76,6 +76,8 @@ namespace RTE {
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
 		std::vector<NetValueObservation> s_DroppedValueObservations;
 		bool s_WorldCatchUpActive = false;
+		bool s_WorldCatchUpHeld = false;
+		int s_WorldCatchUpBudget = 0;
 		uint64_t s_WorldCatchUpAppliedThrough = 0;
 		uint64_t s_WorldCatchUpActivationTick = 0;
 		std::deque<NetLockstepFrame> s_WorldCatchUpTail;
@@ -944,6 +946,12 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
+		// The mirror of the send gate above: an ordinary round decodes these packets now, so without
+		// this it would spawn an actor and rebind a brain on a host-stamped transition.
+		if (s_LockstepCoordinator && !IsPersistentWorld()) {
+			if (error) *error = "world transition arrived on a round that is not a persistent world";
+			return false;
+		}
 		if (transition.schema != c_NetWorldJoinSchema) {
 			if (error) *error = "world transition schema is not the live world schema";
 			return false;
@@ -980,6 +988,7 @@ namespace RTE {
 		s_WorldCatchUpAppliedThrough = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;
+		s_WorldCatchUpHeld = false;
 		return true;
 	}
 
@@ -995,6 +1004,16 @@ namespace RTE {
 
 	bool ScenarioRunner::WorldCatchUpActive() {
 		return s_WorldCatchUpActive;
+	}
+
+	bool ScenarioRunner::WorldCatchUpHolding() {
+		return s_WorldCatchUpActive && s_WorldCatchUpHeld;
+	}
+
+	void ScenarioRunner::ReleaseWorldCatchUp() {
+		s_WorldCatchUpActive = false;
+		s_WorldCatchUpHeld = false;
+		s_WorldCatchUpTail.clear();
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
@@ -1015,7 +1034,29 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame) {
-		return s_WorldCatchUpActive && ticksLeftThisFrame > 0 && WorldCatchUpHasFrame(nextSimTick);
+		return s_WorldCatchUpActive && !s_WorldCatchUpHeld && ticksLeftThisFrame > 0 && WorldCatchUpHasFrame(nextSimTick);
+	}
+
+	void ScenarioRunner::BeginWorldCatchUpFrame() {
+		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+	}
+
+	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick) {
+		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
+			return false;
+		}
+		--s_WorldCatchUpBudget;
+		return true;
+	}
+
+	bool ScenarioRunner::LockstepStopHoldsControllers() {
+		// A joiner applying its committed tail has a coordinator that is attached and not yet running.
+		// That is the whole catch-up window, so the stop gate must not read it as a stopped round.
+		return !IsLockstepControllerSyncActive() && HasLockstepCoordinator() && !s_WorldCatchUpActive;
+	}
+
+	bool ScenarioRunner::OfflineCommandsDriveTick() {
+		return !IsLockstepControllerSyncActive() && !s_WorldCatchUpActive;
 	}
 
 	bool ScenarioRunner::TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error) {
@@ -1040,8 +1081,11 @@ namespace RTE {
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
 		s_WorldCatchUpAppliedThrough = simTick;
+		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
+		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and
+		// carry the sim clock past the frame the round starts the joiner at.
 		if (s_WorldCatchUpActivationTick != 0 && simTick + 1 >= s_WorldCatchUpActivationTick) {
-			s_WorldCatchUpActive = false;
+			s_WorldCatchUpHeld = true;
 		}
 		return true;
 	}
@@ -1063,6 +1107,11 @@ namespace RTE {
 
 	int64_t ScenarioRunner::GetE2eOwnerTransferUid() {
 		return s_E2eFirstTransferUid;
+	}
+
+	uint8_t ScenarioRunner::GetLockstepControlOverrideOwner(int64_t actorUniqueID) {
+		const auto found = s_LockstepControlOverrides.find(actorUniqueID);
+		return found == s_LockstepControlOverrides.end() ? uint8_t{0} : found->second;
 	}
 
 	void ScenarioRunner::SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId) {

@@ -522,6 +522,20 @@ namespace RTE {
 		return transition.bindBrain && seated && transition.player >= Players::PlayerOne && transition.player < Players::MaxPlayerCount;
 	}
 
+	int64_t ChooseWorldActivateBrain(const std::vector<NetWorldBrainCandidate>& brains, const NetGameWorldTransition& transition) {
+		for (const NetWorldBrainCandidate& brain: brains) {
+			if (brain.team != transition.team) {
+				continue;
+			}
+			// A brain a live member holds is that member's character; only an unowned one (a departed
+			// seat's, or one the AI runs) is free for this activation.
+			if (brain.ownerPeerId == 0 || brain.ownerPeerId == transition.peerId) {
+				return brain.actorUID;
+			}
+		}
+		return 0;
+	}
+
 	NetWorldActivationPlan PlanWorldActivation(const NetWorldJoinSession& session, uint64_t nextFrame, bool late) {
 		NetWorldActivationPlan plan;
 		plan.firstRequired = late ? std::max(session.activationTick, nextFrame + 1) : session.activationTick;
@@ -542,7 +556,9 @@ namespace RTE {
 		transition.activationFrame = session.activationTick;
 		transition.team = session.team;
 		int human = 0;
-		transition.player = 0;
+		// A capacity slot the roster does not name owns no activity player, and -1 binds none: seating
+		// it on player 0 would rebind another member's brain.
+		transition.player = -1;
 		for (const NetMatchPlayerSlot& slot: config.players) {
 			if (slot.cpu) {
 				continue;
@@ -677,6 +693,10 @@ namespace RTE {
 		m_TransferBytes += bytes;
 	}
 
+	void NetWorldMetrics::NoteBootstrapStall() {
+		++m_BootstrapStalls;
+	}
+
 	void NetWorldMetrics::NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture) {
 		++m_PurityProbes;
 		if (withCapture != withoutCapture) {
@@ -721,6 +741,7 @@ namespace RTE {
 			{"catch_up_ms", m_CatchUpMs},
 			{"catch_up_ratio", CatchUpRatio()},
 			{"transfer_bytes", m_TransferBytes},
+			{"bootstrap_stalls", m_BootstrapStalls},
 			{"purity_probes", m_PurityProbes},
 			{"purity_mismatches", m_PurityMismatches},
 			{"first_purity_mismatch_tick", m_FirstPurityMismatchTick},

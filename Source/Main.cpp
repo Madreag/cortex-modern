@@ -3644,22 +3644,21 @@ void RunGameLoop() {
 
 		// A world joiner applies the committed tail faster than real time. 16 is a ceiling, and a
 		// tick is granted only when the tail still holds that next frame.
-		int worldCatchUpBudget = 0;
-		if (ScenarioRunner::WorldCatchUpActive()) {
-			worldCatchUpBudget = ScenarioRunner::c_WorldCatchUpTicksPerRealFrame;
-		}
+		ScenarioRunner::BeginWorldCatchUpFrame();
 
 		// Simulation update, as many times as the fixed update step allows in the span since last frame draw.
 		while (true) {
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 			if (ScenarioRunner::WorldCatchUpActive()) {
-				if (!ScenarioRunner::WorldCatchUpMayGrant(nextSimTick, worldCatchUpBudget)) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
+					// A joiner that cannot advance still has to receive: the tail's next frame and the
+					// lockstep start both arrive on this pump, which otherwise runs per sim tick only.
+					g_NetMatchService.PumpSessionEvents();
 					break;
 				}
 				if (!g_TimerMan.TimeForSimUpdate()) {
 					g_TimerMan.GrantSimUpdates(1);
 				}
-				--worldCatchUpBudget;
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
 				break;
 			}
