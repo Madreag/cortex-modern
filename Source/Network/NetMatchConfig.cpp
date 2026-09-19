@@ -95,7 +95,9 @@ namespace RTE {
 			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
-			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
+			        {"path_horizon_ticks", config.pathHorizonTicks},
+			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
+			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
 		}
 
 		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
@@ -117,6 +119,9 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
+			if (config.pathHorizonTicks != 0) {
+				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
+			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";
 				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
@@ -150,12 +155,17 @@ namespace RTE {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
+		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
 		std::vector<uint8_t> survivors = survivingPeerIds;
 		std::sort(survivors.begin(), survivors.end());
 		survivors.erase(std::unique(survivors.begin(), survivors.end()), survivors.end());
+		if (previous.persistentWorld) {
+			if (error) *error = "a persistent world does not rematch";
+			return false;
+		}
 		if (survivors.empty() || survivors.size() > previous.peerCount) {
 			if (error) *error = "surviving peer count is out of range";
 			return false;
@@ -204,8 +214,23 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetMatchConfigUtil::IsWorldId(const std::string& text) {
+		if (text.size() != c_WorldIdBytes) {
+			return false;
+		}
+		for (size_t index = 0; index < text.size(); ++index) {
+			const char c = text[index];
+			if (index == 8 || index == 13 || index == 18 || index == 23) {
+				if (c != '-') return false;
+			} else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+				return false;
+			}
+		}
+		return true;
+	}
+
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != 3 && config.version != c_Version) {
+		if (config.version != 2 && config.version != 3 && config.version != c_Version && config.version != c_PersistentWorldVersion) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
@@ -219,11 +244,26 @@ namespace RTE {
 		}
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
+		// The persistent world's fields reached the wire in v5; an ordinary match stays on v4 and hashes as it always did.
+		if (config.version < c_PersistentWorldVersion) {
+			if (config.persistentWorld) return refuse("pre-world config cannot carry the persistent world rule");
+			if (!config.worldId.empty() || config.worldBoot != 0) return refuse("pre-world config cannot carry a world identity");
+		} else if (config.persistentWorld) {
+			if (!IsWorldId(config.worldId)) return refuse("a persistent world needs a canonical world id");
+			if (config.worldBoot == 0) return refuse("a persistent world needs a nonzero host boot incarnation");
+			// The world ticks on whether or not a human is seated, so the brain rules never end it.
+			if (!config.dedicated) return refuse("a persistent world is hosted by a dedicated host");
+		} else if (!config.worldId.empty() || config.worldBoot != 0) {
+			return refuse("an ordinary match cannot carry a world identity");
+		}
+		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
+		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
 		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
 		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
+		if (config.frameRedundancyTicks < 1 || config.frameRedundancyTicks > c_MaxFrameRedundancyTicks) return refuse("frame_redundancy_ticks is out of range");
 		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
 		if (config.mode != NetMatchMode::PvPSkirmish && config.mode != NetMatchMode::CoopPvE && config.mode != NetMatchMode::PvPvE) return refuse("match mode is invalid");
 		if (!ValidateModule(config.activityModule, "activity_module", error) || !ValidateModule(config.sceneModule, "scene_module", error)) return false;
@@ -368,11 +408,23 @@ namespace RTE {
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
 		}
+		// Same for the redundancy window: only a host's non-default choice rides it.
+		if (config.frameRedundancyTicks != c_DefaultFrameRedundancyTicks) {
+			fields.emplace_back("frame_redundancy_ticks", std::to_string(config.frameRedundancyTicks));
+		}
+		// The world identity is frozen for the world's life: its members' rosters change under a
+		// separate revision, so what a joiner validates against stays the same string every boot. Only
+		// a world takes the v5 domain, so every ordinary roster hashes as it always did.
+		if (config.persistentWorld) {
+			fields.emplace_back("persistent_world", "true");
+			fields.emplace_back("world_id", config.worldId);
+		}
 		if (config.version >= 3) {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2");
+		const char* domain = config.persistentWorld ? "NetMatchConfig/v5"
+		                                            : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}
 
@@ -386,6 +438,9 @@ namespace RTE {
 			{"session_id", config.sessionId},
 			{"host_peer_id", static_cast<int>(config.hostPeerId)},
 			{"dedicated", config.dedicated},
+			{"persistent_world", config.persistentWorld},
+			{"world_id", config.worldId},
+			{"world_boot", config.worldBoot},
 			{"peer_count", static_cast<int>(config.peerCount)},
 			{"input_delay_frames", config.inputDelayFrames},
 			{"peer_input_delays", config.peerInputDelayFrames},

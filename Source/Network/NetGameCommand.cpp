@@ -39,6 +39,8 @@ namespace RTE {
 				return NetGameCommandType::AIGib;
 			} else if constexpr (std::is_same_v<T, NetGamePlaceBrain>) {
 				return NetGameCommandType::PlaceBrain;
+			} else if constexpr (std::is_same_v<T, NetGameWorldTransition>) {
+				return NetGameCommandType::WorldTransition;
 			}
 		}, payload);
 	}
@@ -84,6 +86,8 @@ namespace RTE {
 				return "AIGib";
 			case NetGameCommandType::PlaceBrain:
 				return "PlaceBrain";
+			case NetGameCommandType::WorldTransition:
+				return "WorldTransition";
 		}
 		return "Unknown";
 	}

@@ -18,6 +18,7 @@ namespace RTE {
 			std::string replay;
 			std::string replayReason = "no recording";
 			bool replayTruncated = false;
+			bool identityPending = false; //!< The identity's inputs are captured; the worker owes the hashing.
 			double identityBuildMs = 0;
 		};
 

@@ -2,13 +2,20 @@
 
 #include "Singleton.h"
 #include "Activity.h"
+#include "AutosaveStore.h"
 #include "ContentFile.h"
 #include "SoundContainerRegistry.h"
 
 #include "BS_thread_pool.hpp"
 
+#include <deque>
 #include <functional>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_set>
+#include <vector>
 
 #define g_ActivityMan ActivityMan::Instance()
 
@@ -130,6 +137,25 @@ namespace RTE {
 		/// @return Whether the game was successfully saved.
 		bool ForceAbortSave();
 
+		enum class SaveKind {
+			Manual,
+			Autosave,
+			Resync,
+		};
+
+		/// One refused save, copied into the diagnostics bundle.
+		struct SaveRefusalRecord {
+			std::string kind;
+			std::string objectClass;
+			std::string presetName;
+			std::string scriptFile;
+			std::string functionName;
+			std::string lastSegment;
+			std::string path;
+			std::string playerLine;
+			std::string problem;
+		};
+
 		enum class SaveCompression {
 			Fast,
 			Small,
@@ -147,8 +173,32 @@ namespace RTE {
 		bool SaveCurrentGame(const std::string& fileName, SaveCompression compression = SaveCompression::Fast);
 		/// Captures a callback-free checkpoint at a completed sim tick and queues its archive write.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
+		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
+		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
+		/// The last automatic capture this process published; empty when none has.
+		const std::string& LastAutosavePath() const { return m_LastAutosavePath; }
+		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }
+		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
+		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
+		/// One finished autosave archive, as the writer thread left it: the bytes it wrote, their
+		/// digest and the buffer itself. A capture that is still being zipped is not one of these.
+		struct CompletedAutosave {
+			uint64_t serial = 0; //!< Advances per finished archive, so a poller can tell a new one.
+			uint64_t tick = 0;
+			std::string path;
+			uint64_t bytes = 0;  //!< The finished archive's size, never the captured pre-zip count.
+			std::string digest;
+			std::shared_ptr<const std::vector<uint8_t>> archive;
+		};
+		/// The newest archive the writer thread has finished; empty before the first one lands.
+		std::optional<CompletedAutosave> LastCompletedAutosave() const;
+		/// Writer thread: reads the archive it just wrote, hashes it and publishes the entry above.
+		void PublishCompletedAutosave(uint64_t tick, const std::string& path);
+		/// Test seam: the digest the writer stamps a finished archive with. Installed by the net
+		/// layer so the hashing of a multi-megabyte archive happens on the writer, not the sim.
+		void SetAutosaveDigest(std::function<std::string(const std::vector<uint8_t>&)> digest);
 		long long LastSaveMainMs() const { return m_LastSaveMainMs; }
 		long long LastSaveZipMs() const { return m_LastSaveZipMs; }
 		std::string CaptureRuntimeGlobals() const;
@@ -168,6 +218,11 @@ namespace RTE {
 		/// @return Whether or not the saved game was successfully staged.
 		bool LoadGameToRestart(const std::string& fileName);
 
+		/// Stages one of this match's autosaves for a deferred restart. The checkpoint must validate as
+		/// restorable first, so a torn or foreign archive never reaches the staging path.
+		/// @param matchId The match both peers named; @param tick the committed tick it stands on.
+		bool LoadAutosaveToRestart(const std::string& matchId, uint64_t tick);
+
 		// These callbacks belong only to the currently staged checkpoint.
 		bool SetPendingCheckpointCallbacks(std::function<bool()> before, std::function<bool(Activity&)> after);
 
@@ -182,6 +237,12 @@ namespace RTE {
 
 		/// Checks native global callbacks and their checkpoint continuations.
 		bool RunGlobalCallbacksSelfTest();
+
+		/// Plants a dead script upvalue, requests a save capture, and checks the player line.
+		bool RunSaveRefusalDiagnosisSelfTest();
+
+		/// The last refusals a diagnostics bundle copies into DesyncHeal.json.
+		const std::deque<SaveRefusalRecord>& GetSaveRefusalRecords() const { return m_SaveRefusalRecords; }
 
 		/// Deletes a saved game file this process wrote for itself.
 		void RemoveSavedGame(const std::string& fileName) const;
@@ -289,12 +350,24 @@ namespace RTE {
 		/// Reads a .ccsave into its Scene, Activity, and restart metadata; shared by the launch and
 		/// stage-for-restart load paths.
 		bool ReadSavedGame(const std::string& fileName, PendingCheckpoint& out);
+		/// The same read against a checkpoint anywhere on disk, so autosaves load like saved games.
+		bool ReadSavedGameArchive(const std::string& archivePath, const std::string& label, PendingCheckpoint& out);
+		/// Stages any checkpoint archive for the deferred restart.
+		bool LoadArchiveToRestart(const std::string& archivePath, const std::string& label);
 		/// Shares the checkpoint encoding while keeping automatic capture independent of user saves.
 		bool QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
-		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr);
+		                       std::shared_future<bool>& task, const std::string& matchId = "", uint64_t tick = 0, size_t* capturedBytes = nullptr,
+		                       const AutosaveIdentity* identity = nullptr);
 		bool QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
-		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast);
+		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
+		                              const AutosaveIdentity* identity = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const;
+		/// Serializes script graphs the way a save does and reports each refusal.
+		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
+		/// Prints each refused script value to the console and tells the player once.
+		void ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<std::string>& problems);
+		/// Match toast in lockstep, screen text otherwise.
+		void ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep);
 
 		std::string m_DefaultActivityType; //!< The type name of the default Activity to be loaded if nothing else is available.
 		std::string m_DefaultActivityName; //!< The preset name of the default Activity to be loaded if nothing else is available.
@@ -330,6 +403,17 @@ namespace RTE {
 
 		std::shared_future<bool> m_SaveGameTask; //!< The current save game task.
 		std::vector<std::shared_future<bool>> m_AutosaveTasks; //!< Captured checkpoints awaiting disk IO.
+		std::string m_LastAutosavePath;
+		uint64_t m_LastAutosaveTick = 0;
+		size_t m_LastAutosaveBytes = 0;
+		double m_LastAutosaveCaptureMs = 0.0;
+		mutable std::mutex m_CompletedAutosaveMutex; //!< The writer thread publishes through it.
+		std::optional<CompletedAutosave> m_CompletedAutosave;
+		uint64_t m_CompletedAutosaveSerial = 0;
+		std::function<std::string(const std::vector<uint8_t>&)> m_AutosaveDigest;
+		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
+		std::unordered_set<std::string> m_ReportedAutosaveKeys;
+		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
 

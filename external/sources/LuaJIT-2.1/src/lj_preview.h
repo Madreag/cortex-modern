@@ -11,19 +11,33 @@ typedef struct LJPreviewTable {
   int captured;
 } LJPreviewTable;
 
+/* An upvalue slot as the window found it; the measurement compares it at the end. */
+typedef struct LJPreviewUV {
+  GCupval *uv;
+  TValue saved;
+  int counted;
+} LJPreviewUV;
+
 typedef struct LJPreview {
   global_State *g;
   LJPreviewTable *tables;
   GCobj **objects;
   GCobj **seen;
+  GCobj **skipped;
+  LJPreviewUV *upvalues;
   size_t ntables, tablescap, nobjects, objectscap, nseen, seencap;
+  size_t nskipped, skippedcap, nupvalues, upvaluescap;
   GCtab *root;
   uint64_t savedserial;
+  GCtab *registry;
   size_t savedbytes;
   uint32_t lastwrite;
   int active;
   int timed;
+  int measure;
   double window_ms;
+  double *samples;
+  size_t nsamples, samplescap;
   luaJIT_PreviewStats stats;
 } LJPreview;
 

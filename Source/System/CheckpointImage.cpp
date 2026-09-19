@@ -207,8 +207,6 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 		rootsRewritten = m_LastRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
-	std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n",
-	                         tick, freezeUs / 1000.0, imageBytes);
 	std::cout << std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}\n",
 	                         tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99);
 	// Where the freeze went, and how much of it the shadows and the graph index saved.

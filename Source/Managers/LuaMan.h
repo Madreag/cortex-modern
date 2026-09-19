@@ -8,6 +8,7 @@
 #include "BS_thread_pool.hpp"
 
 #include <array>
+#include <atomic>
 #include <functional>
 #include <string>
 #include <unordered_set>
@@ -201,9 +202,21 @@ namespace RTE {
 		/// Arms the native barrier for tables reachable from this state's globals and require caches.
 		/// It undoes table writes only: upvalue slots, setfenv envs, registry-only tables and stack-only tables keep what a preview wrote.
 		void CapturePreviewGlobalFence();
+		/// Arms it with the registry as a rollback root as well, which the release's reference order makes safe.
+		/// @param rootRegistry Whether the registry rolls back with the globals.
+		void CapturePreviewGlobalFence(bool rootRegistry);
+		/// Drops the luabind references the window made, so they are off luabind's free list before any state rolls back.
+		/// @return How many cached scripts were put back.
+		int DropPreviewWindowReferences();
 		/// Puts them back as the fence found them: keys the preview added go, values it changed or removed come back.
+		/// Drops this state's window references first if nothing has yet.
 		/// @return How many tables and cached scripts were put back.
 		int ReleasePreviewGlobalFence();
+		/// Records a function object handed to a caller inside this state's preview window, so the release can put back what it named.
+		/// @param wrapper The wrapper the caller now owns.
+		/// @param scriptPath The script file the function came from.
+		/// @param functionName The function's name in that file.
+		void TrackPreviewBornWrapper(LuabindObjectWrapper* wrapper, const std::string& scriptPath, const std::string& functionName);
 		bool BindPreviewScriptObject(MovableObject* clone, bool sharedSlot);
 		bool RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass);
 		void DropPreviewScriptObject(long uniqueID);
@@ -376,16 +389,30 @@ namespace RTE {
 		/// Clears all the member variables of this LuaStateWrapper, effectively resetting the members of this abstraction level only.
 		void Clear();
 
+		/// A function object copy a preview window handed out, waiting for the release to point it back at what it named before.
+		struct PreviewCallerCopy {
+			LuabindObjectWrapper* wrapper; //!< The caller's wrapper; its address does not change across the release.
+			uint64_t serial; //!< The tracking serial, so a wrapper that died and a reused address are told apart.
+			std::string scriptPath; //!< The script file the function came from.
+			std::string functionName; //!< The function's name in that file.
+		};
+
 		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
 		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
-		bool m_PreviewGlobalFenceArmed = false; //!< Whether the VM's native table barrier is armed for this state.
+		std::atomic<bool> m_PreviewGlobalFenceArmed{false}; //!< Whether the VM's native table barrier is armed for this state; read off the state mutex on the cached script path.
+		bool m_PreviewReferencesDropped = false; //!< Whether this state's window references are dropped and it only waits for the rollback.
+		bool m_PreviewRegistryRooted = false; //!< Whether a barrier this state armed held the registry as a rollback root, as the VM reported it.
 		bool m_PreviewStatsReported = false; //!< Whether this state's barrier stats row has been printed.
 		std::unordered_set<std::string> m_PreviewScriptCacheKeys; //!< The script files this state had cached when the preview's record was taken.
 		std::unordered_map<std::string, std::unordered_map<std::string, LuabindObjectWrapper*>> m_PreviewScriptCacheHeld; //!< The cached function objects a reload replaced inside the preview, held for the release to put back.
+		std::vector<PreviewCallerCopy> m_PreviewCallerCopies; //!< The caller copies the rollback still owes a function, between the drop and the release.
+		uint64_t m_PreviewCallerCopiesRolledBack = 0; //!< Caller-held function objects the preview pointed back at the function they named before it.
+		uint64_t m_PreviewCallerCopiesKept = 0; //!< Caller-held function objects that name a function the window never reloaded.
+		uint64_t m_PreviewCallerCopiesEmptied = 0; //!< Caller-held function objects left empty because the rollback takes away what they named.
 		Entity* m_TempEntity; //!< Temporary holder for an Entity object that we want to pass into the Lua state without fuss. Lets you export objects to lua easily.
 		std::vector<Entity*> m_TempEntityVector; //!< Temporary holder for a vector of Entities that we want to pass into the Lua state without a fuss. Usually used to pass arguments to special Lua functions.
 		std::string m_LastError; //!< Description of the last error that occurred in the script execution.
@@ -452,6 +479,10 @@ namespace RTE {
 		static uint64_t PreviewCodecFallbackCount() { return s_PreviewCodecFallbacks; }
 		/// Whether previews fence the Lua states' globals; CC_PREVIEW_GLOBALS_FENCE=0 turns the fence off.
 		static bool PreviewGlobalFenceEnabled();
+		/// Stops tracking a function object a preview window handed out; LuabindObjectWrapper's deletion hook.
+		static void ForgetPreviewBornWrapper(LuabindObjectWrapper* wrapper);
+		/// Whether a preview window rolls the Lua registry back with the globals; CC_PREVIEW_REGISTRY_ROOT=1 turns it on.
+		static bool PreviewRegistryRootEnabled();
 		/// How many global entries previews have put back so far.
 		static uint64_t PreviewGlobalsUndoneCount() { return s_PreviewGlobalsUndone; }
 #pragma endregion

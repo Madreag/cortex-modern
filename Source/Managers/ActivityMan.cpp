@@ -1,7 +1,10 @@
 #include "ActivityMan.h"
+#include "AutosaveStore.h"
+#include "GameVersion.h"
 #include "GUIInput.h"
 #include "GUISound.h"
 #include "CheckpointArchive.h"
+#include "NetIdentity.h"
 #include "LuaMan.h"
 #include "Base64/base64.h"
 
@@ -30,7 +33,12 @@
 #include "GlobalScript.h"
 #include "ACraft.h"
 #include "SLTerrain.h"
+#include "Scene.h"
 #include "SceneMan.h"
+#include "LoopbackTransport.h"
+#include "NetLockstep.h"
+#include "NetMatchService.h"
+#include "nlohmann/json.hpp"
 
 #include "EditorActivity.h"
 #include "SceneEditor.h"
@@ -42,6 +50,7 @@
 #include "MusicMan.h"
 #include "TimerMan.h"
 #include "MovableMan.h"
+#include "MovableObject.h"
 #include "CheckpointImage.h"
 #include "SceneLayer.h"
 
@@ -58,6 +67,8 @@
 #include "SDL3/SDL_surface.h"
 #include <SDL3_image/SDL_image.h>
 
+#include "lua.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -72,9 +83,12 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <thread>
 
 #ifdef _WIN32
@@ -88,6 +102,82 @@ using namespace RTE;
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 namespace {
+	const char* SaveKindName(ActivityMan::SaveKind kind) {
+		switch (kind) {
+			case ActivityMan::SaveKind::Autosave:
+				return "autosave";
+			case ActivityMan::SaveKind::Resync:
+				return "resync";
+			default:
+				return "manual";
+		}
+	}
+
+	std::string ScriptFileBasename(const std::string& key) {
+		std::string name = key;
+		if (const size_t slash = name.find_last_of("/\\"); slash != std::string::npos) name = name.substr(slash + 1);
+		return name;
+	}
+
+	std::vector<std::string> BracketSegments(const std::string& path) {
+		std::vector<std::string> segments;
+		for (size_t i = 0; i < path.size(); ++i) {
+			if (path[i] != '[') continue;
+			const size_t close = path.find(']', i + 1);
+			if (close == std::string::npos) break;
+			segments.push_back(path.substr(i + 1, close - i - 1));
+			i = close;
+		}
+		return segments;
+	}
+
+	ActivityMan::SaveRefusalRecord ParseSaveRefusal(ActivityMan::SaveKind kind, const std::string& problem) {
+		ActivityMan::SaveRefusalRecord record;
+		record.kind = SaveKindName(kind);
+		record.problem = problem;
+
+		constexpr std::string_view deadPrefix = "a reference to a ";
+		constexpr std::string_view deadAt = " that no longer exists at ";
+		std::string message = problem;
+		if (problem.starts_with(deadPrefix)) {
+			if (const size_t at = problem.find(deadAt); at != std::string::npos) {
+				record.objectClass = problem.substr(deadPrefix.size(), at - deadPrefix.size());
+				record.path = problem.substr(at + deadAt.size());
+				message = problem.substr(0, at);
+			}
+		}
+		if (record.path.empty()) {
+			if (const size_t at = problem.rfind(" at "); at != std::string::npos) {
+				message = problem.substr(0, at);
+				record.path = problem.substr(at + 4);
+			}
+		}
+
+		const std::vector<std::string> segments = BracketSegments(record.path);
+		if ((record.path.starts_with("global[") || record.path.starts_with("package.loaded[")) && !segments.empty()) {
+			record.scriptFile = ScriptFileBasename(segments.front());
+			if (segments.size() > 1) record.functionName = segments[1];
+		} else if (record.path.starts_with("object[") && !segments.empty()) {
+			record.scriptFile = "object[" + segments.front() + "]";
+			if (segments.size() > 1) record.functionName = segments[1];
+		}
+		if (!segments.empty()) record.lastSegment = segments.back();
+
+		record.playerLine = "Save skipped:";
+		if (!record.scriptFile.empty()) record.playerLine += " " + record.scriptFile;
+		else if (!record.path.empty()) record.playerLine += " " + record.path;
+		if (!record.functionName.empty()) record.playerLine += " " + record.functionName;
+		if (!record.objectClass.empty()) {
+			record.playerLine += " keeps a dead " + record.objectClass;
+			if (!record.presetName.empty()) record.playerLine += " \"" + record.presetName + "\"";
+			if (!record.lastSegment.empty()) record.playerLine += " (" + record.lastSegment + ")";
+		} else if (!message.empty()) {
+			record.playerLine += " " + message;
+			if (!record.lastSegment.empty()) record.playerLine += " (" + record.lastSegment + ")";
+		}
+		return record;
+	}
+
 	class AutosaveArchiveWriter {
 	public:
 		AutosaveArchiveWriter() : m_Worker([this] {
@@ -178,7 +268,9 @@ namespace {
 	void WriteCheckpointArchive(const std::string& fileName, const std::filesystem::path& savePath, int zipLevel,
 	                            const std::string& matchId, std::string_view mainText, std::string_view indexText,
 	                            const std::vector<std::string>& layerNames,
-	                            const std::function<bool(size_t, std::vector<unsigned char>&)>& encode) {
+	                            const std::function<bool(size_t, std::vector<unsigned char>&)>& encode,
+	                            const AutosaveDescriptor* descriptor = nullptr,
+	                            const std::shared_ptr<const std::atomic<uint64_t>>& pinnedTickSource = nullptr) {
 		const bool automatic = !matchId.empty();
 		if (automatic) std::filesystem::create_directories(savePath.parent_path());
 		struct PendingArchive {
@@ -214,6 +306,10 @@ namespace {
 			}
 			if (zipCloseFileInZip(archive.file) != ZIP_OK) throw std::runtime_error("could not finish " + name);
 		};
+		if (automatic && descriptor) {
+			const std::string descriptorText = AutosaveStore::WriteDescriptor(*descriptor);
+			writeEntry(AutosaveStore::c_DescriptorEntry, descriptorText.data(), descriptorText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
+		}
 		writeEntry("Index.ini", indexText.data(), indexText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
 		writeEntry("Save.ini", mainText.data(), mainText.size(), HACK_MZ_COMPRESS_METHOD_DEFLATE);
 		std::vector<std::vector<unsigned char>> pngData(layerNames.size());
@@ -243,19 +339,20 @@ namespace {
 			std::filesystem::rename(archive.path, savePath);
 		}
 		if (automatic) {
-			std::vector<std::pair<uint64_t, std::filesystem::path>> saves;
-			const std::string prefix = matchId + "-";
-			for (const auto& entry: std::filesystem::directory_iterator(savePath.parent_path())) {
-				if (entry.is_symlink() || !entry.is_regular_file()) continue;
-				const std::string name = entry.path().filename().string();
-				if (!name.starts_with(prefix) || !name.ends_with(".ccsave")) continue;
-				const std::string_view number(name.data() + prefix.size(), name.size() - prefix.size() - 7);
-				uint64_t savedTick = 0;
-				const auto parsed = std::from_chars(number.data(), number.data() + number.size(), savedTick);
-				if (parsed.ec == std::errc{} && parsed.ptr == number.data() + number.size()) saves.emplace_back(savedTick, entry.path());
+			// A checkpoint nobody can restore is not a checkpoint: it is proven readable before it counts.
+			AutosaveDescriptor published;
+			std::string refusal;
+			if (!AutosaveStore::Validate(savePath, published, &refusal)) {
+				std::error_code ignored;
+				std::filesystem::remove(savePath, ignored);
+				throw std::runtime_error("the published checkpoint is not restorable: " + refusal);
 			}
-			std::sort(saves.begin(), saves.end());
-			for (size_t index = 3; index < saves.size(); ++index) std::filesystem::remove(saves[index - 3].second);
+			// A heal names the rewind point from this record instead of reading every archive again.
+			AutosaveStore::NoteValidated(published);
+			const uint64_t pinnedTick = pinnedTickSource ? pinnedTickSource->load() : AutosaveStore::c_NoPinnedTick;
+			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
+			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
+			                         published.savedTick, AutosaveStore::c_RetainedAutosaves, pinnedTick, removed) << std::flush;
 		}
 	}
 }
@@ -286,6 +383,8 @@ void ActivityMan::Clear() {
 	m_StartActivityResumed = false;
 	m_SaveGameTask = std::shared_future<bool>();
 	m_AutosaveTasks.clear();
+	m_SaveRefusalRecords.clear();
+	m_ReportedAutosaveKeys.clear();
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
 	m_ActivityNeedsResume = false;
@@ -326,21 +425,72 @@ bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression c
 	return QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
 }
 
+std::optional<ActivityMan::CompletedAutosave> ActivityMan::LastCompletedAutosave() const {
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	return m_CompletedAutosave;
+}
+
+void ActivityMan::SetAutosaveDigest(std::function<std::string(const std::vector<uint8_t>&)> digest) {
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	m_AutosaveDigest = std::move(digest);
+}
+
+void ActivityMan::PublishCompletedAutosave(uint64_t tick, const std::string& path) {
+	std::function<std::string(const std::vector<uint8_t>&)> digest;
+	{
+		std::lock_guard lock(m_CompletedAutosaveMutex);
+		digest = m_AutosaveDigest;
+	}
+	if (!digest) {
+		return;
+	}
+	std::ifstream in(path, std::ios::binary);
+	if (!in) {
+		std::cout << "[autosave] finished archive could not be read back tick=" << tick << std::endl;
+		return;
+	}
+	auto archive = std::make_shared<std::vector<uint8_t>>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+	if (archive->empty()) {
+		std::cout << "[autosave] finished archive is empty tick=" << tick << std::endl;
+		return;
+	}
+	CompletedAutosave entry;
+	entry.tick = tick;
+	entry.path = path;
+	entry.bytes = archive->size();
+	entry.digest = digest(*archive);
+	entry.archive = std::move(archive);
+	std::lock_guard lock(m_CompletedAutosaveMutex);
+	entry.serial = ++m_CompletedAutosaveSerial;
+	m_CompletedAutosave = std::move(entry);
+}
+
 bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick) {
-	if (matchId.empty() || matchId.find_first_not_of("0123456789abcdef-") != std::string::npos || tick == 0) return false;
+	return SaveAutosaveSnapshot(matchId, tick, AutosaveIdentity{});
+}
+
+bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
+	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	std::erase_if(m_AutosaveTasks, [](const auto& task) {
 		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
 	});
 	const std::string fileName = matchId + "-" + std::to_string(tick);
-	const std::string path = System::GetWorkingDirectory() + "Autosaves/" + fileName + ".ccsave";
+	const std::string path = AutosaveStore::ArchivePath(matchId, tick).string();
 	std::shared_future<bool> task;
 	size_t bytes = 0;
+	const auto captureStart = std::chrono::steady_clock::now();
 	try {
-		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes)) {
+		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity)) {
 			std::cout << "[autosave] failed tick=" << tick << " reason=capture refused" << std::endl;
 			return false;
 		}
 		m_AutosaveTasks.push_back(std::move(task));
+		const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count();
+		m_LastAutosavePath = path;
+		m_LastAutosaveTick = tick;
+		m_LastAutosaveBytes = bytes;
+		m_LastAutosaveCaptureMs = captureMs;
+		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
 		return true;
 	} catch (const std::exception& error) {
 		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
@@ -349,7 +499,8 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 }
 
 bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
-                                          std::shared_future<bool>& task, size_t& bytes, SaveCompression compression) {
+                                          std::shared_future<bool>& task, size_t& bytes, SaveCompression compression,
+                                          const AutosaveIdentity* identity) {
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
@@ -415,6 +566,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		const bool captured = g_MovableMan.CaptureScriptGraphs(image->graphs, problems);
 		graphIndex.EndWalk();
 		if (!captured) {
+			// Every refused script value reaches the player the same way a manual save reports it.
+			ReportScriptGraphSaveRefusal(matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave, problems);
 			std::string message = "script graph capture refused";
 			for (const auto& problem: problems) message += ": " + problem;
 			throw std::runtime_error(message);
@@ -477,8 +630,33 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
 	const auto simThread = std::this_thread::get_id();
+	const bool automatic = !matchId.empty();
+	AutosaveDescriptor descriptor;
+	if (automatic) {
+		descriptor.schema = AutosaveStore::c_DescriptorSchema;
+		descriptor.matchId = matchId;
+		descriptor.savedTick = tick;
+		descriptor.simTimeTicks = g_TimerMan.GetSimTimeTicks();
+		descriptor.gameVersion = c_VersionString;
+		descriptor.activityPreset = activity->GetPresetName();
+		descriptor.scenePreset = scene->GetPresetName();
+		if (identity) {
+			descriptor.sessionId = identity->sessionId;
+			descriptor.roundId = identity->roundId;
+			descriptor.intervalSeconds = identity->intervalSeconds;
+			descriptor.buildId = identity->buildId;
+			descriptor.deterministicConfigHash = identity->deterministicConfigHash;
+			descriptor.moduleManifestHash = identity->moduleManifestHash;
+			descriptor.sessionIdentityHash = identity->sessionIdentityHash;
+		}
+	}
+	// The pin is read where retention runs, so an anchor named while this capture is in flight still counts.
+	const std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource = identity ? identity->pinnedTickSource : nullptr;
+	// The world text is hashed on the archive thread, so the capture never pays for the digest.
+	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? image->structure.Text() : std::string());
 	// Nothing writes the image once it is published, so the worker keeps its own buffers.
-	task = AutosaveWriter().Submit([image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel,
+	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel,
+	                                automatic, descriptor, pinnedTickSource, checkpointWorld,
 	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)]() mutable {
 		const auto start = std::chrono::steady_clock::now();
 		const auto sinceStart = [&start] {
@@ -491,11 +669,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
+			if (automatic) {
+				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", *checkpointWorld}}));
+			}
 			WriteCheckpointArchive(fileName, path, zipLevel, matchId, main.Text(), index.Text(), layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
 				    png = images[i]->Bytes();
 				    return true;
-			    });
+			    },
+			    automatic ? &descriptor : nullptr, pinnedTickSource);
+			// The archive exists only now. What a world publishes is this output, never a guess at the file.
+			if (automatic) PublishCompletedAutosave(tick, path);
 			if (matchId.empty()) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
 			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
@@ -518,7 +702,8 @@ void ActivityMan::WaitForAutosaveTasks() const {
 }
 
 bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
-                                  std::shared_future<bool>& task, const std::string& matchId, uint64_t tick, size_t* capturedBytes) {
+                                  std::shared_future<bool>& task, const std::string& matchId, uint64_t tick, size_t* capturedBytes,
+                                  const AutosaveIdentity* identity) {
 	const bool automatic = !matchId.empty();
 	std::promise<bool> refused;
 	refused.set_value(false);
@@ -551,17 +736,65 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	}
 	size_t bytes = 0;
 	const uint64_t saveTick = tick ? tick : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	if (!QueueIncrementalAutosave(fileName, path, matchId, saveTick, task, bytes, compression)) return false;
+	if (!QueueIncrementalAutosave(fileName, path, matchId, saveTick, task, bytes, compression, identity)) return false;
 	if (capturedBytes) *capturedBytes = bytes;
 	return true;
 }
 
+bool ActivityMan::CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs) {
+	std::vector<std::string> luaProblems;
+	if (!g_MovableMan.SerializeScriptGraphs(graphs, luaProblems)) {
+		ReportScriptGraphSaveRefusal(kind, luaProblems);
+		return false;
+	}
+	m_ReportedAutosaveKeys.clear();
+	return true;
+}
+
+void ActivityMan::ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<std::string>& problems) {
+	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
+	std::vector<SaveRefusalRecord> fresh;
+	for (const std::string& problem: problems) {
+		g_ConsoleMan.PrintString("ERROR: the save cannot carry a script value: " + problem);
+		std::cout << "[scriptgraph] save refused: " << problem << std::endl;
+		SaveRefusalRecord record = ParseSaveRefusal(kind, problem);
+		if (m_SaveRefusalRecords.size() >= c_SaveRefusalRecordLimit) m_SaveRefusalRecords.pop_front();
+		m_SaveRefusalRecords.push_back(record);
+		const std::string key = record.scriptFile + "\n" + record.path;
+		if (kind == SaveKind::Autosave && !m_ReportedAutosaveKeys.insert(key).second) continue;
+		fresh.push_back(std::move(record));
+	}
+	if (fresh.empty()) return;
+	const SaveRefusalRecord* shown = nullptr;
+	for (const SaveRefusalRecord& record: fresh) {
+		if (!record.objectClass.empty()) {
+			shown = &record;
+			break;
+		}
+	}
+	ShowSaveRefusalToPlayer(shown ? *shown : fresh.front(), lockstep);
+}
+
+void ActivityMan::ShowSaveRefusalToPlayer(const SaveRefusalRecord& record, bool lockstep) {
+	if (lockstep) {
+		ScenarioRunner::PushNetUiToast("save_refused", record.playerLine);
+		return;
+	}
+	g_FrameMan.ClearScreenText(0);
+	g_FrameMan.SetScreenText(record.playerLine, 0, 0, 6000, false);
+}
+
 bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& out) {
+	const std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
+	return ReadSavedGameArchive(filePath + ".ccsave", fileName, out);
+}
+
+bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std::string& fileName, PendingCheckpoint& out) {
 	WaitForSaveGameTask();
 	const std::string modulePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName);
 	const std::string filePath = modulePath + "/" + fileName;
 	try {
-		SaveGameArchive archive(filePath + ".ccsave");
+		SaveGameArchive archive(archivePath);
 		std::string text;
 		archive.ReadEntry("Save.ini", text);
 		if (text.empty() || text.find('\0') != std::string::npos) throw std::runtime_error("empty or invalid Save.ini");
@@ -594,6 +827,8 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& 
 			if (!stagedImages->Add(modulePath + "/" + name, image.get())) throw std::runtime_error("could not stage " + name);
 			image.release();
 		}
+		// The label names the reader's data module, so it stays inside the saves module wherever the archive
+		// itself lives; a refusal below names the archive that was read.
 		Reader reader(std::make_unique<std::istringstream>(text), filePath + "/Save.ini", true, nullptr, true);
 		reader.SetCheckpoint(true);
 		reader.SetThrowOnError(true);
@@ -724,7 +959,8 @@ bool ActivityMan::ReadSavedGame(const std::string& fileName, PendingCheckpoint& 
 		out.images = std::move(stagedImages);
 		return true;
 	} catch (const std::exception& error) {
-		const std::string message = "Could not load game \"" + fileName + "\": " + error.what();
+		// The reason keeps its shape for the refusal classifiers; the archive it was read from rides after it.
+		const std::string message = "Could not load game \"" + fileName + "\": " + error.what() + " (read from " + archivePath + ")";
 		g_ConsoleMan.PrintString("ERROR: " + message);
 		RTEError::ShowMessageBox(message);
 		return false;
@@ -853,6 +1089,148 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	return passed;
 }
 
+bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
+	constexpr const char* Tag = "[save-refusal-diagnosis-selftest]";
+	int failures = 0;
+	const auto check = [&](bool ok, const char* name, const std::string& detail) {
+		std::cout << Tag << (ok ? " PASS " : " FAIL ") << name << ": " << detail << std::endl;
+		if (!ok) ++failures;
+	};
+
+	const std::string r11 = "a reference to a ACDropShip that no longer exists at global[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Update].upvalue[fn].upvalue[transactionOwner]";
+	const SaveRefusalRecord example = ParseSaveRefusal(SaveKind::Autosave, r11);
+	check(example.objectClass == "ACDropShip" && example.scriptFile == "mod_failure_continuation.lua" &&
+	          example.functionName == "Update" && example.lastSegment == "transactionOwner",
+	      "parse_r11", example.playerLine);
+	check(example.playerLine == "Save skipped: mod_failure_continuation.lua Update keeps a dead ACDropShip (transactionOwner)",
+	      "player_line", example.playerLine);
+
+	const SaveRefusalRecord objectPath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a AHuman that no longer exists at object[44][Update].upvalue[held]");
+	check(objectPath.scriptFile == "object[44]" && objectPath.functionName == "Update" &&
+	          objectPath.playerLine == "Save skipped: object[44] Update keeps a dead AHuman (held)",
+	      "parse_object", objectPath.playerLine);
+	const SaveRefusalRecord packagePath = ParseSaveRefusal(SaveKind::Manual,
+	    "a reference to a ACDropShip that no longer exists at package.loaded[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Create].upvalue[ship]");
+	check(packagePath.scriptFile == "mod_failure_continuation.lua" && packagePath.functionName == "Create",
+	      "parse_package", packagePath.playerLine);
+
+	m_SaveRefusalRecords.clear();
+	m_ReportedAutosaveKeys.clear();
+	g_FrameMan.ClearScreenText(0);
+
+	auto priorActivity = std::move(m_Activity);
+	m_Activity.reset(new GAScripted());
+	m_Activity->SetActivityState(Activity::Running);
+	SceneMan::SceneSetAside originalScene;
+	g_SceneMan.SetAsideScene(originalScene);
+	SceneMan::SceneSetAside dummyScene;
+	dummyScene.scene = new Scene();
+	g_SceneMan.ReinstateScene(dummyScene);
+
+	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
+	const char* plant =
+	    "local transactionOwner = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
+	    "MovableMan:AddParticle(transactionOwner);"
+	    "local fn = function() return transactionOwner end;"
+	    "local function Update() return fn() end;"
+	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };"
+	    "_SaveRefusalUID = transactionOwner.UniqueID;";
+	const bool planted = state.RunScriptString(plant) == 0;
+	lua_State* lua = state.GetLuaState();
+	lua_getglobal(lua, "_SaveRefusalUID");
+	MovableObject* held = planted ? g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(lua, -1))) : nullptr;
+	lua_pop(lua, 1);
+	if (held) g_MovableMan.UnregisterObject(held);
+
+	const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
+	const bool refused = planted && held && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
+	const std::string screen = g_FrameMan.GetScreenText(0);
+	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
+	const bool hasLive = !m_SaveRefusalRecords.empty();
+	const SaveRefusalRecord live = hasLive ? m_SaveRefusalRecords.back() : SaveRefusalRecord{};
+	const bool consoleKept = console.find("ERROR: the save cannot carry a script value:") != std::string::npos;
+	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
+	      "plant_invalid", hasLive ? live.problem : "no refusal");
+	check(refused && hasLive && !live.playerLine.empty() && screen == live.playerLine, "autosave_ui", screen);
+	std::string consoleDetail;
+	if (!consoleKept) {
+		consoleDetail = console;
+		for (char& ch: consoleDetail) {
+			if (ch == '\n' || ch == '\r') ch = ' ';
+		}
+	}
+	check(consoleKept, "console_text", consoleDetail);
+
+	nlohmann::json heal;
+	try {
+		heal = nlohmann::json::parse(g_NetMatchService.ExportDiagnosticDesyncHeal());
+	} catch (const std::exception& error) {
+		heal = nlohmann::json{{"error", error.what()}};
+	}
+	bool bundleOk = false;
+	std::string bundleDetail = heal.dump();
+	if (heal.contains("save_refusals") && heal["save_refusals"].is_array()) {
+		for (const auto& row: heal["save_refusals"]) {
+			if (row.value("kind", "") == "autosave" && row.value("script", "") == "mod_failure_continuation.lua" &&
+			    row.value("function", "") == "Update" && row.value("class", "") == "MOPixel" &&
+			    row.value("path", "").find("transactionOwner") != std::string::npos &&
+			    row.value("problem", "").find("that no longer exists") != std::string::npos &&
+			    row.value("player_line", "") == live.playerLine) {
+				bundleOk = true;
+				bundleDetail = row.dump();
+				break;
+			}
+		}
+	}
+	check(bundleOk, "bundle_json", bundleDetail);
+
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedAgain = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2);
+	check(refusedAgain && g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
+	      "autosave_dedup", g_FrameMan.GetScreenText(0));
+
+	if (held) g_MovableMan.RegisterObject(held);
+	std::vector<std::string> clearedGraphs;
+	const bool cleared = held && CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, clearedGraphs);
+	if (held) g_MovableMan.UnregisterObject(held);
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedAfterClear = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
+	check(cleared && refusedAfterClear && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "autosave_returns", g_FrameMan.GetScreenText(0));
+
+	g_FrameMan.ClearScreenText(0);
+	const bool refusedManual = !SaveCurrentGame("save_refusal");
+	check(refusedManual && hasLive && !live.playerLine.empty() && g_FrameMan.GetScreenText(0) == live.playerLine,
+	      "manual_repeat", g_FrameMan.GetScreenText(0));
+
+	LoopbackTransport transport;
+	NetLockstepCoordinator coordinator;
+	NetLockstepConfig config;
+	config.localPeerId = 1;
+	config.peerCount = 1;
+	std::string lockstepError;
+	const bool lockstepReady = coordinator.StartReplay(transport, config, &lockstepError);
+	ScenarioRunner::SetLockstepCoordinator(lockstepReady ? &coordinator : nullptr);
+	g_FrameMan.ClearScreenText(0);
+	const size_t toastsAtLockstep = ScenarioRunner::GetNetUiToastLog().size();
+	if (hasLive) ReportScriptGraphSaveRefusal(SaveKind::Manual, {live.problem});
+	const auto& toasts = ScenarioRunner::GetNetUiToastLog();
+	const bool toasted = lockstepReady && toasts.size() > toastsAtLockstep && toasts.back().kind == "save_refused" &&
+	                     toasts.back().text == live.playerLine && g_FrameMan.GetScreenText(0).empty();
+	check(toasted, "lockstep_toast", toasts.empty() ? lockstepError : toasts.back().text);
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+
+	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _SaveRefusalUID = nil;");
+	g_LuaMan.CollectGarbageForCheckpoint();
+	g_SceneMan.SetAsideScene(dummyScene);
+	g_SceneMan.ReinstateScene(originalScene);
+	m_Activity = std::move(priorActivity);
+
+	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+	return failures == 0;
+}
+
 bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {
 	if (!LoadGameToRestart("load_seed")) return false;
 	const Scene* stagedScene = m_PendingCheckpoint.scene.get();
@@ -904,6 +1282,27 @@ void ActivityMan::RemoveSavedGame(const std::string& fileName) const {
 }
 
 bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
+	const std::string filePath = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName;
+	return LoadArchiveToRestart(filePath + ".ccsave", fileName);
+}
+
+bool ActivityMan::LoadAutosaveToRestart(const std::string& matchId, uint64_t tick) {
+	WaitForAutosaveTasks();
+	std::string refusal;
+	const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(matchId, tick, &refusal);
+	if (!checkpoint) {
+		const std::string message = "Could not restore the checkpoint at tick " + std::to_string(tick) + ": " + refusal;
+		g_ConsoleMan.PrintString("ERROR: " + message);
+		std::cout << "[autosave] restore refused match=" << matchId << " tick=" << tick << " reason=" << refusal << std::endl;
+		return false;
+	}
+	if (!LoadArchiveToRestart(checkpoint->path.string(), matchId + "-" + std::to_string(tick))) return false;
+	std::cout << std::format("[autosave] restored match={} tick={} round={} world_hash={}\n",
+	                         checkpoint->matchId, checkpoint->savedTick, checkpoint->roundId, checkpoint->worldStructureHash) << std::flush;
+	return true;
+}
+
+bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std::string& fileName) {
 	AudioMan::RestorePlayPhaseScope playPhase("staging");
 	MovableMan::ConstructionRegistryScope registryScope;
 	MovableObject::ScriptLoadDeferralScope scriptScope;
@@ -919,7 +1318,7 @@ bool ActivityMan::LoadGameToRestart(const std::string& fileName) {
 	const int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
-	const bool read = ReadSavedGame(fileName, candidate);
+	const bool read = ReadSavedGameArchive(archivePath, fileName, candidate);
 	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
 		MovableObject::PinUniqueIDCounter(uidCounter);
@@ -1172,6 +1571,10 @@ bool ActivityMan::RestartActivityCandidate() {
 		}
 	}
 	g_MovableMan.SetRestoringSnapshot(false);
+	if (restoresSnapshot && activityStarted >= 0 && m_Activity) {
+		m_Activity->ClearAllPresentationViews();
+		m_Activity->FillPresentationFromPreview(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	}
 	if (restoresSnapshot) {
 		g_SceneMan.SetSceneToLoad(m_PendingCheckpoint.restartPreset, m_PendingCheckpoint.restartObjects, m_PendingCheckpoint.restartUnits);
 
@@ -1435,6 +1838,9 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 }
 
 bool ActivityMan::RestartActivity() {
+	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
+		ScenarioRunner::ResetRetiredChecksumCounters();
+	}
 	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
 	std::string error;
 	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {

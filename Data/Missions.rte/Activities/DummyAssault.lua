@@ -178,7 +178,7 @@ function DummyAssault:UpdateActivity()
 		end
 
 		if MovableMan:IsActor(self.CPUBrain) then
-			self:AddObjectivePoint("Destroy!", self.CPUBrain.AboveHUDPos+Vector(0,-16), Activity.TEAM_1, GameActivity.ARROWDOWN);
+			self:AddObjectivePoint("Destroy!", self.CPUBrain.AboveHeadPos+Vector(0,-16), Activity.TEAM_1, GameActivity.ARROWDOWN);
 		else
 			self.WinnerTeam = Activity.TEAM_1;
 			ActivityMan:EndActivity();

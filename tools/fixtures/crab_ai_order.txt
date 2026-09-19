@@ -1,0 +1,7 @@
+# AI order on a spawned Base.rte Crab. Grasslands has no ACrab; the crab is
+# host-spawned to the right of the brain so the first NEXT seats it. Crab pie
+# puts Go To on the Right slice (no Change-AI submenu). FIRE places the waypoint.
+30 31 NEXT
+150 220 PIEMENU_DIGITAL
+160 161 L_RIGHT
+270 271 FIRE

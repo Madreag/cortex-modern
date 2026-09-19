@@ -14,6 +14,7 @@
 #include "NetConnectionQuality.h"
 #include "PresetMan.h"
 #include "SceneMan.h"
+#include "System.h"
 #include "ScenarioRunner.h"
 #include "TelemetryBundle.h"
 
@@ -32,10 +33,14 @@
 #include "GUITextBox.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
+#include "GUIListPanel.h"
+#include "GUISlider.h"
+#include "GUITab.h"
 
 #include "Resources/Credits.h"
 
 #include <algorithm>
+#include <map>
 #include <chrono>
 #include <charconv>
 #include <cctype>
@@ -49,12 +54,106 @@
 
 using namespace RTE;
 
+// Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+static bool Cp1252FromCodepoint(int codepoint, char& out) {
+	if (codepoint < 0) {
+		return false;
+	}
+	if (codepoint < 0x80 || (codepoint >= 0xA0 && codepoint <= 0xFF)) {
+		out = static_cast<char>(codepoint);
+		return true;
+	}
+	switch (codepoint) {
+		case 0x20AC: out = static_cast<char>(0x80); return true;
+		case 0x201A: out = static_cast<char>(0x82); return true;
+		case 0x0192: out = static_cast<char>(0x83); return true;
+		case 0x201E: out = static_cast<char>(0x84); return true;
+		case 0x2026: out = static_cast<char>(0x85); return true;
+		case 0x2020: out = static_cast<char>(0x86); return true;
+		case 0x2021: out = static_cast<char>(0x87); return true;
+		case 0x02C6: out = static_cast<char>(0x88); return true;
+		case 0x2030: out = static_cast<char>(0x89); return true;
+		case 0x0160: out = static_cast<char>(0x8A); return true;
+		case 0x2039: out = static_cast<char>(0x8B); return true;
+		case 0x0152: out = static_cast<char>(0x8C); return true;
+		case 0x017D: out = static_cast<char>(0x8E); return true;
+		case 0x2018: out = static_cast<char>(0x91); return true;
+		case 0x2019: out = static_cast<char>(0x92); return true;
+		case 0x201C: out = static_cast<char>(0x93); return true;
+		case 0x201D: out = static_cast<char>(0x94); return true;
+		case 0x2022: out = static_cast<char>(0x95); return true;
+		case 0x2013: out = static_cast<char>(0x96); return true;
+		case 0x2014: out = static_cast<char>(0x97); return true;
+		case 0x02DC: out = static_cast<char>(0x98); return true;
+		case 0x2122: out = static_cast<char>(0x99); return true;
+		case 0x0161: out = static_cast<char>(0x9A); return true;
+		case 0x203A: out = static_cast<char>(0x9B); return true;
+		case 0x0153: out = static_cast<char>(0x9C); return true;
+		case 0x017E: out = static_cast<char>(0x9E); return true;
+		case 0x0178: out = static_cast<char>(0x9F); return true;
+		default: return false;
+	}
+}
+
+static int NextUtf8Codepoint(const std::string& text, size_t& index) {
+	const unsigned char lead = static_cast<unsigned char>(text[index]);
+	if (lead < 0x80) {
+		++index;
+		return lead;
+	}
+	size_t need = 0;
+	int codepoint = 0;
+	if ((lead & 0xE0) == 0xC0) {
+		need = 1;
+		codepoint = lead & 0x1F;
+	} else if ((lead & 0xF0) == 0xE0) {
+		need = 2;
+		codepoint = lead & 0x0F;
+	} else if ((lead & 0xF8) == 0xF0) {
+		need = 3;
+		codepoint = lead & 0x07;
+	} else {
+		++index;
+		return -1;
+	}
+	if (index + 1 + need > text.size()) {
+		++index;
+		return -1;
+	}
+	for (size_t trail = 1; trail <= need; ++trail) {
+		const unsigned char byte = static_cast<unsigned char>(text[index + trail]);
+		if ((byte & 0xC0) != 0x80) {
+			++index;
+			return -1;
+		}
+		codepoint = (codepoint << 6) | (byte & 0x3F);
+	}
+	index += 1 + need;
+	return codepoint;
+}
+
+static std::string Utf8ToCp1252(const std::string& utf8) {
+	std::string out;
+	out.reserve(utf8.size());
+	for (size_t index = 0; index < utf8.size();) {
+		char mapped = '?';
+		if (!Cp1252FromCodepoint(NextUtf8Codepoint(utf8, index), mapped)) {
+			mapped = '?';
+		}
+		out.push_back(mapped);
+	}
+	return out;
+}
+
 // The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
 static std::string SavedMultiplayerName() {
 	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
 }
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
+
+static std::string s_ShareAddress;
+static bool s_ShareResolved = false;
 
 static std::optional<size_t> ReplayRowIndex(const std::string& name) {
 	const std::string prefix = "LabelReplayRow";
@@ -107,11 +206,15 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostInputDelayTextBox = nullptr;
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
-	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostModeCombo = nullptr;
 	m_MultiplayerHostActivityCombo = nullptr;
+	m_MultiplayerHostSceneCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
 	m_MultiplayerHostActivities.clear();
 	m_MultiplayerHostActivityIndex = 0;
+	m_MultiplayerHostScenes.clear();
+	m_MultiplayerHostSceneIndex = 0;
+	m_MultiplayerHostPickNotice.clear();
 	m_MultiplayerHostMode = NetMatchMode::PvPSkirmish;
 	m_MultiplayerJoinAddressTextBox = nullptr;
 	m_MultiplayerJoinPortTextBox = nullptr;
@@ -254,9 +357,17 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
-	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
+	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
 	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
+	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostScene"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->ClearList();
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::CoopPvE));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPvE));
+		m_MultiplayerHostModeCombo->SetSelectedIndex(0);
+	}
 	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
@@ -361,6 +472,20 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
 	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
 	m_MultiplayerJoinPortTextBox->SetMaxTextLength(5);
+
+	m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonLobbyOptions"));
+	m_MainMenuButtons[MenuButton::MultiplayerHostOptionsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptions"));
+	m_MainMenuButtons[MenuButton::HostOptionsBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptBack"));
+	m_MainMenuButtons[MenuButton::HostOptionsApplyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptApply"));
+	m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostOptDefaults"));
+	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSeatDlgClose"));
+	m_MainMenuButtons[MenuButton::HostRepairNowButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostRecRepairNow"));
+	m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostFilesSaveDiag"));
+	m_MainMenuButtons[MenuButton::HostSessionEndButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessEnd"));
+	m_MainMenuButtons[MenuButton::HostSessionBannedButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostSessBanned"));
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedRemove"));
+	m_MainMenuButtons[MenuButton::HostBannedCloseButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBannedClose"));
+	CreateHostOptionsControls();
 }
 
 void MainMenuGUI::CreateMetaGameNoticeScreen() {
@@ -392,16 +517,11 @@ void MainMenuGUI::CreateCreditsScreen() {
 
 	m_CreditsTextLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("CreditsLabel"));
 
-	// TODO: Get Unicode going!
-	// Hack here to change the special characters over 128 in the ANSI ASCII table to match our font files
-	for (char& stringChar: s_CreditsText) {
-		if (stringChar == -60) {
-			stringChar = static_cast<unsigned char>(142); //'Ä'
-		} else if (stringChar == -42) {
-			stringChar = static_cast<unsigned char>(153); //'Ö'
-		} else if (stringChar == -87) {
-			stringChar = static_cast<unsigned char>(221); //'©'
-		}
+	// Credits.h is UTF-8; transcode to cp1252 so the menu Latin-1 atlas draws the letters.
+	static bool s_CreditsAreCp1252 = false;
+	if (!s_CreditsAreCp1252) {
+		s_CreditsText = Utf8ToCp1252(s_CreditsText);
+		s_CreditsAreCp1252 = true;
 	}
 	m_CreditsTextLabel->SetText(s_CreditsText);
 	m_CreditsTextLabel->ResizeHeightToFit();
@@ -416,7 +536,7 @@ void MainMenuGUI::CreateQuitScreen() {
 }
 
 void MainMenuGUI::HideAllScreens() {
-	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog)) CloseMultiplayerDialog();
+	if (m_ActiveDialogBox && (m_ActiveDialogBox == m_LastMatchDialog || m_ActiveDialogBox == m_ReplayDeleteDialog || m_ActiveDialogBox == m_HostSeatDialog || m_ActiveDialogBox == m_HostBannedDialog)) CloseMultiplayerDialog();
 	for (GUICollectionBox* menuScreen: m_MainMenuScreens) {
 		if (menuScreen) {
 			menuScreen->SetVisible(false);
@@ -657,6 +777,21 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		return;
 	}
+	if (m_ActiveMenuScreen == MenuScreen::MultiplayerScreen && m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && g_UInputMan.KeyPressed(SDLK_ESCAPE)) {
+		// Esc is the panel's Back: local navigation only, never a session action. An open dialog
+		// eats it first the way every other screen's dialog does.
+		if (m_ActiveDialogBox == m_HostSeatDialog) {
+			m_HostOptionsSeatRow = -1;
+			m_HostSeatDlgModerationRow = -1;
+			m_HostSeatDlgRemovalSeat.reset();
+			CloseMultiplayerDialog();
+		} else if (m_ActiveDialogBox == m_HostBannedDialog) {
+			CloseMultiplayerDialog();
+		} else {
+			m_MultiplayerSubScreen = m_HostOptionsSetupDraft ? MultiplayerSubScreen::HostSetup : MultiplayerSubScreen::Lobby;
+		}
+		return;
+	}
 	if ((!m_ActiveDialogBox || m_ActiveDialogBox == m_MainMenuScreens[MenuScreen::QuitScreen]) && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != MenuScreen::MainScreen) {
 			if (m_ActiveMenuScreen == MenuScreen::SettingsScreen || m_ActiveMenuScreen == MenuScreen::ModManagerScreen) {
@@ -739,7 +874,9 @@ bool MainMenuGUI::HandleInputEvents() {
 			g_GUISound.SelectionChangeSound()->Play();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
-		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed && guiEvent.GetControl() == m_MultiplayerHostActivityCombo) {
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed &&
+		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostSceneCombo ||
+		            guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -752,6 +889,14 @@ bool MainMenuGUI::HandleInputEvents() {
 				const int frames = std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
 				m_MultiplayerHostInputDelayPolicyLabel->SetText("(fixed, " + std::to_string(frames) + ")");
 			}
+		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
+		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
+		           (guiEvent.GetMsg() == GUITab::UnPushed || guiEvent.GetMsg() == GUIComboBox::Closed ||
+		            guiEvent.GetMsg() == GUICheckbox::Changed || guiEvent.GetMsg() == GUISlider::Changed ||
+		            guiEvent.GetMsg() == GUITextBox::Enter)) {
+			// Tabs, combos, checks and sliders on the options pages notify rather than Command; only
+			// the commit-flavoured ones reach the handler (a hover must never switch the page).
+			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
 	return false;
@@ -804,6 +949,10 @@ void MainMenuGUI::HandleMainScreenInputEvents(const GUIControl* guiEventControl)
 }
 
 void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventControl) {
+	if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions) {
+		HandleHostOptionsInputEvents(guiEventControl);
+		return;
+	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]) {
 		if (TelemetryBundle::RequestCapture()) g_ConsoleMan.PrintString("SYSTEM: Saving diagnostics...");
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::LastMatchDetailsButton]) {
@@ -864,19 +1013,29 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_SettingsMan.SetNetworkPortMapEnable(m_MultiplayerHostPortMapCheckbox->GetCheck() == GUICheckbox::Checked);
 		g_SettingsMan.UpdateSettingsFile();
 		g_GUISound.ItemChangeSound()->Play();
-	} else if (guiEventControl == m_MultiplayerHostModeButton) {
-		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
-		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
-		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
-		m_MultiplayerHostModeButton->SetText(modeText);
+	} else if (guiEventControl == m_MultiplayerHostModeCombo) {
+		const int selected = m_MultiplayerHostModeCombo ? m_MultiplayerHostModeCombo->GetSelectedIndex() : -1;
+		static const NetMatchMode modes[] = {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE};
+		if (selected >= 0 && selected < 3) {
+			m_MultiplayerHostMode = modes[selected];
+		}
 		ApplyMultiplayerHostActivity();
-		g_GUISound.ButtonPressSound()->Play();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MultiplayerHostActivityCombo) {
 		// A closed pick-list carries its selection; the index is the request fields' source.
 		const int selected = m_MultiplayerHostActivityCombo ? m_MultiplayerHostActivityCombo->GetSelectedIndex() : -1;
 		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostActivities.size()) {
 			m_MultiplayerHostActivityIndex = static_cast<size_t>(selected);
 		}
+		m_MultiplayerHostPickNotice.clear();
+		RefreshMultiplayerHostScenes();
+		g_GUISound.ItemChangeSound()->Play();
+	} else if (guiEventControl == m_MultiplayerHostSceneCombo) {
+		const int selected = m_MultiplayerHostSceneCombo ? m_MultiplayerHostSceneCombo->GetSelectedIndex() : -1;
+		if (selected >= 0 && static_cast<size_t>(selected) < m_MultiplayerHostScenes.size()) {
+			m_MultiplayerHostSceneIndex = static_cast<size_t>(selected);
+		}
+		m_MultiplayerHostPickNotice.clear();
 		ApplyMultiplayerHostActivity();
 		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerReadyButton]) {
@@ -922,6 +1081,12 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerationBackButton]) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 		g_GUISound.BackButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton]) {
+		// The lobby's options entry: the host edits, a client reads the same adopted config.
+		OpenHostOptions(false);
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostOptionsButton]) {
+		// The setup screen's twin: the draft the next Create carries.
+		OpenHostOptions(true);
 	} else if (guiEventControl == m_MultiplayerLanGamesList) {
 		// Clicking a listed host fills the join fields; Connect stays the explicit action. A row the
 		// merge marked non-joinable is refused here, before any connection is attempted.
@@ -936,6 +1101,13 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			} else {
 				m_MultiplayerJoinAddressTextBox->SetText(row.address);
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
+				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
+				m_JoinTargetActivity = row.activity;
+				if (m_JoinTargetPersistentWorld) {
+					m_LastWorldJoinAddress = row.address;
+					m_LastWorldJoinPort = row.port;
+					g_NetMatchService.NoteJoinTargetPersistentWorld(true);
+				}
 				if (m_MultiplayerLanGamesLabel) {
 					m_MultiplayerLanGamesLabel->SetText(m_LanGamesLabelText);
 				}
@@ -963,25 +1135,30 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 }
 
 void MainMenuGUI::RefreshMultiplayerHostActivities() {
-	// The host's picker offers the scripted activities a lockstep match can run, each pinned to the
-	// module that defines it so a same-named preset elsewhere cannot swap in silently. The presets do
-	// not exist until the modules load, so the list is built on entry to the host setup screen.
+	// Same walk as the scenario menu: every GameActivity that is not a test and has a compatible scene.
+	// H12's first-run default is Skirmish Defense - the same preset a fresh NetMatchServiceRequest
+	// names - until the host's saved template (or an earlier pick) says otherwise.
 	const std::pair<std::string, std::string> current =
-		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"P4 Alpha Duel", "Base.rte"};
+		m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex] : std::pair<std::string, std::string>{"Skirmish Defense", "Base.rte"};
+	const bool hadPick = !m_MultiplayerHostActivities.empty();
 	m_MultiplayerHostActivities.clear();
-	std::list<Entity*> presets;
-	if (g_PresetMan.GetAllOfType(presets, "Activity")) {
-		for (const Entity* entity: presets) {
-			const auto* activity = dynamic_cast<const Activity*>(entity);
-			if (!activity || activity->GetClassName() != "GAScripted" || activity->IsTestActivity()) continue;
-			m_MultiplayerHostActivities.emplace_back(activity->GetPresetName(), g_PresetMan.GetDataModuleName(activity->GetModuleID()));
-		}
+	for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+		m_MultiplayerHostActivities.emplace_back(row.preset, row.module);
 	}
 	m_MultiplayerHostActivityIndex = 0;
+	bool found = false;
 	for (size_t i = 0; i < m_MultiplayerHostActivities.size(); ++i) {
 		if (m_MultiplayerHostActivities[i] == current) {
 			m_MultiplayerHostActivityIndex = i;
+			found = true;
 		}
+	}
+	if (hadPick && !found && !m_MultiplayerHostActivities.empty()) {
+		m_MultiplayerHostPickNotice = current.first + " is no longer loaded; picked " +
+		                             m_MultiplayerHostActivities[0].first +
+		                             (m_MultiplayerHostActivities[0].second.empty() ? "" : " - " + m_MultiplayerHostActivities[0].second);
+	} else if (found) {
+		m_MultiplayerHostPickNotice.clear();
 	}
 	if (m_MultiplayerHostActivityCombo) {
 		m_MultiplayerHostActivityCombo->ClearList();
@@ -989,7 +1166,102 @@ void MainMenuGUI::RefreshMultiplayerHostActivities() {
 			m_MultiplayerHostActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
+	RefreshMultiplayerHostScenes();
+}
+
+void MainMenuGUI::RefreshMultiplayerHostScenes() {
+	const std::pair<std::string, std::string> current =
+		m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size() ? m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : std::pair<std::string, std::string>{};
+	const std::string preset = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first : "P4 Alpha Duel";
+	const std::string module = m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size() ? m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second : "Base.rte";
+	m_MultiplayerHostScenes.clear();
+	for (const NetHostSceneChoice& row: g_NetMatchService.ListHostScenes(preset, module)) {
+		m_MultiplayerHostScenes.emplace_back(row.name, row.module);
+	}
+	m_MultiplayerHostSceneIndex = 0;
+	bool found = false;
+	for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+		if (!current.first.empty() && m_MultiplayerHostScenes[i] == current) {
+			m_MultiplayerHostSceneIndex = i;
+			found = true;
+		}
+	}
+	if (!found) {
+		for (size_t i = 0; i < m_MultiplayerHostScenes.size(); ++i) {
+			if (m_MultiplayerHostScenes[i].first == "Grasslands") {
+				m_MultiplayerHostSceneIndex = i;
+				break;
+			}
+		}
+	}
+	if (m_MultiplayerHostSceneCombo) {
+		m_MultiplayerHostSceneCombo->ClearList();
+		std::map<std::string, int> names;
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			++names[name];
+		}
+		for (const auto& [name, sceneModule] : m_MultiplayerHostScenes) {
+			m_MultiplayerHostSceneCombo->AddItem(name + (names[name] > 1 && !sceneModule.empty() ? " - " + sceneModule : ""));
+		}
+	}
+	FitHostActivityCombo();
 	ApplyMultiplayerHostActivity();
+}
+
+void MainMenuGUI::FitHostActivityCombo() {
+	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
+		return;
+	}
+	constexpr int namePad = 8;
+	constexpr int scrollThickness = 17;
+	constexpr int panelPad = 12;
+	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX - panelPad);
+	// Every picker in the value column is measured the same way: its own longest row plus the list
+	// pad and, when the rows overflow the drop, the scrollbar.
+	const auto fit = [&](GUIComboBox* combo) {
+		GUIListPanel* list = combo->GetListPanel();
+		GUIFont* font = list ? list->GetFont() : nullptr;
+		if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
+			GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
+			std::string fontName;
+			if (skin->GetValue("Listbox", "Font", &fontName)) {
+				font = skin->GetFont(fontName);
+			}
+			if (!font) {
+				font = skin->GetFont("FontLarge.png");
+			}
+		}
+		int longest = 0;
+		if (font) {
+			for (int i = 0; i < combo->GetCount(); ++i) {
+				if (const GUIListPanel::Item* item = combo->GetItem(i)) {
+					longest = std::max(longest, font->CalculateWidth(item->m_Name));
+				}
+			}
+		}
+		const int rowHeight = font ? font->GetFontHeight() : 0;
+		const int stackHeight = std::max(list ? list->GetStackHeight() : 0, rowHeight * combo->GetCount());
+		const int scroll = (rowHeight > 0 && stackHeight > combo->GetDropHeight()) ? scrollThickness : 0;
+		const int needed = longest > 0 ? longest + namePad + scroll : combo->GetWidth();
+		const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
+		combo->SetPositionRel(valueX, combo->GetRelYPos());
+		if (combo->GetWidth() != width) {
+			combo->Resize(width, combo->GetHeight());
+		}
+		return width;
+	};
+	const int activityWidth = fit(m_MultiplayerHostActivityCombo);
+	if (m_MultiplayerHostSceneCombo) {
+		fit(m_MultiplayerHostSceneCombo);
+	}
+	// The mode rows are short words, so the mode picker follows the activity picker's width.
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->SetPositionRel(valueX, m_MultiplayerHostModeCombo->GetRelYPos());
+		if (m_MultiplayerHostModeCombo->GetWidth() != activityWidth) {
+			m_MultiplayerHostModeCombo->Resize(activityWidth, m_MultiplayerHostModeCombo->GetHeight());
+		}
+	}
 }
 
 void MainMenuGUI::ApplyMultiplayerHostActivity() {
@@ -1005,9 +1277,1328 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
-	if (m_MultiplayerHostInfoLabel) {
-		m_MultiplayerHostInfoLabel->SetText(std::string("Grasslands - ") + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+	const auto* scene = m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()
+	                        ? &m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex] : nullptr;
+	const std::string sceneName = scene ? scene->first : "Grasslands";
+	if (m_MultiplayerHostSceneCombo) {
+		if (scene) {
+			m_MultiplayerHostSceneCombo->SetSelectedIndex(static_cast<int>(m_MultiplayerHostSceneIndex));
+		} else {
+			m_MultiplayerHostSceneCombo->SetText(sceneName);
+		}
 	}
+	if (m_MultiplayerHostModeCombo) {
+		const int modeIndex = m_MultiplayerHostMode == NetMatchMode::CoopPvE ? 1 : (m_MultiplayerHostMode == NetMatchMode::PvPvE ? 2 : 0);
+		m_MultiplayerHostModeCombo->SetSelectedIndex(modeIndex);
+	}
+	if (m_MultiplayerHostInfoLabel) {
+		if (!m_MultiplayerHostPickNotice.empty()) {
+			m_MultiplayerHostInfoLabel->SetText(m_MultiplayerHostPickNotice);
+		} else {
+			m_MultiplayerHostInfoLabel->SetText(sceneName + " - " + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
+		}
+	}
+}
+
+// ---- §9.2/9.3 host options: six tabbed pages over the lobby, or the host setup's draft of the
+// next one. The panel edits a complete NetMatchConfig draft; Apply stages it through the service. ----
+
+void MainMenuGUI::CreateHostOptionsControls() {
+	const auto get = [this](const char* name) { return m_SubMenuScreenGUIControlManager->GetControl(name); };
+	m_HostOptionsPanel = dynamic_cast<GUICollectionBox*>(get("MultiplayerHostOptionsPanel"));
+	m_HostOptionsTitle = dynamic_cast<GUILabel*>(get("LabelHostOptionsTitle"));
+	static const char* tabNames[c_HostOptionsPageCount] = {"TabHostPageSeats", "TabHostPageRules", "TabHostPageNetwork", "TabHostPageRecovery", "TabHostPageFiles", "TabHostPageSession"};
+	static const char* pageNames[c_HostOptionsPageCount] = {"CollectionBoxHostPageSeats", "CollectionBoxHostPageRules", "CollectionBoxHostPageNetwork", "CollectionBoxHostPageRecovery", "CollectionBoxHostPageFiles", "CollectionBoxHostPageSession"};
+	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
+		m_HostOptionsTabs[i] = dynamic_cast<GUITab*>(get(tabNames[i]));
+		m_HostOptionsPages[i] = dynamic_cast<GUICollectionBox*>(get(pageNames[i]));
+	}
+	m_HostOptionsStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostOptStatus"));
+	m_HostSeatPlayersCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSeatPlayers"));
+	m_HostSeatCapacityHint = dynamic_cast<GUILabel*>(get("LabelHostSeatCapacityHint"));
+	for (int row = 0; row < c_HostSeatRows; ++row) {
+		const std::string n = std::to_string(row);
+		m_HostSeatNameLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatName" + n).c_str()));
+		m_HostSeatTypeCombos[row] = dynamic_cast<GUIComboBox*>(get(("ComboHostSeatType" + n).c_str()));
+		m_HostSeatTeamCombos[row] = dynamic_cast<GUIComboBox*>(get(("ComboHostSeatTeam" + n).c_str()));
+		m_HostSeatDelayLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatDelay" + n).c_str()));
+		m_HostSeatStateLabels[row] = dynamic_cast<GUILabel*>(get(("LabelHostSeatState" + n).c_str()));
+		m_HostSeatDetailsButtons[row] = dynamic_cast<GUIButton*>(get(("ButtonHostSeatDetails" + n).c_str()));
+	}
+	m_HostRulesActivityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesActivity"));
+	if (m_HostRulesActivityCombo) {
+		// The same module-qualified census the setup picker's combo carries; a staged preset the
+		// census lacks still displays by name through HostOptSelectCombo.
+		m_HostRulesActivityCombo->ClearList();
+		for (const auto& [preset, module] : m_MultiplayerHostActivities) {
+			m_HostRulesActivityCombo->AddItem(preset + (module.empty() ? "" : " - " + module));
+		}
+	}
+	m_HostRulesSceneCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesScene"));
+	m_HostRulesModeCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesMode"));
+	m_HostRulesDifficultySlider = dynamic_cast<GUISlider*>(get("SliderHostRulesDifficulty"));
+	m_HostRulesDifficultyValue = dynamic_cast<GUILabel*>(get("LabelHostRulesDifficultyValue"));
+	m_HostRulesGoldSlider = dynamic_cast<GUISlider*>(get("SliderHostRulesGold"));
+	m_HostRulesGoldValue = dynamic_cast<GUILabel*>(get("LabelHostRulesGoldValue"));
+	m_HostRulesFogCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRulesFog"));
+	m_HostRulesClearPathCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRulesClearPath"));
+	m_HostRulesDeployCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRulesDeploy"));
+	m_HostRulesBrainlessCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesBrainless"));
+	m_HostRulesTeamCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesTeam"));
+	m_HostRulesTechCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRulesTech"));
+	m_HostRulesSkillSlider = dynamic_cast<GUISlider*>(get("SliderHostRulesSkill"));
+	m_HostRulesSkillValue = dynamic_cast<GUILabel*>(get("LabelHostRulesSkillValue"));
+	m_HostNetPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetPolicy"));
+	m_HostNetMinDelayBox = dynamic_cast<GUITextBox*>(get("TextHostNetMinDelay"));
+	m_HostNetEffectiveLabel = dynamic_cast<GUILabel*>(get("LabelHostNetEffective"));
+	for (int peer = 0; peer < 4; ++peer) {
+		const std::string n = std::to_string(peer + 1);
+		m_HostNetPeerLabels[peer] = dynamic_cast<GUILabel*>(get(("LabelHostNetPeer" + n).c_str()));
+		m_HostNetPeerDelayBoxes[peer] = dynamic_cast<GUITextBox*>(get(("TextHostNetPeerDelay" + n).c_str()));
+	}
+	m_HostNetPingLabel = dynamic_cast<GUILabel*>(get("LabelHostNetPing"));
+	m_HostNetRecalcButton = dynamic_cast<GUIButton*>(get("ButtonHostNetRecalc"));
+	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
+	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
+	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
+	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
+	m_HostRecWaitingLabel = dynamic_cast<GUILabel*>(get("LabelHostRecWaiting"));
+	m_HostFilesSavePathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesSavePath"));
+	m_HostFilesDiagPathLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesDiagPath"));
+	m_HostFilesDiagResultLabel = dynamic_cast<GUILabel*>(get("LabelHostFilesDiagResult"));
+	m_HostFilesWidgetCombo = dynamic_cast<GUIComboBox*>(get("ComboHostFilesWidget"));
+	m_HostSessHostingLabel = dynamic_cast<GUILabel*>(get("LabelHostSessHosting"));
+	m_HostSessSeatsLabel = dynamic_cast<GUILabel*>(get("LabelHostSessSeats"));
+	m_HostSessIdleCombo = dynamic_cast<GUIComboBox*>(get("ComboHostSessIdle"));
+	m_HostSessIdleStateLabel = dynamic_cast<GUILabel*>(get("LabelHostSessIdleState"));
+	m_HostSessBannedLabel = dynamic_cast<GUILabel*>(get("LabelHostSessBanned"));
+	m_HostSeatDialog = dynamic_cast<GUICollectionBox*>(get("HostSeatDialog"));
+	m_HostSeatDlgName = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgName"));
+	m_HostSeatDlgSeat = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgSeat"));
+	m_HostSeatDlgTeam = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgTeam"));
+	m_HostSeatDlgState = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgState"));
+	m_HostSeatDlgReclaim = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgReclaim"));
+	m_HostSeatDlgApplicants = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgApplicants"));
+	m_HostSeatDlgApplicant = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgApplicant"));
+	m_HostSeatDlgWait = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgWait"));
+	m_HostSeatDlgApprove = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgApprove"));
+	m_HostSeatDlgCancel = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgCancel"));
+	m_HostSeatDlgKick = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgKick"));
+	m_HostSeatDlgBan = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgBan"));
+	m_HostSeatDlgActionHint = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgActionHint"));
+	m_HostSeatDlgStatus = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgStatus"));
+	m_HostBannedDialog = dynamic_cast<GUICollectionBox*>(get("HostBannedDialog"));
+	m_HostBannedPick = dynamic_cast<GUIComboBox*>(get("ComboHostBannedPick"));
+	m_HostBannedListLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedList"));
+	m_HostBannedStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedStatus"));
+
+	if (m_HostSeatPlayersCombo) {
+		m_HostSeatPlayersCombo->ClearList();
+		for (int seats = NetMatchConfigUtil::c_MinPeerCount; seats <= NetMatchConfigUtil::c_MaxPeerCount; ++seats) {
+			m_HostSeatPlayersCombo->AddItem(std::to_string(seats));
+		}
+	}
+	if (m_HostRulesModeCombo) {
+		m_HostRulesModeCombo->ClearList();
+		m_HostRulesModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
+		m_HostRulesModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::CoopPvE));
+		m_HostRulesModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPvE));
+	}
+	// L33's pair of values, in the host's words.
+	if (m_HostRulesBrainlessCombo) {
+		m_HostRulesBrainlessCombo->ClearList();
+		m_HostRulesBrainlessCombo->AddItem("Keep playing, humans spectate");
+		m_HostRulesBrainlessCombo->AddItem("End the match");
+	}
+	if (m_HostRulesTeamCombo) {
+		m_HostRulesTeamCombo->ClearList();
+		for (int team = 1; team <= 4; ++team) {
+			m_HostRulesTeamCombo->AddItem("Team " + std::to_string(team));
+		}
+	}
+	for (GUIComboBox* combo : m_HostSeatTeamCombos) {
+		if (!combo) continue;
+		combo->ClearList();
+		for (int team = 1; team <= 4; ++team) {
+			combo->AddItem("Team " + std::to_string(team));
+		}
+	}
+	// H03's seat kinds, in the order the status column reads them.
+	for (GUIComboBox* combo : m_HostSeatTypeCombos) {
+		if (!combo) continue;
+		combo->ClearList();
+		combo->AddItem("Open");
+		combo->AddItem("Closed");
+		combo->AddItem("CPU");
+	}
+	if (m_HostRulesTechCombo) {
+		m_HostRulesTechCombo->ClearList();
+		m_HostOptionsTechModules.clear();
+		m_HostOptionsTechModules.push_back("-All-");
+		m_HostOptionsTechModules.push_back("-Random-");
+		for (int moduleId = 0; moduleId < g_PresetMan.GetTotalModuleCount(); ++moduleId) {
+			m_HostOptionsTechModules.push_back(g_PresetMan.GetDataModuleName(moduleId));
+		}
+		for (const std::string& module : m_HostOptionsTechModules) {
+			m_HostRulesTechCombo->AddItem(module);
+		}
+	}
+	if (m_HostNetPolicyCombo) {
+		m_HostNetPolicyCombo->ClearList();
+		m_HostNetPolicyCombo->AddItem("Automatic");
+		m_HostNetPolicyCombo->AddItem("Fixed");
+	}
+	if (m_HostFilesWidgetCombo) {
+		m_HostFilesWidgetCombo->ClearList();
+		m_HostFilesWidgetCombo->AddItem("Off");
+		m_HostFilesWidgetCombo->AddItem("Auto");
+		m_HostFilesWidgetCombo->AddItem("Always");
+	}
+	if (m_HostSessIdleCombo) {
+		m_HostSessIdleCombo->ClearList();
+		m_HostSessIdleCombo->AddItem("Never");
+		for (int minutes : {1, 5, 10, 20, 30, 45, 60}) {
+			m_HostSessIdleCombo->AddItem(std::to_string(minutes) + " minutes");
+		}
+	}
+	if (m_HostNetMinDelayBox) {
+		m_HostNetMinDelayBox->SetNumericOnly(true);
+		m_HostNetMinDelayBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
+		m_HostNetMinDelayBox->SetMaxTextLength(2);
+	}
+	for (GUITextBox* box : m_HostNetPeerDelayBoxes) {
+		if (!box) continue;
+		box->SetNumericOnly(true);
+		box->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
+		box->SetMaxTextLength(2);
+	}
+	if (m_HostRecAutosaveIntervalBox) {
+		m_HostRecAutosaveIntervalBox->SetNumericOnly(true);
+		m_HostRecAutosaveIntervalBox->SetMaxNumericValue(NetMatchService::c_MaxAutosaveIntervalSeconds);
+		m_HostRecAutosaveIntervalBox->SetMaxTextLength(4);
+	}
+	// The scene list is a preset census like the host picker's activity one; the draft's own scene
+	// always stays selectable even when no preset of that name loads.
+	m_HostOptionsScenes.clear();
+	std::list<Entity*> scenes;
+	if (g_PresetMan.GetAllOfType(scenes, "Scene")) {
+		for (const Entity* scene : scenes) {
+			m_HostOptionsScenes.push_back(scene->GetPresetName());
+		}
+	}
+	if (m_HostRulesSceneCombo) {
+		m_HostRulesSceneCombo->ClearList();
+		for (const std::string& name : m_HostOptionsScenes) {
+			m_HostRulesSceneCombo->AddItem(name);
+		}
+	}
+}
+
+NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
+	NetMatchServiceRequest request;
+	request.host = true;
+	const std::string typedName = m_MultiplayerNameTextBox->GetText();
+	request.playerName = typedName.empty() ? "Host" : typedName;
+	const long parsedPort = std::strtol(m_MultiplayerHostPortTextBox->GetText().c_str(), nullptr, 10);
+	request.port = static_cast<uint16_t>(std::clamp<long>(parsedPort, 1, 65535));
+	request.activityPreset = "P4 Alpha Duel";
+	if (m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
+		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
+		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+	}
+	const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
+	request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
+	request.mode = m_MultiplayerHostMode;
+	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+	request.resyncOnDesync = true;
+	request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
+	const long parsedDelay = std::strtol(m_MultiplayerHostInputDelayTextBox->GetText().c_str(), nullptr, 10);
+	request.inputDelayFrames = static_cast<uint16_t>(std::clamp<int>(static_cast<int>(parsedDelay), 0, NetMatchConfigUtil::c_MaxInputDelayFrames));
+	// The staged options draft overrides every field the request names; a field it leaves keeps the
+	// setup controls' (then the saved settings') values.
+	if (m_HostSetupOptions) {
+		request.standardRules = static_cast<const NetMatchStandardRules&>(*m_HostSetupOptions);
+		// BuildMatchConfig reads the mode off the request, not the rules block it carries inside.
+		request.mode = m_HostSetupOptions->mode;
+		request.delayPolicy = m_HostSetupOptions->delayPolicy;
+		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
+		request.automaticRepair = m_HostSetupOptions->automaticRepair;
+		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
+		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
+		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
+		request.peerCount = m_HostSetupOptions->peerCount;
+		// H03's kind edits ride the request: the drafted human/CPU split, not the mode's default.
+		uint32_t humanSeats = 0, cpuSeats = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) {
+			(slot.cpu ? cpuSeats : humanSeats)++;
+		}
+		request.humans = humanSeats;
+		request.cpuSlots = cpuSeats;
+	}
+	NetMatchService::SeatSavedOptions(request);
+	return request;
+}
+
+void MainMenuGUI::OpenHostOptions(bool setupDraft) {
+	m_HostOptionsSetupDraft = setupDraft;
+	m_HostOptionsReadOnly = false;
+	m_HostOptionsSeatRow = -1;
+	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgRemovalSeat.reset();
+	m_HostKickBanWatch = false;
+	m_HostOptionsAwaitedRevision = 0;
+	if (setupDraft) {
+		// The staged draft applies where one exists; the request the Create button would send builds the rest.
+		NetMatchServiceRequest request = HostRequestDraft();
+		std::string error;
+		// A setup draft has no session yet, so it is built under a placeholder id: the real one is
+		// assigned when the lobby opens, and a zero id is not a configuration the validator accepts.
+		constexpr uint64_t setupDraftSessionId = 1;
+		if (!NetMatchService::BuildMatchConfig(request, setupDraftSessionId, m_HostOptionsDraft, &error)) {
+			m_HostOptionsDraft = NetMatchConfigUtil::MakeDefault(setupDraftSessionId);
+			m_HostOptionsStatusLabel->SetText(error);
+		} else if (m_HostSetupOptions) {
+			m_HostOptionsStatusLabel->SetText("Staged options are loaded.");
+		} else {
+			// Nothing staged this run: the host's saved defaults are what a new lobby proposes.
+			NetHostDefaultsTemplate saved;
+			std::string templateError;
+			if (NetHostDefaults::Load(saved, &templateError) && NetHostDefaults::ApplyTo(saved, m_HostOptionsDraft, &templateError)) {
+				m_HostOptionsStatusLabel->SetText("Host defaults loaded.");
+			} else {
+				m_HostOptionsStatusLabel->SetText(templateError);
+			}
+		}
+	} else {
+		m_HostOptionsDraft = g_NetMatchService.GetLobbyMatchConfig();
+		m_HostOptionsReadOnly = !g_NetMatchService.GetLobbySnapshot().isHost;
+		m_HostOptionsStatusLabel->SetText(m_HostOptionsReadOnly ? "Only the host edits these." : "");
+	}
+	m_HostOptionsBaseRevision = m_HostOptionsDraft.configRevision;
+	m_MultiplayerSubScreen = MultiplayerSubScreen::HostOptions;
+	ShowHostOptionsPage(m_HostOptionsPage);
+	g_GUISound.ButtonPressSound()->Play();
+}
+
+void MainMenuGUI::ShowHostOptionsPage(int page) {
+	m_HostOptionsPage = std::clamp(page, 0, c_HostOptionsPageCount - 1);
+	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
+		if (m_HostOptionsPages[i]) m_HostOptionsPages[i]->SetVisible(i == m_HostOptionsPage);
+		if (m_HostOptionsTabs[i]) m_HostOptionsTabs[i]->SetCheck(i == m_HostOptionsPage);
+	}
+}
+
+namespace {
+	void HostOptSelectCombo(GUIComboBox* combo, const std::string& text) {
+		if (!combo) return;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			if (combo->GetItem(i) && combo->GetItem(i)->m_Name == text) {
+				combo->SetSelectedIndex(i);
+				return;
+			}
+		}
+		combo->SetText(text);
+	}
+
+	void HostOptSelectComboIndex(GUIComboBox* combo, int index) {
+		if (combo) combo->SetSelectedIndex(std::clamp(index, 0, std::max(0, combo->GetCount() - 1)));
+	}
+
+	void HostOptSetEditable(GUIControl* control, bool editable) {
+		if (control) control->SetEnabled(editable);
+	}
+
+	bool HostOptBoxFocused(GUITextBox* box) {
+		return box && box->GetPanel() && box->GetPanel()->HasFocus();
+	}
+}
+
+void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
+	if (!m_HostOptionsPanel) return;
+	// A live lobby re-seeds the draft whenever the adopted config advances past the base revision;
+	// a staged host draft or a local edit never loses the player's text mid-typing.
+	if (!m_HostOptionsSetupDraft) {
+		const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
+		if (adopted.configRevision != m_HostOptionsDraft.configRevision || m_HostOptionsReadOnly) {
+			// A client always mirrors the adopted config; a host re-seeds only from an older base.
+			if (m_HostOptionsReadOnly || adopted.configRevision > m_HostOptionsBaseRevision) {
+				m_HostOptionsDraft = adopted;
+				m_HostOptionsBaseRevision = adopted.configRevision;
+			}
+		}
+		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions();
+		if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
+			// A rematch lobby's draft is staged for the next match; an open lobby's Apply is a live
+			// republish the peers acknowledge before it counts. "Applied" lands when the adopted
+			// mirror reaches the awaited revision - the runner queue publishes it for every peer.
+			m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
+			                                      ? "Options staged for the next match."
+			                                      : "Waiting for peers to confirm the new options...");
+		}
+		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
+			m_HostOptionsAwaitedRevision = 0;
+			m_HostOptionsStatusLabel->SetText("Applied.");
+		}
+	}
+	// A Queued kick/ban drains on the setup worker's host pump; the applied result lands in the
+	// service's last-result field, and this reads it until it stops being Queued.
+	if (m_HostKickBanWatch) {
+		const NetKickBanResult drained = g_NetMatchService.GetLastKickBanResult();
+		if (drained != NetKickBanResult::Queued) {
+			m_HostKickBanWatch = false;
+			m_HostOptionsStatusLabel->SetText(m_HostKickBanVerb + ": " + NetKickBanResultName(drained));
+		}
+	}
+	// Each page names itself in the title band the way the design's page mocks do; the client's
+	// read-only view keeps the details title on every page.
+	static const char* pageTitles[c_HostOptionsPageCount] = {
+		"H O S T   O P T I O N S", "M A T C H   R U L E S", "N E T W O R K   O P T I O N S",
+		"M A T C H   R E C O V E R Y", "F I L E S   A N D   S T A T U S", "S E S S I O N"};
+	m_HostOptionsTitle->SetText(m_HostOptionsReadOnly ? "M A T C H   D E T A I L S" : pageTitles[m_HostOptionsPage]);
+	const bool editable = !m_HostOptionsReadOnly;
+
+	// Seats page.
+	const int capacity = std::clamp<int>(m_HostOptionsDraft.peerCount, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount);
+	HostOptSelectComboIndex(m_HostSeatPlayersCombo, capacity - NetMatchConfigUtil::c_MinPeerCount);
+	// Capacity is a session property once the lobby is open; only the setup draft may move it.
+	HostOptSetEditable(m_HostSeatPlayersCombo, editable && m_HostOptionsSetupDraft);
+	if (m_HostSeatCapacityHint) {
+		m_HostSeatCapacityHint->SetText(m_HostOptionsSetupDraft ? "Peers the lobby will seat" : "Fixed while the lobby is open");
+	}
+	// Each rostered slot is a row; while the draft can still take a seat a trailing "Closed"
+	// placeholder row is where the host opens one back up. peerCount itself is transport
+	// capacity, fixed once the lobby is open, so a closed seat keeps its row instead of
+	// shrinking the session.
+	int humans = 0;
+	for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) humans += slot.cpu ? 0 : 1;
+	const int humanCapacity = m_HostOptionsDraft.peerCount - (m_HostOptionsDraft.dedicated ? 1 : 0);
+	const int slots = static_cast<int>(m_HostOptionsDraft.players.size());
+	const bool placeholder = editable && slots < c_HostSeatRows &&
+	                         (humans < humanCapacity || slots < static_cast<int>(NetMatchConfigUtil::c_MaxPlayers));
+	const int seatRows = std::min(slots + (placeholder ? 1 : 0), c_HostSeatRows);
+	for (int row = 0; row < c_HostSeatRows; ++row) {
+		const bool used = row < seatRows;
+		for (GUIControl* control : {static_cast<GUIControl*>(m_HostSeatNameLabels[row]), static_cast<GUIControl*>(m_HostSeatTypeCombos[row]),
+		                            static_cast<GUIControl*>(m_HostSeatTeamCombos[row]),
+		                            static_cast<GUIControl*>(m_HostSeatDelayLabels[row]), static_cast<GUIControl*>(m_HostSeatStateLabels[row]),
+		                            static_cast<GUIControl*>(m_HostSeatDetailsButtons[row])}) {
+			if (control) control->SetVisible(used);
+		}
+		if (!used) continue;
+		const bool isPlaceholder = row >= slots;
+		static const NetMatchPlayerSlot c_EmptySlot;
+		const NetMatchPlayerSlot& slot = isPlaceholder ? c_EmptySlot : m_HostOptionsDraft.players[row];
+		m_HostSeatNameLabels[row]->SetText(isPlaceholder ? "--" : slot.displayName);
+		const NetLobbyMember* member = nullptr;
+		if (!isPlaceholder && slot.peerId != 0) {
+			for (const NetLobbyMember& m : snapshot.members) {
+				if (m.peerId == slot.peerId) {
+					member = &m;
+					break;
+				}
+			}
+		}
+		// The delay column reads the agreed per-sender value; automatic reads "Auto" since each
+		// sender's own link decides its figure there.
+		std::string delay = "--";
+		if (!isPlaceholder && !slot.cpu && slot.peerId != 0) {
+			delay = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed
+			            ? std::to_string(NetMatchConfigUtil::PeerInputDelay(m_HostOptionsDraft, slot.peerId)) + " ticks"
+			            : "Auto";
+		}
+		m_HostSeatDelayLabels[row]->SetText(delay);
+		// A departed human's seat shows the leave consequence, not the CPU's: its units are already
+		// AI-driven, while a merely dropped holder is still reclaiming and stays a held seat.
+		std::string state = "Open";
+		if (isPlaceholder) {
+			state = "Closed";
+		} else if (slot.cpu) {
+			state = "CPU / Skill " + std::to_string(m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0].aiSkill);
+		} else {
+			const std::string line = member ? member->statusLine : std::string();
+			if (line.size() >= 5 && line.compare(line.size() - 5, 5, ": left") == 0) {
+				state = "AI in control";
+			} else if (line.find("reconnecting") != std::string::npos) {
+				state = "Reclaiming";
+			} else if (line.find("disconnected") != std::string::npos) {
+				state = "Held";
+			} else if (member && member->connected) {
+				state = member->ready ? "Ready" : "Not ready";
+				if (member->isLocal) state += " (you)";
+			} else if (member && member->dropped) {
+				state = "Held";
+			}
+		}
+		m_HostSeatStateLabels[row]->SetText(state);
+		// H03: the kind column — Open / Closed / CPU. A seated human's kind never moves: the seat
+		// belongs to its player, and SubmitHostOptions refuses the drop a stale UI would still try.
+		const int typeIndex = isPlaceholder ? 1 : (slot.cpu ? 2 : 0);
+		HostOptSelectComboIndex(m_HostSeatTypeCombos[row], typeIndex);
+		const bool seatedHuman = !isPlaceholder && !slot.cpu && slot.peerId != 0 &&
+		                         member && (member->connected || member->dropped || member->reclaiming);
+		HostOptSetEditable(m_HostSeatTypeCombos[row], editable && !seatedHuman);
+		HostOptSelectComboIndex(m_HostSeatTeamCombos[row], slot.team);
+		HostOptSetEditable(m_HostSeatTeamCombos[row], editable && !isPlaceholder && !slot.cpu);
+		HostOptSetEditable(m_HostSeatDetailsButtons[row], !isPlaceholder);
+	}
+
+	// Rules page.
+	HostOptSelectCombo(m_HostRulesActivityCombo, m_HostOptionsDraft.activityPreset +
+	                   (m_HostOptionsDraft.activityModule.empty() ? "" : " - " + m_HostOptionsDraft.activityModule));
+	HostOptSelectCombo(m_HostRulesSceneCombo, m_HostOptionsDraft.sceneName);
+	const int modeIndex = m_HostOptionsDraft.mode == NetMatchMode::CoopPvE ? 1 : (m_HostOptionsDraft.mode == NetMatchMode::PvPvE ? 2 : 0);
+	HostOptSelectComboIndex(m_HostRulesModeCombo, modeIndex);
+	if (m_HostRulesDifficultySlider) m_HostRulesDifficultySlider->SetValue(m_HostOptionsDraft.difficulty);
+	if (m_HostRulesDifficultyValue) m_HostRulesDifficultyValue->SetText(std::to_string(m_HostOptionsDraft.difficulty));
+	const uint32_t goldSlider = std::min(m_HostOptionsDraft.startingGold, static_cast<uint32_t>(31000));
+	if (m_HostRulesGoldSlider) m_HostRulesGoldSlider->SetValue(static_cast<int>(goldSlider));
+	if (m_HostRulesGoldValue) {
+		m_HostRulesGoldValue->SetText(m_HostOptionsDraft.startingGold >= NetMatchConfigUtil::c_InfiniteGold
+		                                  ? "Infinite" : (std::to_string(m_HostOptionsDraft.startingGold) + " oz"));
+	}
+	if (m_HostRulesFogCheck) m_HostRulesFogCheck->SetCheck(m_HostOptionsDraft.fogOfWar ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	if (m_HostRulesClearPathCheck) m_HostRulesClearPathCheck->SetCheck(m_HostOptionsDraft.requireClearPathToOrbit ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	if (m_HostRulesDeployCheck) m_HostRulesDeployCheck->SetCheck(m_HostOptionsDraft.deployUnits ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	// L33: index 0 keeps the humans spectating; index 1 ends the match.
+	HostOptSelectComboIndex(m_HostRulesBrainlessCombo, m_HostOptionsDraft.brainlessHumansSpectate ? 0 : 1);
+	const int rulesTeam = std::clamp<int>(m_HostRulesTeamCombo ? m_HostRulesTeamCombo->GetSelectedIndex() : 0, 0, 3);
+	const NetMatchTeamRules& teamRules = m_HostOptionsDraft.teamRules[rulesTeam];
+	HostOptSelectComboIndex(m_HostRulesTeamCombo, rulesTeam);
+	{
+		const std::string tech = teamRules.technologyModule.empty() ? teamRules.technologyIntent
+		                                                            : teamRules.technologyIntent + " - " + teamRules.technologyModule;
+		HostOptSelectCombo(m_HostRulesTechCombo, tech);
+	}
+	if (m_HostRulesSkillSlider) m_HostRulesSkillSlider->SetValue(teamRules.aiSkill);
+	if (m_HostRulesSkillValue) m_HostRulesSkillValue->SetText(std::to_string(teamRules.aiSkill));
+	for (GUIControl* control : {static_cast<GUIControl*>(m_HostRulesActivityCombo), static_cast<GUIControl*>(m_HostRulesSceneCombo),
+	                            static_cast<GUIControl*>(m_HostRulesModeCombo), static_cast<GUIControl*>(m_HostRulesDifficultySlider),
+	                            static_cast<GUIControl*>(m_HostRulesGoldSlider), static_cast<GUIControl*>(m_HostRulesFogCheck),
+	                            static_cast<GUIControl*>(m_HostRulesClearPathCheck), static_cast<GUIControl*>(m_HostRulesDeployCheck),
+	                            static_cast<GUIControl*>(m_HostRulesBrainlessCombo), static_cast<GUIControl*>(m_HostRulesTeamCombo),
+	                            static_cast<GUIControl*>(m_HostRulesTechCombo), static_cast<GUIControl*>(m_HostRulesSkillSlider)}) {
+		HostOptSetEditable(control, editable);
+	}
+
+	// Network page.
+	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
+	if (m_HostNetMinDelayBox && !HostOptBoxFocused(m_HostNetMinDelayBox)) {
+		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
+	}
+	if (m_HostNetEffectiveLabel) {
+		// H22: the floor in ticks and in milliseconds, then the announced per-sender figure.
+		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
+		                        std::to_string(m_HostOptionsDraft.inputDelayFrames * 1000 / 60) + " ms)";
+		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (auto, follows ping)";
+		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
+		m_HostNetEffectiveLabel->SetText(effective);
+	}
+	const bool fixedPolicy = m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed;
+	for (int peer = 0; peer < 4; ++peer) {
+		const bool used = peer < capacity;
+		if (m_HostNetPeerLabels[peer]) {
+			m_HostNetPeerLabels[peer]->SetVisible(used);
+			m_HostNetPeerLabels[peer]->SetText("Peer " + std::to_string(peer + 1));
+		}
+		if (m_HostNetPeerDelayBoxes[peer]) {
+			m_HostNetPeerDelayBoxes[peer]->SetVisible(used);
+			const uint16_t delay = peer < static_cast<int>(m_HostOptionsDraft.peerInputDelayFrames.size())
+			                           ? m_HostOptionsDraft.peerInputDelayFrames[peer]
+			                           : m_HostOptionsDraft.inputDelayFrames;
+			if (!HostOptBoxFocused(m_HostNetPeerDelayBoxes[peer])) {
+				m_HostNetPeerDelayBoxes[peer]->SetText(std::to_string(delay));
+			}
+			HostOptSetEditable(m_HostNetPeerDelayBoxes[peer], editable && fixedPolicy);
+		}
+	}
+	HostOptSetEditable(m_HostNetPolicyCombo, editable);
+	HostOptSetEditable(m_HostNetMinDelayBox, editable);
+	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
+	// figures are the answer, so the button stays off there.
+	HostOptSetEditable(m_HostNetRecalcButton, editable && !fixedPolicy);
+	if (m_HostNetPingLabel) {
+		std::string ping;
+		for (const NetLobbyMember& m : snapshot.members) {
+			if (m.peerId == snapshot.localPeerId || !m.connected || m.pingMs == 0) continue;
+			ping += ping.empty() ? "" : ", ";
+			ping += m.displayName + " " + std::to_string(m.pingMs) + "ms";
+		}
+		m_HostNetPingLabel->SetText(ping.empty() ? "No peer ping yet" : ping);
+	}
+
+	// Recovery page.
+	if (m_HostRecRepairCheck) m_HostRecRepairCheck->SetCheck(m_HostOptionsDraft.automaticRepair ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(m_HostOptionsDraft.autosaveEnabled ? GUICheckbox::Checked : GUICheckbox::Unchecked);
+	if (m_HostRecAutosaveIntervalBox && !HostOptBoxFocused(m_HostRecAutosaveIntervalBox)) {
+		m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
+	}
+	HostOptSetEditable(m_HostRecAutosaveIntervalBox, editable && m_HostOptionsDraft.autosaveEnabled);
+	HostOptSetEditable(m_HostRecRepairCheck, editable);
+	HostOptSetEditable(m_HostRecAutosaveCheck, editable);
+	if (m_HostRecLastSaveLabel) {
+		// H28: the service exposes no last-autosave tick getter, so the observation is the local
+		// filesystem's own newest .ccsave - the same place the [autosave] log line's file lands.
+		// It is this peer's disk only; a client sees its own (usually empty) directory.
+		const uint64_t nowMs = MenuClockMs();
+		if (nowMs - m_HostLastSaveScanMs >= 1000) {
+			m_HostLastSaveScanMs = nowMs;
+			m_HostLastSaveText.clear();
+			std::error_code dirError;
+			const std::string dir = System::GetWorkingDirectory() + "Autosaves";
+			std::string latest;
+			std::filesystem::file_time_type latestTime{};
+			for (const auto& entry : std::filesystem::directory_iterator(dir, dirError)) {
+				if (!entry.is_regular_file() || entry.path().extension() != ".ccsave") continue;
+				const auto written = entry.last_write_time(dirError);
+				if (dirError) continue;
+				if (latest.empty() || written > latestTime) {
+					latestTime = written;
+					latest = entry.path().filename().string();
+				}
+			}
+			if (!latest.empty()) {
+				// The name is <matchId>-<tick>.ccsave; the tick trails the last dash.
+				const size_t dash = latest.rfind('-');
+				const std::string tick = dash == std::string::npos ? "" : latest.substr(dash + 1, latest.size() - dash - 8);
+				m_HostLastSaveText = tick.empty() || tick.find_first_not_of("0123456789") != std::string::npos
+				                         ? "Last checkpoint: " + latest
+				                         : "Last checkpoint: tick " + tick + " (" + latest + ")";
+			}
+		}
+		m_HostRecLastSaveLabel->SetText(m_HostLastSaveText.empty()
+		                                  ? (m_HostOptionsDraft.autosaveEnabled
+		                                         ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds - none saved yet"
+		                                         : "No autosaves while this is off")
+		                                  : m_HostLastSaveText);
+	}
+	if (m_HostRecWaitingLabel) {
+		std::string waiting;
+		for (const NetLobbyMember& m : snapshot.members) {
+			if (m.reclaiming) waiting += (waiting.empty() ? "" : ", ") + m.displayName;
+		}
+		m_HostRecWaitingLabel->SetText(waiting.empty() ? "" : ("Waiting on: " + waiting));
+	}
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostRepairNowButton], false); // repair now needs the match's snapshot path, which is an open seam
+
+	// Files page: local paths, local retention, and the local status-widget preference.
+	if (m_HostFilesSavePathLabel) {
+		m_HostFilesSavePathLabel->SetText("Autosaves: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves").generic_string());
+	}
+	if (m_HostFilesDiagPathLabel) {
+		m_HostFilesDiagPathLabel->SetText("Diagnostics: " + (std::filesystem::path(System::GetWorkingDirectory()) / "Telemetry").generic_string());
+	}
+	HostOptSelectComboIndex(m_HostFilesWidgetCombo, static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+	HostOptSetEditable(m_HostFilesWidgetCombo, true); // local preference, editable on every peer
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton], true);
+
+	// Session page.
+	if (m_HostSessHostingLabel) {
+		m_HostSessHostingLabel->SetText(m_HostOptionsSetupDraft
+		                                  ? "Hosting: not open yet"
+		                                  : ("Hosting: " + snapshot.serviceState + " - " + snapshot.lobbyPhase));
+	}
+	if (m_HostSessSeatsLabel) {
+		int humans = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) humans += slot.cpu ? 0 : 1;
+		m_HostSessSeatsLabel->SetText("Human seats: " + std::to_string(humans) + " of " + std::to_string(m_HostOptionsDraft.players.size()));
+	}
+	static const uint8_t idleValues[] = {0, 1, 5, 10, 20, 30, 45, 60};
+	int idleIndex = 0;
+	for (int i = 0; i < 8; ++i) {
+		if (m_HostOptionsDraft.idleWaitMinutes == idleValues[i]) idleIndex = i;
+	}
+	HostOptSelectComboIndex(m_HostSessIdleCombo, idleIndex);
+	HostOptSetEditable(m_HostSessIdleCombo, editable);
+	if (m_HostSessIdleStateLabel) {
+		// H31's countdown and reason: the configured window plus why it is running. The snapshot
+		// carries no published deadline, so the live seconds stay the service's - the label names
+		// the phase the peers are actually in instead of inventing a clock of its own.
+		std::string idle = m_HostOptionsDraft.idleWaitMinutes == 0
+		                       ? "Idle wait: Never - the lobby stays open"
+		                       : "Idle wait: " + std::to_string(m_HostOptionsDraft.idleWaitMinutes) + " min";
+		if (m_HostOptionsSetupDraft) {
+			idle += " (applies once the lobby opens)";
+		} else if (!snapshot.lobbyPhase.empty()) {
+			idle += " - " + snapshot.lobbyPhase;
+			if (!snapshot.statusText.empty()) idle += ": " + snapshot.statusText;
+		}
+		m_HostSessIdleStateLabel->SetText(idle);
+	}
+	// H11: the count is the store's own rows - a Session-scope record counts when it names this
+	// session's id, an Until Removed one counts beside it ("2 banned this session, 1 until removed").
+	if (m_HostSessBannedLabel) {
+		const uint64_t sessionId = g_NetMatchService.GetLobbyMatchConfig().sessionId;
+		uint32_t sessionBans = 0, heldBans = 0;
+		for (const NetHostBanRecord& record : g_NetMatchService.GetBanRecords()) {
+			if (record.scope == NetHostBanScope::UntilRemoved) {
+				++heldBans;
+			} else if (record.sessionId == sessionId) {
+				++sessionBans;
+			}
+		}
+		m_HostSessBannedLabel->SetText(std::to_string(sessionBans) + " banned this session" +
+		                               (heldBans > 0 ? ", " + std::to_string(heldBans) + " until removed" : ""));
+	}
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
+
+	// The footer: Apply only when there is a change and the player may make one.
+	bool dirty = false;
+	if (m_HostOptionsSetupDraft) {
+		dirty = !m_HostSetupOptions || static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft) != static_cast<const NetMatchStandardRules&>(*m_HostSetupOptions)
+		        || m_HostOptionsDraft.players != m_HostSetupOptions->players
+		        || m_HostOptionsDraft.mode != m_HostSetupOptions->mode
+		        || m_HostOptionsDraft.activityPreset != m_HostSetupOptions->activityPreset
+		        || m_HostOptionsDraft.activityModule != m_HostSetupOptions->activityModule
+		        || m_HostOptionsDraft.sceneName != m_HostSetupOptions->sceneName
+		        || m_HostOptionsDraft.peerCount != m_HostSetupOptions->peerCount
+		        || m_HostOptionsDraft.delayPolicy != m_HostSetupOptions->delayPolicy
+		        || m_HostOptionsDraft.idleWaitMinutes != m_HostSetupOptions->idleWaitMinutes
+		        || m_HostOptionsDraft.automaticRepair != m_HostSetupOptions->automaticRepair
+		        || m_HostOptionsDraft.autosaveEnabled != m_HostSetupOptions->autosaveEnabled
+		        || m_HostOptionsDraft.autosaveIntervalSeconds != m_HostSetupOptions->autosaveIntervalSeconds
+		        || m_HostOptionsDraft.inputDelayFrames != m_HostSetupOptions->inputDelayFrames;
+	} else {
+		const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
+		dirty = !(m_HostOptionsDraft == adopted) && !(g_NetMatchService.GetPendingHostOptions() && m_HostOptionsDraft == *g_NetMatchService.GetPendingHostOptions());
+	}
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostOptionsApplyButton], editable && dirty);
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton], editable);
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostOptionsBackButton], true);
+	if (m_HostOptionsStatusLabel->GetText().empty() && dirty) {
+		m_HostOptionsStatusLabel->SetText("Unsaved changes");
+	}
+	// An open seat dialog re-reads the moderation view every frame: the reclaim seconds tick and a
+	// new applicant shows without the host reopening it.
+	RefreshHostSeatDialog();
+	// The banned dialog likewise tracks the store: a queued unban's drain lands the row's removal.
+	RefreshHostBannedDialog();
+}
+
+void MainMenuGUI::DraftHostOptionsFromControls() {
+	// Seats: team picks only; the kind column commits in ChangeHostSeatType the moment it moves,
+	// so a row past the roster (the closed-seat placeholder) has nothing to read back.
+	for (int row = 0; row < c_HostSeatRows && row < static_cast<int>(m_HostOptionsDraft.players.size()); ++row) {
+		if (m_HostSeatTeamCombos[row] && m_HostSeatTeamCombos[row]->GetSelectedIndex() >= 0) {
+			m_HostOptionsDraft.players[row].team = static_cast<uint8_t>(m_HostSeatTeamCombos[row]->GetSelectedIndex());
+		}
+	}
+	if (m_HostOptionsSetupDraft && m_HostSeatPlayersCombo && m_HostSeatPlayersCombo->GetSelectedIndex() >= 0) {
+		m_HostOptionsDraft.peerCount = static_cast<uint8_t>(NetMatchConfigUtil::c_MinPeerCount + m_HostSeatPlayersCombo->GetSelectedIndex());
+	}
+	// Rules.
+	if (m_HostRulesActivityCombo && m_HostRulesActivityCombo->GetSelectedIndex() >= 0) {
+		const int picked = m_HostRulesActivityCombo->GetSelectedIndex();
+		if (picked < static_cast<int>(m_MultiplayerHostActivities.size())) {
+			m_HostOptionsDraft.activityPreset = m_MultiplayerHostActivities[picked].first;
+			m_HostOptionsDraft.activityModule = m_MultiplayerHostActivities[picked].second;
+		} else if (const GUIListPanel::Item* item = m_HostRulesActivityCombo->GetItem(picked)) {
+			m_HostOptionsDraft.activityPreset = item->m_Name;
+		}
+	}
+	if (m_HostRulesSceneCombo && m_HostRulesSceneCombo->GetSelectedIndex() >= 0) {
+		if (const GUIListPanel::Item* item = m_HostRulesSceneCombo->GetItem(m_HostRulesSceneCombo->GetSelectedIndex())) {
+			m_HostOptionsDraft.sceneName = item->m_Name;
+		}
+	}
+	if (m_HostRulesModeCombo) {
+		static const NetMatchMode modes[] = {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE};
+		const int picked = m_HostRulesModeCombo->GetSelectedIndex();
+		if (picked >= 0 && picked < 3) {
+			m_HostOptionsDraft.mode = modes[picked];
+			m_HostOptionsDraft.modePreset = NetMatchConfigUtil::ModeName(m_HostOptionsDraft.mode);
+		}
+	}
+	if (m_HostRulesDifficultySlider) m_HostOptionsDraft.difficulty = static_cast<uint8_t>(std::clamp(m_HostRulesDifficultySlider->GetValue(), 0, 100));
+	if (m_HostRulesGoldSlider) {
+		const int slider = m_HostRulesGoldSlider->GetValue();
+		m_HostOptionsDraft.startingGold = slider >= 31000 ? NetMatchConfigUtil::c_InfiniteGold
+		                                                : static_cast<uint32_t>(std::clamp(slider, 0, static_cast<int>(NetMatchConfigUtil::c_MaxFiniteStartingGold)));
+	}
+	if (m_HostRulesFogCheck) m_HostOptionsDraft.fogOfWar = m_HostRulesFogCheck->GetCheck() == GUICheckbox::Checked;
+	if (m_HostRulesClearPathCheck) m_HostOptionsDraft.requireClearPathToOrbit = m_HostRulesClearPathCheck->GetCheck() == GUICheckbox::Checked;
+	if (m_HostRulesDeployCheck) m_HostOptionsDraft.deployUnits = m_HostRulesDeployCheck->GetCheck() == GUICheckbox::Checked;
+	if (m_HostRulesBrainlessCombo && m_HostRulesBrainlessCombo->GetSelectedIndex() >= 0) {
+		m_HostOptionsDraft.brainlessHumansSpectate = m_HostRulesBrainlessCombo->GetSelectedIndex() == 0;
+	}
+	const int rulesTeam = std::clamp<int>(m_HostRulesTeamCombo ? m_HostRulesTeamCombo->GetSelectedIndex() : 0, 0, 3);
+	if (m_HostRulesTechCombo && m_HostRulesTechCombo->GetSelectedIndex() >= 0) {
+		const int picked = m_HostRulesTechCombo->GetSelectedIndex();
+		if (picked < static_cast<int>(m_HostOptionsTechModules.size())) {
+			m_HostOptionsDraft.teamRules[rulesTeam].technologyIntent = m_HostOptionsTechModules[picked];
+			m_HostOptionsDraft.teamRules[rulesTeam].technologyModule.clear();
+		} else if (const GUIListPanel::Item* item = m_HostRulesTechCombo->GetItem(picked)) {
+			m_HostOptionsDraft.teamRules[rulesTeam].technologyIntent = item->m_Name;
+		}
+	}
+	if (m_HostRulesSkillSlider) m_HostOptionsDraft.teamRules[rulesTeam].aiSkill = static_cast<uint8_t>(std::clamp(m_HostRulesSkillSlider->GetValue(), 1, 100));
+
+	// Network.
+	if (m_HostNetPolicyCombo) {
+		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+	}
+	if (m_HostNetMinDelayBox) {
+		const long parsed = std::strtol(m_HostNetMinDelayBox->GetText().c_str(), nullptr, 10);
+		m_HostOptionsDraft.inputDelayFrames = static_cast<uint16_t>(std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames));
+	}
+	m_HostOptionsDraft.peerInputDelayFrames.clear();
+	for (int peer = 0; peer < 4 && peer < m_HostOptionsDraft.peerCount; ++peer) {
+		if (!m_HostNetPeerDelayBoxes[peer]) continue;
+		const long parsed = std::strtol(m_HostNetPeerDelayBoxes[peer]->GetText().c_str(), nullptr, 10);
+		m_HostOptionsDraft.peerInputDelayFrames.push_back(static_cast<uint16_t>(std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames)));
+	}
+	if (m_HostOptionsDraft.delayPolicy != NetMatchDelayPolicy::Fixed) {
+		m_HostOptionsDraft.peerInputDelayFrames.clear();
+	}
+
+	// Recovery.
+	if (m_HostRecRepairCheck) m_HostOptionsDraft.automaticRepair = m_HostRecRepairCheck->GetCheck() == GUICheckbox::Checked;
+	if (m_HostRecAutosaveCheck) m_HostOptionsDraft.autosaveEnabled = m_HostRecAutosaveCheck->GetCheck() == GUICheckbox::Checked;
+	if (m_HostRecAutosaveIntervalBox) {
+		const long parsed = std::strtol(m_HostRecAutosaveIntervalBox->GetText().c_str(), nullptr, 10);
+		m_HostOptionsDraft.autosaveIntervalSeconds = static_cast<uint32_t>(std::clamp<long>(parsed, 0, NetMatchService::c_MaxAutosaveIntervalSeconds));
+	}
+	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
+
+	// Session: the idle combo's index maps onto the minutes table.
+	static const uint8_t idleValues[] = {0, 1, 5, 10, 20, 30, 45, 60};
+	if (m_HostSessIdleCombo && m_HostSessIdleCombo->GetSelectedIndex() >= 0) {
+		m_HostOptionsDraft.idleWaitMinutes = idleValues[std::clamp(m_HostSessIdleCombo->GetSelectedIndex(), 0, 7)];
+	}
+}
+
+void MainMenuGUI::RederiveHostOptionsRoster() {
+	// Rebuild the seat list for the drafted capacity/mode, keeping the rules the panel edited.
+	NetMatchServiceRequest request = HostRequestDraft();
+	request.peerCount = m_HostOptionsDraft.peerCount;
+	request.mode = m_HostOptionsDraft.mode;
+	NetMatchStandardRules rules = static_cast<const NetMatchStandardRules&>(m_HostOptionsDraft);
+	request.standardRules = rules;
+	// The kind column's edits ride the rebuild: the humans and CPUs the draft seats now, not the
+	// mode's own default split, so closing or CPU-filling a seat survives a mode pick.
+	uint32_t humanSeats = 0, cpuSeats = 0;
+	for (const NetMatchPlayerSlot& slot : m_HostOptionsDraft.players) {
+		(slot.cpu ? cpuSeats : humanSeats)++;
+	}
+	request.humans = humanSeats;
+	request.cpuSlots = cpuSeats;
+	NetMatchConfig built;
+	std::string error;
+	if (NetMatchService::BuildMatchConfig(request, m_HostOptionsDraft.sessionId, built, &error)) {
+		built.configRevision = m_HostOptionsDraft.configRevision;
+		// Teams the panel already picked on the old roster carry over where the seat survives.
+		for (size_t i = 0; i < built.players.size() && i < m_HostOptionsDraft.players.size(); ++i) {
+			if (built.players[i].peerId == m_HostOptionsDraft.players[i].peerId) {
+				built.players[i].team = m_HostOptionsDraft.players[i].team;
+			}
+		}
+		m_HostOptionsDraft.players = std::move(built.players);
+	} else if (m_HostOptionsStatusLabel) {
+		// H13: the refused mode+roster pair says why on the panel, in the validator's own words.
+		m_HostOptionsStatusLabel->SetText(error);
+	}
+}
+
+void MainMenuGUI::ApplyHostOptions() {
+	if (m_HostOptionsReadOnly) return;
+	DraftHostOptionsFromControls();
+	std::string error;
+	if (!NetMatchConfigUtil::ValidateLocalAlpha(m_HostOptionsDraft, &error)) {
+		m_HostOptionsStatusLabel->SetText(error);
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
+	if (m_HostOptionsSetupDraft) {
+		m_HostSetupOptions = m_HostOptionsDraft;
+		m_HostOptionsStatusLabel->SetText("Staged for the next lobby.");
+	} else {
+		if (!g_NetMatchService.SubmitHostOptions(m_HostOptionsBaseRevision, m_HostOptionsDraft, &error)) {
+			m_HostOptionsStatusLabel->SetText(error);
+			g_GUISound.BackButtonPressSound()->Play();
+			return;
+		}
+		// In an open lobby the submission is a live republish: the peers' adopted configs move to
+		// the next revision, and the status row reads their acks until it lands. In the rematch
+		// (closed) lobby the same draft is the staged next-match config instead.
+		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
+		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+		m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
+		                                      ? "Options staged for the next match."
+		                                      : "Waiting for peers to confirm the new options...");
+	}
+	g_GUISound.ButtonPressSound()->Play();
+}
+
+void MainMenuGUI::SaveHostOptionsDefaults() {
+	DraftHostOptionsFromControls();
+	// The settings twins hold the same fields; the draft's host-owned values become the defaults
+	// every later lobby's request starts from.
+	g_SettingsMan.SetNetworkHostDelayPolicy(m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed
+	                                          ? SettingsMan::NetworkHostDelayPolicy::Fixed : SettingsMan::NetworkHostDelayPolicy::Auto);
+	g_SettingsMan.SetNetworkInputDelayFrames(m_HostOptionsDraft.inputDelayFrames);
+	g_SettingsMan.SetNetworkHostIdleWaitMinutes(m_HostOptionsDraft.idleWaitMinutes);
+	g_SettingsMan.SetNetworkHostAutoRepair(m_HostOptionsDraft.automaticRepair);
+	g_SettingsMan.SetAutosaveSeconds(m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds : 0);
+	g_SettingsMan.SetBrainlessHumansSpectate(m_HostOptionsDraft.brainlessHumansSpectate);
+	g_SettingsMan.UpdateSettingsFile();
+	// The scalars above are this installation's preferences; the whole match intent - activity, site,
+	// rules, capacity and each seat's team - goes to the versioned template a new lobby seeds from.
+	std::string templateError;
+	if (!NetHostDefaults::Save(NetHostDefaults::FromConfig(m_HostOptionsDraft), &templateError)) {
+		m_HostOptionsStatusLabel->SetText(templateError);
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
+	m_HostOptionsStatusLabel->SetText("Saved as the host defaults.");
+	g_GUISound.ItemChangeSound()->Play();
+}
+
+void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
+	if (m_HostOptionsReadOnly || row < 0 || row >= c_HostSeatRows || typeIndex < 0 || typeIndex > 2) return;
+	DraftHostOptionsFromControls();
+	auto refuse = [this](const std::string& reason) {
+		m_HostOptionsStatusLabel->SetText(reason);
+		g_GUISound.BackButtonPressSound()->Play();
+	};
+	const size_t slots = m_HostOptionsDraft.players.size();
+	const bool isPlaceholder = row >= static_cast<int>(slots);
+	const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
+	auto memberSeated = [&snapshot](uint8_t peerId) {
+		if (peerId == 0) return false;
+		for (const NetLobbyMember& m : snapshot.members) {
+			if (m.peerId == peerId) return true;
+		}
+		return false;
+	};
+	// The smallest peer id the roster leaves unclaimed; 0 when the peer capacity is fully seated.
+	auto freePeerId = [this]() -> uint8_t {
+		for (uint8_t id = 1; id <= m_HostOptionsDraft.peerCount; ++id) {
+			bool used = false;
+			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+				if (!s.cpu && s.peerId == id) {
+					used = true;
+					break;
+				}
+			}
+			if (!used) return id;
+		}
+		return 0;
+	};
+	// A CPU seat wants a team no human seat holds and no other CPU seat claims.
+	auto freeCpuTeam = [this]() -> int {
+		for (int team = 0; team < 4; ++team) {
+			bool humanTeam = false, cpuTeam = false;
+			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
+				if (s.team != team) continue;
+				(s.cpu ? cpuTeam : humanTeam) = true;
+			}
+			if (!humanTeam && !cpuTeam) return team;
+		}
+		return -1;
+	};
+	const auto currentType = [this, isPlaceholder](const NetMatchPlayerSlot& slot) {
+		return isPlaceholder ? 1 : (slot.cpu ? 2 : 0);
+	};
+	if (isPlaceholder && typeIndex == 1) return; // Closing a seat that does not exist is a no-op.
+
+	NetMatchConfig candidate = m_HostOptionsDraft;
+	if (isPlaceholder) {
+		// Opening the closed tail: a new seat joins the roster within the capacity the mode allows.
+		if (typeIndex == 0) {
+			const uint8_t peerId = freePeerId();
+			if (peerId == 0) {
+				return refuse("No free peer seat - raise the Players count first");
+			}
+			NetMatchPlayerSlot seat;
+			seat.peerId = peerId;
+			seat.team = 0;
+			seat.cpu = false;
+			seat.displayName = "Client " + std::to_string(peerId);
+			candidate.players.push_back(seat);
+		} else {
+			const int team = freeCpuTeam();
+			if (team < 0) {
+				return refuse("No free team for a CPU seat");
+			}
+			NetMatchPlayerSlot seat;
+			seat.peerId = 0;
+			seat.team = static_cast<uint8_t>(team);
+			seat.cpu = true;
+			seat.displayName = "CPU";
+			candidate.players.push_back(seat);
+		}
+	} else {
+		const NetMatchPlayerSlot slot = candidate.players[row];
+		const int kind = currentType(slot);
+		if (typeIndex == kind) return;
+		if (!slot.cpu && memberSeated(slot.peerId)) {
+			// The rule the submission path enforces, surfaced at the row: a live holder's seat is
+			// never reallocated by an options edit, whatever kind it becomes.
+			return refuse("A seated player is never dropped by an options edit");
+		}
+		if (!slot.cpu && !m_HostOptionsSetupDraft) {
+			// Every human slot in the adopted config is a seat the open lobby reserved for its peer,
+			// claimed or not; SubmitHostOptions refuses its removal, so the row refuses it here with
+			// the same reason rather than letting Apply surprise the host.
+			const NetMatchConfig adopted = g_NetMatchService.GetLobbyMatchConfig();
+			for (const NetMatchPlayerSlot& kept : adopted.players) {
+				if (!kept.cpu && kept.peerId == slot.peerId) {
+					return refuse("An open lobby's human seat stays open for its peer - close it after the match");
+				}
+			}
+		}
+		if (typeIndex == 1) {
+			candidate.players.erase(candidate.players.begin() + row);
+		} else if (typeIndex == 2) {
+			const int team = freeCpuTeam();
+			if (team < 0) {
+				return refuse("No free team for a CPU seat - every team is taken");
+			}
+			candidate.players[row].peerId = 0;
+			candidate.players[row].cpu = true;
+			candidate.players[row].team = static_cast<uint8_t>(team);
+			candidate.players[row].displayName = "CPU";
+		} else {
+			const uint8_t peerId = freePeerId();
+			if (peerId == 0) {
+				return refuse("No free peer seat - raise the Players count first");
+			}
+			candidate.players[row].peerId = peerId;
+			candidate.players[row].cpu = false;
+			candidate.players[row].team = 0;
+			candidate.players[row].displayName = "Client " + std::to_string(peerId);
+		}
+	}
+	std::string error;
+	if (!NetMatchConfigUtil::ValidateLocalAlpha(candidate, &error)) {
+		// H13: the validator's own words explain the refused roster - "cpu slot shares a human
+		// team" tells the host which pick to move, not just that the pick is wrong.
+		return refuse(error);
+	}
+	m_HostOptionsDraft.players = std::move(candidate.players);
+	m_HostOptionsStatusLabel->SetText("Unsaved changes");
+	g_GUISound.ItemChangeSound()->Play();
+}
+
+void MainMenuGUI::ShowHostSeatDetails(int row) {
+	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
+	m_HostOptionsSeatRow = row;
+	m_HostSeatDlgModerationRow = -1;
+	RefreshHostSeatDialog();
+	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
+	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]->SetFocus();
+}
+
+void MainMenuGUI::RefreshHostSeatDialog() {
+	if (m_ActiveDialogBox != m_HostSeatDialog || m_HostOptionsSeatRow < 0 ||
+	    m_HostOptionsSeatRow >= static_cast<int>(m_HostOptionsDraft.players.size())) {
+		return;
+	}
+	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[m_HostOptionsSeatRow];
+	m_HostSeatDlgName->SetText("Name: " + slot.displayName);
+	m_HostSeatDlgSeat->SetText(slot.peerId == 0 ? "Seat: peerless" : ("Seat: peer " + std::to_string(slot.peerId)));
+	m_HostSeatDlgTeam->SetText("Team: Team " + std::to_string(slot.team + 1));
+	m_HostSeatDlgState->SetText(slot.cpu ? "Kind: CPU player" : "Kind: human seat");
+	const NetMatchTeamRules& rules = m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0];
+	m_HostSeatDlgStatus->SetText("Tech: " + rules.technologyIntent +
+	                             (rules.technologyModule.empty() ? "" : " - " + rules.technologyModule) +
+	                             "  AI skill " + std::to_string(rules.aiSkill));
+
+	// H04-H08: the host's moderation view holds the reclaim clock and the applicant list; the
+	// dialog maps its roster row to that view by the lockstep peer id, never the list index.
+	const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
+	m_ModerationUx.Refresh(seats);
+	m_HostSeatDlgModerationRow = -1;
+	if (slot.peerId != 0) {
+		for (size_t i = 0; i < m_ModerationUx.RowCount(); ++i) {
+			if (m_ModerationUx.GetRow(i).lockstepPeerId == slot.peerId) {
+				m_HostSeatDlgModerationRow = static_cast<int>(i);
+				break;
+			}
+		}
+	}
+	const bool host = !m_HostOptionsReadOnly && !m_HostOptionsSetupDraft && g_NetMatchService.IsHost();
+	// H09/H10's selection rides the seat's admission row. The UX model only rows seats needing a
+	// decision, so the raw view is scanned too - a healthy holder has a seat there even when it has
+	// no decision row. The view is published while a match runs; a fresh lobby publishes none, so a
+	// press then names that state instead of sending a selection the drain would refuse.
+	m_HostSeatDlgRemovalSeat.reset();
+	if (slot.peerId != 0) {
+		for (const NetH4ModerationSeat& seat : seats) {
+			if (!seat.cpu && seat.lockstepPeerId == slot.peerId) {
+				m_HostSeatDlgRemovalSeat = seat;
+				break;
+			}
+		}
+	}
+	const NetModerationUx::Row* mrow = m_HostSeatDlgModerationRow >= 0 ? &m_ModerationUx.GetRow(m_HostSeatDlgModerationRow) : nullptr;
+	if (mrow && (mrow->view.dropped || mrow->view.heldForReclaim || mrow->view.reclaiming)) {
+		// H08's countdown is the snapshot's own figure: frames the round still holds, in seconds.
+		const uint64_t seconds = NetSeatPresence::HoldSeconds(mrow->view.holdFramesRemaining);
+		m_HostSeatDlgReclaim->SetText(mrow->view.holdFramesRemaining > 0
+		                                  ? "Reclaim: seat held " + std::to_string(seconds) + "s for the original holder"
+		                                  : "Reclaim: the hold has run out");
+	} else {
+		m_HostSeatDlgReclaim->SetText(mrow ? "Reclaim: seat in use" : "Reclaim: --");
+	}
+	if (mrow) {
+		m_HostSeatDlgApplicants->SetText("Applicants: " + std::to_string(mrow->applicants));
+		m_HostSeatDlgApplicant->SetText(mrow->applicantText);
+		m_HostSeatDlgApplicant->SetEnabled(host && mrow->applicants > 1);
+		HostOptSetEditable(m_HostSeatDlgWait, host && NetModerationUx::Available(*mrow, NetModerationAction::Wait));
+		HostOptSetEditable(m_HostSeatDlgApprove, host && NetModerationUx::Available(*mrow, NetModerationAction::Substitute));
+		HostOptSetEditable(m_HostSeatDlgCancel, host && NetModerationUx::Available(*mrow, NetModerationAction::Cancel));
+	} else {
+		m_HostSeatDlgApplicants->SetText("Applicants: none");
+		m_HostSeatDlgApplicant->SetText("No applicant");
+		m_HostSeatDlgApplicant->SetEnabled(false);
+		HostOptSetEditable(m_HostSeatDlgWait, false);
+		HostOptSetEditable(m_HostSeatDlgApprove, false);
+		HostOptSetEditable(m_HostSeatDlgCancel, false);
+	}
+	// H09/H10: Kick and Ban act on a human seat another peer holds - the host's own seat is never
+	// kickable (the store answers ForbiddenTarget, but the button stays off first).
+	const uint8_t localPeerId = g_NetMatchService.GetLobbySnapshot().localPeerId;
+	const bool humanSeat = host && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
+	m_HostSeatDlgKick->SetEnabled(humanSeat);
+	m_HostSeatDlgBan->SetEnabled(humanSeat);
+	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
+		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
+		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
+		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
+		                                            : "Moderation is the host's; clients watch."));
+	}
+}
+
+void MainMenuGUI::RefreshHostBannedDialog() {
+	if (m_ActiveDialogBox != m_HostBannedDialog || !m_HostBannedPick) {
+		return;
+	}
+	const std::vector<NetHostBanRecord> records = g_NetMatchService.GetBanRecords();
+	const uint64_t nowUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count());
+	const auto describe = [&nowUnixMs](const NetHostBanRecord& record) {
+		const uint64_t minutes = record.createdUnixMs < nowUnixMs ? (nowUnixMs - record.createdUnixMs) / 60000 : 0;
+		return (record.displayAlias.empty() ? "(unnamed)" : record.displayAlias) + " - " +
+		       (record.scope == NetHostBanScope::UntilRemoved ? "until removed" : "session") + ", " +
+		       (minutes == 0 ? std::string("just now") : std::to_string(minutes) + "m ago");
+	};
+	// The pick list rebuilds only when the store's rows change, so an open dropdown survives.
+	bool changed = records.size() != m_HostBannedRecords.size();
+	for (size_t i = 0; !changed && i < records.size(); ++i) {
+		changed = !(records[i].identity == m_HostBannedRecords[i].identity &&
+		            records[i].scope == m_HostBannedRecords[i].scope &&
+		            records[i].createdUnixMs == m_HostBannedRecords[i].createdUnixMs);
+	}
+	if (changed) {
+		m_HostBannedRecords = records;
+		m_HostBannedPick->ClearList();
+		for (const NetHostBanRecord& record : m_HostBannedRecords) {
+			m_HostBannedPick->AddItem(describe(record));
+		}
+		if (!m_HostBannedRecords.empty()) {
+			m_HostBannedPick->SetSelectedIndex(0);
+		}
+	}
+	if (m_HostBannedRecords.empty()) {
+		m_HostBannedListLabel->SetText("(no banned players)");
+	} else {
+		std::string lines;
+		const int pick = m_HostBannedPick->GetSelectedIndex();
+		for (size_t i = 0; i < m_HostBannedRecords.size(); ++i) {
+			const NetHostBanRecord& record = m_HostBannedRecords[i];
+			if (!lines.empty()) lines += "\n";
+			lines += (pick == static_cast<int>(i) ? "> " : "  ") + describe(record) +
+			         (record.reason.empty() ? "" : " - " + record.reason);
+		}
+		m_HostBannedListLabel->SetText(lines);
+	}
+	const int pick = m_HostBannedPick->GetSelectedIndex();
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton]->SetEnabled(
+		pick >= 0 && pick < static_cast<int>(m_HostBannedRecords.size()) && g_NetMatchService.IsHost());
+}
+
+void MainMenuGUI::ShowHostBannedDialog() {
+	// H11: the store's own rows - identity's public alias, the scope, the age; Remove unbans the
+	// picked row through the same host pump a queued kick drains on.
+	m_HostBannedRecords.clear();
+	if (m_HostBannedPick) m_HostBannedPick->ClearList();
+	m_HostBannedStatusLabel->SetText("");
+	OpenMultiplayerDialog(m_HostBannedDialog, m_HostOptionsPanel);
+	RefreshHostBannedDialog();
+	m_MainMenuButtons[MenuButton::HostBannedCloseButton]->SetFocus();
+}
+
+void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
+		if (guiEventControl == m_HostOptionsTabs[i]) {
+			// The tab un-pushes after a pick; commit the page's text boxes before it hides.
+			DraftHostOptionsFromControls();
+			ShowHostOptionsPage(i);
+			g_GUISound.ItemChangeSound()->Play();
+			return;
+		}
+	}
+	for (int row = 0; row < c_HostSeatRows; ++row) {
+		if (guiEventControl == m_HostSeatDetailsButtons[row]) {
+			ShowHostSeatDetails(row);
+			return;
+		}
+		if (guiEventControl == m_HostSeatTypeCombos[row]) {
+			ChangeHostSeatType(row, m_HostSeatTypeCombos[row]->GetSelectedIndex());
+			return;
+		}
+		if (guiEventControl == m_HostSeatTeamCombos[row] && row < static_cast<int>(m_HostOptionsDraft.players.size())) {
+			m_HostOptionsDraft.players[row].team = static_cast<uint8_t>(m_HostSeatTeamCombos[row]->GetSelectedIndex());
+			return;
+		}
+	}
+	// The seat dialog's moderation row: applicant cycling and the three live actions all go through
+	// the shared model, so a click here is the same selection the seats panel would send.
+	if (guiEventControl == m_HostSeatDlgApplicant) {
+		if (m_HostSeatDlgModerationRow >= 0) {
+			m_ModerationUx.CycleApplicant(m_HostSeatDlgModerationRow);
+		}
+		return;
+	}
+	if (guiEventControl == m_HostSeatDlgWait || guiEventControl == m_HostSeatDlgApprove || guiEventControl == m_HostSeatDlgCancel) {
+		if (m_HostSeatDlgModerationRow >= 0) {
+			const NetModerationAction action = guiEventControl == m_HostSeatDlgWait    ? NetModerationAction::Wait
+			                                   : guiEventControl == m_HostSeatDlgApprove ? NetModerationAction::Substitute
+			                                                                             : NetModerationAction::Cancel;
+			m_ModerationUx.Act(m_HostSeatDlgModerationRow, action);
+			m_HostSeatDlgActionHint->SetText(m_ModerationUx.GetStatusText());
+		}
+		return;
+	}
+	if (guiEventControl == m_HostSeatDlgKick || guiEventControl == m_HostSeatDlgBan) {
+		const NetParticipantRemovalAction action = guiEventControl == m_HostSeatDlgKick
+		                                           ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
+		const std::string verb = action == NetParticipantRemovalAction::Kick ? "Kick" : "Ban";
+		if (!m_HostSeatDlgRemovalSeat) {
+			// The selection a removal validates against is the seat's admission row: epoch, holder and
+			// seat generations, incarnation. The lobby publishes no such row (PublishModerationView is
+			// Running-scoped), so the press names the state rather than queueing a doomed selection.
+			m_HostSeatDlgActionHint->SetText(verb + ": the seat's admission row is not published in the lobby.");
+			return;
+		}
+		const NetKickBanResult result =
+			g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(*m_HostSeatDlgRemovalSeat), action);
+		if (result == NetKickBanResult::Ok || result == NetKickBanResult::Queued) {
+			// On Ok the seat is already removed; on Queued the setup worker's host pump applies it.
+			// The roster row re-reads the snapshot next frame either way.
+			m_HostOptionsSeatRow = -1;
+			m_HostSeatDlgModerationRow = -1;
+			m_HostSeatDlgRemovalSeat.reset();
+			CloseMultiplayerDialog();
+			m_HostOptionsStatusLabel->SetText(verb + (result == NetKickBanResult::Queued ? " queued..." : ": Ok"));
+			m_HostKickBanWatch = result == NetKickBanResult::Queued;
+			m_HostKickBanVerb = verb;
+			return;
+		}
+		// The refusal names the store's own verdict; the issue carries the peer it was refused for.
+		const NetParticipantRemovalIssue issue = g_NetMatchService.GetLastRemovalIssue();
+		std::string text = verb + " refused - " + NetKickBanResultName(result) +
+		                   " (seat " + std::to_string(m_HostSeatDlgRemovalSeat->stableSeat) + ")";
+		if (issue.lockstepPeerId != 0) {
+			text += " (peer " + std::to_string(issue.lockstepPeerId) + ")";
+		}
+		m_HostSeatDlgActionHint->SetText(text);
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionBannedButton]) {
+		ShowHostBannedDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostBannedCloseButton]) {
+		CloseMultiplayerDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostBannedRemoveButton]) {
+		const int pick = m_HostBannedPick ? m_HostBannedPick->GetSelectedIndex() : -1;
+		if (pick < 0 || pick >= static_cast<int>(m_HostBannedRecords.size())) {
+			m_HostBannedStatusLabel->SetText("Pick a ban row first.");
+			return;
+		}
+		// UnbanParticipant answers Queued while the setup worker owns admission; the applied result
+		// replaces it at the next drain, and this dialog's rows re-read the store when it lands.
+		const NetKickBanResult result = g_NetMatchService.UnbanParticipant(m_HostBannedRecords[pick].identity);
+		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultName(result));
+		RefreshHostBannedDialog();
+		return;
+	}
+	if (guiEventControl == m_HostBannedPick) {
+		RefreshHostBannedDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostOptionsBackButton]) {
+		// Back is local navigation only: the session is never touched by leaving the panel.
+		DraftHostOptionsFromControls();
+		m_MultiplayerSubScreen = m_HostOptionsSetupDraft ? MultiplayerSubScreen::HostSetup : MultiplayerSubScreen::Lobby;
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostOptionsApplyButton]) {
+		ApplyHostOptions();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton]) {
+		SaveHostOptionsDefaults();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]) {
+		m_HostOptionsSeatRow = -1;
+		m_HostSeatDlgModerationRow = -1;
+		m_HostSeatDlgRemovalSeat.reset();
+		CloseMultiplayerDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionEndButton]) {
+		// Same end the lobby's Leave runs; the panel closes with it.
+		g_NetMatchService.Destroy();
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostFilesSaveDiagButton]) {
+		if (TelemetryBundle::RequestCapture()) {
+			m_HostFilesDiagResultLabel->SetText("Saving diagnostics...");
+		}
+		return;
+	}
+	if (guiEventControl == m_HostRulesTeamCombo) {
+		// Switching the team re-reads its rules row; the prior pick is already in the draft.
+		DraftHostOptionsFromControls();
+		return;
+	}
+	if (guiEventControl == m_HostSeatPlayersCombo) {
+		DraftHostOptionsFromControls();
+		RederiveHostOptionsRoster();
+		return;
+	}
+	if (guiEventControl == m_HostRulesModeCombo) {
+		DraftHostOptionsFromControls();
+		RederiveHostOptionsRoster();
+		return;
+	}
+	if (guiEventControl == m_HostFilesWidgetCombo) {
+		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(std::clamp(m_HostFilesWidgetCombo->GetSelectedIndex(), 0, 2)));
+		g_SettingsMan.UpdateSettingsFile();
+		return;
+	}
+	if (guiEventControl == m_HostNetPolicyCombo) {
+		// The per-peer boxes only exist under Fixed; the policy flip redraws their state.
+		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+		return;
+	}
+	if (guiEventControl == m_HostNetRecalcButton) {
+		// The auto policy already re-derives each sender's figure from the live link; the button is
+		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
+		m_HostOptionsStatusLabel->SetText("Link figures refreshed from the live snapshot.");
+		g_GUISound.ItemChangeSound()->Play();
+		return;
+	}
+	// Every other editable control marks the draft; DraftHostOptionsFromControls reads them on Apply.
 }
 
 void MainMenuGUI::StartMultiplayer(bool host) {
@@ -1046,17 +2637,67 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		g_SettingsMan.UpdateSettingsFile();
 	}
 	request.activityPreset = "P4 Alpha Duel";
+	request.activityModule = "Base.rte";
+	if (!host) {
+		bool targetWorld = m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World";
+		if (!targetWorld) {
+			const int selected = m_MultiplayerLanGamesList ? m_MultiplayerLanGamesList->GetSelectedIndex() : -1;
+			targetWorld = NetDirectoryClient::TargetsPersistentWorld(m_GameRows, selected, request.address, request.port,
+			                                                        m_LastWorldJoinAddress, m_LastWorldJoinPort, &m_JoinTargetActivity);
+		}
+		if (targetWorld) {
+			request.persistentWorld = true;
+			m_JoinTargetPersistentWorld = true;
+			m_LastWorldJoinAddress = request.address;
+			m_LastWorldJoinPort = request.port;
+			g_NetMatchService.NoteJoinTargetPersistentWorld(true);
+			if (!m_JoinTargetActivity.empty()) {
+				request.activityPreset = m_JoinTargetActivity;
+			} else {
+				request.activityPreset = "Persistent World";
+			}
+		}
+	}
 	if (host && m_MultiplayerHostActivityIndex < m_MultiplayerHostActivities.size()) {
 		// The host's picker names both fields, so the lobby never resolves a bare preset name.
 		request.activityPreset = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].first;
 		request.activityModule = m_MultiplayerHostActivities[m_MultiplayerHostActivityIndex].second;
+		for (const NetHostActivityChoice& row: g_NetMatchService.ListHostActivities()) {
+			if (row.preset == request.activityPreset && row.module == request.activityModule) {
+				request.activityType = row.activityType;
+				break;
+			}
+		}
+	}
+	if (host && m_MultiplayerHostSceneIndex < m_MultiplayerHostScenes.size()) {
+		request.sceneName = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].first;
+		request.sceneModule = m_MultiplayerHostScenes[m_MultiplayerHostSceneIndex].second;
+	}
+	if (host) {
+		NetMatchService::ApplyHostActivityFallback(request);
 	}
 	request.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 	// Headed matches self-heal: a desync (or a rejoiner) reloads everyone from the host's snapshot.
 	request.resyncOnDesync = true;
+	// The setup screen's staged options draft overrides every field the request carries.
+	if (host && m_HostSetupOptions) {
+		request.standardRules = static_cast<const NetMatchStandardRules&>(*m_HostSetupOptions);
+		// BuildMatchConfig reads the mode off the request, not the rules block it carries inside.
+		request.mode = m_HostSetupOptions->mode;
+		request.delayPolicy = m_HostSetupOptions->delayPolicy;
+		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
+		request.automaticRepair = m_HostSetupOptions->automaticRepair;
+		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
+		request.peerCount = m_HostSetupOptions->peerCount;
+		request.inputDelayFrames = m_HostSetupOptions->inputDelayFrames;
+		request.autoInputDelay = m_HostSetupOptions->delayPolicy == NetMatchDelayPolicy::Auto;
+		uint32_t cpuSeats = 0;
+		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
+		request.cpuSlots = cpuSeats;
+	}
 	// The host picks the roster size and the lockstep input-delay buffer; clients adopt both via
 	// the lobby config sync. The delay box writes back to the setting so the choice persists.
-	if (host) {
+	if (host && !m_HostSetupOptions) {
 		const long parsedPlayers = std::strtol(m_MultiplayerHostPlayersTextBox->GetText().c_str(), nullptr, 10);
 		request.peerCount = static_cast<uint8_t>(std::clamp<long>(parsedPlayers, NetMatchConfigUtil::c_MinPeerCount, NetMatchConfigUtil::c_MaxPeerCount));
 		m_MultiplayerHostPlayersTextBox->SetText(std::to_string(request.peerCount));
@@ -1174,9 +2815,12 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	// Reconcile the sub-screen with the live service state. The moderation panel is a lobby screen
 	// the host opened, so it stays open until the host leaves it or the match ends under it.
 	const bool inMatchOrLobby = snapshot.inLobby || snapshot.running;
-	if (inMatchOrLobby && m_MultiplayerSubScreen != MultiplayerSubScreen::Moderation) {
+	// The options panel opened from the lobby survives a publish tick like Moderation does; one
+	// opened from the setup screen outlives the service itself, being the draft of the next one.
+	if (inMatchOrLobby && m_MultiplayerSubScreen != MultiplayerSubScreen::Moderation && m_MultiplayerSubScreen != MultiplayerSubScreen::HostOptions) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
-	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation)) {
+	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation ||
+	            (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && !m_HostOptionsSetupDraft))) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		m_MultiplayerLandingStatusLabel->SetText(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText)));
 	}
@@ -1300,6 +2944,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
 	m_MultiplayerModerationPanel->SetVisible(moderating);
 	m_ReplayBrowserPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
+	m_HostOptionsPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions);
 	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
@@ -1316,8 +2961,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			RefreshReplayBrowserControls();
 			return;
 		}
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions) {
+			// The options panel's own geometry: 545x246 at every size, like the design's H01 frame.
+			RefreshHostOptionsControls(snapshot);
+			constexpr int panelHeight = 246;
+			FitMultiplayerScreen(545, panelHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5);
+			LayoutMultiplayerFooter(545, panelHeight);
+			return;
+		}
 		int contentWidth = 300;
 		int contentHeight = 250;
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
+			contentHeight = m_MultiplayerHostPanel->GetHeight();
+		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
 			m_MultiplayerLandingStatusLabel->EnsureDrawableTextFont("FontSmall.png");
@@ -1404,8 +3060,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowTailBare[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
-	static std::string s_shareAddress;
-	static bool s_shareResolved = false;
+	const int contentWidth = 300;
+	const int rowBoxWidth = contentWidth - 24;
+	bool addressOnOwnRow = false;
 	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
 	// a played match already carries its own line - the result and the rematch offer - like the client's.
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
@@ -1416,15 +3073,36 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 		if (connectedCount < 2) {
-			if (!s_shareResolved) {
-				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
-				s_shareResolved = true;
+			if (!s_ShareResolved) {
+				s_ShareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+				s_ShareResolved = true;
 			}
-			m_MultiplayerStatusLabel->SetText(s_shareAddress.empty()
-			                                      ? "Waiting for a player to join..."
-			                                      : "Waiting for a player to join... share " + s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
+			if (s_ShareAddress.empty()) {
+				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+			} else {
+				const std::string address = s_ShareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
+				std::string prose = "Waiting for a player to join... share";
+				// The status label's skin font is FontLarge; draw and measure the share row in FontSmall.
+				if (m_MultiplayerLobbyPlayerRowFallbackFont) {
+					m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+					m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
+				}
+				if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont) {
+					if (font->CalculateWidth(prose) > rowBoxWidth) {
+						while (!prose.empty() && font->CalculateWidth(prose + "...") > rowBoxWidth) {
+							prose.pop_back();
+						}
+						prose += "...";
+					}
+				}
+				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
+				addressOnOwnRow = true;
+				const bool addressScrolls = m_MultiplayerStatusLabel->GetMaxWordWidth() > rowBoxWidth;
+				m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(addressScrolls);
+				m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(addressScrolls);
+			}
 		} else {
-			s_shareResolved = false;
+			s_ShareResolved = false;
 			if (connectedCount < snapshot.members.size()) {
 				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
 			} else {
@@ -1432,14 +3110,17 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 	} else {
-		s_shareResolved = false;
+		s_ShareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	}
+	if (!addressOnOwnRow) {
+		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
+		m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(false);
 	}
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
-	const int contentWidth = 300;
-	const int rowBoxWidth = contentWidth - 24;
-	if (m_MultiplayerLobbyPlayerRowFont) {
+	if (!addressOnOwnRow && m_MultiplayerLobbyPlayerRowFont) {
+		m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFont);
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
 		while (!statusText.empty() &&
 		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
@@ -1449,7 +3130,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
-	// The status line can wrap; reserve its real height and let everything below slide with it.
 	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
 		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
@@ -1595,11 +3275,22 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	FitMultiplayerScreen(contentWidth, screenHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
-	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
-	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
-	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
-	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 236 + extraHeight);
+	// Leave 100 + Seats 82 + 8 matches Start Match's 190: Leave keeps the wider half as the exit.
+	GUIButton* leave = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton];
+	GUIButton* seats = m_MainMenuButtons[MenuButton::MultiplayerModerateButton];
+	GUIButton* options = m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton];
+	constexpr int pairGap = 8;
+	if (leave->GetWidth() != 90) {
+		leave->Resize(90, leave->GetHeight());
+	}
+	if (seats->GetWidth() != 74) {
+		seats->Resize(74, seats->GetHeight());
+	}
+	if (options->GetWidth() != 74) {
+		options->Resize(74, options->GetHeight());
+	}
+	const int pairLeft = (contentWidth - leave->GetWidth() - pairGap - seats->GetWidth() - pairGap - options->GetWidth()) / 2;
+	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1609,9 +3300,14 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 236 + extraHeight);
+	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
+	// Options sits after Seats on the same row: the host's edit surface, the client's details view.
+	// A client sees no Seats button, so Options closes up next to Leave instead of floating.
+	options->SetPositionRel(pairLeft + leave->GetWidth() + pairGap + (snapshot.isHost ? seats->GetWidth() + pairGap : 0), 236 + extraHeight);
+	options->SetText(snapshot.isHost ? "Options" : "Details");
+	options->SetEnabled(snapshot.inLobby);
 }
 
 void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
@@ -1657,6 +3353,7 @@ void MainMenuGUI::CloseMultiplayerDialog() {
 	m_MainMenuButtons[MenuButton::BackToMainButton]->SetEnabled(true);
 	m_ReplayDeletePath.clear();
 	if (m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser) m_ReplayList->SetFocus();
+	else if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions) m_MainMenuButtons[MenuButton::HostOptionsBackButton]->SetFocus();
 	else m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetFocus();
 }
 
@@ -1908,6 +3605,11 @@ bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::s
 	return false;
 }
 
+void MainMenuGUI::AutomationSetShareAddress(const std::string& address) {
+	s_ShareAddress = address;
+	s_ShareResolved = true;
+}
+
 bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
 	GUICheckbox* checkbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl(controlName));
 	if (!checkbox) {
@@ -2010,6 +3712,7 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 		case MultiplayerSubScreen::Lobby: return "Lobby";
 		case MultiplayerSubScreen::Moderation: return "Moderation";
 		case MultiplayerSubScreen::ReplayBrowser: return "ReplayBrowser";
+		case MultiplayerSubScreen::HostOptions: return "HostOptions";
 		default: return "Unknown";
 	}
 }
@@ -2143,8 +3846,13 @@ void MainMenuGUI::RefreshGamesList() {
 		NetIdentityBuildOptions identityOptions;
 		identityOptions.buildId = "stage2-p2d-local";
 		identityOptions.sessionRulesTag = "stage2-p2-session-rules";
+		NetIdentity::StampOptionsForTarget(identityOptions, false);
 		std::string identityError;
 		const bool identityBuilt = NetIdentity::BuildCurrentManifest(manifest, &identityError, identityOptions);
+		NetIdentityManifest worldManifest;
+		NetIdentityBuildOptions worldOptions = identityOptions;
+		NetIdentity::StampOptionsForTarget(worldOptions, true);
+		const bool worldBuilt = NetIdentity::BuildCurrentManifest(worldManifest, &identityError, worldOptions);
 		g_TimerMan.SetDeltaTimeSecs(menuDeltaTime);
 		if (identityBuilt) {
 			NetDirectoryLocalIdentity local;
@@ -2155,8 +3863,18 @@ void MainMenuGUI::RefreshGamesList() {
 			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 			m_DirectoryIdentity = local;
 		}
+		if (worldBuilt) {
+			NetDirectoryLocalIdentity worldLocal;
+			worldLocal.networkProtocolVersion = worldManifest.networkProtocolVersion;
+			worldLocal.lockstepCodecVersion = worldManifest.deterministicConfig.lockstepCodecVersion;
+			worldLocal.controllerFrameVersion = worldManifest.controllerFrameVersion;
+			worldLocal.sessionIdentityHash = NetIdentity::HashHex(worldManifest.sessionIdentityHash);
+			worldLocal.moduleManifestHash = NetIdentity::HashHex(worldManifest.moduleManifestHash);
+			m_DirectoryWorldIdentity = worldLocal;
+		}
 	}
-	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}));
+	const NetDirectoryLocalIdentity* worldIdent = m_DirectoryWorldIdentity ? &*m_DirectoryWorldIdentity : nullptr;
+	std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists(hosts, m_DirectoryBrowser.Rows(), m_DirectoryIdentity.value_or(NetDirectoryLocalIdentity{}), worldIdent);
 	if (!m_DirectoryIdentity) {
 		// Without the local identity no NET row can be proven compatible.
 		for (NetDirectoryClient::GameRow& row: rows) {
@@ -2215,11 +3933,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
-		g_NetMatchService.Destroy();
-		return;
-	}
+	(void)activityPreset; // ConsumeReadyToLaunch already adopted this preset into the roster.
 	const int localTeam = g_NetMatchService.GetLocalTeam();
 	std::string setupError;
 	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);

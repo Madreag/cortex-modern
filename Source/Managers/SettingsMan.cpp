@@ -12,11 +12,14 @@
 #include "NetMatchConfig.h"
 #include "System.h"
 
+#include <cctype>
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <random>
 #include <unordered_set>
@@ -178,11 +181,13 @@ void SettingsMan::Clear() {
 	m_NetworkMatchStatusMode = NetworkMatchStatusMode::Auto;
 	m_NetworkChatDefaultScope = NetworkChatDefaultScope::All;
 	m_NetworkChatTextSize = NetworkChatTextSize::Small;
+	m_NetworkChatKey = "T";
 	m_NetworkHostDelayPolicy = NetworkHostDelayPolicy::Auto;
 	m_NetworkHostVisibility = NetworkHostVisibility::LAN;
 	m_NetworkToastsEnabled = m_NetworkChatVisible = m_NetworkChatNotify = m_NetworkAutoReconnect = m_NetworkOfferStoredRejoin = m_NetworkRecordReplays = m_NetworkHostAutoRepair = true;
 	m_NetworkChatSound = false;
 	m_NetworkHostIdleWaitMinutes = 10;
+	m_NetworkPathHorizonTicks = 30;
 	m_NumberOfLuaStatesOverride = -1;
 	m_ForceImmediatePathingRequestCompletion = false;
 
@@ -365,6 +370,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkChatNotify", { reader >> m_NetworkChatNotify; });
 	MatchProperty("NetworkChatSound", { reader >> m_NetworkChatSound; });
 	MatchProperty("NetworkChatTextSize", { m_NetworkChatTextSize = ParseChatTextSize(reader.ReadPropValue()); });
+	MatchProperty("NetworkChatKey", { SetNetworkChatKey(reader.ReadPropValue()); });
 	MatchProperty("NetworkAutoReconnect", { reader >> m_NetworkAutoReconnect; });
 	MatchProperty("NetworkOfferStoredRejoin", { reader >> m_NetworkOfferStoredRejoin; });
 	MatchProperty("NetworkDiagnosticsDirectory", { SetNetworkDiagnosticsDirectory(reader.ReadPropValue()); });
@@ -372,6 +378,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkHostDelayPolicy", { m_NetworkHostDelayPolicy = ParseHostDelayPolicy(reader.ReadPropValue()); });
 	MatchProperty("NetworkHostAutoRepair", { reader >> m_NetworkHostAutoRepair; });
 	MatchProperty("NetworkHostIdleWaitMinutes", { int minutes = m_NetworkHostIdleWaitMinutes; reader >> minutes; SetNetworkHostIdleWaitMinutes(minutes); });
+	MatchProperty("NetworkPathHorizonTicks", { int ticks = m_NetworkPathHorizonTicks; reader >> ticks; SetNetworkPathHorizonTicks(ticks); });
 	MatchProperty("NetworkHostVisibility", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
@@ -633,6 +640,67 @@ void SettingsMan::SetNetworkHostIdleWaitMinutes(int minutes) {
 	if (minutes >= 0 && minutes <= 60) m_NetworkHostIdleWaitMinutes = minutes;
 }
 
+void SettingsMan::SetNetworkPathHorizonTicks(int ticks) {
+	if (ticks >= 0 && ticks <= static_cast<int>(NetMatchConfigUtil::c_MaxPathHorizonTicks)) m_NetworkPathHorizonTicks = ticks;
+}
+
+void SettingsMan::SetNetworkChatKey(const std::string& key) {
+	std::string normalized;
+	normalized.reserve(key.size());
+	for (unsigned char c: key) {
+		if (c <= 32) continue;
+		normalized.push_back(static_cast<char>(std::toupper(c)));
+	}
+	if (normalized == "ENTER" || normalized == "RETURN") {
+		m_NetworkChatKey = "ENTER";
+		return;
+	}
+	if (normalized.size() == 1 && normalized[0] >= 'A' && normalized[0] <= 'Z') {
+		m_NetworkChatKey = normalized;
+	}
+}
+
+std::string SettingsMan::NetworkHostDefaultsPath() {
+	return System::GetWorkingDirectory() + System::GetUserdataDirectory() + "NetworkHostDefaults.ini";
+}
+
+bool SettingsMan::HasNetworkHostDefaults() const {
+	std::error_code ignored;
+	return std::filesystem::exists(NetworkHostDefaultsPath(), ignored);
+}
+
+bool SettingsMan::LoadNetworkHostDefaultsText(std::string& outText, std::string* error) const {
+	// No template yet is the ordinary first run, not a failure: the caller keeps its own draft and
+	// has nothing to say about it.
+	if (!HasNetworkHostDefaults()) {
+		if (error) error->clear();
+		return false;
+	}
+	std::ifstream file(NetworkHostDefaultsPath(), std::ios::binary);
+	if (!file) {
+		if (error) *error = "the host defaults template could not be opened";
+		return false;
+	}
+	outText.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+	return true;
+}
+
+bool SettingsMan::SaveNetworkHostDefaultsText(const std::string& text, std::string* error) const {
+	std::error_code ignored;
+	std::filesystem::create_directories(System::GetWorkingDirectory() + System::GetUserdataDirectory(), ignored);
+	std::ofstream file(NetworkHostDefaultsPath(), std::ios::binary | std::ios::trunc);
+	if (!file) {
+		if (error) *error = "the host defaults template could not be written";
+		return false;
+	}
+	file << text;
+	if (!file) {
+		if (error) *error = "the host defaults template was not written completely";
+		return false;
+	}
+	return true;
+}
+
 void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkDisplayName", m_NetworkDisplayName);
 	writer.NewPropertyWithValue("NetworkMatchStatusMode", MatchStatusText(m_NetworkMatchStatusMode));
@@ -642,6 +710,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkChatNotify", m_NetworkChatNotify);
 	writer.NewPropertyWithValue("NetworkChatSound", m_NetworkChatSound);
 	writer.NewPropertyWithValue("NetworkChatTextSize", ChatSizeText(m_NetworkChatTextSize));
+	writer.NewPropertyWithValue("NetworkChatKey", m_NetworkChatKey);
 	writer.NewPropertyWithValue("NetworkAutoReconnect", m_NetworkAutoReconnect);
 	writer.NewPropertyWithValue("NetworkOfferStoredRejoin", m_NetworkOfferStoredRejoin);
 	writer.NewPropertyWithValue("NetworkDiagnosticsDirectory", m_NetworkDiagnosticsDirectory);
@@ -649,6 +718,7 @@ void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkHostDelayPolicy", DelayPolicyText(m_NetworkHostDelayPolicy));
 	writer.NewPropertyWithValue("NetworkHostAutoRepair", m_NetworkHostAutoRepair);
 	writer.NewPropertyWithValue("NetworkHostIdleWaitMinutes", m_NetworkHostIdleWaitMinutes);
+	writer.NewPropertyWithValue("NetworkPathHorizonTicks", m_NetworkPathHorizonTicks);
 	writer.NewPropertyWithValue("NetworkHostVisibility", VisibilityText(m_NetworkHostVisibility));
 }
 
@@ -663,6 +733,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	settings.SetNetworkChatDefaultScope(NetworkChatDefaultScope::Team);
 	settings.SetNetworkChatTextSize(NetworkChatTextSize::Large);
+	settings.SetNetworkChatKey("Y");
 	settings.SetNetworkDiagnosticsDirectory("D:/tmp/telemetry-alt");
 	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Fixed);
 	settings.SetNetworkHostVisibility(NetworkHostVisibility::Unlisted);
@@ -675,6 +746,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkRecordReplays(false);
 	settings.SetNetworkHostAutoRepair(false);
 	settings.SetNetworkHostIdleWaitMinutes(0);
+	settings.SetNetworkPathHorizonTicks(45);
 
 	const std::string path = (std::filesystem::temp_directory_path() / "cccp-settings-preferences-selftest.ini").string();
 	const auto writeRead = [&](auto&& fill) {
@@ -712,7 +784,7 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		}
 		settings.Create(reader);
 	}
-	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
+	check("roundtrip", settings.GetNetworkDisplayName() == "AlphaPilot" && settings.GetNetworkMatchStatusMode() == NetworkMatchStatusMode::Always && !settings.GetNetworkToastsEnabled() && !settings.GetNetworkChatVisible() && settings.GetNetworkChatDefaultScope() == NetworkChatDefaultScope::Team && !settings.GetNetworkChatNotify() && settings.GetNetworkChatSound() && settings.GetNetworkChatTextSize() == NetworkChatTextSize::Large && settings.GetNetworkChatKey() == "Y" && !settings.GetNetworkAutoReconnect() && !settings.GetNetworkOfferStoredRejoin() && settings.GetNetworkDiagnosticsDirectory() == "D:/tmp/telemetry-alt" && !settings.GetNetworkRecordReplays() && settings.GetNetworkHostDelayPolicy() == NetworkHostDelayPolicy::Fixed && !settings.GetNetworkHostAutoRepair() && settings.GetNetworkHostIdleWaitMinutes() == 0 && settings.GetNetworkPathHorizonTicks() == 45 && settings.GetNetworkHostVisibility() == NetworkHostVisibility::Unlisted);
 	if (failures != 0) {
 		return 1;
 	}
@@ -749,6 +821,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkHostIdleWaitMinutes(61);
 	settings.SetNetworkHostIdleWaitMinutes(-1);
 	check("idle-wait range", settings.GetNetworkHostIdleWaitMinutes() == 0);
+	settings.SetNetworkPathHorizonTicks(45);
+	settings.SetNetworkPathHorizonTicks(121);
+	settings.SetNetworkPathHorizonTicks(-1);
+	check("path-horizon range", settings.GetNetworkPathHorizonTicks() == 45);
 
 	const int warningsBefore = g_UnknownEnumWarnings;
 	// Unknown-enum and case-insensitive arms leave a non-default set so the read is what changes it.
@@ -773,13 +849,15 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Fixed);
 	settings.SetNetworkHostIdleWaitMinutes(25);
 	settings.SetNetworkHostAutoRepair(false);
+	settings.SetNetworkPathHorizonTicks(45);
 	NetMatchConfig hosted = NetMatchConfigUtil::MakeDefault(1);
 	NetMatchConfigUtil::ApplySavedHostOptions(hosted);
-	check("host options mapped", hosted.delayPolicy == NetMatchDelayPolicy::Fixed && hosted.idleWaitMinutes == 25 && !hosted.automaticRepair);
+	check("host options mapped", hosted.delayPolicy == NetMatchDelayPolicy::Fixed && hosted.idleWaitMinutes == 25 && !hosted.automaticRepair && hosted.pathHorizonTicks == 45);
 	settings.SetNetworkHostDelayPolicy(NetworkHostDelayPolicy::Auto);
 	settings.SetNetworkHostAutoRepair(true);
+	settings.SetNetworkPathHorizonTicks(30);
 	NetMatchConfigUtil::ApplySavedHostOptions(hosted);
-	check("host options mapped back", hosted.delayPolicy == NetMatchDelayPolicy::Auto && hosted.automaticRepair);
+	check("host options mapped back", hosted.delayPolicy == NetMatchDelayPolicy::Auto && hosted.automaticRepair && hosted.pathHorizonTicks == 30);
 
 	if (failures != 0) {
 		return 1;

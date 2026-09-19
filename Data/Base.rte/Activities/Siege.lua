@@ -308,7 +308,7 @@ function Siege:UpdateActivity()
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		local Brain = self:GetPlayerBrain(player);
 		if Brain and MovableMan:IsActor(Brain) then
-			self:AddObjectivePoint("Protect!", Brain.AboveHUDPos, self.PlayerTeam, GameActivity.ARROWDOWN);
+			self:AddObjectivePoint("Protect!", Brain.AboveHeadPos, self.PlayerTeam, GameActivity.ARROWDOWN);
 		end
 	end
 
@@ -336,7 +336,7 @@ function Siege:UpdateActivity()
 					players = players + 1;
 					self:SetObservationTarget(Brain.Pos, player);
 					self.BrainLocations = Brain.Pos;
-					-- self:AddObjectivePoint("Protect!", Brain.AboveHUDPos, self.PlayerTeam, GameActivity.ARROWDOWN);
+					-- self:AddObjectivePoint("Protect!", Brain.AboveHeadPos, self.PlayerTeam, GameActivity.ARROWDOWN);
 				else
 					self:ResetMessageTimer(player);
 					local screen = self:ScreenOfPlayer(player);
@@ -449,7 +449,7 @@ function Siege:UpdateActivity()
 			if actor.Team == self.CPUTeam then
 				if actor.ClassName == "AHuman" or actor.ClassName == "ACrab" then
 					troops = troops + 1;
-					self:AddObjectivePoint("Terminate!", actor.AboveHUDPos, self.PlayerTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Terminate!", actor.AboveHeadPos, self.PlayerTeam, GameActivity.ARROWDOWN);
 				end
 			end
 		end

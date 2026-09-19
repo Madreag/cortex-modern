@@ -1,0 +1,6 @@
+# Fire + reload (host, player 0): switch to the dummy, face the enemy, hold fire for a second, then
+# reload. Ticks are the sim ticks the input is sampled at; the wire applies them D ticks later.
+30 31 NEXT
+100 106 L_RIGHT
+200 260 FIRE
+300 301 WEAPON_RELOAD

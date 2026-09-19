@@ -22,8 +22,16 @@ namespace RTE {
 		/// Takes a share of the process-global joystick background-events hint, which SDL needs before it
 		/// will deliver a virtual pad's presses to a window that has no keyboard focus.
 		static void AcquireJoystickBackgroundEvents();
-		/// Gives back a share of the hint; only the last holder turns it off.
+		/// Gives back a share of the hint; only the last holder restores the previous value.
 		static void ReleaseJoystickBackgroundEvents();
+		/// Takes a share of the one shared scripted pad; the last holder detaches it.
+		static bool AcquireScriptedPad();
+		/// Presses or releases a button on the one shared scripted pad.
+		static bool QueueScriptedPad(const std::string& name, bool down);
+		/// Gives back a share of the shared scripted pad; only the last holder detaches it.
+		static void ReleaseScriptedPad();
+		/// SDL joystick id of the shared scripted pad, or 0 when none is attached.
+		static uint32_t ScriptedPadId();
 		/// Creates a scripted wrapper; ordinary menus keep their existing input object.
 		std::unique_ptr<GUIInputWrapper> CreateAutomationInput();
 		bool GetKeyJoyMouseCursor() const { return m_KeyJoyMouseCursor; }

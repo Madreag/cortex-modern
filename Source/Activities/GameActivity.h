@@ -455,7 +455,10 @@ namespace RTE {
 		/// @param pTargetBitmap A pointer to a screen-sized BITMAP to draw on.
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene. (default: Vector())
 		/// @param which Which screen's GUI to draw onto the bitmap. (default: 0)
+		void PrepareDrawGUI(int whichScreen = 0) override;
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
+		/// The gold string DrawGUI last printed for this seat.
+		static const std::string& GetLastFundsReadout(int player);
 
 		/// Draws this ActivityMan's current graphical representation to a
 		/// BITMAP of choice. This includes all game-related graphics.
@@ -671,6 +674,7 @@ namespace RTE {
 
 		// The observation sceneman scroll targets, for when the game is over or a player is in observation mode
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
+		bool m_ObserveFreezeHeld[Players::MaxPlayerCount]{}; //!< Per-seat game-over observe freeze; zeroed in Clear.
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
 		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints
@@ -777,6 +781,7 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		static std::string s_LastFundsReadout[Players::MaxPlayerCount];
 		/// The peer that drives a seat in the agreed roster, or 0 when no peer holds it.
 		static uint8_t LockstepSeatPeerId(int player);
 		/// The seat holder's display name from the agreed roster, for the match's own banners.
@@ -799,6 +804,13 @@ namespace RTE {
 		void DriveScriptedSetupEditor(int player);
 		/// Runs a queued actor-select onto a craft passenger for a presented seat after the match starts.
 		void DriveScriptedActorSelect(int player);
+		/// Observe look-around after OVER: freeze until GameOverTimer is past 1000 sim ms, then apply cursor input.
+		bool ApplyObserveLookAround(int player);
+		/// Draw-only ActorSelect/Go-To pie highlight for a local seat.
+		void ApplyCursorHighlightDraw(int player);
+		/// Clears the draw-only highlight when the cursor leaves an actor or those views.
+		void ClearCursorHighlightDraw(int player);
+		Actor* m_pLastHighlightDrawActor[Players::MaxPlayerCount]; //!< Draw-only last ring target; never dumped.
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.

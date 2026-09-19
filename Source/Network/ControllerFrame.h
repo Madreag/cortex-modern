@@ -93,6 +93,12 @@ namespace RTE {
 		static std::vector<uint8_t> Encode(const ControllerFrame& frame);
 		static bool Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);
 
+		/// Bits for a negotiated window tick after the first; the actor id always rides the wire.
+		static constexpr uint32_t c_DeltaAll = 0x1FFFU;
+		static uint32_t ChangeMask(const ControllerFrame& from, const ControllerFrame& to);
+		static void EncodeDelta(std::vector<uint8_t>& out, const ControllerFrame& frame, const ControllerFrame* previous);
+		static bool DecodeDelta(const uint8_t* data, size_t size, ControllerFrame& outFrame, const ControllerFrame* previous, size_t* consumed, std::string* error = nullptr, uint16_t version = ControllerFrame::c_Version);
+
 		static int16_t QuantizeAnalog(float value);
 		static float DequantizeAnalog(int16_t value);
 		static int16_t QuantizeMouseDelta(float value);

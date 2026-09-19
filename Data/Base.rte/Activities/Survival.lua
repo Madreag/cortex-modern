@@ -183,7 +183,7 @@ function Survival:UpdateActivity()
 						ActivityMan:EndActivity();
 					end
 				else
-					self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHUDPos, self:GetTeamOfPlayer(player), GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHeadPos, self:GetTeamOfPlayer(player), GameActivity.ARROWDOWN);
 				end
 
 				--Check if the player has won.

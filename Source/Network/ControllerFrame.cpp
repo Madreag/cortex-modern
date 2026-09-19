@@ -17,6 +17,7 @@
 #include "UInputMan.h"
 
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -358,6 +359,258 @@ namespace RTE {
 		return out;
 	}
 
+	// A repaired tick has to be the tick the original carried down to the bytes, and the desync check reads
+	// frames as their encoding: -0.0 and +0.0 are the same number and different wire fields.
+	static bool SameFloatBits(float from, float to) {
+		return std::bit_cast<uint32_t>(from) == std::bit_cast<uint32_t>(to);
+	}
+
+	uint32_t ControllerFrameCodec::ChangeMask(const ControllerFrame& from, const ControllerFrame& to) {
+		uint32_t mask = 0;
+		if (from.stateMask != to.stateMask) mask |= 0x0001U;
+		if (from.analogMoveX != to.analogMoveX || from.analogMoveY != to.analogMoveY) mask |= 0x0002U;
+		if (from.analogAimX != to.analogAimX || from.analogAimY != to.analogAimY) mask |= 0x0004U;
+		if (from.analogCursorX != to.analogCursorX || from.analogCursorY != to.analogCursorY) mask |= 0x0008U;
+		if (from.mouseDeltaX != to.mouseDeltaX || from.mouseDeltaY != to.mouseDeltaY) mask |= 0x0010U;
+		if (from.inputMode != to.inputMode || from.playerRaw != to.playerRaw || from.flags != to.flags || from.deviceClass != to.deviceClass) mask |= 0x0020U;
+		if (!SameFloatBits(from.aimAngle, to.aimAngle)) mask |= 0x0040U;
+		if (!SameFloatBits(from.viewPointX, to.viewPointX) || !SameFloatBits(from.viewPointY, to.viewPointY)) mask |= 0x0080U;
+		if (from.equippedFGUniqueID != to.equippedFGUniqueID || from.equippedBGUniqueID != to.equippedBGUniqueID) mask |= 0x0100U;
+		if (!SameFloatBits(from.fgHandPosX, to.fgHandPosX) || !SameFloatBits(from.fgHandPosY, to.fgHandPosY)) mask |= 0x0200U;
+		if (!SameFloatBits(from.bgHandPosX, to.bgHandPosX) || !SameFloatBits(from.bgHandPosY, to.bgHandPosY)) mask |= 0x0400U;
+		if (!SameFloatBits(from.digitalAimSpeed, to.digitalAimSpeed)) mask |= 0x0800U;
+		if (from.hatchCommand != to.hatchCommand) mask |= 0x1000U;
+		return mask;
+	}
+
+	void ControllerFrameCodec::EncodeDelta(std::vector<uint8_t>& out, const ControllerFrame& frame, const ControllerFrame* previous) {
+		const uint32_t mask = (!previous || previous->actorUniqueID != frame.actorUniqueID) ? c_DeltaAll : ChangeMask(*previous, frame);
+		AppendI64LE(out, frame.actorUniqueID);
+		AppendU32LE(out, mask);
+		if (mask & 0x0001U) AppendU64LE(out, frame.stateMask);
+		if (mask & 0x0002U) {
+			AppendI16LE(out, frame.analogMoveX);
+			AppendI16LE(out, frame.analogMoveY);
+		}
+		if (mask & 0x0004U) {
+			AppendI16LE(out, frame.analogAimX);
+			AppendI16LE(out, frame.analogAimY);
+		}
+		if (mask & 0x0008U) {
+			AppendI16LE(out, frame.analogCursorX);
+			AppendI16LE(out, frame.analogCursorY);
+		}
+		if (mask & 0x0010U) {
+			AppendI16LE(out, frame.mouseDeltaX);
+			AppendI16LE(out, frame.mouseDeltaY);
+		}
+		if (mask & 0x0020U) {
+			AppendU8(out, frame.inputMode);
+			AppendI8(out, frame.playerRaw);
+			AppendU8(out, frame.flags);
+			AppendU8(out, frame.deviceClass);
+		}
+		if (mask & 0x0040U) AppendF32LE(out, frame.aimAngle);
+		if (mask & 0x0080U) {
+			AppendF32LE(out, frame.viewPointX);
+			AppendF32LE(out, frame.viewPointY);
+		}
+		if (mask & 0x0100U) {
+			AppendI64LE(out, frame.equippedFGUniqueID);
+			AppendI64LE(out, frame.equippedBGUniqueID);
+		}
+		if (mask & 0x0200U) {
+			AppendF32LE(out, frame.fgHandPosX);
+			AppendF32LE(out, frame.fgHandPosY);
+		}
+		if (mask & 0x0400U) {
+			AppendF32LE(out, frame.bgHandPosX);
+			AppendF32LE(out, frame.bgHandPosY);
+		}
+		if (mask & 0x0800U) AppendF32LE(out, frame.digitalAimSpeed);
+		if (mask & 0x1000U) AppendU8(out, frame.hatchCommand);
+	}
+
+	// The field rules a decoded frame must meet, whichever wire form carried it: a delta tick reaches the
+	// simulation through the same Apply as a whole frame.
+	static bool ValidateDecodedFrame(const ControllerFrame& frame, std::string* error) {
+		if (frame.IsLegacy()) {
+			// The legacy layout kept this byte reserved and carried no scheme facts.
+			if (frame.deviceClass != 0) {
+				SetError(error, "ControllerFrame reserved byte must be zero.");
+				return false;
+			}
+		} else {
+			if (frame.deviceClass >= static_cast<uint8_t>(Controller::WireDeviceClass::Count)) {
+				SetError(error, "ControllerFrame device class is out of range.");
+				return false;
+			}
+			if (!std::isfinite(frame.digitalAimSpeed) || frame.digitalAimSpeed < 0.0F) {
+				SetError(error, "ControllerFrame digital aim speed must be finite and non-negative.");
+				return false;
+			}
+			if (frame.HasHatchChannel() && frame.hatchCommand >= static_cast<uint8_t>(ControllerFrame::HatchCommand::Count)) {
+				SetError(error, "ControllerFrame hatch command is out of range.");
+				return false;
+			}
+		}
+		if (frame.inputMode >= static_cast<uint8_t>(Controller::CIM_INPUTMODECOUNT)) {
+			SetError(error, "ControllerFrame input_mode is out of range.");
+			return false;
+		}
+		if (HasUnknownControlStateBits(frame.stateMask)) {
+			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
+			return false;
+		}
+		if ((frame.flags & static_cast<uint8_t>(~(frame.IsLegacy() ? ControllerFrame::c_LegacyKnownFlags : ControllerFrame::c_KnownFlags))) != 0) {
+			SetError(error, "ControllerFrame reserved flags must be zero.");
+			return false;
+		}
+		if (!std::isfinite(frame.aimAngle) || !std::isfinite(frame.viewPointX) || !std::isfinite(frame.viewPointY) ||
+		    !std::isfinite(frame.fgHandPosX) || !std::isfinite(frame.fgHandPosY) ||
+		    !std::isfinite(frame.bgHandPosX) || !std::isfinite(frame.bgHandPosY)) {
+			SetError(error, "ControllerFrame actor state fields must be finite.");
+			return false;
+		}
+		return true;
+	}
+
+	bool ControllerFrameCodec::DecodeDelta(const uint8_t* data, size_t size, ControllerFrame& outFrame, const ControllerFrame* previous, size_t* consumed, std::string* error, uint16_t version) {
+		// The delta form exists for the current layout only; a legacy round never negotiates a window.
+		if (version != ControllerFrame::c_Version) {
+			SetError(error, "ControllerFrame delta is only defined for version " + std::to_string(ControllerFrame::c_Version) + ".");
+			return false;
+		}
+		if (!data || size < 12) {
+			SetError(error, "ControllerFrame delta is truncated.");
+			return false;
+		}
+		const uint8_t* p = data;
+		const uint8_t* end = data + size;
+		ControllerFrame frame;
+		if (previous) {
+			frame = *previous;
+		}
+		frame.version = ControllerFrame::c_Version;
+		frame.actorUniqueID = ReadI64LE(p);
+		const uint32_t mask = ReadU32LE(p);
+		if (mask > c_DeltaAll) {
+			SetError(error, "ControllerFrame delta mask is reserved.");
+			return false;
+		}
+		auto need = [&](size_t bytes) {
+			return static_cast<size_t>(end - p) >= bytes;
+		};
+		if ((mask & 0x0001U) && !need(8)) {
+			SetError(error, "ControllerFrame delta is truncated.");
+			return false;
+		}
+		if (mask & 0x0001U) frame.stateMask = ReadU64LE(p);
+		if (mask & 0x0002U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.analogMoveX = ReadI16LE(p);
+			frame.analogMoveY = ReadI16LE(p);
+		}
+		if (mask & 0x0004U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.analogAimX = ReadI16LE(p);
+			frame.analogAimY = ReadI16LE(p);
+		}
+		if (mask & 0x0008U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.analogCursorX = ReadI16LE(p);
+			frame.analogCursorY = ReadI16LE(p);
+		}
+		if (mask & 0x0010U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.mouseDeltaX = ReadI16LE(p);
+			frame.mouseDeltaY = ReadI16LE(p);
+		}
+		if (mask & 0x0020U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.inputMode = ReadU8(p);
+			frame.playerRaw = ReadI8(p);
+			frame.flags = ReadU8(p);
+			frame.deviceClass = ReadU8(p);
+		}
+		if (mask & 0x0040U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.aimAngle = ReadF32LE(p);
+		}
+		if (mask & 0x0080U) {
+			if (!need(8)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.viewPointX = ReadF32LE(p);
+			frame.viewPointY = ReadF32LE(p);
+		}
+		if (mask & 0x0100U) {
+			if (!need(16)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.equippedFGUniqueID = ReadI64LE(p);
+			frame.equippedBGUniqueID = ReadI64LE(p);
+		}
+		if (mask & 0x0200U) {
+			if (!need(8)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.fgHandPosX = ReadF32LE(p);
+			frame.fgHandPosY = ReadF32LE(p);
+		}
+		if (mask & 0x0400U) {
+			if (!need(8)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.bgHandPosX = ReadF32LE(p);
+			frame.bgHandPosY = ReadF32LE(p);
+		}
+		if (mask & 0x0800U) {
+			if (!need(4)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.digitalAimSpeed = ReadF32LE(p);
+		}
+		if (mask & 0x1000U) {
+			if (!need(1)) {
+				SetError(error, "ControllerFrame delta is truncated.");
+				return false;
+			}
+			frame.hatchCommand = ReadU8(p);
+		}
+		if (!ValidateDecodedFrame(frame, error)) {
+			return false;
+		}
+		if (consumed) {
+			*consumed = static_cast<size_t>(p - data);
+		}
+		outFrame = frame;
+		return true;
+	}
+
 	bool ControllerFrameCodec::Decode(const uint8_t* data, size_t size, ControllerFrame& outFrame, std::string* error, uint16_t version) {
 		if (!IsSupportedVersion(version)) {
 			SetError(error, "ControllerFrame version " + std::to_string(version) + " is not supported.");
@@ -393,46 +646,13 @@ namespace RTE {
 		frame.fgHandPosY = ReadF32LE(p);
 		frame.bgHandPosX = ReadF32LE(p);
 		frame.bgHandPosY = ReadF32LE(p);
-		if (frame.IsLegacy()) {
-			// The legacy layout kept this byte reserved and carried no scheme facts.
-			if (frame.deviceClass != 0) {
-				SetError(error, "ControllerFrame reserved byte must be zero.");
-				return false;
-			}
-		} else {
+		if (!frame.IsLegacy()) {
 			frame.digitalAimSpeed = ReadF32LE(p);
-			if (frame.deviceClass >= static_cast<uint8_t>(Controller::WireDeviceClass::Count)) {
-				SetError(error, "ControllerFrame device class is out of range.");
-				return false;
-			}
-			if (!std::isfinite(frame.digitalAimSpeed) || frame.digitalAimSpeed < 0.0F) {
-				SetError(error, "ControllerFrame digital aim speed must be finite and non-negative.");
-				return false;
-			}
 			if (frame.HasHatchChannel()) {
 				frame.hatchCommand = ReadU8(p);
-				if (frame.hatchCommand >= static_cast<uint8_t>(ControllerFrame::HatchCommand::Count)) {
-					SetError(error, "ControllerFrame hatch command is out of range.");
-					return false;
-				}
 			}
 		}
-		if (frame.inputMode >= static_cast<uint8_t>(Controller::CIM_INPUTMODECOUNT)) {
-			SetError(error, "ControllerFrame input_mode is out of range.");
-			return false;
-		}
-		if (HasUnknownControlStateBits(frame.stateMask)) {
-			SetError(error, "ControllerFrame has state bits beyond CONTROLSTATECOUNT.");
-			return false;
-		}
-		if ((frame.flags & static_cast<uint8_t>(~(frame.IsLegacy() ? ControllerFrame::c_LegacyKnownFlags : ControllerFrame::c_KnownFlags))) != 0) {
-			SetError(error, "ControllerFrame reserved flags must be zero.");
-			return false;
-		}
-		if (!std::isfinite(frame.aimAngle) || !std::isfinite(frame.viewPointX) || !std::isfinite(frame.viewPointY) ||
-		    !std::isfinite(frame.fgHandPosX) || !std::isfinite(frame.fgHandPosY) ||
-		    !std::isfinite(frame.bgHandPosX) || !std::isfinite(frame.bgHandPosY)) {
-			SetError(error, "ControllerFrame actor state fields must be finite.");
+		if (!ValidateDecodedFrame(frame, error)) {
 			return false;
 		}
 		outFrame = frame;
@@ -823,6 +1043,9 @@ namespace RTE {
 		if (!ActivityMan::IsConstructed()) { ActivityMan::Construct(); }
 		if (!g_UInputMan.RunScriptedInputEdgeSelfTest()) {
 			return fail("a scripted input element did not edge once per press");
+		}
+		if (!g_UInputMan.RunScriptedPadSeatSelfTest()) {
+			return fail("a scripted pad reached a seat's controller");
 		}
 
 		std::cout << "[controller-frame-selftest] PASS" << std::endl;

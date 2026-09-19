@@ -24,6 +24,7 @@ LANE = Path('D:/mx/astra-f44-write-barrier-20260914')
 ROOT = LANE / 'phase-b'
 BASE = '6e8a59e117'
 RED = '0aad92fe55e7622f8d5dc64625fea893df443edd'
+FIXTURE_PIN = '030db17ae0085f4bc9f458935f6d975634fa5abd'
 REFERENCE = Path('D:/mx/opus-f44-20260914/binaries/final-bdf7e0bb.exe')
 REFERENCE_SHA = 'bdf7e0bbe9d95170b1464938224a12efccc65e513f60147794e17301339c6653'
 LOCKS = [Path('D:/mx') / name for name in ('LEAD_FAMILY.lock', 'LEAD_EXCLUSIVE.lock', 'LEAD_BATTERY.lock')]
@@ -35,8 +36,8 @@ ENVIRONMENT = {'CCCP_HEADLESS': '1', 'CC_PREVIEW_GLOBALS_FENCE': '1',
                'CC_PREVIEW_FENCE_DEPTH': '1', 'CC_PREVIEW_FENCE_NAMES': '0', 'CC_PREVIEW_BARRIER_STATS': '1'}
 STATS = re.compile(r'\[localpred\] previews=(\d+) actor_ticks=\d+ ms_total=([\d.]+) avg_ms=([\d.]+)')
 NATIVE = re.compile(r'\[preview-write-barrier\] (.*)')
-FAIL = re.compile(r'^\[script-graph-selftest\] FAIL(?: (.*))?$', re.M)
-OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat)[^\]]*\].*$', re.M)
+FAIL = re.compile(r'^\[(?:script-graph-selftest|preview-funds-selftest)\] FAIL(?: (.*))?$', re.M)
+OBSERVE = re.compile(r'^\[(?:pie-observe|pie-write-observe|pie-write|preview-module-fixture|preview-compat|preview-modcompat-fixture)[^\]]*\].*$', re.M)
 DRIVER_SHA = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -119,7 +120,7 @@ def gate():
 def fixture_hashes():
     files = [path for folder in LEGACY_FIXTURES for path in sorted((REPO / folder).rglob('*')) if path.is_file()]
     files += [FIXTURES / (name + suffix) for name in ('pickup_fire', 'ak47_fire') for suffix in ('.txt', '.ccreplay')]
-    files += [REPO / 'tools/fixtures' / name for name in ('preview_write_barrier.lua', 'preview_barrier_240.lua', 'preview_barrier_240.txt')]
+    files += [REPO / 'tools/fixtures' / name for name in ('preview_write_barrier.lua', 'preview_barrier_240.lua', 'preview_barrier_240.txt', 'preview_window_modcompat.lua')]
     return {str(path).replace('\\', '/'): sha(path) for path in files}
 
 
@@ -202,14 +203,20 @@ def install(run, files, activity=None):
     (folder / 'Index.ini').write_text(index, encoding='utf-8')
 
 
-def run_case(name, flags, files=None, activity=None, quiet=False):
+def run_case(name, flags, files=None, activity=None, quiet=False, extra_env=None):
     gate()
     from run_sim_test import make_run
     out = ROOT / name
     identity = sha(REPO / 'Cortex Command.exe')
     args = [*map(str, flags), '-out', str(out / 'trace.json')]
     env = dict(ENVIRONMENT)
+    if extra_env:
+        env.update(extra_env)
     run = make_run(REPO, args, out, timeout=900, env=env)
+    fixture = REPO / 'tools/fixtures/preview_window_modcompat.lua'
+    dest = Path(run.cwd) / 'tools/fixtures' / fixture.name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(fixture.read_bytes())
     if files:
         install(run, files, activity)
     interference = []
@@ -238,7 +245,7 @@ def run_case(name, flags, files=None, activity=None, quiet=False):
                preview_ms=float(stats[-1][2]) if stats else None,
                previews=int(stats[-1][0]) if stats else 0, native=native, interference=interference,
                graph_failures=FAIL.findall(text), observations=observations,
-               verdicts=[line for line in text.splitlines() if any(tag in line for tag in ('[lpinv]', '[script-graph-selftest]', '[preview-event-selftest]'))])
+               verdicts=[line for line in text.splitlines() if any(tag in line for tag in ('[lpinv]', '[script-graph-selftest]', '[preview-funds-selftest]', '[preview-event-selftest]'))])
     row['transport_ok'] = row['complete'] is True and row['timed_out'] is not True and same and row['desktop_unchanged']
     write(out / 'row.json', row)
     ledger('run', name=name, identity=identity, binary_unchanged=same, exit_code=row['exit_code'])
@@ -281,6 +288,9 @@ def compatibility(label):
                  '-max-ticks', 600, '-num-lua-states', 4, '-tick-hashes'])
     run_case(f'{label}/module', [*replay_flags(), '-test-script', 'UserScenes.rte/PreviewModuleCompat.lua'],
              {'PreviewModuleCompat.lua': REPO / 'Data/Tests.rte/PreviewModuleCompat.lua'})
+    run_case(f'{label}/modcompat', ['-scenario', 'LuaBaseline', '-seed', 42, '-max-ticks', 8,
+             '-num-lua-states', 4, '-test-script', 'UserScenes.rte/preview_window_modcompat.lua'],
+             {'preview_window_modcompat.lua': REPO / 'tools/fixtures/preview_window_modcompat.lua'})
     pie = import_driver('tools/pie_lockstep/run_arm.py')
     pie.LANE_PORTS = ((PORT_LO, PORT_HI),)
     for case in ('next', 'prev', 'goto', 'actor_cancel', 'delivery_cancel'):
@@ -320,25 +330,46 @@ def count_actors(data):
     return len(re.findall(rb'^\d+ actor uid=\d+ ', data, re.M))
 
 
+def graph_failed(failures, name):
+    return any(item == name or (item or '').startswith(name + ' ') for item in failures)
+
+
 def assess_cost(red, green, scene, red_census, census):
     native = green.get('native', [])
     valid = bool(native) and all(all(key in row and math.isfinite(row[key]) and row[key] >= 0
-                                   for key in ('capture_ms', 'write_ms', 'restore_ms', 'max_ms'))
+                                   for key in ('capture_ms', 'write_ms', 'restore_ms', 'max_ms', 'p99_ms'))
                                  and row.get('windows', 0) > 0 and row['capture_ms'] > 0 and row['restore_ms'] > 0 for row in native)
     maximum = sum(row['max_ms'] for row in native) if valid else None
+    p99 = sum(row['p99_ms'] for row in native) if valid else None
     delta = green['preview_ms'] - red['preview_ms'] if all(r.get('preview_ms') is not None for r in (red, green)) else None
     ok = all(r['transport_ok'] and not r['interference'] and r['previews'] > 0 and
              r['preview_ms'] is not None and math.isfinite(r['preview_ms']) for r in (red, green))
     ok = ok and green['exit_code'] == 0 and maximum is not None and maximum < LIMIT_MS
+    ok = ok and p99 is not None and p99 < LIMIT_MS
     ok = ok and delta is not None and delta < LIMIT_MS
     ok = ok and (census == red_census == 240 if scene == '240' else red['exit_code'] == 0)
-    restore = {label: sum(entry.get('restore_ms', 0.0) for entry in row.get('native', []))
-               for label, row in (('red', red), ('green', green))}
+    def restore_total(row):
+        total = 0.0
+        entries = row.get('native') or []
+        if not entries:
+            return None
+        for entry in entries:
+            if 'restore_ms' not in entry or not math.isfinite(entry['restore_ms']):
+                return None
+            total += entry['restore_ms']
+        return total
+    restore = {label: restore_total(row) for label, row in (('red', red), ('green', green))}
     windows = sum(entry.get('windows', 0.0) for entry in native)
+    saves = sum(entry.get('saves', 0.0) for entry in native)
+    tables = sum(entry.get('tables', 0.0) for entry in native)
+    restore_us = restore['green']*1000.0/windows if windows and restore['green'] is not None else None
+    if windows > 0 and (saves == 0 or tables == 0 or restore_us is None):
+        ok = False
     return dict(scene=scene, red_ms=red['preview_ms'], green_ms=green['preview_ms'], delta_ms=delta,
-                native_max_ms_sum=maximum, actors=census, red_actors=red_census,
+                native_max_ms_sum=maximum, native_p99_ms_sum=p99, actors=census, red_actors=red_census,
                 red_restore_ms=restore['red'], green_restore_ms=restore['green'],
-                green_windows=windows, pass_check=ok)
+                green_windows=windows, journal_entries=saves, tables_touched=tables,
+                restore_us_per_window=restore_us, pass_check=ok)
 
 
 def assess_selftests(summary, identity):
@@ -365,10 +396,15 @@ def score():
     red, green = read_row('red/graph'), read_row('green/graph')
     reference = read_row('reference/graph')
     checks['reference_graph'] = (reference['transport_ok'] and reference['exit_code'] == 1 and
-                                 'preview_deep_global_writes_undone' in reference['graph_failures'] and
+                                 graph_failed(reference['graph_failures'], 'preview_deep_global_writes_undone') and
                                  set(reference['graph_failures']) <= {'', 'preview_deep_global_writes_undone'})
-    checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and 'preview_deep_global_writes_undone' in red['graph_failures']
+    checks['fresh_red'] = red['transport_ok'] and red['exit_code'] == 1 and graph_failed(red['graph_failures'], 'preview_deep_global_writes_undone')
     checks['green_graph'] = green['transport_ok'] and green['exit_code'] == 0 and not green['graph_failures']
+    checks['green_depth_writes_undone'] = any('PASS preview_depth_writes_undone' in line for line in green['verdicts'])
+    checks['green_window_modcompat'] = any('PASS preview_window_modcompat' in line for line in green['verdicts'])
+    fence_off = read_row('green/graph-fence-off')
+    checks['fresh_depth_red'] = (fence_off['transport_ok'] and fence_off['exit_code'] == 1 and
+                                 graph_failed(fence_off['graph_failures'], 'preview_depth_writes_undone'))
     checks['barrier_rounds'] = sum('PASS preview_barrier_exact_rollback ' in line for line in green['verdicts']) == 10
     suites = json.loads((ROOT / 'green/selftests/result.json').read_text())
     checks['selftests_13'] = assess_selftests(suites, identities['green'])
@@ -392,6 +428,10 @@ def score():
         checks['fixture_' + scenario] = runs_ok and rows[0]['passed'] and rows[0] == rows[1] == rows[2]
     rows = [read_row(label + '/module') for label in ('reference', 'red', 'green')]
     checks['fixture_module'] = all(r['transport_ok'] and r['exit_code'] == 0 for r in rows) and bool(rows[0]['observations']) and rows[0]['observations'] == rows[1]['observations'] == rows[2]['observations']
+    modcompat = [read_row(label + '/modcompat') for label in ('reference', 'red', 'green')]
+    checks['fixture_modcompat'] = (all(r['transport_ok'] and r['exit_code'] == 0 for r in modcompat) and
+                                   bool(modcompat[0]['observations']) and
+                                   modcompat[0]['observations'] == modcompat[1]['observations'] == modcompat[2]['observations'])
     held = [[line for line in read_row(label + '/letters')['verdicts'] if 'fixture_reference_semantics:' in line]
             for label in ('reference', 'red', 'green')]
     checks['fixture_held_references'] = bool(held[0]) and held[0] == held[1] == held[2] and all('[lpinv] PASS ' in line for line in held[0])
@@ -438,12 +478,12 @@ def phase_b(authorized):
         raise RuntimeError('retained reference hash differs')
     if git('diff', BASE, '--', *LEGACY_FIXTURES).strip():
         raise RuntimeError('legacy fixtures differ from the wave base')
-    if git('diff', RED, '--', 'Source/Managers/PreviewScriptSelfTest.cpp', 'Source/Managers/PreviewScriptSelfTest.h').strip():
-        raise RuntimeError('RED and GREEN regression fixtures differ')
+    if git('diff', FIXTURE_PIN, '--', 'Source/Managers/PreviewScriptSelfTest.cpp', 'Source/Managers/PreviewScriptSelfTest.h').strip():
+        raise RuntimeError('preview regression fixtures differ from the pinned fixture commit')
     branch = git('branch', '--show-current').decode().strip()
     tip = git('rev-parse', 'HEAD').decode().strip()
     write(ROOT / 'fixtures.json', fixture_hashes())
-    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED, environment=ENVIRONMENT))
+    write(ROOT / 'authorization.json', dict(date=stamp(), message='FAMILY ENDED — BUILD', branch=branch, tip=tip, red=RED, fixture_pin=FIXTURE_PIN, environment=ENVIRONMENT))
     green_binary = None
     try:
         red_binary = build('red', RED)
@@ -454,6 +494,8 @@ def phase_b(authorized):
             select_binary(label, binary)
             if label == 'green':
                 run_case('green/graph', ['-script-graph-selftest', '-num-lua-states', 4])
+                run_case('green/graph-fence-off', ['-script-graph-selftest', '-num-lua-states', 4],
+                         extra_env={'CC_PREVIEW_GLOBALS_FENCE': '0'})
                 gate()
                 command = [sys.executable, str(REPO / 'tools/run_selftests.py'), '--repo', str(REPO),
                            '--out', str(ROOT / 'green/selftests'), '--timeout', '300']

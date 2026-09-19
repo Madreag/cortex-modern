@@ -83,12 +83,16 @@ function GameIntensityCalculator:UpdateGameIntensityCalculator()
 
 	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 		if self.Activity:PlayerActive(player) and self.Activity:PlayerHuman(player) then
-			-- The pinned screen size: the intensity this measures is saved with the game.
-			local screenBox = Box(CameraMan:GetOffset(player), CameraMan:GetOffset(player) + Vector(FrameMan.SimScreenWidth, FrameMan.SimScreenHeight));
-			for mo in MovableMan:GetMOsInBox(screenBox, -1, true) do
-				if IsActor(mo) then
-					mo = ToActor(mo);
-					healthLostThisFrame = math.max(0, healthLostThisFrame + mo.PrevHealth - mo.Health);
+			-- Shared seat actor, never the per-machine camera: the intensity this measures is saved with the game.
+			local actor = self.Activity:GetPlayerBrain(player) or self.Activity:GetControlledActor(player);
+			if actor then
+				local pos = actor.AboveHeadPos;
+				local screenBox = Box(Vector(pos.X - FrameMan.SimScreenWidth / 2, pos.Y - FrameMan.SimScreenHeight / 2), Vector(pos.X + FrameMan.SimScreenWidth / 2, pos.Y + FrameMan.SimScreenHeight / 2));
+				for mo in MovableMan:GetMOsInBox(screenBox, -1, true) do
+					if IsActor(mo) then
+						mo = ToActor(mo);
+						healthLostThisFrame = math.max(0, healthLostThisFrame + mo.PrevHealth - mo.Health);
+					end
 				end
 			end
 		end

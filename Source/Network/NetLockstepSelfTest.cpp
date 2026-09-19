@@ -4,6 +4,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "PieMenu.h"
+#include "PathFinder.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
@@ -3305,6 +3306,653 @@ namespace RTE {
 			return true;
 		}
 
+		NetValueObservation MakeValueObservation(uint8_t sender, uint64_t objectUID, uint64_t tick, uint32_t ordinal, const std::string& key, double number);
+
+		bool TestFrameWindowKeepsClassicReservedZero(std::string* error) {
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1;
+			frame.targetFrame = 7;
+			frame.roundId = 99;
+			frame.frames = {MakeFrame(100, 1)};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({frame}, bytes, error)) {
+				return false;
+			}
+			if (bytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || bytes[NetLockstepCodec::c_HeaderBytes + 1] != 0) {
+				*error = "classic frame reserved byte is not zero";
+				return false;
+			}
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) {
+				*error = "classic frame did not decode";
+				return false;
+			}
+			const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+			if (got != frame || !got.priorWindow.empty()) {
+				*error = "classic frame round trip changed the payload";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowCodecRoundTrip(std::string* error) {
+			NetLockstepFrame older;
+			older.senderPeerId = 1;
+			older.targetFrame = 3;
+			older.roundId = 11;
+			older.frames = {MakeFrame(100, 1)};
+			NetLockstepFrame newest = older;
+			newest.targetFrame = 4;
+			newest.frames[0].analogMoveX = 2000;
+			newest.frames[0].stateMask = 2;
+			older.observations = {MakeObservation(1, 11, 3, 1, 1, 0.25F)};
+			newest.observations = {MakeObservation(1, 22, 4, 1, 1, 0.5F)};
+			older.valueObservations = {MakeValueObservation(1, 11, 3, 1, "ai.order", 3.0)};
+			newest.valueObservations = {MakeValueObservation(1, 22, 4, 1, "ai.order", 4.0)};
+			newest.priorWindow = {older};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({newest}, bytes, error)) {
+				return false;
+			}
+			if (bytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || bytes[NetLockstepCodec::c_HeaderBytes + 1] != 2) {
+				*error = "window packet reserved byte is not the tick count";
+				return false;
+			}
+			bytes[NetLockstepCodec::c_HeaderBytes + 1] = 9;
+			if (NetLockstepCodec::Decode(bytes).ok) {
+				*error = "reserved tick count 9 was accepted";
+				return false;
+			}
+			bytes[NetLockstepCodec::c_HeaderBytes + 1] = 2;
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (!decoded.ok || !std::holds_alternative<NetLockstepFrame>(decoded.packet.payload)) {
+				*error = "window packet did not decode: " + decoded.error.message;
+				return false;
+			}
+			const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+			if (got.targetFrame != 4 || got.frames[0].analogMoveX != 2000 || got.frames[0].stateMask != 2 ||
+			    got.priorWindow.size() != 1 || got.priorWindow[0].targetFrame != 3 ||
+			    got.priorWindow[0].frames[0].analogMoveX != 123 || got.observations.size() != 1 ||
+			    got.observations[0].objectUID != 22 || got.priorWindow[0].observations.size() != 1 ||
+			    got.priorWindow[0].observations[0].objectUID != 11) {
+				*error = "window packet did not restore both ticks: newest target " + std::to_string(got.targetFrame) +
+				         " state " + std::to_string(got.frames.empty() ? -1 : got.frames[0].stateMask) + ", window ticks " +
+				         std::to_string(got.priorWindow.size()) + ", newest observations " + std::to_string(got.observations.size());
+				return false;
+			}
+			if (got.valueObservations.size() != 1 || got.valueObservations[0].numberValue != 4.0 ||
+			    got.priorWindow[0].valueObservations.size() != 1 || got.priorWindow[0].valueObservations[0].numberValue != 3.0) {
+				*error = "window packet carried " + std::to_string(got.priorWindow[0].valueObservations.size()) +
+				         " value observations on the older tick and " + std::to_string(got.valueObservations.size()) + " on the newest";
+				return false;
+			}
+			NetLockstepFrame stripped = newest;
+			stripped.priorWindow.clear();
+			std::vector<uint8_t> classicBytes;
+			if (!EncodePacket({stripped}, classicBytes, error) ||
+			    classicBytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 ||
+			    classicBytes[NetLockstepCodec::c_HeaderBytes + 1] != 0) {
+				*error = "stripped window copy is not a classic reserved-0 frame";
+				return false;
+			}
+			const NetLockstepDecodeResult classicDecoded = NetLockstepCodec::Decode(classicBytes);
+			if (!classicDecoded.ok || !std::holds_alternative<NetLockstepFrame>(classicDecoded.packet.payload)) {
+				*error = "stripped window copy did not decode";
+				return false;
+			}
+			const auto& classic = std::get<NetLockstepFrame>(classicDecoded.packet.payload);
+			if (classic.targetFrame != 4 || classic.frames[0].stateMask != 2 || classic.observations.size() != 1 ||
+			    classic.observations[0].objectUID != 22 || !classic.priorWindow.empty() ||
+			    classic.valueObservations.size() != 1 || classic.valueObservations[0].numberValue != 4.0) {
+				*error = "stripped window copy carried " + std::to_string(classic.observations.size()) + " sound and " +
+				         std::to_string(classic.valueObservations.size()) + " value observations for the newest tick";
+				return false;
+			}
+			ControllerFrame changed = MakeFrame(100, 1);
+			changed.analogMoveX = 2000;
+			if (ControllerFrameCodec::ChangeMask(MakeFrame(100, 1), changed) == 0) {
+				*error = "ChangeMask ignored a moved analog";
+				return false;
+			}
+			return true;
+		}
+
+		// A window copy must be the block its own packet wrote: the same slots, the same binding count.
+		// Re-encoding it against the sender's live dictionary spells known keys as slots and advertises a
+		// binding count from the sender's present, which the peer that missed the tick refuses.
+		bool TestFrameWindowRepeatsObservationBlocks(std::string* error) {
+			NetSoundObservationDictionary encodeTable;
+			NetLockstepObservationBlocks blocks;
+			auto tick = [](uint64_t target, uint64_t objectUID, float value) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = target;
+				frame.roundId = 77;
+				frame.frames = {MakeFrame(100, 1)};
+				frame.observations = {MakeObservation(1, objectUID, target, 1, 1, value)};
+				frame.valueObservations = {MakeValueObservation(1, objectUID, target, 1, "ai.order", static_cast<double>(target))};
+				return frame;
+			};
+			const NetLockstepFrame first = tick(3, 11, 0.25F);
+			const NetLockstepFrame classicSecond = tick(4, 22, 0.5F);
+			NetLockstepFrame second = classicSecond;
+			std::vector<uint8_t> firstBytes;
+			std::vector<uint8_t> classicBytes;
+			std::vector<uint8_t> secondBytes;
+			NetLockstepError encodeError;
+			size_t encoded = 0;
+			size_t valueEncoded = 0;
+			if (!NetLockstepCodec::Encode({first}, firstBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+				*error = "the first tick did not encode: " + encodeError.message;
+				return false;
+			}
+			// The send order the coordinator uses: the classic packet spends the dictionary, the window
+			// packet repeats what it kept.
+			if (!NetLockstepCodec::Encode({classicSecond}, classicBytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+				*error = "the classic copy of the newest tick did not encode: " + encodeError.message;
+				return false;
+			}
+			const uint64_t bindingsAfterClassic = encodeTable.BindingCount();
+			second.priorWindow = {first};
+			if (!NetLockstepCodec::Encode({second}, secondBytes, &encodeError, nullptr, nullptr, nullptr, &blocks)) {
+				*error = "the window packet did not encode: " + encodeError.message;
+				return false;
+			}
+			if (encodeTable.BindingCount() != bindingsAfterClassic || bindingsAfterClassic != 2) {
+				*error = "the window packet spent the dictionary: bindings " + std::to_string(bindingsAfterClassic) +
+				         " before and " + std::to_string(encodeTable.BindingCount()) + " after";
+				return false;
+			}
+			if (secondBytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || secondBytes[NetLockstepCodec::c_HeaderBytes + 1] != 2) {
+				*error = "the window packet reserved byte is " +
+				         std::to_string(secondBytes.size() > NetLockstepCodec::c_HeaderBytes + 1 ? secondBytes[NetLockstepCodec::c_HeaderBytes + 1] : 0) + ", not the tick count 2";
+				return false;
+			}
+			// The kept blocks of both ticks ride the window packet byte for byte, and the classic copy of
+			// the newest tick carries the same block a peer without the capability would have seen.
+			const auto& kept = blocks.at(3).soundBytes;
+			const auto& keptNewest = blocks.at(4).soundBytes;
+			if (std::search(secondBytes.begin(), secondBytes.end(), kept.begin(), kept.end()) == secondBytes.end()) {
+				*error = "the window copy of tick 3 is not the " + std::to_string(kept.size()) + " observation bytes its own packet wrote";
+				return false;
+			}
+			if (std::search(secondBytes.begin(), secondBytes.end(), keptNewest.begin(), keptNewest.end()) == secondBytes.end()) {
+				*error = "the newest tick's " + std::to_string(keptNewest.size()) + " observation bytes are not in the window packet";
+				return false;
+			}
+			// What a peer without the capability gets is what a sender that never had one would have sent:
+			// the same two ticks encoded by a table and a store that never saw a window.
+			NetSoundObservationDictionary classicOnlyTable;
+			NetLockstepObservationBlocks classicOnlyBlocks;
+			std::vector<uint8_t> classicOnlyFirst;
+			std::vector<uint8_t> classicOnlySecond;
+			if (!NetLockstepCodec::Encode({first}, classicOnlyFirst, &encodeError, &classicOnlyTable, &encoded, &valueEncoded, &classicOnlyBlocks) ||
+			    !NetLockstepCodec::Encode({classicSecond}, classicOnlySecond, &encodeError, &classicOnlyTable, &encoded, &valueEncoded, &classicOnlyBlocks)) {
+				*error = "the window-free reference encode failed: " + encodeError.message;
+				return false;
+			}
+			if (classicOnlyFirst != firstBytes || classicOnlySecond != classicBytes) {
+				*error = "a classic packet from the window path differs from a window-free send: " +
+				         std::to_string(classicBytes.size()) + " bytes against " + std::to_string(classicOnlySecond.size());
+				return false;
+			}
+			// The peer that missed tick 3 reads it out of the window and stays in step for tick 4.
+			NetSoundObservationTables lagging;
+			lagging.roundId = 77;
+			const NetLockstepDecodeResult repaired = NetLockstepCodec::Decode(secondBytes.data(), secondBytes.size(), ControllerFrame::c_Version, &lagging);
+			if (!repaired.ok) {
+				*error = "a peer that missed tick 3 refused the window packet: " + repaired.error.message;
+				return false;
+			}
+			const auto& repairedFrame = std::get<NetLockstepFrame>(repaired.packet.payload);
+			if (repairedFrame.priorWindow.size() != 1 || repairedFrame.priorWindow[0].observations.size() != 1 ||
+			    repairedFrame.priorWindow[0].observations[0].objectUID != 11 || repairedFrame.priorWindow[0].valueObservations.size() != 1 ||
+			    repairedFrame.observations.size() != 1 || repairedFrame.observations[0].objectUID != 22) {
+				*error = "the repaired tick carried " + std::to_string(repairedFrame.priorWindow.empty() ? 0 : repairedFrame.priorWindow[0].observations.size()) +
+				         " of tick 3's sound observations";
+				return false;
+			}
+			// The peer that read tick 3 already reads its copy past and commits it once.
+			NetSoundObservationTables inStep;
+			inStep.roundId = 77;
+			const NetLockstepDecodeResult firstDecoded = NetLockstepCodec::Decode(firstBytes.data(), firstBytes.size(), ControllerFrame::c_Version, &inStep);
+			if (!firstDecoded.ok) {
+				*error = "the first tick did not decode: " + firstDecoded.error.message;
+				return false;
+			}
+			const uint64_t bindingsBeforeWindow = inStep.Exactly(1).BindingCount();
+			const NetLockstepDecodeResult windowDecoded = NetLockstepCodec::Decode(secondBytes.data(), secondBytes.size(), ControllerFrame::c_Version, &inStep);
+			if (!windowDecoded.ok) {
+				*error = "a peer that already read tick 3 refused the window packet: " + windowDecoded.error.message;
+				return false;
+			}
+			// A copy read past never binds: the table moves only for the newest tick of the packet.
+			if (inStep.Exactly(1).BindingCount() != bindingsBeforeWindow + 1) {
+				*error = "the window packet moved the reader's table from " + std::to_string(bindingsBeforeWindow) +
+				         " to " + std::to_string(inStep.Exactly(1).BindingCount()) + ", not by the newest tick alone";
+				return false;
+			}
+			const auto& windowFrame = std::get<NetLockstepFrame>(windowDecoded.packet.payload);
+			if (windowFrame.priorWindow.size() != 1 || !windowFrame.priorWindow[0].observationsReadPast ||
+			    !windowFrame.priorWindow[0].observations.empty() || windowFrame.observations.size() != 1 ||
+			    windowFrame.observations[0].objectUID != 22) {
+				*error = "an already-read window copy was not read past: readPast " +
+				         std::to_string(windowFrame.priorWindow.empty() ? false : windowFrame.priorWindow[0].observationsReadPast) +
+				         ", observations " + std::to_string(windowFrame.priorWindow.empty() ? 0 : windowFrame.priorWindow[0].observations.size());
+				return false;
+			}
+			return true;
+		}
+
+		// A delta tick reaches the simulation through the same Apply as a whole frame, so its fields meet
+		// the same rules: a value no whole frame could carry must not ride a window copy either.
+		bool TestFrameWindowDeltaRefusesInvalidFields(std::string* error) {
+			NetLockstepFrame older;
+			older.senderPeerId = 1;
+			older.targetFrame = 3;
+			older.roundId = 11;
+			ControllerFrame first = MakeFrame(100, 1);
+			first.digitalAimSpeed = 0.25F;
+			older.frames = {first};
+			NetLockstepFrame newest = older;
+			newest.targetFrame = 4;
+			ControllerFrame second = first;
+			second.digitalAimSpeed = 0.75F;
+			newest.frames = {second};
+			newest.priorWindow = {older};
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({newest}, bytes, error)) {
+				return false;
+			}
+			// 0.75 rides the newest tick's delta and nothing else in the packet spells those four bytes.
+			const std::array<uint8_t, 4> speedBytes{0x00U, 0x00U, 0x40U, 0x3FU};
+			const auto at = std::search(bytes.begin(), bytes.end(), speedBytes.begin(), speedBytes.end());
+			if (at == bytes.end()) {
+				*error = "the window packet did not carry the newest tick's digital aim speed as a delta";
+				return false;
+			}
+			const std::array<uint8_t, 4> notANumber{0x00U, 0x00U, 0xC0U, 0x7FU};
+			std::copy(notANumber.begin(), notANumber.end(), at);
+			const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+			if (decoded.ok) {
+				const auto& got = std::get<NetLockstepFrame>(decoded.packet.payload);
+				*error = "a window tick carrying a NaN digital aim speed decoded, speed " +
+				         std::to_string(got.frames.empty() ? 0.0F : got.frames.front().digitalAimSpeed);
+				return false;
+			}
+			if (decoded.error.message.find("digital aim speed") == std::string::npos) {
+				*error = "a NaN delta field was refused for the wrong reason: " + decoded.error.message;
+				return false;
+			}
+			return true;
+		}
+
+		// The advertisement is one bit of the Ack's received mask and it is this one; a peer that reads a
+		// different bit agrees no window with a build that sends this.
+		bool TestFrameWindowCapabilityBitIsTheTopAckBit(std::string* error) {
+			const uint16_t port = 43086;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 1;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (host.FrameWindowAgreed()) {
+				*error = "the host agreed a window before the one-tick client advertised anything";
+				return false;
+			}
+			NetLockstepAck ack;
+			ack.senderPeerId = 2;
+			ack.highestContiguousFrame = 0;
+			ack.receivedMask = 0x80000000U;
+			std::vector<uint8_t> bytes;
+			if (!EncodePacket({ack}, bytes, error) || !clientTransport.Send(1, NetTransportLane::ControlReliable, bytes, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.FrameWindowAgreed(); }, error)) {
+				*error = "an Ack carrying the top received-mask bit did not agree the window for that link";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowStaysClassicWithoutCapability(std::string* error) {
+			const uint16_t port = 43081;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 1;
+			clientConfig.frameRedundancyTicks = 4;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			if (!host.QueueLocalInput(0, {MakeFrame(100, 1)}, {}, error) || !client.QueueLocalInput(0, {MakeFrame(200, 2)}, {}, error)) {
+				return false;
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					DrainReady(host, hostReady);
+					DrainReady(client, clientReady);
+					return hostReady.size() == 1 && clientReady.size() == 1;
+				}, error)) {
+				return false;
+			}
+			if (host.FrameWindowAgreed() || client.FrameWindowAgreed()) {
+				*error = "a ticks=1 peer agreed a frame window";
+				return false;
+			}
+			const auto hostToClient = host.GetStats().peers.find(2);
+			const auto clientToHost = client.GetStats().peers.find(1);
+			if (hostToClient == host.GetStats().peers.end() || clientToHost == client.GetStats().peers.end() ||
+			    hostToClient->second.lastFrameReserved != 0 || clientToHost->second.lastFrameReserved != 0) {
+				*error = "classic frame reserved byte is host->client " +
+				         std::to_string(hostToClient == host.GetStats().peers.end() ? -1 : hostToClient->second.lastFrameReserved) +
+				         ", client->host " + std::to_string(clientToHost == client.GetStats().peers.end() ? -1 : clientToHost->second.lastFrameReserved);
+				return false;
+			}
+			if (host.GetStats().windowCopiesSkipped != 0 || client.GetStats().windowCopiesSkipped != 0) {
+				*error = "window copies arrived without a capability advertisement: host skipped " +
+				         std::to_string(host.GetStats().windowCopiesSkipped) + ", client skipped " + std::to_string(client.GetStats().windowCopiesSkipped);
+				return false;
+			}
+			if (host.GetStats().windowCopiesApplied != 0 || client.GetStats().windowCopiesApplied != 0) {
+				*error = "window copies were applied without a capability advertisement: host applied " +
+				         std::to_string(host.GetStats().windowCopiesApplied) + ", client applied " + std::to_string(client.GetStats().windowCopiesApplied);
+				return false;
+			}
+			return true;
+		}
+
+		bool TestFrameWindowSurvivesUnreliableLoss(std::string* error) {
+			const uint16_t port = 43082;
+			LoopbackTransportConfig faults;
+			faults.unreliableDropEveryN = 2;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			hostTransport.SetFaultConfig(faults);
+			clientTransport.SetFaultConfig(faults);
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000082ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000082ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 4;
+			hostConfig.timeoutMs = 400;
+			clientConfig.timeoutMs = 400;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			std::map<uint64_t, float> hostSent;
+			std::map<uint64_t, float> clientSent;
+			for (uint64_t produced = 0; produced < 6; ++produced) {
+				const float hostValue = 0.25F + static_cast<float>(produced);
+				const float clientValue = 1.25F + static_cast<float>(produced);
+				hostSent[produced] = hostValue;
+				clientSent[produced] = clientValue;
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error,
+				        {MakeObservation(1, 500 + produced, produced, 1, 1, hostValue)},
+				        {MakeValueObservation(1, 500 + produced, produced, 1, "ai.order", static_cast<double>(hostValue))}) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error,
+				        {MakeObservation(2, 600 + produced, produced, 1, 1, clientValue)},
+				        {MakeValueObservation(2, 600 + produced, produced, 1, "ai.order", static_cast<double>(clientValue))})) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			std::map<uint64_t, float> hostRemote;
+			std::map<uint64_t, float> clientRemote;
+			std::map<uint64_t, double> hostRemoteValues;
+			std::map<uint64_t, double> clientRemoteValues;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady.push_back(ready.frame);
+						if (!ready.remoteObservations.empty()) hostRemote[ready.frame] = ready.remoteObservations.front().value;
+						if (!ready.remoteValueObservations.empty()) hostRemoteValues[ready.frame] = ready.remoteValueObservations.front().numberValue;
+					}
+					while (client.PopReadyFrame(ready)) {
+						clientReady.push_back(ready.frame);
+						if (!ready.remoteObservations.empty()) clientRemote[ready.frame] = ready.remoteObservations.front().value;
+						if (!ready.remoteValueObservations.empty()) clientRemoteValues[ready.frame] = ready.remoteValueObservations.front().numberValue;
+					}
+					return hostReady.size() == 6 && clientReady.size() == 6;
+				}, error, 1500)) {
+				return false;
+			}
+			if (host.GetStats().windowCopiesApplied == 0 && client.GetStats().windowCopiesApplied == 0) {
+				*error = "a dropped target never arrived via a later window: host applied " +
+				         std::to_string(host.GetStats().windowCopiesApplied) + ", client applied " + std::to_string(client.GetStats().windowCopiesApplied);
+				return false;
+			}
+			for (uint64_t frame = 0; frame < 6; ++frame) {
+				if (!hostRemote.contains(frame) || hostRemote[frame] != clientSent[frame] ||
+				    !clientRemote.contains(frame) || clientRemote[frame] != hostSent[frame]) {
+					*error = "a repaired window tick committed a different sound observation set at frame " + std::to_string(frame) +
+					         ": host read " + std::to_string(hostRemote.contains(frame) ? hostRemote[frame] : -1.0F) +
+					         " for " + std::to_string(clientSent[frame]) + ", client read " +
+					         std::to_string(clientRemote.contains(frame) ? clientRemote[frame] : -1.0F) + " for " + std::to_string(hostSent[frame]);
+					return false;
+				}
+				if (!hostRemoteValues.contains(frame) || hostRemoteValues[frame] != static_cast<double>(clientSent[frame]) ||
+				    !clientRemoteValues.contains(frame) || clientRemoteValues[frame] != static_cast<double>(hostSent[frame])) {
+					*error = "a repaired window tick committed a different value observation set at frame " + std::to_string(frame) +
+					         ": host read " + std::to_string(hostRemoteValues.contains(frame) ? hostRemoteValues[frame] : -1.0) +
+					         " for " + std::to_string(clientSent[frame]) + ", client read " +
+					         std::to_string(clientRemoteValues.contains(frame) ? clientRemoteValues[frame] : -1.0) + " for " + std::to_string(hostSent[frame]);
+					return false;
+				}
+			}
+			return true;
+		}
+
+
+		// A window whose kept blocks outgrow one packet costs the send its redundancy; the tick and its
+		// readings still leave as a classic frame.
+		bool TestFrameWindowDegradesWhenItOutgrowsThePacket(std::string* error) {
+			const uint16_t port = 43087;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000087ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000087ULL, 0, NetTransportLane::InputUnreliable);
+			hostConfig.frameRedundancyTicks = 4;
+			clientConfig.frameRedundancyTicks = 4;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return false;
+			}
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error)) {
+				return false;
+			}
+			// Fresh keys every tick, enough of them to fill the observation budget, so four kept blocks
+			// cannot fit one payload.
+			const size_t perTick = 1800;
+			for (uint64_t produced = 0; produced < 5; ++produced) {
+				std::vector<NetSoundObservation> hostObservations;
+				std::vector<NetSoundObservation> clientObservations;
+				hostObservations.reserve(perTick);
+				clientObservations.reserve(perTick);
+				for (size_t index = 0; index < perTick; ++index) {
+					const uint64_t uid = produced * 100000 + index;
+					hostObservations.push_back(MakeObservation(1, 1000000 + uid, produced, 1, 1, 0.5F));
+					clientObservations.push_back(MakeObservation(2, 2000000 + uid, produced, 1, 1, 1.5F));
+				}
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error, hostObservations) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error, clientObservations)) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady;
+			std::vector<uint64_t> clientReady;
+			std::map<uint64_t, size_t> hostRemotes;
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) {
+						hostReady.push_back(ready.frame);
+						hostRemotes[ready.frame] = ready.remoteObservations.size();
+					}
+					DrainReady(client, clientReady);
+					return hostReady.size() == 5 && clientReady.size() == 5;
+				}, error, 4000)) {
+				return false;
+			}
+			const auto hostToClient = host.GetStats().peers.find(2);
+			if (hostToClient == host.GetStats().peers.end() || hostToClient->second.lastFrameReserved != 0) {
+				*error = "a window too large for one packet still went out: reserved " +
+				         std::to_string(hostToClient == host.GetStats().peers.end() ? -1 : hostToClient->second.lastFrameReserved);
+				return false;
+			}
+			for (uint64_t frame = 0; frame < 5; ++frame) {
+				if (hostRemotes[frame] == 0) {
+					*error = "the degraded send lost the tick's readings at frame " + std::to_string(frame);
+					return false;
+				}
+			}
+			return true;
+		}
+
+		bool TestFrameWindowStripsRelayWithoutCapability(std::string* error) {
+			const uint16_t port = 43083;
+			const uint64_t sessionId = 0x7000000000000083ULL;
+			LoopbackTransport hostT, clientAT, clientBT;
+			if (!hostT.StartHost(port, error) || !clientAT.Connect("loopback", port, error) || !clientBT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint8_t ticks) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.startFrame = 0;
+				c.inputDelayFrames = 0;
+				c.timeoutMs = 500;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::InputUnreliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.frameRedundancyTicks = ticks;
+				return c;
+			};
+			NetLockstepCoordinator host, clientA, clientB;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true, 4), error) ||
+			    !clientA.Start(clientAT, cfg(2, {{1, 1}}, false, 4), error) ||
+			    !clientB.Start(clientBT, cfg(3, {{1, 1}}, false, 1), error)) {
+				return false;
+			}
+			auto drive = [&](const std::function<bool()>& done) {
+				for (uint64_t now = 0; now <= 2000; now += 5) {
+					host.Tick(now);
+					clientA.Tick(now);
+					clientB.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					clientAT.AdvanceTimeMs(5);
+					clientBT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive([&] { return host.IsRunning() && clientA.IsRunning() && clientB.IsRunning(); })) {
+				*error = "mixed-capability three-peer lockstep did not reach Running";
+				return false;
+			}
+			// Every tick carries a reading of its own, so the peer without the capability is the one that
+			// says whether the classic copy was written with the sender's dictionary.
+			std::map<uint64_t, float> hostSent;
+			for (uint64_t f = 0; f < 3; ++f) {
+				const float hostValue = 0.5F + static_cast<float>(f);
+				hostSent[f] = hostValue;
+				if (!host.QueueLocalInput(f, {MakeFrame(100 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(1, 700 + f, f, 1, 1, hostValue)}) ||
+				    !clientA.QueueLocalInput(f, {MakeFrame(200 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(2, 800 + f, f, 1, 1, 2.5F + static_cast<float>(f))}) ||
+				    !clientB.QueueLocalInput(f, {MakeFrame(300 + static_cast<int64_t>(f), f + 1)}, {}, error,
+				        {MakeObservation(3, 900 + f, f, 1, 1, 3.5F + static_cast<float>(f))})) {
+					return false;
+				}
+			}
+			std::vector<uint64_t> hostReady, aReady, bReady;
+			std::map<uint64_t, size_t> classicRemotes;
+			if (!drive([&] {
+					DrainReady(host, hostReady);
+					DrainReady(clientA, aReady);
+					NetLockstepReadyFrame ready;
+					while (clientB.PopReadyFrame(ready)) {
+						bReady.push_back(ready.frame);
+						classicRemotes[ready.frame] = ready.remoteObservations.size();
+					}
+					return hostReady.size() >= 3 && aReady.size() >= 3 && bReady.size() >= 3;
+				})) {
+				*error = "mixed-capability three-peer lockstep did not produce 3 ready frames";
+				return false;
+			}
+			if (host.FrameWindowAgreed() || clientA.FrameWindowAgreed()) {
+				*error = "a window was agreed while a peer never advertised";
+				return false;
+			}
+			for (uint64_t f = 0; f < 3; ++f) {
+				if (classicRemotes[f] != 2) {
+					*error = "the peer without the capability committed " + std::to_string(classicRemotes[f]) +
+					         " of the 2 remote observations at frame " + std::to_string(f);
+					return false;
+				}
+			}
+			// A classic copy written with no dictionary would leave the sender's own table empty.
+			if (host.ObservationBindingsSpelled(1) == 0 || clientA.ObservationBindingsSpelled(2) == 0) {
+				*error = "the sender spelled " + std::to_string(host.ObservationBindingsSpelled(1)) +
+				         " keys for its own stream and the capable client " + std::to_string(clientA.ObservationBindingsSpelled(2));
+				return false;
+			}
+			const auto hostToClassic = host.GetStats().peers.find(3);
+			if (hostToClassic == host.GetStats().peers.end()) {
+				*error = "the host never sent the classic sibling a frame, so the strip was never exercised";
+				return false;
+			}
+			if (hostToClassic->second.lastFrameReserved != 0) {
+				*error = "a relay to a peer that never advertised kept reserved=" + std::to_string(hostToClassic->second.lastFrameReserved);
+				return false;
+			}
+			// The capable client still receives windows, or the strip proves nothing about the other link.
+			const NetLockstepStats& capable = clientA.GetStats();
+			if (capable.windowCopiesSkipped + capable.windowCopiesApplied == 0) {
+				*error = "the capable client received no window copy at all, so the per-link strip proves nothing";
+				return false;
+			}
+			const NetLockstepStats& classic = clientB.GetStats();
+			if (classic.windowCopiesSkipped + classic.windowCopiesApplied != 0) {
+				*error = "the peer that never advertised received " +
+				         std::to_string(classic.windowCopiesSkipped + classic.windowCopiesApplied) + " window copies";
+				return false;
+			}
+			if (clientB.IsFailed()) {
+				*error = "the classic sibling failed after a reserved!=0 relay";
+				return false;
+			}
+			return true;
+		}
 
 		// P4C: three peers over a host-star loopback (clients connect only to the host, which relays).
 		// Proves N-peer frame collection (advance only when all remotes are in), the peerId-ordered
@@ -5298,6 +5946,71 @@ namespace RTE {
 
 		// H4 §4: a 1v1 whose only remote DROPS holds its seat for the reclaim window instead of ending,
 		// so the returner has a match to come back to. A clean leave with nobody left still ends at once.
+		// The hold heartbeat is an Ack like any other: a peer that repeats no tick must not advertise the
+		// window in it either, or its links agree a window it never sends.
+		bool TestFrameWindowHoldHeartbeatKeepsTicksOne(std::string* error) {
+			const uint16_t port = 43084;
+			const uint64_t sessionId = 0x7000000000000084ULL;
+			LoopbackTransport hostT, stayerT, leaverT;
+			if (!hostT.StartHost(port, error) || !stayerT.Connect("loopback", port, error) || !leaverT.Connect("loopback", port, error)) {
+				return false;
+			}
+			auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint8_t ticks) {
+				NetLockstepConfig c;
+				c.sessionId = sessionId;
+				c.timeoutMs = 5000;
+				c.localPeerId = local;
+				c.peerCount = 3;
+				c.remoteTransportPeerIds = std::move(transports);
+				c.relayToOtherPeers = relay;
+				c.frameLane = NetTransportLane::InputUnreliable;
+				c.scenario = "LockstepSelfTest";
+				c.ownershipPolicy = "unique-id-split";
+				c.frameRedundancyTicks = ticks;
+				return c;
+			};
+			SeatStateStub stub;
+			stub.held = true;
+			NetLockstepCoordinator host, stayer, leaver;
+			if (!host.Start(hostT, cfg(1, {{2, 1}, {3, 2}}, true, 1), error) ||
+			    !stayer.Start(stayerT, cfg(2, {{1, 1}}, false, 4), error) ||
+			    !leaver.Start(leaverT, cfg(3, {{1, 1}}, false, 4), error)) {
+				return false;
+			}
+			host.SetSeatStateSource(&QuerySeatStateStub, &stub);
+			uint64_t now = 0;
+			auto drive = [&](uint64_t forMs, const std::function<bool()>& done) {
+				for (const uint64_t until = now + forMs; now <= until; now += 5) {
+					host.Tick(now);
+					stayer.Tick(now);
+					leaver.Tick(now);
+					if (done()) {
+						return true;
+					}
+					hostT.AdvanceTimeMs(5);
+					stayerT.AdvanceTimeMs(5);
+					leaverT.AdvanceTimeMs(5);
+				}
+				return false;
+			};
+			if (!drive(2000, [&] { return host.IsRunning() && stayer.IsRunning() && leaver.IsRunning(); })) {
+				*error = "the hold-heartbeat fixture never started";
+				return false;
+			}
+			leaverT.Stop();
+			if (!drive(4000, [&] { return host.AnyDroppedSeatHeld(); })) {
+				*error = "the drop never left the host holding a seat, so no hold heartbeat was sent";
+				return false;
+			}
+			// Heartbeats ride the held seat for as long as it is held; pump time so several go out.
+			(void)drive(2000, [] { return false; });
+			if (stayer.FrameWindowAgreed()) {
+				*error = "a peer that repeats one tick advertised the window in its hold heartbeats";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestCoordinatorDroppedSeatHold(std::string* error) {
 			uint16_t port = 43020;
 			bool holdingBeforeDrop = false;
@@ -12470,6 +13183,39 @@ namespace RTE {
 			return passed;
 		}
 
+		bool TestPausedFramesResetOnResyncRelaunch(std::string* error) {
+			const char* name = "paused_frames_reset_on_resync_relaunch";
+			const uint64_t cap = 20;
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			const std::deque<Actor*> none;
+			for (uint64_t frame = 1; frame <= 10; ++frame) {
+				NetLockstepReadyFrame ready;
+				ready.frame = frame;
+				ApplyLockstepLeaveHandoffs(ready, none, frame >= 8);
+			}
+			if (LockstepPlayedFrame() != 7) {
+				if (error) *error = "pre-resync played frame is " + std::to_string(LockstepPlayedFrame()) + " not 7";
+				return false;
+			}
+			// The coordinator handoff a resync runs: applied goes to 0, the next frame is dropFrame-1.
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			for (uint64_t frame = 9; frame <= cap; ++frame) {
+				NetLockstepReadyFrame ready;
+				ready.frame = frame;
+				ApplyLockstepLeaveHandoffs(ready, none, false);
+			}
+			const uint64_t played = LockstepPlayedFrame();
+			const bool ok = played == cap;
+			std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
+			          << " cap=" << cap << " played=" << played << std::endl;
+			if (!ok && error) {
+				*error = "resync left LockstepPlayedFrame at " + std::to_string(played) +
+				         " short of the -net-match-ticks cap " + std::to_string(cap);
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			return ok;
+		}
+
 		// followups-1 (second read HIGH-3): NetLockstep.cpp ResolveActorOwner hands a team with no surviving
 		// human to matchConfig.hostPeerId without asking whether the host itself departed, and IsActorOwnerGone
 		// no longer stands those units down while the round runs. A survivor told the host has left would
@@ -13171,6 +13917,213 @@ namespace RTE {
 			return finish(nullptr);
 		}
 
+		// The suite's arms leave their actors in the world. An arm that drives a pass over the world
+		// itself starts from an empty one and hands the next arm an empty one back. A reset that
+		// throws is reported as its own failure instead of taking the suite's result with it.
+		bool ResetSelfTestWorld() {
+			try {
+				EnsureSwitchTestManagers();
+				// Drops the coordinator, this match's control overrides and the paused-frame state with it.
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				// Empties the actor, item and particle lists, the team rosters, the seeded owners and the claims.
+				g_MovableMan.PurgeAllMOs();
+			} catch (const std::exception& error) {
+				std::cout << "[net-lockstep-selftest] FAIL reset_self_test_world " << error.what() << std::endl;
+				return false;
+			}
+			return true;
+		}
+
+		// The producing pass ends exactly the set it began with: a team write inside the window moves an
+		// actor out of this peer's ownership, and an actor handed out of the world is never touched again.
+		bool TestProducingPassEndsTheSetItBeganWith(std::string* error) {
+			const char* name = "producing_pass_ends_the_set_it_began_with";
+			bool worldReset = ResetSelfTestWorld();
+			const uint16_t port = 43227;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5732315433573137ULL);
+			// One human per team, so a team write hands the actor from this peer to the other one.
+			matchConfig.players = {NetMatchPlayerSlot{1, 0, false, "Host"}, NetMatchPlayerSlot{2, 1, false, "Client"}};
+			matchConfig.peerCount = 2;
+			matchConfig.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 0, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.ownershipPolicy = "team-owner";
+			clientConfig.ownershipPolicy = "team-owner";
+			// The world hands this one back inside the window, so this arm owns it from then on.
+			std::unique_ptr<Actor> leaver;
+			const auto finish = [&](const char* message) {
+				leaver.reset();
+				worldReset = ResetSelfTestWorld() && worldReset;
+				if (!message && !worldReset) {
+					message = "the world reset around this arm failed";
+				}
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
+				return finish(error && !error->empty() ? error->c_str() : "coordinator pair failed");
+			}
+			ScenarioRunner::SetLockstepCoordinator(&host);
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* stayer = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* mover = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* leaving = MakeSwitchTestActor(Activity::TeamOne);
+			if (!stayer || !mover || !leaving) {
+				delete stayer;
+				delete mover;
+				delete leaving;
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(stayer);
+			AddSwitchTestActor(mover);
+			AddSwitchTestActor(leaving);
+			const auto isLocal = [](const Actor* actor) {
+				return ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(actor->GetUniqueID()), actor->GetTeam(), !actor->IsPlayerControlled());
+			};
+			if (!isLocal(stayer) || !isLocal(mover) || !isLocal(leaving)) {
+				return finish("the selftest actors did not start on this peer's team");
+			}
+			// The frame the wire committed for this tick, which the pass holds aside and gives back.
+			for (Actor* actor: {stayer, mover, leaving}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, true);
+			}
+			const std::deque<Actor*> actors = {stayer, mover, leaving};
+			const std::vector<long int> producing = MovableMan::BeginLockstepProducingPass(actors, isLocal);
+			if (producing.size() != actors.size() || !stayer->GetController()->IsProducingLocalInput() ||
+			    !mover->GetController()->IsProducingLocalInput() || !leaving->GetController()->IsProducingLocalInput()) {
+				return finish(("the pass began on " + std::to_string(producing.size()) + " of " + std::to_string(actors.size()) + " actors").c_str());
+			}
+			// What this machine produces for them this tick.
+			for (Actor* actor: {stayer, mover, leaving}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, false);
+				actor->GetController()->SetState(ControlState::BODY_JUMP, true);
+			}
+			// The transfer a Lua script makes inside the window: the team moves under a live actor.
+			mover->SetTeam(Activity::TeamTwo);
+			if (isLocal(mover)) {
+				return finish("the team write left the actor owned by this peer");
+			}
+			leaver.reset(g_MovableMan.RemoveActor(leaving));
+			if (leaver.get() != leaving || g_MovableMan.IsActor(leaving)) {
+				return finish("the selftest actor did not leave the world");
+			}
+			MovableMan::EndLockstepProducingPass(producing);
+
+			const auto describe = [](Actor* actor) {
+				const Controller* controller = actor->GetController();
+				return "{producing=" + std::to_string(controller->IsProducingLocalInput() ? 1 : 0) +
+				       " committed_fire=" + std::to_string(controller->IsState(ControlState::WEAPON_FIRE) ? 1 : 0) +
+				       " produced_jump=" + std::to_string(controller->IsState(ControlState::BODY_JUMP) ? 1 : 0) + "}";
+			};
+			const std::string ended = "{producing=0 committed_fire=1 produced_jump=0}";
+			const std::string stayerState = describe(stayer);
+			const std::string moverState = describe(mover);
+			const std::string leaverState = describe(leaver.get());
+			if (stayerState != ended || moverState != ended || leaverState != ended) {
+				return finish(("stayer=" + stayerState + " team_changed=" + moverState + " left_the_world=" + leaverState +
+				               " (expected " + ended + " " + ended + " " + ended + ")")
+				                  .c_str());
+			}
+			return finish(nullptr);
+		}
+
+		// Two views of one actor: remove inside the window, End, re-add, a second Begin/End. The
+		// re-added view's committed input has to match the view that stayed on the wire.
+		bool TestReaddedActorBeginsFromTheWire(std::string* error) {
+			const char* name = "readded_actor_begins_from_the_wire";
+			bool worldReset = ResetSelfTestWorld();
+			const auto finish = [&](const char* message) {
+				worldReset = ResetSelfTestWorld() && worldReset;
+				if (!message && !worldReset) {
+					message = "the world reset around this arm failed";
+				}
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) {
+						*error = message;
+					}
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamOne, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			Actor* ownerView = MakeSwitchTestActor(Activity::TeamOne);
+			Actor* peerView = MakeSwitchTestActor(Activity::TeamOne);
+			if (!ownerView || !peerView) {
+				delete ownerView;
+				delete peerView;
+				return finish("selftest actors could not be created");
+			}
+			AddSwitchTestActor(ownerView);
+			AddSwitchTestActor(peerView);
+			for (Actor* actor: {ownerView, peerView}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, true);
+			}
+			const auto isLocal = [](const Actor*) { return true; };
+			const std::deque<Actor*> firstActors = {ownerView, peerView};
+			const std::vector<long int> firstProducing = MovableMan::BeginLockstepProducingPass(firstActors, isLocal);
+			if (firstProducing.size() != firstActors.size() || !ownerView->GetController()->IsProducingLocalInput() ||
+			    !peerView->GetController()->IsProducingLocalInput()) {
+				return finish(("the pass began on " + std::to_string(firstProducing.size()) + " of " + std::to_string(firstActors.size()) + " actors").c_str());
+			}
+			for (Actor* actor: {ownerView, peerView}) {
+				actor->GetController()->SetState(ControlState::WEAPON_FIRE, false);
+				actor->GetController()->SetState(ControlState::BODY_JUMP, true);
+			}
+			std::unique_ptr<Actor> held(g_MovableMan.RemoveActor(ownerView));
+			if (held.get() != ownerView || g_MovableMan.IsActor(ownerView)) {
+				return finish("the owner view did not leave the world");
+			}
+			MovableMan::EndLockstepProducingPass(firstProducing);
+			AddSwitchTestActor(held.release());
+			const std::deque<Actor*> secondActors = {ownerView, peerView};
+			const std::vector<long int> secondProducing = MovableMan::BeginLockstepProducingPass(secondActors, isLocal);
+			if (secondProducing.size() != secondActors.size()) {
+				return finish(("the second pass began on " + std::to_string(secondProducing.size()) + " of " + std::to_string(secondActors.size()) + " actors").c_str());
+			}
+			MovableMan::EndLockstepProducingPass(secondProducing);
+			const ControllerFrame ownerSnap = ControllerFrameCodec::Snapshot(static_cast<int64_t>(ownerView->GetUniqueID()), *ownerView->GetController(), ownerView);
+			const ControllerFrame peerSnap = ControllerFrameCodec::Snapshot(static_cast<int64_t>(peerView->GetUniqueID()), *peerView->GetController(), peerView);
+			const auto describeSnap = [](const ControllerFrame& frame) {
+				return "{uid=" + std::to_string(frame.actorUniqueID) +
+				       " mask=" + std::to_string(frame.stateMask) +
+				       " fire=" + std::to_string((frame.stateMask >> ControlState::WEAPON_FIRE) & 1) +
+				       " jump=" + std::to_string((frame.stateMask >> ControlState::BODY_JUMP) & 1) + "}";
+			};
+			const std::string ownerText = describeSnap(ownerSnap);
+			const std::string peerText = describeSnap(peerSnap);
+			std::cout << "[net-lockstep-selftest] " << name << " owner=" << ownerText << " peer=" << peerText << std::endl;
+			const bool ownerCarriesProduced = ((ownerSnap.stateMask >> ControlState::BODY_JUMP) & 1) != 0;
+			const bool peerHoldsWire = ((peerSnap.stateMask >> ControlState::WEAPON_FIRE) & 1) != 0 &&
+			                           ((peerSnap.stateMask >> ControlState::BODY_JUMP) & 1) == 0;
+			if (ownerCarriesProduced || !peerHoldsWire ||
+			    ((ownerSnap.stateMask >> ControlState::WEAPON_FIRE) & 1) == 0 ||
+			    ownerSnap.stateMask != peerSnap.stateMask) {
+				return finish(("re-added view committed the produced press owner=" + ownerText + " peer=" + peerText).c_str());
+			}
+			return finish(nullptr);
+		}
+
 		// A script may replace a whole controller inside the producing pass; the sim still gets the frame
 		// the wire committed for the tick back, and the replacement is what the next pass produces from.
 		bool TestProducingPassSurvivesAnOverride(std::string* error) {
@@ -13249,6 +14202,10 @@ namespace RTE {
 			return 1;
 		};
 
+		if (PathFinder::RunHorizonGridSelfTest() != 0) {
+			return fail("horizon path grid self-test failed");
+		}
+
 		std::string piePinError;
 		if (!PieMenu::RunHoverOpenDelayPinSelfTest(&piePinError)) {
 			return fail(piePinError);
@@ -13264,6 +14221,7 @@ namespace RTE {
 		std::string followupError;
 		bool followupsPassed = true;
 		followupsPassed &= TestPausedFramesDoNotSpendTheTickBudget(&followupError);
+		followupsPassed &= TestPausedFramesResetOnResyncRelaunch(&followupError);
 		followupsPassed &= TestDepartedHostEndsTheRound(&followupError);
 		followupsPassed &= TestReseatWithoutAReadoptionKeepsItsSeat(&followupError);
 		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
@@ -13317,6 +14275,16 @@ namespace RTE {
 		    !TestCoordinatorIgnoresSessionPacketsAtHandoff(&error) ||
 		    !TestCoordinatorUnreliableOutOfOrderDuplicate(&error) ||
 		    !TestCoordinatorMissingFrameTimeout(&error) ||
+		    !TestFrameWindowKeepsClassicReservedZero(&error) ||
+		    !TestFrameWindowCodecRoundTrip(&error) ||
+		    !TestFrameWindowRepeatsObservationBlocks(&error) ||
+		    !TestFrameWindowDeltaRefusesInvalidFields(&error) ||
+		    !TestFrameWindowCapabilityBitIsTheTopAckBit(&error) ||
+		    !TestFrameWindowDegradesWhenItOutgrowsThePacket(&error) ||
+		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
+		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
+		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
+		    !TestFrameWindowHoldHeartbeatKeepsTicksOne(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
 		    !TestB2SeatSnapshotCodec(&error) ||
 		    !TestRecoveryWireRefusals(&error) ||
@@ -13413,8 +14381,13 @@ namespace RTE {
 		const bool startWindow = TestStartWindowAnswersTheSeatedBrain(&startWindowError);
 		std::string checkpointBindingError;
 		const bool checkpointBinding = TestControlBindingSurvivesACheckpoint(&checkpointBindingError);
+		// Runs last and on a world of its own: it empties the world the arms above filled.
+		std::string producingSetError;
+		const bool producingSet = TestProducingPassEndsTheSetItBeganWith(&producingSetError);
+		std::string readdedError;
+		const bool readdedFromWire = TestReaddedActorBeginsFromTheWire(&readdedError);
 		if (!switchLands || !claimTie || !switchHold || !coopTakeover || !ownerMapLives || !claimedExpiry || !teamChangeOwner || !remoteSeatInput || !seatMapSurvivesEnd ||
-		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding) {
+		    !sharedSeatAnswer || !speculativeBinding || !startWindow || !checkpointBinding || !producingSet || !readdedFromWire) {
 			return 1;
 		}
 		std::cout << "[net-lockstep-selftest] PASS" << std::endl;

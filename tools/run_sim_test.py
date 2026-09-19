@@ -38,6 +38,11 @@ def prepare_runtime(repo, out):
         if count == 0:
             settings += f"\n\t{name} = {value}\n"
     (runtime / "Userdata/Settings.ini").write_text(settings, encoding="utf-8")
+    fixture = repo / "tools/fixtures/preview_window_modcompat.lua"
+    if fixture.is_file():
+        dest = runtime / "tools/fixtures"
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / fixture.name).write_bytes(fixture.read_bytes())
     manifest = {"executable": str(repo / "Cortex Command.exe"), "cwd": str(runtime), "data": str(repo / "Data"), "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(), "settings_overrides": values}
     (out / "runtime.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return runtime
