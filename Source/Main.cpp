@@ -1471,10 +1471,15 @@ static void ConfigureMenuScriptInput(int argc, char** argv) {
 	GUIInputWrapper::SetAutomationDriving(driving);
 }
 
+// One write per diagnostic line: a worker thread's own line can never land inside a menu-script line.
+static void MenuScriptPrint(const std::string& line) {
+	System::PrintDiagnosticLine("[menu-script] " + line);
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	GUIInputWrapper::SetAutomationDriving(false);
-	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
+	System::PrintDiagnosticErrorLine("[menu-script] FAILED: " + reason);
 	s_menuScriptFailed = true;
 	System::SetQuit(true);
 }
@@ -1524,7 +1529,7 @@ void ProcessMenuScript() {
 			steps.push_back(line);
 		}
 		loaded = true;
-		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
+		MenuScriptPrint("loaded " + std::to_string(steps.size()) + " steps");
 		if (steps.empty()) {
 			return MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
 		}
@@ -1584,7 +1589,7 @@ void ProcessMenuScript() {
 		// keeps the frame budget it has always had.
 		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
-			std::cout << std::format("[menu-script] {} -> {} (members={} state={})\n", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState) << std::flush;
+			MenuScriptPrint(std::format("{} -> {} (members={} state={})", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState));
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 			waitCondDeadlineMs = 0;
@@ -1592,7 +1597,7 @@ void ProcessMenuScript() {
 		return;
 	}
 	if (stepIndex >= steps.size()) {
-		std::cout << "[menu-script] complete" << std::endl;
+		MenuScriptPrint("complete");
 		CompleteMenuScript();
 		return;
 	}
@@ -1604,7 +1609,7 @@ void ProcessMenuScript() {
 		std::string observation;
 		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager(),
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
-		std::cout << "[menu-script] " << cmd << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint(cmd + " " + observation + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) return MenuScriptFail(cmd + " " + observation);
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
@@ -1672,24 +1677,24 @@ void ProcessMenuScript() {
 		iss >> name;
 		// SaveScreenToPNG prepends System::GetScreenshotDirectory() ("ScreenShots/"); use a plain name.
 		g_FrameMan.SaveScreenToPNG(name.c_str());
-		std::cout << "[menu-script] screenshot ScreenShots/" << name << " screen=" << (pauseMenu ? "Pause" : menu->AutomationActiveScreenName()) << std::endl;
+		MenuScriptPrint("screenshot ScreenShots/" + name + " screen=" + (pauseMenu ? std::string("Pause") : menu->AutomationActiveScreenName()));
 	} else if (cmd == "activate") {
 		std::string control;
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
-		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
+		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
-		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
+		MenuScriptPrint("post_command " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
 		const bool exists = pauseMenu ? pauseMenu->AutomationControlExists(control) : menu->AutomationControlExists(control);
-		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_control " + control + " " + (exists ? "PASS" : "FAIL"));
 		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
 	} else if (cmd == "moderate") {
 		// The same panel action a host clicks, driven from a menu script.
@@ -1700,7 +1705,7 @@ void ProcessMenuScript() {
 			seat = -1;
 		}
 		const bool ok = menu->AutomationModerate(action, seat);
-		std::cout << "[menu-script] moderate " << action << " seat=" << seat << " ok=" << ok << std::endl;
+		MenuScriptPrint("moderate " + action + " seat=" + std::to_string(seat) + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("moderate found no seat to act on: " + action); }
 	} else if (cmd == "settext") {
 		std::string control;
@@ -1714,7 +1719,7 @@ void ProcessMenuScript() {
 		int checked = 0;
 		iss >> control >> checked;
 		if (!menu->AutomationSetCheck(control, checked != 0)) { return MenuScriptFail("setcheck failed (checkbox missing or hidden): " + control); }
-		std::cout << "[menu-script] setcheck " << control << " " << checked << std::endl;
+		MenuScriptPrint("setcheck " + control + " " + std::to_string(checked));
 	} else if (cmd == "assert_label") {
 		std::string control;
 		std::string sub;
@@ -1724,14 +1729,14 @@ void ProcessMenuScript() {
 		std::string text;
 		const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, text) : menu->AutomationLabelText(control, text);
 		const bool pass = found && text.find(sub) != std::string::npos;
-		std::cout << "[menu-script] assert_label " << control << " \"" << sub << "\" text=\"" << text << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_label " + control + " \"" + sub + "\" text=\"" + text + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_screen expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
 	} else if (cmd == "assert_status" || cmd == "assert_error") {
 		std::string sub;
@@ -1739,14 +1744,14 @@ void ProcessMenuScript() {
 		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
 		const std::string status = cmd == "assert_error" ? menu->AutomationMultiplayerError() : menu->AutomationMultiplayerStatus();
 		const bool pass = status.find(sub) != std::string::npos;
-		std::cout << "[menu-script] " << cmd << " \"" << sub << "\" status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint(cmd + " \"" + sub + "\" status=\"" + status + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail(cmd + " missing substring: " + sub); }
 	} else if (cmd == "assert_substate") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = menu->AutomationMultiplayerSubScreen();
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_substate expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
 	} else if (cmd == "chat") {
 		// The same send the lobby's input line does, driven headless so a capture has content.
@@ -1757,42 +1762,42 @@ void ProcessMenuScript() {
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
 		const uint8_t scopeValue = scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
 		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
-		std::cout << "[menu-script] chat scope=" << scope << " ok=" << ok << " text=\"" << text << "\"" << std::endl;
+		MenuScriptPrint("chat scope=" + scope + " ok=" + std::to_string(static_cast<int>(ok)) + " text=\"" + text + "\"");
 		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
-				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
-				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
-				  << " input_delay=\"" << snapshot.inputDelayText << "\""
-				  << " port_map=\"" << snapshot.portMap << "\"";
+		std::string line = "dump_lobby state=" + snapshot.serviceState + " members=" + std::to_string(snapshot.members.size()) +
+		                   " activity=\"" + snapshot.activityPreset + "\" module=\"" + snapshot.activityModule + "\"" +
+		                   " error=\"" + snapshot.errorText + "\" status=\"" + snapshot.statusText + "\"" +
+		                   " input_delay=\"" + snapshot.inputDelayText + "\"" +
+		                   " port_map=\"" + snapshot.portMap + "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
-			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
-					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
+			line += " | " + member.displayName + "(team" + std::to_string(static_cast<int>(member.team)) +
+			        (member.isLocal ? ",local" : ",remote") + ",ping" + std::to_string(member.pingMs) + ")";
 		}
-		std::cout << std::endl;
+		MenuScriptPrint(line);
 	} else if (cmd == "goto_main") {
 		menu->AutomationGoToMainScreen();
-		std::cout << "[menu-script] goto_main screen=" << menu->AutomationActiveScreenName() << std::endl;
+		MenuScriptPrint("goto_main screen=" + menu->AutomationActiveScreenName());
 	} else if (cmd == "dump_reconnect") {
 		const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
-		std::cout << "[menu-script] dump_reconnect screen=" << menu->AutomationActiveScreenName()
-				  << " state=" << NetReconnectUx::StateName(reconnect.GetState())
-				  << " attempts=" << reconnect.GetAttempts()
-				  << " service=" << g_NetMatchService.GetLobbySnapshot().serviceState
-				  << " status=\"" << reconnect.GetStatusText() << "\""
-				  << " offer=\"" << reconnect.GetOfferText() << "\"" << std::endl;
+		MenuScriptPrint("dump_reconnect screen=" + menu->AutomationActiveScreenName() +
+		                " state=" + std::string(NetReconnectUx::StateName(reconnect.GetState())) +
+		                " attempts=" + std::to_string(reconnect.GetAttempts()) +
+		                " service=" + g_NetMatchService.GetLobbySnapshot().serviceState +
+		                " status=\"" + reconnect.GetStatusText() + "\"" +
+		                " offer=\"" + reconnect.GetOfferText() + "\"");
 	} else if (cmd == "assert_console") {
 		int expected = 0;
 		iss >> expected;
 		const int actual = g_ConsoleMan.IsEnabled() ? 1 : 0;
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_console expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_console expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_console expected " + std::to_string(expected)); }
 	} else if (cmd == "assert_landing_empty") {
 		const std::string status = menu->AutomationMultiplayerError();
 		const bool pass = status.empty();
-		std::cout << "[menu-script] assert_landing_empty status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_landing_empty status=\"" + status + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_landing_empty found: " + status); }
 	} else if (cmd == "assert_enabled") {
 		std::string control;
@@ -1800,7 +1805,7 @@ void ProcessMenuScript() {
 		iss >> control >> expected;
 		const int actual = (pauseMenu ? pauseMenu->AutomationControlEnabled(control) : menu->AutomationControlEnabled(control)) ? 1 : 0;
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
 	} else if (cmd == "exit") {
 		CompleteMenuScript();

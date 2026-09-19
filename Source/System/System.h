@@ -105,6 +105,15 @@ namespace RTE {
 		/// Prints console output to command-line.
 		/// @param inputString
 		static void PrintToCLI(const std::string& stringToPrint);
+
+		/// Writes one whole diagnostic line to standard output under the shared print lock, so no other
+		/// thread's line can land inside it. The line the parsers read is the line one write put there.
+		/// @param line The complete line, without its terminator.
+		static void PrintDiagnosticLine(const std::string& line);
+
+		/// The same single-write discipline on standard error, under the same lock as standard output.
+		/// @param line The complete line, without its terminator.
+		static void PrintDiagnosticErrorLine(const std::string& line);
 #pragma endregion
 
 #pragma region Archived DataModule Handling

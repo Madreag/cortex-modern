@@ -295,11 +295,11 @@ void RTEError::SetExceptionHandlers() {
 
 void RTEError::ShowMessageBox(const std::string& message) {
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Warning (headless): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Warning (headless): " + message);
 		return;
 	}
 	if (!IsOnAppMainThread()) {
-		std::fprintf(stderr, "RTE Warning (from worker thread): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Warning (from worker thread): " + message);
 		return;
 	}
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "RTE Warning! (>_<)", message.c_str(), nullptr);
@@ -307,12 +307,12 @@ void RTEError::ShowMessageBox(const std::string& message) {
 
 bool RTEError::ShowAbortMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
-		std::fprintf(stderr, "RTE Abort (from worker thread): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Abort (from worker thread): " + message);
 		return false;
 	}
 	// Headless / automated runs can't dismiss a modal dialog — log + proceed to exit.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Abort (headless): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Abort (headless): " + message);
 		return false;
 	}
 	enum AbortMessageButton {
@@ -350,12 +350,12 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
 		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
-		std::fprintf(stderr, "RTE Assert (from worker thread): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Assert (from worker thread): " + message);
 		return false;
 	}
 	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Assert (headless): %s\n", message.c_str());
+		System::PrintDiagnosticErrorLine("RTE Assert (headless): " + message);
 		return true;
 	}
 	enum AssertMessageButton {
