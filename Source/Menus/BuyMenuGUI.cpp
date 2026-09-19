@@ -43,6 +43,14 @@ uint64_t BuyMenuGUI::s_ModuleFlagAllocations = 0;
 const std::string BuyMenuGUI::c_DefaultBannerImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuBanner.png";
 const std::string BuyMenuGUI::c_DefaultLogoImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuLogo.png";
 
+void BuyMenuGUI::SeatModuleFlags(std::vector<bool>& flags, int moduleCount) {
+	const size_t storage = flags.capacity();
+	flags.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
+	if (flags.capacity() != storage) ++s_ModuleFlagAllocations;
+	// The base module is the one a fresh menu opens with.
+	if (!flags.empty()) flags[0] = true;
+}
+
 BuyMenuGUI::BuyMenuGUI() {
 	Clear();
 }
@@ -84,11 +92,7 @@ void BuyMenuGUI::Clear() {
 	m_MetaPlayer = Players::NoPlayer;
 	m_NativeTechModule = 0;
 	m_ForeignCostMult = 4.0;
-	int moduleCount = g_PresetMan.GetTotalModuleCount();
-	const size_t flagStorage = m_aExpandedModules.capacity();
-	m_aExpandedModules.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
-	if (m_aExpandedModules.capacity() != flagStorage) ++s_ModuleFlagAllocations;
-	if (!m_aExpandedModules.empty()) m_aExpandedModules[0] = true;
+	SeatModuleFlags(m_aExpandedModules, g_PresetMan.GetTotalModuleCount());
 	m_pShopList = 0;
 	m_pCartList = 0;
 	m_pCraftBox = 0;
