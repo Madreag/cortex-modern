@@ -1708,6 +1708,8 @@ local function newReader(text)
 	end
 	return reader
 end
+)lua"
+	    R"lua(
 
 local function parse(text)
 	local reader = newReader(text)
@@ -2094,6 +2096,8 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 				local saved = graph.nodes[token.owner.id]
 				if saved and saved.value then owner = resolve(saved.value); objects[token.owner.id] = owner end
 			end
+)lua"
+	    R"lua(
 			local value
 			if owner then
 				if t == "gib" then value = _ScriptGraphGib(owner, token.index)
@@ -3064,6 +3068,34 @@ do
 	local reboundAgainNative = reboundKlass and { _ScriptGraphNative(reboundKlass) } or {}
 	check("lua_class_restore_rebinds", #reboundAgain == 0 and reboundAgainNative[1] == "lua-class" and reboundAgainNative[2] == "F90ClassCarry" and reboundAgainNative[3] == "Box" and rawequal(reboundKlass, F90ClassCarry), table.concat(reboundAgain, " | "))
 	F90ClassCarry = nil
+	-- A table is named by its birth number, so the same graph captured twice is the same bytes.
+	local birthRoot = { tag = "f76", nested = { 1, 2 } }
+	local birthOne, birthProblemsOne = _ScriptGraph.serialize({ ["1"] = birthRoot })
+	local birthTwo, birthProblemsTwo = _ScriptGraph.serialize({ ["1"] = birthRoot })
+	check("sg5_capture_repeats_byte_for_byte", birthOne == birthTwo and string.sub(birthOne, 1, 4) == "SG5;" and #birthProblemsOne == 0 and #birthProblemsTwo == 0, table.concat(birthProblemsOne, " | ") .. table.concat(birthProblemsTwo, " | "))
+	local birthSerial = tonumber(string.match(birthOne, "^SG5;S(%d+);"))
+	local birthId = tonumber(string.match(birthOne, "X%d+;N%d+;T(%d+);"))
+	check("sg5_header_carries_the_state_counter", birthSerial ~= nil and birthId ~= nil and birthId <= birthSerial, tostring(birthSerial) .. " " .. tostring(birthId))
+	-- A table born elsewhere moves the counter and leaves every name already given alone.
+	local birthSpare = { 1 }
+	local birthThree = _ScriptGraph.serialize({ ["1"] = birthRoot })
+	local serialThree = tonumber(string.match(birthThree, "^SG5;S(%d+);"))
+	local idThree = tonumber(string.match(birthThree, "X%d+;N%d+;T(%d+);"))
+	check("sg5_name_survives_a_later_table", birthSpare[1] == 1 and serialThree ~= nil and birthSerial ~= nil and serialThree > birthSerial and idThree == birthId, tostring(serialThree) .. " " .. tostring(idThree))
+	-- The ids are explicit now: a hole is a fact of the graph, a repeat is corruption.
+	local sg5Gap = "SG5;S100;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"
+	local sg5Duplicate = "SG5;S100;r0;G0;L0;E0;Rz;N2;T7;P-;Mz;k0;T7;P-;Mz;k0;"
+	local sg5OverCounter = "SG5;S2;r0;G0;L0;E0;Rz;N1;T9;P-;Mz;k0;"
+	check("sg5_reader_takes_a_gap", pcall(_ScriptGraph.validate, sg5Gap))
+	check("sg5_reader_refuses_a_duplicate_id", not pcall(_ScriptGraph.validate, sg5Duplicate))
+	check("sg5_reader_refuses_an_id_past_the_counter", not pcall(_ScriptGraph.validate, sg5OverCounter))
+	-- Saves written before the birth numbers still load, and they keep the old contiguous rule.
+	check("sg4_archive_still_loads", pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T1;P-;Mz;k0;"))
+	check("sg4_keeps_contiguous_ids", not pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"))
+	-- A restored table answers to the name the archive gave it, so the next capture writes the same bytes.
+	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
+	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
+	check("sg5_restore_then_capture_is_the_same_text", #carriedProblems == 0 and carriedText == birthOne, table.concat(carriedProblems, " | "))
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
 	local file = io.tmpfile()
@@ -3108,6 +3140,8 @@ do
 	check("held_owned_iterator_continuation", rawequal(result.values, originalValues) and result.values() == 23 and result.values() == 37 and result.values() == nil)
 	_ScriptGraph.releaseObjects()
 end
+)lua"
+	    R"lua(
 
 -- The reviewer's within-object alias sweep.
 local sweepOk, sweepDetail = true, ""
@@ -5933,6 +5967,11 @@ void LuaMan::ArmCheckpointWriteTrap() {
 	for (LuaStateWrapper& state: m_ScriptStates) arm(state);
 }
 
+uint64_t LuaMan::GetTableBirthCount() const {
+	lua_State* luaState = const_cast<LuaStateWrapper&>(m_MasterScriptState).GetLuaState();
+	return luaState ? luaJIT_state_tab_serial(luaState) : 0;
+}
+
 int LuaMan::GetStateIndex(const LuaStateWrapper* state) const {
 	if (!state) {
 		return -1;
@@ -6257,6 +6296,42 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	LoadScriptGraphHelper();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	// Two states that make tables in the same order hand out the same numbers, which is what makes
+	// a birth number an identity every peer agrees on.
+	const auto birthSequence = [](std::vector<uint64_t>& numbers) {
+		lua_State* fresh = luaL_newstate();
+		if (!fresh) return false;
+		luaL_openlibs(fresh);
+		for (int table = 0; table < 8; ++table) {
+			lua_newtable(fresh);
+			numbers.push_back(luaJIT_tab_serial(fresh, -1));
+			lua_pop(fresh, 1);
+		}
+		numbers.push_back(luaJIT_state_tab_serial(fresh));
+		lua_close(fresh);
+		return true;
+	};
+	std::vector<uint64_t> birthsHere;
+	std::vector<uint64_t> birthsThere;
+	const bool birthsAgree = birthSequence(birthsHere) && birthSequence(birthsThere) && birthsHere == birthsThere &&
+	                         birthsHere.front() > 0 && birthsHere[1] == birthsHere[0] + 1 &&
+	                         birthsHere.back() >= birthsHere[birthsHere.size() - 2];
+	std::cout << "[script-graph-selftest] " << (birthsAgree ? "PASS" : "FAIL") << " table_birth_numbers_match_across_states" << std::endl;
+	checkpointValues = birthsAgree && checkpointValues;
+	// A speculative window rolls its tables back, so it gives their numbers back as well.
+	const uint64_t birthsBeforeWindow = luaJIT_state_tab_serial(m_State);
+	uint64_t birthsInsideWindow = birthsBeforeWindow;
+	const bool windowOpened = luaJIT_preview_begin(m_State, nullptr, 0) != 0;
+	if (windowOpened) {
+		lua_newtable(m_State);
+		birthsInsideWindow = luaJIT_state_tab_serial(m_State);
+		lua_pop(m_State, 1);
+		luaJIT_preview_end(m_State);
+	}
+	const bool windowGivesNumbersBack = windowOpened && birthsInsideWindow > birthsBeforeWindow &&
+	                                    luaJIT_state_tab_serial(m_State) == birthsBeforeWindow;
+	std::cout << "[script-graph-selftest] " << (windowGivesNumbersBack ? "PASS" : "FAIL") << " preview_window_returns_table_numbers" << std::endl;
+	checkpointValues = windowGivesNumbersBack && checkpointValues;
 	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
 	// A Lua class left in a global is what a mod checkpoint has to carry.
 	RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
