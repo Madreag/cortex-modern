@@ -188,7 +188,9 @@ static bool s_contractAuditFinished = false;
 static std::string s_loadSelfTestName;
 static bool s_loadSelfTestExpected = false;
 static bool s_loadSelfTestPassed = false;
-static uint64_t s_netAutosaveRestoreTick = 0;
+static uint64_t s_netAutosaveRestoreTick = 0; //!< The committed tick to restore; 0 when the checkpoint is named by its place.
+static std::string s_netAutosaveRestoreWhich; //!< "oldest" or "newest" of the retained set, for a caller that cannot know the cadence's ticks.
+static uint64_t s_netAutosaveRestoreAtTick = 0; //!< The sim tick the restore check runs at; the restored tick by default.
 static bool s_netAutosaveRestorePassed = false;
 static bool s_saveCatalogSelfTest = false;
 static bool s_saveCallbacksSelfTest = false;
@@ -406,26 +408,38 @@ static void CloseNetReplayPlayback();
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 bool StageResyncedMatchActivity(std::string* error);
 
-/// Restores this match's newest restorable checkpoint and reports whether the restored world is the
-/// one the checkpoint recorded. Ends the run, so it only ever serves a driver.
-static bool RunAutosaveRestoreCheck() {
+/// Restores the checkpoint of this match the run was told to restore and reports whether the restored
+/// world is the one that checkpoint recorded. Ends the run, so it only ever serves a driver.
+/// @param tick The committed tick to restore, or 0 to take the oldest or newest checkpoint still retained.
+static bool RunAutosaveRestoreCheck(uint64_t tick, const std::string& which) {
 	g_ActivityMan.WaitForAutosaveTasks();
 	const std::string matchId = g_NetMatchService.GetAutosaveMatchId();
-	const std::optional<AutosaveDescriptor> newest = AutosaveStore::NewestRestorable(matchId);
-	if (!newest) {
-		std::cout << "[autosave] restore_check FAIL match=" << matchId << " reason=no restorable checkpoint" << std::endl;
+	std::string refusal;
+	std::optional<AutosaveDescriptor> named;
+	if (tick > 0) {
+		named = AutosaveStore::Find(matchId, tick, &refusal);
+	} else if (const std::vector<AutosaveDescriptor> held = AutosaveStore::ListRestorable(matchId); !held.empty()) {
+		// A caller that cannot know the cadence's exact ticks names the checkpoint by its place; the
+		// restore below still goes through the tick that names it.
+		named = which == "oldest" ? held.back() : held.front();
+	} else {
+		refusal = "no restorable checkpoint";
+	}
+	if (!named) {
+		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << tick << " reason=" << refusal << std::endl;
 		return false;
 	}
 	const bool policy = AutosaveStore::RunSelfTest(matchId);
-	if (!g_ActivityMan.LoadAutosaveToRestart(matchId, newest->savedTick) || !g_ActivityMan.RestartActivity()) {
-		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << newest->savedTick << " reason=restore refused" << std::endl;
+	if (!g_ActivityMan.LoadAutosaveToRestart(matchId, named->savedTick) || !g_ActivityMan.RestartActivity()) {
+		std::cout << "[autosave] restore_check FAIL match=" << matchId << " tick=" << named->savedTick << " reason=restore refused" << std::endl;
 		return false;
 	}
 	const std::string worldHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", g_MovableMan.SaveWorldStructure()}}));
 	const auto restoredTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
-	const bool passed = policy && worldHash == newest->worldStructureHash && restoredTick == newest->savedTick;
+	const bool passed = policy && worldHash == named->worldStructureHash && restoredTick == named->savedTick;
+	// The flag prints as a number, the way the store's own self-test line reports its results.
 	std::cout << std::format("[autosave] restore_check {} match={} tick={} sim_update_count={} world_hash={} expected={} policy={}\n",
-	                         passed ? "PASS" : "FAIL", matchId, newest->savedTick, restoredTick, worldHash, newest->worldStructureHash, policy) << std::flush;
+	                         passed ? "PASS" : "FAIL", matchId, named->savedTick, restoredTick, worldHash, named->worldStructureHash, static_cast<int>(policy)) << std::flush;
 	return passed;
 }
 
@@ -563,7 +577,7 @@ int ShutDown(int exitCode) {
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (!s_snapshotRoundtripSelfTestName.empty() && !s_snapshotRoundtripSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (!s_loadSelfTestName.empty() && !s_loadSelfTestPassed) exitCode = EXIT_FAILURE;
-	if (s_netAutosaveRestoreTick > 0 && !s_netAutosaveRestorePassed) exitCode = EXIT_FAILURE;
+	if ((s_netAutosaveRestoreTick > 0 || !s_netAutosaveRestoreWhich.empty()) && !s_netAutosaveRestorePassed) exitCode = EXIT_FAILURE;
 	if (s_saveCallbacksSelfTest && !s_saveCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_purgeSelfTest && !s_purgeSelfTestPassed) exitCode = EXIT_FAILURE;
 	if (s_globalCallbacksSelfTest && !s_globalCallbacksSelfTestPassed) exitCode = EXIT_FAILURE;
@@ -1117,9 +1131,27 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-net-autosave-restore") {
 			const std::string value = lastArg ? "" : argValue[i + 1];
+			if (value == "oldest" || value == "newest") {
+				// Named by place, for a caller that cannot know which ticks the cadence lands on; it must
+				// say when to restore with -net-autosave-restore-at.
+				s_netAutosaveRestoreWhich = value;
+				i += 2;
+				continue;
+			}
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreTick);
 			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreTick == 0) {
-				std::cerr << "[autosave] -net-autosave-restore requires the positive sim tick to restore at" << std::endl;
+				std::cerr << "[autosave] -net-autosave-restore requires the committed tick to restore, or oldest or newest" << std::endl;
+				return false;
+			}
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-autosave-restore-at") {
+			// The tick the restore runs at, so a run can restore an older checkpoint after later ones exist.
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), s_netAutosaveRestoreAtTick);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || s_netAutosaveRestoreAtTick == 0) {
+				std::cerr << "[autosave] -net-autosave-restore-at requires the positive sim tick to restore at" << std::endl;
 				return false;
 			}
 			i += 2;
@@ -4423,8 +4455,10 @@ void RunGameLoop() {
 				g_ActivityMan.EndActivity();
 				break;
 			}
-			if (s_netAutosaveRestoreTick > 0 && simTick >= s_netAutosaveRestoreTick) {
-				s_netAutosaveRestorePassed = RunAutosaveRestoreCheck();
+			const uint64_t restoreCheckTick = std::max(s_netAutosaveRestoreTick, s_netAutosaveRestoreAtTick);
+			if (restoreCheckTick > 0 && simTick >= restoreCheckTick &&
+			    (s_netAutosaveRestoreTick > 0 || !s_netAutosaveRestoreWhich.empty())) {
+				s_netAutosaveRestorePassed = RunAutosaveRestoreCheck(s_netAutosaveRestoreTick, s_netAutosaveRestoreWhich);
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
 				g_MetricsCollector.Record("final_tick", static_cast<double>(simTick));
