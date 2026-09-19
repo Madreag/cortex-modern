@@ -600,7 +600,8 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeSessionId = matchConfig.worldId;
 					// The previous boot's row token, so this boot resumes the world's own row.
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
-				m_DirectoryRow.spectatorFree = matchConfig.worldMaxSpectators;
+					// Nothing is connected yet, so every watcher slot the world offers is free.
+					m_DirectoryRow.spectatorFree = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
 				}
 			}
 			if (request.host && !request.resumeMatchId.empty()) {
@@ -613,9 +614,17 @@ static std::string ResyncSaveName() {
 				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
 				m_PinnedAutosaveTick->store(m_ResumeTick);
 				m_MatchAutosaveSeconds = MatchAutosaveSeconds(matchConfig);
-				// The stored row token resumes the very session id the peers' tickets name.
-				m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
-				m_DirectoryRow.resumeToken = m_ResumeDirectoryToken;
+				if (!matchConfig.persistentWorld) {
+					// The stored row token resumes the very session id the peers' tickets name.
+					m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
+					m_DirectoryRow.resumeToken = m_ResumeDirectoryToken;
+				}
+				// The row advertises the seats the resumed state really leaves open, not peerCount-1:
+				// a returning player must not read a world of free seats that are all still held.
+				const int64_t openSeats = NetReconnectHost::CountExportedOpenSeats(m_ResumeAdmissionState, matchConfig.hostPeerId);
+				if (openSeats >= 0) {
+					m_DirectoryRow.seatsFree = openSeats;
+				}
 			}
 			m_DirectoryRetracted = false;
 			m_DirectoryHidden = false;
@@ -1741,7 +1750,7 @@ static std::string ResyncSaveName() {
 					// The admission table says which seats a late joiner could still take: the host's
 					// own seat and the CPU slot never count, a committed or closed one is taken.
 					for (const NetH4SeatStatus& seat : m_SeatStatuses) {
-						if (seat.lockstepPeerId != 0 && seat.lockstepPeerId != m_LocalPeerId && !seat.committed && !seat.closed) {
+						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
 					}

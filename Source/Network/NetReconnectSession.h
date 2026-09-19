@@ -255,6 +255,13 @@ namespace RTE {
 		bool operator==(const NetH4SeatStatus&) const = default;
 	};
 
+	/// Whether a late joiner could still take this seat. The one rule the directory row, a resumed
+	/// row and every count read: the host's own seat and a CPU slot are not seats, and a committed or
+	/// closed one is taken.
+	inline bool NetH4SeatIsOpen(uint8_t lockstepPeerId, uint8_t localPeerId, bool committed, bool closed) {
+		return lockstepPeerId != 0 && lockstepPeerId != localPeerId && !committed && !closed;
+	}
+
 	struct NetReconnectHostStats {
 		uint32_t newJoins = 0;
 		uint32_t ticketOffersSent = 0;
@@ -413,6 +420,10 @@ namespace RTE {
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
 		std::vector<uint8_t> ExportMigrationState() const;
+		/// How many seats an exported plane still offers a joiner, read without importing it, so a
+		/// restarted host's directory row advertises what the match really has before the plane is live.
+		/// @return The open seats, or -1 when the bytes are not an export.
+		static int64_t CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId);
 		/// Every mutable seat, ledger and ban path goes through NoteStateChanged, so the revision can
 		/// only ever run ahead of the truth, never behind it.
 		void NoteStateChanged() { ++m_StateRevision; }
