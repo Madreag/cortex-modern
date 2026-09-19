@@ -21,6 +21,8 @@ static LJ_AINLINE void checkpoint_mark(GCtab *t)
 static LJ_AINLINE void checkpoint_mark_state(lua_State *L, GCtab *t)
 {
   G(L)->checkpoint_armed = 0;
+  /* A pending word with no preview index is the checkpoint's own trap on this table. */
+  if (t->preview == LJ_PREVIEW_PENDING) t->preview = 0;
   checkpoint_mark(t);
 }
 

@@ -167,6 +167,8 @@ static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_cowCheckpointAutosave = false;
+static std::string s_loadGameName;
+static bool s_loadGameFailed = false;
 static bool s_bitmapSaveSelfTest = false;
 static int s_bitmapSaveSelfTestResult = -1;
 static bool s_cameraNullSceneSelfTest = false;
@@ -614,6 +616,16 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-load-game") {
+			if (lastArg) {
+				std::cout << "[load-game] usage: -load-game <SaveName>, the name the load menu shows; add -max-ticks N to stop the run after N ticks" << std::endl;
+				++i;
+				continue;
+			}
+			s_loadGameName = argValue[++i];
 			++i;
 			continue;
 		}
@@ -3701,6 +3713,10 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (!s_loadGameName.empty() && ScenarioRunner::GetArgs().maxTicks > 0 &&
+			    simTick >= static_cast<uint64_t>(ScenarioRunner::GetArgs().maxTicks)) {
+				System::SetQuit(true);
+			}
 			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick == 1) {
 				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
 				RTE::RunCheckpointSceneRows();
@@ -6431,7 +6447,16 @@ int main(int argc, char** argv) {
 		} else {
 			// Interactive mode: a stalled lockstep match draws the "waiting for peer" screen.
 			ScenarioRunner::SetLockstepStallOverlayEnabled(true);
-			if (!g_ActivityMan.Initialize()) {
+			bool loadedSavedGame = false;
+			if (!s_loadGameName.empty()) {
+				loadedSavedGame = g_ActivityMan.LoadAndLaunchGame(s_loadGameName);
+				std::cout << "[load-game] " << (loadedSavedGame ? "loaded " : "could not load ") << std::quoted(s_loadGameName) << std::endl;
+				if (!loadedSavedGame) {
+					s_loadGameFailed = true;
+					System::SetQuit(true);
+				}
+			}
+			if (!loadedSavedGame && !g_ActivityMan.Initialize()) {
 				RunMenuLoop();
 			}
 
@@ -6474,6 +6499,9 @@ int main(int argc, char** argv) {
 		}
 	}
 
+	if (s_loadGameFailed) {
+		scenarioExitCode = 1;
+	}
 	return ShutDown(scenarioExitCode);
 }
 

@@ -3,10 +3,13 @@
 #include "Writer.h"
 #include "SceneLayer.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -36,6 +39,14 @@ namespace RTE {
 		size_t dirtyBytes = 0;
 		double dirtyRatio = 0;
 		int64_t freezeUs = 0;
+		int64_t activityUs = 0;
+		int64_t graphUs = 0;
+		int64_t sceneUs = 0;
+		int64_t structureUs = 0;
+		int64_t sceneRuntimeUs = 0;
+		int64_t globalsUs = 0;
+		int64_t layersUs = 0;
+		GraphDirt graph;
 		bool luaReused = false;
 		size_t objectsReused = 0;
 		size_t objectsCaptured = 0;
@@ -56,6 +67,7 @@ namespace RTE {
 		void BeginImage();
 		void RememberLua(std::vector<CheckpointText> graphs, uint64_t writeGeneration);
 		bool LuaUnchanged(uint64_t writeGeneration, size_t stateCount) const;
+		bool HasLua(size_t stateCount) const;
 		std::vector<CheckpointText> LastLua() const {
 			std::lock_guard lock(m_Mutex);
 			return m_LuaGraphs;
@@ -79,6 +91,11 @@ namespace RTE {
 		std::vector<CheckpointText> m_LuaGraphs;
 		uint64_t m_LuaWriteGeneration = 0;
 		std::vector<int64_t> m_FreezeSamples;
+		std::array<int64_t, 7> m_LastRecords{};
+		GraphDirt m_LastGraph;
+		size_t m_LastReused = 0;
+		size_t m_LastCaptured = 0;
+		bool m_LastLuaReused = false;
 		int64_t m_LastFreezeUs = 0;
 		int64_t m_LastWorkerUs = 0;
 		size_t m_LastImageBytes = 0;
@@ -87,6 +104,43 @@ namespace RTE {
 
 	CheckpointText AssembleCheckpointSave(const CheckpointImage& image);
 	CheckpointText AssembleCheckpointIndex(const CheckpointImage& image);
+
+	/// What a script graph walk saw and what has been written since it.
+	struct GraphDirt {
+		size_t roots = 0;        //!< Roots the last walk recorded.
+		size_t tables = 0;       //!< Tables the last walk recorded.
+		size_t dirtyRoots = 0;   //!< Roots holding a table written since that walk.
+		size_t dirtyTables = 0;  //!< Tables written since that walk.
+		bool unknownTable = false;  //!< A table no walk has seen was written.
+		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
+	};
+
+	/// The table-to-root index a script graph walk fills and the write barrier marks.
+	class CheckpointGraphIndex {
+	public:
+		static CheckpointGraphIndex& Get();
+
+		void BeginWalk();
+		void BeginRoot(uint64_t root);
+		void NoteTable(const void* table);
+		void EndWalk();
+		void OnTableWritten(const void* table);
+		GraphDirt Sample() const;
+
+	private:
+		mutable std::mutex m_Mutex;
+		std::unordered_map<const void*, uint64_t> m_TableRoots;
+		std::unordered_set<uint64_t> m_Roots;
+		std::unordered_set<uint64_t> m_DirtyRoots;
+		std::unordered_map<const void*, uint64_t> m_Walking;
+		std::unordered_set<uint64_t> m_WalkingRoots;
+		size_t m_DirtyTables = 0;
+		bool m_UnknownTable = false;
+		bool m_Walk = false;
+		uint64_t m_Root = 0;
+		int64_t m_NoteUs = 0;
+		int64_t m_WalkNoteUs = 0;
+	};
 
 	void ArmLuaCheckpointBarrier();
 	uint64_t LuaCheckpointWriteGeneration();

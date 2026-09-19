@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 <details><summary><b>Added</b></summary>
 
+- Launch straight into a saved game.
+	`-load-game <SaveName>` starts the game in the named save instead of the main menu, using the same load the
+	menu's load screen uses; the name is the one the load screen shows. `-max-ticks N` stops such a run after N
+	simulation ticks, which makes a load reproducible from a script.
+
 - Pathfinding and navigation overhaul, including jetpack/jump-aware pathfinding.  
 	Actors will now choose their path depending on how high they can jump, instead of always taking the shortest flying path. This will reduce instances of the AI getting stuck while trying to take paths that are impossible for them.  
 	Improvements to both `ACrab` and `AHuman` navigation. `ACrab`s are now aware of how to pathfind and navigate using their jetpack, and will use it where applicable. Actors are better at using their jetpack, and will use automovers if their jetpack is not sufficient to reach a destination.  

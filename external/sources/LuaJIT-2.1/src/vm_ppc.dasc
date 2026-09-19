@@ -1496,6 +1496,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  lwz TMP0, TAB:CARG1->preview
   |  cmpwi TMP0, 0
   |  blt ->fff_fallback
+  |  lbz TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+  |  cmpwi TMP0, 0
+  |  bne ->fff_fallback
   |   andix. TMP0, TMP3, LJ_GC_BLACK	// isblack(table)
   |    stw TAB:CARG2, TAB:CARG1->metatable
   |   beq ->fff_restv
@@ -4879,6 +4882,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP0, TAB:RB->preview
     |  cmpwi TMP0, 0
     |  blt ->vmeta_tsetv
+    |  lbz TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  cmpwi TMP0, 0
+    |  bne ->vmeta_tsetv
     |.if DUALNUM
     |  lwz TMP0, TAB:RB->asize
     |   bne cr1, >5
@@ -4956,6 +4962,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP0, TAB:RB->preview
     |  cmpwi TMP0, 0
     |  blt ->vmeta_tsets
+    |  lbz TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  cmpwi TMP0, 0
+    |  bne ->vmeta_tsets
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = src*8
     |  lwz TMP0, TAB:RB->hmask
     |  lwz TMP1, STR:RC->sid
@@ -5049,6 +5058,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP1, TAB:RB->preview
     |  cmpwi TMP1, 0
     |  blt ->vmeta_tsetb
+    |  lbz TMP1, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  cmpwi TMP1, 0
+    |  bne ->vmeta_tsetb
     |  lwz TMP1, TAB:RB->asize
     |   lwz TMP2, TAB:RB->array
     |    lbz TMP3, TAB:RB->marked
@@ -5111,6 +5123,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP2, TAB:CARG2->preview
     |  cmpwi TMP2, 0
     |  blt ->vmeta_tsetr
+    |  lbz TMP2, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  cmpwi TMP2, 0
+    |  bne ->vmeta_tsetr
     |  cmplw TMP0, CARG3
     |   slwi TMP2, CARG3, 3
     |.if FPU
@@ -5144,6 +5159,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lwz TMP2, TAB:CARG2->preview
     |  cmpwi TMP2, 0
     |  blt >8
+    |  lbz TMP2, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  cmpwi TMP2, 0
+    |  bne >9
     |    addic. TMP0, MULTRES, -8
     |   lwz TMP3, 4(TMP3)		// Integer constant is in lo-word.
     |    srwi CARG3, TMP0, 3
@@ -5195,6 +5213,15 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  stw PC, SAVE_PC
     |  mr SAVE0, RD
     |  bl extern lj_preview_write
+    |  mr RD, SAVE0
+    |  b <1
+
+    |9:
+    |  stp BASE, L->base
+    |  mr CARG1, L
+    |  stw PC, SAVE_PC
+    |  mr SAVE0, RD
+    |  bl extern lj_checkpoint_mark
     |  mr RD, SAVE0
     |  b <1
     |

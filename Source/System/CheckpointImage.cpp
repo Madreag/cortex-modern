@@ -11,6 +11,7 @@
 #include "lua.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -32,8 +33,9 @@ using namespace RTE;
 namespace {
 	std::atomic<uint64_t> s_LuaWrites{0};
 
-	void OnLuaTableWrite(void*) {
+	void OnLuaTableWrite(void* table) {
 		s_LuaWrites.fetch_add(1, std::memory_order_relaxed);
+		CheckpointGraphIndex::Get().OnTableWritten(table);
 	}
 
 	int64_t Percentile99(std::vector<int64_t> samples) {
@@ -42,6 +44,72 @@ namespace {
 		const size_t index = samples.size() - 1 - samples.size() / 100;
 		return samples[std::min(index, samples.size() - 1)];
 	}
+}
+
+CheckpointGraphIndex& CheckpointGraphIndex::Get() {
+	static CheckpointGraphIndex index;
+	return index;
+}
+
+void CheckpointGraphIndex::BeginWalk() {
+	std::lock_guard lock(m_Mutex);
+	m_Walking.clear();
+	m_WalkingRoots.clear();
+	m_Walk = true;
+	m_Root = 0;
+	m_WalkNoteUs = 0;
+}
+
+void CheckpointGraphIndex::BeginRoot(uint64_t root) {
+	std::lock_guard lock(m_Mutex);
+	m_Root = root;
+	if (m_Walk) m_WalkingRoots.insert(root);
+}
+
+void CheckpointGraphIndex::NoteTable(const void* table) {
+	const auto start = std::chrono::steady_clock::now();
+	std::lock_guard lock(m_Mutex);
+	if (!m_Walk || !table) return;
+	// The first root to reach a shared table owns it; that root is dirty when the table is written.
+	m_Walking.emplace(table, m_Root);
+	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+}
+
+void CheckpointGraphIndex::EndWalk() {
+	std::lock_guard lock(m_Mutex);
+	m_TableRoots = std::move(m_Walking);
+	m_Roots = std::move(m_WalkingRoots);
+	m_Walking.clear();
+	m_WalkingRoots.clear();
+	m_DirtyRoots.clear();
+	m_DirtyTables = 0;
+	m_UnknownTable = false;
+	m_NoteUs = m_WalkNoteUs;
+	m_Walk = false;
+	m_Root = 0;
+}
+
+void CheckpointGraphIndex::OnTableWritten(const void* table) {
+	std::lock_guard lock(m_Mutex);
+	if (m_Walk) return;  // The walk writes its own scratch tables.
+	if (const auto found = m_TableRoots.find(table); found != m_TableRoots.end()) {
+		m_DirtyRoots.insert(found->second);
+	} else if (!m_TableRoots.empty()) {
+		m_UnknownTable = true;
+	}
+	++m_DirtyTables;
+}
+
+GraphDirt CheckpointGraphIndex::Sample() const {
+	std::lock_guard lock(m_Mutex);
+	GraphDirt dirt;
+	dirt.roots = m_Roots.size();
+	dirt.tables = m_TableRoots.size();
+	dirt.dirtyRoots = m_DirtyRoots.size();
+	dirt.dirtyTables = m_DirtyTables;
+	dirt.unknownTable = m_UnknownTable;
+	dirt.noteUs = m_NoteUs;
+	return dirt;
 }
 
 CheckpointCow& CheckpointCow::Get() {
@@ -67,6 +135,11 @@ bool CheckpointCow::LuaUnchanged(uint64_t writeGeneration, size_t stateCount) co
 	return writeGeneration == m_LuaWriteGeneration && !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
+bool CheckpointCow::HasLua(size_t stateCount) const {
+	std::lock_guard lock(m_Mutex);
+	return !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
+}
+
 void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 	if (!image) return;
 	image->generation = m_Cache.Generation();
@@ -77,6 +150,12 @@ void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 	m_LastImageBytes = image->imageBytes;
 	m_LastDirtyRatio = image->dirtyRatio;
 	m_FreezeSamples.push_back(image->freezeUs);
+	m_LastRecords = {image->layersUs, image->activityUs, image->graphUs, image->sceneUs,
+	                 image->structureUs, image->sceneRuntimeUs, image->globalsUs};
+	m_LastGraph = image->graph;
+	m_LastReused = image->objectsReused;
+	m_LastCaptured = image->objectsCaptured;
+	m_LastLuaReused = image->luaReused;
 	m_Last = std::move(image);
 }
 
@@ -92,6 +171,11 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	double dirtyRatio = 0;
 	int64_t p99 = 0;
 	std::vector<int64_t> samples;
+	std::array<int64_t, 7> records{};
+	GraphDirt graph;
+	size_t reused = 0;
+	size_t captured = 0;
+	bool luaReused = false;
 	{
 		std::lock_guard lock(m_Mutex);
 		freezeUs = m_LastFreezeUs;
@@ -99,12 +183,23 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 		imageBytes = m_LastImageBytes;
 		dirtyRatio = m_LastDirtyRatio;
 		samples = m_FreezeSamples;
+		records = m_LastRecords;
+		graph = m_LastGraph;
+		reused = m_LastReused;
+		captured = m_LastCaptured;
+		luaReused = m_LastLuaReused;
 	}
 	p99 = Percentile99(std::move(samples));
 	std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n",
 	                         tick, freezeUs / 1000.0, imageBytes);
 	std::cout << std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}\n",
-	                         tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99) << std::flush;
+	                         tick, freezeUs, workerUs, imageBytes, dirtyRatio, p99);
+	// Where the freeze went, and how much of it the shadows and the graph index saved.
+	std::cout << std::format("[autosave] tick={} layers_us={} activity_us={} graph_us={} scene_us={} structure_us={} scene_runtime_us={} globals_us={}\n",
+	                         tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]);
+	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={}\n",
+	                         tick, reused, captured, graph.roots, graph.tables, graph.dirtyRoots, graph.dirtyTables,
+	                         graph.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0) << std::flush;
 }
 
 void CheckpointCow::WriteMetricsJson(const std::string& path) const {
@@ -116,6 +211,11 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 	int64_t p99 = 0;
 	size_t sampleCount = 0;
 	std::vector<int64_t> samples;
+	std::array<int64_t, 7> records{};
+	GraphDirt graph;
+	size_t reused = 0;
+	size_t captured = 0;
+	bool luaReused = false;
 	{
 		std::lock_guard lock(m_Mutex);
 		freezeUs = m_LastFreezeUs;
@@ -124,6 +224,11 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 		dirtyRatio = m_LastDirtyRatio;
 		samples = m_FreezeSamples;
 		sampleCount = m_FreezeSamples.size();
+		records = m_LastRecords;
+		graph = m_LastGraph;
+		reused = m_LastReused;
+		captured = m_LastCaptured;
+		luaReused = m_LastLuaReused;
 	}
 	p99 = Percentile99(std::move(samples));
 	std::ofstream out(path, std::ios::trunc);
@@ -134,6 +239,22 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 	    << "  \"image_bytes\": " << imageBytes << ",\n"
 	    << "  \"dirty_ratio\": " << dirtyRatio << ",\n"
 	    << "  \"p99_freeze_us\": " << p99 << ",\n"
+	    << "  \"layers_us\": " << records[0] << ",\n"
+	    << "  \"activity_us\": " << records[1] << ",\n"
+	    << "  \"graph_us\": " << records[2] << ",\n"
+	    << "  \"scene_us\": " << records[3] << ",\n"
+	    << "  \"structure_us\": " << records[4] << ",\n"
+	    << "  \"scene_runtime_us\": " << records[5] << ",\n"
+	    << "  \"globals_us\": " << records[6] << ",\n"
+	    << "  \"shadows_reused\": " << reused << ",\n"
+	    << "  \"shadows_captured\": " << captured << ",\n"
+	    << "  \"graph_roots\": " << graph.roots << ",\n"
+	    << "  \"graph_tables\": " << graph.tables << ",\n"
+	    << "  \"graph_dirty_roots\": " << graph.dirtyRoots << ",\n"
+	    << "  \"graph_dirty_tables\": " << graph.dirtyTables << ",\n"
+	    << "  \"graph_unknown_table\": " << (graph.unknownTable ? 1 : 0) << ",\n"
+	    << "  \"graph_note_us\": " << graph.noteUs << ",\n"
+	    << "  \"graph_reused\": " << (luaReused ? 1 : 0) << ",\n"
 	    << "  \"samples\": " << sampleCount << "\n"
 	    << "}\n";
 }

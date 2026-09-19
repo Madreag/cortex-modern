@@ -77,6 +77,7 @@ LUA_API int luaJIT_preview_faultcheck(lua_State *L);
 typedef void (*luaJIT_tab_write_cb)(void *tab);
 LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb);
 LUA_API void luaJIT_arm_tab_write_trap(lua_State *L);
+LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx);
 
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,

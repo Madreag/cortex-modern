@@ -1203,6 +1203,9 @@ static void build_subroutines(BuildCtx *ctx)
   |  lw TMP0, TAB:SFARG1LO->preview
   |  bltz TMP0, ->fff_fallback
   |.  nop
+  |  lbu TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+  |  bnez TMP0, ->fff_fallback
+  |.  nop
   |  lw TAB:TMP1, TAB:SFARG1LO->metatable
   |   lbu TMP3, TAB:SFARG1LO->marked
   |  or AT, SFARG2HI, TAB:TMP1
@@ -4360,6 +4363,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lw TMP0, TAB:RB->preview
     |  bltz TMP0, ->vmeta_tsetv
     |.  nop
+    |  lbu TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  bnez TMP0, ->vmeta_tsetv
+    |.  nop
     |  bne TMP2, TISNUM, >5
     |.  lw RC, LO(CARG3)
     |  lw TMP0, TAB:RB->asize
@@ -4419,6 +4425,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |->BC_TSETS_Z:
     |  lw TMP0, TAB:RB->preview
     |  bltz TMP0, ->vmeta_tsets
+    |.  nop
+    |  lbu TMP0, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  bnez TMP0, ->vmeta_tsets
     |.  nop
     |  // TAB:RB = GCtab *, STR:RC = GCstr *, RA = BASE+src*8
     |  lw TMP0, TAB:RB->hmask
@@ -4523,6 +4532,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lw TMP1, TAB:RB->preview
     |  bltz TMP1, ->vmeta_tsetb
     |.  nop
+    |  lbu TMP1, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  bnez TMP1, ->vmeta_tsetb
+    |.  nop
     |  lw TMP1, TAB:RB->asize
     |   lw TMP2, TAB:RB->array
     |  sltu AT, TMP0, TMP1
@@ -4574,6 +4586,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lw TMP2, TAB:CARG2->preview
     |  bltz TMP2, ->vmeta_tsetr
     |.  nop
+    |  lbu TMP2, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  bnez TMP2, ->vmeta_tsetr
+    |.  nop
     |  sltu AT, CARG3, TMP0
     |   sll TMP2, CARG3, 3
     |  beqz AT, ->vmeta_tsetr		// In array part?
@@ -4598,6 +4613,9 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  lw TAB:CARG2, -8+LO(RA)		// Guaranteed to be a table.
     |  lw TMP2, TAB:CARG2->preview
     |  bltz TMP2, >8
+    |.  nop
+    |  lbu TMP2, DISPATCH_GL(checkpoint_armed)(DISPATCH)
+    |  bnez TMP2, >9
     |.  nop
     |    addiu TMP0, MULTRES, -8
     |   lw TMP3, LO(TMP3)		// Integer constant is in lo-word.
@@ -4645,6 +4663,17 @@ static void build_ins(BuildCtx *ctx, BCOp op, int defop)
     |  sw PC, SAVE_PC
     |  move BASE, RD
     |  call_intern lj_preview_write
+    |.  move CARG1, L
+    |  move RD, BASE
+    |  b <1
+    |.  lw BASE, L->base
+
+    |9:
+    |  load_got lj_checkpoint_mark
+    |  sw BASE, L->base
+    |  sw PC, SAVE_PC
+    |  move BASE, RD
+    |  call_intern lj_checkpoint_mark
     |.  move CARG1, L
     |  move RD, BASE
     |  b <1
