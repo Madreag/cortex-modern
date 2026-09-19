@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "repair", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "world-open-seat", "repair", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -100,7 +100,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "repair", "pause")
+    *((case, size) for case in ("lobby", "host-defaults", "world-open-seat", "repair", "pause")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -426,6 +426,18 @@ def assert_combo_matches_loaded_activities(picker, dump):
         raise AssertionError(("item_count", picker.get("item_count"), len(allowed)))
 
 
+def world_open_seat_readback(port):
+    return (LANDING + f"host_world_lobby {port}\nwait_state Starting 60\nwait 15\n"
+            "assert_substate Lobby\nactivate ButtonLobbyOptions\nwait 5\n"
+            "assert_substate HostOptions\nactivate TabHostPageSeats\nwait 3\n"
+            "assert_label LabelHostSeatName0 Open\nassert_label LabelHostSeatName1 CPU\n"
+            "combo_select ComboHostSeatType2 Open\nwait 3\n"
+            "assert_label LabelHostOptStatus Unsaved changes\n"
+            "assert_label LabelHostSeatName2 Open\ndump_host_options\n"
+            "combo_select ComboHostSeatType1 Open\nwait 3\n"
+            "assert_label LabelHostSeatName1 Open\ndump_host_options\nexit\n")
+
+
 def scripts(case, port, root):
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -435,7 +447,9 @@ def scripts(case, port, root):
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
-    if case == "host-defaults":
+    if case == "world-open-seat":
+        text = world_open_seat_readback(port)
+    elif case == "host-defaults":
         text = LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
         text += (f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 5\n"
                  "activate TabHostPageNetwork\nwait 3\n"

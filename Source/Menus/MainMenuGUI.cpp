@@ -2255,6 +2255,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 	// The smallest peer id the roster leaves unclaimed; 0 when the peer capacity is fully seated.
 	auto freePeerId = [this]() -> uint8_t {
 		for (uint8_t id = 1; id <= m_HostOptionsDraft.peerCount; ++id) {
+			if (m_HostOptionsDraft.dedicated && id == m_HostOptionsDraft.hostPeerId) continue;
 			bool used = false;
 			for (const NetMatchPlayerSlot& s : m_HostOptionsDraft.players) {
 				if (!s.cpu && s.peerId == id) {
@@ -2295,7 +2296,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 			seat.peerId = peerId;
 			seat.team = 0;
 			seat.cpu = false;
-			seat.displayName = "Client " + std::to_string(peerId);
+			seat.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId, candidate.persistentWorld);
 			candidate.players.push_back(seat);
 		} else {
 			const int team = freeCpuTeam();
@@ -2348,7 +2349,7 @@ void MainMenuGUI::ChangeHostSeatType(int row, int typeIndex) {
 			candidate.players[row].peerId = peerId;
 			candidate.players[row].cpu = false;
 			candidate.players[row].team = 0;
-			candidate.players[row].displayName = "Client " + std::to_string(peerId);
+			candidate.players[row].displayName = NetMatchConfigUtil::UnseatedSlotName(peerId, candidate.persistentWorld);
 		}
 	}
 	std::string error;
