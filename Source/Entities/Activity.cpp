@@ -853,10 +853,10 @@ void Activity::ExpirePresentationViews(uint64_t committedTick) {
 	}
 }
 
-void Activity::FillPresentationFromPreview(uint64_t horizonTick) {
+void Activity::FillPresentationFromPreview(uint64_t canonicalTick, uint64_t horizonTick) {
 	ClearAllPresentationViews();
 	std::vector<ScenarioRunner::PendingQueuedPurchase> pending;
-	ScenarioRunner::PeekPendingLocalQueuedPurchases(pending);
+	ScenarioRunner::PeekPendingLocalQueuedPurchases(pending, canonicalTick);
 	for (const ScenarioRunner::PendingQueuedPurchase& order: pending) {
 		const uint64_t commitTick = order.targetFrame != 0 ? order.targetFrame : horizonTick;
 		if (order.player >= Players::PlayerOne && order.player < Players::MaxPlayerCount) {
@@ -1771,7 +1771,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	ScenarioRunner::PeekPendingLocalQueuedPurchases(peeked);
 	check("peek_sees_the_unapplied_order", peeked.size() == 1 && peeked[0].cost == 137.0F && peeked[0].player == Players::PlayerOne,
 	      "peeked " + std::to_string(peeked.size()) + (peeked.empty() ? "" : " cost " + std::to_string(peeked[0].cost)));
-	fixture.FillPresentationFromPreview(press + delay);
+	fixture.FillPresentationFromPreview(press, press + delay);
 	std::ostringstream worldAfter;
 	g_MovableMan.DumpSimState(g_TimerMan.GetSimUpdateCount(), worldAfter);
 	check("funds_path_dumps_byte_identical", worldBefore.str() == worldAfter.str(), mismatch(worldBefore.str(), worldAfter.str()));
@@ -1796,7 +1796,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	const std::string deducted = fixture.Activity::SaveCheckpoint();
 	check("load_checkpoint_clears_the_presentation_view", fixture.Activity::LoadCheckpoint(deducted) && fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
 	      "presentation after load " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
-	fixture.FillPresentationFromPreview(press + delay);
+	fixture.FillPresentationFromPreview(press, press + delay);
 	check("fill_rearms_from_live_orders", fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1726.0F,
 	      "rearmed presentation " + std::to_string(fixture.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	fixture.AdoptPreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137);
@@ -1814,7 +1814,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, secondCost});
 	GameActivity summed;
 	summed.SetTeamFunds(2000, Teams::TeamOne);
-	summed.FillPresentationFromPreview(press + delay);
+	summed.FillPresentationFromPreview(press, press + delay);
 	check("unapplied_order_costs_sum", summed.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1813.0F,
 	      "summed presentation " + std::to_string(summed.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
@@ -1822,7 +1822,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, firstCost});
 	GameActivity sameCosts;
 	sameCosts.SetTeamFunds(2000, Teams::TeamOne);
-	sameCosts.FillPresentationFromPreview(press + delay);
+	sameCosts.FillPresentationFromPreview(press, press + delay);
 	check("same_cost_orders_sum", sameCosts.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1726.0F,
 	      "same-cost presentation " + std::to_string(sameCosts.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
@@ -1831,12 +1831,12 @@ bool Activity::RunPresentationViewSelfTest() {
 	NetGameCommand consumedCmd{1, buy};
 	consumedCmd.sequence = 9;
 	ScenarioRunner::EnqueueLocalGameCommand(consumedCmd);
-	consumedFix.FillPresentationFromPreview(press + delay);
+	consumedFix.FillPresentationFromPreview(press, press + delay);
 	const float armed = consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
 	ScenarioRunner::ConsumeLockstepGameCommand(consumedCmd);
 	std::vector<ScenarioRunner::PendingQueuedPurchase> consumed;
 	ScenarioRunner::PeekPendingLocalQueuedPurchases(consumed);
-	consumedFix.FillPresentationFromPreview(press + delay);
+	consumedFix.FillPresentationFromPreview(press, press + delay);
 	check("peek_empty_after_consumed_sequence", consumed.empty() && armed == 1863.0F && consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
 	      "peeked " + std::to_string(consumed.size()) + " armed " + std::to_string(armed) + " after fill " + std::to_string(consumedFix.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
@@ -1845,7 +1845,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	NetGameDeliverCargo expireBuy = buy;
 	expireBuy.cost = 50;
 	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, expireBuy});
-	expire.FillPresentationFromPreview(press + delay);
+	expire.FillPresentationFromPreview(press, press + delay);
 	const float expireArmed = expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
 	expire.ExpirePresentationViews(press + delay + 2);
 	check("unconfirmed_expires_after_the_commit_window", expireArmed == 1950.0F && expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
@@ -1898,7 +1898,7 @@ bool Activity::RunPresentationViewSelfTest() {
 	GameActivity peekedExpire;
 	peekedExpire.SetTeamFunds(2000, Teams::TeamOne);
 	ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, buy});
-	peekedExpire.FillPresentationFromPreview(press + delay);
+	peekedExpire.FillPresentationFromPreview(press, press + delay);
 	const float peekArmed = peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne);
 	peekedExpire.ExpirePresentationViews(press + delay + 2);
 	check("confirmed_expires_from_commit_tick", peekArmed == 1863.0F && peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,

@@ -43,6 +43,7 @@ namespace RTE {
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
 	long long LocalPrediction::s_PreviewedTick = -1;
+	uint64_t LocalPrediction::s_LastFillTick = 0;
 	uint64_t LocalPrediction::s_PreviewCount = 0;
 	uint64_t LocalPrediction::s_PreviewTicks = 0;
 	double LocalPrediction::s_PreviewMs = 0.0;
@@ -307,7 +308,9 @@ namespace RTE {
 		}
 		terrain.Restore();
 		activity->RestoreRollbackState(activityState);
-		activity->FillPresentationFromPreview(static_cast<uint64_t>(simCount) + static_cast<uint64_t>(depth));
+		// The peek runs on the canonical tick, not this preview's advanced clock; the horizon only dates unstamped orders.
+		s_LastFillTick = static_cast<uint64_t>(simCount);
+		activity->FillPresentationFromPreview(static_cast<uint64_t>(simCount), static_cast<uint64_t>(simCount) + static_cast<uint64_t>(depth));
 		g_SimRNG.SetEngineState(rngState);
 		g_SimRNG.SetDrawCount(rngDraws);
 		g_TimerMan.RestoreSimTickAfterPreview(simCount, simTicks);

@@ -858,6 +858,10 @@ def funds_preview(options):
     oz = {name: _funds_oz(fields.get("buy_team_oz")) for name, fields in samples.items()}
     committed = {name: _funds_oz(fields.get("buy_team_committed")) for name, fields in samples.items()}
     both = oz["host_p1"] is not None and oz["client_p1"] is not None
+    ticks = {"host_p1": FUNDS_PRESS + 1, "client_p1": FUNDS_PRESS + 1,
+             "host_pd": FUNDS_PRESS + FUNDS_DELAY, "client_pd": FUNDS_PRESS + FUNDS_DELAY}
+    peeked = {name: _funds_oz(fields.get("peek_tick")) for name, fields in samples.items()}
+    problems = {name: _funds_oz(fields.get("problems")) for name, fields in samples.items()}
     checks = {
         "host_p1_readout_present": bool(samples["host_p1"]) and samples["host_p1"]["readout"] != "EMPTY",
         "client_p1_readout_present": bool(samples["client_p1"]) and samples["client_p1"]["readout"] != "EMPTY",
@@ -865,14 +869,34 @@ def funds_preview(options):
         "client_p1_committed": bool(committed["client_p1"] is not None and oz["client_p1"] is not None and oz["client_p1"] == committed["client_p1"]),
         "both_equal_at_commit": bool(oz["host_pd"] is not None and oz["client_pd"] is not None and oz["host_pd"] == oz["client_pd"] and
                                      committed["host_pd"] is not None and oz["host_pd"] == committed["host_pd"] and oz["client_pd"] == committed["client_pd"]),
+        # The preview must peek the in-flight buys on the committed tick, not on its own advanced clock.
+        "peek_used_the_canonical_tick": all(peeked[name] == ticks[name] for name in samples if samples[name]) and bool(samples["host_p1"]),
+        "no_canonical_problems": all(problems[name] == 0 for name in samples if samples[name]) and bool(samples["host_p1"]),
     }
+
+    def observed():
+        rows = []
+        for name in ("host_p1", "client_p1", "host_pd", "client_pd"):
+            fields = samples[name]
+            rows.append(f"  {name} tick={ticks[name]} " + (
+                "no [preview-funds-driver] line" if not fields else
+                f"seat={fields.get('seat')} seat_team={fields.get('seat_team')} buy_team={fields.get('buy_team')} "
+                f"buy_team_oz={fields.get('buy_team_oz')} buy_team_committed={fields.get('buy_team_committed')} "
+                f"peek_tick={fields.get('peek_tick')} problems={fields.get('problems')} readout={fields.get('readout')}"))
+        return "\n".join(rows)
+
     if not samples["host_p1"]:
         print("FAIL " + FUNDS_FAIL_ABSENT)
     elif not checks["host_p1_readout_present"]:
         print("FAIL host readout empty at P+1")
     if samples["host_p1"] and not checks["host_p1_previewed"]:
         print("FAIL " + FUNDS_FAIL_P1)
+    if samples["host_p1"] and not checks["peek_used_the_canonical_tick"]:
+        print("FAIL the preview peeked in-flight buys on a tick other than the committed one")
+    if not all(checks.values()):
+        print("observed:\n" + observed())
     dump_pairs = []
+    # The world dump only: the peers' extras carry a per-process accumulator and are written beside it, not compared.
     for suffix in ("funds_p1", "funds_pd"):
         left = root / "host" / f"trace.json.{suffix}.simstate.txt"
         right = root / "client" / f"trace.json.{suffix}.simstate.txt"
@@ -896,7 +920,7 @@ def main(argv=None):
     parser.add_argument("--case", choices=["launch", "funds_preview"], default="launch")
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--port", type=int, default=48320)
-    parser.add_argument("--variant", default="default")
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "brains-shared", "hold-desync", "hold-resync", "resync-duel", "resync-skirmish", "brains-longname", "wire-refusal", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
     parser.add_argument("--dedicated", action="store_true")
     parser.add_argument("--captures", action="store_true")
     parser.add_argument("--resolution")
