@@ -327,6 +327,10 @@ namespace RTE {
 		/// Live match: a ticketless join is denied outright in Phase A; in a lobby it may fill a
 		/// never-held seat.
 		void SetLiveMatch(bool live) { m_LiveMatch = live; if (live) m_MatchEnded = false; }
+		/// A persistent world admits a fresh, ticketless joiner into a LIVE round: its seats are the
+		/// world's gameplay slots, freed by a clean leave under the next generation, never "used up".
+		void SetPersistentWorld(bool persistent) { m_PersistentWorld = persistent; }
+		bool IsPersistentWorld() const { return m_PersistentWorld; }
 		/// Retains credentials between rounds without carrying world ownership into the lobby.
 		void SetMatchEnded();
 		bool IsLiveMatch() const { return m_LiveMatch; }
@@ -395,6 +399,8 @@ namespace RTE {
 
 		/// Which peer id, if any, currently holds the seat on which transport.
 		bool GetSeatHolder(uint16_t stableSeat, NetPeerId& connection, uint32_t& holderGeneration, uint32_t& incarnation) const;
+		/// The committed H4 seat on this connection; 0 until admission has one.
+		uint16_t StableSeatOfConnection(NetPeerId connection) const;
 		bool IsSeatClosed(uint16_t stableSeat) const;
 		/// Every seat's admission status, in stable-seat order.
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
@@ -511,6 +517,9 @@ namespace RTE {
 		SeatState* FindSeat(uint16_t stableSeat);
 		const SeatState* FindSeat(uint16_t stableSeat) const;
 		SeatState* FindFreeNeverHeldSeat();
+		/// A world's free gameplay slot: not the host's, not committed, not closed and not already being
+		/// offered. Unlike a match seat it may have been held before - a clean leave gives it back.
+		SeatState* FindFreeWorldSeat();
 		Provisional* FindProvisionalByTxId(const NetAuthBytes16& txId);
 		bool BindIncarnation(SeatState& seat, NetPeerId connection);
 		void ReleaseProvisional(uint16_t stableSeat);
@@ -562,6 +571,7 @@ namespace RTE {
 		NetMatchMode m_Mode = NetMatchMode::PvPSkirmish;
 		uint64_t m_NowMs = 0; //!< The plane's own clock, so a drop can be stamped without one being passed in.
 		bool m_LiveMatch = false;
+		bool m_PersistentWorld = false;
 		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;
@@ -640,6 +650,9 @@ namespace RTE {
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
 		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
+		/// The host is a persistent world, so the record says so and a relaunch's rejoin hellos on the
+		/// world plane instead of the ordinary one.
+		void SetWorldTarget(bool world) { m_WorldTarget = world; }
 		void SetDirectorySessionId(std::string directorySessionId);
 
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
@@ -719,6 +732,7 @@ namespace RTE {
 		std::string m_HostAddress;
 		std::string m_DirectorySessionId;
 		NetHash32 m_MatchConfigHash{};
+		bool m_WorldTarget = false;
 		uint64_t (*m_UnixClock)(void*) = nullptr;
 		void* m_UnixClockContext = nullptr;
 

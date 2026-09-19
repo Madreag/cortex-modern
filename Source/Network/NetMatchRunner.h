@@ -78,6 +78,9 @@ namespace RTE {
 		// the message deadline as the budget, which is what a round without a seating policy had.
 		std::optional<uint32_t> lobbySeatingWaitMs;
 		uint32_t lockstepWaitMs = 5000;
+		// A world joiner's start runs inside its sim update, so its deadline counts that peer's own
+		// updates: a wall clock read inside the tick is a per-machine decision.
+		uint32_t worldJoinStartWaitTicks = 600;
 		// In-match missing-frame grace before the match is declared dead; the setup wait above stays short.
 		uint32_t missingFrameGraceMs = 20000;
 		uint32_t postSessionSettleMs = 250;
@@ -143,7 +146,20 @@ namespace RTE {
 		void SetRematchRoster(std::vector<uint8_t> survivingPeerIds) { m_RematchRoster = std::move(survivingPeerIds); }
 
 		NetMatchRuntimeState GetState() const { return m_State; }
+		NetLobbySession& GetLobbySession() { return m_Lobby; }
 		const NetLobbySession& GetLobbySession() const { return m_Lobby; }
+		bool TookWorldJoinImage() const { return m_WorldJoinImage; }
+		/// Starts the joiner's lockstep at its activation tick without blocking the sim update it runs
+		/// inside: the handshake finishes over the pumps that follow.
+		/// @return Whether the coordinator is already running.
+		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error = nullptr);
+		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
+		/// false with an error set is the start giving up.
+		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error = nullptr);
+		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.
+		bool IsWorldJoinLockstepStarting() const { return m_WorldJoinStarting && m_State == NetMatchRuntimeState::LockstepStarting; }
+		/// How many of the joiner's own updates the start has cost so far.
+		uint32_t GetWorldJoinStartTicks() const { return m_WorldJoinStartTicks; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
@@ -193,6 +209,9 @@ namespace RTE {
 		std::string m_SetupError;
 		std::vector<uint8_t> m_StateToStream; //!< Host: a match-state file the next lobby round streams out.
 		std::vector<uint8_t> m_ReceivedStateBytes; //!< The state file the last lobby round received.
+		bool m_WorldJoinImage = false;
+		bool m_WorldJoinStarting = false;      //!< A joiner's lockstep start is mid-handshake.
+		uint32_t m_WorldJoinStartTicks = 0;    //!< The joiner's own updates that start has cost.
 	};
 
 } // namespace RTE

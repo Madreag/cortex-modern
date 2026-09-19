@@ -14,6 +14,13 @@
 namespace RTE {
 	class NetSession;
 
+	/// What a targeted state transfer did with the blob it was handed.
+	enum class NetLobbyStateTransfer : uint8_t {
+		Refused = 0, //!< Not taken and not kept: an unknown remote, an empty or oversize blob.
+		Queued = 1,  //!< Held until the transfer in flight drains.
+		Started = 2, //!< On the pump now.
+	};
+
 	enum class NetLobbyState {
 		Idle,
 		WaitingForConfig,
@@ -109,6 +116,42 @@ namespace RTE {
 		/// lobby starts: chunks pace out through Tick and the Start rides the same ordered lane, so a
 		/// started client always holds the complete state.
 		void BeginStateTransfer(std::vector<uint8_t> fileBytes);
+		/// The same StateChunk pump, aimed at one late remote after the lobby has Started.
+		/// @return Whether this call took the pump; a queued blob starts when the one in flight drains.
+		bool BeginStateTransferTo(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// The same call, with the refusal told apart from the queue: a refused blob was never taken,
+		/// so its caller must retry it rather than wait for a transfer that will not happen.
+		NetLobbyStateTransfer BeginStateTransferToPeer(uint8_t peerId, std::vector<uint8_t> fileBytes);
+		/// Whether a joiner's image is waiting for the pump.
+		size_t QueuedStateTransfers() const { return m_QueuedStateTransfers.size(); }
+		/// Binds a session-Ready joiner so the host can send it config and StateChunks.
+		bool BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
+		/// Binds a world bootstrap's own lobby id. Its chunks go out by transport, without the lobby-up
+		/// gate: a reserved world id is never named in a lobby payload, so the client cannot mark it up.
+		bool BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
+		/// Whether that peer is a world bootstrap this host bound itself.
+		bool IsWorldTransferPeer(uint8_t peerId) const { return m_WorldTransferPeers.find(peerId) != m_WorldTransferPeers.end(); }
+		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
+		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
+		void SendMatchConfigTo(uint8_t peerId);
+		/// Sends queued chunks after Started; Tick itself stops once the lobby is terminal.
+		void PumpOutgoingChunks();
+		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);
+		bool SendPayloadTo(uint8_t peerId, const NetLobbyPayload& payload, std::string* error = nullptr);
+		bool SendPayload(const NetLobbyPayload& payload, std::string* error = nullptr);
+		const std::vector<uint8_t>& PeekReceivedState() const { return m_ReceivedState; }
+		uint64_t GetOutgoingStateId() const { return m_OutgoingStateId; }
+		uint16_t GetOutgoingChunkCount() const { return m_OutgoingChunkCount; }
+		uint16_t GetOutgoingChunkIndex(uint8_t peerId) const { return OutgoingChunkIndex(peerId); }
+		struct WorldJoinReport {
+			uint8_t kind = 0;
+			uint64_t value = 0;
+			uint8_t fromPeer = 0;
+			bool pending = false;
+		};
+		WorldJoinReport TakeWorldJoinReport();
+		std::vector<uint8_t> TakePendingTailBytes();
+		void SetStartFrame(uint64_t startFrame) { m_StartFrame = startFrame; }
 		bool HasCompleteStateTransfer() const { return m_IncomingStateComplete; }
 		/// Gets whether any remote still lacks a chunk of the queued state file.
 		bool HasPendingStateChunks() const;
@@ -145,14 +188,14 @@ namespace RTE {
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
 		void SendSeatAssign(uint8_t peerId);
 		void RestartStateTransfer();
+		/// Takes the free pump for the next waiting joiner image. Returns whether one started.
+		bool StartNextQueuedStateTransfer();
 		void SendQueuedStateChunks();
 		void Reject(const std::string& reason);
 		void Fail(const std::string& reason);
 
 		bool IsKnownRemote(uint8_t peerId) const;
 		bool IsCommittedTransport(NetPeerId transportPeerId) const;
-		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
-		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
 		uint16_t OutgoingChunkIndex(uint8_t peerId) const;
 		/// Whether the round seats a human on a peer other than this host's own.
 		bool SeatsRemoteHuman() const;
@@ -182,10 +225,13 @@ namespace RTE {
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
 		std::set<uint8_t> m_RemoteLobbyUp; //!< Remotes that have sent a lobby message of their own.
+		std::set<uint8_t> m_WorldTransferPeers; //!< World bootstraps the host bound; no lobby-up gate.
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
 		std::vector<uint8_t> m_StateBytesToSend;
 		uint64_t m_OutgoingStateId = 0;
+		uint8_t m_StateTransferOnlyPeer = 0; //!< 0 = every remote (resync); else the one world joiner.
 		std::map<uint8_t, uint16_t> m_OutgoingChunkIndexByPeer; //!< Next chunk each remote still needs.
+		std::vector<std::pair<uint8_t, std::vector<uint8_t>>> m_QueuedStateTransfers; //!< Joiner images waiting for the pump.
 		uint16_t m_OutgoingChunkCount = 0;
 		uint32_t m_ChunkSendStall = 0; //!< Consecutive ticks the transport refused a chunk (backpressure).
 		uint64_t m_StateTransferProgressSerial = 0;
@@ -197,6 +243,8 @@ namespace RTE {
 		uint16_t m_IncomingNextChunkIndex = 0;
 		bool m_IncomingStateComplete = false;
 		std::vector<uint8_t> m_ReceivedState;
+		WorldJoinReport m_WorldJoinReport;
+		std::vector<uint8_t> m_PendingTailBytes;
 		NetLobbyStats m_Stats;
 	};
 

@@ -28,6 +28,7 @@ SELFTESTS = [
     "net-admission",
     "net-reconnect",
     "net-reconnect-session",
+    "net-world-join",
     "camera-null-scene",
     "rotate-primitive",
     "float-text",

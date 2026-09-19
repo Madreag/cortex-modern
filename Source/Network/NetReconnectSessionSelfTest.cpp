@@ -421,7 +421,7 @@ namespace RTE {
 			store.SetPath(StorePath("store"));
 
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			record.epoch = Ramp<16>(0x10);
 			record.stableSeat = 1;
 			record.holderGeneration = 3;
@@ -2325,7 +2325,7 @@ namespace RTE {
 			NetReconnectTicketStore store;
 			store.SetPath(StorePath("signal"));
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			record.epoch = Ramp<16>(0x11);
 			record.stableSeat = 0;
 			record.holderGeneration = 1;
@@ -2493,7 +2493,7 @@ namespace RTE {
 			NetReconnectTicketStore store;
 			store.SetPath(StorePath("failclosed"));
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			record.epoch = Ramp<16>(0x22);
 			record.stableSeat = 0;
 			record.holderGeneration = 1;
@@ -6444,7 +6444,7 @@ namespace RTE {
 			NetReconnectTicketStore store;
 			store.SetPath(StorePath("refused-fallback"));
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			record.epoch = Ramp<16>(0x21);
 			record.stableSeat = 1;
 			record.holderGeneration = 3;

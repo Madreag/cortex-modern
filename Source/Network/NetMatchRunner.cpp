@@ -1,6 +1,7 @@
 #include "NetMatchRunner.h"
 
 #include "NetIdentity.h"
+#include "NetWorldJoin.h"
 
 #include "nlohmann/json.hpp"
 
@@ -47,6 +48,8 @@ namespace RTE {
 		m_MatchConfig = config.matchConfig;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
+		m_WorldJoinImage = false;
+		m_ReceivedStateBytes.clear();
 		m_State = NetMatchRuntimeState::SessionStarting;
 
 		if (config.host == !config.joinAddress.empty()) {
@@ -63,7 +66,7 @@ namespace RTE {
 
 		NetSessionConfig sessionConfig = config.sessionConfig;
 		// A one-peer roster has no remote to wait for: the host is the whole round.
-		sessionConfig.readyWithoutPeers = config.host && m_MatchConfig.peerCount == 1;
+		sessionConfig.readyWithoutPeers = config.host && (m_MatchConfig.peerCount == 1 || m_MatchConfig.persistentWorld);
 		const bool sessionStarted = config.host
 			? session.StartHost(transport, std::move(sessionConfig), error)
 			: session.StartClient(transport, config.joinAddress, std::move(sessionConfig), error);
@@ -72,7 +75,7 @@ namespace RTE {
 			return false;
 		}
 		// The host waits for every client (peerCount-1); a client waits for the host alone.
-		const uint32_t expectedReadyPeers = config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U;
+		const uint32_t expectedReadyPeers = sessionConfig.readyWithoutPeers ? 0U : (config.host ? static_cast<uint32_t>(m_MatchConfig.peerCount - 1) : 1U);
 		if (!WaitForSessionReady(transport, session, expectedReadyPeers, config.sessionWaitMs, error)) {
 			return false;
 		}
@@ -108,6 +111,11 @@ namespace RTE {
 			if (config.postLobbySettleMs > 0) {
 				std::this_thread::sleep_for(std::chrono::milliseconds(config.postLobbySettleMs));
 			}
+		}
+
+		if (m_WorldJoinImage) {
+			m_State = NetMatchRuntimeState::Running;
+			return true;
 		}
 
 		m_State = NetMatchRuntimeState::LockstepStarting;
@@ -571,6 +579,13 @@ namespace RTE {
 			if (m_Config.publishLobby) {
 				m_Config.publishLobby(BuildLobbySnapshot(transport, session));
 			}
+			if (m_Lobby.HasCompleteStateTransfer() && IsWorldJoinImageBlob(m_Lobby.PeekReceivedState())) {
+				m_MatchConfig = m_Lobby.GetMatchConfig();
+				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+				m_ReceivedStateBytes = m_Lobby.TakeReceivedState();
+				m_WorldJoinImage = true;
+				return true;
+			}
 			if (m_Lobby.IsStarted()) {
 				m_MatchConfig = m_Lobby.GetMatchConfig();
 				m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
@@ -619,6 +634,9 @@ namespace RTE {
 		lockstepConfig.remoteTransportPeerIds = BuildRemoteTransportMap(session);
 		// Host-star: the host relays each client's frames/checksums to the other clients.
 		lockstepConfig.relayToOtherPeers = config.host;
+		// A world joiner's round opens inside one that has been running: the members it joins owe it
+		// every frame from its own start, so none of them ramps in behind the input delay.
+		lockstepConfig.joinsRunningRound = m_WorldJoinStarting;
 		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
 		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
 		// other agreed field; a joining peer's own request only carries its local default.
@@ -719,6 +737,47 @@ namespace RTE {
 			snapshot.members.push_back(member);
 		}
 		return snapshot;
+	}
+
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error) {
+		m_Lobby.SetStartFrame(startFrame);
+		m_Config.startFrame = startFrame;
+		m_State = NetMatchRuntimeState::LockstepStarting;
+		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
+		// because a wait loop would hold the sim update it runs inside. The deadline counts those
+		// updates; this runs inside the tick, where a wall clock is a per-machine decision.
+		m_WorldJoinStarting = true;
+		m_WorldJoinStartTicks = 0;
+		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
+			return false;
+		}
+		return PumpWorldJoinLockstepStart(coordinator, error);
+	}
+
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error) {
+		if (!IsWorldJoinLockstepStarting()) {
+			return m_State == NetMatchRuntimeState::Running;
+		}
+		++m_WorldJoinStartTicks;
+		coordinator.Tick(NetLockstepNowMs());
+		if (coordinator.IsRunning()) {
+			m_State = NetMatchRuntimeState::Running;
+			m_WorldJoinStarting = false;
+			return true;
+		}
+		if (coordinator.IsFailed() || coordinator.IsStopped()) {
+			m_WorldJoinStarting = false;
+			SetFailed(coordinator.GetStats().timeoutReason);
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		if (m_WorldJoinStartTicks > m_Config.worldJoinStartWaitTicks) {
+			m_WorldJoinStarting = false;
+			SetFailed("timed out waiting for lockstep start after " + std::to_string(m_WorldJoinStartTicks) + " updates");
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		return false;
 	}
 
 	void NetMatchRunner::SetFailed(const std::string& error) {
