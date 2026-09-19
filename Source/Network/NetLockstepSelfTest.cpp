@@ -3,6 +3,7 @@
 #include "allegro.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
 #include "PieMenu.h"
 #include "PathFinder.h"
@@ -14328,6 +14329,15 @@ namespace RTE {
 
 		template <typename LobbyConfig>
 		bool TransferMigrationSnapshot(const NetMatchConfig& match, const std::vector<uint8_t>& envelope, bool delegated, std::vector<uint8_t>& received, std::string* error) {
+			NetHash32 credential{};
+			const bool credentialDrawn = GetNetAuthCrypto().RandomBytes(credential.data(), credential.size());
+			if (!GetNetAuthCrypto().IsRealCrypto() || !credentialDrawn) {
+				*error = "capsule crypto=" + std::to_string(GetNetAuthCrypto().IsRealCrypto()) + " credential=" + std::to_string(credentialDrawn);
+				return false;
+			}
+			const auto configHash = NetMatchConfigUtil::HashConfig(match);
+			const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"session", match.sessionId}, {"config_hash", configHash}, {"state", envelope}});
+			size_t openedCapsules = 0;
 			LoopbackTransport hostWire, clientWire;
 			if (!hostWire.StartHost(delegated ? 45806 : 45805, error) || !clientWire.Connect("loopback", delegated ? 45806 : 45805, error))
 				return false;
@@ -14346,11 +14356,42 @@ namespace RTE {
 			hostConfig.migrationListenPort = 45806;
 			hostConfig.migrationListenAddrs = {"loopback"};
 			hostConfig.snapshotProviderPeerId = delegated ? 2 : 0;
-			hostConfig.sealMigration = [](uint8_t, const NetHash32&, std::vector<uint8_t>& capsule) {
-				capsule = {1};
-				return true;
+			hostConfig.sealMigration = [&](uint8_t peer, const NetHash32& hash, std::vector<uint8_t>& capsule) {
+				std::vector<uint8_t> context(hash.begin(), hash.end());
+				context.push_back(peer);
+				return NetAuthSeal(credential, context, plaintext, capsule);
 			};
-			hostConfig.openMigration = [](const auto&) { return true; };
+			hostConfig.openMigration = [&](const NetLobbyMigration& capsule) {
+				std::vector<uint8_t> context(capsule.configHash.begin(), capsule.configHash.end());
+				context.push_back(capsule.peerId);
+				std::vector<uint8_t> opened;
+				const bool authenticated = NetAuthOpen(credential, context, capsule.sealedState, opened);
+				if (authenticated && opened == plaintext) {
+					++openedCapsules;
+					return true;
+				}
+				return false;
+			};
+			NetLobbyMigration capsule;
+			capsule.kind = 2;
+			capsule.peerId = 2;
+			capsule.configHash = configHash;
+			const bool sealed = hostConfig.sealMigration(2, configHash, capsule.sealedState);
+			const bool opened = sealed && hostConfig.openMigration(capsule);
+			if (!opened) {
+				*error = "capsule sealed=" + std::to_string(sealed) + " opened=" + std::to_string(opened) + " bytes=" + std::to_string(capsule.sealedState.size());
+				return false;
+			}
+			capsule.sealedState.back() ^= 1;
+			const bool changedTagAccepted = hostConfig.openMigration(capsule);
+			capsule.sealedState.back() ^= 1;
+			capsule.configHash[0] ^= 1;
+			const bool changedContextAccepted = hostConfig.openMigration(capsule);
+			if (changedTagAccepted || changedContextAccepted) {
+				*error = "capsule accepted tag=" + std::to_string(changedTagAccepted) + " context=" + std::to_string(changedContextAccepted);
+				return false;
+			}
+			const size_t openedBeforeLobby = openedCapsules;
 			LobbyConfig clientConfig = hostConfig;
 			clientConfig.host = false;
 			clientConfig.localPeerId = 2;
@@ -14370,6 +14411,10 @@ namespace RTE {
 					return false;
 				}
 				if (host.IsStarted() && client.IsStarted()) {
+					if (openedCapsules == openedBeforeLobby) {
+						*error = "lobby authenticated capsules=" + std::to_string(openedCapsules - openedBeforeLobby);
+						return false;
+					}
 					received = client.TakeReceivedState();
 					if (received != envelope || (delegated && host.TakeReceivedState() != envelope) || client.GetStartFrame() != 6 || client.GetMatchConfig() != match) {
 						*error = "successor resync changed the archive, roster or applied boundary";
