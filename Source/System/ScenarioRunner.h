@@ -200,6 +200,10 @@ namespace RTE {
 		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
 		static void SetWorldCatchUpActivation(uint64_t activationTick);
 		static bool WorldCatchUpActive();
+		/// Whether the tail is exhausted at the announced frame and the sim waits for the coordinator.
+		static bool WorldCatchUpHolding();
+		/// Ends the catch-up window once the joiner's coordinator runs; normal pacing resumes here.
+		static void ReleaseWorldCatchUp();
 		static uint64_t WorldCatchUpAppliedThrough();
 		static uint64_t WorldCatchUpActivationTick();
 		/// Whether the tail still holds a committed frame for this tick.
@@ -211,6 +215,15 @@ namespace RTE {
 		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
 		/// to hold that very frame, so the sim clock never runs past what the world committed.
 		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
+		/// Opens one real frame's catch-up budget. Every grant below is counted against it.
+		static void BeginWorldCatchUpFrame();
+		/// Takes one catch-up sim tick out of this real frame's budget.
+		static bool TakeWorldCatchUpGrant(uint64_t nextSimTick);
+		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying
+		/// its committed tail is driven by that tail, not by the coordinator, so it is not held.
+		static bool LockstepStopHoldsControllers();
+		/// Whether this tick runs the offline command paths: no committed frame drives it from anywhere.
+		static bool OfflineCommandsDriveTick();
 
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.
@@ -289,6 +302,9 @@ namespace RTE {
 		/// Records a synced control handoff: the actor's frames now come from this peer. Co-op players
 		/// share a team, so per-actor control must override the per-team ownership policy.
 		static void SetLockstepControlOverride(int64_t actorUniqueID, uint8_t ownerPeerId);
+		/// The peer a live handoff gave this actor to; 0 when no member holds it. A dropped seat's
+		/// claim is not a holder, so an actor a departed member left behind reads as unowned here.
+		static uint8_t GetLockstepControlOverrideOwner(int64_t actorUniqueID);
 		/// Latches the first lockstep owner transfer after the match is running, for the e2e owner log.
 		static void NoteE2eOwnerTransfer(int64_t actorUniqueID);
 		/// The latched transfer uid, or 0 if none has been observed.

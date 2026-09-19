@@ -164,6 +164,8 @@ namespace RTE {
 		void NoteCapture(double stallMs, uint64_t bytes);
 		void NoteCatchUp(uint64_t ticks, uint64_t elapsedMs);
 		void NoteTransfer(uint64_t bytes);
+		/// A bootstrap that could not be started at all, so the world ended it instead of retrying.
+		void NoteBootstrapStall();
 		/// Records one tick hashed with and without a capture. No capture path produces that pair yet.
 		void NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture);
 
@@ -172,6 +174,7 @@ namespace RTE {
 		uint64_t Captures() const { return m_Captures; }
 		uint64_t CaptureCeilingMisses() const { return m_CaptureCeilingMisses; }
 		double CatchUpRatio() const; //!< Joiner ticks per world tick; must exceed 1 to converge.
+		uint64_t BootstrapStalls() const { return m_BootstrapStalls; }
 		uint64_t PurityProbes() const { return m_PurityProbes; }
 		uint64_t PurityMismatches() const { return m_PurityMismatches; }
 		std::string BuildReportJson() const;
@@ -186,6 +189,7 @@ namespace RTE {
 		uint64_t m_CatchUpTicks = 0;
 		uint64_t m_CatchUpMs = 0;
 		uint64_t m_TransferBytes = 0;
+		uint64_t m_BootstrapStalls = 0;
 		uint64_t m_PurityProbes = 0;
 		uint64_t m_PurityMismatches = 0;
 		uint64_t m_FirstPurityMismatchTick = 0;
@@ -299,6 +303,18 @@ namespace RTE {
 	/// Whether an applied Activate binds the seat's brain on this peer: the host asked for it, a
 	/// resident was seated and the slot is a real player seat.
 	bool WorldTransitionBindsBrain(const NetGameWorldTransition& transition, bool seated);
+
+	/// One brain an Activate could seat, read from lockstep state: the committed actor roster's order
+	/// and the synced control-handoff map, so every peer offers the same list in the same order.
+	struct NetWorldBrainCandidate {
+		int64_t actorUID = 0;
+		int team = 0;
+		uint8_t ownerPeerId = 0; //!< The member holding it through a synced handoff; 0 when none does.
+	};
+
+	/// The brain an Activate may seat: the first of the transition's team that no other member holds.
+	/// 0 means the activation spawns the transition's own preset instead of taking a resident.
+	int64_t ChooseWorldActivateBrain(const std::vector<NetWorldBrainCandidate>& brains, const NetGameWorldTransition& transition);
 
 	/// What a bootstrap whose E has arrived gets: a member is admitted and its Activate is committed;
 	/// an overflow spectator only keeps streaming.

@@ -730,7 +730,21 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			Actor* seated = nullptr;
 			if (transition->kind == NetGameWorldTransition::Activate) {
-				seated = g_MovableMan.GetFirstBrainActor(transition->team);
+				// The candidates come from lockstep state alone - the committed roster's order and the
+				// synced handoff map - so every peer picks the same actor, and never one a member holds.
+				std::vector<NetWorldBrainCandidate> brains;
+				if (transition->team >= Activity::Teams::TeamOne && transition->team < Activity::Teams::MaxTeamCount) {
+					for (const Actor* candidate: *g_MovableMan.GetTeamRoster(transition->team)) {
+						if (candidate == nullptr || !candidate->HasObjectInGroup("Brains")) {
+							continue;
+						}
+						const int64_t uid = static_cast<int64_t>(candidate->GetUniqueID());
+						brains.push_back(NetWorldBrainCandidate{uid, candidate->GetTeam(), ScenarioRunner::GetLockstepControlOverrideOwner(uid)});
+					}
+				}
+				if (const int64_t chosen = ChooseWorldActivateBrain(brains, *transition); chosen != 0) {
+					seated = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(chosen)));
+				}
 			}
 			if (!seated && !transition->className.empty()) {
 				if (const Entity* preset = g_PresetMan.GetEntityPreset(transition->className, transition->preset, transition->module)) {
@@ -4882,7 +4896,7 @@ void MovableMan::UpdateControllers() {
 	const bool lockstepActive = ScenarioRunner::IsLockstepControllerSyncActive();
 	// A stopped coordinator still owns the sim: surface its stop reason so the match-level
 	// handling (resync, clean end, error) runs — never silently degrade to per-machine control.
-	if (!lockstepActive && ScenarioRunner::HasLockstepCoordinator()) {
+	if (ScenarioRunner::LockstepStopHoldsControllers()) {
 		const std::string reason = ScenarioRunner::GetLockstepStopReason();
 		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
 		return;
@@ -5140,7 +5154,7 @@ void MovableMan::UpdateControllers() {
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ActorsAI);
 
-	if (!lockstepActive) {
+	if (ScenarioRunner::OfflineCommandsDriveTick()) {
 		CommitOfflineValueWrites();
 		ApplyOfflineGameCommands(simTick);
 	}

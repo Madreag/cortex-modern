@@ -289,6 +289,15 @@ namespace RTE {
 		static NetPeerId ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer);
 		/// Applies one world-join report to the host's plane and sends the E it earns.
 		static void ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs);
+		/// Whether a bootstrap can be started at all. A bootstrap with no world lobby id never can, so
+		/// the world ends it instead of building its image again every tick.
+		static bool WorldBootstrapCanStart(const NetWorldJoinSession& session, std::string* reason);
+		/// Records what the lobby did with a bootstrap's image. A refusal is not a start: the bootstrap
+		/// stays unstarted so the next pump retries it.
+		static bool NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough);
+		/// Ends the joiner's catch-up the moment its own coordinator runs: the round owns the wire and
+		/// the pacing from there. Returns whether this call released it.
+		static bool ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
@@ -648,6 +657,8 @@ namespace RTE {
 		NetWorldJoinHost m_WorldJoin;
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
+		std::vector<uint8_t> m_WorldJoinImageBytes; //!< The published archive, read once per image.
+		std::string m_WorldJoinImageDigest;         //!< Its digest, so a stale cache is refused without a re-hash.
 	};
 
 } // namespace RTE

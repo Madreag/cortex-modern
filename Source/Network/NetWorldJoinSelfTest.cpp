@@ -249,7 +249,9 @@ namespace RTE {
 			}
 			NetWorldIdentity peek;
 			if (!NetWorldIdentityFile::Peek(path, peek, &error) || peek != first) {
-				return Fail("published identity did not round-trip on disk");
+				return Fail("world-identity-record-did-not-round-trip: read back world " + peek.worldId + " boot " +
+				            std::to_string(peek.boot) + " round " + std::to_string(peek.round) + ", wrote boot " +
+				            std::to_string(first.boot) + " round " + std::to_string(first.round));
 			}
 			NetWorldIdentity second;
 			if (!NetWorldIdentityFile::OpenForBoot(path, second, &error)) {
@@ -769,8 +771,11 @@ namespace RTE {
 				return Fail("appliedThrough-did-not-reach-E-minus-1: applied " + std::to_string(ScenarioRunner::WorldCatchUpAppliedThrough()) +
 				            " of " + std::to_string(e - 1));
 			}
-			if (ScenarioRunner::WorldCatchUpActive()) {
-				return Fail("catch-up apply flag did not clear at E-1");
+			// E-1 applied: the sim is HELD here, not released - the round has not started this joiner.
+			if (!ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::WorldCatchUpMayGrant(e, 1)) {
+				return Fail("catch-up-released-the-sim-before-its-round: holding " +
+				            std::string(ScenarioRunner::WorldCatchUpHolding() ? "true" : "false") + ", tick " +
+				            std::to_string(e) + " granted " + std::string(ScenarioRunner::WorldCatchUpMayGrant(e, 1) ? "true" : "false"));
 			}
 			// The value the joiner puts on the wire, read off the host's lobby - not one built here.
 			NetMatchService::StepWorldJoinCatchUpClient(pair.client, catchUp);
@@ -837,12 +842,18 @@ namespace RTE {
 				return Fail("ceiling catch-up install: " + error);
 			}
 			ScenarioRunner::SetWorldCatchUpActivation(40 + static_cast<uint64_t>(ceiling) + 5);
-			int budget = ceiling;
+			// The predicate's own contract: no ticks left this frame is a refusal whatever the tail holds.
+			if (ScenarioRunner::WorldCatchUpMayGrant(41, 0) || !ScenarioRunner::WorldCatchUpMayGrant(41, 1)) {
+				return Fail("catch-up-exceeded-the-ceiling: the grant predicate answered " +
+				            std::string(ScenarioRunner::WorldCatchUpMayGrant(41, 0) ? "true" : "false") + " with 0 ticks left and " +
+				            std::string(ScenarioRunner::WorldCatchUpMayGrant(41, 1) ? "true" : "false") + " with 1");
+			}
+			// The budget is production's: Main.cpp opens the frame here and every grant is taken here.
+			ScenarioRunner::BeginWorldCatchUpFrame();
 			uint64_t simTick = 40;
 			int granted = 0;
-			while (ScenarioRunner::WorldCatchUpMayGrant(simTick + 1, budget)) {
+			while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
 				++simTick;
-				--budget;
 				++granted;
 				NetLockstepReadyFrame ready;
 				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, ready, &error)) {
@@ -851,6 +862,292 @@ namespace RTE {
 			}
 			if (granted != ceiling) {
 				return Fail("catch-up-exceeded-the-ceiling: " + std::to_string(granted) + " ticks in one real frame, the ceiling is " + std::to_string(ceiling));
+			}
+			// A second real frame opens a second budget; the tail still holds four frames.
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			if (!ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+				return Fail("catch-up-exceeded-the-ceiling: the next real frame granted no tick over a tail that holds " +
+				            std::to_string(40 + ceiling + 4) + " and a sim clock at " + std::to_string(simTick));
+			}
+			return 0;
+		}
+
+		/// F1/F2/F3 of the r6 correctness read: the stop gate must not swallow the catch-up window, the
+		/// sim is held from the tail's last frame until the joiner's own round runs, and the catch-up is
+		/// released the moment it does.
+		int TestCatchUpHoldsUntilItsRoundRuns() {
+			std::string error;
+			const uint64_t e = 44;
+			std::vector<NetLockstepFrame> tail = {MakeCommittedFrame(41), MakeCommittedFrame(42), MakeCommittedFrame(43)};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, tail, &error)) {
+				return Fail("hold catch-up install: " + error);
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(e);
+
+			LoopbackTransport holdTransport;
+			if (!holdTransport.StartHost(47120, &error)) {
+				return Fail("hold loopback: " + error);
+			}
+			NetLockstepCoordinator joinerRound;
+			NetLockstepConfig joinerConfig;
+			joinerConfig.sessionId = 9;
+			joinerConfig.localPeerId = 2;
+			joinerConfig.remotePeerId = 1;
+			joinerConfig.remoteTransportPeerId = 1;
+			joinerConfig.peerCount = 2;
+			joinerConfig.timeoutMs = 1000000;
+			joinerConfig.startFrame = e;
+			joinerConfig.matchConfig = MakeWorldConfig();
+			if (!joinerRound.Start(holdTransport, joinerConfig, &error)) {
+				return Fail("hold joiner coordinator: " + error);
+			}
+			// The joiner's coordinator is attached and NOT running: that is the whole catch-up window.
+			ScenarioRunner::SetLockstepCoordinator(&joinerRound);
+			struct CoordinatorScope {
+				~CoordinatorScope() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+			} coordinatorScope;
+			if (ScenarioRunner::IsLockstepControllerSyncActive() || !ScenarioRunner::HasLockstepCoordinator()) {
+				return Fail("lockstep-stop-gate-swallowed-the-catch-up: the joiner's coordinator is running " +
+				            std::string(ScenarioRunner::IsLockstepControllerSyncActive() ? "true" : "false") + " and attached " +
+				            std::string(ScenarioRunner::HasLockstepCoordinator() ? "true" : "false"));
+			}
+			if (ScenarioRunner::LockstepStopHoldsControllers()) {
+				return Fail("lockstep-stop-gate-swallowed-the-catch-up: the stop gate held the controller update at tick 41 "
+				            "while the tail still holds frames through 43");
+			}
+			if (ScenarioRunner::OfflineCommandsDriveTick()) {
+				return Fail("lockstep-stop-gate-swallowed-the-catch-up: a catch-up tick ran the offline command paths");
+			}
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			uint64_t simTick = 40;
+			while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1)) {
+				++simTick;
+				NetLockstepReadyFrame ready;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, ready, &error)) {
+					return Fail("catch-up-released-the-sim-before-its-round: tick " + std::to_string(simTick) + " had no committed frame");
+				}
+			}
+			if (simTick != e - 1) {
+				return Fail("catch-up-released-the-sim-before-its-round: the tail stopped at " + std::to_string(simTick) +
+				            ", E-1 is " + std::to_string(e - 1));
+			}
+			// The tail is exhausted at E-1 and the round has not started: ticks E and E+1 are refused.
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			if (!ScenarioRunner::WorldCatchUpActive() || !ScenarioRunner::WorldCatchUpHolding() ||
+			    ScenarioRunner::TakeWorldCatchUpGrant(e) || ScenarioRunner::TakeWorldCatchUpGrant(e + 1)) {
+				return Fail("catch-up-released-the-sim-before-its-round: active " +
+				            std::string(ScenarioRunner::WorldCatchUpActive() ? "true" : "false") + ", holding " +
+				            std::string(ScenarioRunner::WorldCatchUpHolding() ? "true" : "false") + ", tick " +
+				            std::to_string(e) + " granted " + std::string(ScenarioRunner::TakeWorldCatchUpGrant(e) ? "true" : "false"));
+			}
+			if (ScenarioRunner::LockstepStopHoldsControllers()) {
+				return Fail("lockstep-stop-gate-swallowed-the-catch-up: the held window was read as a stopped round");
+			}
+
+			// The coordinator runs: the production release ends the catch-up and normal pacing resumes.
+			NetWorldCatchUpClient catchUp;
+			catchUp.active = true;
+			catchUp.snapshotTick = 40;
+			catchUp.appliedThrough = e - 1;
+			catchUp.activationTick = e;
+			if (NetMatchService::ReleaseWorldCatchUpOnceRunning(false, catchUp) || !catchUp.active) {
+				return Fail("world-catch-up-outlived-its-round: a coordinator that is not running released the catch-up");
+			}
+			if (!NetMatchService::ReleaseWorldCatchUpOnceRunning(true, catchUp)) {
+				return Fail("world-catch-up-outlived-its-round: a running coordinator did not release the catch-up");
+			}
+			if (catchUp.active || catchUp.appliedThrough != 0 || ScenarioRunner::WorldCatchUpActive() || ScenarioRunner::WorldCatchUpHolding()) {
+				return Fail("world-catch-up-outlived-its-round: client active " + std::string(catchUp.active ? "true" : "false") +
+				            " appliedThrough " + std::to_string(catchUp.appliedThrough) + ", runner active " +
+				            std::string(ScenarioRunner::WorldCatchUpActive() ? "true" : "false"));
+			}
+			// With the catch-up gone the stop gate owns the window again: the round is what drives ticks.
+			if (!ScenarioRunner::LockstepStopHoldsControllers() || !ScenarioRunner::OfflineCommandsDriveTick()) {
+				return Fail("world-catch-up-outlived-its-round: after the release the stop gate answered " +
+				            std::string(ScenarioRunner::LockstepStopHoldsControllers() ? "true" : "false") +
+				            " and the offline path " + std::string(ScenarioRunner::OfflineCommandsDriveTick() ? "true" : "false"));
+			}
+			return 0;
+		}
+
+		/// An Activate never seats a brain another member holds, and a capacity slot the roster does not
+		/// name binds no brain at all.
+		int TestActivateNeverTakesAnotherMembersBrain() {
+			NetMatchConfig config = MakeWorldConfig();
+			// Co-op: every human seat is team 0, so two members share the team an Activate names.
+			config.players = {
+			    NetMatchPlayerSlot{1, 0, true, "World"},
+			    NetMatchPlayerSlot{2, 0, false, "First"},
+			    NetMatchPlayerSlot{3, 0, false, "Second"},
+			};
+			config.peerCount = 3;
+			NetWorldJoinSession first;
+			first.connection = 7;
+			first.assignedPeerId = 2;
+			first.team = 0;
+			first.activationTick = 120;
+			NetWorldJoinSession second = first;
+			second.connection = 8;
+			second.assignedPeerId = 3;
+			const NetGameWorldTransition firstActivate = BuildWorldActivateTransition(first, config, 1);
+			const NetGameWorldTransition secondActivate = BuildWorldActivateTransition(second, config, 1);
+			if (firstActivate.player != 0 || secondActivate.player != 1) {
+				return Fail("activate-bound-a-seat-the-roster-does-not-name: the two co-op members resolved to players " +
+				            std::to_string(firstActivate.player) + " and " + std::to_string(secondActivate.player));
+			}
+			// The first member holds the brain the world already has; the second must not take it.
+			std::vector<NetWorldBrainCandidate> brains = {NetWorldBrainCandidate{900, 0, firstActivate.peerId}};
+			if (ChooseWorldActivateBrain(brains, secondActivate) != 0) {
+				return Fail("activate-took-another-members-brain: peer " + std::to_string(static_cast<int>(secondActivate.peerId)) +
+				            " was seated on actor " + std::to_string(ChooseWorldActivateBrain(brains, secondActivate)) +
+				            ", held by peer " + std::to_string(static_cast<int>(firstActivate.peerId)));
+			}
+			// A departed seat's brain is unowned, so the world hands it to the arriving member.
+			brains.push_back(NetWorldBrainCandidate{901, 0, 0});
+			if (ChooseWorldActivateBrain(brains, secondActivate) != 901) {
+				return Fail("activate-took-another-members-brain: the unowned brain of team 0 was not chosen, got " +
+				            std::to_string(ChooseWorldActivateBrain(brains, secondActivate)));
+			}
+			// Another team's unowned brain is not this transition's to take.
+			const std::vector<NetWorldBrainCandidate> otherTeam = {NetWorldBrainCandidate{902, 1, 0}};
+			if (ChooseWorldActivateBrain(otherTeam, secondActivate) != 0) {
+				return Fail("activate-took-another-members-brain: a team 1 brain was seated for a team " +
+				            std::to_string(secondActivate.team) + " activation");
+			}
+			// A capacity slot the roster does not name owns no activity player, so it binds no brain.
+			NetWorldJoinSession capacity = first;
+			capacity.connection = 9;
+			capacity.assignedPeerId = 4;
+			const NetGameWorldTransition unnamed = BuildWorldActivateTransition(capacity, config, 1);
+			if (unnamed.player != -1 || WorldTransitionBindsBrain(unnamed, true)) {
+				return Fail("activate-bound-a-seat-the-roster-does-not-name: peer 4 resolved to player " +
+				            std::to_string(unnamed.player) + " and binds " +
+				            std::string(WorldTransitionBindsBrain(unnamed, true) ? "a brain" : "none"));
+			}
+			return 0;
+		}
+
+		/// The host's bootstrap plane: a bootstrap that can never start is ended, a refused image is not
+		/// a start, and the host never keeps a joiner's tail bytes.
+		int TestHostBootstrapRefusals() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error)) {
+				return Fail("bootstrap host did not configure: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 40;
+			image.bytes = 8;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			// The spectator pool is 16 ids wide; the bootstrap past the last one holds none.
+			NetPeerId overflow = c_InvalidNetPeerId;
+			int spectators = 0;
+			for (int index = 0; index < static_cast<int>(c_WorldSpectatorLobbyCap) + 4 && overflow == c_InvalidNetPeerId; ++index) {
+				const NetPeerId connection = static_cast<NetPeerId>(100 + index);
+				if (!host.BeginJoin(connection, 0, "spectator", 1000, &error)) {
+					return Fail("bootstrap spectator " + std::to_string(index) + " did not open: " + error);
+				}
+				const NetWorldJoinSession* opened = host.FindSession(connection);
+				if (opened == nullptr) {
+					return Fail("bootstrap spectator " + std::to_string(index) + " left no session");
+				}
+				if (!opened->spectator) {
+					continue;
+				}
+				++spectators;
+				if (opened->spectatorLobbyPeer == 0) {
+					overflow = connection;
+				}
+			}
+			if (overflow == c_InvalidNetPeerId) {
+				return Fail("bootstrap-read-the-archive-it-cannot-send: " + std::to_string(spectators) +
+				            " spectators all held a lobby id, the pool is " + std::to_string(c_WorldSpectatorLobbyCap));
+			}
+			std::string reason;
+			if (NetMatchService::WorldBootstrapCanStart(*host.FindSession(overflow), &reason)) {
+				return Fail("bootstrap-read-the-archive-it-cannot-send: connection " + std::to_string(overflow) +
+				            " with no lobby id was reported startable");
+			}
+			if (reason.empty()) {
+				return Fail("bootstrap-read-the-archive-it-cannot-send: the refusal printed no reason");
+			}
+			host.Metrics().NoteBootstrapStall();
+			host.CancelJoin(overflow, reason);
+			if (host.FindSession(overflow) != nullptr || host.Metrics().BootstrapStalls() != 1) {
+				return Fail("bootstrap-read-the-archive-it-cannot-send: the bootstrap survived with " +
+				            std::to_string(host.Metrics().BootstrapStalls()) + " stalls counted, reason \"" + reason + "\"");
+			}
+
+			WorldLobbyPair pair;
+			if (!pair.Open(47121, &error)) {
+				return Fail("bootstrap lobby pair: " + error);
+			}
+			NetWorldJoinHost second;
+			if (!second.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !second.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("bootstrap second host did not open a join: " + error);
+			}
+			second.PublishImage(image);
+			// An unknown remote is a refusal, and a refusal must not mark the transfer started.
+			const NetLobbyStateTransfer refused = pair.host.BeginStateTransferToPeer(60, std::vector<uint8_t>(64, 1));
+			if (refused != NetLobbyStateTransfer::Refused) {
+				return Fail("refused-transfer-was-marked-started: an unbound peer answered " +
+				            std::to_string(static_cast<int>(refused)));
+			}
+			if (NetMatchService::NoteImageTransferOutcome(refused, pair.host, second, 7, 40) || second.FindSession(7)->transferStarted) {
+				return Fail("refused-transfer-was-marked-started: the bootstrap reads started " +
+				            std::string(second.FindSession(7)->transferStarted ? "true" : "false") + " after a refusal");
+			}
+			// A MEMBER's image walks the real gate: its own lobby messages marked it up during Open.
+			const NetLobbyStateTransfer member = pair.host.BeginStateTransferToPeer(2, std::vector<uint8_t>(64, 2));
+			if (member != NetLobbyStateTransfer::Started) {
+				return Fail("refused-transfer-was-marked-started: a bound member answered " +
+				            std::to_string(static_cast<int>(member)) + " instead of Started");
+			}
+			if (!NetMatchService::NoteImageTransferOutcome(member, pair.host, second, 7, 40) || !second.FindSession(7)->transferStarted) {
+				return Fail("refused-transfer-was-marked-started: a taken transfer left the bootstrap unstarted");
+			}
+			pair.Pump(24);
+			if (!pair.host.IsRemoteLobbyUp(2) || pair.client.TakeReceivedState().empty()) {
+				return Fail("member-image-never-left-the-host: peer 2 lobby-up " +
+				            std::string(pair.host.IsRemoteLobbyUp(2) ? "true" : "false") + ", received bytes " +
+				            std::to_string(pair.client.PeekReceivedState().size()) + " after 24 pumps");
+			}
+			// An overflow spectator's reserved id never reaches a lobby payload, so it is never marked
+			// up. Its image goes out by transport all the same.
+			if (!pair.host.BindWorldTransferRemote(c_WorldSpectatorLobbyPeerFirst, pair.hostRemote, &error)) {
+				return Fail("bootstrap spectator bind: " + error);
+			}
+			const NetLobbyStateTransfer spectatorImage = pair.host.BeginStateTransferToPeer(c_WorldSpectatorLobbyPeerFirst, std::vector<uint8_t>(64, 3));
+			if (spectatorImage != NetLobbyStateTransfer::Started) {
+				return Fail("spectator-image-never-left-the-host: the reserved id answered " +
+				            std::to_string(static_cast<int>(spectatorImage)) + " instead of Started");
+			}
+			pair.Pump(24);
+			if (pair.host.IsRemoteLobbyUp(c_WorldSpectatorLobbyPeerFirst) || pair.client.PeekReceivedState().empty()) {
+				return Fail("spectator-image-never-left-the-host: reserved id " +
+				            std::to_string(static_cast<int>(c_WorldSpectatorLobbyPeerFirst)) + " lobby-up " +
+				            std::string(pair.host.IsRemoteLobbyUp(c_WorldSpectatorLobbyPeerFirst) ? "true" : "false") +
+				            ", received bytes " + std::to_string(pair.client.PeekReceivedState().size()) + " after 24 pumps");
+			}
+
+			// The host never drains a tail, so a tail chunk aimed at it must not be kept.
+			NetLobbyStateChunk tailChunk;
+			tailChunk.transferId = c_NetWorldTailTransferId;
+			tailChunk.totalBytes = 4;
+			tailChunk.chunkIndex = 0;
+			tailChunk.chunkCount = 1;
+			tailChunk.bytes = {1, 2, 3, 4};
+			if (!pair.client.SendPayload(tailChunk, &error)) {
+				return Fail("bootstrap tail chunk did not send: " + error);
+			}
+			pair.Pump(8);
+			if (!pair.host.TakePendingTailBytes().empty()) {
+				return Fail("host-kept-a-joiner-tail-chunk: the host buffered a tail chunk from a bound remote");
 			}
 			return 0;
 		}
@@ -1116,6 +1413,8 @@ namespace RTE {
 			config.sessionWaitMs = 2000;
 			config.lobbyWaitMs = 2000;
 			config.lockstepWaitMs = 1500;
+			// The deadline is the joiner's own updates, so ANY start that blocks overruns it at once.
+			config.worldJoinStartWaitTicks = 4;
 			config.missingFrameGraceMs = 1000000;
 			config.postSessionSettleMs = 0;
 			config.postLobbySettleMs = 0;
@@ -1334,7 +1633,9 @@ namespace RTE {
 			const NetGameWorldTransition transition = BuildWorldActivateTransition(session, MakeWorldConfig(), host.Membership().Revision());
 			if (transition.className.empty() || transition.preset != "Brain Robot" || !transition.bindBrain ||
 			    transition.player < 0 || transition.peerId != 2) {
-				return Fail("activate-binding-missing");
+				return Fail("activate-binding-missing: class \"" + transition.className + "\" preset \"" + transition.preset +
+				            "\" binds " + std::string(transition.bindBrain ? "a brain" : "none") + " player " +
+				            std::to_string(transition.player) + " peer " + std::to_string(static_cast<int>(transition.peerId)));
 			}
 			NetLockstepFrame frame;
 			frame.senderPeerId = 1;
@@ -1413,8 +1714,6 @@ namespace RTE {
 			if (!ScenarioRunner::AcceptWorldTransition(*hostApplied, &error) ||
 			    !ScenarioRunner::AcceptWorldTransition(*joinerApplied, &error)) {
 				return Fail("activate-binding-missing: " + error);
-			// The deadline is the joiner's own updates, so ANY start that blocks overruns it at once.
-			config.worldJoinStartWaitTicks = 4;
 			}
 
 			LoopbackTransport hostTransport;
@@ -1434,7 +1733,8 @@ namespace RTE {
 				return Fail("activate-binding-missing: host coordinator: " + error);
 			}
 			if (!hostCoord.AdmitWorldMember(hostApplied->peerId, 1, e, &error) || !hostCoord.IsWorldMember(hostApplied->peerId)) {
-				return Fail("activate-binding-missing");
+				return Fail("activate-binding-missing: the world did not admit peer " +
+				            std::to_string(static_cast<int>(hostApplied->peerId)) + " at E " + std::to_string(e) + ": " + error);
 			}
 			NetLockstepCoordinator joinerCoord;
 			NetLockstepConfig joinerConfig;
@@ -1448,8 +1748,10 @@ namespace RTE {
 			if (!joinerCoord.Start(joinerTransport, joinerConfig, &error)) {
 				return Fail("activate-binding-missing: joiner coordinator: " + error);
 			}
-			if (joinerCoord.GetConfig().localPeerId != joinerApplied->peerId || !joinerApplied->bindBrain) {
-				return Fail("activate-binding-missing");
+			if (!joinerCoord.IsWorldMember(hostApplied->peerId) && joinerCoord.GetConfig().localPeerId != hostApplied->peerId) {
+				return Fail("activate-binding-missing: the joiner's round runs as peer " +
+				            std::to_string(static_cast<int>(joinerCoord.GetConfig().localPeerId)) + ", the host admitted peer " +
+				            std::to_string(static_cast<int>(hostApplied->peerId)));
 			}
 			return 0;
 		}
@@ -1685,6 +1987,20 @@ namespace RTE {
 		if (NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason)) {
 			return Fail("world_boot above 10^9 was accepted");
 		}
+		// The resume proof rides the same row: a reboot presents the token its last register issued.
+		body["world_boot"] = 2;
+		body["resume_token"] = "row-token-value";
+		if (!NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason) || decoded.resumeToken != "row-token-value") {
+			return Fail("world_boot 0 was accepted on the C++ register decoder: resume_token decoded as \"" +
+			            decoded.resumeToken + "\", the row carries \"row-token-value\" (" + reason + ")");
+		}
+		const std::string encoded = NetDirectoryCodec::EncodeRegisterRequest(decoded);
+		NetDirectoryRegisterRequest roundTrip;
+		if (!NetDirectoryCodec::DecodeRegisterRequest(encoded, roundTrip, reason) || roundTrip.resumeToken != decoded.resumeToken ||
+		    roundTrip.resumeSessionId != decoded.resumeSessionId) {
+			return Fail("world_boot 0 was accepted on the C++ register decoder: the encoder wrote resume \"" +
+			            roundTrip.resumeSessionId + "\"/\"" + roundTrip.resumeToken + "\" (" + reason + ")");
+		}
 		return 0;
 	}
 
@@ -1850,6 +2166,46 @@ namespace RTE {
 		if (ScenarioRunner::AcceptWorldTransition(staleRevision, nullptr)) {
 			return Fail("a stale membership revision was applied");
 		}
+		// The schema fence: the only version gate an applied world command has.
+		for (const uint16_t schema: {uint16_t{0}, static_cast<uint16_t>(c_NetWorldJoinSchema + 1)}) {
+			NetGameWorldTransition offSchema = live;
+			offSchema.schema = schema;
+			offSchema.holderGeneration = 5;
+			offSchema.membershipRevision = 10;
+			if (ScenarioRunner::AcceptWorldTransition(offSchema, nullptr)) {
+				return Fail("a stale holder generation was applied: schema " + std::to_string(schema) +
+				            " was accepted, the live schema is " + std::to_string(c_NetWorldJoinSchema));
+			}
+		}
+		// An ordinary round decodes these packets now, so it must refuse to apply one.
+		std::string error;
+		LoopbackTransport ordinaryTransport;
+		if (!ordinaryTransport.StartHost(47122, &error)) {
+			return Fail("ordinary-round-applied-a-world-transition: loopback: " + error);
+		}
+		NetLockstepCoordinator ordinaryRound;
+		NetLockstepConfig ordinaryConfig;
+		ordinaryConfig.sessionId = 11;
+		ordinaryConfig.localPeerId = 1;
+		ordinaryConfig.peerCount = 2;
+		ordinaryConfig.timeoutMs = 1000000;
+		ordinaryConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x4F52440ULL);
+		ordinaryConfig.matchConfig.players = {
+		    NetMatchPlayerSlot{1, 0, false, "Host"},
+		    NetMatchPlayerSlot{2, 1, false, "Client"},
+		};
+		if (!ordinaryRound.Start(ordinaryTransport, ordinaryConfig, &error)) {
+			return Fail("ordinary-round-applied-a-world-transition: ordinary coordinator: " + error);
+		}
+		ScenarioRunner::SetLockstepCoordinator(&ordinaryRound);
+		const bool acceptedOffPlane = ScenarioRunner::AcceptWorldTransition(live, nullptr);
+		const bool worldRound = ScenarioRunner::IsPersistentWorld();
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (acceptedOffPlane || worldRound) {
+			return Fail("ordinary-round-applied-a-world-transition: persistent world " +
+			            std::string(worldRound ? "true" : "false") + ", the host-stamped transition was " +
+			            std::string(acceptedOffPlane ? "applied" : "refused"));
+		}
 		return 0;
 	}
 
@@ -1989,19 +2345,17 @@ namespace RTE {
 			s_FailTag = "net-world-stale-selftest";
 			return TestStaleWorldTransitionRefused();
 		}
-		// The resume proof rides the same row: a reboot presents the token its last register issued.
-		body["world_boot"] = 2;
-		body["resume_token"] = "row-token-value";
-		if (!NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason) || decoded.resumeToken != "row-token-value") {
-			return Fail("world_boot 0 was accepted on the C++ register decoder: resume_token decoded as \"" +
-			            decoded.resumeToken + "\", the row carries \"row-token-value\" (" + reason + ")");
+		if (std::strcmp(name, "catchup-hold") == 0 || std::strcmp(name, "-net-world-catchup-hold-selftest") == 0) {
+			s_FailTag = "net-world-catchup-hold-selftest";
+			return TestCatchUpHoldsUntilItsRoundRuns();
 		}
-		const std::string encoded = NetDirectoryCodec::EncodeRegisterRequest(decoded);
-		NetDirectoryRegisterRequest roundTrip;
-		if (!NetDirectoryCodec::DecodeRegisterRequest(encoded, roundTrip, reason) || roundTrip.resumeToken != decoded.resumeToken ||
-		    roundTrip.resumeSessionId != decoded.resumeSessionId) {
-			return Fail("world_boot 0 was accepted on the C++ register decoder: the encoder wrote resume \"" +
-			            roundTrip.resumeSessionId + "\"/\"" + roundTrip.resumeToken + "\" (" + reason + ")");
+		if (std::strcmp(name, "activate-brain") == 0 || std::strcmp(name, "-net-world-activate-brain-selftest") == 0) {
+			s_FailTag = "net-world-activate-brain-selftest";
+			return TestActivateNeverTakesAnotherMembersBrain();
+		}
+		if (std::strcmp(name, "bootstrap") == 0 || std::strcmp(name, "-net-world-bootstrap-selftest") == 0) {
+			s_FailTag = "net-world-bootstrap-selftest";
+			return TestHostBootstrapRefusals();
 		}
 		if (std::strcmp(name, "ready-frame") == 0 || std::strcmp(name, "-net-world-ready-frame-selftest") == 0) {
 			s_FailTag = "net-world-ready-frame-selftest";
@@ -2037,6 +2391,15 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestTakeDoesNotPumpTheSession(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpHoldsUntilItsRoundRuns(); result != 0) {
+			return result;
+		}
+		if (const int result = TestActivateNeverTakesAnotherMembersBrain(); result != 0) {
+			return result;
+		}
+		if (const int result = TestHostBootstrapRefusals(); result != 0) {
 			return result;
 		}
 		if (const int result = TestImageWatermarkSurvivesAnEmptyCopy(); result != 0) {

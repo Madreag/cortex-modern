@@ -1725,6 +1725,10 @@ static std::string ResyncSaveName() {
 		image.bytes = archive.size();
 		image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
 		image.digest = DigestWorldJoinBytes(archive);
+		// The bytes every bootstrap ships are kept here: the file is read and hashed once per image,
+		// not once per bootstrap per sim tick.
+		m_WorldJoinImageDigest = image.digest;
+		m_WorldJoinImageBytes = std::move(archive);
 		m_WorldJoin.PublishImage(image);
 		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
 	}
@@ -1795,46 +1799,71 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	bool NetMatchService::StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error) {
+	bool NetMatchService::StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable) {
+		if (outUnstartable) *outUnstartable = false;
 		if (!m_Runner || !m_WorldJoin.Image().IsValid()) {
 			if (error) *error = "the joiner has no image yet";
 			return false;
 		}
-		std::ifstream in(m_WorldJoin.Image().path, std::ios::binary);
-		std::vector<uint8_t> archive;
-		if (in) {
-			archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
-		}
-		if (archive.empty() || DigestWorldJoinBytes(archive) != m_WorldJoin.Image().digest) {
-			if (error) *error = "the published archive is missing or its digest does not match";
+		// Every cheap refusal is answered before the archive is touched: this runs on the sim thread
+		// inside the tick, once per bootstrap per pump.
+		if (std::string reason; !WorldBootstrapCanStart(session, &reason)) {
+			if (error) *error = reason;
+			// Nothing about this bootstrap can change: it holds no seat and the pool is full.
+			if (outUnstartable) *outUnstartable = true;
+			m_WorldJoin.Metrics().NoteBootstrapStall();
 			return false;
 		}
-		std::vector<std::vector<uint8_t>> tail;
-		uint64_t lastCopied = 0;
-		(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail, &lastCopied);
-		std::vector<uint8_t> blob;
-		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), archive, tail, blob, error)) {
-			return false;
-		}
-		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		const uint8_t lobbyPeer = WorldJoinLobbyPeer(session);
-		if (lobbyPeer == 0) {
-			if (error) *error = "no spectator lobby id remains";
-			return false;
-		}
+		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		std::string bindError;
-		if (!lobby.BindLateRemote(lobbyPeer, session.connection, &bindError)) {
+		if (!lobby.BindWorldTransferRemote(lobbyPeer, session.connection, &bindError)) {
 			if (error) *error = bindError;
 			return false;
 		}
 		if (session.assignedPeerId != 0) {
 			lobby.SendMatchConfigTo(lobbyPeer);
 		}
-		// A queued image is the lobby's now: the bootstrap must not read the archive again next pump.
-		const bool onThePump = lobby.BeginStateTransferTo(lobbyPeer, std::move(blob));
+		// The bytes and their digest were read once, when the image was published; re-reading the
+		// archive per pump is a sim-thread stall the world pays for every waiting bootstrap.
+		if (m_WorldJoinImageBytes.empty() || m_WorldJoinImageDigest != m_WorldJoin.Image().digest) {
+			if (error) *error = "the published archive is missing or its digest does not match";
+			m_WorldJoin.Metrics().NoteBootstrapStall();
+			return false;
+		}
+		std::vector<std::vector<uint8_t>> tail;
+		uint64_t lastCopied = 0;
+		(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail, &lastCopied);
+		std::vector<uint8_t> blob;
+		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), m_WorldJoinImageBytes, tail, blob, error)) {
+			return false;
+		}
+		// A queued image is the lobby's now: the bootstrap must not build the blob again next pump.
+		// A refusal is not a start, so the next pump retries instead of waiting out the deadline.
+		const NetLobbyStateTransfer outcome = lobby.BeginStateTransferToPeer(lobbyPeer, std::move(blob));
+		if (outcome == NetLobbyStateTransfer::Refused && error) {
+			*error = "the lobby refused the joiner image";
+		}
+		return NoteImageTransferOutcome(outcome, lobby, m_WorldJoin, session.connection, lastCopied);
+	}
+
+	bool NetMatchService::WorldBootstrapCanStart(const NetWorldJoinSession& session, std::string* reason) {
+		if (WorldJoinLobbyPeer(session) == 0) {
+			if (reason) *reason = "no world lobby id remains for this bootstrap";
+			return false;
+		}
+		return true;
+	}
+
+	bool NetMatchService::NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough) {
+		if (outcome == NetLobbyStateTransfer::Refused) {
+			// Never taken and never kept, so the bootstrap stays unstarted and the next pump retries.
+			return false;
+		}
+		const bool onThePump = outcome == NetLobbyStateTransfer::Started;
 		const uint64_t transferId = onThePump ? lobby.GetOutgoingStateId() : 0;
 		const uint16_t chunkCount = onThePump ? lobby.GetOutgoingChunkCount() : 0;
-		return m_WorldJoin.NoteTransferStarted(session.connection, transferId, chunkCount, lastCopied);
+		return host.NoteTransferStarted(connection, transferId, chunkCount, deliveredThrough);
 	}
 
 	void NetMatchService::SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session) {
@@ -1918,16 +1947,26 @@ static std::string ResyncSaveName() {
 			}
 			std::cout << "[net-world] join connection=" << peer.transportPeerId << " name=" << peer.displayName << std::endl;
 		}
+		std::vector<std::pair<NetPeerId, std::string>> unstartable;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid()) {
 				std::string transferError;
-				if (!StartJoinerImageTransfer(session, &transferError)) {
+				bool cannotStart = false;
+				if (!StartJoinerImageTransfer(session, &transferError, &cannotStart)) {
 					std::cout << "[net-world] transfer wait connection=" << session.connection << " " << transferError << std::endl;
+					if (cannotStart) {
+						unstartable.emplace_back(session.connection, transferError);
+					}
 				}
 			}
 			if (session.phase == NetWorldJoinPhase::CatchingUp && m_Runner) {
 				SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, session);
 			}
+		}
+		// After the walk: CancelJoin erases from the vector the loop above is iterating.
+		for (const auto& [connection, reason]: unstartable) {
+			m_WorldJoin.CancelJoin(connection, reason);
+			std::cout << "[net-world] cancel bootstrap connection=" << connection << " " << reason << std::endl;
 		}
 		if (m_Runner) {
 			m_Runner->GetLobbySession().PumpOutgoingChunks();
@@ -1948,8 +1987,10 @@ static std::string ResyncSaveName() {
 				std::cout << "[net-world] reannounce peer=" << static_cast<int>(slow->assignedPeerId) << " e=" << later << std::endl;
 				continue;
 			}
-			m_WorldJoin.CancelJoin(slow->connection, "the joiner missed the announced activation");
-			std::cout << "[net-world] cancel slow join connection=" << slow->connection << std::endl;
+			// CancelJoin erases the session this pointer names, so the id is read before the call.
+			const NetPeerId cancelled = slow->connection;
+			m_WorldJoin.CancelJoin(cancelled, "the joiner missed the announced activation");
+			std::cout << "[net-world] cancel slow join connection=" << cancelled << std::endl;
 		}
 		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
 			if (status.lockstepPeerId == 0 || status.committed || status.dropped || status.reclaiming) {
@@ -2086,8 +2127,44 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::PersistWorldDirectoryToken() {
+		if (!m_WorldIdentity.IsValid() || m_Directory.GetState() != NetDirectoryClient::State::Registered) {
+			return;
+		}
+		const std::string& issued = m_Directory.GetToken();
+		if (issued.empty() || issued == m_WorldIdentity.directoryToken || m_WorldJoin.IdentityPath().empty()) {
+			return;
+		}
+		// The token outlives this process: the next boot proves the row is the world's own with it.
+		NetWorldIdentity stored = m_WorldIdentity;
+		stored.directoryToken = issued;
+		std::string writeError;
+		if (!NetWorldIdentityFile::Write(m_WorldJoin.IdentityPath(), stored, &writeError)) {
+			std::cout << "[net-world] directory token not persisted: " << writeError << std::endl;
+			return;
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_WorldIdentity.directoryToken = issued;
+		m_DirectoryRow.resumeToken = issued;
+	}
+
+	bool NetMatchService::ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp) {
+		if (!coordinatorRunning || !catchUp.active) {
+			return false;
+		}
+		// The coordinator owns the wire and the pacing from the moment it runs. A catch-up left armed
+		// past that drains the round's own packets into the session and keeps reporting a finished
+		// bootstrap the host answers with "that bootstrap is not catching up".
+		catchUp = {};
+		ScenarioRunner::ReleaseWorldCatchUp();
+		return true;
+	}
+
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) {
+			return;
+		}
+		if (ReleaseWorldCatchUpOnceRunning(m_Coordinator != nullptr && m_Coordinator->IsRunning(), m_WorldCatchUp)) {
 			return;
 		}
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
@@ -2127,39 +2204,6 @@ static std::string ResyncSaveName() {
 		}
 		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
 		CaptureA7SeatView();
-	void NetMatchService::PersistWorldDirectoryToken() {
-		if (!m_WorldIdentity.IsValid() || m_Directory.GetState() != NetDirectoryClient::State::Registered) {
-			return;
-		}
-		const std::string& issued = m_Directory.GetToken();
-		if (issued.empty() || issued == m_WorldIdentity.directoryToken || m_WorldJoin.IdentityPath().empty()) {
-			return;
-		}
-		// The token outlives this process: the next boot proves the row is the world's own with it.
-		NetWorldIdentity stored = m_WorldIdentity;
-		stored.directoryToken = issued;
-		std::string writeError;
-		if (!NetWorldIdentityFile::Write(m_WorldJoin.IdentityPath(), stored, &writeError)) {
-			std::cout << "[net-world] directory token not persisted: " << writeError << std::endl;
-			return;
-		}
-		std::lock_guard<std::mutex> lock(m_Mutex);
-		m_WorldIdentity.directoryToken = issued;
-		m_DirectoryRow.resumeToken = issued;
-	}
-
-	bool NetMatchService::ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp) {
-		if (!coordinatorRunning || !catchUp.active) {
-			return false;
-		}
-		// The coordinator owns the wire and the pacing from the moment it runs. A catch-up left armed
-		// past that drains the round's own packets into the session and keeps reporting a finished
-		// bootstrap the host answers with "that bootstrap is not catching up".
-		catchUp = {};
-		ScenarioRunner::ReleaseWorldCatchUp();
-		return true;
-	}
-
 	}
 
 	void NetMatchService::PublishModerationView() {

@@ -43,6 +43,20 @@ RED_SECOND_JOIN = "second-join-had-no-image"
 RED_IMAGE_QUEUE = "joiner-image-replaced"
 RED_LOCKSTEP_START_HELD = "world-join-lockstep-held-the-sim-update"
 RED_LOCKSTEP_START_MISSED = "world-join-lockstep-did-not-start"
+RED_IDENTITY_RECORD = "world-identity-record-did-not-round-trip"
+RED_STALE_TRANSITION = "a stale holder generation was applied"
+RED_ORDINARY_TRANSITION = "ordinary-round-applied-a-world-transition"
+RED_READY_FRAME = "committed ready-frame pack dropped a remote Controller or command"
+RED_CATCHUP_RELEASED_EARLY = "catch-up-released-the-sim-before-its-round"
+RED_STOP_GATE_SWALLOWED = "lockstep-stop-gate-swallowed-the-catch-up"
+RED_CATCHUP_OUTLIVED = "world-catch-up-outlived-its-round"
+RED_ACTIVATE_TOOK_A_BRAIN = "activate-took-another-members-brain"
+RED_ACTIVATE_BOUND_NO_SEAT = "activate-bound-a-seat-the-roster-does-not-name"
+RED_BOOTSTRAP_READ_THE_ARCHIVE = "bootstrap-read-the-archive-it-cannot-send"
+RED_REFUSED_TRANSFER_NOT_RETRIED = "refused-transfer-was-marked-started"
+RED_HOST_KEPT_TAIL_BYTES = "host-kept-a-joiner-tail-chunk"
+RED_SPECTATOR_IMAGE_GATE = "spectator-image-never-left-the-host"
+RED_MEMBER_IMAGE_GATE = "member-image-never-left-the-host"
 
 CASES = (
     {
@@ -125,6 +139,7 @@ CASES = (
         "kind": "python",
         "fn": "directory_resume_same_world_id",
         "red": RED_DIRECTORY_RESUME,
+        "also_red": (RED_DIRECTORY_TOKEN, RED_DIRECTORY_SEIZED),
         "pass_token": "[directory-resume] PASS",
     },
     {
@@ -139,7 +154,6 @@ CASES = (
         "red": RED_ORDINARY_IDENTITY,
         "pass_token": "[net-world-ordinary-identity-selftest] PASS",
     },
-        "also_red": (RED_DIRECTORY_TOKEN, RED_DIRECTORY_SEIZED),
     {
         "name": "due-activation-admits",
         "argv": ["-net-world-admit-selftest"],
@@ -221,11 +235,58 @@ CASES = (
         "also_red": RED_LOCKSTEP_START_MISSED,
         "pass_token": "[net-world-lockstep-start-selftest] PASS",
     },
+    {
+        "name": "world-identity-record-round-trip",
+        "argv": ["-net-world-identity-selftest"],
+        "red": RED_IDENTITY_RECORD,
+        "pass_token": "[net-world-identity-selftest] PASS",
+    },
+    {
+        "name": "stale-or-off-plane-world-transition-refused",
+        "argv": ["-net-world-stale-selftest"],
+        "red": RED_STALE_TRANSITION,
+        "also_red": RED_ORDINARY_TRANSITION,
+        "pass_token": "[net-world-stale-selftest] PASS",
+    },
+    {
+        "name": "ready-frame-pack-keeps-remotes",
+        "argv": ["-net-world-ready-frame-selftest"],
+        "red": RED_READY_FRAME,
+        "pass_token": "[net-world-ready-frame-selftest] PASS",
+    },
+    {
+        "name": "catch-up-holds-the-sim-until-its-round-runs",
+        "argv": ["-net-world-catchup-hold-selftest"],
+        "red": RED_CATCHUP_RELEASED_EARLY,
+        "also_red": (RED_STOP_GATE_SWALLOWED, RED_CATCHUP_OUTLIVED),
+        "pass_token": "[net-world-catchup-hold-selftest] PASS",
+    },
+    {
+        "name": "activate-never-takes-another-members-brain",
+        "argv": ["-net-world-activate-brain-selftest"],
+        "red": RED_ACTIVATE_TOOK_A_BRAIN,
+        "also_red": RED_ACTIVATE_BOUND_NO_SEAT,
+        "pass_token": "[net-world-activate-brain-selftest] PASS",
+    },
+    {
+        "name": "host-bootstrap-refusals-and-retries",
+        "argv": ["-net-world-bootstrap-selftest"],
+        "red": RED_BOOTSTRAP_READ_THE_ARCHIVE,
+        "also_red": (
+            RED_REFUSED_TRANSFER_NOT_RETRIED,
+            RED_HOST_KEPT_TAIL_BYTES,
+            RED_SPECTATOR_IMAGE_GATE,
+            RED_MEMBER_IMAGE_GATE,
+        ),
+        "pass_token": "[net-world-bootstrap-selftest] PASS",
+    },
 )
 
 
 def score_stdout(stdout: str, case: dict) -> dict:
-    for red in (case["red"], case.get("also_red")):
+    also = case.get("also_red")
+    also = list(also) if isinstance(also, (list, tuple)) else [also]
+    for red in [case["red"], *also]:
         if red and red in (stdout or ""):
             return {"pass": False, "reason": f"FAIL: {red}"}
     token = case["pass_token"]
@@ -258,10 +319,13 @@ def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
         "world_boot": boot,
         "resume_session_id": world_id,
     }
+    if resume_token:
+        row["resume_token"] = resume_token
+    return row
 
 
 def directory_resume_same_world_id() -> None:
-    """Directory detecting helper: the same world id resumes the existing row."""
+    """Directory detecting helper: the world's own token resumes its row, nothing else does."""
     tools = Path(__file__).resolve().parent
     sys.path.insert(0, str(tools / "session_directory"))
     import session_directory
@@ -269,11 +333,20 @@ def directory_resume_same_world_id() -> None:
     world_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
     directory = session_directory.SessionDirectory(expiry_s=60, heartbeat_s=15)
     first = directory.register(_world_row(world_id, 1), "127.0.0.1", 0.0)
-    second = directory.register(_world_row(world_id, 2), "127.0.0.1", 1.0)
+    second = directory.register(_world_row(world_id, 2, first["token"]), "127.0.0.1", 1.0)
     if first["session_id"] != world_id or second["session_id"] != world_id:
-        raise AssertionError("directory resume did not keep the world id")
+        raise AssertionError("directory resume did not keep the world id, got %r and %r" % (first["session_id"], second["session_id"]))
     if first["token"] == second["token"]:
-        raise AssertionError("directory resume did not issue a new token")
+        raise AssertionError("directory resume did not issue a new token, both are %r" % (first["token"],))
+    try:
+        directory.register(_world_row(world_id, 3, "not-the-row-token"), "203.0.113.9", 2.0)
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("directory resume took a row without its token, world %r" % (world_id,))
+    listed = directory.list_sessions(3.0, None, None, None)["sessions"]
+    if not listed or listed[0].get("world_boot") != 2:
+        raise AssertionError("directory resume took a row without its token, the row now reads %r" % (listed,))
 
 
 def _printed_world_id(text: str) -> str:
@@ -315,6 +388,3 @@ if __name__ == "__main__":
     else:
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
-    if resume_token:
-        row["resume_token"] = resume_token
-    return row
