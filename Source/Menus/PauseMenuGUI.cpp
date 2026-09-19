@@ -23,6 +23,7 @@
 #include "GUICollectionBox.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "GUIFont.h"
 
 #include "AllegroTools.h"
 
@@ -70,6 +71,9 @@ void PauseMenuGUI::Clear() {
 	m_MatchOptionsBox = nullptr;
 	m_MatchOptionsLabel = nullptr;
 	m_MatchOptionsShown = false;
+	m_MatchRepairHint = nullptr;
+	m_MatchRepairArmed = false;
+	m_MatchRepairRefusal.clear();
 }
 
 void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
@@ -85,6 +89,16 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 
 	m_PauseMenuBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PauseScreen"));
 	m_PauseMenuBox->CenterInParent(true, true);
+	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
+	m_MatchOptionsBox->Resize(568, 308);
+	m_MatchOptionsBox->CenterInParent(true, true);
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
+	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 276, 260, 20));
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetText("Repair match now");
+	m_MatchRepairHint = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(
+	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 236, 544, 34));
+	m_MatchRepairHint->SetHAlignment(GUIFont::Left);
+	m_MatchRepairHint->SetVAlignment(GUIFont::Top);
 
 	m_PauseMenuButtons[PauseMenuButton::BackToMainButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonBackToMain"));
 	m_PauseMenuButtons[PauseMenuButton::SaveOrLoadGameButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveOrLoadGame"));
@@ -122,6 +136,11 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
 	m_MatchOptionsBox->CenterInParent(true, true);
 	m_MatchOptionsLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchOptions"));
+	m_MatchOptionsLabel->Resize(544, 210);
+	m_GUIControlManager->GetControl("LabelMatchOptionsTitle")->Resize(568, 14);
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, 276);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->Resize(260, 20);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, 276);
 
 	int boxPosX = 0;
 	int boxPosY = 0;
@@ -294,16 +313,24 @@ void PauseMenuGUI::ShowLeaveConfirm(bool show) {
 
 void PauseMenuGUI::ShowMatchOptions(bool show) {
 	m_MatchOptionsShown = show;
+	m_MatchRepairArmed = false;
+	m_MatchRepairRefusal.clear();
 	if (show) {
-		// Mid-match every peer reads the adopted config: the same panel the lobby's Details shows,
-		// read-only because the open round's edits live in the lobby that follows.
-		m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(),
-		                                                 g_NetMatchService.GetLobbySnapshot()));
+		RefreshMatchOptions();
 	}
 	m_MatchOptionsBox->SetVisible(show);
 	m_MatchOptionsBox->SetEnabled(show);
 	m_PauseMenuBox->SetVisible(!show);
 	m_PauseMenuBox->SetEnabled(!show);
+}
+
+void PauseMenuGUI::RefreshMatchOptions() {
+	m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), g_NetMatchService.GetLobbySnapshot()));
+	const bool enabled = NetHostRepairEnabled(g_NetMatchService);
+	if (!enabled) m_MatchRepairArmed = false;
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetVisible(g_NetMatchService.IsHost());
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetEnabled(enabled);
+	m_MatchRepairHint->SetText(NetHostRepairHint(g_NetMatchService, m_MatchRepairArmed, m_MatchRepairRefusal));
 }
 
 void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playButtonPressSound) {
@@ -331,6 +358,7 @@ PauseMenuGUI::PauseMenuUpdateResult PauseMenuGUI::Update() {
 	}
 
 	UpdateMatchPauseRow();
+	if (m_MatchOptionsShown) RefreshMatchOptions();
 
 	if (g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly()) {
 		return m_UpdateResult;
@@ -437,6 +465,13 @@ bool PauseMenuGUI::HandleInputEvents() {
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]) {
 				ShowMatchOptions(false);
 				g_GUISound.BackButtonPressSound()->Play();
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]) {
+				if (NetHostRepairPress(g_NetMatchService, m_MatchRepairArmed, m_MatchRepairRefusal)) {
+					g_GUISound.ButtonPressSound()->Play();
+				} else {
+					g_GUISound.BackButtonPressSound()->Play();
+				}
+				RefreshMatchOptions();
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::EndMatchButton]) {
 				// H33: the host's End Match is the round's own completion, so every peer takes the
 				// same rematch path a played-out match takes. Leave stays the session's way out.

@@ -1,4 +1,5 @@
 #include "MainMenuGUI.h"
+#include "NetHostOptionsText.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
@@ -1369,6 +1370,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRulesSkillSlider = dynamic_cast<GUISlider*>(get("SliderHostRulesSkill"));
 	m_HostRulesSkillValue = dynamic_cast<GUILabel*>(get("LabelHostRulesSkillValue"));
 	m_HostNetPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetPolicy"));
+	m_HostNetRedundancyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetRedundancy"));
 	m_HostNetMinDelayBox = dynamic_cast<GUITextBox*>(get("TextHostNetMinDelay"));
 	m_HostNetEffectiveLabel = dynamic_cast<GUILabel*>(get("LabelHostNetEffective"));
 	for (int peer = 0; peer < 4; ++peer) {
@@ -1472,6 +1474,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPolicyCombo->AddItem("Automatic");
 		m_HostNetPolicyCombo->AddItem("Fixed");
 	}
+	if (m_HostNetRedundancyCombo) {
+		m_HostNetRedundancyCombo->ClearList();
+		for (int ticks = 1; ticks <= NetMatchConfigUtil::c_MaxFrameRedundancyTicks; ++ticks) {
+			m_HostNetRedundancyCombo->AddItem(std::to_string(ticks) + " ticks");
+		}
+	}
 	if (m_HostFilesWidgetCombo) {
 		m_HostFilesWidgetCombo->ClearList();
 		m_HostFilesWidgetCombo->AddItem("Off");
@@ -1569,6 +1577,10 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		}
 		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
+		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+	} else {
+		NetHostDefaultsTemplate saved;
+		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
 	}
 	NetMatchService::SeatSavedOptions(request);
 	return request;
@@ -1582,6 +1594,7 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostSeatDlgRemovalSeat.reset();
 	m_HostKickBanWatch = false;
 	m_HostRecRepairArmed = false;
+	m_HostRecRepairRefusal.clear();
 	m_HostOptionsAwaitedRevision = 0;
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox) {
 		// H34's port field edits the setup draft's port - the value the next hosted request carries.
@@ -1666,18 +1679,18 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				m_HostOptionsBaseRevision = adopted.configRevision;
 			}
 		}
+		std::string refusal = g_NetMatchService.GetErrorText();
+		if (!refusal.starts_with("Host options refused: ")) refusal.clear();
 		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions();
-		if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
-			// A rematch lobby's draft is staged for the next match; an open lobby's Apply is a live
-			// republish the peers acknowledge before it counts. "Applied" lands when the adopted
-			// mirror reaches the awaited revision - the runner queue publishes it for every peer.
-			m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
-			                                      ? "Options staged for the next match."
-			                                      : "Waiting for peers to confirm the new options...");
+		if (!refusal.empty()) {
+			m_HostOptionsStatusLabel->SetText(refusal);
+		} else if ((pending && pending->configRevision > adopted.configRevision) || m_HostOptionsAwaitedRevision > adopted.configRevision) {
+			// A returned lobby publishes immediately even though it has played a round.
+			m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 		}
-		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
+		if (refusal.empty() && m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
 			m_HostOptionsAwaitedRevision = 0;
-			m_HostOptionsStatusLabel->SetText("Applied.");
+			m_HostOptionsStatusLabel->SetText("Applied: this lobby was republished.");
 		}
 	}
 	// A Queued kick/ban drains on the setup worker's host pump; the applied result lands in the
@@ -1822,6 +1835,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
+	HostOptSelectComboIndex(m_HostNetRedundancyCombo, m_HostOptionsDraft.frameRedundancyTicks - 1);
 	if (m_HostNetMinDelayBox && !HostOptBoxFocused(m_HostNetMinDelayBox)) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
 	}
@@ -1852,6 +1866,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	HostOptSetEditable(m_HostNetPolicyCombo, editable);
+	HostOptSetEditable(m_HostNetRedundancyCombo, editable);
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
 	// figures are the answer, so the button stays off there.
@@ -1937,32 +1952,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecWaitingLabel->SetText(waiting.empty() ? "" : ("Waiting on: " + waiting));
 	}
-	// H25: the button lights only where a repair can run - the host's own call, a live session,
-	// resync allowed on the running activity, not over, and no restore already in flight.
-	bool resyncInFlight = false;
-	uint64_t resyncBytes = 0, resyncMs = 0;
-	g_NetMatchService.GetResyncStatus(&resyncInFlight, &resyncBytes, &resyncMs);
-	const bool repairLive = g_NetMatchService.IsHost() && g_NetMatchService.CanResyncMatch() &&
-	                        NetMatchService::ResyncSnapshotAllowed(g_ActivityMan.GetActivity());
+	// The service gates both repair controls on the same live round.
+	const bool repairLive = NetHostRepairEnabled(g_NetMatchService);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostRepairNowButton], repairLive);
 	if (!repairLive) m_HostRecRepairArmed = false;
 	if (m_HostRecRepairHintLabel) {
-		if (resyncInFlight) {
-			// Phase from the bytes the snapshot has moved: none yet means the host is still saving.
-			m_HostRecRepairHintLabel->SetText("Repairing: " + std::string(resyncBytes > 0 ? "transfer" : "snapshot") +
-			                                  " " + std::to_string(resyncBytes) + " B " +
-			                                  std::to_string(resyncMs / 1000) + "s");
-		} else if (m_HostRecRepairArmed) {
-			m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
-		} else if (resyncBytes > 0 || resyncMs > 0) {
-			m_HostRecRepairHintLabel->SetText("Repaired: " + std::to_string(resyncBytes) + " B " +
-			                                  std::to_string(resyncMs / 1000) + "s");
-		} else if (!g_NetMatchService.IsHost()) {
-			m_HostRecRepairHintLabel->SetText("Repair is the host's call");
-		} else {
-			m_HostRecRepairHintLabel->SetText(repairLive ? "Every peer reloads the host's snapshot"
-			                                           : "Repair needs a live match session");
-		}
+		m_HostRecRepairHintLabel->SetText(NetHostRepairHint(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal));
 	}
 
 	// Files page: local paths, local retention, and the local status-widget preference.
@@ -2040,6 +2035,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		        || m_HostOptionsDraft.delayPolicy != m_HostSetupOptions->delayPolicy
 		        || m_HostOptionsDraft.idleWaitMinutes != m_HostSetupOptions->idleWaitMinutes
 		        || m_HostOptionsDraft.automaticRepair != m_HostSetupOptions->automaticRepair
+		        || m_HostOptionsDraft.frameRedundancyTicks != m_HostSetupOptions->frameRedundancyTicks
 		        || m_HostOptionsDraft.autosaveEnabled != m_HostSetupOptions->autosaveEnabled
 		        || m_HostOptionsDraft.autosaveIntervalSeconds != m_HostSetupOptions->autosaveIntervalSeconds
 		        || m_HostOptionsDraft.inputDelayFrames != m_HostSetupOptions->inputDelayFrames;
@@ -2121,6 +2117,9 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	// Network.
 	if (m_HostNetPolicyCombo) {
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+	}
+	if (m_HostNetRedundancyCombo) {
+		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 	}
 	if (m_HostNetMinDelayBox) {
 		const long parsed = std::strtol(m_HostNetMinDelayBox->GetText().c_str(), nullptr, 10);
@@ -2205,14 +2204,9 @@ void MainMenuGUI::ApplyHostOptions() {
 			g_GUISound.BackButtonPressSound()->Play();
 			return;
 		}
-		// In an open lobby the submission is a live republish: the peers' adopted configs move to
-		// the next revision, and the status row reads their acks until it lands. In the rematch
-		// (closed) lobby the same draft is the staged next-match config instead.
+		// The adopted revision keeps Apply pending until the runner publishes it.
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
-		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
-		                                      ? "Options staged for the next match."
-		                                      : "Waiting for peers to confirm the new options...");
+		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 	}
 	g_GUISound.ButtonPressSound()->Play();
 }
@@ -2406,10 +2400,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		}
 	}
 	const bool host = !m_HostOptionsReadOnly && !m_HostOptionsSetupDraft && g_NetMatchService.IsHost();
-	// H09/H10's selection rides the seat's admission row. The UX model only rows seats needing a
-	// decision, so the raw view is scanned too - a healthy holder has a seat there even when it has
-	// no decision row. The view is published while a match runs; a fresh lobby publishes none, so a
-	// press then names that state instead of sending a selection the drain would refuse.
+	// Healthy holders still need the raw admission row that removal validates.
 	m_HostSeatDlgRemovalSeat.reset();
 	if (slot.peerId != 0) {
 		for (const NetH4ModerationSeat& seat : seats) {
@@ -2583,11 +2574,11 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		const NetParticipantRemovalAction action = guiEventControl == m_HostSeatDlgKick
 		                                           ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
 		const std::string verb = action == NetParticipantRemovalAction::Kick ? "Kick" : "Ban";
-		if (!m_HostSeatDlgRemovalSeat) {
-			// The selection a removal validates against is the seat's admission row: epoch, holder and
-			// seat generations, incarnation. The lobby publishes no such row (PublishModerationView is
-			// Running-scoped), so the press names the state rather than queueing a doomed selection.
-			m_HostSeatDlgActionHint->SetText(verb + ": the seat's admission row is not published in the lobby.");
+		const uint8_t peerId = m_HostOptionsSeatRow >= 0 && m_HostOptionsSeatRow < static_cast<int>(m_HostOptionsDraft.players.size())
+		                           ? m_HostOptionsDraft.players[m_HostOptionsSeatRow].peerId : 0;
+		const std::string refusal = NetHostSeatRemovalRefusal(g_NetMatchService.GetState(), m_HostSeatDlgRemovalSeat.has_value(), peerId, verb);
+		if (!refusal.empty()) {
+			m_HostSeatDlgActionHint->SetText(refusal);
 			return;
 		}
 		const NetKickBanResult result =
@@ -2662,22 +2653,8 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostRepairNowButton]) {
-		// H25's two-step: the first press arms and the hint names the shared pause and reload; the
-		// second calls the service, which queues the heal at its safe boundary.
-		if (!m_HostRecRepairArmed) {
-			m_HostRecRepairArmed = true;
-			if (m_HostRecRepairHintLabel) {
-				m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
-			}
-			return;
-		}
-		m_HostRecRepairArmed = false;
-		std::string repairError;
-		if (g_NetMatchService.ResyncMatch(&repairError)) {
-			if (m_HostRecRepairHintLabel) m_HostRecRepairHintLabel->SetText("Repairing: snapshot 0 B 0s");
-		} else if (m_HostRecRepairHintLabel) {
-			m_HostRecRepairHintLabel->SetText(repairError.empty() ? "Repair refused" : "Repair refused - " + repairError);
-		}
+		NetHostRepairPress(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal);
+		if (m_HostRecRepairHintLabel) m_HostRecRepairHintLabel->SetText(NetHostRepairHint(g_NetMatchService, m_HostRecRepairArmed, m_HostRecRepairRefusal));
 		return;
 	}
 	if (guiEventControl == m_HostNetVisibilityCombo) {
@@ -2739,6 +2716,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	if (guiEventControl == m_HostNetPolicyCombo) {
 		// The per-peer boxes only exist under Fixed; the policy flip redraws their state.
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+		return;
+	}
+	if (guiEventControl == m_HostNetRedundancyCombo) {
+		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 		return;
 	}
 	if (guiEventControl == m_HostNetRecalcButton) {
@@ -2844,6 +2825,10 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		uint32_t cpuSeats = 0;
 		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
 		request.cpuSlots = cpuSeats;
+		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+	} else if (host) {
+		NetHostDefaultsTemplate saved;
+		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
 	}
 	// The host picks the roster size and the lockstep input-delay buffer; clients adopt both via
 	// the lobby config sync. The delay box writes back to the setting so the choice persists.
@@ -3131,6 +3116,17 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			constexpr int panelHeight = 246;
 			FitMultiplayerScreen(545, panelHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5);
 			LayoutMultiplayerFooter(545, panelHeight);
+			// Late rows open upward so their full lists stay above the footer.
+			for (GUICollectionBox* page : m_HostOptionsPages) {
+				for (GUIControl* control : *page->GetChildren()) {
+					if (auto* combo = dynamic_cast<GUIComboBox*>(control)) {
+						const int below = combo->GetYPos() + combo->GetHeight();
+						const int bottom = m_MainMenuButtons[MenuButton::HostOptionsBackButton]->GetYPos() - 4;
+						combo->GetListPanel()->SetPositionAbs(combo->GetXPos(), below + combo->GetDropHeight() <= bottom
+						                                                        ? below : combo->GetYPos() - combo->GetDropHeight());
+					}
+				}
+			}
 			return;
 		}
 		int contentWidth = 300;

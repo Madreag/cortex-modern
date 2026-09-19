@@ -191,6 +191,7 @@ namespace RTE {
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
 		std::optional<uint16_t> pathHorizonTicks;
+		std::optional<uint8_t> frameRedundancyTicks;
 		// The host's checkpoint cadence in simulation seconds; 0 disables autosaves. Unset keeps the
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;
@@ -496,6 +497,8 @@ namespace RTE {
 		/// and no restore already in flight. CanResyncLocked's conditions without its failure
 		/// side-effects, so a per-frame UI poll never moves the service state.
 		bool CanResyncMatch() const;
+		// The shared stop lets the game loop own snapshot capture and relaunch on both peers.
+		bool RequestHostRepair(std::string* error = nullptr);
 		/// Read-only repair progress for the Recovery page: inFlight while the heal is open, the
 		/// snapshot bytes moved so far, and the open (or last finished) heal's elapsed ms.
 		void GetResyncStatus(bool* inFlight, uint64_t* bytes, uint64_t* elapsedMs) const;
@@ -870,6 +873,7 @@ namespace RTE {
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend struct HostOptionsLobbyRow;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
