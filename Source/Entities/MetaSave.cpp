@@ -16,6 +16,8 @@ MetaSave::~MetaSave() {
 }
 
 void MetaSave::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_SavePath, m_PlayerCount, m_Difficulty, m_RoundCount, m_SiteCount); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_SavePath.clear();
 	m_PlayerCount = 0;
 	m_Difficulty = Activity::MediumDifficulty;

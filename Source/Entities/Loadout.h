@@ -95,6 +95,7 @@ namespace RTE {
 		/// is NOT transferred!
 		/// @param pCraft A pointer to the ACraft preset instance. OWNERSHIP IS NOT TRANSFERRED!
 		void SetDeliveryCraft(const ACraft* pCraft) {
+			if (m_pDeliveryCraft != pCraft) TouchCheckpoint();
 			m_pDeliveryCraft = pCraft;
 			m_Complete = m_Complete && m_pDeliveryCraft;
 		}
@@ -106,6 +107,7 @@ namespace RTE {
 		/// Adds a new Preset to the list of cargo items to be included in this.
 		/// @param pNewItem A const pointer to the ScneObject preset we want to add to this loadout.
 		void AddToCargoList(const SceneObject* pNewItem) {
+			if (pNewItem) TouchCheckpoint();
 			if (pNewItem)
 				m_CargoItems.push_back(pNewItem);
 		}
@@ -123,6 +125,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Loadout, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

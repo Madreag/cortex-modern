@@ -169,6 +169,15 @@ namespace RTE {
 		void CopyCheckpointFrom(const Controller& reference);
 		void TouchCheckpoint();
 		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
+		auto CheckpointStampValue() const {
+			return CheckpointFields(m_ControlledActor, m_ControlStates, m_AnalogMove, m_AnalogAim, m_AnalogCursor,
+				m_InputMode, m_SeatMode, m_Team, m_Player, m_SeatPlayer, m_Disabled, m_SyncedOrderDisableTick,
+				m_WireApplyTick, m_WireSchemeValid, m_WireDeviceClass, m_WireDigitalAimSpeed, m_NextIgnore, m_PrevIgnore,
+				m_WeaponChangeNextIgnore, m_WeaponChangePrevIgnore, m_WeaponPickupIgnore, m_WeaponDropIgnore,
+				m_WeaponReloadIgnore, m_WeaponPrimaryHotkeyIgnore, m_MouseMovement, m_AnalogCursorAngleLimits,
+				m_ReleaseTimer, m_JoyAccelTimer, m_KeyAccelTimer, m_LocalProduction, m_LocalProductionSeatMode,
+				m_LocalProductionSeatPlayer, m_LocalProductionValid);
+		}
 #pragma endregion
 
 #pragma region Destruction

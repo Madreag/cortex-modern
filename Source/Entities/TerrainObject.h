@@ -137,6 +137,8 @@ namespace RTE {
 		/// @param terrain The SLTerrain to draw this TerrainObject to. Ownership is NOT transferred!
 		void DrawToTerrain(SLTerrain* terrain);
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this TerrainObject, effectively resetting the members of this abstraction level only.
 		void Clear();
 

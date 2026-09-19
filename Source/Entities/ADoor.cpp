@@ -88,6 +88,7 @@ int ADoor::Create(const ADoor& reference) {
 
 	for (const ADSensor& sensor: reference.m_Sensors) {
 		m_Sensors.push_back(sensor);
+		m_Sensors.back().SetCheckpointOwner(this);
 	}
 
 	m_SensorInterval = reference.m_SensorInterval;
@@ -183,6 +184,7 @@ int ADoor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		ADSensor sensor;
 		reader >> sensor;
 		m_Sensors.push_back(sensor);
+		m_Sensors.back().SetCheckpointOwner(this);
 	});
 	MatchProperty("DrawMaterialLayerWhenOpen", { reader >> m_DrawMaterialLayerWhenOpen; });
 	MatchProperty("DrawMaterialLayerWhenClosed", { reader >> m_DrawMaterialLayerWhenClosed; });

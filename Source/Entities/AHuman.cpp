@@ -50,7 +50,7 @@ void AHuman::Clear() {
 			m_ProneState, m_ProneTimer, m_RotAngleTargets, m_SharpAimRevertTimer, m_StrideFrame, m_StrideSound,
 			m_StrideStart, m_ThrowPrepTime, m_ThrowTmr, m_TriggerPulled, m_WaitingToReloadOffhand, m_WalkAngle,
 			m_WalkPathOffset, m_pBGArm, m_pBGFootGroup, m_pBGHandGroup, m_pBGLeg, m_pFGArm,
-			m_pFGFootGroup, m_pFGHandGroup, m_pFGLeg, m_pHead, m_pJetpack);
+			m_pFGFootGroup, m_pFGHandGroup, m_pFGLeg, m_pHead, m_pJetpack, m_Paths);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
 	m_PersistedAHumanRuntime.clear();
@@ -3749,6 +3749,7 @@ float AHuman::GetLimbPathTravelSpeed(MovementState movementState) {
 }
 
 void AHuman::SetLimbPathTravelSpeed(MovementState movementState, float newSpeed) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[FGROUND][movementState].GetTravelSpeed()); });
 	m_Paths[FGROUND][movementState].SetTravelSpeed(newSpeed);
 	m_Paths[FGROUND][movementState].SetTravelSpeed(newSpeed);
 }
@@ -3758,6 +3759,7 @@ float AHuman::GetLimbPathPushForce(MovementState movementState) {
 }
 
 void AHuman::SetLimbPathPushForce(MovementState movementState, float newForce) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[FGROUND][movementState].GetPushForce(), m_Paths[BGROUND][movementState].GetPushForce()); });
 	m_Paths[FGROUND][movementState].SetPushForce(newForce);
 	m_Paths[FGROUND][movementState].SetPushForce(newForce);
 

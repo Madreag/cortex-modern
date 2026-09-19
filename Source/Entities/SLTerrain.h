@@ -245,6 +245,8 @@ namespace RTE {
 		/// Applies Material textures to the foreground and background color layers, based on the loaded material layer (main bitmap).
 		void TexturizeTerrain();
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this SLTerrain, effectively resetting the members of this abstraction level only.
 		void Clear();
 

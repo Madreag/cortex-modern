@@ -320,7 +320,7 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 
 void SoundContainer::SetTopLevelSoundSet(const SoundSet& newTopLevelSoundSet) {
 	if (Deferring() && QueuePendingStructure(PendingOp::SetTopLevelSet, {}, newTopLevelSoundSet.SaveStructure(), 0, newTopLevelSoundSet.HasAnySounds())) return;
-	CheckpointChange changed(*this, [this] { return CheckpointFields(m_TopLevelSoundSet->SaveStructure(), m_TopLevelSoundSet->SaveSimulationCheckpoint(), m_SoundPropertiesUpToDate); });
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_TopLevelSoundSet->CheckpointStampValue(), m_SoundPropertiesUpToDate); });
 	*m_TopLevelSoundSet = newTopLevelSoundSet;
 	m_TopLevelSoundSet->SetOwnerContainer(this);
 	m_SoundPropertiesUpToDate = false;
