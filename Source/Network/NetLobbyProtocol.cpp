@@ -266,8 +266,9 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag, bit 1 the persistent world; old builds refuse the nonzero word.
-			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? 1 : 0) | (config.persistentWorld ? 2 : 0)));
+			// The reserved word carries the dedicated flag and the persistent world; old builds refuse the nonzero word.
+			AppendU16LE(out, static_cast<uint16_t>((config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0) |
+			                                      (config.persistentWorld ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0)));
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -336,11 +337,12 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "config.reserved")) {
 				return false;
 			}
-			out.dedicated = (reserved & 1) != 0;
-			// Bit 1 is the persistent world and only a v5 config may set it; a v4 reader still refuses
-			// the whole word, so an older peer can never read a world's round as an ordinary match.
-			out.persistentWorld = (reserved & 2) != 0;
-			const uint16_t allowed = out.version >= NetMatchConfigUtil::c_PersistentWorldVersion ? 3 : 1;
+			out.dedicated = (reserved & NetMatchConfigUtil::c_ReservedDedicatedBit) != 0;
+			// The world bit is known only on a v5 config; a v4 reader still refuses the whole word, so
+			// an older peer can never read a world's round as an ordinary match.
+			out.persistentWorld = (reserved & NetMatchConfigUtil::c_ReservedPersistentWorldBit) != 0;
+			const uint16_t allowed = static_cast<uint16_t>(NetMatchConfigUtil::c_ReservedKnownMask |
+			                                              (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0));
 			if (reserved & ~allowed) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
