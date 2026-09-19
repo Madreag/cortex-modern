@@ -2017,7 +2017,7 @@ namespace RTE {
 			}
 		}
 		if (!offered) {
-			return Fail("rejoin after a clean leave did not land in the running world");
+			return Fail("the world offered the first join no ticket");
 		}
 		host.HandleMessage(12, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true}, 5);
 		host.TakeOutbound();
