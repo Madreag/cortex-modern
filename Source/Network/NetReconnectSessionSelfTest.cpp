@@ -5222,7 +5222,8 @@ namespace RTE {
 		int TestReResolvePaths() {
 			NetH4TicketRecord record;
 			if (record.recordVersion != NetReconnectTicketStore::c_RecordVersion) {
-				return Fail("a default ticket record still writes a v1 body");
+				return Fail("a default ticket record writes version " + std::to_string(record.recordVersion) +
+				            " and not " + std::to_string(NetReconnectTicketStore::c_RecordVersion));
 			}
 			record.directorySessionId = "sess-re-resolve-1";
 			record.hostAddress = "10.0.0.8:41010";
