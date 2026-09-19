@@ -13205,22 +13205,29 @@ namespace RTE {
 		}
 
 		// The suite's arms leave their actors in the world. An arm that drives a pass over the world
-		// itself starts from an empty one and hands the next arm an empty one back.
-		void ResetSelfTestWorld() {
-			EnsureSwitchTestManagers();
-			// Drops the coordinator, this match's control overrides and the paused-frame state with it.
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
-			std::unique_ptr<Activity> empty;
-			g_ActivityMan.SwapCheckpointActivity(empty);
-			// Empties the actor, item and particle lists, the team rosters, the seeded owners and the claims.
-			g_MovableMan.PurgeAllMOs();
+		// itself starts from an empty one and hands the next arm an empty one back. A reset that
+		// throws is reported as its own failure instead of taking the suite's result with it.
+		bool ResetSelfTestWorld() {
+			try {
+				EnsureSwitchTestManagers();
+				// Drops the coordinator, this match's control overrides and the paused-frame state with it.
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				// Empties the actor, item and particle lists, the team rosters, the seeded owners and the claims.
+				g_MovableMan.PurgeAllMOs();
+			} catch (const std::exception& error) {
+				std::cout << "[net-lockstep-selftest] FAIL reset_self_test_world " << error.what() << std::endl;
+				return false;
+			}
+			return true;
 		}
 
 		// The producing pass ends exactly the set it began with: a team write inside the window moves an
 		// actor out of this peer's ownership, and an actor handed out of the world is never touched again.
 		bool TestProducingPassEndsTheSetItBeganWith(std::string* error) {
 			const char* name = "producing_pass_ends_the_set_it_began_with";
-			ResetSelfTestWorld();
+			bool worldReset = ResetSelfTestWorld();
 			const uint16_t port = 43227;
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -13241,7 +13248,10 @@ namespace RTE {
 			std::unique_ptr<Actor> leaver;
 			const auto finish = [&](const char* message) {
 				leaver.reset();
-				ResetSelfTestWorld();
+				worldReset = ResetSelfTestWorld() && worldReset;
+				if (!message && !worldReset) {
+					message = "the world reset around this arm failed";
+				}
 				if (message) {
 					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
 					if (error) {
