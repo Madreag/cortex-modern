@@ -377,6 +377,10 @@ namespace RTE {
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
 		bool SaveStampedAutosave(uint64_t tick);
+		/// Cuts a recording world's segment at the checkpoint just captured, and opens the held segment
+		/// as soon as that checkpoint's archive names its world-structure digest.
+		void RollWorldReplaySegment(uint64_t tick);
+		void SealWorldReplaySegment();
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
