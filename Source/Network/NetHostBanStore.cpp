@@ -110,7 +110,28 @@ namespace RTE {
 	}
 
 	void NetHostBanStore::SetPath(std::string path) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Path = std::move(path);
+	}
+
+	std::string NetHostBanStore::GetPath() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_Path;
+	}
+
+	bool NetHostBanStore::PersistentReady() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_PersistentReady;
+	}
+
+	std::vector<NetHostBanRecord> NetHostBanStore::List() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_Records;
+	}
+
+	void NetHostBanStore::ForcePersistFailureForTest(bool fail) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_ForcePersistFail = fail;
 	}
 
 	bool NetHostBanStore::SerializePersistent(const std::vector<NetHostBanRecord>& records, std::vector<uint8_t>& out) {
@@ -188,6 +209,11 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::Load(std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return LoadLocked(error);
+	}
+
+	bool NetHostBanStore::LoadLocked(std::string* error) {
 		const std::filesystem::path path(m_Path);
 		std::error_code code;
 		const bool present = std::filesystem::exists(path, code);
@@ -273,6 +299,11 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::Ban(const NetAuthBytes32& identity, NetHostBanScope scope, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return BanLocked(identity, scope, alias, reason, sessionId, nowUnixMs, error);
+	}
+
+	bool NetHostBanStore::BanLocked(const NetAuthBytes32& identity, NetHostBanScope scope, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error) {
 		if (scope == NetHostBanScope::UntilRemoved && !m_PersistentReady) {
 			if (error) *error = "the host ban store is not loaded";
 			return false;
@@ -309,6 +340,11 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::Unban(const NetAuthBytes32& identity, std::string* error) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return UnbanLocked(identity, error);
+	}
+
+	bool NetHostBanStore::UnbanLocked(const NetAuthBytes32& identity, std::string* error) {
 		const auto found = std::find_if(m_Records.begin(), m_Records.end(), [&identity](const NetHostBanRecord& record) {
 			return record.identity == identity;
 		});
@@ -325,6 +361,11 @@ namespace RTE {
 	}
 
 	bool NetHostBanStore::IsBanned(const NetAuthBytes32& identity, uint64_t sessionId) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return IsBannedLocked(identity, sessionId);
+	}
+
+	bool NetHostBanStore::IsBannedLocked(const NetAuthBytes32& identity, uint64_t sessionId) const {
 		for (const NetHostBanRecord& record : m_Records) {
 			if (record.identity != identity) {
 				continue;
@@ -337,6 +378,7 @@ namespace RTE {
 	}
 
 	void NetHostBanStore::EndSession(uint64_t sessionId) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_Records.erase(std::remove_if(m_Records.begin(), m_Records.end(), [sessionId](const NetHostBanRecord& record) {
 			return record.scope == NetHostBanScope::Session && record.sessionId == sessionId;
 		}), m_Records.end());
