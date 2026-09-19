@@ -550,7 +550,7 @@ namespace RTE {
 		}
 		kind = chunk.bytes[0];
 		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate &&
-		    kind != c_NetWorldReportRefused) {
+		    kind != c_NetWorldReportRefused && kind != c_NetWorldReportDecline) {
 			return false;
 		}
 		value = 0;

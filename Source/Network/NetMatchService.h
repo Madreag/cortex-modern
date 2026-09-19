@@ -408,6 +408,12 @@ namespace RTE {
 		bool StageResyncedMatchLaunch(std::string* error = nullptr);
 		void Destroy();
 		void Update();
+
+		/// Watcher: tell the world whether this player wants a seat when one frees. A declining
+		/// watcher keeps its stream and promotion passes it over.
+		bool SetWorldSpectatorDeclinesPromotion(bool declines);
+		/// What this watcher last told the world; false means it wants the next free seat.
+		bool WorldSpectatorDeclinesPromotion() const { return m_WorldSpectatorDeclinesPromotion; }
 		void SetReady();
 		void RequestStart();
 		void ReportRuntimeError(const std::string& error);
@@ -934,6 +940,7 @@ namespace RTE {
 		NetWorldJoinHost m_WorldJoin;
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
