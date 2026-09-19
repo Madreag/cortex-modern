@@ -157,6 +157,9 @@ namespace RTE {
 			BackToMainButton,
 			MultiplayerHostGameButton,
 			MultiplayerJoinGameButton,
+			MultiplayerResumeGameButton,
+			ResumeStartButton,
+			ResumeBackButton,
 			MultiplayerCreateButton,
 			MultiplayerConnectButton,
 			MultiplayerReadyButton,
@@ -206,6 +209,7 @@ namespace RTE {
 			Landing,
 			HostSetup,
 			JoinSetup,
+			ResumeSetup,
 			Lobby,
 			Moderation,
 			ReplayBrowser,
@@ -262,6 +266,18 @@ namespace RTE {
 		};
 		std::vector<ReplayRow> m_ReplayRows;
 		std::string m_ReplayDeletePath;
+		GUICollectionBox* m_MultiplayerResumePanel = nullptr;
+		GUIListBox* m_ResumeMatchesList = nullptr;
+		GUILabel* m_ResumeSelectedLabel = nullptr;
+		GUILabel* m_ResumeStatusLabel = nullptr;
+		/// One resumable match as the screen shows it: the newest checkpoint of that match id.
+		struct ResumeRow {
+			std::string matchId;
+			uint64_t tick = 0;
+			std::string text;    //!< The list line: activity, site, how far in, how long ago.
+			std::string details; //!< The selection's body: the peers the configuration names.
+		};
+		std::vector<ResumeRow> m_ResumeRows;
 		GUITextBox* m_MultiplayerNameTextBox;
 		GUITextBox* m_MultiplayerHostPortTextBox;
 		GUITextBox* m_MultiplayerHostPlayersTextBox;
@@ -529,6 +545,12 @@ namespace RTE {
 		/// Enumerates replay headers and preserves the selected filename across refreshes.
 		void RefreshReplayList();
 		void RefreshReplayBrowserControls();
+		/// Lists the matches this install can restart, newest first, and what each one stands on.
+		void RefreshResumeList();
+		/// The resume screen's selection, its details line and whether Resume can be pressed.
+		void RefreshResumeControls();
+		/// Starts the service on the selected checkpoint.
+		void StartSelectedResume();
 		void PlaySelectedReplay();
 		void ConfirmReplayDelete();
 		/// Rebuilds §9b's moderation panel from the host's live seat view.

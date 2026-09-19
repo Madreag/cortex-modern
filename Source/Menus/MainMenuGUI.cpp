@@ -343,6 +343,13 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReady"));
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"));
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerLeave"));
+	m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerResumeGame"));
+	m_MainMenuButtons[MenuButton::ResumeStartButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonResumeStart"));
+	m_MainMenuButtons[MenuButton::ResumeBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonResumeBack"));
+	m_MultiplayerResumePanel = dynamic_cast<GUICollectionBox*>(m_SubMenuScreenGUIControlManager->GetControl("MultiplayerResumePanel"));
+	m_ResumeMatchesList = dynamic_cast<GUIListBox*>(m_SubMenuScreenGUIControlManager->GetControl("ListResumeMatches"));
+	m_ResumeSelectedLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelResumeSelected"));
+	m_ResumeStatusLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelResumeStatus"));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerReconnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerCancelReconnect"));
 	m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostBack"));
@@ -1001,6 +1008,18 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		m_MultiplayerLandingStatusLabel->SetText("");
 		m_MultiplayerSubScreen = MultiplayerSubScreen::JoinSetup;
 		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerResumeGameButton]) {
+		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerSubScreen = MultiplayerSubScreen::ResumeSetup;
+		RefreshResumeList();
+		g_GUISound.ButtonPressSound()->Play();
+	} else if (guiEventControl == m_ResumeMatchesList) {
+		RefreshResumeControls();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ResumeStartButton]) {
+		StartSelectedResume();
+	} else if (guiEventControl == m_MainMenuButtons[MenuButton::ResumeBackButton]) {
+		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerHostBackButton] || guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerJoinBackButton]) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		g_GUISound.BackButtonPressSound()->Play();
@@ -1073,6 +1092,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// A cancel stops the automatic attempts; the recovery record survives it, so Rejoin still works.
 		g_NetMatchService.GetReconnectUx().Cancel(MenuClockMs());
 		g_NetMatchService.GetReconnectUx().DismissOffer();
+		g_NetMatchService.GetReconnectUx().StopWatchingForHostReturn();
 		m_MultiplayerApplyOffered = false;
 		g_GUISound.BackButtonPressSound()->Play();
 	} else if (guiEventControl == m_MainMenuButtons[MenuButton::MultiplayerModerateButton]) {
@@ -2842,12 +2862,25 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// §9b: the one refusal a joiner can answer. The same two buttons carry it, so the landing panel
 	// keeps one pair of controls whatever it is offering.
 	const bool applying = !recovering && !offering && m_MultiplayerApplyOffered && g_NetMatchService.WasJoinRefusedByALiveMatch();
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || reconnect.CanRetryManually()));
-	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering || applying || reconnect.CanRetryManually());
+	// 7e: the match died with its host and no successor took it. The prompt stays up and waits for that
+	// host to come back: enabled once its row is listed again, or at once when there is no directory to
+	// watch and the only route left is the address the player types.
+	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
+	const bool hostBack = reconnect.HasHostReturned() || reconnect.GetWatchedSessionId().empty();
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
+	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || recovering));
-	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || reconnect.CanCancel());
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
+	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	if (!landing) {
+		return;
+	}
+	if (awaiting && offering) {
+		const std::string waiting = reconnect.GetHostReturnText();
+		if (waiting != m_ReconnectStatusShown) {
+			m_MultiplayerLandingStatusLabel->SetText(waiting);
+			m_ReconnectStatusShown = waiting;
+		}
 		return;
 	}
 	if (applying) {
@@ -2940,6 +2973,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
 	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
 	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
+	if (m_MultiplayerResumePanel) m_MultiplayerResumePanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup);
 	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
 	m_MultiplayerModerationPanel->SetVisible(moderating);
@@ -2973,6 +3007,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		int contentHeight = 250;
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup && m_MultiplayerHostPanel) {
 			contentHeight = m_MultiplayerHostPanel->GetHeight();
+		}
+		if (m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup && m_MultiplayerResumePanel) {
+			RefreshResumeControls();
+			contentHeight = m_MultiplayerResumePanel->GetHeight();
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::Landing) {
 			// FontLarge's atlas has a few width-only blank cells (e.g. 0xDF); FontSmall's ink draws those bytes.
@@ -3447,6 +3485,97 @@ void MainMenuGUI::RefreshReplayList() {
 	RefreshReplayBrowserControls();
 }
 
+void MainMenuGUI::RefreshResumeList() {
+	if (!m_ResumeMatchesList) {
+		return;
+	}
+	const int selected = m_ResumeMatchesList->GetSelectedIndex();
+	const std::string keep = selected >= 0 && static_cast<size_t>(selected) < m_ResumeRows.size() ? m_ResumeRows[selected].matchId : "";
+	m_ResumeRows.clear();
+	m_ResumeMatchesList->ClearList();
+	for (const AutosaveDescriptor& checkpoint: AutosaveStore::ListResumable()) {
+		AutosaveManifest manifest;
+		if (!AutosaveStore::ReadManifest(checkpoint.path.parent_path(), checkpoint.matchId, checkpoint.savedTick, manifest)) {
+			continue;
+		}
+		ResumeRow row;
+		row.matchId = checkpoint.matchId;
+		row.tick = checkpoint.savedTick;
+		// How far the match got, as the clock the players watched, not as a tick count.
+		NetMatchSummary reached;
+		reached.runningTicks = checkpoint.savedTick;
+		std::string age = "just now";
+		std::error_code status;
+		const auto written = std::filesystem::last_write_time(checkpoint.path, status);
+		if (!status) {
+			const auto minutes = std::chrono::duration_cast<std::chrono::minutes>(std::filesystem::file_time_type::clock::now() - written).count();
+			age = minutes >= 1440 ? std::to_string(minutes / 1440) + "d ago" : (minutes >= 60 ? std::to_string(minutes / 60) + "h ago" : std::to_string(std::max<long long>(minutes, 0)) + "m ago");
+		}
+		row.text = manifest.activityPreset + " / " + manifest.scenePreset + " | " + reached.DurationText() + " in | " + age;
+		row.details = "Checkpoint " + std::to_string(checkpoint.savedTick) + " of match " + checkpoint.matchId + ".";
+		if (!manifest.peerNames.empty()) {
+			row.details += "\nPlayers: ";
+			for (size_t index = 0; index < manifest.peerNames.size(); ++index) {
+				row.details += (index == 0 ? "" : ", ") + manifest.peerNames[index];
+			}
+		}
+		row.details += "\nThey rejoin with the seats they had; anyone without this checkpoint is sent it.";
+		m_ResumeRows.push_back(std::move(row));
+	}
+	m_ResumeMatchesList->BeginUpdate();
+	int restore = m_ResumeRows.empty() ? -1 : 0;
+	for (size_t index = 0; index < m_ResumeRows.size(); ++index) {
+		m_ResumeMatchesList->AddItem(m_ResumeRows[index].text);
+		if (m_ResumeRows[index].matchId == keep) restore = static_cast<int>(index);
+	}
+	m_ResumeMatchesList->EndUpdate();
+	m_ResumeMatchesList->SetSelectedIndex(restore);
+	if (m_ResumeStatusLabel) {
+		m_ResumeStatusLabel->SetText(m_ResumeRows.empty()
+		                                 ? "No match here can be restarted: a checkpoint needs its restart manifest."
+		                                 : std::to_string(m_ResumeRows.size()) + " match(es) can be restarted");
+	}
+	RefreshResumeControls();
+}
+
+void MainMenuGUI::RefreshResumeControls() {
+	if (!m_ResumeMatchesList || !m_ResumeSelectedLabel) {
+		return;
+	}
+	const int selected = m_ResumeMatchesList->GetSelectedIndex();
+	const bool hasSelection = selected >= 0 && static_cast<size_t>(selected) < m_ResumeRows.size();
+	m_ResumeSelectedLabel->SetText(hasSelection ? m_ResumeRows[selected].details : "Select a match to restart it where its last checkpoint stands.");
+	m_ResumeSelectedLabel->SetVerticalOverflowScroll(true);
+	m_ResumeSelectedLabel->ActivateDeactivateOverflowScroll(true);
+	if (m_ResumeStatusLabel) m_ResumeStatusLabel->ActivateDeactivateOverflowScroll(true);
+	if (GUIButton* start = m_MainMenuButtons[MenuButton::ResumeStartButton]) {
+		start->SetEnabled(hasSelection);
+	}
+}
+
+void MainMenuGUI::StartSelectedResume() {
+	const int selected = m_ResumeMatchesList ? m_ResumeMatchesList->GetSelectedIndex() : -1;
+	if (selected < 0 || static_cast<size_t>(selected) >= m_ResumeRows.size()) {
+		return;
+	}
+	NetMatchServiceRequest request;
+	request.host = true;
+	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? "Host" : m_MultiplayerNameTextBox->GetText();
+	request.port = static_cast<uint16_t>(std::max(1, std::atoi(m_MultiplayerHostPortTextBox->GetText().c_str())));
+	request.resyncOnDesync = true;
+	// The manifest authors the roster; the request only names which checkpoint to stand on.
+	request.resumeMatchId = m_ResumeRows[selected].matchId;
+	request.resumeTick = m_ResumeRows[selected].tick;
+	std::string error;
+	if (!g_NetMatchService.Start(request, &error)) {
+		if (m_ResumeStatusLabel) m_ResumeStatusLabel->SetText(error);
+		g_GUISound.UserErrorSound()->Play();
+		return;
+	}
+	m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+	g_GUISound.ButtonPressSound()->Play();
+}
+
 void MainMenuGUI::RefreshReplayBrowserControls() {
 	const int width = std::min(600, m_RootBoxMaxWidth - 24);
 	constexpr int height = 360 - 24; // The lobby's minimum-viewport budget leaves a band for Back.
@@ -3709,6 +3838,7 @@ std::string MainMenuGUI::AutomationMultiplayerSubScreen() const {
 		case MultiplayerSubScreen::Landing: return "Landing";
 		case MultiplayerSubScreen::HostSetup: return "HostSetup";
 		case MultiplayerSubScreen::JoinSetup: return "JoinSetup";
+		case MultiplayerSubScreen::ResumeSetup: return "ResumeSetup";
 		case MultiplayerSubScreen::Lobby: return "Lobby";
 		case MultiplayerSubScreen::Moderation: return "Moderation";
 		case MultiplayerSubScreen::ReplayBrowser: return "ReplayBrowser";
