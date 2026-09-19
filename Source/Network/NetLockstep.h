@@ -389,6 +389,7 @@ namespace RTE {
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
+		static constexpr size_t c_MaxHistoryBytes = 16 * 1024 * 1024; // Older inputs yield to resync before recovery consumes match memory.
 		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
 		static bool Encode(const NetHostMigrationMessage& message, const NetHash32& key, std::vector<uint8_t>& bytes);
 		static bool Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message);
@@ -812,6 +813,7 @@ namespace RTE {
 		bool DecodeMigrationFrame(const std::vector<uint8_t>& bytes, uint64_t frame, NetLockstepReadyFrame& ready) const;
 		void SendMigrationFrame(NetPeerId peer, uint64_t frame);
 		void RetainMigrationFrame(const NetLockstepReadyFrame& ready);
+		void StoreMigrationFrame(uint64_t frame, std::vector<uint8_t> bytes);
 		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
 		std::unique_ptr<INetTransport> m_MigrationListener;
@@ -834,6 +836,7 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_MigrationPeers;
 		std::set<uint8_t> m_MigrationReady;
 		std::map<uint64_t, std::vector<uint8_t>> m_MigrationHistory;
+		size_t m_MigrationHistoryBytes = 0;
 		std::map<uint64_t, std::vector<uint8_t>> m_MigrationIncoming;
 		std::map<NetPeerId, std::deque<std::vector<uint8_t>>> m_MigrationOutbox;
 		std::deque<std::tuple<NetPeerId, uint64_t, size_t>> m_MigrationFrameQueue;
