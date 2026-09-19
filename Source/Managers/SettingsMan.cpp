@@ -175,6 +175,11 @@ void SettingsMan::Clear() {
 	m_NetworkTurnServers.clear();
 	m_NetworkTurnUser.clear();
 	m_NetworkTurnPass.clear();
+	m_NetworkConnectionMode = NetworkConnectionMode::Automatic;
+	m_NetworkHostRelayMode = NetworkHostRelayMode::Directory;
+	m_NetworkPlayerTurnServers.clear();
+	m_NetworkPlayerTurnUser.clear();
+	m_NetworkPlayerTurnPass.clear();
 	m_LocalPrediction = true;
 	m_LocalPredictionMaxTicks = 20;
 	m_NetworkDisplayName = "Player";
@@ -362,6 +367,17 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkTurnServers", { reader >> m_NetworkTurnServers; });
 	MatchProperty("NetworkTurnUser", { reader >> m_NetworkTurnUser; });
 	MatchProperty("NetworkTurnPass", { reader >> m_NetworkTurnPass; });
+	MatchProperty("NetworkConnectionMode", {
+		const std::string value = LowerAscii(reader.ReadPropValue());
+		m_NetworkConnectionMode = value == "directonly" ? NetworkConnectionMode::DirectOnly : value == "relayonly" ? NetworkConnectionMode::RelayOnly : NetworkConnectionMode::Automatic;
+	});
+	MatchProperty("NetworkHostRelayMode", {
+		const std::string value = LowerAscii(reader.ReadPropValue());
+		m_NetworkHostRelayMode = value == "off" ? NetworkHostRelayMode::Off : value == "fixed" ? NetworkHostRelayMode::Fixed : NetworkHostRelayMode::Directory;
+	});
+	MatchProperty("NetworkPlayerTurnServers", { reader >> m_NetworkPlayerTurnServers; });
+	MatchProperty("NetworkPlayerTurnUser", { reader >> m_NetworkPlayerTurnUser; });
+	MatchProperty("NetworkPlayerTurnPass", { reader >> m_NetworkPlayerTurnPass; });
 	MatchProperty("LocalPrediction", { reader >> m_LocalPrediction; });
 	MatchProperty("LocalPredictionMaxTicks", { reader >> m_LocalPredictionMaxTicks; });
 	MatchProperty("NetworkDisplayName", { SetNetworkDisplayName(reader.ReadPropValue()); });
@@ -522,6 +538,11 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkTurnServers", m_NetworkTurnServers);
 	writer.NewPropertyWithValue("NetworkTurnUser", m_NetworkTurnUser);
 	writer.NewPropertyWithValue("NetworkTurnPass", m_NetworkTurnPass);
+	writer.NewPropertyWithValue("NetworkConnectionMode", m_NetworkConnectionMode == NetworkConnectionMode::DirectOnly ? "DirectOnly" : m_NetworkConnectionMode == NetworkConnectionMode::RelayOnly ? "RelayOnly" : "Automatic");
+	writer.NewPropertyWithValue("NetworkHostRelayMode", m_NetworkHostRelayMode == NetworkHostRelayMode::Off ? "Off" : m_NetworkHostRelayMode == NetworkHostRelayMode::Fixed ? "Fixed" : "Directory");
+	writer.NewPropertyWithValue("NetworkPlayerTurnServers", m_NetworkPlayerTurnServers);
+	writer.NewPropertyWithValue("NetworkPlayerTurnUser", m_NetworkPlayerTurnUser);
+	writer.NewPropertyWithValue("NetworkPlayerTurnPass", m_NetworkPlayerTurnPass);
 	writer.NewPropertyWithValue("LocalPrediction", m_LocalPrediction);
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	WriteNetworkPreferences(writer);

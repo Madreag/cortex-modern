@@ -155,6 +155,20 @@ namespace RTE {
 		/// Gets the saved NetworkIceEnable, ignoring any run override.
 		/// @return The saved setting.
 		bool GetNetworkIceEnableSetting() const { return m_NetworkIceEnable; }
+		bool HasNetworkIceEnableOverride() const { return m_NetworkIceEnableOverridden; }
+
+		enum class NetworkConnectionMode { Automatic, DirectOnly, RelayOnly };
+		enum class NetworkHostRelayMode { Off, Directory, Fixed };
+		NetworkConnectionMode GetNetworkConnectionMode() const { return m_NetworkConnectionMode; }
+		void SetNetworkConnectionMode(NetworkConnectionMode mode) { m_NetworkConnectionMode = mode; }
+		NetworkHostRelayMode GetNetworkHostRelayMode() const { return m_NetworkHostRelayMode; }
+		void SetNetworkHostRelayMode(NetworkHostRelayMode mode) { m_NetworkHostRelayMode = mode; }
+		const std::string& GetNetworkPlayerTurnServers() const { return m_NetworkPlayerTurnServers; }
+		void SetNetworkPlayerTurnServers(const std::string& value) { m_NetworkPlayerTurnServers = value; }
+		const std::string& GetNetworkPlayerTurnUser() const { return m_NetworkPlayerTurnUser; }
+		void SetNetworkPlayerTurnUser(const std::string& value) { m_NetworkPlayerTurnUser = value; }
+		const std::string& GetNetworkPlayerTurnPass() const { return m_NetworkPlayerTurnPass; }
+		void SetNetworkPlayerTurnPass(const std::string& value) { m_NetworkPlayerTurnPass = value; }
 
 		/// Sets and saves whether session-id joins offer or use ICE.
 		void SetNetworkIceEnable(bool enable) { m_NetworkIceEnable = enable; }
@@ -606,6 +620,11 @@ namespace RTE {
 		bool m_NetworkPortMapEnable; //!< Whether a hosted match requests a router UDP port mapping and advertises the public endpoint.
 		int m_NetworkPortMapEnableOverride; //!< -net-port-map on|off run override (-1 unset); consulted by the getter, never persisted.
 		bool m_NetworkIceEnable = true; //!< Whether session-id joins offer or use ICE beside the direct address.
+		NetworkConnectionMode m_NetworkConnectionMode = NetworkConnectionMode::Automatic;
+		NetworkHostRelayMode m_NetworkHostRelayMode = NetworkHostRelayMode::Directory;
+		std::string m_NetworkPlayerTurnServers;
+		std::string m_NetworkPlayerTurnUser;
+		std::string m_NetworkPlayerTurnPass;
 		std::string m_NetworkStunServers; //!< Comma-separated host:port; empty means ICE gathers host candidates only.
 		std::string m_NetworkTurnServers;
 		std::string m_NetworkTurnUser;
