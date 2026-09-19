@@ -1545,7 +1545,8 @@ serializeGraph = function(roots, rebuildEverything)
 	table.sort(uids, function(a, b) return tonumber(a) < tonumber(b) end)
 	-- A root is serialized again only when the write barrier saw one of its tables move.
 	local dirt = (not rebuildEverything) and _ScriptGraphDirtyRoots and _ScriptGraphDirtyRoots() or nil
-	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base) and graphCache or nil
+	-- A chunk written under a counter this capture has not reached names ids it would call unborn.
+	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base and graphCache.base <= base) and graphCache or nil
 	local reused, rewritten = 0, 0
 	for _, uid in ipairs(uids) do
 		local key = tostring(tonumber(uid) or uid)
@@ -3192,7 +3193,18 @@ do
 	local cacheRoots = { ["11"] = cacheRootOne, ["12"] = cacheRootTwo }
 	local cacheFirst = _ScriptGraph.serialize(cacheRoots)
 	cacheRootTwo.tag = "moved"
+	-- What the barrier marked before this capture is exactly what the capture must write again.
+	local cacheDirt = _ScriptGraphDirtyRoots()
+	local cacheMarked = 0
+	for _ in pairs(cacheDirt.roots) do cacheMarked = cacheMarked + 1 end
+	local cacheReused, cacheRewritten
+	local noteReuse = _ScriptGraphNoteRootReuse
+	_ScriptGraphNoteRootReuse = function(r, w) cacheReused, cacheRewritten = r, w return noteReuse(r, w) end
 	local cacheSecond = _ScriptGraph.serialize(cacheRoots)
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("root_cache_reuses_every_root_the_barrier_left_alone",
+	      cacheDirt.walked and not cacheDirt.unknown and cacheRewritten == cacheMarked and cacheReused == 2 - cacheMarked,
+	      tostring(cacheDirt.walked) .. " " .. tostring(cacheDirt.unknown) .. " marked=" .. cacheMarked .. " reused=" .. tostring(cacheReused) .. " rewritten=" .. tostring(cacheRewritten))
 	local cacheThird = _ScriptGraph.serialize(cacheRoots)
 	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one")
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
@@ -3489,10 +3501,13 @@ static int ScriptGraphBeginRoot(lua_State* L) {
 }
 
 // The scratch tables a capture allocates are its own, so the state's counter is put back afterwards.
-static uint64_t s_SerialBeforeCapture = 0;
+// The counter belongs to the state, so the saved value does too: another state's capture must not move it.
+static std::unordered_map<lua_State*, uint64_t> s_SerialBeforeCapture;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
-	s_SerialBeforeCapture = luaJIT_state_serial(L);
+	// The walk the index records is the capture itself, so every caller gets one, nested or not.
+	CheckpointGraphIndex::Get().BeginWalk();
+	s_SerialBeforeCapture[L] = luaJIT_state_serial(L);
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
@@ -3518,10 +3533,13 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 }
 
 static int ScriptGraphEndCapture(lua_State* L) {
-	if (s_SerialBeforeCapture > 0) luaJIT_set_state_serial(L, s_SerialBeforeCapture);
-	s_SerialBeforeCapture = 0;
+	if (const auto saved = s_SerialBeforeCapture.find(L); saved != s_SerialBeforeCapture.end()) {
+		if (saved->second > 0) luaJIT_set_state_serial(L, saved->second);
+		s_SerialBeforeCapture.erase(saved);
+	}
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
+	CheckpointGraphIndex::Get().EndWalk();
 	return 0;
 }
 
@@ -6531,18 +6549,25 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	};
 	const bool sinkingWas = LuaMan::IsCheckpointAllocationSinking();
 	LuaMan::SetCheckpointAllocationSinking(true);
+	const bool sinkingOn = LuaMan::IsCheckpointAllocationSinking();
 	probeBirths();
 	probeBirths();
 	const uint64_t bornWithSinking = probeBirths();
 	LuaMan::SetCheckpointAllocationSinking(false);
+	const bool sinkingOff = !LuaMan::IsCheckpointAllocationSinking();
 	probeBirths();
 	const uint64_t bornWithoutSinking = probeBirths();
 	LuaMan::SetCheckpointAllocationSinking(sinkingWas);
 	RunScriptString("_F76SinkProbe = nil");
-	const bool sinkingHidesBirths = bornWithoutSinking == 400 && bornWithSinking < bornWithoutSinking;
+	// The invariant is that a captured state allocates every table; comparing against a sunk run
+	// says something only when the JIT compiled the probe and sank its table.
+	const bool jitSank = bornWithSinking < 400;
+	const bool sinkingHidesBirths = sinkingOn && sinkingOff && bornWithoutSinking == 400 &&
+	                                (!jitSank || bornWithSinking < bornWithoutSinking);
 	std::cout << "[script-graph-selftest] " << (sinkingHidesBirths ? "PASS" : "FAIL")
 	          << " sinking_off_allocates_every_table born_with=" << bornWithSinking
-	          << " born_without=" << bornWithoutSinking << std::endl;
+	          << " born_without=" << bornWithoutSinking << " sinking_on=" << sinkingOn << " sinking_off=" << sinkingOff
+	          << (jitSank ? "" : " jit_did_not_sink_the_probe_so_the_count_compare_is_skipped") << std::endl;
 	checkpointValues = sinkingHidesBirths && checkpointValues;
 	// A speculative window rolls its tables back, so it gives their numbers back as well.
 	const uint64_t birthsBeforeWindow = luaJIT_state_serial(m_State);
