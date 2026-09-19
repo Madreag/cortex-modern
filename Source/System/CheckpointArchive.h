@@ -94,11 +94,11 @@ namespace RTE {
 		void Value(float value) { Value(std::bit_cast<uint32_t>(value)); }
 		void Value(double value) { Value(std::bit_cast<uint64_t>(value)); }
 		void Value(const std::string& value) {
-			if (m_Recording) { m_Capture.String(value); return; }
+			if (m_Recording) { RefuseDivertedValue(); m_Capture.String(value); return; }
 			Value(value.size()); m_Text += value; m_Text.push_back(' ');
 		}
 		void Value(const CheckpointText& value) {
-			if (m_Recording) m_Capture.Child(value, true); else Value(value.Text());
+			if (m_Recording) { RefuseDivertedValue(); m_Capture.Child(value, true); } else Value(value.Text());
 		}
 		void Value(const Vector& value) { (*this)(value.m_X, value.m_Y); }
 		void Value(const Box& value) { (*this)(value.m_Corner, value.m_Width, value.m_Height); }
@@ -122,6 +122,11 @@ namespace RTE {
 		}
 
 	private:
+		// A nested writer that already published into this scope was composed by hand, so its text
+		// never reached this writer: name the mistake here instead of losing the value.
+		void RefuseDivertedValue() const {
+			if (s_Capture && s_Capture->output) throw std::logic_error("a nested checkpoint value must be produced with CheckpointWriter::Native");
+		}
 		struct CaptureScope {
 			CaptureScope* previous = s_Capture;
 			std::optional<CheckpointText> output;

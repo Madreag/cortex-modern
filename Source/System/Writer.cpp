@@ -474,6 +474,38 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		} catch (const std::logic_error&) { rejected = true; }
 		check(rejected && CheckpointWriter::IsCapturing() == capturing, "owned_checkpoint_refuses_uncaptured_text_and_restores_scope");
 
+		const auto nested = [](int id) { CheckpointWriter inner("Nested1"); inner(id, std::string("payload")); return inner.Text(); };
+		const auto composeWithNative = [&nested] {
+			CheckpointWriter outer("Outer1");
+			outer(CheckpointWriter::Native([&nested] { return nested(1); }));
+			outer(CheckpointWriter::Native([&nested] { return nested(2); }));
+			return outer.Text();
+		};
+		const std::string composedPlainly = composeWithNative();
+		const CheckpointText composedUnderCapture = CheckpointWriter::CaptureNative(composeWithNative);
+		check(!composedPlainly.empty() && composedUnderCapture.Text() == composedPlainly, "owned_checkpoint_keeps_two_nested_writers_under_native");
+
+		std::string handRefusal;
+		try {
+			CheckpointWriter::CaptureNative([&nested] {
+				CheckpointWriter outer("Outer1");
+				outer(nested(1));
+				outer(nested(2));
+				return outer.Text();
+			});
+		} catch (const std::logic_error& error) { handRefusal = error.what(); }
+		check(handRefusal == "a nested checkpoint value must be produced with CheckpointWriter::Native" &&
+		          CheckpointWriter::IsCapturing() == capturing,
+		      "owned_checkpoint_refuses_a_hand_composed_nested_value");
+
+		CheckpointCache scopeCache;
+		scopeCache.Begin();
+		const int cacheOwner = 0;
+		const CheckpointText firstReach = scopeCache.Remember(&cacheOwner, 7, CheckpointWriter::CaptureNative(composeWithNative));
+		const CheckpointText secondReach = scopeCache.Remember(&cacheOwner, 7, CheckpointWriter::CaptureNative(composeWithNative));
+		check(firstReach.SameValues(secondReach) && secondReach.Text() == composedPlainly && scopeCache.Reused() == 1,
+		      "owned_checkpoint_cache_keeps_the_first_reach_identity_of_nested_writers");
+
 		auto calls = std::make_shared<std::atomic<int>>(0);
 		auto replacements = std::make_shared<std::atomic<int>>(0);
 		const auto original = CheckpointText::Deferred([calls] { ++*calls; return std::string("stable"); }, 0, "OwnedCheckpointStable1");
