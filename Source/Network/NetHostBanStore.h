@@ -36,6 +36,7 @@ namespace RTE {
 		bool Load(std::string* error = nullptr);
 		bool PersistentReady() const;
 		bool Ban(const NetAuthBytes32& identity, NetHostBanScope scope, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error = nullptr);
+		bool ImportSessionBan(const NetAuthBytes32& identity, const std::string& alias, const std::string& reason, uint64_t sessionId, uint64_t nowUnixMs, std::string* error = nullptr);
 		bool Unban(const NetAuthBytes32& identity, std::string* error = nullptr);
 		bool IsBanned(const NetAuthBytes32& identity, uint64_t sessionId) const;
 		void EndSession(uint64_t sessionId);

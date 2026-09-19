@@ -6539,6 +6539,9 @@ namespace RTE {
 						}
 					}
 					permanentBefore = permanentIds(successorBans);
+					if (!successorBans.Ban(bannedId, NetHostBanScope::Session, "old match", "stale session row", match.sessionId + 1, unixClock - 1)) {
+						return Fail("stale session ban write=false");
+					}
 					if (permanentBefore.size() != 2) {
 						return Fail("successor fixture does not contain two permanent identities");
 					}
@@ -6617,7 +6620,7 @@ namespace RTE {
 					const auto imported = successorBans.List();
 					for (const auto& identity: {bannedId, sessionBannedId}) {
 						const auto ban = std::find_if(imported.begin(), imported.end(), [&](const auto& record) { return record.identity == identity; });
-						if (ban == imported.end() || ban->scope != NetHostBanScope::Session || ban->sessionId != match.sessionId || successorBans.IsBanned(identity, match.sessionId + 1)) {
+						if (ban == imported.end() || ban->scope != NetHostBanScope::Session || ban->sessionId != match.sessionId || !successorBans.IsBanned(identity, match.sessionId) || successorBans.IsBanned(identity, match.sessionId + 1)) {
 							return Fail("an imported old-host ban escaped this match's Session scope");
 						}
 					}
