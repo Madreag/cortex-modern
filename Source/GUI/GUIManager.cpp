@@ -464,8 +464,7 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		check("kept_focus_still_presses", holder.m_Downs == 1 && holder.m_Presses == 1 && manager.GetFocusPanel() == &holder);
 	}
 	{
-		// The buy menu's module flags are owned for the menu's life: Destroy clears them where it used to
-		// hand the menu a fresh array, which left the one it had just deleted behind on every cycle.
+		// The buy menu's module flags are owned for the menu's life: a destroy cycle clears them in place.
 		if (!PresetMan::IsConstructed()) {
 			PresetMan::Construct();
 		}
@@ -474,7 +473,22 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		menu.Destroy();
 		menu.Destroy();
 		menu.Destroy();
-		check("buy_menu_flags_survive_a_destroy_cycle", BuyMenuGUI::GetModuleFlagAllocations() == created);
+		const uint64_t afterMenu = BuyMenuGUI::GetModuleFlagAllocations();
+		// This fixture loads no data module, so the menu's own store stays empty and takes no storage at
+		// all: the same seat path is driven here at the module count a loaded game gives it.
+		std::vector<bool> flags;
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		const uint64_t seated = BuyMenuGUI::GetModuleFlagAllocations();
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		BuyMenuGUI::SeatModuleFlags(flags, 8);
+		check("buy_menu_flags_survive_a_destroy_cycle", afterMenu == created && seated == created + 1 &&
+		                                                   BuyMenuGUI::GetModuleFlagAllocations() == seated &&
+		                                                   flags.size() == 8 && flags[0]);
+		// The archive's flags-present byte is the menu's, not the module count's: a checkpoint taken
+		// before a module loads ends with that byte, an empty flag map, no loadout and no controls.
+		BuyMenuGUI archived;
+		check("buy_menu_zero_module_checkpoint_keeps_its_flag_byte", archived.SaveCheckpoint().ends_with("1 0 0 0 "));
 	}
 	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;

@@ -43,6 +43,14 @@ uint64_t BuyMenuGUI::s_ModuleFlagAllocations = 0;
 const std::string BuyMenuGUI::c_DefaultBannerImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuBanner.png";
 const std::string BuyMenuGUI::c_DefaultLogoImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuLogo.png";
 
+void BuyMenuGUI::SeatModuleFlags(std::vector<bool>& flags, int moduleCount) {
+	const size_t storage = flags.capacity();
+	flags.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
+	if (flags.capacity() != storage) ++s_ModuleFlagAllocations;
+	// The base module is the one a fresh menu opens with.
+	if (!flags.empty()) flags[0] = true;
+}
+
 BuyMenuGUI::BuyMenuGUI() {
 	Clear();
 }
@@ -84,11 +92,7 @@ void BuyMenuGUI::Clear() {
 	m_MetaPlayer = Players::NoPlayer;
 	m_NativeTechModule = 0;
 	m_ForeignCostMult = 4.0;
-	int moduleCount = g_PresetMan.GetTotalModuleCount();
-	const size_t flagStorage = m_aExpandedModules.capacity();
-	m_aExpandedModules.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
-	if (m_aExpandedModules.capacity() != flagStorage) ++s_ModuleFlagAllocations;
-	if (!m_aExpandedModules.empty()) m_aExpandedModules[0] = true;
+	SeatModuleFlags(m_aExpandedModules, g_PresetMan.GetTotalModuleCount());
 	m_pShopList = 0;
 	m_pCartList = 0;
 	m_pCraftBox = 0;
@@ -2503,7 +2507,9 @@ std::string BuyMenuGUI::SaveCheckpoint() const {
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pSelectedCraft); }));
 	std::vector<bool> expanded;
 	for (size_t i = 0; i < m_aExpandedModules.size(); ++i) expanded.push_back(m_aExpandedModules[i]);
-	writer(!m_aExpandedModules.empty(), GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
+	// The menu holds its flag store for its whole life, which is what this byte has always said: it is
+	// true at every module count, including none, and the load side rebuilds the flags themselves.
+	writer(true, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
 	for (const auto& loadout: m_Loadouts) {
 		std::vector<CheckpointText> cargo;
 		for (const auto* item: loadout.m_CargoItems) cargo.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(item); }));
