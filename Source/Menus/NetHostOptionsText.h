@@ -31,7 +31,7 @@ namespace RTE {
 		}
 		if (!setup) {
 			if (route == "ip") return text + "Current session uses direct IP: forward the host's UDP port or use LAN.";
-			if (route == "ice") return text + "This session offers NAT traversal. End it to change the setting.";
+			if (route == "ice") return text + "This session is using this preference. End it to change the setting.";
 			if (!settings.GetNetworkIceEnableSetting()) return text + "NAT traversal is Off for this session. End it to change the setting.";
 		}
 		return text + (settings.GetSessionDirectoryUrl().empty()
