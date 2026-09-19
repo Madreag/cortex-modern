@@ -10950,6 +10950,62 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestRelayOfferRefresh(std::string* error) {
+		struct Script {
+			std::deque<NetDirectoryClient::Reply> replies;
+			std::vector<NetDirectoryClient::Request> sent;
+		};
+		class Wire final : public NetDirectoryClient::Transport {
+		public:
+			explicit Wire(std::shared_ptr<Script> script) : m_Script(std::move(script)) {}
+			void Start(const NetDirectoryClient::Request& request) override { m_Script->sent.push_back(request); }
+			bool Finished() override { return true; }
+			NetDirectoryClient::Reply Take() override {
+				if (m_Script->replies.empty()) return {500, "", ""};
+				auto reply = m_Script->replies.front(); m_Script->replies.pop_front(); return reply;
+			}
+			void Abort() override {}
+		private:
+			std::shared_ptr<Script> m_Script;
+		};
+		NetMatchService service;
+		struct ResetDirectory { NetDirectoryClient& client; ~ResetDirectory() { client.Configure("", "", ""); } } reset{service.m_Directory};
+		auto script = std::make_shared<Script>();
+		service.m_Directory.SetTransportFactory([script] { return std::make_unique<Wire>(script); });
+		service.m_Directory.Configure("dir.example", "0123456789abcdef", "");
+		script->replies.push_back({200, R"({"session_id":"11111111-2222-4333-8444-555555555555","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+		service.m_Directory.Advertise(NetDirectoryRegisterRequest{}, false);
+		service.m_Directory.Update(0); service.m_Directory.Update(0);
+		service.m_IsHost = true;
+		service.m_IceEnabled = true;
+		service.m_HostRelayMode = 1;
+		service.m_LastRoundId = 1;
+		service.m_RelayReplies = 0;
+		service.m_FreshRelayRequested = true;
+		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + 3600);
+		script->replies.push_back({200, relay.ToJson(), ""});
+		service.UpdateRelayOffer(1);
+		NetRelayConfig offered;
+		if (!service.m_Directory.IceRequestPending() || service.ReadRelayOffer(offered)) { *error = "host did not wait for the match's relay request"; return false; }
+		if (nlohmann::json::parse(script->sent.back().body) != nlohmann::json{{"token", "host-token"}, {"match_id", relay.matchId}, {"ttl", 3600}}) { *error = "host requested an unbound relay lifetime"; return false; }
+		service.m_Directory.Update(2); service.UpdateRelayOffer(2);
+		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "host did not publish its minted relay"; return false; }
+		relay.expiresAt = now + 299;
+		service.SetRelayOfferLocked(relay);
+		service.UpdateRelayOffer(15001);
+		if (!service.m_Directory.IceRequestPending()) { *error = "host did not refresh before relay expiry"; return false; }
+		relay.expiresAt = now + 3600;
+		relay.iceServers.front().credential = "renewed-password";
+		script->replies.push_back({200, relay.ToJson(), ""});
+		service.m_Directory.Update(15002); service.UpdateRelayOffer(15002);
+		service.m_LastRoundId = 2;
+		service.m_FreshRelayRequested = true;
+		service.UpdateRelayOffer(30001);
+		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") { *error = "a fresh round reused the previous relay request"; return false; }
+		return true;
+	}
+
 	bool TestIceDefaultsAndOverrides(std::string* error) {
 		SettingsMan settings;
 		const std::string defaults = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
@@ -11234,6 +11290,7 @@ namespace RTE {
 		std::string error;
 		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
 		if (!TestRelayOfferAndPolicy(&error)) return fail(error);
+		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);

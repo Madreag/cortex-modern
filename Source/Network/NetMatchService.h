@@ -941,6 +941,7 @@ namespace RTE {
 		friend bool TestServiceDirectoryIceLeaseKeepsIdentity(std::string* error);
 		friend bool TestIceDefaultsAndOverrides(std::string* error);
 		friend bool TestRelayOfferAndPolicy(std::string* error);
+		friend bool TestRelayOfferRefresh(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
