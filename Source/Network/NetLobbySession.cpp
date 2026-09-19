@@ -251,6 +251,11 @@ namespace RTE {
 		return false;
 	}
 
+	NetPeerId NetLobbySession::RemoteTransportOf(uint8_t peerId) const {
+		const auto found = m_RemoteTransports.find(peerId);
+		return found == m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
+	}
+
 	bool NetLobbySession::BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
 		if (!m_Config.host || peerId == 0 || peerId == m_Config.localPeerId || transport == c_InvalidNetPeerId) {
 			if (error) *error = "late lobby remote is invalid";

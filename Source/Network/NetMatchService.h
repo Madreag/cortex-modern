@@ -466,6 +466,9 @@ namespace RTE {
 		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr);
 		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
 		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
+		/// Answers one refused connection on the world's reserved refusal id. Binding re-points a
+		/// known remote, so this must never take a watcher's or a member's id.
+		static bool AnswerWorldJoinRefusal(NetLobbySession& lobby, NetPeerId connection, NetWorldJoinRefusal refusal);
 		/// The bootstrap a lobby report belongs to: a bootstrap's own lobby id first, then a ready peer.
 		static NetPeerId ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer);
 		/// Applies one world-join report to the host's plane and sends the E it earns.

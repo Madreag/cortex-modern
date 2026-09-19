@@ -300,6 +300,14 @@ namespace RTE {
 	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
 	// A host may never configure more spectators than the world has lobby ids to bind them on.
 	static_assert(NetMatchConfigUtil::c_MaxWorldSpectators <= c_WorldSpectatorLobbyCap);
+	// The id a refusal is answered on. Binding re-points a known remote's transport, so a refusal
+	// answered on a watcher's id would hand that watcher's stream to the connection being refused.
+	inline constexpr uint8_t c_WorldRefusalLobbyPeer = c_WorldSpectatorLobbyPeerLast + 1;
+	static_assert(c_WorldRefusalLobbyPeer > c_WorldSpectatorLobbyPeerLast);
+	static_assert(c_WorldRefusalLobbyPeer < c_WorldSpectatorLobbyPeerFirst || c_WorldRefusalLobbyPeer > c_WorldSpectatorLobbyPeerLast);
+	// Above every lockstep peer id a member can take, so it is never a seat's id either.
+	static_assert(c_WorldRefusalLobbyPeer > NetLockstepCodec::c_MaxPeerCount);
+	static_assert(c_WorldRefusalLobbyPeer != 0);
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
 		if (session.assignedPeerId != 0) {
