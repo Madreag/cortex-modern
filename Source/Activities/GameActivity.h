@@ -456,7 +456,7 @@ namespace RTE {
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene. (default: Vector())
 		/// @param which Which screen's GUI to draw onto the bitmap. (default: 0)
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
-		/// The gold string DrawGUI last printed for this seat; the funds-preview driver reads it.
+		/// The gold string DrawGUI last printed for this seat.
 		static const std::string& GetLastFundsReadout(int player);
 
 		/// Draws this ActivityMan's current graphical representation to a

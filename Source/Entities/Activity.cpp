@@ -803,7 +803,7 @@ void Activity::NotePreviewedPurchase(int player, int team, float cost, uint64_t 
 			}
 		}
 	}
-	view.orders.push_back({applied, commitTick, sequence, false, 0});
+	view.orders.push_back({applied, commitTick, sequence});
 }
 
 void Activity::AdoptPreviewedPurchase(int player, int team, float cost) {
