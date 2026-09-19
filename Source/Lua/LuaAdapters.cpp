@@ -383,7 +383,9 @@ bool LuaAdaptersMovableObject::DisableScript2(MovableObject* luaSelfObject, cons
 }
 
 void LuaAdaptersMovableObject::SendMessage1(MovableObject* luaSelfObject, const std::string& message) {
-	luaSelfObject->RunScriptedFunctionInAppropriateScripts("OnMessage", false, false, {}, {message});
+	// No context is a context the wire can name, so the one-argument form takes the same road as the other:
+	// from an AI pass it crosses and every peer delivers at the committed tick, instead of landing here alone.
+	luaSelfObject->SendScriptedMessage(message, NetGameAIScriptMessage::None, 0.0, 0, "", nullptr);
 }
 
 void LuaAdaptersMovableObject::SendMessage2(MovableObject* luaSelfObject, const std::string& message, luabind::object context) {
