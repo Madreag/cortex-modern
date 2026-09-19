@@ -198,7 +198,7 @@ function MaginotMission:DoGameOverCheck()
 						end
 					else
 						if self.evacuationRocket and brain.UniqueID ~= self.evacuationRocket.UniqueID then
-							self:AddObjectivePoint("Protect!", brain.AboveHUDPos, self.defenderTeam, GameActivity.ARROWDOWN);
+							self:AddObjectivePoint("Protect!", brain.AboveHeadPos, self.defenderTeam, GameActivity.ARROWDOWN);
 						end
 
 						self:SetObservationTarget(brain.Pos, player);
@@ -441,7 +441,7 @@ function MaginotMission:UpdateActivity()
 				end
 			end
 			if not evacuationRocketHasAllBrains then
-				self:AddObjectivePoint("Get in the rocket!", self.evacuationRocket.AboveHUDPos, self.defenderTeam, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Get in the rocket!", self.evacuationRocket.AboveHeadPos, self.defenderTeam, GameActivity.ARROWDOWN);
 				self.evacuationRocket:OpenHatch();
 			else
 				self.evacuationRocket.AIMode = Actor.AIMODE_RETURN;

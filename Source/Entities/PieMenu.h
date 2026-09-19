@@ -199,14 +199,23 @@ namespace RTE {
 		/// This animation will continue until the next call to SetEnabled.
 		void Wobble() { m_MenuMode = MenuMode::Wobble; m_FrozenForView = false; }
 
-		/// Freezes the background circle's drawn radius until the menu leaves the frozen presentation. The PieMenu is
-		/// effectively disabled while doing this; none of the presentation state it drives is checkpointed.
+		/// Freezes the background circle at radius; IsEnabled/IsVisible/Update still observe m_FrozenForView.
 		/// @param radius The radius to make the background circle freeze at.
 		void FreezeAtRadius(int radius) {
 			m_FrozenForView = true;
 			m_FreezeRadiusDraw = radius;
 			m_FrozenBitmapNeedsRedraw = true;
 		}
+
+		/// A draw-only ActorSelect/Go-To ring. Update, the getters and the dump never read this.
+		void SetHighlightDrawRadius(int radius);
+		void SetHighlightWobble();
+		void ClearHighlightDraw();
+		bool HasHighlightDraw() const { return m_HighlightDrawActive; }
+		int GetHighlightDrawRadius() const { return m_HighlightDrawRadius; }
+		bool FrozenBitmapHasDrawnPixel() const;
+		/// Fills the ring and draws it at the owner's committed CPU pos. Does not write dump fields.
+		void DrawHighlight(BITMAP* targetBitmap, const Vector& targetPos = Vector());
 #pragma endregion
 
 #pragma region PieSlice Handling
@@ -401,7 +410,11 @@ namespace RTE {
 		BITMAP* m_FrozenBitmap = nullptr; //!< The background ring bitmap drawn while the frozen presentation shows.
 		bool m_FrozenForView = false; //!< Whether FreezeAtRadius's frozen ring is showing.
 		int m_FreezeRadiusDraw = 0; //!< The radius the frozen ring is held at.
-		bool m_FrozenBitmapNeedsRedraw = false; //!< Whether the frozen ring should be drawn into m_FrozenBitmap on the next Update.
+		bool m_FrozenBitmapNeedsRedraw = false; //!< Whether the frozen ring should be drawn into m_FrozenBitmap on the next render.
+		bool m_HighlightDrawActive = false; //!< Draw-only ActorSelect/Go-To ring; never dumped.
+		bool m_HighlightWobble = false; //!< Draw-only far-cursor pulse.
+		int m_HighlightDrawRadius = 0; //!< Drawn freeze radius when the highlight is held.
+		Timer m_HighlightViewTimer; //!< Real-time pulse for the draw-only wobble.
 		std::string m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
@@ -409,6 +422,9 @@ namespace RTE {
 		bool m_BGPieSlicesWithSubPieMenuBitmapNeedsRedrawing; //!< Whether the BG bitmap for PieSlices with sub-PieMenus should be redrawn when the BGBitmap is redrawn.
 
 #pragma region Update Breakdown
+		int CurrentHighlightRadius() const;
+		void FillHighlightBitmap();
+
 		/// Handles the wobbling portion of Update.
 		void UpdateWobbling();
 
@@ -437,6 +453,7 @@ namespace RTE {
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene.
 		/// @param drawPos Out parameter, a Vector to be filled in with the position at which the PieMenu should be drawn.
 		void CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, Vector& drawPos) const;
+		void CalculateDrawPosition(const BITMAP* targetBitmap, const Vector& targetPos, const Vector& center, Vector& drawPos) const;
 
 		/// Handles drawing icons for PieSlices' visual representation in the PieMenu.
 		/// @param targetBitmap A pointer to the BITMAP to draw on. Generally a screen BITMAP.

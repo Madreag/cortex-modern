@@ -347,14 +347,14 @@ function SkirmishDefense:UpdateActivity()
 					playertally = playertally + 1;
 					if not setTeam[team] then
 						-- Add objective points
-						self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHUDPos, team, GameActivity.ARROWDOWN);
+						self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHeadPos, team, GameActivity.ARROWDOWN);
 						for otherPlayer = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 							if otherPlayer ~= player and self:PlayerActive(otherPlayer) and self:PlayerHuman(otherPlayer) and MovableMan:IsActor(self:GetPlayerBrain(otherPlayer)) then
 								local otherTeam = self:GetTeamOfPlayer(otherPlayer);
 								if otherTeam ~= team then
-									self:AddObjectivePoint("Destroy!", self:GetPlayerBrain(otherPlayer).AboveHUDPos, team, GameActivity.ARROWDOWN);
+									self:AddObjectivePoint("Destroy!", self:GetPlayerBrain(otherPlayer).AboveHeadPos, team, GameActivity.ARROWDOWN);
 								else
-									self:AddObjectivePoint("Protect!", self:GetPlayerBrain(otherPlayer).AboveHUDPos, team, GameActivity.ARROWDOWN);
+									self:AddObjectivePoint("Protect!", self:GetPlayerBrain(otherPlayer).AboveHeadPos, team, GameActivity.ARROWDOWN);
 								end
 							end
 						end
@@ -642,7 +642,7 @@ function SkirmishDefense:UpdateActivity()
 												end
 
 												for team = Activity.TEAM_1, Activity.TEAM_4 do
-													self:AddObjectivePoint("Destroy!", Act.AboveHUDPos, team, GameActivity.ARROWDOWN);
+													self:AddObjectivePoint("Destroy!", Act.AboveHeadPos, team, GameActivity.ARROWDOWN);
 												end
 											end
 										end

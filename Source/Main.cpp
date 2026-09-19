@@ -5097,8 +5097,12 @@ std::string BuildControllerBoundaryJson() {
 std::string BuildDesyncCheckJson() {
 	const ScenarioRunner::LockstepChecksumCounters counters = ScenarioRunner::GetLockstepChecksumCounters();
 	std::ostringstream out;
+	const uint64_t ticks = ScenarioRunner::GetLockstepAppliedFrame();
+	const int64_t compareFloor = static_cast<int64_t>(ticks / 30) - 1;
+	const int64_t compareMargin = static_cast<int64_t>(counters.compares) - compareFloor;
 	out << "{\"submissions\":" << counters.submissions << ",\"sends\":" << counters.sends
-	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches << "}";
+	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches
+	    << ",\"compare_floor\":" << compareFloor << ",\"compare_margin\":" << compareMargin << "}";
 	return out.str();
 }
 

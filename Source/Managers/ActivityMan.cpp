@@ -1684,6 +1684,9 @@ bool ActivityMan::PrepareCheckpointPrimitives(std::string_view runtimeGlobals) {
 }
 
 bool ActivityMan::RestartActivity() {
+	if (!m_RestartRestoresSnapshot && !m_LockstepRelaunchInProgress) {
+		ScenarioRunner::ResetRetiredChecksumCounters();
+	}
 	if (!m_RestartRestoresSnapshot) return RestartActivityCandidate();
 	std::string error;
 	if (!m_PendingCheckpoint.activity || !m_PendingCheckpoint.scene || !g_MovableMan.ValidateScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
