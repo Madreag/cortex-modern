@@ -3128,6 +3128,17 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			constexpr int panelHeight = 246;
 			FitMultiplayerScreen(545, panelHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5);
 			LayoutMultiplayerFooter(545, panelHeight);
+			// Late rows open upward so their full lists stay above the footer.
+			for (GUICollectionBox* page : m_HostOptionsPages) {
+				for (GUIControl* control : *page->GetChildren()) {
+					if (auto* combo = dynamic_cast<GUIComboBox*>(control)) {
+						const int below = combo->GetYPos() + combo->GetHeight();
+						const int bottom = m_MainMenuButtons[MenuButton::HostOptionsBackButton]->GetYPos() - 4;
+						combo->GetListPanel()->SetPositionAbs(combo->GetXPos(), below + combo->GetDropHeight() <= bottom
+						                                                        ? below : combo->GetYPos() - combo->GetDropHeight());
+					}
+				}
+			}
 			return;
 		}
 		int contentWidth = 300;

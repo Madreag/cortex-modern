@@ -1129,6 +1129,30 @@ def captures(runtime, metadata):
     return rows
 
 
+def host_options_geometry(images):
+    measured = {}
+    for capture in images:
+        controls = {row["name"]: row for row in capture["controls"]}
+        panel = controls.get("MultiplayerHostOptionsPanel")
+        back = controls.get("ButtonHostOptBack")
+        if not panel or not back:
+            continue
+        for name, page in controls.items():
+            if name.startswith("CollectionBoxHostPage"):
+                bottom = page["rect"][1] + page["rect"][3]
+                assert bottom + 4 <= back["rect"][1], (name, page["rect"], back["rect"])
+                measured[name] = page["rect"]
+        visibility = controls.get("ComboHostNetVisibility")
+        if visibility:
+            x, y, width, height = visibility["rect"]
+            drop_bottom = y + height + 56
+            assert drop_bottom <= panel["rect"][1] + panel["rect"][3], (visibility, panel, drop_bottom)
+            measured["visibility_drop_bottom"] = drop_bottom
+    assert all("CollectionBoxHostPage" + page in measured for page in
+               ("Seats", "Rules", "Network", "Recovery", "Files", "Session")), measured
+    return measured
+
+
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root)
@@ -1501,6 +1525,8 @@ def run_case(options, case, root, failing=None):
             # The Leave/Seats block is centred on the lobby panel the way Start Match is; doubled
             # centres avoid halves. The Players header starts on its rows' left edge and holds its line.
             drawn = {c["name"]: c for c in images[-1]["controls"]}
+            if case == "lobby":
+                result["host_options_geometry"] = host_options_geometry(images)
             leave, seats, panel = (drawn[name] for name in
                                    ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
             assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
