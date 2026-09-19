@@ -2775,8 +2775,21 @@ namespace RTE {
 	void NetLockstepCoordinator::RetainMigrationFrame(const NetLockstepReadyFrame& ready) {
 		if (m_Config.matchConfig.successorOrder.empty()) return;
 		std::vector<uint8_t> bytes;
-		if (EncodeMigrationFrame(ready, bytes)) m_MigrationHistory[ready.frame] = std::move(bytes);
-		while (m_MigrationHistory.size() > NetHostMigrationCodec::c_HistoryFrames) m_MigrationHistory.erase(m_MigrationHistory.begin());
+		if (EncodeMigrationFrame(ready, bytes)) {
+			StoreMigrationFrame(ready.frame, std::move(bytes));
+		}
+	}
+
+	void NetLockstepCoordinator::StoreMigrationFrame(uint64_t frame, std::vector<uint8_t> bytes) {
+		auto& stored = m_MigrationHistory[frame];
+		m_MigrationHistoryBytes -= stored.size();
+		stored = std::move(bytes);
+		m_MigrationHistoryBytes += stored.size();
+		while (m_MigrationHistory.size() > NetHostMigrationCodec::c_HistoryFrames || m_MigrationHistoryBytes > NetHostMigrationCodec::c_MaxHistoryBytes) {
+			const auto oldest = m_MigrationHistory.begin();
+			m_MigrationHistoryBytes -= oldest->second.size();
+			m_MigrationHistory.erase(oldest);
+		}
 	}
 
 	NetHostMigrationMessage NetLockstepCoordinator::MigrationMessage(NetHostMigrationMessageType type) const {
@@ -3046,7 +3059,8 @@ namespace RTE {
 				if (incoming.size() != message.totalBytes) break;
 				NetLockstepReadyFrame ready;
 				if (!DecodeMigrationFrame(incoming, message.frame, ready)) { m_MigrationNeedsResync = true; m_MigrationIncoming.erase(message.frame); break; }
-				m_MigrationHistory[message.frame] = std::move(incoming); m_MigrationIncoming.erase(message.frame);
+				StoreMigrationFrame(message.frame, std::move(incoming));
+				m_MigrationIncoming.erase(message.frame);
 				if (hosting) {
 					for (const auto& [peer, answer] : m_MigrationAnswers) if (peer != m_Config.localPeerId && peer != m_MigrationDonor && answer.appliedFrame < message.frame) SendMigrationFrame(m_MigrationPeers.at(peer), message.frame);
 				}
@@ -3343,6 +3357,7 @@ namespace RTE {
 		m_Config = config;
 		m_MigrationPhase = NetHostMigrationPhase::None;
 		m_MigrationHistory.clear();
+		m_MigrationHistoryBytes = 0;
 		m_MigrationTransport.reset();
 		m_MigrationListener.reset(); m_MigrationProbes.clear();
 		m_MigrationGeneration = config.migrationGeneration;
@@ -4970,6 +4985,7 @@ namespace RTE {
 		out << "\"local_peer_id\":" << static_cast<int>(m_Stats.localPeerId) << ",";
 		out << "\"host_peer_id\":" << static_cast<int>(GetHostPeerId()) << ",";
 		out << "\"migration_generation\":" << m_MigrationGeneration << ",";
+		out << "\"migration_history_bytes\":" << m_MigrationHistoryBytes << ",";
 		out << "\"migration_boundary\":" << m_MigrationResult.boundary << ",";
 		out << "\"migration_phase\":" << static_cast<int>(m_MigrationPhase) << ",";
 		out << "\"remote_peer_id\":" << static_cast<int>(m_Stats.remotePeerId) << ",";
