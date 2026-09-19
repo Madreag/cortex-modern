@@ -30,6 +30,8 @@ namespace RTE {
 		static bool CheckHotcountAfterAbort();
 		/// A leftover abort reports the frame it runs at, not the prototype the recorder was left in.
 		static bool CheckAbortLeftoverPosition();
+		/// The upvalue measurement is on for "1" and off for anything else, like the engine's own switches.
+		static bool CheckPreviewMeasureEnvGate();
 		/// A runtime error while recording still runs the real abort, penalty and slot release.
 		static bool CheckAbortPenalizes();
 		/// Exercises retirement ownership and observes links before and after disposal.

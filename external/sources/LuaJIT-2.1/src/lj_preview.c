@@ -42,6 +42,13 @@ static double preview_clock(void)
 #endif
 }
 
+/* Exactly "1", as the engine's own preview switches read: a harness that sets "0" means off. */
+static int preview_env_on(const char *name)
+{
+  const char *value = getenv(name);
+  return value && value[0] == '1' && value[1] == '\0';
+}
+
 static void *preview_grow(LJPreview *p, void *buffer, size_t *capacity, size_t count, size_t size)
 {
   global_State *g = p->g;
@@ -278,7 +285,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   LJPreview *p = g->preview;
   GCtab *root = tabref(L->env);
   size_t i;
-  int timed = p ? p->timed : getenv("CC_PREVIEW_BARRIER_STATS") != NULL;
+  int timed = p ? p->timed : preview_env_on("CC_PREVIEW_BARRIER_STATS");
   double started = timed ? preview_clock() : 0.0;
 #if LJ_HASJIT
   /* The recorded preview guard is hoisted out of loops, so a window must not open inside a trace. */
@@ -293,7 +300,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
     p->g = g;
     g->preview = p;
     p->timed = timed;
-    p->measure = getenv("CC_PREVIEW_UPVALUE_MEASURE") != NULL;
+    p->measure = preview_env_on("CC_PREVIEW_UPVALUE_MEASURE");
   }
   if (p->active) return 0;
   /* Tables born in a speculative window die with it, so their numbers are handed back. */
@@ -541,8 +548,8 @@ LUA_API int luaJIT_preview_measure(lua_State *L, int on)
     memset(p, 0, sizeof(LJPreview));
     p->g = g;
     g->preview = p;
-    p->timed = getenv("CC_PREVIEW_BARRIER_STATS") != NULL;
-    p->measure = getenv("CC_PREVIEW_UPVALUE_MEASURE") != NULL;
+    p->timed = preview_env_on("CC_PREVIEW_BARRIER_STATS");
+    p->measure = preview_env_on("CC_PREVIEW_UPVALUE_MEASURE");
   }
   previous = p->measure;
   if (on >= 0 && !p->active) p->measure = on;  /* An armed window keeps the setting it was armed with. */
