@@ -1452,6 +1452,7 @@ void MovableMan::Clear() {
 	m_Speculation = Speculation();
 	DropAllPreviewGhosts();
 	m_PreviewGhostPeak = 0;
+	m_LastPreviewSwap = PreviewSwap();
 	m_RenderHidden.clear();
 	m_RenderSubstitutes.clear();
 	m_LinkRoot = nullptr;
@@ -2401,7 +2402,7 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
 	return out;
 }
 
-void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key) {
+void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
 	if (!mo) {
 		return;
 	}
@@ -2415,7 +2416,11 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	}
 	UnregisterObject(mo);
 	mo->SetAsNoID();
-	m_PreviewGhosts.push_back({mo, key});
+	PreviewGhost ghost;
+	ghost.object = mo;
+	ghost.key = key;
+	ghost.poseTick = poseTick;
+	m_PreviewGhosts.push_back(std::move(ghost));
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
@@ -2425,19 +2430,76 @@ static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLed
 	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
 }
 
-void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn) {
+void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick) {
 	for (PreviewGhost& ghost: m_PreviewGhosts) {
 		if (ghost.object && SameGhostKey(ghost.key, key)) {
 			ghost.object->SetPos(spawn.GetPos());
 			ghost.object->SetVel(spawn.GetVel());
+			ghost.poseTick = poseTick;
+			// A re-pose after the adoption moves the pose the adoptee is travelling to, so its tag follows.
+			if (MovableObject* adoptee = const_cast<MovableObject*>(ghost.adoptee.get())) {
+				adoptee->HoldForPreviewAdoption(key, poseTick);
+			}
 			return;
 		}
+	}
+}
+
+void MovableMan::AdoptPreviewGhost(const PreviewEventLedger::Key& key, MovableObject* adoptee, uint64_t committedTick) {
+	for (size_t index = 0; index < m_PreviewGhosts.size(); ++index) {
+		PreviewGhost& ghost = m_PreviewGhosts[index];
+		if (!SameGhostKey(ghost.key, key)) {
+			continue;
+		}
+		// Nothing to lead with: the ghost is at or behind the spawn, so the pixel changes hands this tick.
+		if (!adoptee || !ghost.object || ghost.poseTick <= committedTick) {
+			DropPreviewGhost(key);
+			return;
+		}
+		ghost.adopted = true;
+		ghost.adoptionTick = committedTick;
+		ghost.adoptee = adoptee;
+		adoptee->HoldForPreviewAdoption(key, ghost.poseTick);
+		return;
+	}
+}
+
+void MovableMan::ReleaseAdoptionHold(PreviewGhost& ghost) {
+	MovableObject* adoptee = const_cast<MovableObject*>(ghost.adoptee.get());
+	if (!adoptee) {
+		return;
+	}
+	adoptee->ReleasePreviewAdoptionHold();
+	ghost.adoptee = nullptr;
+}
+
+void MovableMan::ResolvePreviewAdoptions(uint64_t committedTick) {
+	for (size_t index = 0; index < m_PreviewGhosts.size();) {
+		PreviewGhost& ghost = m_PreviewGhosts[index];
+		const MovableObject* adoptee = ghost.adoptee.get();
+		if (!ghost.adopted || (adoptee && committedTick < ghost.poseTick)) {
+			++index;
+			continue;
+		}
+		if (adoptee && ghost.object) {
+			m_LastPreviewSwap.tick = committedTick;
+			m_LastPreviewSwap.adoptionTick = ghost.adoptionTick;
+			m_LastPreviewSwap.leadTicks = ghost.poseTick - ghost.adoptionTick;
+			m_LastPreviewSwap.poseDelta = g_SceneMan.ShortestDistance(ghost.object->GetPos(), adoptee->GetPos(), true).GetMagnitude();
+			m_LastPreviewSwap.adopteeUID = adoptee->GetUniqueID();
+			++m_LastPreviewSwap.count;
+			FrameMan::FeelPreviewSwap(ghost.adoptionTick, committedTick, m_LastPreviewSwap.leadTicks, m_LastPreviewSwap.poseDelta);
+		}
+		ReleaseAdoptionHold(ghost);
+		delete ghost.object;
+		m_PreviewGhosts.erase(m_PreviewGhosts.begin() + index);
 	}
 }
 
 void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
 	for (auto ghost = m_PreviewGhosts.begin(); ghost != m_PreviewGhosts.end(); ++ghost) {
 		if (SameGhostKey(ghost->key, key)) {
+			ReleaseAdoptionHold(*ghost);
 			delete ghost->object;
 			m_PreviewGhosts.erase(ghost);
 			return;
@@ -2447,6 +2509,7 @@ void MovableMan::DropPreviewGhost(const PreviewEventLedger::Key& key) {
 
 void MovableMan::DropAllPreviewGhosts() {
 	for (PreviewGhost& ghost: m_PreviewGhosts) {
+		ReleaseAdoptionHold(ghost);
 		delete ghost.object;
 	}
 	m_PreviewGhosts.clear();
@@ -2456,9 +2519,23 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 	std::vector<PreviewGhostState> out;
 	out.reserve(m_PreviewGhosts.size());
 	for (const PreviewGhost& ghost: m_PreviewGhosts) {
-		if (ghost.object) {
-			out.push_back({ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()});
+		if (!ghost.object) {
+			continue;
 		}
+		PreviewGhostState state{ghost.key, ghost.object->GetPos(), ghost.object->GetVel(), ghost.object->GetGlobalAccScalar(), ghost.object->GetAirResistance(), ghost.object->GetAirThreshold()};
+		state.poseTick = ghost.poseTick;
+		state.adoptionTick = ghost.adoptionTick;
+		state.adopted = ghost.adopted;
+		if (const MovableObject* adoptee = ghost.adoptee.get()) {
+			state.adopteeHeld = adoptee->IsHeldForPreviewAdoption();
+			state.adopteeUID = adoptee->GetUniqueID();
+			state.adopteePos = adoptee->GetPos();
+			state.adopteeVel = adoptee->GetVel();
+			state.adopteeGlobalAccScalar = adoptee->GetGlobalAccScalar();
+			state.adopteeAirResistance = adoptee->GetAirResistance();
+			state.adopteeAirThreshold = adoptee->GetAirThreshold();
+		}
+		out.push_back(state);
 	}
 	return out;
 }
@@ -2547,16 +2624,20 @@ void MovableMan::TakePreviewSpawn(MovableObject* particle) {
 	if (PreviewEventLedger::IsArmed() || !PreviewEventLedger::IsPreviewedEmitter(emitter)) {
 		return;
 	}
+	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const uint64_t presetHash = Hash(particle->GetPresetName() + "@" + std::to_string(particle->GetModuleID()));
-	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+	const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, emitter, 0, presetHash, tick);
 	std::vector<int> voices;
 	if (PreviewEventLedger::Consume(key, voices)) {
-		DropPreviewGhost(key);
+		// The ghost already shows where this spawn is going, so it keeps the pixel until the spawn gets there.
+		AdoptPreviewGhost(key, particle, tick);
 		NoteProjectileEvent(key, false);
 	}
 }
 
 void MovableMan::DisposeSpeculativeSpawns() {
+	// Still on the preview's advanced clock: this is the tick every spawn was travelled to.
+	const uint64_t horizonTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	for (Speculation::Spawn& spawn: m_Speculation.spawns) {
 		MovableObject* mo = spawn.object;
 		if (!mo) {
@@ -2570,13 +2651,13 @@ void MovableMan::DisposeSpeculativeSpawns() {
 		const PreviewEventLedger::Key key = PreviewEventLedger::NextKey(PreviewEventLedger::Projectile, spawn.emitterUID, 0, presetHash, spawn.tick);
 		if (PreviewEventLedger::AlreadyPlayed(key)) {
 			// A later preview re-runs the same shot: its spawn carries the ghost to the new horizon.
-			ReposePreviewGhost(key, *mo);
+			ReposePreviewGhost(key, *mo, horizonTick);
 			DestroySpeculativeSpawn(mo);
 			continue;
 		}
 		PreviewEventLedger::Insert(key, {});
 		NoteProjectileEvent(key, true);
-		InstallPreviewGhost(mo, key);
+		InstallPreviewGhost(mo, key, horizonTick);
 	}
 	m_Speculation.spawns.clear();
 	m_Speculation.spawnMeta.clear();
@@ -2894,6 +2975,11 @@ void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor
 #ifdef DEBUG_BUILD
 	RTEAssert(false, "The AI pass wrote to the canonical actor outside the controller boundary: " + std::string(what) + " " + subject);
 #endif
+}
+
+bool MovableMan::IsHiddenFromRender(const MovableObject* mo) const {
+	// Either a preview draws in its place, or the ghost it adopted still shows the pose it is travelling to.
+	return mo->IsHeldForPreviewAdoption() || (!m_RenderHidden.empty() && m_RenderHidden.count(mo) > 0);
 }
 
 void MovableMan::HideForRender(const MovableObject* mo, bool hidden) {
@@ -4729,6 +4815,9 @@ void MovableMan::Update() {
 		}
 	}
 
+	// This tick's travel is done, so an adopted spawn that has reached its ghost's pose takes the frame back.
+	ResolvePreviewAdoptions(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+
 	if (g_ActivityMan.LockstepRelaunchInProgress()) {
 		if (Activity* activity = g_ActivityMan.GetActivity()) activity->RebindNonOwnedActorSlots();
 		g_ActivityMan.EndLockstepRelaunch();
@@ -5368,7 +5457,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Particles Draw");
 
 		for (std::deque<MovableObject*>::iterator parIt = m_Particles.begin(); parIt != m_Particles.end(); ++parIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*parIt) == 0) {
+			if (!IsHiddenFromRender(*parIt)) {
 				(*parIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5383,7 +5472,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Items Draw");
 
 		for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+			if (!IsHiddenFromRender(*itmIt)) {
 				(*itmIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5393,7 +5482,7 @@ void MovableMan::Draw(BITMAP* pTargetBitmap, const Vector& targetPos) {
 		ZoneScopedN("Actors Draw");
 
 		for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
-			if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+			if (!IsHiddenFromRender(*aIt)) {
 				(*aIt)->Draw(pTargetBitmap, targetPos);
 			}
 		}
@@ -5406,13 +5495,13 @@ void MovableMan::DrawHUD(BITMAP* pTargetBitmap, const Vector& targetPos, int whi
 
 	// Draw HUD elements
 	for (std::deque<MovableObject*>::reverse_iterator itmIt = m_Items.rbegin(); itmIt != m_Items.rend(); ++itmIt) {
-		if (m_RenderHidden.empty() || m_RenderHidden.count(*itmIt) == 0) {
+		if (!IsHiddenFromRender(*itmIt)) {
 			(*itmIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
 	}
 
 	for (std::deque<Actor*>::reverse_iterator aIt = m_Actors.rbegin(); aIt != m_Actors.rend(); ++aIt) {
-		if (m_RenderHidden.empty() || m_RenderHidden.count(*aIt) == 0) {
+		if (!IsHiddenFromRender(*aIt)) {
 			(*aIt)->DrawHUD(pTargetBitmap, targetPos, which);
 		}
 	}
