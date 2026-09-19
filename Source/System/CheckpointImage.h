@@ -15,6 +15,15 @@
 
 namespace RTE {
 
+	struct GraphWalkPart {
+		size_t state = 0;
+		std::string part;
+		uint64_t root = 0;
+		int64_t elapsedUs = 0;
+		bool reused = false;
+		std::string unwatched;
+	};
+
 	/// What a script graph walk saw and what has been written since it.
 	struct GraphDirt {
 		size_t roots = 0;        //!< Roots the last walk recorded.
@@ -28,6 +37,7 @@ namespace RTE {
 		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
 		size_t rootsReused = 0;     //!< Roots whose chunk the last capture reused byte for byte.
 		size_t rootsRewritten = 0;  //!< Roots the last capture serialized again.
+		std::vector<GraphWalkPart> walkParts;
 	};
 
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
@@ -151,6 +161,7 @@ namespace RTE {
 		/// Marks the root whose chunk carries this native's values; a native no walk recorded is not ours.
 		void OnValueWritten(const void* value);
 		void NoteRootReuse(size_t reused, size_t rewritten);
+		void NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched);
 		/// The roots holding a table written since the walk that recorded them.
 		std::unordered_set<uint64_t> DirtyRoots() const;
 		bool UnknownTableWritten() const;
@@ -178,6 +189,8 @@ namespace RTE {
 		uint64_t m_Root = 0;
 		int64_t m_NoteUs = 0;
 		int64_t m_WalkNoteUs = 0;
+		std::vector<const void*> m_WalkStates;
+		std::vector<GraphWalkPart> m_WalkParts;
 	};
 
 	void ArmLuaCheckpointBarrier();
