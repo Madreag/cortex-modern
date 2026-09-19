@@ -13,6 +13,7 @@
 #include "LuabindObjectWrapper.h"
 #include "Material.h"
 #include "MovableMan.h"
+#include "PreviewEventLedger.h"
 
 #include <atomic>
 #include <cstdint>
@@ -624,6 +625,33 @@ namespace RTE {
 		/// Tells whether this Actor's HUD is drawn or not.
 		/// @return Whether this' HUD gets drawn or not.
 		bool GetHUDVisible() const { return m_HUDVisible; }
+
+		/// The previewed event this object adopted, and the tick a ghost still leads it to.
+		/// Presentation only: never hashed, saved, snapshotted, sent, copied to a clone or read by sim code.
+		struct PreviewAdoption {
+			PreviewEventLedger::Key key;
+			uint64_t revealTick = 0; //!< The sim tick this object's own motion reaches the ghost's pose at.
+			bool held = false;
+		};
+
+		/// Keeps this object off the frame while its preview ghost still shows the pose it is travelling to.
+		/// The simulation is untouched: it moves, collides, settles and hashes exactly as it would unheld.
+		/// @param key The ledger key of the event this object adopted.
+		/// @param revealTick The tick the ghost's pose was computed for.
+		void HoldForPreviewAdoption(const PreviewEventLedger::Key& key, uint64_t revealTick) {
+			m_PreviewAdoption.key = key;
+			m_PreviewAdoption.revealTick = revealTick;
+			m_PreviewAdoption.held = true;
+		}
+
+		/// Puts this object back on the frame; the ghost that led it is gone.
+		void ReleasePreviewAdoptionHold() { m_PreviewAdoption = PreviewAdoption(); }
+
+		/// Whether a preview ghost is drawn in this object's place, so the draw loops skip it.
+		bool IsHeldForPreviewAdoption() const { return m_PreviewAdoption.held; }
+
+		/// @return The previewed event this object adopted; its key is zeroed when it adopted none.
+		const PreviewAdoption& GetPreviewAdoption() const { return m_PreviewAdoption; }
 
 		/// Indicates whether this MO is moving or rotating stupidly fast in a way
 		/// that will screw up the simulation.
@@ -1397,6 +1425,8 @@ namespace RTE {
 		bool m_ToDelete;
 		// To draw this guy's HUD or not
 		bool m_HUDVisible;
+		// The preview event this object adopted; presentation only, so no Create, checkpoint, dump or wire path carries it.
+		PreviewAdoption m_PreviewAdoption;
 
 		bool m_IsTraveling; //!< Prevents self-intersection while traveling.
 

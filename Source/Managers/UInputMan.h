@@ -252,6 +252,20 @@ namespace RTE {
 		/// @param disable Whether to disable most keys or not.
 		void DisableKeys(bool disable = true) { m_DisableKeyboard = disable; }
 
+		/// Takes the human seats' own keyboard and mouse for a text entry until it closes. Losing the
+		/// window or opening a dialog does not do this; only something the player types into does.
+		/// @param typing Whether a text entry is holding the seats' input.
+		void TypeIntoSeatInput(bool typing) { m_SeatInputTypedInto = typing; }
+
+		/// Whether a text entry is holding the human seats' keyboard and mouse at all.
+		/// @return Whether something the player types into owns the seats' input.
+		bool SeatInputTypedInto() const { return m_SeatInputTypedInto; }
+
+		/// Whether a text entry holds this player's own keyboard and mouse, so none of it drives its actor.
+		/// @param whichPlayer The player to ask about.
+		/// @return Whether the player's device input is being typed into instead.
+		bool SeatInputTypedInto(int whichPlayer) const;
+
 		/// Gets whether a key is being held right now, by scancode.
 		/// @param scancodeToTest A scancode to test. See SDL_Scancode enumeration.
 		/// @return Whether the key is held or not.
@@ -603,6 +617,7 @@ namespace RTE {
 		bool m_EnableMultiMouseKeyboard{true}; //!< Allow use of multiple mice and keyboards. (Enables relative mouse mode.)
 		bool m_PlayerMouseKeyboardKnown{false}; //!< Whether all player devices are known when multiple mouse and/or keyboards are requested.
 		bool m_DisableKeyboard; //!< Temporarily disable all keyboard input reading.
+		bool m_SeatInputTypedInto = false; //!< A text entry holds the human seats' keyboard and mouse.
 		bool m_DisableMouseMoving; //!< Temporary disable for positioning the mouse, for when the game window is not in focus.
 
 		/// This is set when focus is switched back to the game window and will cause the m_DisableMouseMoving to switch to false when the mouse button is RELEASED.

@@ -419,7 +419,15 @@ namespace RTE {
 					nextRetryMs = nowMs + 2000;
 					std::string retryError;
 					NetSessionConfig retryConfig = m_Config.sessionConfig;
-					(void)session.StartClient(transport, m_Config.joinAddress, std::move(retryConfig), &retryError);
+					std::string address = m_Config.joinAddress;
+					if (m_Config.resolveJoinAddress) {
+						const std::string resolved = m_Config.resolveJoinAddress();
+						if (!resolved.empty()) {
+							address = resolved;
+							m_Config.joinAddress = resolved;
+						}
+					}
+					(void)session.StartClient(transport, address, std::move(retryConfig), &retryError);
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(5));
 				continue;

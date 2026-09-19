@@ -653,6 +653,7 @@ namespace RTE {
 		/// The host is a persistent world, so the record says so and a relaunch's rejoin hellos on the
 		/// world plane instead of the ordinary one.
 		void SetWorldTarget(bool world) { m_WorldTarget = world; }
+		void SetDirectorySessionId(std::string directorySessionId);
 
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.
@@ -729,6 +730,7 @@ namespace RTE {
 		NetH4Identity m_Identity;
 		std::string m_DisplayName = "Player";
 		std::string m_HostAddress;
+		std::string m_DirectorySessionId;
 		NetHash32 m_MatchConfigHash{};
 		bool m_WorldTarget = false;
 		uint64_t (*m_UnixClock)(void*) = nullptr;

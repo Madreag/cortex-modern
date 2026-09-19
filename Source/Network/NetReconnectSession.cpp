@@ -1825,6 +1825,11 @@ namespace RTE {
 		m_Record.matchConfigHash = m_MatchConfigHash;
 	}
 
+	void NetReconnectClient::SetDirectorySessionId(std::string directorySessionId) {
+		m_DirectorySessionId = std::move(directorySessionId);
+		m_Record.directorySessionId = m_DirectorySessionId;
+	}
+
 	bool NetReconnectClient::IsAdmissionPending() const {
 		// Applied waits for a human, which is why it is bounded by the same P2 window everything else
 		// on this plane is, rather than by the handshake ladder.
@@ -1968,16 +1973,17 @@ namespace RTE {
 				return true;
 			}
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
 			record.epoch = offer->epoch;
 			record.stableSeat = offer->stableSeat;
 			record.holderGeneration = offer->holderGeneration;
 			record.credential = offer->credential;
 			record.hostSessionId = offer->hostSessionId;
 			record.hostAddress = m_Record.hostAddress;
+			record.directorySessionId = m_DirectorySessionId.empty() ? m_Record.directorySessionId : m_DirectorySessionId;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
 			record.persistentWorld = m_WorldTarget;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			std::string storeError;
 			// The ack must never be sent before the record is durable: the host commits the seat on it.
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
@@ -2050,16 +2056,17 @@ namespace RTE {
 			}
 			++m_Stats.substitutionOffersReceived;
 			NetH4TicketRecord record;
-			record.recordVersion = NetReconnectTicketStore::c_RecordVersion;
 			record.epoch = offer->epoch;
 			record.stableSeat = offer->stableSeat;
 			record.holderGeneration = offer->holderGeneration;
 			record.credential = offer->credential;
 			record.hostSessionId = offer->hostSessionId;
 			record.hostAddress = m_Record.hostAddress;
+			record.directorySessionId = m_DirectorySessionId.empty() ? m_Record.directorySessionId : m_DirectorySessionId;
 			record.issuedAtUnixMs = UnixNowMs();
 			record.matchConfigHash = m_Record.matchConfigHash;
 			record.persistentWorld = m_WorldTarget;
+			record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
 			std::string storeError;
 			const bool stored = m_Store != nullptr && m_Store->Store(record, &storeError);
 			NetAuthBytes16 nonce{};

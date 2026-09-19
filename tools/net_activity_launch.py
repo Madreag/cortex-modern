@@ -974,3 +974,155 @@ def launch(options):
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     report_checks(checks, result["config_refusal"])
     return 0 if result["passed"] else 1
+
+
+# Host CreateDelivery at tick 80 for team 0 (-net-match-e2e-buy-command). D=7 is the lockstep input delay.
+FUNDS_PRESS = 80
+FUNDS_DELAY = 7
+FUNDS_TEAM = 0
+FUNDS_FAIL_P1 = "the local readout did not show the previewed buy at P+1"
+FUNDS_FAIL_ABSENT = "the base emits no funds readout at P+1: RED by absence (no preview observed)"
+
+
+def _funds_oz(text):
+    match = re.search(r"(-?[0-9]+(?:\.[0-9]+)?)", text or "")
+    return float(match.group(1)) if match else None
+
+
+def _funds_fields(log, tick):
+    """The driver's fields at this committed tick: the seat this peer presents and its tally of the buying team."""
+    prefix = f"[preview-funds-driver] tick={tick} "
+    for line in log.splitlines():
+        if not line.startswith(prefix):
+            continue
+        head, _, readout = line.partition(" readout=")
+        fields = dict(token.split("=", 1) for token in head.split()[1:] if "=" in token)
+        fields["readout"] = readout
+        return fields
+    return {}
+
+
+def funds_preview(options):
+    """Two-process D=7 funds arm: each peer reads the buying team from its own seat - the host previewed at P+1,
+    the client still committed, both equal at P+D."""
+    if Path("D:/mx/LEAD_FAMILY.lock").exists():
+        raise RuntimeError("family lock exists; launch is deferred")
+    if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
+        raise ValueError("port must be in " + " or ".join(f"{low}..{high}" for low, high in PORT_BLOCKS))
+    os.environ["CCCP_HEADLESS"] = "1"
+    repo, root = options.repo.resolve(), options.out.resolve()
+    root.mkdir(parents=True, exist_ok=False)
+    rules = rules_for("default")
+    config = root / "launch-config.bin"
+    wire = net_lobby_wire.read(repo)
+    config.write_bytes(encode_config(rules, wire, False, True))
+    exe_hash = sha(repo / "Cortex Command.exe")
+    common = [
+        "-net-match-service-e2e", "-net-port", str(options.port), "-net-match-peers", "2",
+        "-net-match-mode", "pvp", "-net-match-ticks", "120", "-max-ticks", "120",
+        "-net-match-input-delay", str(FUNDS_DELAY), "-seed", "42", "-num-lua-states", "4",
+        "-tick-hashes", "-local-prediction-depth", "7",
+        "-local-prediction-funds-preview", str(FUNDS_PRESS),
+    ]
+    argv_host = [*common, "-net-host", "-net-match-service-config", str(config), "-net-match-e2e-buy-command"]
+    argv_client = [*common, "-net-join", "127.0.0.1"]
+    (root / "argv.json").write_text(json.dumps({"host": argv_host, "client": argv_client, "press": FUNDS_PRESS, "delay": FUNDS_DELAY, "buy_team": FUNDS_TEAM}, indent=2), encoding="utf-8")
+    runs, records = {}, {}
+    try:
+        for peer, flags in (("host", argv_host), ("client", argv_client)):
+            trace, report = root / peer / "trace.json", root / peer / "report.json"
+            runs[peer] = make_run(repo, [*flags, "-out", str(trace), "-net-match-report", str(report)],
+                                  root / peer, options.timeout, env={"CCCP_HEADLESS": "1"}, expected=[report])
+        for run in runs.values():
+            run.start()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = {peer: pool.submit(run.finish) for peer, run in runs.items()}
+            records = {peer: future.result() for peer, future in pending.items()}
+    finally:
+        for run in runs.values():
+            run.close()
+    logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
+    samples = {f"{peer}_{name}": _funds_fields(logs[peer], tick)
+               for peer in ("host", "client")
+               for name, tick in (("p1", FUNDS_PRESS + 1), ("pd", FUNDS_PRESS + FUNDS_DELAY))}
+    # Each peer's tally of the BUYING team, read from the seat that peer presents.
+    oz = {name: _funds_oz(fields.get("buy_team_oz")) for name, fields in samples.items()}
+    committed = {name: _funds_oz(fields.get("buy_team_committed")) for name, fields in samples.items()}
+    both = oz["host_p1"] is not None and oz["client_p1"] is not None
+    ticks = {"host_p1": FUNDS_PRESS + 1, "client_p1": FUNDS_PRESS + 1,
+             "host_pd": FUNDS_PRESS + FUNDS_DELAY, "client_pd": FUNDS_PRESS + FUNDS_DELAY}
+    peeked = {name: _funds_oz(fields.get("peek_tick")) for name, fields in samples.items()}
+    problems = {name: _funds_oz(fields.get("problems")) for name, fields in samples.items()}
+    checks = {
+        "host_p1_readout_present": bool(samples["host_p1"]) and samples["host_p1"]["readout"] != "EMPTY",
+        "client_p1_readout_present": bool(samples["client_p1"]) and samples["client_p1"]["readout"] != "EMPTY",
+        "host_p1_previewed": bool(both and committed["host_p1"] is not None and oz["host_p1"] < committed["host_p1"] and oz["host_p1"] < oz["client_p1"]),
+        "client_p1_committed": bool(committed["client_p1"] is not None and oz["client_p1"] is not None and oz["client_p1"] == committed["client_p1"]),
+        "both_equal_at_commit": bool(oz["host_pd"] is not None and oz["client_pd"] is not None and oz["host_pd"] == oz["client_pd"] and
+                                     committed["host_pd"] is not None and oz["host_pd"] == committed["host_pd"] and oz["client_pd"] == committed["client_pd"]),
+        # The preview must peek the in-flight buys on the committed tick, not on its own advanced clock.
+        "peek_used_the_canonical_tick": all(peeked[name] == ticks[name] for name in samples if samples[name]) and bool(samples["host_p1"]),
+        "no_canonical_problems": all(problems[name] == 0 for name in samples if samples[name]) and bool(samples["host_p1"]),
+    }
+
+    def observed():
+        rows = []
+        for name in ("host_p1", "client_p1", "host_pd", "client_pd"):
+            fields = samples[name]
+            rows.append(f"  {name} tick={ticks[name]} " + (
+                "no [preview-funds-driver] line" if not fields else
+                f"seat={fields.get('seat')} seat_team={fields.get('seat_team')} buy_team={fields.get('buy_team')} "
+                f"buy_team_oz={fields.get('buy_team_oz')} buy_team_committed={fields.get('buy_team_committed')} "
+                f"peek_tick={fields.get('peek_tick')} problems={fields.get('problems')} readout={fields.get('readout')}"))
+        return "\n".join(rows)
+
+    if not samples["host_p1"]:
+        print("FAIL " + FUNDS_FAIL_ABSENT)
+    elif not checks["host_p1_readout_present"]:
+        print("FAIL host readout empty at P+1")
+    if samples["host_p1"] and not checks["host_p1_previewed"]:
+        print("FAIL " + FUNDS_FAIL_P1)
+    if samples["host_p1"] and not checks["peek_used_the_canonical_tick"]:
+        print("FAIL the preview peeked in-flight buys on a tick other than the committed one")
+    if not all(checks.values()):
+        print("observed:\n" + observed())
+    dump_pairs = []
+    # The world dump only: the peers' extras carry a per-process accumulator and are written beside it, not compared.
+    for suffix in ("funds_p1", "funds_pd"):
+        left = root / "host" / f"trace.json.{suffix}.simstate.txt"
+        right = root / "client" / f"trace.json.{suffix}.simstate.txt"
+        same = left.is_file() and right.is_file() and left.read_bytes() == right.read_bytes()
+        checks[f"{suffix}_dumps_byte_identical"] = same
+        dump_pairs.append({"suffix": suffix, "host": str(left), "client": str(right), "identical": same})
+    result = {"records": records, "samples": samples, "buy_team": FUNDS_TEAM,
+              "seats": {name: {"seat": fields.get("seat"), "seat_team": fields.get("seat_team")} for name, fields in samples.items()},
+              "dumps": dump_pairs, "argv": {"host": argv_host, "client": argv_client},
+              "checks": checks, "passed": all(checks.values()), "exe_sha256": exe_hash}
+    (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    report_checks(checks)
+    return 0 if result["passed"] else 1
+
+
+def main(argv=None):
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--case", choices=["launch", "funds_preview"], default="launch")
+    parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument("--port", type=int, default=48320)
+    parser.add_argument("--variant", default="rules", choices=["rules", "default", "infinite", "site", "stock", "brains", "brains-auto", "brains-shared", "hold-desync", "hold-resync", "resync-duel", "resync-skirmish", "brains-longname", "wire-refusal", "census", "missing-activity", "missing-scene", "missing-module", "missing-tech"])
+    parser.add_argument("--dedicated", action="store_true")
+    parser.add_argument("--captures", action="store_true")
+    parser.add_argument("--resolution")
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--offline-repo", type=Path)
+    options = parser.parse_args(argv)
+    if options.case == "funds_preview":
+        return funds_preview(options)
+    return launch(options)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

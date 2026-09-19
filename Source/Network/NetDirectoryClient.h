@@ -89,6 +89,8 @@ namespace RTE {
 		/// selects discovery visibility; a false intent needs the service's supports_unlisted
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
+		/// Marks listen_addrs dirty so the next heartbeat can refresh a renewed NAT mapping.
+		void NoteListenAddrs(std::vector<std::string> addrs);
 		/// Host: take the row down. Once a session exists the delete rides the request pump; a row
 		/// still mid-register is answered first so the delete can target the issued session id.
 		void Retract();
@@ -163,6 +165,8 @@ namespace RTE {
 		bool m_HiddenUnsupported = false; //!< A hidden intent on a legacy service already deleted once.
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
+		bool m_ListenAddrsDirty = false;
+		bool m_ListenAddrsInFlight = false; //!< The dirty flag clears on the reply, so a failed heartbeat republishes.
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;

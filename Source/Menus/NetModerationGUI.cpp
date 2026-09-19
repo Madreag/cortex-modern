@@ -1,21 +1,30 @@
 #include "NetModerationGUI.h"
 
 #include "ActivityMan.h"
+#include "Constants.h"
 #include "CameraMan.h"
 #include "GameActivity.h"
 #include "NetMatchService.h"
+#include "NetSession.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
 #include "UInputMan.h"
 #include "GUI.h"
+#include "GUIEvent.h"
+#include "GUIManager.h"
 #include "GUIInputWrapper.h"
 #include "GUIControlManager.h"
 #include "GUICollectionBox.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "GUITextBox.h"
 #include "GUISkin.h"
+#include "NetProtocol.h"
+#include "InputScript.h"
+#include "ConsoleMan.h"
+#include <SDL3/SDL.h>
 #include "AllegroScreen.h"
 #include "AllegroBitmap.h"
 #include "RTEError.h"
@@ -23,6 +32,7 @@
 #include "RTETools.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -119,10 +129,10 @@ namespace {
 	EditorArea FreeArea(int screenWidth) {
 		EditorArea area;
 		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-		if (!game || game->GetActivityState() != Activity::ActivityState::Editing) return area;
+		if (!game) return area;
+		area.editing = game->GetActivityState() == Activity::ActivityState::Editing;
 		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 			if (!(game->IsSeatActive(player) && game->IsLocalHumanSeat(player))) continue;
-			area.editing = true;
 			const int screen = game->ScreenOfPlayer(player);
 			const FrameMan::ScreenTextLayout text = g_FrameMan.GetScreenTextLayout(screen, true);
 			if (text.height > 0) {
@@ -150,6 +160,25 @@ namespace {
 		if (font->CalculateWidth(text) <= width) return text;
 		while (!text.empty() && font->CalculateWidth(text + "...") > width) text.pop_back();
 		return text + "...";
+	}
+
+	SDL_Scancode ChatScancode() {
+		const std::string& key = g_SettingsMan.GetNetworkChatKey();
+		if (key == "ENTER" || key == "RETURN") return SDL_SCANCODE_RETURN;
+		if (key.size() == 1 && key[0] >= 'A' && key[0] <= 'Z') {
+			return static_cast<SDL_Scancode>(SDL_SCANCODE_A + (key[0] - 'A'));
+		}
+		return SDL_SCANCODE_T;
+	}
+
+	int TeamBarColor(uint8_t team, int alpha) {
+		switch (team) {
+			case 0: return makeacol32(220, 70, 70, alpha);
+			case 1: return makeacol32(70, 120, 220, alpha);
+			case 2: return makeacol32(70, 200, 90, alpha);
+			case 3: return makeacol32(220, 200, 70, alpha);
+			default: return makeacol32(190, 190, 190, alpha);
+		}
 	}
 
 	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
@@ -273,6 +302,15 @@ void NetModerationGUI::CreateOverlay() {
 		m_Toasts[row]->SetVAlignment(GUIFont::Top);
 		m_Toasts[row]->SetVisible(false);
 	}
+	for (size_t row = 0; row < m_MatchChat.size(); ++row) {
+		m_MatchChat[row] = dynamic_cast<GUILabel*>(m_OverlayControls->AddControl("LabelMatchChat" + std::to_string(row), "LABEL", nullptr, 0, 0, 20, 12));
+		m_MatchChat[row]->SetHAlignment(GUIFont::Left);
+		m_MatchChat[row]->SetVAlignment(GUIFont::Top);
+		m_MatchChat[row]->SetVisible(false);
+	}
+	m_MatchChatInput = dynamic_cast<GUITextBox*>(m_OverlayControls->AddControl("TextMatchChatInput", "TEXTBOX", nullptr, 0, 0, 20, 16));
+	m_MatchChatInput->SetMaxTextLength(static_cast<int>(NetProtocol::c_MaxShortTextBytes));
+	m_MatchChatInput->SetVisible(false);
 }
 
 bool NetModerationGUI::SetOpen(bool open) {
@@ -424,6 +462,7 @@ void NetModerationGUI::HandleEvents() {
 void NetModerationGUI::Update() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	if (m_Open && snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch") SetOpen(false);
+	UpdateMatchChat(snapshot);
 	if (!m_Open) return;
 	g_UInputMan.TrapMousePos(false);
 	m_Controls->Update();
@@ -699,6 +738,271 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	m_NetStatus->Draw(&bitmap, false);
 }
 
+void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
+	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	if (!inMatch) {
+		m_MatchChatLines.clear();
+		if (m_ChatEntryOpen) {
+			m_ChatEntryOpen = false;
+			if (m_MatchChatInput) {
+				m_MatchChatInput->SetText("");
+				m_MatchChatInput->SetVisible(false);
+			}
+			if (m_ChatDisabledKeys) {
+				g_UInputMan.DisableKeys(false);
+				g_UInputMan.TypeIntoSeatInput(false);
+				m_ChatDisabledKeys = false;
+			}
+			if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
+		}
+		return;
+	}
+
+	const auto history = g_NetMatchService.ChatHistory();
+	std::deque<MatchChatLine> next;
+	const long long nowUs = g_TimerMan.GetAbsoluteTime();
+	for (const NetChatEntry& entry: history) {
+		MatchChatLine line;
+		line.receivedTick = entry.receivedTick;
+		line.senderPeerId = entry.senderPeerId;
+		line.scope = entry.scope;
+		line.name = entry.senderName;
+		line.text = entry.text;
+		line.seenUs = nowUs;
+		for (const auto& member: snapshot.members) {
+			if (member.peerId != entry.senderPeerId) continue;
+			line.team = member.team;
+			if (line.name.empty()) line.name = member.displayName;
+			break;
+		}
+		for (const auto& prior: m_MatchChatLines) {
+			if (prior.receivedTick == line.receivedTick && prior.senderPeerId == line.senderPeerId && prior.text == line.text) {
+				line.seenUs = prior.seenUs;
+				line.team = prior.team ? prior.team : line.team;
+				if (line.name.empty()) line.name = prior.name;
+				break;
+			}
+		}
+		next.push_back(std::move(line));
+	}
+	m_MatchChatLines = std::move(next);
+
+	const bool consoleOpen = g_ConsoleMan.IsEnabled() && !g_ConsoleMan.IsReadOnly();
+	bool scriptChat = false;
+	if (InputScript::IsActive()) {
+		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+			if (InputScript::HeldAt(player, InputScript::c_ChatAction, tick)) {
+				scriptChat = true;
+				break;
+			}
+		}
+	}
+	const SDL_Scancode chatKey = ChatScancode();
+	const bool keyChat = !m_ChatEntryOpen && !consoleOpen && g_UInputMan.KeyPressed(chatKey);
+	if ((scriptChat || keyChat) && !m_ChatKeysHeld && !m_ChatEntryOpen && !consoleOpen) {
+		CreateOverlay();
+		m_ChatEntryOpen = true;
+		if (m_MatchChatInput) {
+			m_MatchChatInput->SetText("");
+			m_MatchChatInput->SetVisible(true);
+			if (GUIPanel* panel = m_MatchChatInput->GetPanel()) panel->SetFocus();
+		}
+		if (!m_ChatDisabledKeys) {
+			g_UInputMan.DisableKeys(true);
+			// The entry takes the seats' own gameplay mappings too, which losing the window must not.
+			g_UInputMan.TypeIntoSeatInput(true);
+			m_ChatDisabledKeys = true;
+		}
+		m_Input->SetKeyJoyMouseCursor(true);
+	}
+	m_ChatKeysHeld = scriptChat || g_UInputMan.KeyHeld(chatKey);
+
+	if (!m_ChatEntryOpen) return;
+
+	if (g_UInputMan.KeyPressed(SDL_SCANCODE_ESCAPE)) {
+		m_ChatEntryOpen = false;
+		if (m_MatchChatInput) {
+			m_MatchChatInput->SetText("");
+			m_MatchChatInput->SetVisible(false);
+		}
+		if (m_ChatDisabledKeys) {
+			g_UInputMan.DisableKeys(false);
+			g_UInputMan.TypeIntoSeatInput(false);
+			m_ChatDisabledKeys = false;
+		}
+		if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
+		return;
+	}
+
+	if (m_OverlayControls) {
+		m_OverlayControls->Update();
+		GUIEvent event;
+		while (m_OverlayControls->GetEvent(&event)) {
+			if (event.GetType() == GUIEvent::Notification && event.GetMsg() == GUITextBox::Enter && event.GetControl() == m_MatchChatInput) {
+				const std::string text = m_MatchChatInput->GetText();
+				if (!text.empty()) {
+					const int modifier = m_OverlayControls->GetManager()->GetInputController()->GetModifier();
+					const uint8_t scope = (modifier & GUIPanel::MODI_CTRL) ? c_NetChatScopeTeam : c_NetChatScopeAll;
+					if (!g_NetMatchService.SendChat(scope, text)) continue;
+				}
+				m_ChatEntryOpen = false;
+				m_MatchChatInput->SetText("");
+				m_MatchChatInput->SetVisible(false);
+				if (m_ChatDisabledKeys) {
+					g_UInputMan.DisableKeys(false);
+					g_UInputMan.TypeIntoSeatInput(false);
+					m_ChatDisabledKeys = false;
+				}
+				if (!m_Open) m_Input->SetKeyJoyMouseCursor(false);
+			}
+		}
+	}
+}
+
+void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
+	(void)snapshot;
+	m_ChatBand = {};
+	if (!m_OverlayControls) {
+		m_ChatRect = {};
+		return;
+	}
+	const bool showHistory = g_SettingsMan.GetNetworkChatVisible();
+	if (!showHistory && !m_ChatEntryOpen) {
+		for (GUILabel* label: m_MatchChat) {
+			if (!label) continue;
+			label->SetVisible(false);
+			label->SetText("");
+		}
+		if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
+		m_ChatRect = {};
+		return;
+	}
+
+	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+	GUIFont* font = g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large ?
+	    g_FrameMan.GetLargeFont(true) : g_FrameMan.GetSmallFont(true);
+	if (!font) font = g_FrameMan.GetSmallFont(true);
+	const int lineH = std::max(12, font->GetFontHeight()) + 4;
+	EditorArea area = FreeArea(backbuffer->w);
+	if (m_StatusRect.visible) {
+		area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
+	}
+	if (m_ToastRect.visible) {
+		area.occupiers.push_back({m_ToastRect.x, m_ToastRect.y, m_ToastRect.width, m_ToastRect.height});
+	}
+	int bottom = backbuffer->h - 6;
+	auto lower = [&](int y) {
+		if (y > 0) bottom = std::min(bottom, y);
+	};
+	if (m_StatusRect.visible && m_StatusRect.y + m_StatusRect.height > backbuffer->h / 2) {
+		lower(m_StatusRect.y - 4);
+	}
+	if (m_ToastRect.visible && m_ToastRect.y + m_ToastRect.height > backbuffer->h / 2) {
+		lower(m_ToastRect.y - 4);
+	}
+	if (m_Open) {
+		int panelX, panelTop, panelWidth, panelHeight;
+		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
+		area.occupiers.push_back({panelX, panelTop, panelWidth, panelHeight});
+		lower(panelTop - 4);
+	}
+	for (const auto& band: area.textBands) {
+		if (band.y + band.h > backbuffer->h / 2) lower(band.y - 4);
+	}
+
+	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
+	const int available = std::max(0, bottom - 4);
+	// The entry gives up its two spare pixels before the history gives up a row: a roomy entry takes the whole
+	// carved band at 640x360 with the panel open, where the tight one leaves exactly one row above it.
+	const int roomyInputH = lineH + 6;
+	const int tightInputH = lineH + 4;
+	const int inputH = !m_ChatEntryOpen ? 0 : (available - roomyInputH >= lineH ? roomyInputH : tightInputH);
+	// The band yields to whatever owns the screen: as many history rows as fit above the entry.
+	const int maxRows = std::min(static_cast<int>(m_MatchChat.size()), std::max(0, (available - inputH) / lineH));
+	if (rows > maxRows) rows = maxRows;
+	const int height = rows * lineH + inputH;
+	// An open entry that the free area cannot hold gives way rather than drawing over an occupier.
+	if (height <= 0 || height > available) {
+		for (GUILabel* label: m_MatchChat) {
+			if (!label) continue;
+			label->SetVisible(false);
+			label->SetText("");
+		}
+		if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
+		m_ChatRect = {};
+		return;
+	}
+	int top = std::max(0, bottom - height);
+	int freeLeft = 8, freeRight = backbuffer->w - 8;
+	area.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
+	constexpr int c_ChatMinWidth = 80;
+	if (freeRight - freeLeft < c_ChatMinWidth) {
+		// Nothing wide enough down here: the band takes the top band the toasts fall back to, or gives way.
+		top = 2;
+		freeLeft = 0;
+		freeRight = backbuffer->w;
+		area.FreeSpan(top, top + height, backbuffer->w, freeLeft, freeRight);
+		if (freeRight - freeLeft < c_ChatMinWidth) {
+			for (GUILabel* label: m_MatchChat) {
+				if (!label) continue;
+				label->SetVisible(false);
+				label->SetText("");
+			}
+			if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
+			m_ChatRect = {};
+			return;
+		}
+	}
+	const int width = std::max(1, std::min(420, std::max(c_ChatMinWidth, freeRight - freeLeft - 8)));
+	const int x = std::max(0, std::min(backbuffer->w - width, freeLeft + std::max(0, (freeRight - freeLeft - width) / 2)));
+	m_ChatRect = {x, top, width, height, true};
+	m_ChatBand = {lineH, inputH, rows, showHistory};
+
+	const long long nowUs = g_TimerMan.GetAbsoluteTime();
+	const size_t first = m_MatchChatLines.size() > static_cast<size_t>(rows) ? m_MatchChatLines.size() - static_cast<size_t>(rows) : 0;
+	AllegroBitmap bitmap(backbuffer);
+	for (size_t row = 0; row < m_MatchChat.size(); ++row) {
+		GUILabel* label = m_MatchChat[row];
+		const bool shown = row < static_cast<size_t>(rows);
+		label->SetVisible(shown);
+		if (!shown) {
+			label->SetText("");
+			continue;
+		}
+		const MatchChatLine& line = m_MatchChatLines[first + row];
+		long long ageUs = nowUs - line.seenUs;
+		if (ageUs < 0) ageUs = 0;
+		int alpha = 255;
+		if (!m_ChatEntryOpen && ageUs > 8000000) {
+			const long long fade = ageUs - 8000000;
+			alpha = fade >= 4000000 ? 90 : static_cast<int>(255 - (fade * 165) / 4000000);
+		}
+		std::string prefix = line.scope == c_NetChatScopeTeam ? "[TEAM] " : "";
+		std::string text = prefix + DisplayName(line.name.empty() ? "Player" : line.name) + ": " + DisplayName(line.text);
+		text = FitLine(font, std::move(text), width - 18);
+		const int y = top + static_cast<int>(row) * lineH;
+		label->SetFont(font);
+		label->Move(x + 8, y + 2);
+		label->Resize(width - 12, lineH - 2);
+		label->SetText(text);
+		rectfill(backbuffer, x, y, x + width - 1, y + lineH - 2, makeacol32(20, 22, 27, alpha));
+		rectfill(backbuffer, x, y, x + 2, y + lineH - 2, TeamBarColor(line.team, alpha));
+		label->Draw(&bitmap, false);
+	}
+	if (m_ChatEntryOpen && m_MatchChatInput) {
+		const int y = top + rows * lineH;
+		m_MatchChatInput->SetVisible(true);
+		m_MatchChatInput->Move(x + 4, y + 2);
+		m_MatchChatInput->Resize(width - 8, inputH - 4);
+		rectfill(backbuffer, x, y, x + width - 1, y + inputH - 1, makeacol32(20, 22, 27, 230));
+		rect(backbuffer, x, y, x + width - 1, y + inputH - 1, makeacol32(59, 65, 83, 255));
+		m_MatchChatInput->Draw(m_Screen);
+	} else if (m_MatchChatInput) {
+		m_MatchChatInput->SetVisible(false);
+	}
+}
+
 void NetModerationGUI::DrawMatchToasts() {
 	m_ToastRect = {};
 	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
@@ -745,6 +1049,9 @@ void NetModerationGUI::DrawMatchToasts() {
 	if (m_StatusRect.visible) {
 		toastArea.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
 	}
+	if (m_ChatRect.visible) {
+		toastArea.occupiers.push_back({m_ChatRect.x, m_ChatRect.y, m_ChatRect.width, m_ChatRect.height});
+	}
 	int freeLeft = 0, freeRight = backbuffer->w;
 	toastArea.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
 	const int countNeed = font->CalculateWidth(std::string("0 of 0")) + 14;
@@ -784,6 +1091,7 @@ void NetModerationGUI::DrawMatchToasts() {
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	m_StatusRect = {};
+	m_ChatRect = {};
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
@@ -803,6 +1111,16 @@ void NetModerationGUI::Draw() {
 	if (inMatch && MatchStatusWanted()) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
+	}
+	if (inMatch) {
+		DrawMatchChat(snapshot);
+	} else {
+		for (GUILabel* label: m_MatchChat) {
+			if (!label) continue;
+			label->SetVisible(false);
+			label->SetText("");
+		}
+		if (m_MatchChatInput) m_MatchChatInput->SetVisible(false);
 	}
 	if (m_Open) m_Controls->DrawMouse();
 	t_simRNGOverride = previousRNG;
@@ -833,7 +1151,17 @@ bool NetModerationGUI::AutomationModerate(const std::string& action, int stableS
 	return m_ActionResult == NetH4ModerationResult::Ok;
 }
 
+int NetModerationGUI::ChatKeyScancode() {
+	return static_cast<int>(ChatScancode());
+}
+
 GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
+	if (m_OverlayControls && name == "LabelMatchChatNewest") {
+		for (auto row = m_MatchChat.rbegin(); row != m_MatchChat.rend(); ++row) {
+			if (*row && (*row)->GetVisible()) return *row;
+		}
+		return m_MatchChat.front();
+	}
 	if (m_OverlayControls && name == "LabelNetMatchToastNewest") {
 		for (auto row = m_Toasts.rbegin(); row != m_Toasts.rend(); ++row) {
 			if ((*row)->GetVisible()) return *row;
