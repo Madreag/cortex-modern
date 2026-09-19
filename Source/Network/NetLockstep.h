@@ -361,8 +361,27 @@ namespace RTE {
 		bool joinsRunningRound = false;
 	};
 
-	enum class NetHostMigrationPhase : uint8_t { None, Contacting, Recovering, WaitingForReady, ResyncAdmission, Complete, Failed };
-	enum class NetHostMigrationMessageType : uint16_t { Hello = 1, RollCall, Answer, Plan, RequestInput, Input, Ready, Commit, Rejoin, Abort };
+	enum class NetHostMigrationPhase : uint8_t {
+		None,
+		Contacting,
+		Recovering,
+		WaitingForReady,
+		ResyncAdmission,
+		Complete,
+		Failed
+	};
+	enum class NetHostMigrationMessageType : uint16_t {
+		Hello = 1,
+		RollCall,
+		Answer,
+		Plan,
+		RequestInput,
+		Input,
+		Ready,
+		Commit,
+		Rejoin,
+		Abort
+	};
 
 	struct NetHostMigrationMessage {
 		NetHostMigrationMessageType type = NetHostMigrationMessageType::Hello;
@@ -706,7 +725,10 @@ namespace RTE {
 		std::unique_ptr<INetTransport> TakeMigrationTransport() { return std::move(m_MigrationTransport); }
 		bool TakeMigrationNotice() { return std::exchange(m_MigrationNotice, false); }
 		std::vector<NetTransportEvent> TakeMigrationAdmissionEvents() { return std::exchange(m_MigrationAdmissionEvents, {}); }
-		void FinishMigrationAdmission() { m_MigrationPhase = NetHostMigrationPhase::Complete; RequestResync("handover survivor admitted for snapshot", true); }
+		void FinishMigrationAdmission() {
+			m_MigrationPhase = NetHostMigrationPhase::Complete;
+			RequestResync("handover survivor admitted for snapshot", true);
+		}
 		/// A transport fault starts agreement without choosing a simulation departure.
 		bool BeginHostMigration(uint64_t nowMs);
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);

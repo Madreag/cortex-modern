@@ -596,7 +596,8 @@ namespace RTE {
 			std::unique_ptr<GnsDirectorySignalDispatcher> dispatcher; //!< After the mux, so it is destroyed first.
 #endif
 			/// The session's wire: the mux if there is one, else the IP transport.
-			INetTransport* Wire() const { return migrated ? migrated.get() : mux ? static_cast<INetTransport*>(mux.get()) : ip.get(); }
+			INetTransport* Wire() const { return migrated ? migrated.get() : mux ? static_cast<INetTransport*>(mux.get())
+				                                                                 : ip.get(); }
 		};
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
@@ -616,7 +617,8 @@ namespace RTE {
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
-		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get()) : m_Transport.get(); }
+		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get())
+			                                                                                                     : m_Transport.get(); }
 		bool SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
 		bool SealMigrationCapsuleLocked(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);
 		bool OpenMigrationCapsule(const NetLobbyMigration& capsule);

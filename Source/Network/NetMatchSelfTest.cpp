@@ -228,20 +228,29 @@ namespace RTE {
 			return true;
 		}
 
-		template<typename Config>
+		template <typename Config>
 		bool TestMigrationConfigOrder(std::string* error) {
 			Config config = NetMatchConfigUtil::MakeDefault(45791);
-			if constexpr (requires { config.successorOrder; config.migrationPeers; }) {
+			if constexpr (requires {
+				config.successorOrder;
+				config.migrationPeers;
+			}) {
 				using Peer = typename decltype(config.migrationPeers)::value_type;
 				config.peerCount = 3;
 				config.players.push_back({3, 2, false, "Third"});
 				config.successorOrder = {3, 2};
 				config.migrationPeers = {Peer{1, 45791, {"127.0.0.1"}}, Peer{2, 45792, {"127.0.0.1"}}, Peer{3, 45793, {"127.0.0.1"}}};
 				std::vector<uint8_t> bytes;
-				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) { *error = "migration config did not encode"; return false; }
+				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) {
+					*error = "migration config did not encode";
+					return false;
+				}
 				const auto decoded = NetLobbyProtocol::Decode(bytes);
 				const auto* proposal = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
-				if (!proposal || proposal->config != config) { *error = "successor order or listen roster changed on the config wire"; return false; }
+				if (!proposal || proposal->config != config) {
+					*error = "successor order or listen roster changed on the config wire";
+					return false;
+				}
 				config.frameRedundancyTicks = 2;
 				config.pathHorizonTicks = 17;
 				Config withoutMigration = config;
@@ -288,9 +297,15 @@ namespace RTE {
 				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
 				config.successorOrder = {2, 3};
-				if (NetMatchConfigUtil::HashConfig(config) == hash) { *error = "config agreement did not bind successor order"; return false; }
+				if (NetMatchConfigUtil::HashConfig(config) == hash) {
+					*error = "config agreement did not bind successor order";
+					return false;
+				}
 				config.successorOrder = {3, 3};
-				if (NetMatchConfigUtil::ValidateLocalAlpha(config)) { *error = "duplicate successor passed config validation"; return false; }
+				if (NetMatchConfigUtil::ValidateLocalAlpha(config)) {
+					*error = "duplicate successor passed config validation";
+					return false;
+				}
 				std::cout << "[net-match-selftest] PASS: successor order and addresses are config-bound" << std::endl;
 				std::cout << "[net-match-selftest] PASS: migration trails redundancy and rejects absent or invalid payloads" << std::endl;
 				return true;
@@ -8860,8 +8875,10 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
-		if (!TestMigrationConfigOrder<NetMatchConfig>(&error)) return fail(error);
-		if (!TestMigrationEndpointTimeout(&error)) return fail(error);
+		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
+			return fail(error);
+		if (!TestMigrationEndpointTimeout(&error))
+			return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);
