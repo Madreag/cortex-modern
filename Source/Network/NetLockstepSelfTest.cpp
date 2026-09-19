@@ -50,6 +50,7 @@
 #include <chrono>
 #include <filesystem>
 #include <atomic>
+#include <barrier>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -1971,6 +1972,29 @@ namespace RTE {
 		// NativeHumanAI.lua:266 and NativeCrabAI.lua:327 send "AI_IsFlying" from inside their own pass, and a
 		// receiver script that runs on every peer gates a sim write on it (BrowncoatBoss.lua:104-110 sets
 		// isInAir, :176-201 reads it before writing self.Vel): the message must cross the wire.
+		bool TestLocalScriptMessageCountAcrossWorkers(std::string* error) {
+			constexpr size_t workers = 4;
+			constexpr size_t messages = 4096;
+			const uint64_t before = g_MovableMan.GetControllerBoundaryStats().localScriptMessages;
+			std::barrier gate(static_cast<std::ptrdiff_t>(workers));
+			std::vector<std::jthread> threads;
+			for (size_t worker = 0; worker < workers; ++worker) {
+				threads.emplace_back([&] {
+					for (size_t message = 0; message < messages; ++message) {
+						gate.arrive_and_wait();
+						g_MovableMan.NoteLocalAIPassScriptMessage();
+					}
+				});
+			}
+			for (auto& thread : threads) thread.join();
+			const uint64_t counted = g_MovableMan.GetControllerBoundaryStats().localScriptMessages - before;
+			if (counted != workers * messages) {
+				*error = "concurrent local script messages counted=" + std::to_string(counted);
+				return false;
+			}
+			return true;
+		}
+
 		bool TestAIScriptMessageCrossesTheWire(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -2524,7 +2548,8 @@ namespace RTE {
 		bool RunAIOffWireArms(std::string* error) {
 			using Arm = std::pair<const char*, bool (*)(std::string*)>;
 			bool allPassed = true;
-			for (const Arm& arm: {Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
+			for (const Arm& arm: {Arm{"local script message workers", &TestLocalScriptMessageCountAcrossWorkers},
+			                     Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
 			                      Arm{"ai move target", &TestAIMoveTargetCrossesTheWire},
 			                      Arm{"ai gib", &TestAIGibCrossesTheWire},
 			                      Arm{"ai alarm point", &TestAIAlarmPointCrossesTheWire},
