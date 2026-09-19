@@ -14228,6 +14228,7 @@ namespace RTE {
 			DelayedAnswer,
 			StaleAnswer,
 			AddressFallback,
+			FailureActuals,
 			ZeroStart
 		};
 
@@ -14250,7 +14251,9 @@ namespace RTE {
 				m_Schedule->contactedPorts.push_back(port);
 				m_Schedule->contactedAddresses.push_back(address);
 				if (address == "unreachable") {
-					if (error) *error = "fixture endpoint unreachable";
+					if (error) {
+						*error = "fixture endpoint unreachable";
+					}
 					return false;
 				}
 				return LoopbackTransport::Connect(address, port, error);
@@ -14304,11 +14307,12 @@ namespace RTE {
 
 		struct MigrationRelayTransport : LoopbackTransport {
 			uint64_t loseFrame = UINT64_MAX;
+			NetPeerId losePeer = 2;
 			uint32_t lost = 0;
 			bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				const auto packet = NetLockstepCodec::Decode(bytes);
 				const auto* input = packet.ok ? std::get_if<NetLockstepFrame>(&packet.packet.payload) : nullptr;
-				if (peer == 2 && input && input->senderPeerId == 1 && input->targetFrame == loseFrame) {
+				if (peer == losePeer && input && input->senderPeerId == 1 && input->targetFrame == loseFrame) {
 					++lost;
 					return true;
 				}
@@ -14474,6 +14478,9 @@ namespace RTE {
 					match.migrationPeers.push_back({peer, static_cast<uint16_t>(port + peer), addresses});
 				}
 				MigrationRelayTransport hostWire;
+				if (scenario == MigrationCase::FailureActuals) {
+					hostWire.losePeer = 1;
+				}
 				LoopbackTransport aWire, bWire, restoredHostWire, restoredClientWire;
 				if (!hostWire.StartHost(port, error) || !aWire.Connect("loopback", port, error) || !bWire.Connect("loopback", port, error))
 					return false;
@@ -14818,6 +14825,11 @@ namespace RTE {
 				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
 			}
 		}
+		const bool diagnosticPassed = TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, MigrationCase::FailureActuals);
+		if (diagnosticPassed || error.find("applied A=4 B=5") == std::string::npos || error.find("dropped=1") == std::string::npos) {
+			return fail("diagnostic fixture passed=" + std::to_string(diagnosticPassed) + " text=" + error);
+		}
+		error.clear();
 		for (auto policy: {NetActorOwnershipPolicy::TeamOwner, NetActorOwnershipPolicy::HostCpuRemoteHuman}) {
 			for (bool dropped: {false, true}) {
 				for (bool teammate: {false, true}) leavePassed &= TestDepartedActorsGoToAI(policy, dropped, teammate, &error);
