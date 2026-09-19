@@ -1242,6 +1242,65 @@ namespace RTE {
 		return view;
 	}
 
+	uint64_t NetReconnectHost::GetModerationSignature() const {
+		uint64_t stamp = 1469598103934665603ULL;
+		const auto foldByte = [&stamp](uint8_t byte) {
+			stamp ^= byte;
+			stamp *= 1099511628211ULL;
+		};
+		const auto fold = [&foldByte](uint64_t value) {
+			for (int shift = 0; shift < 64; shift += 8) {
+				foldByte(static_cast<uint8_t>(value >> shift));
+			}
+		};
+		const auto foldBytes = [&foldByte](const uint8_t* bytes, size_t count) {
+			for (size_t i = 0; i < count; ++i) {
+				foldByte(bytes[i]);
+			}
+		};
+		const auto foldText = [&foldBytes](const std::string& text) {
+			foldBytes(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+		};
+		foldBytes(m_ConfiguredEpoch.data(), m_ConfiguredEpoch.size());
+		bool anyDropped = false;
+		for (const SeatState& seat : m_Seats) {
+			fold(seat.seat.stableSeat);
+			fold(seat.seat.lockstepPeerId);
+			fold(static_cast<uint64_t>(static_cast<int64_t>(seat.seat.team)));
+			fold(seat.holderGeneration);
+			fold(seat.incarnation);
+			fold(seat.seatGeneration);
+			fold(seat.activeConnection);
+			fold((seat.seat.cpu ? 1u : 0u) | (seat.committed ? 2u : 0u) | (seat.closed ? 4u : 0u) |
+			     (seat.dropped ? 8u : 0u) | (seat.holdExpired ? 16u : 0u) | (IsSeatSubstitutable(seat) ? 32u : 0u));
+			fold(seat.droppedAtMs);
+			foldText(seat.substituteName);
+			anyDropped = anyDropped || (seat.committed && seat.activeConnection == c_InvalidNetPeerId);
+		}
+		for (const Substitution& pending : m_Substitutions) {
+			fold(pending.stableSeat);
+			foldBytes(pending.txId.data(), pending.txId.size());
+		}
+		for (const PendingReclaim& pending : m_PendingReclaims) {
+			fold(pending.stableSeat);
+			fold((pending.superseded ? 1u : 0u) | (pending.proofFinished ? 2u : 0u));
+		}
+		for (const Applicant& applicant : m_Applicants) {
+			fold(applicant.stableSeat);
+			fold(applicant.connection);
+			fold(applicant.appliedAtMs);
+			fold(applicant.approved ? 1u : 0u);
+			foldBytes(applicant.txId.data(), applicant.txId.size());
+			foldText(applicant.displayName);
+		}
+		// A dropped seat's row carries how long ago it dropped, so its stamp has to move with the
+		// clock; a second is the resolution the panel renders and costs one rebuild per second.
+		if (anyDropped) {
+			fold(m_NowMs / 1000);
+		}
+		return stamp;
+	}
+
 	NetModerationSelection NetSelectModerationSeat(const NetH4ModerationSeat& seat, NetPeerId applicant) {
 		NetModerationSelection selected{seat.epoch, seat.stableSeat, seat.holderGeneration, seat.seatGeneration, seat.incarnation};
 		selected.substitutionTransaction = seat.substitutionTransaction;

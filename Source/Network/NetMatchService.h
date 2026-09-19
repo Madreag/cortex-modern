@@ -810,6 +810,11 @@ namespace RTE {
 		void DriveAutoSubstitution(uint64_t nowMs);
 		/// Called with the service lock on the game thread, when it owns the admission plane.
 		void PublishModerationView();
+		/// The lobby's moderation rows, built on the setup worker under the service lock. Same seats the
+		/// running view publishes, without the coordinator's frames - there is no coordinator yet.
+		void PublishLobbyModerationViewLocked();
+		uint64_t m_LobbyModerationSignature = 0; //!< The plane stamp the published lobby rows were built from.
+		bool m_LobbyModerationPublished = false;
 
 		static bool s_AdmissionEnabled;
 		static std::string s_TicketStorePath;
