@@ -1,9 +1,13 @@
 #!/usr/bin/env python
 """Compare shared snapshot state, or the complete per-peer state with --full.
 
-Shared comparison projects only measured local AI, presentation and clock fields. It preserves
-Lua graph identities and compares every VM, global, native payload and archive entry. Full
+Shared comparison projects only measured local AI, presentation and clock fields. It checks
+Lua identity relationships and compares every VM, global, native payload and archive entry. Full
 comparison has no local-state projection and is the separate restoration oracle.
+
+A lone one-peer allocation that REPLACES a shared table is undetectable by identity alone
+(documented), an added or missing one is caught structurally, a replacement among several
+is caught by the offset.
 """
 
 import argparse
@@ -397,7 +401,11 @@ def masked_timer_tokens(value):
 def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep_master=True):
     """Require a bijection, including table keys, closures, upvalue cells and native aliases.
 
-    A threaded state's allocation counter is local; surviving shared identities still need proof.
+    A threaded state's allocation counter is local. Moved identities require one uniform
+    right-minus-left offset and a monotonic map, with the offset following the direction of
+    unequal state serials. Equal serials supply no direction. Unmoved identities are excluded
+    from the offset check. One moved node passes with identity_offset_evidence="single";
+    its offset cannot be distinguished from an equal-valued replacement by identity alone.
     """
     if cross_process:
         first, second = masked_timer_tokens(first), masked_timer_tokens(second)
@@ -527,10 +535,17 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep
                     raise GraphMismatch(
                         "birth order differs across peers (an object was created in a different order): "
                         f"nodes {left} and {next_left} on a are {right} and {next_right} on b")
-            if moved:
+            offset = moved[0][1] - moved[0][0] if moved else 0
+            if any(right - left != offset for left, right in moved):
                 raise GraphMismatch(
-                    "shared Lua birth identities differ without allocation provenance: "
-                    f"node {moved[0][0]} on a is node {moved[0][1]} on b")
+                    "a shared Lua object was replaced on one peer (its birth offset differs from the others)")
+            serial_offset = second["serial"] - first["serial"]
+            if offset * serial_offset < 0:
+                raise GraphMismatch(
+                    "shared Lua birth offset opposes the state counters: "
+                    f"node offset {offset}, state counter offset {serial_offset}")
+            report["identity_offset"] = offset
+            report["identity_offset_evidence"] = "single" if len(moved) == 1 else "uniform" if moved else "none"
     return report
 
 
