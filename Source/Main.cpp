@@ -974,6 +974,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 
+		if (!lastArg && currentArg == "-net-host-bans") {
+			NetMatchService::SetHostBanStorePath(argValue[++i]);
+			continue;
+		}
+
 		if (!lastArg && currentArg == "-net-join-wait-for") {
 			NetMatchService::SetJoinWaitPath(argValue[++i]);
 			continue;

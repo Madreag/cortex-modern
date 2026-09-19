@@ -196,6 +196,7 @@ namespace RTE {
 	uint32_t NetMatchService::s_AutosaveSeconds = 0;
 	bool NetMatchService::s_AutosaveSecondsOverridden = false;
 	std::string NetMatchService::s_TicketStorePath;
+	std::string NetMatchService::s_HostBanStorePath;
 	std::string NetMatchService::s_JoinWaitPath;
 	bool NetMatchService::s_ApplyForSeat = false;
 	uint16_t NetMatchService::s_ApplySeat = 0;
@@ -5262,7 +5263,9 @@ static std::string ResyncSaveName() {
 				error = worldError;
 			}
 		}
-		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+		if (started && !AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest, &error)) {
+			started = false;
+		}
 		NetResyncState resumeState;
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -5442,6 +5445,10 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::SetTicketStorePath(std::string path) {
 		s_TicketStorePath = std::move(path);
+	}
+
+	void NetMatchService::SetHostBanStorePath(std::string path) {
+		s_HostBanStorePath = std::move(path);
 	}
 
 	void NetMatchService::SetJoinWaitPath(std::string path) {
@@ -5732,10 +5739,10 @@ static std::string ResyncSaveName() {
 		return state;
 	}
 
-	void NetMatchService::AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest) {
+	bool NetMatchService::AttachAdmissionPlane(NetSession& session, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig, const NetSessionConfig& sessionConfig, const NetIdentityManifest& manifest, std::string* error) {
 		m_AdmissionAttached = false;
 		if (!s_AdmissionEnabled) {
-			return;
+			return true;
 		}
 		const NetH4Identity identity = BuildH4Identity(manifest);
 		if (request.host) {
@@ -5743,7 +5750,16 @@ static std::string ResyncSaveName() {
 			if (!m_SeatAuth.IsActive()) {
 				// Fail closed: with no crypto nothing can be issued or proven, so the session keeps the
 				// pre-admission handshake rather than gating every join on a ticket it cannot mint.
-				return;
+				return true;
+			}
+			// A ban list that is on disk but unreadable would admit every identity it names, so the host
+			// is told which file and hosts nothing until that file loads.
+			const std::string banPath = s_HostBanStorePath.empty() ? NetHostBanStore::DefaultPath() : s_HostBanStorePath;
+			m_BanStore.SetPath(banPath);
+			std::string banError;
+			if (!m_BanStore.Load(&banError)) {
+				if (error) *error = banError + ": " + banPath;
+				return false;
 			}
 			m_ReconnectHost.Configure(&m_SeatAuth, sessionConfig.sessionId, identity);
 			m_ReconnectHost.SetSeatTable(NetH4BuildSeatTable(matchConfig), matchConfig.mode);
@@ -5754,14 +5770,10 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			session.SetReconnectHost(&m_ReconnectHost);
 			session.EnableParticipantProof(nullptr);
-			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
-			if (!m_BanStore.Load(nullptr)) {
-				// Last-good persistents stay; Until Removed writes stay closed until a later load.
-			}
 			m_ReconnectHost.SetBanStore(&m_BanStore);
 			session.SetHostBanStore(&m_BanStore);
 			m_AdmissionAttached = true;
-			return;
+			return true;
 		}
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
@@ -5778,6 +5790,7 @@ static std::string ResyncSaveName() {
 		session.SetReconnectClient(&m_ReconnectClient);
 		session.EnableParticipantProof(&m_ParticipantStore);
 		m_AdmissionAttached = true;
+		return true;
 	}
 
 	void NetMatchService::ScanStoredTicket() {
