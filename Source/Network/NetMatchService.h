@@ -193,6 +193,9 @@ namespace RTE {
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
+		// World host only: open a new round from the scene instead of resuming the world's newest
+		// checkpoint. The world keeps its UUID; its old checkpoints stay for retention to prune.
+		bool worldFresh = false;
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
 		// Host-authored world capacity. Omitted fields take the Persistent World preset's defaults.
@@ -697,6 +700,10 @@ namespace RTE {
 		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
 		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
 		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
+		/// World host: points the request's resume at the world's own checkpoint chain, so a boot of an
+		/// existing world reopens it through the one resume path instead of a second implementation.
+		/// Runs before PrepareResume and reads the identity record without advancing it.
+		bool ResolveWorldResume(NetMatchServiceRequest& request, std::string* error);
 		/// The one purpose label the restart admission key is derived under.
 		static constexpr const char* c_RestartAdmissionKeyLabel = "cccp-restart-admission-v1";
 		/// 7e: polls the directory for the row the stored ticket names, so the rejoin prompt enables

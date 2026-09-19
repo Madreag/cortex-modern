@@ -439,6 +439,11 @@ static std::string ResyncSaveName() {
 		}
 		NetMatchConfig matchConfig;
 		std::string configError;
+		// A world boot resumes its own checkpoint chain by default, through the very same resume path.
+		if (request.host && !ResolveWorldResume(request, error)) {
+			SetState(NetMatchServiceState::Failed, "World resume refused", error ? *error : "world resume refused");
+			return false;
+		}
 		// A resume reopens the lobby the checkpoint was written under, so its own manifest authors the
 		// roster and the request's activity, scene and seats are taken from it.
 		if (request.host && !request.resumeMatchId.empty() && !PrepareResume(request, error)) {
@@ -456,6 +461,12 @@ static std::string ResyncSaveName() {
 			}
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
+			if (request.resumeConfig) {
+				// The resumed round belongs to THIS boot, so nothing the previous boot signed is live
+				// under it; the roster, seats and delay policy stay the checkpoint's own.
+				request.resumeConfig->worldId = m_WorldIdentity.worldId;
+				request.resumeConfig->worldBoot = m_WorldIdentity.boot;
+			}
 			// A world keeps the capacity its first boot authored; a later boot only names one when the record has none.
 			if (!request.worldTeamCapacity.has_value() && WorldIdentityCarriesCapacity(m_WorldIdentity)) {
 				request.worldTeamCapacity = m_WorldIdentity.teamCapacity;
@@ -3159,6 +3170,56 @@ static std::string ResyncSaveName() {
 			m_PublishedDirectorySession.clear();
 			m_PublishedDirectoryToken.clear();
 		}
+	}
+
+	bool NetMatchService::ResolveWorldResume(NetMatchServiceRequest& request, std::string* error) {
+		auto refuse = [&](const std::string& reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!request.host || !(request.persistentWorld || request.activityPreset == "Persistent World")) return true;
+		NetWorldIdentity stored;
+		if (!NetWorldIdentityFile::Peek(NetWorldIdentityFile::DefaultPath(), stored, error)) return false;
+		if (!NetMatchConfigUtil::IsWorldId(stored.worldId)) {
+			// No record yet: this is the world's first boot and there is nothing of it to resume.
+			if (!request.resumeMatchId.empty()) return refuse("-net-resume-match names no world: this install has no world identity record");
+			return true;
+		}
+		if (!request.resumeMatchId.empty() && request.resumeMatchId != stored.worldId) {
+			return refuse("-net-resume-match must name this world " + stored.worldId);
+		}
+		if (request.worldFresh) {
+			// A fresh round opens from the scene under the same UUID; the old checkpoints stay on disk
+			// for retention to prune and are refused by round once this round has checkpointed.
+			request.resumeMatchId.clear();
+			request.resumeTick = 0;
+			return true;
+		}
+		const std::filesystem::path directory = AutosaveStore::Directory();
+		std::optional<AutosaveDescriptor> newest;
+		for (AutosaveDescriptor& held: AutosaveStore::ListRestorable(directory, stored.worldId)) {
+			if (!held.resumable) continue;
+			newest = std::move(held);
+			break;
+		}
+		if (!newest) {
+			// A world that has never checkpointed boots from its scene, exactly as it did before.
+			request.resumeMatchId.clear();
+			request.resumeTick = 0;
+			return true;
+		}
+		if (request.resumeTick != 0 && request.resumeTick != newest->savedTick) {
+			std::string reason;
+			const std::optional<AutosaveDescriptor> named = AutosaveStore::Find(directory, stored.worldId, request.resumeTick, &reason);
+			if (!named) return refuse("checkpoint refused: " + reason);
+			// A round the world has already left cannot be re-entered: its world has moved on.
+			if (named->roundId != newest->roundId) {
+				return refuse("checkpoint refused: that checkpoint belongs to round " + std::to_string(named->roundId) +
+				              ", the world stands on round " + std::to_string(newest->roundId));
+			}
+		}
+		request.resumeMatchId = stored.worldId;
+		return true;
 	}
 
 	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {
