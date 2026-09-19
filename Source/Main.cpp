@@ -135,6 +135,7 @@
 #endif
 #include <chrono>
 #include <charconv>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -410,6 +411,7 @@ static bool s_eventLedgerGhostMoved = false;
 static std::vector<PreviewEventLedger::Key> s_eventLedgerGhostMovedKeys;
 static bool s_eventLedgerExpireDroppedGhost = false;
 static long long s_fundsPreviewPress = 0;
+static const int s_fundsPreviewTeam = Activity::TeamOne; //!< The team -net-match-e2e-buy-command grants and buys for.
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
@@ -2285,8 +2287,20 @@ static void DrawFrameWithPreviews() {
 		const long long tick = g_TimerMan.GetSimUpdateCount();
 		const long long delay = std::max<long long>(static_cast<long long>(ScenarioRunner::GetLockstepLocalInputDelay()), 7);
 		if (tick == s_fundsPreviewPress + 1 || tick == s_fundsPreviewPress + delay) {
-			const std::string& readout = GameActivity::GetLastFundsReadout(Players::PlayerOne);
-			std::cout << "[preview-funds-driver] tick=" << tick << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
+			const Activity* activity = g_ActivityMan.GetActivity();
+			// Each peer presents its own seat, so sample that seat and the buying team as this peer shows it.
+			const int seat = activity ? activity->PlayerOfScreen(0) : Players::NoPlayer;
+			const auto oz = [](float funds) {
+				char text[64];
+				std::snprintf(text, sizeof(text), "%.10g", std::floor(funds));
+				return std::string(text);
+			};
+			const std::string& readout = GameActivity::GetLastFundsReadout(seat);
+			std::cout << "[preview-funds-driver] tick=" << tick << " seat=" << seat << " seat_team=" << (activity ? activity->GetTeamOfPlayer(seat) : static_cast<int>(Activity::NoTeam))
+			          << " buy_team=" << s_fundsPreviewTeam
+			          << " buy_team_oz=" << (activity ? activity->DescribeFundsReadout(s_fundsPreviewTeam, seat) : std::string("EMPTY"))
+			          << " buy_team_committed=" << (activity ? oz(activity->GetTeamFunds(s_fundsPreviewTeam)) : std::string("EMPTY"))
+			          << " readout=" << (readout.empty() ? "EMPTY" : readout) << std::endl;
 			std::vector<std::string> problems;
 			WriteProbeText(tick == s_fundsPreviewPress + 1 ? "funds_p1" : "funds_pd", DumpSimStateToString() + DescribeCanonicalExtras(problems));
 		}
