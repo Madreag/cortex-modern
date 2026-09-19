@@ -16,6 +16,7 @@
 #include "NetMatchReplay.h"
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
+#include "Activity.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
 #include "ScenarioRunner.h"
@@ -4950,11 +4951,68 @@ namespace RTE {
 		coordinator.m_RelayHost = true;
 		coordinator.m_State = NetLockstepState::Running;
 		coordinator.m_Config.localPeerId = 1;
-		coordinator.m_Config.peerCount = 2;
+		coordinator.m_Config.peerCount = 3;
 		coordinator.m_Config.matchConfig.hostPeerId = 1;
-		coordinator.m_RemotePeerIds = {2};
+		coordinator.m_Config.matchConfig.peerCount = 3;
+		// One team per peer, so an ownership read names exactly one of them. Peer 3 is the keeper the
+		// kick must not touch; it has no transport here because nothing is relayed to it.
+		coordinator.m_Config.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Target"}, {3, 2, false, "Keeper"}};
+		coordinator.m_RemotePeerIds = {2, 3};
 		coordinator.m_RemoteTransports[2] = transport;
 		coordinator.m_Stats.nextFrame = 90;
+		const uint64_t committedFrame = coordinator.m_Stats.nextFrame;
+		coordinator.m_RemoteCommands[committedFrame][2] = {{2, NetGameSetTeamFunds{1, 100}}};
+		coordinator.m_RemoteCommands[committedFrame][3] = {{3, NetGameSetTeamFunds{2, 2400}}};
+		// The census reads live ownership, the running activity's funds and the committed queue, before
+		// and after the service's own kick - nothing here evicts by hand.
+		NetActorOwnership::ClearSeededOwners();
+		struct CensusActor {
+			int64_t uid = 0;
+			int team = 0;
+			bool cpu = false;
+		};
+		const std::vector<CensusActor> world = {{101, 1, false}, {102, 1, false}, {201, 2, false}};
+		const auto ownedBy = [&coordinator, &world](uint8_t peerId) {
+			std::vector<int64_t> uids;
+			for (const CensusActor& actor : world) {
+				if (coordinator.ResolveActorOwner(actor.uid, actor.team, actor.cpu) == peerId) {
+					uids.push_back(actor.uid);
+				}
+			}
+			return uids;
+		};
+		std::unique_ptr<Activity> matchFunds = std::make_unique<Activity>();
+		matchFunds->SetTeamFunds(2400.f, 2);
+		g_ActivityMan.SwapCheckpointActivity(matchFunds);
+		const auto leaveCensus = [] {
+			std::unique_ptr<Activity> empty;
+			g_ActivityMan.SwapCheckpointActivity(empty);
+		};
+		Activity* running = g_ActivityMan.GetActivity();
+		if (running == nullptr) {
+			*error = "the service kick fixture did not install the running activity";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const std::vector<int64_t> beforeKeeperUIDs = ownedBy(3);
+		const std::vector<int64_t> beforeTargetUIDs = ownedBy(2);
+		const float beforeKeeperFunds = running->GetTeamFunds(2);
+		std::vector<NetGameCommand> beforeKeeperCommands;
+		std::vector<NetGameCommand> beforeTargetCommands;
+		if (!coordinator.PeekQueuedCommands(committedFrame, 3, beforeKeeperCommands) ||
+		    !coordinator.PeekQueuedCommands(committedFrame, 2, beforeTargetCommands)) {
+			*error = "the committed frame never held both seats' commands";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (beforeKeeperUIDs.empty() || beforeTargetUIDs.empty()) {
+			*error = "the census world gave one of the seats no actors";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
 		NetModerationSelection selected{};
 		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
 			if (seat.stableSeat == 0) {
@@ -4963,9 +5021,60 @@ namespace RTE {
 		}
 		if (service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick) != NetKickBanResult::Ok) {
 			*error = "service RemoveParticipant did not remove the seated holder";
+			leaveCensus();
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		running = g_ActivityMan.GetActivity();
+		if (running == nullptr) {
+			*error = "the kick took the running activity out of the ActivityMan";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const std::vector<int64_t> afterKeeperUIDs = ownedBy(3);
+		if (afterKeeperUIDs != beforeKeeperUIDs) {
+			*error = "the kick changed the keeper's owned actors";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (running->GetTeamFunds(2) != beforeKeeperFunds) {
+			*error = "the kick changed the keeper's team funds";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		std::vector<NetGameCommand> afterKeeperCommands;
+		if (!coordinator.PeekQueuedCommands(committedFrame, 3, afterKeeperCommands) || afterKeeperCommands != beforeKeeperCommands) {
+			*error = "the kick dropped the keeper's queued commands from the committed frame";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		std::vector<NetGameCommand> afterTargetCommands;
+		if (coordinator.PeekQueuedCommands(committedFrame, 2, afterTargetCommands) || !afterTargetCommands.empty()) {
+			*error = "the kicked seat's queued commands survived the kick";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (!ownedBy(2).empty()) {
+			*error = "the kicked seat still owns its actors";
+			leaveCensus();
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		for (const int64_t uid : beforeTargetUIDs) {
+			const uint8_t owner = coordinator.ResolveActorOwner(uid, 1, false);
+			if (owner != coordinator.m_Config.matchConfig.hostPeerId) {
+				*error = "actor " + std::to_string(uid) + " went to peer " + std::to_string(owner) + " instead of the host's takeover";
+				leaveCensus();
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+		}
+		leaveCensus();
 		const NetParticipantRemovalIssue issued = service.GetLastRemovalIssue();
 		if (issued.notice.action != NetParticipantRemovalAction::Kick || issued.lockstepPeerId != 2 || issued.connection != transport) {
 			*error = "the service removal issue did not name the seated holder";
@@ -5049,7 +5158,9 @@ namespace RTE {
 		service.m_IsHost = true;
 		service.m_State = NetMatchServiceState::Starting;
 		service.m_AdmissionAttached = true;
-		service.m_Session = std::make_unique<NetSession>();
+		// The setup worker owns the session for the whole of Start: the service's own pointer is null
+		// until Start returns, which is the state a lobby kick has to work in.
+		std::unique_ptr<NetSession> workerSession = std::make_unique<NetSession>();
 		NetSession client;
 		NetSessionConfig hostConfig;
 		hostConfig.port = port;
@@ -5066,23 +5177,23 @@ namespace RTE {
 		NetSessionConfig clientConfig = hostConfig;
 		clientConfig.displayName = "Client";
 		++clientConfig.localNonce;
-		if (!service.m_Session->StartHost(hostTransport, hostConfig, error) ||
+		if (!workerSession->StartHost(hostTransport, hostConfig, error) ||
 		    !client.StartClient(clientTransport, "loopback", clientConfig, error)) {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		for (uint64_t now = 0; now <= 2000 && service.m_Session->GetReadyPeerCount() != 1; now += 10) {
-			service.m_Session->Tick(now);
+		for (uint64_t now = 0; now <= 2000 && workerSession->GetReadyPeerCount() != 1; now += 10) {
+			workerSession->Tick(now);
 			client.Tick(now);
 			hostTransport.AdvanceTimeMs(10);
 			clientTransport.AdvanceTimeMs(10);
 		}
-		if (service.m_Session->GetReadyPeerCount() != 1) {
+		if (workerSession->GetReadyPeerCount() != 1) {
 			*error = "the Starting kick fixture never seated the client";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		const NetPeerId transport = service.m_Session->GetReadyPeers().front().transportPeerId;
+		const NetPeerId transport = workerSession->GetReadyPeers().front().transportPeerId;
 		if (!service.m_SeatAuth.BeginHostedSession()) {
 			*error = "the Starting kick fixture could not arm reconnect auth";
 			SetNetAuthCryptoForTest(nullptr);
@@ -5099,7 +5210,7 @@ namespace RTE {
 			h4.sessionRulesHash[i] = static_cast<uint8_t>(65 + i);
 			h4.sessionIdentityHash[i] = static_cast<uint8_t>(97 + i);
 		}
-		service.m_ReconnectHost.Configure(&service.m_SeatAuth, service.m_Session->GetSessionId(), h4);
+		service.m_ReconnectHost.Configure(&service.m_SeatAuth, workerSession->GetSessionId(), h4);
 		service.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 2, 2, false, 3, false}, {2, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
 		const auto lane = std::filesystem::temp_directory_path() / "cccp-starting-kick";
 		std::error_code code;
@@ -5146,21 +5257,53 @@ namespace RTE {
 			}
 		}
 		const uint32_t removedBefore = service.m_ReconnectHost.GetStats().seatsRemoved;
-		if (service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick) != NetKickBanResult::Ok) {
-			*error = "Starting RemoveParticipant did not queue";
+		if (service.m_Session) {
+			*error = "the Starting kick fixture held a service session the setup worker owns";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		if (!service.m_PendingRemoval || service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore ||
-		    service.m_ReconnectHost.IsSeatClosed(0)) {
+		const NetKickBanResult queued = service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick);
+		if (queued != NetKickBanResult::Queued) {
+			*error = std::string("Starting RemoveParticipant answered ") + NetKickBanResultName(queued) + " instead of queueing the kick";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (service.m_PendingRemovals.size() != 1) {
+			*error = "the Starting kick left " + std::to_string(service.m_PendingRemovals.size()) + " kicks queued for the setup worker";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore || service.m_ReconnectHost.IsSeatClosed(0)) {
 			*error = "Starting RemoveParticipant wrote the reconnect host on the caller";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		service.DrainPendingRemoval();
-		if (service.m_PendingRemoval || !service.m_ReconnectHost.IsSeatClosed(0) ||
-		    service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore + 1) {
+		// The drain runs through the pump the service hands the runner, on the session the worker owns.
+		NetMatchRunnerConfig runnerConfig;
+		service.AttachHostPump(runnerConfig);
+		if (!runnerConfig.pumpHost) {
+			*error = "the service wired no host pump for the setup worker";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		runnerConfig.pumpHost(*workerSession);
+		if (!service.m_PendingRemovals.empty()) {
+			*error = "the host pump left " + std::to_string(service.m_PendingRemovals.size()) + " kicks queued";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (!service.m_ReconnectHost.IsSeatClosed(0) || service.m_ReconnectHost.GetStats().seatsRemoved != removedBefore + 1) {
 			*error = "the setup worker did not apply the marshaled Starting kick";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (service.GetLastKickBanResult() != NetKickBanResult::Ok) {
+			*error = std::string("the marshaled kick reported ") + NetKickBanResultName(service.GetLastKickBanResult());
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		if (service.GetLastRemovalIssue().notice.stableSeat != 0) {
+			*error = "the marshaled kick issued no notice for the kicked seat";
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
