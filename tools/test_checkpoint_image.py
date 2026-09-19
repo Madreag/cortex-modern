@@ -304,7 +304,7 @@ def graph_nodes(text: bytes) -> dict:
         value = stripped.split("=", 1)[1].strip()
         index, _, payload = value.partition("|")
         data = base64.b64decode(payload.replace(".", "="), altchars=b"-_", validate=True)
-        header = re.match(rb"SG5;S(\d+);", data)
+        header = re.match(rb"SG6;S(\d+);", data)
         ids = re.findall(rb"[TUFCHBJ](\d+);", data[data.rfind(b";N"):]) if header else []
         graphs[index] = (int(header[1]) if header else None, [int(item) for item in ids])
     return graphs
