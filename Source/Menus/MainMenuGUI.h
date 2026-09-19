@@ -376,11 +376,16 @@ namespace RTE {
 		std::array<GUITextBox*, 4> m_HostNetPeerDelayBoxes{};
 		GUIButton* m_HostNetRecalcButton = nullptr;
 		GUILabel* m_HostNetPingLabel = nullptr;
+		GUILabel* m_HostNetModeLabel = nullptr;          //!< H34: "Host mode: <Dedicated|Playing> - capacity N - humans seated M".
+		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
+		GUITextBox* m_HostNetPortBox = nullptr;          //!< H34: the next hosted session's game port (the setup draft's).
 		GUICheckbox* m_HostRecRepairCheck = nullptr;
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
 		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
 		GUILabel* m_HostRecLastSaveLabel = nullptr;
 		GUILabel* m_HostRecWaitingLabel = nullptr;
+		GUILabel* m_HostRecRepairHintLabel = nullptr;    //!< H25: repair row's own status - hint, confirm line, or live progress.
+		bool m_HostRecRepairArmed = false;             //!< H25: first press arms; the second calls ResyncMatch.
 		GUILabel* m_HostFilesSavePathLabel = nullptr;
 		GUILabel* m_HostFilesDiagPathLabel = nullptr;
 		GUILabel* m_HostFilesDiagResultLabel = nullptr;
@@ -603,6 +608,9 @@ namespace RTE {
 		/// Re-fills the open seat dialog's live rows: hold seconds, applicants, action availability.
 		void RefreshHostSeatDialog();
 		void RefreshHostBannedDialog();
+		/// H34: validates the port field against the setup draft - refused while a session is
+		/// hosted, out of range, or unchanged; a valid edit lands on the next hosted request.
+		void CommitHostNetPort();
 		/// H03: applies one row's Open/Closed/CPU pick to the draft roster, refusing the illegal ones.
 		void ChangeHostSeatType(int row, int typeIndex);
 		/// H11: opens the banned-players list dialog.

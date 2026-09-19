@@ -1378,6 +1378,10 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	}
 	m_HostNetPingLabel = dynamic_cast<GUILabel*>(get("LabelHostNetPing"));
 	m_HostNetRecalcButton = dynamic_cast<GUIButton*>(get("ButtonHostNetRecalc"));
+	m_HostNetModeLabel = dynamic_cast<GUILabel*>(get("LabelHostNetMode"));
+	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
+	m_HostNetPortBox = dynamic_cast<GUITextBox*>(get("TextHostNetPort"));
+	m_HostRecRepairHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRepairHint"));
 	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
 	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
 	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
@@ -1486,6 +1490,17 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetMinDelayBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 		m_HostNetMinDelayBox->SetMaxTextLength(2);
 	}
+	if (m_HostNetVisibilityCombo) {
+		m_HostNetVisibilityCombo->ClearList();
+		m_HostNetVisibilityCombo->AddItem("LAN only");
+		m_HostNetVisibilityCombo->AddItem("Internet: Unlisted");
+		m_HostNetVisibilityCombo->AddItem("Internet: Listed");
+	}
+	if (m_HostNetPortBox) {
+		m_HostNetPortBox->SetNumericOnly(true);
+		m_HostNetPortBox->SetMaxNumericValue(65535);
+		m_HostNetPortBox->SetMaxTextLength(5);
+	}
 	for (GUITextBox* box : m_HostNetPeerDelayBoxes) {
 		if (!box) continue;
 		box->SetNumericOnly(true);
@@ -1566,7 +1581,12 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostSeatDlgModerationRow = -1;
 	m_HostSeatDlgRemovalSeat.reset();
 	m_HostKickBanWatch = false;
+	m_HostRecRepairArmed = false;
 	m_HostOptionsAwaitedRevision = 0;
+	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox) {
+		// H34's port field edits the setup draft's port - the value the next hosted request carries.
+		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
+	}
 	if (setupDraft) {
 		// The staged draft applies where one exists; the request the Create button would send builds the rest.
 		NetMatchServiceRequest request = HostRequestDraft();
@@ -1845,6 +1865,25 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostNetPingLabel->SetText(ping.empty() ? "No peer ping yet" : ping);
 	}
+	// H34: the adopted config's own words for the host row - mode, capacity and seated humans.
+	if (m_HostNetModeLabel) {
+		const NetMatchConfig& adopted = g_NetMatchService.GetLobbyMatchConfig();
+		int seated = 0;
+		for (const NetMatchPlayerSlot& slot : adopted.players) {
+			if (!slot.cpu && slot.peerId != 0) ++seated;
+		}
+		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
+		                            " - capacity " + std::to_string(adopted.peerCount) +
+		                            " - humans seated " + std::to_string(seated));
+	}
+	// The visibility combo mirrors the live lease's state; a pick applies through the setter.
+	HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
+	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox && !HostOptBoxFocused(m_HostNetPortBox)) {
+		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
+	}
+	HostOptSetEditable(m_HostNetVisibilityCombo, editable);
+	// The port box stays pressable while hosted so the attempt can name the refusal.
+	HostOptSetEditable(m_HostNetPortBox, editable);
 
 	// Recovery page.
 	if (m_HostRecRepairCheck) m_HostRecRepairCheck->SetCheck(m_HostOptionsDraft.automaticRepair ? GUICheckbox::Checked : GUICheckbox::Unchecked);
@@ -1898,7 +1937,33 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecWaitingLabel->SetText(waiting.empty() ? "" : ("Waiting on: " + waiting));
 	}
-	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostRepairNowButton], false); // repair now needs the match's snapshot path, which is an open seam
+	// H25: the button lights only where a repair can run - the host's own call, a live session,
+	// resync allowed on the running activity, not over, and no restore already in flight.
+	bool resyncInFlight = false;
+	uint64_t resyncBytes = 0, resyncMs = 0;
+	g_NetMatchService.GetResyncStatus(&resyncInFlight, &resyncBytes, &resyncMs);
+	const bool repairLive = g_NetMatchService.IsHost() && g_NetMatchService.CanResyncMatch() &&
+	                        NetMatchService::ResyncSnapshotAllowed(g_ActivityMan.GetActivity());
+	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostRepairNowButton], repairLive);
+	if (!repairLive) m_HostRecRepairArmed = false;
+	if (m_HostRecRepairHintLabel) {
+		if (resyncInFlight) {
+			// Phase from the bytes the snapshot has moved: none yet means the host is still saving.
+			m_HostRecRepairHintLabel->SetText("Repairing: " + std::string(resyncBytes > 0 ? "transfer" : "snapshot") +
+			                                  " " + std::to_string(resyncBytes) + " B " +
+			                                  std::to_string(resyncMs / 1000) + "s");
+		} else if (m_HostRecRepairArmed) {
+			m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
+		} else if (resyncBytes > 0 || resyncMs > 0) {
+			m_HostRecRepairHintLabel->SetText("Repaired: " + std::to_string(resyncBytes) + " B " +
+			                                  std::to_string(resyncMs / 1000) + "s");
+		} else if (!g_NetMatchService.IsHost()) {
+			m_HostRecRepairHintLabel->SetText("Repair is the host's call");
+		} else {
+			m_HostRecRepairHintLabel->SetText(repairLive ? "Every peer reloads the host's snapshot"
+			                                           : "Repair needs a live match session");
+		}
+	}
 
 	// Files page: local paths, local retention, and the local status-widget preference.
 	if (m_HostFilesSavePathLabel) {
@@ -2121,6 +2186,9 @@ void MainMenuGUI::RederiveHostOptionsRoster() {
 
 void MainMenuGUI::ApplyHostOptions() {
 	if (m_HostOptionsReadOnly) return;
+	// The port row commits on the same click the rest of the page does; a refused edit names its
+	// reason before the draft's own status lands.
+	CommitHostNetPort();
 	DraftHostOptionsFromControls();
 	std::string error;
 	if (!NetMatchConfigUtil::ValidateLocalAlpha(m_HostOptionsDraft, &error)) {
@@ -2438,6 +2506,26 @@ void MainMenuGUI::RefreshHostBannedDialog() {
 		pick >= 0 && pick < static_cast<int>(m_HostBannedRecords.size()) && g_NetMatchService.IsHost());
 }
 
+void MainMenuGUI::CommitHostNetPort() {
+	if (!m_HostNetPortBox || !m_MultiplayerHostPortTextBox) return;
+	const std::string text = m_HostNetPortBox->GetText();
+	if (text == m_MultiplayerHostPortTextBox->GetText()) return;
+	const long parsed = std::strtol(text.c_str(), nullptr, 10);
+	if (parsed < 1024 || parsed > 65535) {
+		m_HostOptionsStatusLabel->SetText("Port must be 1024-65535");
+		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
+		return;
+	}
+	if (g_NetMatchService.IsHost()) {
+		// The bind belongs to the live session; a new port only takes effect on the next Create.
+		m_HostOptionsStatusLabel->SetText("End the session to change the port");
+		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
+		return;
+	}
+	m_MultiplayerHostPortTextBox->SetText(std::to_string(static_cast<int>(parsed)));
+	m_HostOptionsStatusLabel->SetText("Port " + std::to_string(static_cast<int>(parsed)) + " applies to the next hosted session");
+}
+
 void MainMenuGUI::ShowHostBannedDialog() {
 	// H11: the store's own rows - identity's public alias, the scope, the age; Remove unbans the
 	// picked row through the same host pump a queued kick drains on.
@@ -2571,6 +2659,48 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		m_HostSeatDlgModerationRow = -1;
 		m_HostSeatDlgRemovalSeat.reset();
 		CloseMultiplayerDialog();
+		return;
+	}
+	if (guiEventControl == m_MainMenuButtons[MenuButton::HostRepairNowButton]) {
+		// H25's two-step: the first press arms and the hint names the shared pause and reload; the
+		// second calls the service, which queues the heal at its safe boundary.
+		if (!m_HostRecRepairArmed) {
+			m_HostRecRepairArmed = true;
+			if (m_HostRecRepairHintLabel) {
+				m_HostRecRepairHintLabel->SetText("Every peer pauses and reloads the host's snapshot - press again");
+			}
+			return;
+		}
+		m_HostRecRepairArmed = false;
+		std::string repairError;
+		if (g_NetMatchService.ResyncMatch(&repairError)) {
+			if (m_HostRecRepairHintLabel) m_HostRecRepairHintLabel->SetText("Repairing: snapshot 0 B 0s");
+		} else if (m_HostRecRepairHintLabel) {
+			m_HostRecRepairHintLabel->SetText(repairError.empty() ? "Repair refused" : "Repair refused - " + repairError);
+		}
+		return;
+	}
+	if (guiEventControl == m_HostNetVisibilityCombo) {
+		// H34: the pick applies to the held lease at once; Internet states need a configured
+		// directory URL, and a lobby with no lease cannot become listed on the spot.
+		const int pick = m_HostNetVisibilityCombo ? m_HostNetVisibilityCombo->GetSelectedIndex() : -1;
+		if (pick > 0 && g_SettingsMan.GetSessionDirectoryUrl().empty()) {
+			m_HostOptionsStatusLabel->SetText("Internet needs a session directory URL (Network settings)");
+			HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
+			return;
+		}
+		if (pick >= 0) {
+			if (!g_NetMatchService.SetDirectoryVisibility(pick)) {
+				m_HostOptionsStatusLabel->SetText("The lobby's listing needs a new hosted session");
+			} else {
+				static const char* visNames[3] = {"LAN only", "Internet: Unlisted", "Internet: Listed"};
+				m_HostOptionsStatusLabel->SetText(std::string("Visibility: ") + visNames[std::min(pick, 2)]);
+			}
+		}
+		return;
+	}
+	if (guiEventControl == m_HostNetPortBox) {
+		CommitHostNetPort();
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionEndButton]) {
