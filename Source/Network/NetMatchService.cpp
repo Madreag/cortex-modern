@@ -1148,6 +1148,10 @@ static std::string ResyncSaveName() {
 			m_Dedicated = false;
 			m_HumanSeats = 0;
 			m_MatchConfig = {};
+			// A staged options draft names the session it was accepted under; teardown drops it
+			// with that config so the next lobby never sees its predecessor's edit.
+			m_AdoptedMatchConfig = {};
+			m_PendingHostOptions.reset();
 			m_ResyncOnDesync = false;
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
@@ -1736,6 +1740,9 @@ static std::string ResyncSaveName() {
 		}
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
+		// A staged options draft is a lobby-round intent: the launch that ran without it retiring
+		// means its window closed, so it must not surface again in the rematch lobby.
+		m_PendingHostOptions.reset();
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
 		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
 		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
