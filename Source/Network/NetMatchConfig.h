@@ -92,6 +92,12 @@ namespace RTE {
 		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
 		static constexpr uint16_t c_LiveMinVersion = 4;
 		static constexpr uint16_t c_PersistentWorldVersion = 5;
+		// The lobby config's reserved word, by bit value. Bit 0 is the dedicated flag; the persistent
+		// world takes bit 2 and is known only from c_PersistentWorldVersion up, so an ordinary reader
+		// still refuses the whole word. c_ReservedKnownMask is what every version allows.
+		static constexpr uint16_t c_ReservedDedicatedBit = 1;
+		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit;
 		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
