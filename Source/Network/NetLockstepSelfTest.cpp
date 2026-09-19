@@ -3,6 +3,7 @@
 #include "allegro.h"
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
+#include "NetLobbySession.h"
 #include "PieMenu.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
@@ -13302,7 +13303,39 @@ namespace RTE {
 			NetHash32 Hash() const { return NetIdentity::HashCanonicalText("migration-sim", {{"state", Save()}}); }
 		};
 
-		template<typename Config, typename Coordinator>
+		template<typename LobbyConfig>
+		bool TransferMigrationSnapshot(const NetMatchConfig& match, const std::vector<uint8_t>& envelope, bool delegated, std::vector<uint8_t>& received, std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(delegated ? 45806 : 45805, error) || !clientWire.Connect("loopback", delegated ? 45806 : 45805, error)) return false;
+			hostWire.PollEvents(); clientWire.PollEvents();
+			LobbyConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 3; hostConfig.remoteTransportPeerIds = {{2, 1}};
+			hostConfig.matchConfig = match; hostConfig.startFrame = 6; hostConfig.activePeerCount = 2;
+			hostConfig.autoReady = true; hostConfig.autoStart = true; hostConfig.enableMigration = true;
+			hostConfig.migrationListenPort = 45806; hostConfig.migrationListenAddrs = {"loopback"};
+			hostConfig.snapshotProviderPeerId = delegated ? 2 : 0;
+			hostConfig.sealMigration = [](uint8_t, const NetHash32&, std::vector<uint8_t>& capsule) { capsule = {1}; return true; };
+			hostConfig.openMigration = [](const auto&) { return true; };
+			LobbyConfig clientConfig = hostConfig;
+			clientConfig.host = false; clientConfig.localPeerId = 2; clientConfig.remoteTransportPeerIds = {{3, 1}};
+			NetLobbySession host, client;
+			if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+			if (delegated) client.BeginStateTransfer(envelope); else host.BeginStateTransfer(envelope);
+			for (uint64_t now = 0; now < 4000; now += 5) {
+				host.Tick(now); client.Tick(now);
+				if (host.IsFailed() || client.IsFailed() || host.IsRejected() || client.IsRejected()) { *error = "successor resync lobby: " + host.GetFailureReason() + " / " + client.GetFailureReason(); return false; }
+				if (host.IsStarted() && client.IsStarted()) {
+					received = client.TakeReceivedState();
+					if (received != envelope || (delegated && host.TakeReceivedState() != envelope) || client.GetStartFrame() != 6 || client.GetMatchConfig() != match) { *error = "successor resync changed the archive, roster or applied boundary"; return false; }
+					return true;
+				}
+				hostWire.AdvanceTimeMs(5); clientWire.AdvanceTimeMs(5);
+			}
+			*error = "successor resync lobby did not finish the ordinary state-chunk path";
+			return false;
+		}
+
+		template<typename Config, typename Coordinator, typename LobbyConfig>
 		bool TestHostMigrationRecovery(bool skipSuccessor, bool midHeal, std::string* error) {
 			Config probe;
 			if constexpr (!requires(Coordinator& peer) { probe.matchConfig.successorOrder; probe.migrationKey; peer.GetMigrationResult(); peer.BeginHostMigrationAfterHeal(uint64_t{}); }) {
@@ -13377,11 +13410,15 @@ namespace RTE {
 				if (midHeal) {
 					NetResyncState state; state.sessionId = match.sessionId; state.sourceRound = b.GetRoundId(); state.savedTick = 5;
 					const std::string saved = worldB.Save();
-					std::vector<uint8_t> envelope, archive;
+					std::vector<uint8_t> envelope, delivered, archive;
 					NetResyncState decoded;
-					if (!NetResyncCodec::Encode(state, {saved.begin(), saved.end()}, envelope, error) || !NetResyncCodec::Decode(envelope, match.sessionId, 6, decoded, archive, error)) return false;
+					if (!NetResyncCodec::Encode(state, {saved.begin(), saved.end()}, envelope, error) ||
+					    !TransferMigrationSnapshot<LobbyConfig>(match, envelope, false, delivered, error) || !NetResyncCodec::Decode(delivered, match.sessionId, 6, decoded, archive, error)) return false;
 					worldA.Load(archive);
 					if (worldA.Hash() != worldB.Hash() || b.GetMigrationResult().resyncPeers != std::vector<uint8_t>{2}) { *error = "mid-heal survivor did not take the new host's ordinary resync envelope to C"; return false; }
+					if (!TransferMigrationSnapshot<LobbyConfig>(match, envelope, true, delivered, error) || !NetResyncCodec::Decode(delivered, match.sessionId, 6, decoded, archive, error)) return false;
+					worldA.Load(archive);
+					if (worldA.Hash() != worldB.Hash()) { *error = "delegated successor snapshot changed the recovered simulation hash"; return false; }
 					std::cout << "[host-migration-selftest] PASS: mid-heal survivor receives the successor resync at the agreed boundary" << std::endl;
 					return true;
 				}
@@ -13399,6 +13436,7 @@ namespace RTE {
 				controller.ResetLocalInputState(Controller::CIM_PLAYER, Players::PlayerOne); controller.ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
 				const std::string baseline = controller.SaveCheckpoint();
 				std::array<std::vector<uint8_t>, 2> controllers;
+				std::array<std::string, 2> checkpoints;
 				std::array<Coordinator*, 2> peers{&a, &b};
 				for (size_t index = 0; index < peers.size(); ++index) {
 					ScenarioRunner::SetLockstepCoordinator(nullptr); ScenarioRunner::SetLockstepCoordinator(peers[index]);
@@ -13406,13 +13444,14 @@ namespace RTE {
 					controller.LoadCheckpoint(baseline);
 					ApplyLockstepLeaveHandoffs(index == 0 ? framesA.at(6) : framesB.at(6), {actor.get()}, false);
 					controllers[index] = ControllerFrameCodec::Encode(ControllerFrameCodec::Snapshot(actor->GetUniqueID(), controller));
+					checkpoints[index] = controller.SaveCheckpoint();
 					if (controller.GetInputMode() != Controller::CIM_AI || peers[index]->ResolveActorOwner(actor->GetUniqueID(), 0, true) != 3) {
 						ScenarioRunner::SetLockstepCoordinator(nullptr); NetActorOwnership::ClearSeededOwners();
 						*error = "the departed host's actor did not enter the shared AI handoff"; return false;
 					}
 				}
 				ScenarioRunner::SetLockstepCoordinator(nullptr); NetActorOwnership::ClearSeededOwners();
-				if (controllers[0] != controllers[1]) { *error = "the host departure left different native controller states"; return false; }
+				if (controllers[0] != controllers[1] || checkpoints[0] != checkpoints[1]) { *error = "the host departure left different native controller states"; return false; }
 				std::cout << "[host-migration-selftest] PASS: asymmetric relay recovers C=F and equal simulation hashes for C+1..C+60" << std::endl;
 				std::cout << "[host-migration-selftest] PASS: departed host uses the shared AI handoff with equal controller state" << std::endl;
 				return true;
@@ -13443,8 +13482,9 @@ namespace RTE {
 		bool migrationsPassed = true;
 		for (const auto [skip, heal] : {std::pair{false, false}, std::pair{true, false}, std::pair{false, true}}) {
 			std::string migrationError;
-			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator>(skip, heal, &migrationError)) {
+			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(skip, heal, &migrationError)) {
 				std::cerr << "[host-migration-selftest] FAIL: " << (heal ? "mid-heal resync: " : skip ? "successor order: " : "roll-call recovery and AI handoff: ") << migrationError << std::endl;
+				if (!skip && !heal) std::cerr << "[host-migration-selftest] FAIL: departed-host AI controller equality: " << migrationError << std::endl;
 				migrationsPassed = false;
 			}
 		}
