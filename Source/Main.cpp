@@ -1769,6 +1769,7 @@ void ProcessMenuScript() {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::string line = "dump_lobby state=" + snapshot.serviceState + " members=" + std::to_string(snapshot.members.size()) +
 		                   " activity=\"" + snapshot.activityPreset + "\" module=\"" + snapshot.activityModule + "\"" +
+		                   " scene=\"" + snapshot.sceneName + "\" scene_module=\"" + snapshot.sceneModule + "\"" +
 		                   " error=\"" + snapshot.errorText + "\" status=\"" + snapshot.statusText + "\"" +
 		                   " input_delay=\"" + snapshot.inputDelayText + "\"" +
 		                   " port_map=\"" + snapshot.portMap + "\"";
