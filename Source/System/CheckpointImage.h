@@ -167,6 +167,15 @@ namespace RTE {
 	void ArmLuaCheckpointBarrier();
 	uint64_t LuaCheckpointWriteGeneration();
 
+	/// Holds the table write barrier off for a capture, so its scratch tables are never armed.
+	class LuaCheckpointBarrierPause {
+	public:
+		LuaCheckpointBarrierPause();
+		~LuaCheckpointBarrierPause();
+		LuaCheckpointBarrierPause(const LuaCheckpointBarrierPause&) = delete;
+		LuaCheckpointBarrierPause& operator=(const LuaCheckpointBarrierPause&) = delete;
+	};
+
 	bool RunCheckpointImageSelfTest();
 
 	/// Runs the checkpoint rows that need a live scene; call from a running match.
