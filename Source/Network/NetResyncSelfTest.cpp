@@ -440,11 +440,15 @@ namespace RTE {
 			// An envelope that names no rewind point carries none of its bytes.
 			const auto plain = EncodeState(State());
 			const auto withAnchor = EncodeState(anchored);
-			Check(withAnchor.size() == plain.size() + 1 + matchId.size() + 8, "rewind anchor is not the only added metadata");
+			const size_t expectedSize = plain.size() + 1 + matchId.size() + 8;
+			Check(withAnchor.size() == expectedSize, "rewind anchor is not the only added metadata: " +
+			                                             std::to_string(withAnchor.size()) + " bytes, expected " + std::to_string(expectedSize));
 			// Everything past the two size fields of the header is untouched by the anchor.
 			const auto plainMetadataEnd = static_cast<std::ptrdiff_t>(plain.size() - c_Archive.size());
-			Check(std::equal(plain.begin() + 16, plain.begin() + plainMetadataEnd, withAnchor.begin() + 16),
-			      "rewind anchor moved the metadata before it");
+			const auto matching = std::mismatch(plain.begin() + 16, plain.begin() + plainMetadataEnd, withAnchor.begin() + 16);
+			Check(matching.first == plain.begin() + plainMetadataEnd, "rewind anchor moved the metadata before it: first difference at byte " +
+			                                                             std::to_string(matching.first - plain.begin()) + " of " +
+			                                                             std::to_string(plainMetadataEnd));
 
 			auto future = anchored;
 			future.rewindTick = future.savedTick + 1;
