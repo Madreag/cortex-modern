@@ -2161,6 +2161,10 @@ namespace RTE {
 		s_ReplayRecordRound = 0;
 	}
 
+	bool ScenarioRunner::IsLockstepReplayRecordArmed() {
+		return !s_ReplayRecordArmedPath.empty();
+	}
+
 	bool ScenarioRunner::BeginLockstepReplayRecord(const NetMatchConfig& config, std::string* error) {
 		if (s_ReplayRecordArmedPath.empty()) {
 			return false;
