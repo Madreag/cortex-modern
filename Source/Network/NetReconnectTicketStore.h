@@ -40,6 +40,9 @@ namespace RTE {
 	public:
 		static constexpr uint16_t c_RecordVersion = 2;
 		static constexpr uint16_t c_LegacyRecordVersion = 1;
+		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
+		// issuedAt 8 + configHash 32 + address length 2, then the address, then the 32 B mac.
+		static constexpr size_t c_FixedBytes = 114;
 		static constexpr size_t c_MaxDirectorySessionIdBytes = NetProtocol::c_MaxShortTextBytes;
 		// Long enough to outlast any single session, short enough that a next-day launch is not
 		// offered a dead match. The record is worthless once the host's epoch is gone.

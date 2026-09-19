@@ -21,9 +21,7 @@ namespace RTE {
 
 	namespace {
 		constexpr char c_Magic[8] = {'C', 'C', 'C', 'P', 'H', '4', 'T', 'K'};
-		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
-		// issuedAt 8 + configHash 32 + address length 2 = 114, then the address, then the 32 B mac.
-		constexpr size_t c_FixedBytes = 114;
+		constexpr size_t c_FixedBytes = NetReconnectTicketStore::c_FixedBytes;
 
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
 			out.push_back(static_cast<uint8_t>(value & 0xFFU));
