@@ -341,7 +341,7 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -434,6 +434,8 @@ class SessionDirectory:
                 fields["world_id"] = require_str(data, "world_id")
             if "world_boot" in data:
                 fields["world_boot"] = require_int(data, "world_boot", 1, 10**9)
+            if "spectator_free" in data:
+                fields["spectator_free"] = require_int(data, "spectator_free", 0, 10**9)
             resume = data.get("resume_session_id")
             if resume is not None:
                 resume = require_str(data, "resume_session_id")
@@ -482,6 +484,10 @@ class SessionDirectory:
         token = require_str(data, "token")
         peer_count = require_int(data, "peer_count", 0, 10**9)
         seats_free = require_int(data, "seats_free", 0, 10**9)
+        # A full world still takes watchers, so the row keeps that count current between registers.
+        spectator_free = (
+            require_int(data, "spectator_free", 0, 10**9) if "spectator_free" in data else None
+        )
         listen_addrs: Optional[list[str]] = None
         if "listen_addrs" in data:
             listen_addrs = require_listen_addrs(data)
@@ -504,6 +510,8 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             sess.fields["peer_count"] = peer_count
             sess.fields["seats_free"] = seats_free
+            if spectator_free is not None:
+                sess.fields["spectator_free"] = spectator_free
             if listen_addrs is not None:
                 sess.fields["listen_addrs"] = listen_addrs
             if state is not None:

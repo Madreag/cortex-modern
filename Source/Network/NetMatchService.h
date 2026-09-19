@@ -455,7 +455,9 @@ namespace RTE {
 		/// The joiner's catch-up step over one lobby pump: applies the tail that arrived, adopts the
 		/// announced E and reports what the sim has applied. The value it sends is the report the host
 		/// schedules activation from.
-		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp);
+		/// One joiner step: the arrived tail, its E and the report it sends back.
+		/// @param outRefusal The world's refusal code when the host turned this joiner away; 0 otherwise.
+		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr);
 		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
 		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
 		/// The bootstrap a lobby report belongs to: a bootstrap's own lobby id first, then a ready peer.
@@ -928,6 +930,7 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

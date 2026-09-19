@@ -2691,6 +2691,156 @@ namespace RTE {
 		return 0;
 	}
 
+	// Overflow spectators are bounded: past the host's bound the world refuses before any transfer.
+	int TestSpectatorOverflowIsBounded() {
+		NetMatchConfig config = MakeWorldConfig();
+		config.peerCount = 3;
+		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.worldTeamCapacity = {1, 1, 0, 0};
+		config.worldMaxSpectators = 1;
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(config, MakeIdentity(), &error)) {
+			return Fail("world-full-refusal-missing: the world plane refused its own config (" + error + ")");
+		}
+		if (host.SpectatorBound() != 1 || host.SpectatorsFree() != 1) {
+			return Fail("world-spectator-bound-ignored: the bound reads " + std::to_string(host.SpectatorBound()) +
+			            " with " + std::to_string(host.SpectatorsFree()) + " free");
+		}
+		// Two seats fill first; neither is a spectator and neither spends a watcher slot.
+		if (!host.BeginJoin(11, 11, "a", 1000, &error) || !host.BeginJoin(12, 12, "b", 1000, &error)) {
+			return Fail("world-seats-refused-below-capacity: a configured seat was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* first = host.FindSession(11);
+		const NetWorldJoinSession* second = host.FindSession(12);
+		if (first == nullptr || second == nullptr || first->spectator || second->spectator ||
+		    first->assignedPeerId != 2 || second->assignedPeerId != 3) {
+			return Fail("world-seats-refused-below-capacity: the first two joiners took peers " +
+			            std::to_string(first == nullptr ? 0 : first->assignedPeerId) + " and " +
+			            std::to_string(second == nullptr ? 0 : second->assignedPeerId));
+		}
+		if (host.SpectatorsFree() != 1) {
+			return Fail("world-spectator-bound-ignored: seating two members left " + std::to_string(host.SpectatorsFree()) + " watcher slots");
+		}
+		// The third joiner watches: no slot, no Controller, but a lobby id of its own.
+		if (!host.BeginJoin(13, 13, "c", 1000, &error)) {
+			return Fail("world-full-refusal-missing: the first overflow joiner was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* watcher = host.FindSession(13);
+		if (watcher == nullptr || !watcher->spectator || watcher->assignedPeerId != 0 ||
+		    watcher->spectatorLobbyPeer < c_WorldSpectatorLobbyPeerFirst) {
+			return Fail("world-full-refusal-missing: the overflow joiner is spectator " +
+			            std::to_string(watcher != nullptr && watcher->spectator) + " on lobby id " +
+			            std::to_string(watcher == nullptr ? 0 : watcher->spectatorLobbyPeer));
+		}
+		if (host.SpectatorCount() != 1 || host.SpectatorsFree() != 0) {
+			return Fail("world-spectator-bound-ignored: one watcher left " + std::to_string(host.SpectatorsFree()) + " free");
+		}
+		// The fourth is turned away before any image work, with the reason the joiner shows.
+		error.clear();
+		if (host.BeginJoin(14, 14, "d", 1000, &error)) {
+			return Fail("world-admitted-past-its-bound: a fourth joiner was admitted with the bound spent");
+		}
+		if (error != "the world is full") {
+			return Fail("world-full-refusal-missing: the refusal reads \"" + error + "\"");
+		}
+		if (host.FindSession(14) != nullptr) {
+			return Fail("world-admitted-past-its-bound: the refused joiner still holds a bootstrap");
+		}
+		// The refusal is answered once and remembered until the connection goes.
+		if (!host.NoteRefusal(14, NetWorldJoinRefusal::WorldFull) || host.NoteRefusal(14, NetWorldJoinRefusal::WorldFull)) {
+			return Fail("world-full-refusal-missing: the refusal was not recorded once");
+		}
+		if (host.RefusalOf(14) != NetWorldJoinRefusal::WorldFull || host.RefusalOf(13) != NetWorldJoinRefusal::None) {
+			return Fail("world-full-refusal-missing: the refusal did not stay on connection 14 alone");
+		}
+		host.ReleaseLostConnections({11, 12, 13});
+		if (host.RefusalOf(14) != NetWorldJoinRefusal::None) {
+			return Fail("world-full-refusal-missing: a gone connection kept its refusal");
+		}
+		// A watcher that leaves frees its slot for the next one.
+		host.ReleaseLostConnections({11, 12});
+		if (host.SpectatorCount() != 0 || host.SpectatorsFree() != 1) {
+			return Fail("world-spectator-bound-ignored: a departed watcher left " + std::to_string(host.SpectatorsFree()) + " free");
+		}
+		// A bound of zero admits no watcher at all; a bound wider than the id pool is held to the pool.
+		NetMatchConfig closed = config;
+		closed.worldMaxSpectators = 0;
+		NetWorldJoinHost noWatchers;
+		if (!noWatchers.Configure(closed, MakeIdentity(), &error) || noWatchers.SpectatorBound() != 0) {
+			return Fail("world-spectator-bound-ignored: a zero bound reads " + std::to_string(noWatchers.SpectatorBound()));
+		}
+		if (!noWatchers.BeginJoin(21, 21, "a", 1000, &error) || !noWatchers.BeginJoin(22, 22, "b", 1000, &error)) {
+			return Fail("world-seats-refused-below-capacity: a seat was refused with watchers closed (" + error + ")");
+		}
+		error.clear();
+		if (noWatchers.BeginJoin(23, 23, "c", 1000, &error) || error != "the world is full") {
+			return Fail("world-admitted-past-its-bound: a closed world admitted a watcher with reason \"" + error + "\"");
+		}
+		NetMatchConfig wide = config;
+		wide.worldMaxSpectators = NetMatchConfigUtil::c_MaxWorldSpectators;
+		NetWorldJoinHost widest;
+		if (!widest.Configure(wide, MakeIdentity(), &error) || widest.SpectatorBound() != c_WorldSpectatorLobbyCap) {
+			return Fail("world-spectator-bound-ignored: the widest bound reads " + std::to_string(widest.SpectatorBound()) +
+			            " against a pool of " + std::to_string(c_WorldSpectatorLobbyCap));
+		}
+		// The refusal rides the same 9-byte report every other world answer does.
+		const NetLobbyStateChunk chunk = MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull));
+		uint8_t kind = 0;
+		uint64_t value = 0;
+		if (!ParseWorldJoinReport(chunk, kind, value) || kind != c_NetWorldReportRefused ||
+		    value != static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull) ||
+		    std::string(NetWorldJoinRefusalText(value)) != "the world is full") {
+			return Fail("world-full-refusal-missing: the refusal report parsed as kind " + std::to_string(static_cast<int>(kind)) +
+			            " value " + std::to_string(value));
+		}
+		// The directory row carries the count a browser needs to tell "full" from "closed".
+		NetDirectoryRegisterRequest row;
+		row.name = "world";
+		row.activity = "Persistent World";
+		row.scene = "Grasslands";
+		row.mode = "coop-pve";
+		row.joinMode = "ip";
+		row.listenPort = 8123;
+		row.listenAddrs = {"127.0.0.1"};
+		row.persistentWorld = true;
+		row.worldId = c_WorldId;
+		row.worldBoot = 1;
+		row.seatsFree = 0;
+		row.spectatorFree = 4;
+		NetDirectoryRegisterRequest back;
+		std::string reason;
+		if (!NetDirectoryCodec::DecodeRegisterRequest(NetDirectoryCodec::EncodeRegisterRequest(row), back, reason) ||
+		    back.spectatorFree != 4 || back.seatsFree != 0) {
+			return Fail("world-row-lost-its-spectator-count: the row read back seats " + std::to_string(back.seatsFree) +
+			            " watchers " + std::to_string(back.spectatorFree) + " (" + reason + ")");
+		}
+		NetDirectoryRegisterRequest ordinary = row;
+		ordinary.persistentWorld = false;
+		ordinary.worldId.clear();
+		ordinary.worldBoot = 0;
+		if (NetDirectoryCodec::EncodeRegisterRequest(ordinary).find("spectator_free") != std::string::npos) {
+			return Fail("world-row-lost-its-spectator-count: an ordinary row carried spectator_free");
+		}
+		NetDirectoryHeartbeatRequest beat;
+		beat.token = "t";
+		beat.peerCount = 3;
+		beat.seatsFree = 0;
+		beat.spectatorFree = 2;
+		NetDirectoryHeartbeatRequest beatBack;
+		if (!NetDirectoryCodec::DecodeHeartbeatRequest(NetDirectoryCodec::EncodeHeartbeatRequest(beat), beatBack, reason) ||
+		    !beatBack.spectatorFree.has_value() || *beatBack.spectatorFree != 2) {
+			return Fail("world-row-lost-its-spectator-count: a beat lost its watcher count (" + reason + ")");
+		}
+		NetDirectoryHeartbeatRequest silent = beat;
+		silent.spectatorFree.reset();
+		if (!NetDirectoryCodec::DecodeHeartbeatRequest(NetDirectoryCodec::EncodeHeartbeatRequest(silent), beatBack, reason) ||
+		    beatBack.spectatorFree.has_value()) {
+			return Fail("world-row-lost-its-spectator-count: a beat that named no watcher count carried one");
+		}
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -2824,6 +2974,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "overflow") == 0 || std::strcmp(name, "-net-world-overflow-selftest") == 0) {
+			s_FailTag = "net-world-overflow-selftest";
+			return TestSpectatorOverflowIsBounded();
+		}
 		if (std::strcmp(name, "capacity") == 0 || std::strcmp(name, "-net-world-capacity-selftest") == 0) {
 			s_FailTag = "net-world-capacity-selftest";
 			return TestWorldCapacityRidesTheV5Config();
@@ -2940,6 +3094,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestSpectatorOverflowIsBounded(); result != 0) {
 			return result;
 		}
 		if (const int result = TestWorldCapacityRidesTheV5Config(); result != 0) {

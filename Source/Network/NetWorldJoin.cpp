@@ -534,13 +534,22 @@ namespace RTE {
 		return chunk;
 	}
 
+	const char* NetWorldJoinRefusalText(uint64_t code) {
+		switch (static_cast<NetWorldJoinRefusal>(code)) {
+			case NetWorldJoinRefusal::WorldFull: return "the world is full";
+			case NetWorldJoinRefusal::None: break;
+		}
+		return "the world refused the join";
+	}
+
 	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value) {
 		if (chunk.transferId != c_NetWorldReportTransferId || chunk.bytes.size() != 9 || chunk.totalBytes != 9 ||
 		    chunk.chunkCount != 1 || chunk.chunkIndex != 0) {
 			return false;
 		}
 		kind = chunk.bytes[0];
-		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate) {
+		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate &&
+		    kind != c_NetWorldReportRefused) {
 			return false;
 		}
 		value = 0;
@@ -989,6 +998,43 @@ namespace RTE {
 		return 0;
 	}
 
+	size_t NetWorldJoinHost::SpectatorCount() const {
+		return static_cast<size_t>(std::count_if(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
+			return session.spectator && session.phase != NetWorldJoinPhase::Failed;
+		}));
+	}
+
+	size_t NetWorldJoinHost::SpectatorBound() const {
+		// The host's configured bound, held under the pool of lobby ids a spectator can be bound on.
+		return std::min<size_t>(m_Config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
+	}
+
+	size_t NetWorldJoinHost::SpectatorsFree() const {
+		const size_t bound = SpectatorBound();
+		const size_t live = SpectatorCount();
+		return live >= bound ? 0 : bound - live;
+	}
+
+	bool NetWorldJoinHost::NoteRefusal(NetPeerId connection, NetWorldJoinRefusal refusal) {
+		for (auto& entry: m_Refused) {
+			if (entry.first == connection) {
+				entry.second = refusal;
+				return false;
+			}
+		}
+		m_Refused.emplace_back(connection, refusal);
+		return true;
+	}
+
+	NetWorldJoinRefusal NetWorldJoinHost::RefusalOf(NetPeerId connection) const {
+		for (const auto& entry: m_Refused) {
+			if (entry.first == connection) {
+				return entry.second;
+			}
+		}
+		return NetWorldJoinRefusal::None;
+	}
+
 	NetWorldJoinSession* NetWorldJoinHost::Find(NetPeerId connection) {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) { return session.connection == connection; });
 		return found == m_Sessions.end() ? nullptr : &*found;
@@ -1033,8 +1079,18 @@ namespace RTE {
 			slot = m_Membership.FirstFreeSlot();
 		}
 		if (slot == nullptr) {
+			// Every team is at capacity, so this connection watches - but only while the host's bound
+			// leaves room. Past it the world turns it away here, before a byte of image is read.
+			if (SpectatorsFree() == 0) {
+				if (error) *error = NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull));
+				return false;
+			}
 			session.spectator = true;
 			session.spectatorLobbyPeer = AllocateSpectatorLobbyPeer();
+			if (session.spectatorLobbyPeer == 0) {
+				if (error) *error = NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull));
+				return false;
+			}
 			session.phase = NetWorldJoinPhase::SnapshotTransfer;
 			m_Sessions.push_back(std::move(session));
 			return true;
@@ -1298,6 +1354,10 @@ namespace RTE {
 			// to return to the pool.
 			CancelJoin(connection, "the connection left before it activated");
 		}
+		// A refused connection that has gone is forgotten, so its next visit is answered fresh.
+		std::erase_if(m_Refused, [&](const auto& entry) {
+			return std::find(liveConnections.begin(), liveConnections.end(), entry.first) == liveConnections.end();
+		});
 		return lost.size();
 	}
 
@@ -1331,6 +1391,7 @@ namespace RTE {
 			{"activations", m_ActivationsCommitted},
 			{"joins_cancelled", m_JoinsCancelled},
 			{"image", {{"tick", m_Image.tick}, {"bytes", m_Image.bytes}, {"digest", m_Image.digest}, {"capture_ms", m_Image.captureMs}}},
+			{"spectators", {{"live", SpectatorCount()}, {"bound", SpectatorBound()}, {"free", SpectatorsFree()}}},
 			{"tail", {{"first", m_Tail.FirstFrame()}, {"last", m_Tail.LastFrame()}, {"count", m_Tail.Count()}, {"bytes", m_Tail.Bytes()}, {"evicted", m_Tail.Evicted()}}},
 			{"sessions", std::move(sessions)},
 		};
@@ -1343,6 +1404,7 @@ namespace RTE {
 		m_Identity = NetWorldIdentity{};
 		m_Config = NetMatchConfig{};
 		m_Sessions.clear();
+		m_Refused.clear();
 		m_Image = NetWorldCheckpointImage{};
 		m_Tail.Clear();
 		m_Metrics.Reset();

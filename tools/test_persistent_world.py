@@ -67,6 +67,11 @@ RED_REPLAY_TABLE_DIVERGED = "replayed-member-table-diverged-from-the-live-table"
 RED_IMAGE_BEFORE_WRITE = "world-image-published-before-the-archive-was-written"
 RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
 RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
+RED_OVERFLOW_REFUSAL = "world-full-refusal-missing"
+RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
+RED_OVERFLOW_ADMITTED = "world-admitted-past-its-bound"
+RED_OVERFLOW_SEATS = "world-seats-refused-below-capacity"
+RED_OVERFLOW_ROW = "world-row-lost-its-spectator-count"
 RED_CAPACITY_MOVED_ORDINARY = "world-capacity-moved-an-ordinary-config"
 RED_CAPACITY_HASH = "world-capacity-left-the-v5-hash"
 RED_CAPACITY_UNBOUNDED = "world-capacity-decoded-past-its-bound"
@@ -298,6 +303,18 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "spectator-overflow-is-bounded",
+        "argv": ["-net-world-overflow-selftest"],
+        "red": RED_OVERFLOW_REFUSAL,
+        "also_red": (
+            RED_OVERFLOW_BOUND,
+            RED_OVERFLOW_ADMITTED,
+            RED_OVERFLOW_SEATS,
+            RED_OVERFLOW_ROW,
+        ),
+        "pass_token": "[net-world-overflow-selftest] PASS",
     },
     {
         "name": "world-capacity-rides-the-v5-config",

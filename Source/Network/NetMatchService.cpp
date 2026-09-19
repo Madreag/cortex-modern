@@ -561,6 +561,7 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeSessionId = matchConfig.worldId;
 					// The previous boot's row token, so this boot resumes the world's own row.
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
+				m_DirectoryRow.spectatorFree = matchConfig.worldMaxSpectators;
 				}
 			}
 			m_DirectoryRetracted = false;
@@ -1628,6 +1629,7 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 				m_DirectoryRow.seatsFree = directorySeatsFree;
+				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
 				// A register receives a new id; only the existing bound row can advertise ICE.
@@ -2155,6 +2157,7 @@ static std::string ResyncSaveName() {
 			liveConnections.push_back(peer.transportPeerId);
 		}
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
+		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 				continue;
@@ -2166,7 +2169,21 @@ static std::string ResyncSaveName() {
 			if (stableSeat == 0) {
 				continue;
 			}
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, nullptr)) {
+			if (m_WorldJoin.RefusalOf(peer.transportPeerId) != NetWorldJoinRefusal::None) {
+				continue;
+			}
+			std::string joinError;
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError)) {
+				// A world with no seat and no watcher slot answers the connection once, before it has
+				// read a byte of image, with the reason the joiner shows.
+				if (joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) &&
+				    m_WorldJoin.NoteRefusal(peer.transportPeerId, NetWorldJoinRefusal::WorldFull) && m_Runner) {
+					NetLobbySession& lobby = m_Runner->GetLobbySession();
+					const uint8_t refusalPeer = c_WorldSpectatorLobbyPeerFirst;
+					(void)lobby.BindLateRemote(refusalPeer, peer.transportPeerId, nullptr);
+					(void)lobby.SendPayloadTo(refusalPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)), nullptr);
+					std::cout << "[net-world] refuse connection=" << peer.transportPeerId << " " << joinError << std::endl;
+				}
 				continue;
 			}
 			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
@@ -2339,7 +2356,8 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp) {
+	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal) {
+		if (outRefusal) *outRefusal = 0;
 		std::vector<uint8_t> packed = lobby.TakePendingTailBytes();
 		std::vector<NetLockstepFrame> later;
 		size_t offset = 0;
@@ -2363,6 +2381,11 @@ static std::string ResyncSaveName() {
 			ScenarioRunner::AppendWorldCatchUp(std::move(later));
 		}
 		const NetLobbySession::WorldJoinReport report = lobby.TakeWorldJoinReport();
+		if (report.pending && report.kind == c_NetWorldReportRefused) {
+			// The world turned this joiner away before any transfer; the caller ends the join.
+			if (outRefusal) *outRefusal = report.value;
+			return;
+		}
 		if (report.pending && report.kind == c_NetWorldReportActivate) {
 			catchUp.activationTick = report.value;
 			ScenarioRunner::SetWorldCatchUpActivation(report.value);
@@ -2431,7 +2454,14 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp);
+		uint64_t refusal = 0;
+		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
+		if (refusal != 0) {
+			const std::string reason = NetWorldJoinRefusalText(refusal);
+			SetState(NetMatchServiceState::Failed, "World join refused", reason);
+			std::cout << "[net-world] refused " << reason << std::endl;
+			return;
+		}
 		// The joiner's lockstep starts here, after the E-1 frame has been applied, never from inside Take.
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {

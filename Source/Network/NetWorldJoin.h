@@ -9,6 +9,7 @@
 #include <deque>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -294,6 +295,14 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportProgress = 1;
 	inline constexpr uint8_t c_NetWorldReportCatchUp = 2;
 	inline constexpr uint8_t c_NetWorldReportActivate = 3;
+	inline constexpr uint8_t c_NetWorldReportRefused = 4;
+
+	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.
+	enum class NetWorldJoinRefusal : uint64_t {
+		None = 0,
+		WorldFull = 1, //!< Every team is at capacity and the spectator bound is spent.
+	};
+	const char* NetWorldJoinRefusalText(uint64_t code);
 
 	/// SHA-256 of the published archive bytes, lowercase hex.
 	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size);
@@ -350,6 +359,17 @@ namespace RTE {
 		bool IsConfigured() const { return m_Identity.IsValid(); }
 		const NetWorldIdentity& Identity() const { return m_Identity; }
 
+		/// How many live bootstraps are watching rather than holding a slot.
+		size_t SpectatorCount() const;
+		/// The spectator bound this world was configured with, never wider than the lobby-id pool.
+		size_t SpectatorBound() const;
+		/// Watchers the world could still admit right now; what the directory row advertises.
+		size_t SpectatorsFree() const;
+		/// Records that a connection was turned away, so the world answers it once instead of
+		/// reopening the same refusal every pump. Returns whether this call was the first.
+		bool NoteRefusal(NetPeerId connection, NetWorldJoinRefusal refusal);
+		/// The refusal a connection already carries; None when it was never turned away.
+		NetWorldJoinRefusal RefusalOf(NetPeerId connection) const;
 		/// Opens a bootstrap for an authenticated connection. Refuses a second one for the same
 		/// connection rather than opening a parallel transfer.
 		/// @param nowMs The host's admission clock, so a stalled transfer can expire.
@@ -424,6 +444,7 @@ namespace RTE {
 		NetWorldMetrics m_Metrics;
 		NetWorldCheckpointImage m_Image;
 		std::vector<NetWorldJoinSession> m_Sessions;
+		std::vector<std::pair<NetPeerId, NetWorldJoinRefusal>> m_Refused; //!< Connections already turned away.
 		uint64_t m_SentInputThrough = 0; //!< The round's highest sent target, from the coordinator.
 		uint64_t m_ActivationsCommitted = 0;
 		uint64_t m_JoinsCancelled = 0;
