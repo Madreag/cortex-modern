@@ -1204,9 +1204,21 @@ local function visitAt(value, ctx, location)
 	return token
 end
 
+-- A node the state does not number (userdata, closures, upvalue cells, coroutines) is named above
+-- the state's counter, so it cannot meet a table's birth number and every id in one archive is unique.
 local function newId(ctx)
+	ctx.spare = ctx.spare + 1
+	return ctx.base + ctx.spare
+end
+
+local function noteNode(ctx, id, text)
+	if ctx.nodes[id] then
+		problem(ctx, "two objects share the node id " .. tostring(id))
+		return
+	end
+	ctx.nodes[id] = text
+	ctx.order[#ctx.order + 1] = id
 	ctx.count = ctx.count + 1
-	return ctx.count
 end
 
 -- Owned values are nodes, so two fields holding one Vector share it again after the restore.
@@ -1214,7 +1226,7 @@ local function userdataNode(value, ctx, payload)
 	local id = newId(ctx)
 	ctx.ids[value] = id
 	local instance = _ScriptGraphInstance(value)
-	ctx.nodes[id] = "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx)
+	noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx))
 	return "#" .. outputNumber(id) .. ";"
 end
 
@@ -1258,28 +1270,28 @@ local function visitUserdata(value, ctx)
 				if not typedOnly then payload = payload .. stringToken(native[7]) end
 			end
 		end
-		ctx.nodes[id] = "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+		noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "gib-ref" then
 		local owner, index = _ScriptGraphGibOwner(value)
 		if not owner then problem(ctx, "a Gib whose owner is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. outputNumber(id) .. ";i" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		noteNode(ctx, id, "U" .. outputNumber(id) .. ";i" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "soundset-ref" then
 		local owner, index = _ScriptGraphSoundSetOwner(value)
 		if not owner then problem(ctx, "a SoundSet whose owner is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. outputNumber(id) .. ";j" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		noteNode(ctx, id, "U" .. outputNumber(id) .. ";j" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "limb-ref" then
 		local owner, index = _ScriptGraphLimbOwner(value)
 		if not owner then problem(ctx, "a LimbPath whose owning actor is missing") return "z;" end
 		local id = newId(ctx)
 		ctx.ids[value] = id
-		ctx.nodes[id] = "U" .. outputNumber(id) .. ";l" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx)
+		noteNode(ctx, id, "U" .. outputNumber(id) .. ";l" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "entity" then
 		return userdataNode(value, ctx, "e" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
@@ -1323,14 +1335,14 @@ local function visitUserdata(value, ctx)
 		if propertyOwner then
 			local id = newId(ctx)
 			ctx.ids[value] = id
-			ctx.nodes[id] = "U" .. outputNumber(id) .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+			noteNode(ctx, id, "U" .. outputNumber(id) .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return "#" .. outputNumber(id) .. ";"
 		end
 		local owner, index, constant = _ScriptGraphLimbVectorOwner(value)
 		if owner then
 			local id = newId(ctx)
 			ctx.ids[value] = id
-			ctx.nodes[id] = "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx)
+			noteNode(ctx, id, "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return "#" .. outputNumber(id) .. ";"
 		end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
@@ -1363,7 +1375,7 @@ local function visitFunction(value, ctx)
 				fields[#fields + 1] = "u" .. outputNumber(#(range.args or {})) .. ";"
 				for _, argument in ipairs(range.args or {}) do fields[#fields + 1] = visit(argument, ctx) end
 			end
-			ctx.nodes[id] = concatenate(fields)
+			noteNode(ctx, id, concatenate(fields))
 			return "#" .. outputNumber(id) .. ";"
 		end
 		for name, prototype in pairs(nativePrototypes) do
@@ -1376,7 +1388,7 @@ local function visitFunction(value, ctx)
 					if name == "gmatch" and i == 3 then upvalue = _ScriptGraphGmatchPosition(value) end
 					upvalues[#upvalues + 1] = visitAt(upvalue, ctx, (ctx.location or "function") .. ".native_upvalue[" .. i .. "]")
 				end
-				ctx.nodes[id] = "B" .. outputNumber(id) .. ";" .. stringToken(name) .. "u" .. outputNumber(#upvalues) .. ";" .. concatenate(upvalues)
+				noteNode(ctx, id, "B" .. outputNumber(id) .. ";" .. stringToken(name) .. "u" .. outputNumber(#upvalues) .. ";" .. concatenate(upvalues))
 				return "#" .. outputNumber(id) .. ";"
 			end
 		end
@@ -1409,15 +1421,15 @@ local function visitFunction(value, ctx)
 			ctx.cells[cellKey] = cellId
 			local open = ctx.openUpvalues[cellKey]
 			if open then
-				ctx.nodes[cellId] = "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";"
+				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
 			else
-				ctx.nodes[cellId] = "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]")
+				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]"))
 			end
 		end
 		cells[#cells + 1] = "c" .. outputNumber(cellId) .. ";"
 	end
 	parts[#parts + 1] = "u" .. outputNumber(#cells) .. ";" .. concatenate(cells)
-	ctx.nodes[id] = "F" .. outputNumber(id) .. ";" .. concatenate(parts)
+	noteNode(ctx, id, "F" .. outputNumber(id) .. ";" .. concatenate(parts))
 	return "#" .. outputNumber(id) .. ";"
 end
 
@@ -1426,7 +1438,12 @@ local function visitTable(value, ctx)
 	if id then return "#" .. outputNumber(id) .. ";" end
 	local path = ctx.paths[value]
 	if path and ctx.engine[value] then return pathToken(path) end
-	id = newId(ctx)
+	-- The table's birth number is its name in the archive, whoever walks it and whenever.
+	id = _ScriptGraphTableSerial(value)
+	if id < 1 or id > ctx.base then
+		problem(ctx, "a table with no birth number")
+		return "z;"
+	end
 	ctx.ids[value] = id
 	if _ScriptGraphNoteTable then _ScriptGraphNoteTable(value) end
 	local parts = { path and ("P" .. pathToken(path)) or "P-;" }
@@ -1440,7 +1457,7 @@ local function visitTable(value, ctx)
 		body[#body + 1] = visitAt(rawget(value, key), ctx, (ctx.location or "table") .. "[" .. label .. "]")
 	end
 	parts[#parts + 1] = "k" .. outputNumber(#keys) .. ";" .. concatenate(body)
-	ctx.nodes[id] = "T" .. outputNumber(id) .. ";" .. concatenate(parts)
+	noteNode(ctx, id, "T" .. outputNumber(id) .. ";" .. concatenate(parts))
 	return "#" .. outputNumber(id) .. ";"
 end
 
@@ -1464,7 +1481,7 @@ local function visitThread(value, ctx)
 		elseif cont then entries[#entries + 1] = "K" .. stringToken(cont)
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
-	ctx.nodes[id] = "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries)
+	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
 	return "#" .. outputNumber(id) .. ";"
 end
 
@@ -1485,10 +1502,13 @@ end
 
 -- roots: { [uidString] = instanceTable }. Returns the text and the list of problems (any problem means the capture is unfaithful).
 local function serializeGraph(roots)
+	-- The capture opens before it allocates anything of its own, so its scratch never moves the counter.
+	if _ScriptGraphBeginCapture then _ScriptGraphBeginCapture() end
+	-- Every table alive now was born at or below this; nodes without a birth number are named above it.
+	local base = _ScriptGraphStateSerial()
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	local paths, engine = buildPaths(baseline)
-	if _ScriptGraphBeginCapture then _ScriptGraphBeginCapture() end
-	local ctx = { ids = {}, cells = {}, nodes = {}, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, base = base, spare = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local rootIds = {}
 	local uids = {}
 	for uid in pairs(roots) do uids[#uids + 1] = uid end
@@ -1543,10 +1563,10 @@ local function serializeGraph(roots)
 			if owner then link = { owner = owner, index = index } end
 		end
 		if link then
-			ctx.nodes[ref.id] = "U" .. outputNumber(ref.id) .. ";b" .. visit(link.owner, ctx) .. "n" .. outputNumber(link.index) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";b" .. visit(link.owner, ctx) .. "n" .. outputNumber(link.index) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance)
 		else
 			problem(ctx, "a Box reference whose owning Area is missing")
-			ctx.nodes[ref.id] = "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance)
 		end
 	end
 	local rng = _ScriptGraphRandomState and stringToken(_ScriptGraphRandomState()) or "z;"
@@ -1554,8 +1574,8 @@ local function serializeGraph(roots)
 	for _, link in ipairs(_ScriptGraphGibReferences(ctx.ownedPointers)) do
 		gibReferences[#gibReferences + 1] = "n" .. outputNumber(link.owner) .. ";n" .. outputNumber(link.index) .. ";" .. visit(link.target, ctx)
 	end
-	local out = { "SG4;", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
-	for id = 1, ctx.count do out[#out + 1] = ctx.nodes[id] end
+	local out = { "SG5;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
+	for _, id in ipairs(ctx.order) do out[#out + 1] = ctx.nodes[id] end
 	lastObjects = setmetatable({}, { __mode = "v" })
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
 	if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
@@ -1692,8 +1712,12 @@ end
 local function parse(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" then reader:bad("bad header") end
-	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {} }
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" then reader:bad("bad header") end
+	local graph = { roots = {}, globals = {}, loaded = {}, nodes = {}, order = {}, enginePatches = {}, gibReferences = {}, nativeReferences = {}, version = version }
+	if version == "SG5" then
+		reader:expect("S")
+		graph.serial = reader:integer(reader:readUntil(";"), 1)
+	end
 	local function namedList(tag, into, nameKey)
 		reader:expect(tag)
 		local names = {}
@@ -1713,7 +1737,7 @@ local function parse(text)
 			graph.enginePatches[#graph.enginePatches + 1] = { target = reader:typed("path"), changes = reader:readToken(), meta = reader:readToken() }
 		end
 	end
-	if version == "SG3" or version == "SG4" then
+	if version == "SG3" or version == "SG4" or version == "SG5" then
 		reader:expect("R")
 		graph.rng = reader:readToken()
 		if graph.rng.t ~= "nil" and graph.rng.t ~= "str" then reader:bad("invalid random state") end
@@ -1732,11 +1756,16 @@ local function parse(text)
 	end
 	reader:expect("N")
 	local count = reader:count()
+	-- SG5 names a table by its birth number, so the ids are explicit and have holes; a repeat is still bad.
+	local explicit = version == "SG5"
+	local idLimit = explicit and (graph.serial + count) or count
 	for expected = 1, count do
 		local kind = reader:peek()
 		reader.pos = reader.pos + 1
-		local id = reader:integer(reader:readUntil(";"), 1, count)
-		if id ~= expected then reader:bad("noncontiguous or duplicate node ID") end
+		local id = reader:integer(reader:readUntil(";"), 1, idLimit)
+		if explicit then
+			if graph.nodes[id] then reader:bad("noncontiguous or duplicate node ID") end
+		elseif id ~= expected then reader:bad("noncontiguous or duplicate node ID") end
 		local node = { kind = kind, id = id }
 		if kind == "T" then
 			reader:expect("P")
@@ -1765,7 +1794,7 @@ local function parse(text)
 			node.cells = {}
 			for i = 1, reader:count() do
 				reader:expect("c")
-				node.cells[i] = reader:integer(reader:readUntil(";"), 1, count)
+				node.cells[i] = reader:integer(reader:readUntil(";"), 1, idLimit)
 			end
 		elseif kind == "B" then
 			node.factory = reader:readString()
@@ -1819,12 +1848,13 @@ local function parse(text)
 			end
 		else reader:bad("unknown node kind '" .. kind .. "'") end
 		graph.nodes[id] = node
+		graph.order[#graph.order + 1] = node
 	end
 	if reader.pos ~= #text + 1 then reader:bad("trailing data") end
 	for _, ref in ipairs(reader.references) do
 		if not graph.nodes[ref.id] or graph.nodes[ref.id].kind == "C" then reader:bad("invalid object reference " .. ref.id) end
 	end
-	for _, node in ipairs(graph.nodes) do
+	for _, node in ipairs(graph.order) do
 		if node.cells then
 			for _, id in ipairs(node.cells) do
 				if not graph.nodes[id] or graph.nodes[id].kind ~= "C" then reader:bad("invalid upvalue cell reference") end
@@ -1840,7 +1870,7 @@ end
 function Graph.validate(text)
 	local graph = parse(text)
 	if graph.rng and graph.rng.t ~= "nil" and not _ScriptGraphRandomState(graph.rng.v, true) then error("script graph: invalid random state") end
-	for _, node in ipairs(graph.nodes) do
+	for _, node in ipairs(graph.order) do
 		if node.value and node.value.t == "controller-value" and not _ScriptGraphControllerState(nil, node.value.checkpoint) then error("script graph: invalid controller checkpoint") end
 		if node.value and node.value.t == "owner-ref" then
 			local value = node.value
@@ -1897,8 +1927,9 @@ function Graph.prepare(text, reuseHeld)
 	if reuseHeld and heldObjects then for id, value in pairs(heldObjects) do objects[id] = value end end
 	preparedGraph = { text = text, graph = graph, objects = objects, problems = problems }
 	local baseline = _ScriptGraphBaseline or {}
-	for id = 1, #graph.nodes do
-		local copy = graph.nodes[id].copy
+	for _, entry in ipairs(graph.order) do
+		local id = entry.id
+		local copy = entry.copy
 		if copy then
 			local bare = copy.preset == "" or copy.preset == "None"
 			local create = (baseline.values or _G)[bare and copy.class or ("Create" .. copy.class)]
@@ -2159,6 +2190,8 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			else
 				object = {}
 			end
+			-- The table takes the number the archive named it by, so a recapture names it the same.
+			if graph.serial then _ScriptGraphSetTableSerial(object, id) end
 			objects[id] = object
 		elseif node.kind == "H" then
 			objects[id] = (reuseHeld and objects[id]) or coroutine.create(function() end)
@@ -2344,6 +2377,8 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	if graph.rng and (graph.rng.t ~= "str" or not _ScriptGraphRandomState or not _ScriptGraphRandomState(graph.rng.v)) then
 		fail("the Lua state's random generator could not be restored")
 	end
+	-- The sequence carries on from where the host stood, so tables born next take the numbers it would give.
+	if graph.serial then _ScriptGraphSetStateSerial(graph.serial) end
 	return roots, problems
 end
 
@@ -2351,7 +2386,11 @@ end
 function Graph.roots(text)
 	local reader = newReader(text)
 	local version = reader:readUntil(";")
-	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" then error("script graph: bad header") end
+	if version ~= "SG1" and version ~= "SG2" and version ~= "SG3" and version ~= "SG4" and version ~= "SG5" then error("script graph: bad header") end
+	if version == "SG5" then
+		reader:expect("S")
+		reader:readUntil(";")
+	end
 	reader.pos = reader.pos + 1
 	local uids = {}
 	for _ = 1, tonumber(reader:readUntil(";")) do
@@ -3228,12 +3267,39 @@ static int ScriptGraphNoteTable(lua_State* L) {
 	return 0;
 }
 
+// A table's number and the state's counter are the archive's identities; scripts never see them.
+static int ScriptGraphTableSerial(lua_State* L) {
+	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_tab_serial(L, 1)));
+	return 1;
+}
+
+static int ScriptGraphSetTableSerial(lua_State* L) {
+	luaJIT_set_tab_serial(L, 1, static_cast<uint64_t>(luaL_checknumber(L, 2)));
+	return 0;
+}
+
+static int ScriptGraphStateSerial(lua_State* L) {
+	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_state_tab_serial(L)));
+	return 1;
+}
+
+// The archive is the authority on where the sequence stands, so a restored peer counts on from the host.
+static int ScriptGraphSetStateSerial(lua_State* L) {
+	const lua_Number serial = luaL_checknumber(L, 1);
+	if (serial > 0) luaJIT_set_state_tab_serial(L, static_cast<uint64_t>(serial));
+	return 0;
+}
+
 static int ScriptGraphBeginRoot(lua_State* L) {
 	CheckpointGraphIndex::Get().BeginRoot(static_cast<uint64_t>(std::strtoull(luaL_optstring(L, 1, "0"), nullptr, 10)));
 	return 0;
 }
 
+// The scratch tables a capture allocates are its own, so the state's counter is put back afterwards.
+static uint64_t s_SerialBeforeCapture = 0;
+
 static int ScriptGraphBeginCapture(lua_State* L) {
+	s_SerialBeforeCapture = luaJIT_state_tab_serial(L);
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
@@ -3259,6 +3325,8 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 }
 
 static int ScriptGraphEndCapture(lua_State* L) {
+	if (s_SerialBeforeCapture > 0) luaJIT_set_state_tab_serial(L, s_SerialBeforeCapture);
+	s_SerialBeforeCapture = 0;
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	return 0;
@@ -4934,6 +5002,14 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphNoteTable");
 		lua_pushcfunction(m_State, ScriptGraphBeginRoot);
 		lua_setglobal(m_State, "_ScriptGraphBeginRoot");
+		lua_pushcfunction(m_State, ScriptGraphTableSerial);
+		lua_setglobal(m_State, "_ScriptGraphTableSerial");
+		lua_pushcfunction(m_State, ScriptGraphSetTableSerial);
+		lua_setglobal(m_State, "_ScriptGraphSetTableSerial");
+		lua_pushcfunction(m_State, ScriptGraphStateSerial);
+		lua_setglobal(m_State, "_ScriptGraphStateSerial");
+		lua_pushcfunction(m_State, ScriptGraphSetStateSerial);
+		lua_setglobal(m_State, "_ScriptGraphSetStateSerial");
 		lua_pushcfunction(m_State, ScriptGraphBeginCapture);
 		lua_setglobal(m_State, "_ScriptGraphBeginCapture");
 		lua_pushcfunction(m_State, ScriptGraphEndCapture);
