@@ -95,7 +95,8 @@ namespace RTE {
 			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
-			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
+			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
+			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
 		}
 
 		std::vector<std::pair<std::string, std::string>> RuleFields(const NetMatchConfig& config) {
@@ -224,6 +225,7 @@ namespace RTE {
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");
 		if (config.autosaveEnabled && config.autosaveIntervalSeconds == 0) return refuse("enabled autosave requires a nonzero interval");
 		if (config.idleWaitMinutes > 60) return refuse("idle_wait_minutes is out of range");
+		if (config.frameRedundancyTicks < 1 || config.frameRedundancyTicks > c_MaxFrameRedundancyTicks) return refuse("frame_redundancy_ticks is out of range");
 		if (config.delayPolicy != NetMatchDelayPolicy::Auto && config.delayPolicy != NetMatchDelayPolicy::Fixed) return refuse("delay_policy is invalid");
 		if (config.mode != NetMatchMode::PvPSkirmish && config.mode != NetMatchMode::CoopPvE && config.mode != NetMatchMode::PvPvE) return refuse("match mode is invalid");
 		if (!ValidateModule(config.activityModule, "activity_module", error) || !ValidateModule(config.sceneModule, "scene_module", error)) return false;
@@ -367,6 +369,10 @@ namespace RTE {
 		// Only the true case rides the hash, so every pre-existing config keeps its value.
 		if (config.dedicated) {
 			fields.emplace_back("dedicated", "true");
+		}
+		// Same for the redundancy window: only a host's non-default choice rides it.
+		if (config.frameRedundancyTicks != c_DefaultFrameRedundancyTicks) {
+			fields.emplace_back("frame_redundancy_ticks", std::to_string(config.frameRedundancyTicks));
 		}
 		if (config.version >= 3) {
 			const auto rules = RuleFields(config);
