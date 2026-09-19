@@ -674,6 +674,12 @@ namespace RTE {
 			row.port = static_cast<uint16_t>(session.listenPort);
 			row.sessionId = session.sessionId;
 			row.persistentWorld = session.persistentWorld;
+			row.worldBoot = session.worldBoot;
+			row.state = session.state;
+			row.seatsFree = session.seatsFree;
+			row.peerCount = session.peerCount;
+			row.spectatorFree = session.spectatorFree;
+			row.spectatorMax = session.spectatorMax;
 			std::string why;
 			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
 			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
@@ -689,6 +695,22 @@ namespace RTE {
 			rows.push_back(std::move(row));
 		}
 		return rows;
+	}
+
+	std::string NetDirectoryClient::DescribeGameRow(const GameRow& row) {
+		const std::string refusal = row.joinable ? std::string() : " [" + row.reason + "]";
+		if (!row.persistentWorld) {
+			return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ") " +
+			       row.address + ":" + std::to_string(row.port) + refusal;
+		}
+		// A world is judged by its boot, whether it is up, and what it still has room for; its address
+		// says nothing a player acts on because a world is reached through its own row.
+		const int64_t taken = std::max<int64_t>(0, row.peerCount - row.seatsFree);
+		return "[" + row.source + "] " + row.name + " - World - boot " + std::to_string(row.worldBoot) +
+		       " - " + (row.state.empty() ? std::string("unknown") : row.state) +
+		       " - seats " + std::to_string(taken) + "/" + std::to_string(row.peerCount) +
+		       " - watchers " + std::to_string(row.spectatorFree) + "/" + std::to_string(row.spectatorMax) +
+		       (row.joinable ? " - joinable" : refusal);
 	}
 
 	const char* NetDirectoryClient::StateName(State state) {

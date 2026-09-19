@@ -243,6 +243,10 @@ namespace RTE {
 			    !ReadInt(obj, "spectator_free", 0, NetDirectoryLimits::c_MaxIntField, out.spectatorFree, reason)) {
 				return false;
 			}
+			if (obj.contains("spectator_max") &&
+			    !ReadInt(obj, "spectator_max", 0, NetDirectoryLimits::c_MaxIntField, out.spectatorMax, reason)) {
+				return false;
+			}
 			if (obj.contains("resume_session_id") && !ReadStr(obj, "resume_session_id", out.resumeSessionId, reason)) {
 				return false;
 			}
@@ -276,6 +280,7 @@ namespace RTE {
 				obj["world_boot"] = in.worldBoot;
 				// A full world still takes watchers, so a browser can tell "full" from "closed".
 				obj["spectator_free"] = in.spectatorFree;
+				obj["spectator_max"] = in.spectatorMax;
 			}
 		}
 
@@ -303,6 +308,7 @@ namespace RTE {
 			out.worldId = std::move(fields.worldId);
 			out.worldBoot = fields.worldBoot;
 			out.spectatorFree = fields.spectatorFree;
+			out.spectatorMax = fields.spectatorMax;
 			return ReadStr(obj, "session_id", out.sessionId, reason) &&
 			       ReadInt(obj, "age_s", 0, std::numeric_limits<int64_t>::max(), out.ageS, reason) &&
 			       ReadStr(obj, "observed_ip", out.observedIp, reason) &&

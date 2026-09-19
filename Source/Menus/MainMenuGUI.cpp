@@ -4011,10 +4011,7 @@ void MainMenuGUI::RefreshGamesList() {
 			}
 		}
 	}
-	const auto describe = [](const NetDirectoryClient::GameRow& row) {
-		return "[" + row.source + "] " + row.name + " - " + row.activity + " (" + row.players + ") " + row.address + ":" + std::to_string(row.port) +
-		       (row.joinable ? "" : " [" + row.reason + "]");
-	};
+	const auto describe = [](const NetDirectoryClient::GameRow& row) { return NetDirectoryClient::DescribeGameRow(row); };
 	bool changed = rows.size() != m_GameRows.size();
 	for (size_t i = 0; !changed && i < rows.size(); ++i) {
 		changed = describe(rows[i]) != describe(m_GameRows[i]);

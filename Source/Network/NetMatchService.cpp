@@ -599,6 +599,7 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
 					// Nothing is connected yet, so every watcher slot the world offers is free.
 					m_DirectoryRow.spectatorFree = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
+					m_DirectoryRow.spectatorMax = static_cast<int64_t>(WorldSpectatorBound(matchConfig));
 				}
 			}
 			if (request.host && !request.resumeMatchId.empty()) {

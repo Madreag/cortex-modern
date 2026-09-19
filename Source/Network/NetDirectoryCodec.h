@@ -47,6 +47,7 @@ namespace RTE {
 		std::string worldId;
 		int64_t worldBoot = 0;
 		int64_t spectatorFree = 0; //!< Watchers a full world could still admit. A world's field only.
+		int64_t spectatorMax = 0;  //!< The watcher capacity those free slots are counted against.
 		std::string resumeSessionId; //!< The existing match row or a world's durable UUID.
 		std::string resumeToken;     //!< The row's current token, the proof a resume may take it over.
 
@@ -128,6 +129,7 @@ namespace RTE {
 		std::string worldId;
 		int64_t worldBoot = 0;
 		int64_t spectatorFree = 0;
+		int64_t spectatorMax = 0;
 
 		bool operator==(const NetDirectorySessionRow&) const = default;
 	};
