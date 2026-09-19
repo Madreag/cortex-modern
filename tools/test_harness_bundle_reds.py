@@ -69,14 +69,19 @@ class GenerateObserverRepo(unittest.TestCase):
         self.assertEqual(header.read_bytes(), before)
 
     def test_refuses_to_drop_hand_fields(self):
-        """ENGINE 94 is a separate lane; dropped Field/Visit lines must abort the write."""
+        """A hand Field/Visit line the generator cannot emit must abort the write."""
         import hashlib
         import json
 
-        existing = 'void Visit(const Actor::DeferredWaypoint& object, const std::string& path) {\nField(path + ".ACraft.m_OffWireHatchTick", object.m_OffWireHatchTick);\n'
-        generated = 'void Visit(const Actor& object, const std::string& path) {\n'
-        self.assertTrue(hand_fields(existing) - hand_fields(generated))
-        inventory = json.loads(Path(DEFAULT_INVENTORY).read_text(encoding="utf-8"))
+        # ContractAuditCanary names no inventory class and appears in no definition, so nothing emits these.
+        existing = ('void Visit(const ContractAuditCanary& object, const std::string& path) {\n'
+                    'Field(path + ".ContractAuditCanary.m_HandWrittenOnly", object.m_HandWrittenOnly);\n')
+        definitions = (HERE / "contracts" / "observer_definitions.py").read_text(encoding="utf-8")
+        inventory_text = Path(DEFAULT_INVENTORY).read_text(encoding="utf-8")
+        for line in hand_fields(existing):
+            self.assertNotIn(line, definitions)
+        self.assertNotIn("ContractAuditCanary", inventory_text)
+        inventory = json.loads(inventory_text)
         with tempfile.TemporaryDirectory() as tmp:
             tree = Path(tmp)
             for data in inventory["classes"].values():
