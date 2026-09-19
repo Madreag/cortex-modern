@@ -50,8 +50,8 @@ namespace RTE {
 		}
 		armed = false;
 		std::string error;
-		if (!service.ResyncMatch(&error)) {
-			refusal = "Repair refused - " + error;
+		if (!service.RequestHostRepair(&error)) {
+			refusal = error.empty() ? "Repair refused" : "Repair refused - " + error;
 			return false;
 		}
 		return true;
