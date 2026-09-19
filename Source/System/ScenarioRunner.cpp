@@ -2128,6 +2128,9 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::ArmLockstepWorldSegment(const NetWorldSegmentHeader& header, const std::string& path) {
+		// A checkpoint that arrives while the previous one's archive is still unwritten takes the chain
+		// over; the frames that waited are said to be lost rather than dropped in silence.
+		DropPendingLockstepWorldSegment("the next checkpoint at tick " + std::to_string(header.tick) + " arrived first");
 		// The previous segment ends here: it is closed with its end marker before the next one starts,
 		// so a reader tells a finished segment from a host that died mid-write.
 		CloseLockstepReplayRecord();
