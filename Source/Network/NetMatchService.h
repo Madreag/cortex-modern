@@ -710,6 +710,7 @@ namespace RTE {
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
+		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
