@@ -1686,7 +1686,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			// A returned lobby publishes immediately even though it has played a round.
 			m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 		}
-		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
+		if (refusal.empty() && m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
 			m_HostOptionsAwaitedRevision = 0;
 			m_HostOptionsStatusLabel->SetText("Applied: this lobby was republished.");
 		}
