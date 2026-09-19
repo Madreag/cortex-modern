@@ -61,6 +61,16 @@
 
 using namespace RTE;
 
+std::string GameActivity::s_LastFundsReadout[Players::MaxPlayerCount];
+
+const std::string& GameActivity::GetLastFundsReadout(int player) {
+	static const std::string empty;
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return empty;
+	}
+	return s_LastFundsReadout[player];
+}
+
 // A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
 static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
 	NetGameAIOrder order;
@@ -795,8 +805,8 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	// Add the new Delivery to the queue
 	m_Deliveries[order.team].push_back(newDelivery);
 
-	// Deduct cost from team's funds
 	m_TeamFunds[order.team] -= order.totalCost;
+	AdoptPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 
 	// Go 'ding!', but only if player is human, or it may be confusing
 	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && IsLocalHumanSeat(order.orderedByPlayer))
@@ -2886,7 +2896,8 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	if (pIcon)
 		draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MAX(2, g_CameraMan.GetScreenOcclusion(which).m_X + 2), 2);
 	// Gold
-	std::snprintf(str, sizeof(str), "%c Funds: %.10g oz", TeamFundsChanged(which) ? -57 : -58, std::floor(GetTeamFunds(m_Team[PoS])));
+	std::snprintf(str, sizeof(str), "%c Funds: %s oz", TeamFundsChanged(which) ? -57 : -58, DescribeFundsReadout(m_Team[PoS], PoS).c_str());
+	s_LastFundsReadout[PoS] = str;
 	g_FrameMan.GetLargeFont()->DrawAligned(&pBitmapInt, MAX(16, g_CameraMan.GetScreenOcclusion(which).m_X + 16), yTextPos, str, GUIFont::Left);
 	/* Not applicable anymore to the 4-team games
 	    // Body losses
