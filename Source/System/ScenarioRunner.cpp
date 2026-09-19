@@ -1736,17 +1736,27 @@ namespace RTE {
 		return true;
 	}
 
+	AutosaveSideState ScenarioRunner::CaptureAgreedSideState() {
+		AutosaveSideState agreed;
+		agreed.controlOwners = s_LockstepControlOverrides;
+		agreed.droppedControlOwners = s_LockstepDroppedControlOverrides;
+		agreed.appliedCommands = s_AppliedCommandSequences;
+		agreed.firstTransferUid = s_E2eFirstTransferUid;
+		return agreed;
+	}
+
 	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
 		captured.sessionId = s_LockstepCoordinator->GetConfig().sessionId;
 		captured.sourceRound = s_LockstepCoordinator->GetRoundId();
 		captured.savedTick = savedTick;
-		captured.controlOwners = s_LockstepControlOverrides;
-		captured.droppedControlOwners = s_LockstepDroppedControlOverrides;
-		captured.e2eFirstTransferUid = s_E2eFirstTransferUid;
+		const AutosaveSideState agreed = CaptureAgreedSideState();
+		captured.controlOwners = agreed.controlOwners;
+		captured.droppedControlOwners = agreed.droppedControlOwners;
+		captured.e2eFirstTransferUid = agreed.firstTransferUid;
 		captured.playerBindings = s_PeerPlayerBindings;
-		captured.appliedCommands = s_AppliedCommandSequences;
+		captured.appliedCommands = agreed.appliedCommands;
 		if (const Activity* activity = g_ActivityMan.GetActivity()) {
 			auto& own = captured.playerBindings[GetLockstepLocalPeerId()];
 			own.frame = savedTick;

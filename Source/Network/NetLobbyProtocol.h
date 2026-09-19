@@ -148,6 +148,9 @@ namespace RTE {
 		uint64_t savedTick = 0;
 		std::string matchId;
 		std::string digest; //!< The checkpoint's world-structure digest, as the descriptor records it.
+		/// The hash of that tick's agreed lockstep state, so a peer proves it holds the same state to
+		/// resume on and not merely a checkpoint of the same tick.
+		std::string sideStateHash;
 
 		bool operator==(const NetLobbyResume&) const = default;
 	};

@@ -1185,6 +1185,7 @@ namespace RTE {
 		offer.savedTick = m_Config.resumeTick;
 		offer.matchId = m_Config.resumeMatchId;
 		offer.digest = m_Config.resumeDigest;
+		offer.sideStateHash = m_Config.resumeSideStateHash;
 		std::string error;
 		(void)SendTo(m_RemoteTransports.at(peerId), offer, &error);
 	}
@@ -1214,6 +1215,7 @@ namespace RTE {
 		answer.savedTick = message.savedTick;
 		answer.matchId = message.matchId;
 		answer.digest = message.digest;
+		answer.sideStateHash = message.sideStateHash;
 		m_ResumeAnsweredHeld = answer.held;
 		std::string error;
 		(void)SendTo(m_RemoteTransports.at(message.peerId), answer, &error);

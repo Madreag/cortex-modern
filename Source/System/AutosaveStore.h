@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,6 +37,18 @@ namespace RTE {
 		bool resumable = false;
 	};
 
+	/// The lockstep state every peer of a match agrees on at a committed tick: who controls which actor,
+	/// which of those handoffs belong to seats that dropped, how far each sender's commands have been
+	/// applied, and the first owner transfer of the round. Every peer holds the same values at the same
+	/// tick, so each peer stamps its own checkpoint with them and a restart hands every peer one state.
+	struct AutosaveSideState {
+		std::map<int64_t, uint8_t> controlOwners;
+		std::map<int64_t, uint8_t> droppedControlOwners;
+		std::map<uint8_t, uint64_t> appliedCommands;
+		int64_t firstTransferUid = 0;
+		bool operator==(const AutosaveSideState&) const = default;
+	};
+
 	/// What a restarted host needs beside the world to reopen the match the checkpoints were written
 	/// under: the agreed configuration exactly as the peers hashed it, and who was playing it. The
 	/// payload is opaque here - the network layer owns the lobby encoding - so the store keeps the bytes
@@ -53,6 +66,7 @@ namespace RTE {
 		std::string activityPreset;
 		std::string scenePreset;
 		std::vector<std::string> peerNames;
+		AutosaveSideState sideState; //!< The agreed lockstep state of that committed tick.
 		std::filesystem::path path; //!< Where it was found; never part of the stored text.
 	};
 
@@ -76,6 +90,8 @@ namespace RTE {
 		std::string configHash;
 		std::string configPayload;
 		std::vector<std::string> peerNames;
+		/// The agreed lockstep state of the tick being captured, read on the sim thread at the boundary.
+		AutosaveSideState sideState;
 		/// The agreed rewind point, read where retention runs rather than where the capture starts, so an
 		/// anchor named while a capture is in flight still protects its archive.
 		std::shared_ptr<const std::atomic<uint64_t>> pinnedTickSource;
@@ -153,6 +169,9 @@ namespace RTE {
 		static size_t ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick);
 		static size_t ApplyRetention(const std::string& matchId, uint64_t pinnedTick);
 
+		/// The one rendering of the agreed side state: the manifest is written with it and its hash is
+		/// taken over it, so a peer's answer and the host's offer are compared over the same bytes.
+		static std::string RenderSideState(const AutosaveSideState& state);
 		static std::string WriteManifest(const AutosaveManifest& manifest);
 		static bool ParseManifest(const std::string& text, AutosaveManifest& out, std::string* error = nullptr);
 		/// Publishes a checkpoint's restart manifest: written to a temporary name and renamed, so a reader

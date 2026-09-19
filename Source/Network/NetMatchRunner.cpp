@@ -537,6 +537,7 @@ namespace RTE {
 		lobbyConfig.resumeMatchId = m_Config.resumeMatchId;
 		lobbyConfig.resumeTick = m_Config.resumeTick;
 		lobbyConfig.resumeDigest = m_Config.resumeDigest;
+		lobbyConfig.resumeSideStateHash = m_Config.resumeSideStateHash;
 		lobbyConfig.resumeHeld = m_Config.resumeHeld;
 		if (!m_ActivePeerIds.empty())
 			lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);

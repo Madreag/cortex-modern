@@ -360,7 +360,13 @@ namespace RTE {
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
-		static NetResyncState BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId);
+		static NetResyncState BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId, const AutosaveSideState& sideState);
+		/// The hash a resume offer carries and a peer answers against, taken over the one rendering of
+		/// the agreed side state so both sides compare the same bytes.
+		static std::string HashSideState(const AutosaveSideState& sideState);
+		/// Whether the checkpoint a peer holds is the one the host offered: the same world at that tick
+		/// and the same agreed lockstep state to resume it on.
+		static bool ResumeOfferMatches(const NetLobbyResume& offer, const std::string& worldDigest, const std::string& sideStateHash);
 		/// Whether this peer holds the checkpoint a resumed host offers, and records it as the one to load.
 		bool AnswerResumeOffer(const NetLobbyResume& offer);
 		/// The id every peer of this match writes its checkpoints under.
