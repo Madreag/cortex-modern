@@ -1738,6 +1738,71 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestWorldLobbyRequiresPlayersInsteadOfCapacity(std::string* error) {
+			struct Case { bool world; uint8_t peers; bool bound; bool ready; bool ack; bool starts; };
+			const Case cases[] = {
+				{true, 4, true, true, true, true}, {true, 4, true, false, true, false},
+				{true, 4, false, false, false, false}, {true, 4, true, true, false, false},
+				{false, 3, true, true, true, false}, {false, 2, true, false, true, false},
+				{false, 2, true, true, true, true}};
+			uint16_t port = 43393;
+			for (const Case& row : cases) {
+				NetMatchServiceRequest request;
+				request.host = true;
+				request.dedicated = true;
+				request.persistentWorld = row.world;
+				request.activityPreset = row.world ? "Persistent World" : "P4 Alpha Duel";
+				request.peerCount = row.peers;
+				request.humans = row.peers - 1;
+				request.worldId = row.world ? "01234567-89ab-cdef-0123-456789abcdef" : "";
+				request.worldBoot = row.world ? 1 : 0;
+				NetMatchConfig config;
+				if (!NetMatchService::BuildMatchConfig(request, 42, config, error)) return false;
+				LoopbackTransport hostTransport, clientTransport;
+				NetPeerId hostRemote, clientRemote;
+				if (!StartLoopbackTransports(port++, hostTransport, clientTransport, hostRemote, clientRemote, error)) return false;
+				NetLobbySession host, client;
+				NetLobbySessionConfig hostConfig;
+				hostConfig.host = true;
+				hostConfig.localPeerId = 1;
+				hostConfig.matchConfig = config;
+				hostConfig.startFrame = 1;
+				if (row.bound) {
+					hostConfig.remotePeerId = 2;
+					hostConfig.remoteTransportPeerId = hostRemote;
+				}
+				if (!host.Start(hostTransport, hostConfig, error)) return false;
+				if (row.ack) {
+					NetLobbySessionConfig clientConfig = hostConfig;
+					clientConfig.host = false;
+					clientConfig.localPeerId = 2;
+					clientConfig.remotePeerId = 1;
+					clientConfig.remoteTransportPeerId = clientRemote;
+					clientConfig.autoReady = row.ready;
+					if (!client.Start(clientTransport, clientConfig, error)) return false;
+				} else if (row.bound) {
+					std::vector<uint8_t> bytes;
+					if (!NetLobbyProtocol::Encode({NetLobbyReady{2, row.ready}}, bytes) ||
+					    !clientTransport.Send(clientRemote, NetTransportLane::ControlReliable, bytes, error)) return false;
+				}
+				for (uint64_t now = 0; now <= 500; now += 10) {
+					host.Tick(now);
+					if (row.ack) client.Tick(now);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				if (host.IsStarted() != row.starts || host.IsFailed() || host.IsRejected() ||
+				    (row.ack && (!host.IsConfigAcked(2) || host.IsRemoteReady(2) != row.ready))) {
+					*error = "lobby occupancy: world=" + std::to_string(row.world) + " capacity=" + std::to_string(row.peers) +
+					         " bound=" + std::to_string(row.bound) + " ready=" + std::to_string(row.ready) +
+					         " ack=" + std::to_string(row.ack) + " state=" + NetLobbySession::StateName(host.GetState());
+					return false;
+				}
+			}
+			std::cout << "[net-match-selftest] PASS world lobby requires a player and every bound ack/ready, ordinary capacity unchanged" << std::endl;
+			return true;
+		}
+
 		bool TestLobbyStartsWithoutRemoteHumanSeats(std::string* error) {
 			NetMatchServiceRequest aiOnly;
 			aiOnly.host = true;
@@ -2043,6 +2108,7 @@ namespace RTE {
 			AutosaveManifest read;
 			if (!AutosaveStore::ReadManifest(scratch.path, matchId, 480, read, error)) return false;
 			if (read.configPayload != manifest.configPayload || read.configHash != manifest.configHash || read.roundId != 7 ||
+			    read.schema != 3 || read.worldBoot != manifest.worldBoot ||
 			    read.savedTick != 480 || read.intervalSeconds != 30 || read.peerNames != manifest.peerNames ||
 			    read.activityPreset != manifest.activityPreset || read.scenePreset != manifest.scenePreset) {
 				*error = "the restart manifest read back different fields than it was written with";
@@ -2108,8 +2174,13 @@ namespace RTE {
 				return false;
 			}
 			const std::string schema = std::to_string(AutosaveStore::c_ManifestSchema);
-			if (AutosaveStore::ParseManifest("ManifestSchema = " + schema + "\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = zz\n", refused)) {
+			if (AutosaveStore::ParseManifest("ManifestSchema = " + schema + "\nWorldBoot = 0\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = zz\n", refused)) {
 				*error = "a manifest whose configuration is not hex was accepted";
+				return false;
+			}
+			if (AutosaveStore::ParseManifest("ManifestSchema = 2\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused) ||
+			    AutosaveStore::ParseManifest("ManifestSchema = 3\nMatchId = " + matchId + "\nSavedTick = 480\nConfigPayload = ab\n", refused)) {
+				*error = "a manifest without a readable boot was accepted";
 				return false;
 			}
 			// A manifest from before the seats were carried cannot resume: a peer reading it would start
@@ -2173,7 +2244,7 @@ namespace RTE {
 			}
 			const bool sealed = GetNetAuthCrypto().IsRealCrypto();
 			// The pin keeps one checkpoint, so the match still has one and its admission file stays.
-			AutosaveStore::ApplyRetention(scratch.path, matchId, 240);
+			AutosaveStore::ApplyRetention(scratch.path, matchId, 240, manifest.roundId);
 			if (std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 120)) ||
 			    std::filesystem::exists(AutosaveStore::ManifestPath(scratch.path, matchId, 480))) {
 				*error = "a dropped checkpoint left its restart manifest behind";
@@ -2231,6 +2302,120 @@ namespace RTE {
 					return false;
 				}
 			}
+			return true;
+		}
+
+		bool TestWorldCheckpointOrderAndRoundPin(std::string* error) {
+			ResumeScratch scratch;
+			struct RetentionScope {
+				size_t prior = AutosaveStore::RetainedAutosaves();
+				~RetentionScope() { AutosaveStore::SetRetainedAutosaves(prior); }
+			} retention;
+			AutosaveStore::SetRetainedAutosaves(2);
+			const std::string worldId = NetWorldIdentityFile::MakeWorldId();
+			const auto publish = [&](uint64_t boot, uint64_t round, uint64_t tick) {
+				NetMatchServiceRequest request;
+				request.host = true;
+				request.dedicated = true;
+				request.persistentWorld = true;
+				request.activityPreset = "Persistent World";
+				request.worldId = worldId;
+				request.worldBoot = boot;
+				NetMatchConfig config;
+				if (!NetMatchService::BuildMatchConfig(request, MakeConfig().sessionId, config, error) ||
+				    !WriteResumeArchive(scratch.path, worldId, tick, round)) return false;
+				AutosaveManifest manifest;
+				manifest.matchId = worldId;
+				manifest.sessionId = config.sessionId;
+				manifest.roundId = round;
+				manifest.worldBoot = boot;
+				manifest.savedTick = tick;
+				manifest.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+				manifest.configPayload = ResumePayloadHex(config);
+				return AutosaveStore::PublishManifest(scratch.path, manifest, error);
+			};
+			if (!publish(7, 9000, 900) || !publish(7, 9000, 800) || !publish(8, 1, 60) || !publish(8, 1, 120) || !publish(8, 1, 180)) return false;
+			AutosaveManifest oldManifest;
+			if (!AutosaveStore::ReadManifest(scratch.path, worldId, 900, oldManifest, error)) return false;
+			std::string legacy = AutosaveStore::WriteManifest(oldManifest);
+			const std::string schemaLine = "ManifestSchema = 3\n", bootLine = "WorldBoot = 7\n";
+			if (!legacy.starts_with(schemaLine) || legacy.find(bootLine) == std::string::npos) {
+				*error = "the schema-2 fixture could not find the schema-3 boot field";
+				return false;
+			}
+			legacy.replace(0, schemaLine.size(), "ManifestSchema = 2\n");
+			legacy.erase(legacy.find(bootLine), bootLine.size());
+			{
+				std::ofstream out(AutosaveStore::ManifestPath(scratch.path, worldId, 900), std::ios::binary | std::ios::trunc);
+				out << legacy;
+			}
+			if (!AutosaveStore::ReadManifest(scratch.path, worldId, 900, oldManifest, error) ||
+			    oldManifest.schema != 2 || oldManifest.worldBoot != 7 || oldManifest.roundId != 9000) {
+				*error = "the prior manifest lost the world boot its lobby payload already carried";
+				return false;
+			}
+			AutosaveAdmission admission;
+			admission.matchId = worldId;
+			admission.generation = 1;
+			admission.sealed = {1, 2, 3};
+			if (!AutosaveStore::PublishAdmission(scratch.path, admission, error)) return false;
+			auto held = AutosaveStore::ListRestorable(scratch.path, worldId);
+			const auto ticks = [](const std::vector<AutosaveDescriptor>& entries) {
+				std::vector<uint64_t> result;
+				for (const auto& entry : entries) result.push_back(entry.savedTick);
+				return result;
+			};
+			if (ticks(held) != std::vector<uint64_t>{180, 120, 60, 900, 800} || held.front().worldBoot != 8 ||
+			    held.front().roundId != 1 || !held.front().resumable || held[3].worldBoot != 7) {
+				*error = "world checkpoint ordering preferred an old round's higher tick";
+				return false;
+			}
+			const auto resumable = AutosaveStore::ListResumable(scratch.path);
+			if (resumable.size() != 1 || resumable.front().savedTick != 180 || resumable.front().worldBoot != 8) {
+				*error = "default resume did not select the fresh world's newest checkpoint";
+				return false;
+			}
+			AutosaveStore::NoteValidated(held[3]);
+			AutosaveStore::NoteValidated(held[0]);
+			AutosaveStore::NoteValidated(held[4]);
+			const auto cached = AutosaveStore::NewestValidated(worldId);
+			if (!cached || cached->savedTick != 180 || cached->worldBoot != 8) {
+				*error = "the validated checkpoint cache ignored the fresh world's lower tick";
+				return false;
+			}
+			auto pinSource = std::make_shared<AutosavePinSource>();
+			pinSource->Store(9000, 900);
+			const std::shared_ptr<const AutosavePinSource> pendingCapturePin = pinSource;
+			pinSource->Store(1, 900);
+			const AutosavePin livePin = pendingCapturePin->Load();
+			AutosaveStore::ApplyRetention(scratch.path, worldId, livePin.tick, livePin.roundId);
+			if (ticks(AutosaveStore::ListRestorable(scratch.path, worldId)) != std::vector<uint64_t>{180, 120}) {
+				*error = "retention pruned the fresh round first or pinned a different round";
+				return false;
+			}
+			if (!publish(7, 9000, 900)) return false;
+			AutosaveStore::ApplyRetention(scratch.path, worldId, 900, 9000);
+			if (ticks(AutosaveStore::ListRestorable(scratch.path, worldId)) != std::vector<uint64_t>{180, 120, 900}) {
+				*error = "a scoped pin did not retain its own round's anchor";
+				return false;
+			}
+			std::filesystem::resize_file(AutosaveStore::ArchivePath(scratch.path, worldId, 900), 1);
+			AutosaveStore::ApplyRetention(scratch.path, worldId, 900, 9000);
+			if (!std::filesystem::exists(AutosaveStore::ArchivePath(scratch.path, worldId, 900))) {
+				*error = "a scoped pin lost its unreadable archive";
+				return false;
+			}
+			AutosaveStore::ApplyRetention(scratch.path, worldId, 900, 1);
+			if (std::filesystem::exists(AutosaveStore::ArchivePath(scratch.path, worldId, 900))) {
+				*error = "an unreadable archive inherited another round's pin";
+				return false;
+			}
+			const std::vector<AutosaveCandidate> sameBoot = {{900, true, 8, 1}, {10, true, 8, 2}, {20, true, 8, 2}};
+			if (AutosaveStore::RetainedTicks(sameBoot, 0) != std::vector<uint64_t>{20, 10}) {
+				*error = "checkpoint ordering skipped the round between boot and tick";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS fresh world checkpoint order and round-scoped pin" << std::endl;
 			return true;
 		}
 
@@ -10965,6 +11150,7 @@ namespace RTE {
 		if (!TestHostRepairEndsBeforeItsBoundary(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestWorldLobbyRequiresPlayersInsteadOfCapacity(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
@@ -11071,6 +11257,7 @@ namespace RTE {
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
+		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
 		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);
 		if (!TestResumeHeldPeerSkipsTheTransfer(&error)) return fail(error);
 		if (!TestResumePreparesTheAgreedLobby(&error)) return fail(error);

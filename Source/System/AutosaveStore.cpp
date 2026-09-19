@@ -1,6 +1,7 @@
 #include "AutosaveStore.h"
 
 #include "SaveGameArchive.h"
+#include "NetLobbyProtocol.h"
 #include "System.h"
 
 #include <algorithm>
@@ -11,10 +12,12 @@
 #include <mutex>
 #include <sstream>
 #include <system_error>
+#include <tuple>
 
 namespace RTE {
 	namespace {
 		const char* c_RequiredEntries[] = {"Index.ini", "Save Mat.png", "Save FG.png", "Save BG.png"};
+		bool FromHex(const std::string& hex, std::vector<uint8_t>& out);
 
 		std::string Trim(std::string_view text) {
 			const size_t first = text.find_first_not_of(" \t\r\n");
@@ -41,6 +44,10 @@ namespace RTE {
 
 		/// This peer's "Autosaves kept" option, applied from its settings; the store never reads them itself.
 		std::atomic<size_t> s_RetainedAutosaves{AutosaveStore::c_RetainedAutosaves};
+
+		auto CheckpointOrder(const AutosaveDescriptor& descriptor) {
+			return std::make_tuple(descriptor.worldBoot, descriptor.roundId, descriptor.savedTick);
+		}
 
 		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
 		bool WorldTick(const std::string& saveText, uint64_t& out) {
@@ -210,9 +217,11 @@ namespace RTE {
 			// it belongs to, which needs the checkpoint's manifest and the match's admission file.
 			AutosaveManifest manifest;
 			AutosaveAdmission admission;
-			descriptor.resumable = ReadManifest(path.parent_path(), descriptor.matchId, descriptor.savedTick, manifest) &&
-			                       manifest.savedTick == descriptor.savedTick && !manifest.configPayload.empty() &&
-			                       ReadAdmission(path.parent_path(), descriptor.matchId, admission);
+			const bool matchingManifest = ReadManifest(path.parent_path(), descriptor.matchId, descriptor.savedTick, manifest) &&
+			                              manifest.sessionId == descriptor.sessionId && manifest.roundId == descriptor.roundId &&
+			                              manifest.savedTick == descriptor.savedTick && !manifest.configPayload.empty();
+			if (matchingManifest) descriptor.worldBoot = manifest.worldBoot;
+			descriptor.resumable = matchingManifest && ReadAdmission(path.parent_path(), descriptor.matchId, admission);
 			out = std::move(descriptor);
 			return true;
 		} catch (const std::exception& exception) {
@@ -271,6 +280,7 @@ namespace RTE {
 		Line(out, "MatchId", manifest.matchId);
 		Line(out, "SessionId", std::to_string(manifest.sessionId));
 		Line(out, "RoundId", std::to_string(manifest.roundId));
+		Line(out, "WorldBoot", std::to_string(manifest.worldBoot));
 		Line(out, "SavedTick", std::to_string(manifest.savedTick));
 		Line(out, "SimTimeTicks", std::to_string(manifest.simTimeTicks));
 		Line(out, "IntervalSeconds", std::to_string(manifest.intervalSeconds));
@@ -285,7 +295,7 @@ namespace RTE {
 
 	bool AutosaveStore::ParseManifest(const std::string& text, AutosaveManifest& out, std::string* error) {
 		AutosaveManifest parsed;
-		bool hasSchema = false;
+		bool hasSchema = false, hasWorldBoot = false;
 		std::istringstream lines(text);
 		std::string line;
 		while (std::getline(lines, line)) {
@@ -306,6 +316,9 @@ namespace RTE {
 			} else if (key == "RoundId") {
 				if (!ParseNumber(value, number)) { if (error) *error = "unreadable RoundId"; return false; }
 				parsed.roundId = number;
+			} else if (key == "WorldBoot") {
+				if (!ParseNumber(value, parsed.worldBoot)) { if (error) *error = "unreadable WorldBoot"; return false; }
+				hasWorldBoot = true;
 			} else if (key == "SavedTick") {
 				if (!ParseNumber(value, number)) { if (error) *error = "unreadable SavedTick"; return false; }
 				parsed.savedTick = number;
@@ -356,8 +369,12 @@ namespace RTE {
 				parsed.sideState.firstTransferUid = transfer;
 			}
 		}
-		if (!hasSchema || parsed.schema != c_ManifestSchema) {
+		if (!hasSchema || (parsed.schema != c_ManifestSchema && parsed.schema != c_PreviousManifestSchema)) {
 			if (error) *error = "unsupported manifest schema " + std::to_string(parsed.schema);
+			return false;
+		}
+		if (!hasWorldBoot && parsed.schema == c_ManifestSchema) {
+			if (error) *error = "manifest has no world boot";
 			return false;
 		}
 		if (parsed.savedTick == 0 || !ValidMatchId(parsed.matchId) || parsed.configPayload.empty()) {
@@ -367,6 +384,18 @@ namespace RTE {
 		if (parsed.configPayload.size() % 2 != 0 || parsed.configPayload.find_first_not_of("0123456789abcdef") != std::string::npos) {
 			if (error) *error = "manifest configuration is not hex";
 			return false;
+		}
+		if (parsed.schema == c_PreviousManifestSchema) {
+			// Older manifests carry the boot inside the agreed lobby payload.
+			std::vector<uint8_t> bytes;
+			if (!FromHex(parsed.configPayload, bytes)) return false;
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* config = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!config) {
+				if (error) *error = "legacy manifest has no readable lobby configuration";
+				return false;
+			}
+			parsed.worldBoot = config->config.persistentWorld ? config->config.worldBoot : 0;
 		}
 		out = std::move(parsed);
 		return true;
@@ -581,7 +610,7 @@ namespace RTE {
 			if (Validate(entry.path(), descriptor)) restorable.push_back(std::move(descriptor));
 		}
 		std::sort(restorable.begin(), restorable.end(), [](const AutosaveDescriptor& left, const AutosaveDescriptor& right) {
-			return left.savedTick > right.savedTick;
+			return CheckpointOrder(left) > CheckpointOrder(right);
 		});
 		return restorable;
 	}
@@ -622,14 +651,18 @@ namespace RTE {
 		if (count >= c_MinRetainedAutosaves && count <= c_MaxRetainedAutosaves) s_RetainedAutosaves.store(count, std::memory_order_relaxed);
 	}
 
-	std::vector<uint64_t> AutosaveStore::RetainedTicks(const std::vector<AutosaveCandidate>& newestFirst, uint64_t pinnedTick) {
+	std::vector<uint64_t> AutosaveStore::RetainedTicks(std::vector<AutosaveCandidate> candidates, uint64_t pinnedTick, uint64_t pinnedRound) {
+		std::sort(candidates.begin(), candidates.end(), [](const AutosaveCandidate& left, const AutosaveCandidate& right) {
+			return std::tie(left.worldBoot, left.roundId, left.tick) > std::tie(right.worldBoot, right.roundId, right.tick);
+		});
 		std::vector<uint64_t> kept;
 		const size_t retained = RetainedAutosaves();
 		size_t restorableKept = 0;
-		for (const AutosaveCandidate& candidate: newestFirst) {
+		for (const AutosaveCandidate& candidate: candidates) {
 			// The agreed rewind point is kept whatever its age, and even when it no longer reads: a transient
 			// read failure must not destroy the checkpoint both sides are rejoining onto.
-			if (pinnedTick != c_NoPinnedTick && candidate.tick == pinnedTick) {
+			if (pinnedTick != c_NoPinnedTick && candidate.tick == pinnedTick &&
+			    (candidate.roundId == pinnedRound || (!candidate.restorable && candidate.roundId == 0))) {
 				kept.push_back(candidate.tick);
 			} else if (candidate.restorable && restorableKept < retained) {
 				kept.push_back(candidate.tick);
@@ -639,7 +672,7 @@ namespace RTE {
 		return kept;
 	}
 
-	size_t AutosaveStore::ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick) {
+	size_t AutosaveStore::ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick, uint64_t pinnedRound) {
 		if (!ValidMatchId(matchId)) return 0;
 		std::vector<std::pair<uint64_t, std::filesystem::path>> held;
 		std::error_code status;
@@ -648,17 +681,23 @@ namespace RTE {
 			if (entry.is_symlink() || !entry.is_regular_file() || !ParseArchiveName(entry.path().filename().string(), matchId, tick)) continue;
 			held.emplace_back(tick, entry.path());
 		}
-		std::sort(held.begin(), held.end(), [](const auto& left, const auto& right) { return left.first > right.first; });
 		std::vector<AutosaveCandidate> candidates;
 		std::string pinnedRefusal;
 		for (const auto& [tick, path]: held) {
 			AutosaveDescriptor descriptor;
 			std::string refusal;
 			const bool restorable = Validate(path, descriptor, &refusal);
-			if (!restorable && tick == pinnedTick) pinnedRefusal = refusal;
-			candidates.push_back({tick, restorable});
+			if (!restorable) {
+				AutosaveManifest manifest;
+				if (ReadManifest(directory, matchId, tick, manifest) && manifest.savedTick == tick) {
+					descriptor.roundId = manifest.roundId;
+					descriptor.worldBoot = manifest.worldBoot;
+				}
+				if (tick == pinnedTick && (descriptor.roundId == pinnedRound || descriptor.roundId == 0)) pinnedRefusal = refusal;
+			}
+			candidates.push_back({tick, restorable, descriptor.worldBoot, descriptor.roundId});
 		}
-		const std::vector<uint64_t> kept = RetainedTicks(candidates, pinnedTick);
+		const std::vector<uint64_t> kept = RetainedTicks(std::move(candidates), pinnedTick, pinnedRound);
 		if (!pinnedRefusal.empty()) {
 			std::cout << "[autosave] pinned tick=" << pinnedTick << " kept but not restorable: " << pinnedRefusal << std::endl;
 		}
@@ -680,16 +719,16 @@ namespace RTE {
 		return removed;
 	}
 
-	size_t AutosaveStore::ApplyRetention(const std::string& matchId, uint64_t pinnedTick) {
-		return ApplyRetention(Directory(), matchId, pinnedTick);
+	size_t AutosaveStore::ApplyRetention(const std::string& matchId, uint64_t pinnedTick, uint64_t pinnedRound) {
+		return ApplyRetention(Directory(), matchId, pinnedTick, pinnedRound);
 	}
 
 	void AutosaveStore::NoteValidated(const AutosaveDescriptor& descriptor) {
 		if (descriptor.matchId.empty() || descriptor.savedTick == 0) return;
 		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
-		// A healed round can republish a tick it already wrote, so only an older tick of the same match loses.
+		// A fresh boot supersedes the previous round even when its tick is lower.
 		auto& held = s_Validated[descriptor.matchId];
-		if (held.matchId == descriptor.matchId && descriptor.savedTick < held.savedTick) return;
+		if (held.matchId == descriptor.matchId && CheckpointOrder(descriptor) < CheckpointOrder(held)) return;
 		held = descriptor;
 	}
 
@@ -718,6 +757,10 @@ namespace RTE {
 		std::filesystem::create_directories(scratch, ignored);
 		for (const AutosaveDescriptor& descriptor: held) {
 			std::filesystem::copy_file(descriptor.path, scratch / descriptor.path.filename(), std::filesystem::copy_options::overwrite_existing, ignored);
+			const auto manifest = ManifestPath(Directory(), matchId, descriptor.savedTick);
+			if (std::filesystem::exists(manifest)) {
+				std::filesystem::copy_file(manifest, scratch / manifest.filename(), std::filesystem::copy_options::overwrite_existing, ignored);
+			}
 		}
 		const std::vector<AutosaveDescriptor> copied = ListRestorable(scratch, matchId);
 		const bool sameSet = copied.size() == held.size() &&
@@ -732,7 +775,7 @@ namespace RTE {
 		const bool skippedTorn = picked.has_value() && picked->savedTick == held[1].savedTick;
 
 		const uint64_t pinned = held.back().savedTick;
-		const size_t removed = ApplyRetention(scratch, matchId, pinned);
+		const size_t removed = ApplyRetention(scratch, matchId, pinned, held.back().roundId);
 		const std::vector<AutosaveDescriptor> kept = ListRestorable(scratch, matchId);
 		const bool tornDropped = std::none_of(kept.begin(), kept.end(), [&](const auto& entry) { return entry.savedTick == held.front().savedTick; });
 		const bool pinnedKept = std::any_of(kept.begin(), kept.end(), [&](const auto& entry) { return entry.savedTick == pinned; });
