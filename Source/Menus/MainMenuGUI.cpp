@@ -783,6 +783,7 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 		if (m_ActiveDialogBox == m_HostSeatDialog) {
 			m_HostOptionsSeatRow = -1;
 			m_HostSeatDlgModerationRow = -1;
+			m_HostSeatDlgRemovalSeat.reset();
 			CloseMultiplayerDialog();
 		} else if (m_ActiveDialogBox == m_HostBannedDialog) {
 			CloseMultiplayerDialog();
@@ -1380,6 +1381,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostSeatDlgActionHint = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgActionHint"));
 	m_HostSeatDlgStatus = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgStatus"));
 	m_HostBannedDialog = dynamic_cast<GUICollectionBox*>(get("HostBannedDialog"));
+	m_HostBannedPick = dynamic_cast<GUIComboBox*>(get("ComboHostBannedPick"));
 	m_HostBannedListLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedList"));
 	m_HostBannedStatusLabel = dynamic_cast<GUILabel*>(get("LabelHostBannedStatus"));
 
@@ -1535,6 +1537,8 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostOptionsReadOnly = false;
 	m_HostOptionsSeatRow = -1;
 	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgRemovalSeat.reset();
+	m_HostKickBanWatch = false;
 	m_HostOptionsAwaitedRevision = 0;
 	if (setupDraft) {
 		// The staged draft applies where one exists; the request the Create button would send builds the rest.
@@ -1615,6 +1619,15 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
 			m_HostOptionsAwaitedRevision = 0;
 			m_HostOptionsStatusLabel->SetText("Applied.");
+		}
+	}
+	// A Queued kick/ban drains on the setup worker's host pump; the applied result lands in the
+	// service's last-result field, and this reads it until it stops being Queued.
+	if (m_HostKickBanWatch) {
+		const NetKickBanResult drained = g_NetMatchService.GetLastKickBanResult();
+		if (drained != NetKickBanResult::Queued) {
+			m_HostKickBanWatch = false;
+			m_HostOptionsStatusLabel->SetText(m_HostKickBanVerb + ": " + NetKickBanResultName(drained));
 		}
 	}
 	// Each page names itself in the title band the way the design's page mocks do; the client's
@@ -1892,10 +1905,20 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostSessIdleStateLabel->SetText(idle);
 	}
-	// H11: the ban list is the L20 store's; until it lands the row reports an empty list and the
-	// dialog's removal stays off, so the control is honest about the contract it needs.
+	// H11: the count is the store's own rows - a Session-scope record counts when it names this
+	// session's id, an Until Removed one counts beside it ("2 banned this session, 1 until removed").
 	if (m_HostSessBannedLabel) {
-		m_HostSessBannedLabel->SetText("0 banned this session");
+		const uint64_t sessionId = g_NetMatchService.GetLobbyMatchConfig().sessionId;
+		uint32_t sessionBans = 0, heldBans = 0;
+		for (const NetHostBanRecord& record : g_NetMatchService.GetBanRecords()) {
+			if (record.scope == NetHostBanScope::UntilRemoved) {
+				++heldBans;
+			} else if (record.sessionId == sessionId) {
+				++sessionBans;
+			}
+		}
+		m_HostSessBannedLabel->SetText(std::to_string(sessionBans) + " banned this session" +
+		                               (heldBans > 0 ? ", " + std::to_string(heldBans) + " until removed" : ""));
 	}
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
@@ -1929,6 +1952,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// An open seat dialog re-reads the moderation view every frame: the reclaim seconds tick and a
 	// new applicant shows without the host reopening it.
 	RefreshHostSeatDialog();
+	// The banned dialog likewise tracks the store: a queued unban's drain lands the row's removal.
+	RefreshHostBannedDialog();
 }
 
 void MainMenuGUI::DraftHostOptionsFromControls() {
@@ -2254,7 +2279,8 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 
 	// H04-H08: the host's moderation view holds the reclaim clock and the applicant list; the
 	// dialog maps its roster row to that view by the lockstep peer id, never the list index.
-	m_ModerationUx.Refresh(g_NetMatchService.GetModerationSeats());
+	const std::vector<NetH4ModerationSeat> seats = g_NetMatchService.GetModerationSeats();
+	m_ModerationUx.Refresh(seats);
 	m_HostSeatDlgModerationRow = -1;
 	if (slot.peerId != 0) {
 		for (size_t i = 0; i < m_ModerationUx.RowCount(); ++i) {
@@ -2265,6 +2291,19 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		}
 	}
 	const bool host = !m_HostOptionsReadOnly && !m_HostOptionsSetupDraft && g_NetMatchService.IsHost();
+	// H09/H10's selection rides the seat's admission row. The UX model only rows seats needing a
+	// decision, so the raw view is scanned too - a healthy holder has a seat there even when it has
+	// no decision row. The view is published while a match runs; a fresh lobby publishes none, so a
+	// press then names that state instead of sending a selection the drain would refuse.
+	m_HostSeatDlgRemovalSeat.reset();
+	if (slot.peerId != 0) {
+		for (const NetH4ModerationSeat& seat : seats) {
+			if (!seat.cpu && seat.lockstepPeerId == slot.peerId) {
+				m_HostSeatDlgRemovalSeat = seat;
+				break;
+			}
+		}
+	}
 	const NetModerationUx::Row* mrow = m_HostSeatDlgModerationRow >= 0 ? &m_ModerationUx.GetRow(m_HostSeatDlgModerationRow) : nullptr;
 	if (mrow && (mrow->view.dropped || mrow->view.heldForReclaim || mrow->view.reclaiming)) {
 		// H08's countdown is the snapshot's own figure: frames the round still holds, in seconds.
@@ -2290,25 +2329,76 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		HostOptSetEditable(m_HostSeatDlgApprove, false);
 		HostOptSetEditable(m_HostSeatDlgCancel, false);
 	}
-	// H09/H10: Kick and Ban are host powers over a peer's seat; the buttons stay pressable so the
-	// click can say why nothing happened when the action cannot run.
-	const bool humanSeat = host && !slot.cpu && slot.peerId != 0;
+	// H09/H10: Kick and Ban act on a human seat another peer holds - the host's own seat is never
+	// kickable (the store answers ForbiddenTarget, but the button stays off first).
+	const uint8_t localPeerId = g_NetMatchService.GetLobbySnapshot().localPeerId;
+	const bool humanSeat = host && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
 	m_HostSeatDlgKick->SetEnabled(humanSeat);
 	m_HostSeatDlgBan->SetEnabled(humanSeat);
 	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
+		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
 		                                            : "Moderation is the host's; clients watch."));
 	}
 }
 
+void MainMenuGUI::RefreshHostBannedDialog() {
+	if (m_ActiveDialogBox != m_HostBannedDialog || !m_HostBannedPick) {
+		return;
+	}
+	const std::vector<NetHostBanRecord> records = g_NetMatchService.GetBanRecords();
+	const uint64_t nowUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count());
+	const auto describe = [&nowUnixMs](const NetHostBanRecord& record) {
+		const uint64_t minutes = record.createdUnixMs < nowUnixMs ? (nowUnixMs - record.createdUnixMs) / 60000 : 0;
+		return (record.displayAlias.empty() ? "(unnamed)" : record.displayAlias) + " - " +
+		       (record.scope == NetHostBanScope::UntilRemoved ? "until removed" : "session") + ", " +
+		       (minutes == 0 ? std::string("just now") : std::to_string(minutes) + "m ago");
+	};
+	// The pick list rebuilds only when the store's rows change, so an open dropdown survives.
+	bool changed = records.size() != m_HostBannedRecords.size();
+	for (size_t i = 0; !changed && i < records.size(); ++i) {
+		changed = !(records[i].identity == m_HostBannedRecords[i].identity &&
+		            records[i].scope == m_HostBannedRecords[i].scope &&
+		            records[i].createdUnixMs == m_HostBannedRecords[i].createdUnixMs);
+	}
+	if (changed) {
+		m_HostBannedRecords = records;
+		m_HostBannedPick->ClearList();
+		for (const NetHostBanRecord& record : m_HostBannedRecords) {
+			m_HostBannedPick->AddItem(describe(record));
+		}
+		if (!m_HostBannedRecords.empty()) {
+			m_HostBannedPick->SetSelectedIndex(0);
+		}
+	}
+	if (m_HostBannedRecords.empty()) {
+		m_HostBannedListLabel->SetText("(no banned players)");
+	} else {
+		std::string lines;
+		const int pick = m_HostBannedPick->GetSelectedIndex();
+		for (size_t i = 0; i < m_HostBannedRecords.size(); ++i) {
+			const NetHostBanRecord& record = m_HostBannedRecords[i];
+			if (!lines.empty()) lines += "\n";
+			lines += (pick == static_cast<int>(i) ? "> " : "  ") + describe(record) +
+			         (record.reason.empty() ? "" : " - " + record.reason);
+		}
+		m_HostBannedListLabel->SetText(lines);
+	}
+	const int pick = m_HostBannedPick->GetSelectedIndex();
+	m_MainMenuButtons[MenuButton::HostBannedRemoveButton]->SetEnabled(
+		pick >= 0 && pick < static_cast<int>(m_HostBannedRecords.size()) && g_NetMatchService.IsHost());
+}
+
 void MainMenuGUI::ShowHostBannedDialog() {
-	// H11: the list is the session ban store's. This branch has no store yet, so the dialog opens
-	// on its empty state and the remove button stays off rather than pretending to act on one.
-	m_HostBannedListLabel->SetText("(no banned players this session)");
-	m_HostBannedStatusLabel->SetText("The session ban list lands with the moderation store.");
-	m_MainMenuButtons[MenuButton::HostBannedRemoveButton]->SetEnabled(false);
+	// H11: the store's own rows - identity's public alias, the scope, the age; Remove unbans the
+	// picked row through the same host pump a queued kick drains on.
+	m_HostBannedRecords.clear();
+	if (m_HostBannedPick) m_HostBannedPick->ClearList();
+	m_HostBannedStatusLabel->SetText("");
 	OpenMultiplayerDialog(m_HostBannedDialog, m_HostOptionsPanel);
+	RefreshHostBannedDialog();
 	m_MainMenuButtons[MenuButton::HostBannedCloseButton]->SetFocus();
 }
 
@@ -2355,12 +2445,38 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostSeatDlgKick || guiEventControl == m_HostSeatDlgBan) {
-		// L20 contract: NetMatchService::RemoveParticipant / BanSession return Queued while the
-		// lobby is Starting and drain through the host pump; until that store lands the click names
-		// the seam instead of faking the action.
-		m_HostSeatDlgActionHint->SetText(guiEventControl == m_HostSeatDlgKick
-		                                     ? "Kick needs the session store (lands with the moderation seam)."
-		                                     : "Ban needs the session store (lands with the moderation seam).");
+		const NetParticipantRemovalAction action = guiEventControl == m_HostSeatDlgKick
+		                                           ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
+		const std::string verb = action == NetParticipantRemovalAction::Kick ? "Kick" : "Ban";
+		if (!m_HostSeatDlgRemovalSeat) {
+			// The selection a removal validates against is the seat's admission row: epoch, holder and
+			// seat generations, incarnation. The lobby publishes no such row (PublishModerationView is
+			// Running-scoped), so the press names the state rather than queueing a doomed selection.
+			m_HostSeatDlgActionHint->SetText(verb + ": the seat's admission row is not published in the lobby.");
+			return;
+		}
+		const NetKickBanResult result =
+			g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(*m_HostSeatDlgRemovalSeat), action);
+		if (result == NetKickBanResult::Ok || result == NetKickBanResult::Queued) {
+			// On Ok the seat is already removed; on Queued the setup worker's host pump applies it.
+			// The roster row re-reads the snapshot next frame either way.
+			m_HostOptionsSeatRow = -1;
+			m_HostSeatDlgModerationRow = -1;
+			m_HostSeatDlgRemovalSeat.reset();
+			CloseMultiplayerDialog();
+			m_HostOptionsStatusLabel->SetText(verb + (result == NetKickBanResult::Queued ? " queued..." : ": Ok"));
+			m_HostKickBanWatch = result == NetKickBanResult::Queued;
+			m_HostKickBanVerb = verb;
+			return;
+		}
+		// The refusal names the store's own verdict; the issue carries the peer it was refused for.
+		const NetParticipantRemovalIssue issue = g_NetMatchService.GetLastRemovalIssue();
+		std::string text = verb + " refused - " + NetKickBanResultName(result) +
+		                   " (seat " + std::to_string(m_HostSeatDlgRemovalSeat->stableSeat) + ")";
+		if (issue.lockstepPeerId != 0) {
+			text += " (peer " + std::to_string(issue.lockstepPeerId) + ")";
+		}
+		m_HostSeatDlgActionHint->SetText(text);
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionBannedButton]) {
@@ -2372,9 +2488,20 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostBannedRemoveButton]) {
-		// L20 contract: UnbanParticipant drains through the same host pump; nothing to remove while
-		// the store is absent.
-		m_HostBannedStatusLabel->SetText("Unban lands with the moderation store.");
+		const int pick = m_HostBannedPick ? m_HostBannedPick->GetSelectedIndex() : -1;
+		if (pick < 0 || pick >= static_cast<int>(m_HostBannedRecords.size())) {
+			m_HostBannedStatusLabel->SetText("Pick a ban row first.");
+			return;
+		}
+		// UnbanParticipant answers Queued while the setup worker owns admission; the applied result
+		// replaces it at the next drain, and this dialog's rows re-read the store when it lands.
+		const NetKickBanResult result = g_NetMatchService.UnbanParticipant(m_HostBannedRecords[pick].identity);
+		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultName(result));
+		RefreshHostBannedDialog();
+		return;
+	}
+	if (guiEventControl == m_HostBannedPick) {
+		RefreshHostBannedDialog();
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostOptionsBackButton]) {
@@ -2395,6 +2522,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]) {
 		m_HostOptionsSeatRow = -1;
 		m_HostSeatDlgModerationRow = -1;
+		m_HostSeatDlgRemovalSeat.reset();
 		CloseMultiplayerDialog();
 		return;
 	}
