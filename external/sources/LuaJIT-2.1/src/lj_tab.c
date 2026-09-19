@@ -46,6 +46,36 @@ LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx)
   if (o < L->top && tvistab(o)) checkpoint_arm_table(tabV(o));
 }
 
+static GCtab *serial_table(lua_State *L, int idx)
+{
+  cTValue *o = L->base + (idx - 1);
+  if (idx < 0) o = L->top + idx;
+  return (o < L->top && tvistab(o)) ? tabV(o) : NULL;
+}
+
+LUA_API uint64_t luaJIT_tab_serial(lua_State *L, int idx)
+{
+  GCtab *t = serial_table(L, idx);
+  return t ? t->serial : 0;
+}
+
+/* A restored table keeps the identity the archive gave it, so a recapture numbers it the same. */
+LUA_API void luaJIT_set_tab_serial(lua_State *L, int idx, uint64_t serial)
+{
+  GCtab *t = serial_table(L, idx);
+  if (t) t->serial = serial;
+}
+
+LUA_API uint64_t luaJIT_state_tab_serial(lua_State *L)
+{
+  return G(L)->tabserial;
+}
+
+LUA_API void luaJIT_set_state_tab_serial(lua_State *L, uint64_t serial)
+{
+  G(L)->tabserial = serial;
+}
+
 /* -- Object hashing ------------------------------------------------------ */
 
 /* Hash an arbitrary key and return its anchor position in the hash table. */
@@ -156,6 +186,8 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
       t->asize = asize;
     }
   }
+  /* Birth order is the table's identity: every peer running the same script numbers alike. */
+  t->serial = ++G(L)->tabserial;
   if (hbits)
     newhpart(L, t, hbits);
   return t;

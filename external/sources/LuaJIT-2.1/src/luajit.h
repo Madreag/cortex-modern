@@ -28,6 +28,8 @@
 #ifndef _LUAJIT_H
 #define _LUAJIT_H
 
+#include <stdint.h>
+
 #include "lua.h"
 
 #define LUAJIT_VERSION		"LuaJIT 2.1.1777102609"
@@ -78,6 +80,12 @@ typedef void (*luaJIT_tab_write_cb)(void *tab);
 LUA_API void luaJIT_set_tab_write_callback(luaJIT_tab_write_cb cb);
 LUA_API void luaJIT_arm_tab_write_trap(lua_State *L);
 LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx);
+
+/* Table birth order: the identity a checkpoint names a table by. Not visible to scripts. */
+LUA_API uint64_t luaJIT_tab_serial(lua_State *L, int idx);
+LUA_API void luaJIT_set_tab_serial(lua_State *L, int idx, uint64_t serial);
+LUA_API uint64_t luaJIT_state_tab_serial(lua_State *L);
+LUA_API void luaJIT_set_state_tab_serial(lua_State *L, uint64_t serial);
 
 /* Low-overhead profiling API. */
 typedef void (*luaJIT_profile_callback)(void *data, lua_State *L,
