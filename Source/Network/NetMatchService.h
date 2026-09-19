@@ -17,6 +17,7 @@
 #include "NetWorldJoin.h"
 #include "Singleton.h"
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <map>
@@ -194,6 +195,10 @@ namespace RTE {
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
+		// Host-authored world capacity. Omitted fields take the Persistent World preset's defaults.
+		std::optional<std::array<uint8_t, 4>> worldTeamCapacity;
+		std::optional<uint8_t> worldMaxSpectators;
+		std::optional<uint16_t> worldRespawnDelaySeconds;
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
@@ -404,6 +409,12 @@ namespace RTE {
 		bool StageResyncedMatchLaunch(std::string* error = nullptr);
 		void Destroy();
 		void Update();
+
+		/// Watcher: tell the world whether this player wants a seat when one frees. A declining
+		/// watcher keeps its stream and promotion passes it over.
+		bool SetWorldSpectatorDeclinesPromotion(bool declines);
+		/// What this watcher last told the world; false means it wants the next free seat.
+		bool WorldSpectatorDeclinesPromotion() const { return m_WorldSpectatorDeclinesPromotion; }
 		void SetReady();
 		void RequestStart();
 		void ReportRuntimeError(const std::string& error);
@@ -451,9 +462,14 @@ namespace RTE {
 		/// The joiner's catch-up step over one lobby pump: applies the tail that arrived, adopts the
 		/// announced E and reports what the sim has applied. The value it sends is the report the host
 		/// schedules activation from.
-		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp);
+		/// One joiner step: the arrived tail, its E and the report it sends back.
+		/// @param outRefusal The world's refusal code when the host turned this joiner away; 0 otherwise.
+		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal = nullptr);
 		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
 		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
+		/// Answers one refused connection on the world's reserved refusal id. Binding re-points a
+		/// known remote, so this must never take a watcher's or a member's id.
+		static bool AnswerWorldJoinRefusal(NetLobbySession& lobby, NetPeerId connection, NetWorldJoinRefusal refusal);
 		/// The bootstrap a lobby report belongs to: a bootstrap's own lobby id first, then a ready peer.
 		static NetPeerId ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer);
 		/// Applies one world-join report to the host's plane and sends the E it earns.
@@ -603,6 +619,8 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
+		/// Host: watches each seated member's brain and authors one respawn per death.
+		void DriveWorldSeatRespawns(uint64_t nowFrame);
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
 		/// image a bootstrap is already being served. Nothing here reads a file.
 		void PublishFinishedWorldJoinImage();
@@ -947,6 +965,9 @@ namespace RTE {
 		bool m_HostLobbyBeaconed = false;
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
+		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
+		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

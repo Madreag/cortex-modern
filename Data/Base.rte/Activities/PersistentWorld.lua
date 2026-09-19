@@ -7,6 +7,17 @@ package.loaded.Constants = nil; require("Constants");
 local TEAM_HOME_X = {[Activity.TEAM_1] = 880, [Activity.TEAM_2] = 1120, [Activity.TEAM_3] = 640, [Activity.TEAM_4] = 1360};
 local RESPAWN_DELAY_TICKS = 300; -- Five seconds of simulation at the fixed timestep.
 
+-- A team with a seated human is the host's: it authors that seat's respawn as a world transition, so
+-- the team loop below must not spawn a second resident for it.
+local function TeamHasSeat(self, team)
+	for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
+		if self:PlayerActive(player) and self:PlayerHuman(player) and self:GetTeamOfPlayer(player) == team then
+			return true;
+		end
+	end
+	return false;
+end
+
 local function HomePosition(team)
 	local x = TEAM_HOME_X[team] or 880;
 	return SceneMan:MovePointToGround(Vector(x, 0), 20, 10) + Vector(0, -20);
@@ -86,7 +97,7 @@ function PersistentWorld:UpdateActivity()
 	self.respawnDueAt = self.respawnDueAt or {};
 	local author = self:IsWorldAuthor();
 	for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
-		if self:TeamActive(team) then
+		if self:TeamActive(team) and not TeamHasSeat(self, team) then
 			if MovableMan:GetFirstBrainActor(team) ~= nil then
 				self.respawnDueAt[team] = nil;
 			elseif self.respawnDueAt[team] == nil then

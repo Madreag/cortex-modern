@@ -329,6 +329,12 @@ namespace RTE {
 				if (config.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
 					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
 					AppendU64LE(out, config.worldBoot);
+					// The world block grows at its end, so a v4 config's bytes never move.
+					for (const uint8_t capacity: config.worldTeamCapacity) {
+						AppendU8(out, capacity);
+					}
+					AppendU8(out, config.worldMaxSpectators);
+					AppendU16LE(out, config.worldRespawnDelaySeconds);
 				}
 			}
 			// The window trails every versioned block, so a config recorded before the bit still reads.
@@ -449,9 +455,25 @@ namespace RTE {
 				}
 				out.worldId.clear();
 				out.worldBoot = 0;
+				out.worldTeamCapacity = {};
+				out.worldMaxSpectators = 0;
+				out.worldRespawnDelaySeconds = 0;
 				if (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
 					if (!reader.ReadString(out.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error) ||
 					    !ReadOrTruncated(reader.ReadU64LE(out.worldBoot), reader, error, "world_boot")) return false;
+					for (uint8_t& capacity: out.worldTeamCapacity) {
+						if (!ReadOrTruncated(reader.ReadU8(capacity), reader, error, "world_team_capacity")) return false;
+					}
+					if (!ReadOrTruncated(reader.ReadU8(out.worldMaxSpectators), reader, error, "world_max_spectators") ||
+					    !ReadOrTruncated(reader.ReadU16LE(out.worldRespawnDelaySeconds), reader, error, "world_respawn_delay_seconds")) return false;
+					if (out.worldMaxSpectators > NetMatchConfigUtil::c_MaxWorldSpectators) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 3, "world_max_spectators is out of range");
+						return false;
+					}
+					if (out.worldRespawnDelaySeconds > NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "world_respawn_delay_seconds is out of range");
+						return false;
+					}
 				}
 			}
 			// Without the bit the config carries the default window, whatever the out parameter held.

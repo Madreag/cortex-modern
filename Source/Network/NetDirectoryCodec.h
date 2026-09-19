@@ -46,6 +46,7 @@ namespace RTE {
 		bool persistentWorld = false;
 		std::string worldId;
 		int64_t worldBoot = 0;
+		int64_t spectatorFree = 0; //!< Watchers a full world could still admit. A world's field only.
 		std::string resumeSessionId; //!< The existing match row or a world's durable UUID.
 		std::string resumeToken;     //!< The row's current token, the proof a resume may take it over.
 
@@ -70,6 +71,7 @@ namespace RTE {
 		int64_t peerCount = 0;
 		int64_t seatsFree = 0;
 		std::optional<std::vector<std::string>> listenAddrs;
+		std::optional<int64_t> spectatorFree; //!< Absent keeps the row's current count.
 		std::optional<std::string> state; //!< "lobby" | "running"
 		std::optional<bool> listed; //!< Absent keeps current visibility; false hides, true relists.
 
@@ -125,6 +127,7 @@ namespace RTE {
 		bool persistentWorld = false;
 		std::string worldId;
 		int64_t worldBoot = 0;
+		int64_t spectatorFree = 0;
 
 		bool operator==(const NetDirectorySessionRow&) const = default;
 	};

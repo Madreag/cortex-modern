@@ -1990,7 +1990,7 @@ namespace RTE {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
 							return false;
 						}
-						if (transition.kind > NetGameWorldTransition::Release) {
+						if (transition.kind > NetGameWorldTransition::SeatRespawn) {
 							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_kind is not a known transition");
 							return false;
 						}
@@ -5485,16 +5485,49 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::SetObservationEpoch(uint64_t frame) {
-		if (frame == 0 || frame == m_ObservationEpochFrame) {
+		if (frame == 0) {
 			return;
 		}
-		m_ObservationEpochFrame = frame;
-		m_ObservationEpochApplied.clear();
+		// Two joiners in flight announce two restarts: a second announcement may never drop the
+		// first, or the member admitted there reads frames spelled against a table it never had.
+		m_ObservationEpochs.insert(frame);
+		PruneObservationEpochs();
+	}
+
+	void NetLockstepCoordinator::MoveObservationEpoch(uint64_t from, uint64_t to) {
+		// A re-announce is the same activation at a later frame, so its old restart goes with it.
+		if (from != 0) {
+			m_ObservationEpochs.erase(from);
+		}
+		SetObservationEpoch(to);
+	}
+
+	void NetLockstepCoordinator::PruneObservationEpochs() {
+		if (m_ObservationEpochApplied.empty() || m_ObservationEpochs.size() < 2) {
+			return;
+		}
+		// An epoch every sender has already reset at can never be due again: senders encode in
+		// target order, and a sender that is behind takes the newest epoch at or below its frame.
+		uint64_t slowest = UINT64_MAX;
+		for (const auto& [peerId, applied]: m_ObservationEpochApplied) {
+			(void)peerId;
+			slowest = std::min(slowest, applied);
+		}
+		if (slowest == UINT64_MAX) {
+			return;
+		}
+		m_ObservationEpochs.erase(m_ObservationEpochs.begin(), m_ObservationEpochs.lower_bound(slowest));
 	}
 
 	void NetLockstepCoordinator::ApplyObservationEpoch(uint8_t senderPeerId, uint64_t targetFrame) {
-		if (m_ObservationEpochFrame == 0 || targetFrame < m_ObservationEpochFrame ||
-		    m_ObservationEpochApplied.find(senderPeerId) != m_ObservationEpochApplied.end()) {
+		// The newest restart this frame is at or past; a sender behind two of them takes the newer.
+		const auto above = m_ObservationEpochs.upper_bound(targetFrame);
+		if (above == m_ObservationEpochs.begin()) {
+			return;
+		}
+		const uint64_t due = *std::prev(above);
+		const auto applied = m_ObservationEpochApplied.find(senderPeerId);
+		if (applied != m_ObservationEpochApplied.end() && applied->second >= due) {
 			return;
 		}
 		// An emptied encode table says so on the wire - the block's binding count reads 0 where the
@@ -5503,8 +5536,8 @@ namespace RTE {
 		// A window may not carry a copy from before the epoch: its kept block was spelled against
 		// the table this reset emptied. The encoder leaves a tick off when its block is gone.
 		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
-		blocks.erase(blocks.begin(), blocks.lower_bound(m_ObservationEpochFrame));
-		m_ObservationEpochApplied.insert(senderPeerId);
+		blocks.erase(blocks.begin(), blocks.lower_bound(due));
+		m_ObservationEpochApplied[senderPeerId] = due;
 	}
 
 	bool NetLockstepCoordinator::BuildPendingRemoteFrame(uint64_t targetFrame, uint8_t senderPeerId, NetLockstepFrame& out) const {
