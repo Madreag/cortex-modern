@@ -11036,6 +11036,189 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestIceDefaultsAndOverrides(std::string* error) {
+		SettingsMan settings;
+		const std::string defaults = "stun.l.google.com:19302,stun.cloudflare.com:3478,stun.nextcloud.com:443";
+		const GnsP2PConfig config = NetMatchService::BuildIceConfig(settings, "str:h-default", 41011);
+		if (!settings.GetNetworkIceEnable() || settings.GetNetworkStunServers() != defaults ||
+		    config.stunServerList != defaults || (config.iceEnable & 4) == 0 ||
+		    config.localIdentity != "str:h-default" || config.localVirtualPort != 41011) {
+			*error = "ice defaults: a fresh install does not gather public STUN candidates";
+			return false;
+		}
+		if (!settings.GetNetworkTurnServers().empty() || !settings.GetNetworkTurnUser().empty() || !settings.GetNetworkTurnPass().empty()) {
+			*error = "ice defaults: a relay or its credentials shipped enabled";
+			return false;
+		}
+		if (NetHostNatTraversalHint(settings, true, false, "").find("session directory URL") == std::string::npos ||
+		    NetHostNatTraversalHint(settings, false, false, "ip").find("Current session uses direct IP:") == std::string::npos) {
+			*error = "NAT hint hid the directory requirement or the direct route after host handover";
+			return false;
+		}
+		settings.SetNetworkStunServers("");
+		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 2) {
+			*error = "ice settings: an explicitly empty STUN list did not keep LAN-only candidates";
+			return false;
+		}
+		settings.SetNetworkTurnServers("turn.example:3478");
+		settings.SetNetworkTurnUser("user");
+		settings.SetNetworkTurnPass("password");
+		if (NetMatchService::BuildIceConfig(settings, "", 41011).iceEnable != 0x7fffffff ||
+		    settings.GetNetworkTurnUser() != "user" || settings.GetNetworkTurnPass() != "password") {
+			*error = "ice settings: a user-supplied relay was disabled by the empty STUN list";
+			return false;
+		}
+		settings.SetNetworkIceEnable(false);
+		settings.SetNetworkIceEnableOverride(true);
+		settings.SetNetworkStunServersOverride(defaults);
+		settings.ClearNetworkIceOverrides();
+		if (settings.GetNetworkIceEnable() || !settings.GetNetworkStunServers().empty()) {
+			*error = "ice settings: run overrides changed the saved Off or empty-list choices";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS ice defaults: public STUN on, TURN empty, explicit LAN-only and relay choices retained" << std::endl;
+		return true;
+	}
+
+	bool TestIceConnectionFallback(std::string* error) {
+		NetIceJoinTarget target{"str:h-fallback", "either", "203.0.113.9", 41237};
+		if (!NetIcePrefersP2P(target, true) || NetIcePrefersP2P(target, false)) {
+			*error = "ice route: Automatic did not prefer ICE, or Off still used it";
+			return false;
+		}
+		target.joinMode = "ip";
+		if (NetIcePrefersP2P(target, true)) {
+			*error = "ice route: an IP-only host was dialled through ICE";
+			return false;
+		}
+		target.joinMode = "either";
+		for (int arm = 0; arm < 9; ++arm) {
+			std::vector<std::string> log;
+			TransportTap *muxIp = nullptr, *p2p = nullptr;
+			auto mux = MakeTappedMux(&log, &muxIp, &p2p);
+			TransportTap ip("retry", &log);
+			NetSession session;
+			NetLockstepCoordinator coordinator;
+			NetMatchRunner runner;
+			NetMatchService service;
+			service.m_IceEnabled = true;
+			service.m_CancelRequested = arm == 5;
+			NetMatchRunnerConfig config;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(73);
+			config.joinAddress = "session:fallback";
+			config.cancelRequested = &service.m_CancelRequested;
+			config.sessionWaitMs = 50;
+			if (arm == 6) {
+				config.nowMs = [] { return 20000; };
+				config.sessionWaitMs = 1;
+			}
+			config.sessionConfig.p2pJoin.identity = target.identity;
+			int iceDials = 0;
+			config.sessionConfig.p2pJoin.connect = [&](INetTransport&, std::string* why) {
+				++iceDials;
+				if (arm == 1) {
+					if (why) *why = "ICE dial refused";
+					return false;
+				}
+				return true;
+			};
+			config.resolveJoinAddress = [] { return "session:fallback"; };
+			if (arm == 4) {
+				NetMessage rejection;
+				rejection.payload = NetJoinRejected{NetRejectReason::ParticipantBanned, "banned", "participant", "allowed", "banned"};
+				std::vector<uint8_t> bytes;
+				if (!NetProtocol::Encode(rejection, bytes)) {
+					*error = "ice refusal fixture: ban could not be encoded";
+					return false;
+				}
+				p2p->Queue({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
+			} else if (arm == 0 || arm == 8) {
+				if (arm == 8) p2p->Queue({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
+				// GNS assigns an id before connecting, so a refused candidate produces this close.
+				p2p->Queue({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
+			} else if (arm != 6) {
+				p2p->Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
+			}
+			ip.Queue({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "IP refused"});
+			NetIceJoinTarget dial = target;
+			if (arm == 3 || arm == 6) { dial.address.clear(); dial.port = 0; }
+			bool noDirectRoute = false;
+			std::string why = arm == 2 ? "ICE signaling failed: channel refused" : "";
+			if (service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, dial, arm != 2, noDirectRoute, &why)) {
+				*error = "ice refusal fixture: two failed transports started a match";
+				return false;
+			}
+			const bool retry = arm < 3 || arm == 7;
+			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
+			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6 || arm == 7)) {
+				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
+				         ", IP dials=" + std::to_string(ipDials) + ", NAT failure=" + std::to_string(noDirectRoute);
+				return false;
+			}
+			if (retry && (mux || config.sessionConfig.p2pJoin.connect || config.resolveJoinAddress || config.sessionConfig.timeoutMs != 1000 || service.m_IceRoute != "ip" ||
+			              why.find("ICE ") == std::string::npos || why.find("IP connection failed:") == std::string::npos)) {
+				*error = "ice retry retained the ICE dial or lost the failed stages: " + why;
+				return false;
+			}
+			if (arm == 3 && config.sessionConfig.timeoutMs != 15000) {
+				*error = "ice gathering retained the shorter heartbeat timeout";
+				return false;
+			}
+			if (arm == 6 && session.GetStats().timeouts != 0) {
+				*error = "ice connection timed out on its first tick after a slow directory lookup";
+				return false;
+			}
+			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
+			    "No direct route (NAT): forward the host's UDP port or use LAN") {
+				*error = "ice failure message still uses the generic setup failure";
+				return false;
+			}
+			if (arm == 4 && NetMatchService::SetupFailureStatus(&session, noDirectRoute) != "The host banned you from this session") {
+				*error = "ice failure message hid the host's ban";
+				return false;
+			}
+		}
+		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice deadline: directory lookup time does not consume the connection budget" << std::endl;
+		return true;
+	}
+
+	bool TestInternetMenuJoinUsesSession(std::string* error) {
+		NetDirectoryClient::GameRow row;
+		row.source = "NET";
+		row.sessionId = "internet-host";
+		row.address = "192.168.1.9";
+		row.port = 41237;
+		NetMatchServiceRequest request;
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.sessionId != "internet-host" || !request.address.empty()) {
+			*error = "internet menu join bypassed ICE through the directory's private address";
+			return false;
+		}
+		row.address.clear();
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.sessionId != "internet-host") {
+			*error = "internet menu refused an ICE-only row with no direct address";
+			return false;
+		}
+		row.source = "LAN";
+		row.address = "192.168.1.9";
+		request.SetJoinAddress(NetIceMenuJoinAddress(row));
+		if (request.address != row.address || !request.sessionId.empty()) {
+			*error = "LAN menu join retained the previous Internet session";
+			return false;
+		}
+		request.SetJoinAddress("203.0.113.9");
+		if (request.address != "203.0.113.9" || !request.sessionId.empty()) {
+			*error = "manual address join retained the previous Internet session";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS internet menu join: session identity survives the selection; LAN and typed IP stay direct" << std::endl;
+		return true;
+	}
+
 	// -net-ice is a run override: it decides this run and never reaches the saved settings.
 	bool TestIceSettingsOverrideIsNotPersisted(std::string* error) {
 		// This selftest runs before the managers are built.
@@ -11045,7 +11228,7 @@ namespace RTE {
 		g_SettingsMan.SetNetworkIceEnable(false);
 		g_SettingsMan.SetNetworkStunServers("");
 		if (g_SettingsMan.GetNetworkIceEnable()) {
-			*error = "ice settings: the default was not off";
+			*error = "ice settings: the explicit Off setting was ignored";
 			return false;
 		}
 		g_SettingsMan.SetNetworkIceEnableOverride(true);
@@ -11065,7 +11248,7 @@ namespace RTE {
 		}
 		g_SettingsMan.SetNetworkIceEnable(savedEnable);
 		g_SettingsMan.SetNetworkStunServers(savedStun);
-		std::cout << "[net-match-selftest] PASS ice settings: NetworkIceEnable defaults off; -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice settings: -net-ice and -net-stun decide the run and never touch the saved value" << std::endl;
 		return true;
 	}
 
@@ -11125,6 +11308,9 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
+		if (!TestIceConnectionFallback(&error)) return fail(error);
+		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);

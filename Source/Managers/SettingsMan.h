@@ -148,15 +148,15 @@ namespace RTE {
 		/// CLI -net-port-map on|off override for this run only (-1 = follow the setting); never written to Settings.ini.
 		void SetNetworkPortMapEnableOverride(int enable) { m_NetworkPortMapEnableOverride = enable; }
 
-		/// Gets whether a host also offers an ICE (session-id) join, override included.
-		/// @return Whether this run offers an ICE join.
+		/// Gets whether session-id joins offer or use ICE, override included.
+		/// @return Whether this run permits ICE.
 		bool GetNetworkIceEnable() const { return m_NetworkIceEnableOverridden ? m_NetworkIceEnableOverride : m_NetworkIceEnable; }
 
 		/// Gets the saved NetworkIceEnable, ignoring any run override.
 		/// @return The saved setting.
 		bool GetNetworkIceEnableSetting() const { return m_NetworkIceEnable; }
 
-		/// Sets and saves whether a host also offers an ICE join.
+		/// Sets and saves whether session-id joins offer or use ICE.
 		void SetNetworkIceEnable(bool enable) { m_NetworkIceEnable = enable; }
 
 		/// Decides ICE for this run only (-net-ice); never saved.
@@ -605,7 +605,7 @@ namespace RTE {
 		std::string m_SessionDirectoryCertSha256; //!< Pinned SHA-256 hex of the directory server's certificate; empty = system chain.
 		bool m_NetworkPortMapEnable; //!< Whether a hosted match requests a router UDP port mapping and advertises the public endpoint.
 		int m_NetworkPortMapEnableOverride; //!< -net-port-map on|off run override (-1 unset); consulted by the getter, never persisted.
-		bool m_NetworkIceEnable = false; //!< Whether a host also offers a session-id (ICE) join beside its direct address.
+		bool m_NetworkIceEnable = true; //!< Whether session-id joins offer or use ICE beside the direct address.
 		std::string m_NetworkStunServers; //!< Comma-separated host:port; empty means ICE gathers host candidates only.
 		std::string m_NetworkTurnServers;
 		std::string m_NetworkTurnUser;

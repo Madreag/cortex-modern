@@ -1120,13 +1120,13 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 				}
 				g_GUISound.BackButtonPressSound()->Play();
 			} else {
-				m_MultiplayerJoinAddressTextBox->SetText(row.address);
-				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port));
+				m_MultiplayerJoinAddressTextBox->SetText(NetIceMenuJoinAddress(row));
+				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port == 0 ? 41010 : row.port));
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
 				if (m_JoinTargetPersistentWorld) {
-					m_LastWorldJoinAddress = row.address;
-					m_LastWorldJoinPort = row.port;
+					m_LastWorldJoinAddress = m_MultiplayerJoinAddressTextBox->GetText();
+					m_LastWorldJoinPort = row.port == 0 ? 41010 : row.port;
 					g_NetMatchService.NoteJoinTargetPersistentWorld(true);
 				}
 				if (m_MultiplayerLanGamesLabel) {
@@ -1382,6 +1382,11 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostNetRecalcButton = dynamic_cast<GUIButton*>(get("ButtonHostNetRecalc"));
 	m_HostNetModeLabel = dynamic_cast<GUILabel*>(get("LabelHostNetMode"));
 	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
+	m_HostNetIceCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetIce"));
+	m_HostNetIceHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetIceHint"));
+	if (m_HostNetIceHintLabel) {
+		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	}
 	m_HostNetPortBox = dynamic_cast<GUITextBox*>(get("TextHostNetPort"));
 	m_HostRecRepairHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRepairHint"));
 	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
@@ -1503,6 +1508,11 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetVisibilityCombo->AddItem("LAN only");
 		m_HostNetVisibilityCombo->AddItem("Internet: Unlisted");
 		m_HostNetVisibilityCombo->AddItem("Internet: Listed");
+	}
+	if (m_HostNetIceCombo) {
+		m_HostNetIceCombo->ClearList();
+		m_HostNetIceCombo->AddItem(NetHostNatTraversalState(true));
+		m_HostNetIceCombo->AddItem(NetHostNatTraversalState(false));
 	}
 	if (m_HostNetPortBox) {
 		m_HostNetPortBox->SetNumericOnly(true);
@@ -1897,6 +1907,11 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
 	}
 	HostOptSetEditable(m_HostNetVisibilityCombo, editable);
+	HostOptSelectComboIndex(m_HostNetIceCombo, g_SettingsMan.GetNetworkIceEnableSetting() ? 0 : 1);
+	HostOptSetEditable(m_HostNetIceCombo, editable);
+	if (m_HostNetIceHintLabel) {
+		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostOptionsSetupDraft, m_HostOptionsReadOnly, g_NetMatchService.GetIceRoute()));
+	}
 	// The port box stays pressable while hosted so the attempt can name the refusal.
 	HostOptSetEditable(m_HostNetPortBox, editable);
 
@@ -2681,6 +2696,17 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		CommitHostNetPort();
 		return;
 	}
+	if (guiEventControl == m_HostNetIceCombo) {
+		if (m_HostOptionsReadOnly || !m_HostOptionsSetupDraft) {
+			m_HostOptionsStatusLabel->SetText("End this session to change NAT traversal.");
+			HostOptSelectComboIndex(m_HostNetIceCombo, g_SettingsMan.GetNetworkIceEnableSetting() ? 0 : 1);
+			return;
+		}
+		g_SettingsMan.SetNetworkIceEnable(m_HostNetIceCombo->GetSelectedIndex() == 0);
+		g_SettingsMan.UpdateSettingsFile();
+		m_HostOptionsStatusLabel->SetText("NAT traversal saved for the next hosted session.");
+		return;
+	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionEndButton]) {
 		// Same end the lobby's Leave runs; the panel closes with it.
 		g_NetMatchService.Destroy();
@@ -2750,7 +2776,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	NetMatchServiceRequest request;
 	request.host = host;
 	if (!host) {
-		request.address = m_MultiplayerJoinAddressTextBox->GetText();
+		request.SetJoinAddress(m_MultiplayerJoinAddressTextBox->GetText());
 	}
 	request.port = static_cast<uint16_t>(parsedPort);
 	// Hosting or joining under a name saves it, but saving is best effort: the wire carries more
@@ -3112,9 +3138,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			return;
 		}
 		if (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions) {
-			// The options panel's own geometry: 545x246 at every size, like the design's H01 frame.
+			// The panel includes the NAT row and its routing hint at every size.
 			RefreshHostOptionsControls(snapshot);
-			constexpr int panelHeight = 246;
+			const int panelHeight = m_HostOptionsPanel->GetHeight();
 			FitMultiplayerScreen(545, panelHeight + m_MainMenuButtons[MenuButton::BackToMainButton]->GetHeight() + 5);
 			LayoutMultiplayerFooter(545, panelHeight);
 			// Late rows open upward so their full lists stay above the footer.
