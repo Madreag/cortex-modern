@@ -1110,11 +1110,13 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (currentArg == "-net-persistent-world") {
 			s_netPersistentWorld = true;
+			++i;
 			continue;
 		}
 
 		if (currentArg == "-net-world-fresh") {
 			s_netWorldFresh = true;
+			++i;
 			continue;
 		}
 
