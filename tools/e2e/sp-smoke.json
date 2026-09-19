@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "name": "sp-smoke",
+  "port_base": 49400,
+  "title": "Single player: the main menu and every settings page, then a skirmish played, paused and quit",
+  "size": "960x540",
+  "timeout_s": 300,
+  "runs": [
+    {
+      "name": "menus",
+      "peers": [
+        {
+          "name": "sp",
+          "menu_script": "sp-smoke.menus.txt",
+          "args": []
+        }
+      ]
+    },
+    {
+      "name": "play",
+      "peers": [
+        {
+          "name": "sp",
+          "args": ["-scenario", "FeelBaseline", "-seed", "42", "-max-ticks", "4000",
+                   "-num-lua-states", "4", "-input-script", "{INPUT_SCRIPT}"],
+          "input_script": "play-input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "sp-smoke.play.probe.json",
+          "settings": {"LocalPrediction": "1", "LocalPredictionMaxTicks": "20"},
+          "runtime_files": [
+            {"copy": "tools/feel/FeelBaseline.lua", "to": "Userdata/UserScenes.rte/FeelBaseline.lua"},
+            {"to": "Userdata/UserScenes.rte/Index.ini",
+             "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"}
+          ]
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {"id": "sp-main-menu", "peer": "sp", "screen": "MainScreen",
+     "what": "the main menu is on screen with its buttons drawn and no loading artefacts",
+     "assert": "menu script: assert_screen MainScreen"},
+    {"id": "sp-settings-pages", "peer": "sp", "screen": "SettingsScreen",
+     "what": "each of Video, Audio, Input, Gameplay, Misc and Network is shown with its rows inside its box",
+     "assert": "menu script: assert_settings_page <page> and assert_visible CollectionBox<page>Settings 1"},
+    {"id": "sp-settings-network-pages", "peer": "sp", "screen": "SettingsScreen",
+     "what": "the Network page's five sub-pages (Player, Chat, Recovery, Files, Internet) each show their box",
+     "assert": "menu script: assert_settings_page Network:<page>"},
+    {"id": "sp-back-to-main", "peer": "sp", "screen": "MainScreen",
+     "what": "Back returns to the main menu with nothing left drawn over it",
+     "assert": "menu script: assert_screen MainScreen"},
+    {"id": "sp-skirmish-picker", "peer": "sp",
+     "what": "the skirmish activity picker (ScenarioGUI) is opened from the main menu and a match is started from it",
+     "assert": "not scripted",
+     "blocked_by": "ScenarioGUI has no menu-automation seam: the menu script pump stops while it is up, so this leg cannot be driven or asserted. The play run below boots the activity directly instead."},
+    {"id": "sp-play", "peer": "sp", "screen": "game", "sim_ticks": [60, 1500],
+     "what": "the skirmish is played: actors walk, aim, jump, crouch, fire and swap weapons; the HUD is drawn",
+     "assert": "input script tools/e2e/play-input.txt drives both seats"},
+    {"id": "sp-pause-menu", "peer": "sp", "screen": "Pause",
+     "what": "Escape opens the pause menu and its rows (Resume, Settings, Save or Load, Mod Manager, Back to Main) are inside the panel",
+     "assert": "probe: assert_visible/assert_rect_inside on each pause row"},
+    {"id": "sp-pause-settings", "peer": "sp", "screen": "PauseSettings",
+     "what": "every pause settings page (Video, Audio, Input, Gameplay, Misc) is shown mid-match",
+     "assert": "probe: assert_settings_page <page> and assert_visible CollectionBox<page>Settings 1"},
+    {"id": "sp-resume", "peer": "sp", "screen": "game", "sim_ticks": [1500, 4000],
+     "what": "Resume closes the pause menu and the match keeps running from where it paused",
+     "assert": "probe: wait screen=game after ButtonResume"},
+    {"id": "sp-quit", "peer": "sp",
+     "what": "the run leaves the match and quits cleanly, with exit code 0 and no assert dialog",
+     "assert": "runner record: exit_code 0, timed_out false"}
+  ]
+}

@@ -1,0 +1,58 @@
+# The main menu and every settings page a player can reach before a match, held on screen long
+# enough for the recorder to catch each one. The skirmish activity picker is not driven here: the
+# menu-script pump stops while ScenarioGUI is up (see the sp-skirmish-picker checklist item).
+wait 60
+assert_screen MainScreen
+wait 20
+activate ButtonMainToOptions
+wait 20
+assert_screen SettingsScreen
+select_settings_page Video
+wait 20
+assert_settings_page Video
+assert_visible CollectionBoxVideoSettings 1
+select_settings_page Audio
+wait 20
+assert_settings_page Audio
+assert_visible CollectionBoxAudioSettings 1
+select_settings_page Input
+wait 20
+assert_settings_page Input
+assert_visible CollectionBoxInputSettings 1
+select_settings_page Gameplay
+wait 20
+assert_settings_page Gameplay
+assert_visible CollectionBoxGameplaySettings 1
+select_settings_page Misc
+wait 20
+assert_settings_page Misc
+assert_visible CollectionBoxMiscSettings 1
+select_settings_page Network
+wait 20
+assert_settings_page Network
+assert_visible CollectionBoxNetworkSettings 1
+select_settings_page Network:Player
+wait 20
+assert_settings_page Network:Player
+assert_visible CollectionBoxNetPagePlayer 1
+select_settings_page Network:Chat
+wait 20
+assert_settings_page Network:Chat
+assert_visible CollectionBoxNetPageChat 1
+select_settings_page Network:Recovery
+wait 20
+assert_settings_page Network:Recovery
+assert_visible CollectionBoxNetPageRecovery 1
+select_settings_page Network:Files
+wait 20
+assert_settings_page Network:Files
+assert_visible CollectionBoxNetPageFiles 1
+select_settings_page Network:Internet
+wait 20
+assert_settings_page Network:Internet
+assert_visible CollectionBoxNetPageInternet 1
+post_command ButtonBackToMainMenu
+wait 25
+assert_screen MainScreen
+wait 20
+exit

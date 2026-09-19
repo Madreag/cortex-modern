@@ -1,0 +1,3 @@
+# The probe drives this peer; the menu script only holds the run open until the probe signals done.
+wait_file {PROBE_DIR}/done.json 240
+exit
