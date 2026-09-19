@@ -1050,10 +1050,28 @@ namespace {
 	// The end-of-tick state every peer has to agree on. A held tick runs no simulation but still applies
 	// commands and runs the activity, so the same census goes in there too - a divergence inside a hold
 	// would otherwise sit under a hash made of terrain alone.
-	void FeedSimChecksum(const std::deque<Actor*>& actors, const std::deque<MovableObject*>& items,
-	                     const std::deque<MovableObject*>& particles, const std::list<Actor*>* rosters) {
+	//
+	// The added deques go in beside the live ones: the checkpoint archive writes both (Scene writes
+	// GetAllParticles, which concatenates them), so an object only one peer holds has to move the hash.
+	void FeedSimChecksum(const std::deque<Actor*>& actors, const std::deque<Actor*>& addedActors,
+	                     const std::deque<MovableObject*>& items, const std::deque<MovableObject*>& addedItems,
+	                     const std::deque<MovableObject*>& particles, const std::deque<MovableObject*>& addedParticles,
+	                     const std::list<Actor*>* rosters) {
 
-		for (Actor* a: actors) {
+		auto eachActor = [&](auto&& body) {
+			for (Actor* a: actors) body(a);
+			for (Actor* a: addedActors) body(a);
+		};
+		auto eachParticle = [&](auto&& body) {
+			for (MovableObject* p: particles) body(p);
+			for (MovableObject* p: addedParticles) body(p);
+		};
+		auto eachItem = [&](auto&& body) {
+			for (MovableObject* i: items) body(i);
+			for (MovableObject* i: addedItems) body(i);
+		};
+
+		eachActor([](Actor* a) {
 			const int64_t uniqueID = static_cast<int64_t>(a->GetUniqueID());
 			g_SimChecksum.Update("actors", &uniqueID, sizeof(uniqueID));
 			const float posX = a->GetPos().m_X;
@@ -1071,10 +1089,10 @@ namespace {
 			g_SimChecksum.Update("rot_angle", &actorRotAngle, sizeof(actorRotAngle));
 			const float actorAngVel = a->GetAngularVel();
 			g_SimChecksum.Update("rot_angvel", &actorAngVel, sizeof(actorAngVel));
-		}
+		});
 
 		// Controller input state per actor — catches control drift the actors fingerprint misses.
-		for (Actor* a: actors) {
+		eachActor([](Actor* a) {
 			const Controller* controller = a->GetController();
 			const int64_t controllerID = static_cast<int64_t>(a->GetUniqueID());
 			g_SimChecksum.Update("controller", &controllerID, sizeof(controllerID));
@@ -1091,10 +1109,10 @@ namespace {
 			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
-		}
+		});
 
 		// Compact per-particle fingerprint — uniqueID + pos + vel.
-		for (MovableObject* p: particles) {
+		eachParticle([](MovableObject* p) {
 			const int64_t particleID = static_cast<int64_t>(p->GetUniqueID());
 			g_SimChecksum.Update("particles", &particleID, sizeof(particleID));
 			const float ppX = p->GetPos().m_X;
@@ -1107,10 +1125,10 @@ namespace {
 			g_SimChecksum.Update("particles", &pvY, sizeof(pvY));
 			const float partAngVel = p->GetAngularVel();
 			g_SimChecksum.Update("rot_angvel", &partAngVel, sizeof(partAngVel));
-		}
+		});
 
 		// Same fingerprint for free items — a dropped device's state was only visible as a count before.
-		for (MovableObject* i: items) {
+		eachItem([](MovableObject* i) {
 			const int64_t itemID = static_cast<int64_t>(i->GetUniqueID());
 			g_SimChecksum.Update("items", &itemID, sizeof(itemID));
 			const float ipX = i->GetPos().m_X;
@@ -1123,14 +1141,15 @@ namespace {
 			g_SimChecksum.Update("items", &ivY, sizeof(ivY));
 			const float itemAngVel = i->GetAngularVel();
 			g_SimChecksum.Update("rot_angvel", &itemAngVel, sizeof(itemAngVel));
-		}
+		});
 
-		// Lightweight population metadata — catches spawn/delete count drift.
-		const int32_t actorCount = static_cast<int32_t>(actors.size());
+		// Lightweight population metadata — catches spawn/delete count drift. The counts are of the
+		// whole census, added deques included, for the same reason the bodies above are.
+		const int32_t actorCount = static_cast<int32_t>(actors.size() + addedActors.size());
 		g_SimChecksum.Update("scene", &actorCount, sizeof(actorCount));
-		const int32_t itemCount = static_cast<int32_t>(items.size());
+		const int32_t itemCount = static_cast<int32_t>(items.size() + addedItems.size());
 		g_SimChecksum.Update("scene", &itemCount, sizeof(itemCount));
-		const int32_t particleCount = static_cast<int32_t>(particles.size());
+		const int32_t particleCount = static_cast<int32_t>(particles.size() + addedParticles.size());
 		g_SimChecksum.Update("scene", &particleCount, sizeof(particleCount));
 		for (int team = Activity::TeamOne; team < Activity::MaxTeamCount; ++team) {
 			const int32_t rosterSize = static_cast<int32_t>(rosters[team].size());
@@ -1143,8 +1162,12 @@ namespace {
 			}
 		}
 
-		// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
-		// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced.
+	}
+
+	// Snapshot the sim + Lua RNG states here — before the see-ray and MOID-draw futures launch
+	// and start mutating g_SimRNG on the thread pool — so the snapshot can't be raced. This is why
+	// the randomness feed stays inside Update while the object census moved to the tick's end.
+	void FeedSimChecksumRandomness() {
 		const std::string rngState = g_SimRNG.SerializeStateForHashing();
 		g_SimChecksum.Update("sim_rng", rngState.data(), rngState.size());
 		g_LuaMan.HashAllLuaStatesIntoSimChecksum();
@@ -1170,10 +1193,33 @@ bool MovableMan::RunLockstepPausedTick() {
 	ApplyLockstepGameCommands(readyFrame);
 	// A held tick hashes what a simulated one does: the activity, its funds and every Lua state still run
 	// while the world waits, so a divergence inside a setup or pause hold is caught by the same exchange.
+	// The object census rides the tick's end with every other tick's, so only the randomness goes in here.
 	if (g_SimChecksum.IsActive()) {
-		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
+		FeedSimChecksumRandomness();
 	}
 	return true;
+}
+
+void MovableMan::FeedTickEndChecksum() {
+	if (!g_SimChecksum.IsActive()) {
+		return;
+	}
+	// The census is taken where the checkpoint archive is written, so the hash and the archive
+	// describe ONE instant: a held tick never drains its added deques, and a running tick can add
+	// to them after AbsorbAddedMOs in the same update.
+	std::scoped_lock lock(m_AddedActorsMutex, m_AddedItemsMutex, m_AddedParticlesMutex);
+	FeedSimChecksum(m_Actors, m_AddedActors, m_Items, m_AddedItems, m_Particles, m_AddedParticles, m_ActorRoster);
+	// Keep the census the hash covered, so a capture can be held to describing the same objects.
+	m_LastChecksumCensus.clear();
+	m_LastChecksumCensus.reserve(m_Actors.size() + m_AddedActors.size() + m_Items.size() +
+	                             m_AddedItems.size() + m_Particles.size() + m_AddedParticles.size());
+	for (const auto* deque: {&m_Actors, &m_AddedActors}) {
+		for (const Actor* a: *deque) m_LastChecksumCensus.push_back(a->GetUniqueID());
+	}
+	for (const auto* deque: {&m_Items, &m_AddedItems, &m_Particles, &m_AddedParticles}) {
+		for (const MovableObject* mo: *deque) m_LastChecksumCensus.push_back(mo->GetUniqueID());
+	}
+	m_LastChecksumCensusTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 }
 
 uint8_t MovableMan::ValueObservationAuthority(uint64_t objectUID) const {
@@ -4985,11 +5031,11 @@ void MovableMan::Update() {
 		g_ActivityMan.EndLockstepRelaunch();
 	}
 
-	// Feed each actor's stable end-of-tick state into the `actors` checksum subsystem.
-	// Fields go in individually with fixed-width types so the byte stream is cross-OS-stable.
+	// The RNG snapshot has to be taken here, before the see-ray and MOID-draw futures launch below;
+	// the object census is taken at the tick's end instead, where the checkpoint archive is written.
 	if (g_SimChecksum.IsActive()) {
 		DumpControllerDebugSnapshot("end_tick_before_checksum", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_Actors, nullptr, nullptr, &m_Particles);
-		FeedSimChecksum(m_Actors, m_Items, m_Particles, m_ActorRoster);
+		FeedSimChecksumRandomness();
 	}
 
 	// Freeze the material terrain for the threaded vision pass so carves can't race the see-ray reads.
