@@ -9,6 +9,7 @@
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
 #include "NetSeatAuth.h"
+#include "AutosaveStore.h"
 #include "NetResyncState.h"
 #include "Singleton.h"
 
@@ -224,6 +225,17 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// The id every peer of this match writes its checkpoints under.
+		std::string GetAutosaveMatchId() const { return m_AutosaveMatchId; }
+		/// Records the checkpoint the host named for a heal: this peer pins it against retention and says
+		/// whether it holds a restorable copy. The choice is never recomputed locally.
+		void NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host);
+		struct RewindAnchor {
+			std::string matchId;
+			uint64_t tick = 0;
+			bool heldLocally = false;
+		};
+		RewindAnchor GetRewindAnchor() const;
 		/// §11: the multiprocess reconnect test shares one Userdata, so each process gets its own
 		/// recovery-record path instead of racing over the default one.
 		static void SetTicketStorePath(std::string path);
@@ -505,6 +517,11 @@ namespace RTE {
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
+		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
+		std::atomic<uint64_t> m_PinnedAutosaveTick{0}; //!< The agreed rewind point; a worker thread names it, the tick path reads it.
+		std::string m_RewindAnchorMatchId;
+		uint64_t m_RewindAnchorTick = 0;
+		bool m_RewindAnchorHeld = false;
 		NetMatchServiceState m_State = NetMatchServiceState::Idle;
 		std::string m_StatusText = "Idle";
 		std::string m_ErrorText;
