@@ -2207,16 +2207,20 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 				}
 				ownerIdentity = 0;
 			}
-			AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.Channel(), bus, voice.awaitingSample);
+			unsigned simPosition = 0;
+			LogicalSoundVoice::Progress progress{};
+			if (voice.hasLifetime) {
+				progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+				simPosition = static_cast<unsigned>(std::max(0.0, progress.position));
+			}
+			AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, ownerIdentity, voice.soundPath, voice.minimumAudibleDistance, voice.Channel(), bus, voice.awaitingSample, simPosition);
 			captured.playing = true;
 			if (voice.hasArchive) {
 				captured.priority = voice.priority;
 				captured.control = voice.control;
 			}
 			if (voice.hasLifetime) {
-				const LogicalSoundVoice::Progress progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 				captured.loops = progress.loops;
-				captured.position = static_cast<unsigned>(std::max(0.0, progress.position));
 				captured.frequency = voice.lifetime.sampleRate;
 				captured.loopStart = voice.lifetime.loopStart;
 				captured.loopEnd = voice.lifetime.loopEnd;
@@ -2555,16 +2559,20 @@ std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* 
 	for (const auto& [identity, voice]: m_PlayingVoices) {
 		if (voice.owner != container || !VoiceSimLive(voice)) continue;
 		int bus = container ? container->GetBusRouting() : 0;
-		AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.Channel(), bus, voice.awaitingSample);
+		unsigned simPosition = 0;
+		LogicalSoundVoice::Progress progress{};
+		if (voice.hasLifetime) {
+			progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+			simPosition = static_cast<unsigned>(std::max(0.0, progress.position));
+		}
+		AudioCheckpoint::Voice captured = AudioCheckpoint::Voice::Capture(identity, container ? container->GetCheckpointIdentity() : 0, voice.soundPath, voice.minimumAudibleDistance, voice.Channel(), bus, voice.awaitingSample, simPosition);
 		captured.playing = true;
 		if (voice.hasArchive) {
 			captured.priority = voice.priority;
 			captured.control = voice.control;
 		}
 		if (voice.hasLifetime) {
-			const LogicalSoundVoice::Progress progress = voice.lifetime.At(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
 			captured.loops = progress.loops;
-			captured.position = static_cast<unsigned>(std::max(0.0, progress.position));
 			captured.frequency = voice.lifetime.sampleRate;
 			captured.loopStart = voice.lifetime.loopStart;
 			captured.loopEnd = voice.lifetime.loopEnd;
@@ -2773,6 +2781,47 @@ bool AudioMan::RunCheckpointSelfTest() {
 		} catch (const std::exception& error) {
 			g_TimerMan.RestoreSimTickAfterPreview(cursorArmUpdateCount, cursorArmTimeTicks);
 			std::cout << "[audio-checkpoint-selftest] FAIL voice_cursor_is_sim_times_not_the_mixers " << error.what() << std::endl;
+			ok = false;
+		}
+		try {
+			std::unique_ptr<SoundContainer> looping(static_cast<SoundContainer*>(preset->Clone()));
+			looping->SetPaused(true); looping->SetImmobile(true); looping->SetLoopSetting(-2);
+			if (looping->GetLoopSetting() != -1) throw std::runtime_error("SetLoopSetting(-2) did not clamp to -1");
+			if (!looping->Play()) throw std::runtime_error("out-of-range loop voice did not play");
+			const int loopId = *looping->GetPlayingChannels()->begin();
+			FMOD::Channel* loopChannel = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(loopId, &loopChannel));
+			FMOD::Sound* loopSound = nullptr;
+			unsigned int loopFrames = 0;
+			AudioCheckpoint::Require(loopChannel->getCurrentSound(&loopSound));
+			if (!loopSound) throw std::runtime_error("out-of-range loop voice has no sound");
+			AudioCheckpoint::Require(loopSound->getLength(&loopFrames, FMOD_TIMEUNIT_PCM));
+			if (loopFrames < 2) throw std::runtime_error("out-of-range loop sample is too short to seek in");
+			unsigned int mixerPos = 0;
+			{
+				AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+				if (loopFrames > 1) AudioCheckpoint::Require(loopChannel->setPosition(loopFrames / 2, FMOD_TIMEUNIT_PCM));
+				AudioCheckpoint::Require(loopChannel->getPosition(&mixerPos, FMOD_TIMEUNIT_PCM));
+			}
+			RetireFinishedPlayingVoices();
+			const bool stillPlaying = looping->IsBeingPlayed() && m_PlayingVoices.contains(loopId);
+			AudioRuntime state;
+			std::string refusal;
+			if (!state.Load(SaveCheckpoint(), &refusal)) throw std::runtime_error("could not parse out-of-range loop archive: " + refusal);
+			unsigned int archivedPos = 0;
+			bool archived = false;
+			for (const auto& voice: state.voices) {
+				if (voice.identity == loopId) { archived = true; archivedPos = voice.position; }
+			}
+			const bool offTheMixer = archived && archivedPos != mixerPos;
+			cursorArm("out_of_range_loop_survives_retire", stillPlaying && archived && offTheMixer,
+			          "playing=" + std::to_string(stillPlaying ? 1 : 0) + " archived=" + std::to_string(archived ? 1 : 0) +
+			              " position=" + std::to_string(archivedPos) + " mixer=" + std::to_string(mixerPos) +
+			              " loops=" + std::to_string(looping->GetLoopSetting()) + " frames=" + std::to_string(loopFrames));
+			if (looping->IsBeingPlayed()) looping->Stop();
+			if (m_PlayingVoices.contains(loopId)) RetireVoice(loopId);
+		} catch (const std::exception& error) {
+			std::cout << "[audio-checkpoint-selftest] FAIL out_of_range_loop_survives_retire " << error.what() << std::endl;
 			ok = false;
 		}
 		try {
