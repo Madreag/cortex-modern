@@ -227,6 +227,10 @@ namespace RTE {
 		return directory / (matchId + c_AdmissionExtension);
 	}
 
+	std::filesystem::path AutosaveStore::SegmentPath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick) {
+		return directory / (matchId + "-" + std::to_string(tick) + c_SegmentExtension);
+	}
+
 	std::string AutosaveStore::RenderSideState(const AutosaveSideState& state) {
 		std::ostringstream out;
 		// Ordered containers, one line per entry: the same tick renders the same bytes on every peer.
@@ -643,6 +647,8 @@ namespace RTE {
 			removed += std::filesystem::remove(path, ignored) ? 1 : 0;
 			// A checkpoint's restart manifest belongs to that checkpoint and goes with it.
 			std::filesystem::remove(ManifestPath(directory, matchId, tick), ignored);
+			// So does the segment that replays from it: without the archive it has nothing to stand on.
+			std::filesystem::remove(SegmentPath(directory, matchId, tick), ignored);
 		}
 		// The admission file lives as long as any checkpoint of the match does.
 		if (kept.empty()) {
