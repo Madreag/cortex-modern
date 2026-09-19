@@ -1057,6 +1057,11 @@ local function concatenate(values)
 	return capturing and captureNative.join(values) or table.concat(values)
 end
 
+-- A path is a list of segments; this is how one is named in a message.
+local function pathText(segments)
+	return table.concat(segments, ".")
+end
+
 local function carriesKey(saved, key)
 	return not saved.global or type(key) ~= "string" or key == "_G"
 end
@@ -1627,7 +1632,7 @@ serializeGraph = function(roots, rebuildEverything)
 		if #changes > 0 or not rawequal(meta, saved.meta) then
 			-- The pairs go in one by one: the list that holds them is this capture's own scratch,
 			-- born above the base, and only objects the capture found can be named by a number.
-			local where = "engine table " .. (baseline.paths[saved.object] or "?")
+			local where = "engine table " .. pathText(baseline.paths[saved.object] or { "?" })
 			local pairsOut = {}
 			for _, change in ipairs(changes) do
 				local label = (type(change[1]) == "string" or type(change[1]) == "number" or type(change[1]) == "boolean") and tostring(change[1]) or type(change[1])
@@ -2028,10 +2033,6 @@ local function assignPath(segments, object)
 	if type(parent) ~= "table" and type(parent) ~= "userdata" then return false end
 	parent[segments[#segments]] = object
 	return true
-end
-
-local function pathText(segments)
-	return table.concat(segments, ".")
 end
 
 )lua"
@@ -3259,6 +3260,22 @@ do
 	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
 	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
 	check("sg5_restore_then_capture_is_the_same_text", #carriedProblems == 0 and carriedText == birthOne, table.concat(carriedProblems, " | "))
+	-- An engine table a mod changed rides in the archive as an inline patch: an added key, a key that is
+	-- not a string, and a metatable the baseline did not have. Writer and reader both, then again.
+	local patchMetaBefore = getmetatable(table)
+	rawset(string, "f107probe", function() return 107 end)
+	rawset(string, 107, "seven")
+	setmetatable(table, { f107 = true })
+	local patchText, patchProblems = _ScriptGraph.serialize({})
+	local patchCount = tonumber(string.match(patchText, "E(%d+);") or "0") or 0
+	local patchRoots, patchRestoreProblems = _ScriptGraph.deserialize(patchText)
+	local patchAgain = patchRoots and select(1, _ScriptGraph.serialize({})) or ""
+	setmetatable(table, patchMetaBefore)
+	rawset(string, "f107probe", nil)
+	rawset(string, 107, nil)
+	check("sg6_engine_patch_round_trips", #patchProblems == 0 and #patchRestoreProblems == 0 and patchCount > 0 and
+	      string.sub(patchText, 1, 4) == "SG6;" and patchAgain == patchText,
+	      "patches=" .. patchCount .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | "))
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
 	local file = io.tmpfile()
