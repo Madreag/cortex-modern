@@ -381,7 +381,7 @@ static bool s_rbProbeRestoreMismatch = false;
 
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
-static int s_netMatchResyncs = 0;
+static NetMatchHealWindow s_netMatchHeals;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
 static std::string s_netMatchServiceE2EError;
@@ -4333,12 +4333,13 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
-		           g_NetMatchService.IsResyncOnDesyncEnabled() && (s_netMatchResyncs < 3 || g_NetMatchService.IsHostMigrationRepairPending()) &&
+		           g_NetMatchService.IsResyncOnDesyncEnabled() &&
+		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
 			// snapshots its state, every peer reloads the identical file, the match plays on.
-			++s_netMatchResyncs;
-			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchResyncs) + "): " + error);
+			s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
 			{
 				std::ostringstream line;
 				line << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot";
@@ -6407,7 +6408,8 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
-	out << "\"resyncs\":" << s_netMatchResyncs << ",";
+	out << "\"resyncs\":" << s_netMatchHeals.Total() << ",";
+	out << "\"resyncs_in_window\":" << s_netMatchHeals.InWindow() << ",";
 	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";
 	// The actor census guards against sim-CONSISTENT duplication (both peers doubling identically
 	// slips every divergence gate); the peak catches a double-spawn that later sheds back to normal.

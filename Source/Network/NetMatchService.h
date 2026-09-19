@@ -18,9 +18,11 @@
 #include "NetWorldJoin.h"
 #include "Singleton.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -343,6 +345,38 @@ namespace RTE {
 		std::string DetailsText() const;
 		/// Formats the identity, reading and caching the executable hash on first use.
 		std::string IdentityText() const;
+	};
+
+	/// The in-place heal cap, held as a window of sim time instead of a process lifetime: a persistent
+	/// world that heals once a day heals forever, while a match that cannot settle still stops after
+	/// three heals inside the window. A sim time before the newest heal means the round was resumed from
+	/// an older checkpoint, which starts the window again.
+	class NetMatchHealWindow {
+	public:
+		static constexpr size_t c_Cap = 3;
+		static constexpr long long c_WindowSeconds = 600;
+
+		bool Allowed(long long nowSimTicks, long long ticksPerSecond) {
+			Trim(nowSimTicks, ticksPerSecond);
+			return m_Heals.size() < c_Cap;
+		}
+		void Note(long long nowSimTicks, long long ticksPerSecond) {
+			Trim(nowSimTicks, ticksPerSecond);
+			m_Heals.push_back(nowSimTicks);
+			++m_Total;
+		}
+		size_t InWindow() const { return m_Heals.size(); }
+		uint64_t Total() const { return m_Total; }
+
+	private:
+		void Trim(long long nowSimTicks, long long ticksPerSecond) {
+			if (!m_Heals.empty() && nowSimTicks < m_Heals.back()) m_Heals.clear();
+			const long long window = c_WindowSeconds * std::max<long long>(1, ticksPerSecond);
+			while (!m_Heals.empty() && nowSimTicks - m_Heals.front() >= window) m_Heals.pop_front();
+		}
+
+		std::deque<long long> m_Heals; //!< Sim times of the heals still inside the window, oldest first.
+		uint64_t m_Total = 0;
 	};
 
 	class NetMatchService : public Singleton<NetMatchService> {
