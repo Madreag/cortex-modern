@@ -295,11 +295,11 @@ void RTEError::SetExceptionHandlers() {
 
 void RTEError::ShowMessageBox(const std::string& message) {
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Warning (headless): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Warning (headless): " + message);
 		return;
 	}
 	if (!IsOnAppMainThread()) {
-		std::fprintf(stderr, "RTE Warning (from worker thread): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Warning (from worker thread): " + message);
 		return;
 	}
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "RTE Warning! (>_<)", message.c_str(), nullptr);
@@ -307,12 +307,12 @@ void RTEError::ShowMessageBox(const std::string& message) {
 
 bool RTEError::ShowAbortMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
-		std::fprintf(stderr, "RTE Abort (from worker thread): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Abort (from worker thread): " + message);
 		return false;
 	}
 	// Headless / automated runs can't dismiss a modal dialog — log + proceed to exit.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Abort (headless): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Abort (headless): " + message);
 		return false;
 	}
 	enum AbortMessageButton {
@@ -350,12 +350,12 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
 		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
-		std::fprintf(stderr, "RTE Assert (from worker thread): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
 		return false;
 	}
 	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		std::fprintf(stderr, "RTE Assert (headless): %s\n", message.c_str());
+		System::PrintFaultLine("RTE Assert (headless): " + message);
 		return true;
 	}
 	enum AssertMessageButton {
@@ -430,7 +430,7 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 	if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 		exceptionMessage += consoleSaveMsg;
 	}
-	System::PrintToCLI(exceptionMessage);
+	System::PrintFaultToCLI(exceptionMessage);
 
 	// Ditch the video mode so the message box appears without problems.
 	if (g_WindowMan.GetWindow()) {
@@ -489,7 +489,7 @@ void RTEError::AbortFunc(const std::string& description, const std::source_locat
 		if (g_ConsoleMan.SaveAllText("AbortLog.txt")) {
 			abortMessage += consoleSaveMsg;
 		}
-		System::PrintToCLI(abortMessage);
+		System::PrintFaultToCLI(abortMessage);
 
 		// Ditch the video mode so the message box appears without problems.
 		if (g_WindowMan.GetWindow()) {

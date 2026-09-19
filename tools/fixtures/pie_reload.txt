@@ -1,0 +1,7 @@
+# Pie-menu reload (host, player 0): switch to the dummy, fire one round, hold the digital pie menu open,
+# step to the Up quadrant (Pick Up, which reads Reload with nothing in reach) and release on it.
+# The wire lands a line at its tick + 1 + D; the menu opens Enabled after 50 sim ms (four ticks).
+30 31 NEXT
+100 101 FIRE
+150 190 PIEMENU_DIGITAL
+160 161 L_UP

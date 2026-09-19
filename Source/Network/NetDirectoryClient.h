@@ -64,6 +64,7 @@ namespace RTE {
 			bool joinable = false;
 			std::string reason;    //!< Empty when joinable, else the refusal label.
 			std::string sessionId; //!< NET rows only.
+			bool persistentWorld = false;
 		};
 
 		NetDirectoryClient();
@@ -88,6 +89,8 @@ namespace RTE {
 		/// selects discovery visibility; a false intent needs the service's supports_unlisted
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
+		/// Marks listen_addrs dirty so the next heartbeat can refresh a renewed NAT mapping.
+		void NoteListenAddrs(std::vector<std::string> addrs);
 		/// Host: take the row down. Once a session exists the delete rides the request pump; a row
 		/// still mid-register is answered first so the delete can target the issued session id.
 		void Retract();
@@ -108,7 +111,15 @@ namespace RTE {
 
 		static std::vector<GameRow> MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 		                                         const std::vector<NetDirectorySessionRow>& directory,
-		                                         const NetDirectoryLocalIdentity& local);
+		                                         const NetDirectoryLocalIdentity& local,
+		                                         const NetDirectoryLocalIdentity* worldLocal = nullptr);
+
+		/// Whether a typed join addresses a persistent world: a listed row at that very address and
+		/// port, or the last world this process joined. A highlighted row for another host says nothing
+		/// about the address that was typed.
+		/// @param outActivity Receives the row's activity preset when a row decided it.
+		static bool TargetsPersistentWorld(const std::vector<GameRow>& rows, int selectedIndex, const std::string& address, uint16_t port,
+		                                   const std::string& lastWorldAddress, uint16_t lastWorldPort, std::string* outActivity = nullptr);
 
 		/// The service.directory report section: {state, session_id, registers, heartbeats, deletes,
 		/// last_status, last_error, desired_listed, confirmed_listed, supports_unlisted}; without a held
@@ -154,6 +165,8 @@ namespace RTE {
 		bool m_HiddenUnsupported = false; //!< A hidden intent on a legacy service already deleted once.
 		bool m_BrowseWanted = false;
 		NetDirectoryRegisterRequest m_Row;
+		bool m_ListenAddrsDirty = false;
+		bool m_ListenAddrsInFlight = false; //!< The dirty flag clears on the reply, so a failed heartbeat republishes.
 		bool m_Running = false;
 		std::string m_SessionId;
 		std::string m_Token;

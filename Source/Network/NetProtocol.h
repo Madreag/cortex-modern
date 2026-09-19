@@ -25,6 +25,12 @@ namespace RTE {
 	/// Version of the chat payload, carried per message for the same reason.
 	constexpr uint16_t c_NetChatVersion = 1;
 
+	/// Version of the host-authored participant-removal payload.
+	constexpr uint16_t c_NetParticipantRemovalVersion = 1;
+
+	/// Version of the participant-identity challenge and proof payloads.
+	constexpr uint16_t c_NetParticipantIdentityVersion = 1;
+
 	/// The sender had more modules than the request or the size cap allowed, and sent the first of them.
 	constexpr uint8_t c_NetModuleDigestsTruncated = 0x01;
 
@@ -58,6 +64,9 @@ namespace RTE {
 		ModuleDigestRequest = 24,
 		ModuleDigests = 25,
 		Chat = 26,
+		ParticipantRemoval = 27,
+		ParticipantChallenge = 28,
+		ParticipantProof = 29,
 	};
 
 	enum class NetRejectReason : uint16_t {
@@ -82,6 +91,23 @@ namespace RTE {
 		// The host gave this seat to a substitute. Only a claimant that proved the superseded
 		// credential is ever told this, so it says nothing to anyone who does not already hold it.
 		SeatReassigned = 17,
+		// Host-authored kick: this holder is gone for good. Not SessionEnded (the session lives).
+		ParticipantRemoved = 18,
+		// Host-authored ban: this identity is refused for the named scope. Not SessionEnded.
+		ParticipantBanned = 19,
+		// Connection proof missing, forged, replayed or bound to another host.
+		IdentityUnproven = 20,
+	};
+
+	enum class NetParticipantRemovalReason : uint8_t {
+		HostKick = 1,
+		HostBan = 2,
+	};
+
+	enum class NetParticipantRemovalAction : uint8_t {
+		Kick = 1,
+		BanSession = 2,
+		BanUntilRemoved = 3,
 	};
 
 	enum class NetProtocolErrorCode {
@@ -414,6 +440,44 @@ namespace RTE {
 		bool operator==(const NetModuleDigests&) const = default;
 	};
 
+	/// Host-only: this holder is removed at the named boundary. A transport drop is not this.
+	struct NetParticipantRemoval {
+		uint16_t version = c_NetParticipantRemovalVersion;
+		uint64_t sessionId = 0;
+		uint32_t round = 0;
+		NetAuthBytes16 txId{};
+		NetAuthBytes16 epoch{};
+		uint16_t stableSeat = 0;
+		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+		uint64_t boundaryFrame = 0;
+		NetParticipantRemovalReason reason = NetParticipantRemovalReason::HostKick;
+		NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
+
+		bool operator==(const NetParticipantRemoval&) const = default;
+	};
+
+	/// Host: prove this connection against this host and session before a human seat is granted.
+	struct NetParticipantChallenge {
+		uint16_t version = c_NetParticipantIdentityVersion;
+		NetAuthBytes32 hostBinding{};
+		uint64_t sessionId = 0;
+		NetAuthBytes16 connectionBinding{};
+		NetAuthBytes16 challenge{};
+
+		bool operator==(const NetParticipantChallenge&) const = default;
+	};
+
+	struct NetParticipantProof {
+		uint16_t version = c_NetParticipantIdentityVersion;
+		NetAuthBytes32 publicId{};
+		NetAuthBytes16 connectionBinding{};
+		NetAuthBytes16 challenge{};
+		std::array<uint8_t, 64> signature{};
+
+		bool operator==(const NetParticipantProof&) const = default;
+	};
+
 	/// Presentation only: chat never becomes a sim command and never enters a tick hash.
 	struct NetChat {
 		uint16_t chatVersion = c_NetChatVersion;
@@ -451,7 +515,10 @@ namespace RTE {
 		NetH4SubstitutionAck,
 		NetModuleDigestRequest,
 		NetModuleDigests,
-		NetChat>;
+		NetChat,
+		NetParticipantRemoval,
+		NetParticipantChallenge,
+		NetParticipantProof>;
 
 	struct NetMessage {
 		uint32_t sequence = 0;
@@ -470,7 +537,7 @@ namespace RTE {
 	class NetProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x324E4343U;
-		static constexpr uint16_t c_Version = 2;
+		static constexpr uint16_t c_Version = 3;
 		static constexpr uint16_t c_HeaderBytes = 24;
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;

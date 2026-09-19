@@ -425,6 +425,21 @@ void Controller::BeginLocalProduction() {
 	m_MouseMovement = m_LocalProduction.mouseMovement;
 }
 
+void Controller::DropLocalProduction() {
+	if (m_ProducingLocalInput) {
+		m_ControlStates = m_CommittedInput.controlStates;
+		m_AnalogMove = m_CommittedInput.analogMove;
+		m_AnalogAim = m_CommittedInput.analogAim;
+		m_AnalogCursor = m_CommittedInput.analogCursor;
+		m_MouseMovement = m_CommittedInput.mouseMovement;
+		m_ProducingLocalInput = false;
+	}
+	m_LocalProduction = InputSample();
+	m_LocalProductionSeatMode = m_SeatMode;
+	m_LocalProductionSeatPlayer = m_SeatPlayer;
+	m_LocalProductionValid = false;
+}
+
 void Controller::EndLocalProduction() {
 	if (!m_ProducingLocalInput) {
 		return;

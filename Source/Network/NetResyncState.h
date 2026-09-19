@@ -28,11 +28,16 @@ namespace RTE {
 		std::vector<NetLockstepFrame> pendingInputs;
 		std::vector<NetGameCommand> admittedReseats;
 		int64_t e2eFirstTransferUid = 0; //!< First owner transfer; a late joiner is a new process.
+		/// The checkpoint the host named for this heal, so every peer rewinds to the same archive
+		/// instead of choosing one of its own. Empty when the host holds no restorable checkpoint.
+		std::string rewindMatchId;
+		uint64_t rewindTick = 0;
 		bool operator==(const NetResyncState&) const = default;
 	};
 
 	class NetResyncCodec {
 	public:
+		static constexpr size_t c_MaxRewindMatchIdBytes = 64;
 		static constexpr size_t c_MaxPendingInputs = NetLockstepCodec::c_MaxPeerCount * (NetLockstepCodec::c_MaxFutureFrameSkew + 1);
 		static constexpr size_t c_MaxAuxiliaryBytes = 8U * 1024U * 1024U;
 		static constexpr size_t c_MaxArchiveBytes = 64U * 1024U * 1024U;

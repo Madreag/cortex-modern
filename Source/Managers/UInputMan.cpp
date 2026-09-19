@@ -3,6 +3,7 @@
 #include <iostream>
 #include "InputScript.h"
 #include <iostream>
+#include "Controller.h"
 #include "TimerMan.h"
 #include "Constants.h"
 #include "SceneMan.h"
@@ -14,6 +15,7 @@
 #include "PresetMan.h"
 #include "PerformanceMan.h"
 #include "MenuMan.h"
+#include "GUIInputWrapper.h"
 #include "Icon.h"
 #include "GameActivity.h"
 #include "System.h"
@@ -30,6 +32,8 @@ using namespace RTE;
 
 std::vector<Gamepad> UInputMan::s_PrevJoystickStates(Players::MaxPlayerCount);
 std::vector<Gamepad> UInputMan::s_ChangedJoystickStates(Players::MaxPlayerCount);
+std::vector<Gamepad> UInputMan::s_ScriptedPadStates;
+std::vector<Gamepad> UInputMan::s_ChangedScriptedPadStates;
 
 UInputMan::UInputMan() {
 	Clear();
@@ -50,6 +54,7 @@ void UInputMan::Clear() {
 	m_MouseTrapRadius = 350;
 	m_LastDeviceWhichControlledGUICursor = InputDevice::DEVICE_KEYB_ONLY;
 	m_DisableKeyboard = false;
+	m_SeatInputTypedInto = false;
 	m_DisableMouseMoving = false;
 	m_PrepareToEnableMouseMoving = false;
 
@@ -86,7 +91,10 @@ int UInputMan::Initialize() {
 	int joystickCount = 0;
 	SDL_JoystickID* joysticks = SDL_GetGamepads(&joystickCount);
 
-	for (size_t index = 0; index < std::min(joystickCount, static_cast<int>(Players::MaxPlayerCount)); ++index) {
+	for (size_t index = 0; index < static_cast<size_t>(joystickCount) && controllerIndex < Players::MaxPlayerCount; ++index) {
+		if (IsScriptedPad(joysticks[index])) {
+			continue;
+		}
 		if (SDL_IsGamepad(joysticks[index])) {
 			SDL_Gamepad* controller = SDL_OpenGamepad(joysticks[index]);
 			if (!controller) {
@@ -143,6 +151,14 @@ void UInputMan::LoadDeviceIcons() {
 	}
 }
 
+bool UInputMan::SeatInputTypedInto(int whichPlayer) const {
+	if (!m_SeatInputTypedInto || whichPlayer < Players::PlayerOne || whichPlayer >= Players::MaxPlayerCount) {
+		return false;
+	}
+	const InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
+	return device == InputDevice::DEVICE_KEYB_ONLY || device == InputDevice::DEVICE_MOUSE_KEYB;
+}
+
 Vector UInputMan::AnalogMoveValues(int whichPlayer) {
 	if (InputScript::DrivesPlayer(whichPlayer)) {
 		return Vector(0, 0);
@@ -176,6 +192,9 @@ Vector UInputMan::AnalogAimValues(int whichPlayer) {
 	}
 	// See AnalogMoveValues — determinism runs must not read live host input.
 	if (g_MetricsCollector.IsRecordingTickHashes()) {
+		return Vector(0, 0);
+	}
+	if (SeatInputTypedInto(whichPlayer)) {
 		return Vector(0, 0);
 	}
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
@@ -280,8 +299,64 @@ bool UInputMan::AnyPress() const {
 	return pressed;
 }
 
+void UInputMan::RegisterScriptedPad(SDL_JoystickID joystickID) {
+	if (IsScriptedPad(joystickID)) {
+		return;
+	}
+	// A script attaches its pad as a virtual gamepad, so it carries the whole gamepad button and axis set.
+	const int index = static_cast<int>(s_ScriptedPadStates.size());
+	s_ScriptedPadStates.emplace_back(index, joystickID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedScriptedPadStates.emplace_back(index, joystickID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+}
+
+void UInputMan::ForgetScriptedPad(SDL_JoystickID joystickID) {
+	const auto pad = std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), joystickID);
+	if (pad == s_ScriptedPadStates.end()) {
+		return;
+	}
+	s_ChangedScriptedPadStates.erase(s_ChangedScriptedPadStates.begin() + (pad - s_ScriptedPadStates.begin()));
+	s_ScriptedPadStates.erase(pad);
+}
+
+bool UInputMan::IsScriptedPad(SDL_JoystickID joystickID) {
+	return std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), joystickID) != s_ScriptedPadStates.end();
+}
+
+bool UInputMan::ScriptedPadButtonPressed(int whichButton) {
+	for (size_t pad = 0; pad < s_ScriptedPadStates.size(); ++pad) {
+		if (whichButton >= 0 && whichButton < static_cast<int>(s_ScriptedPadStates[pad].m_Buttons.size()) &&
+		    s_ScriptedPadStates[pad].m_Buttons[whichButton] && s_ChangedScriptedPadStates[pad].m_Buttons[whichButton]) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UInputMan::RecordScriptedPadButton(const SDL_Event& inputEvent) {
+	const bool joystickEvent = (inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN || inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_UP);
+	const SDL_JoystickID which = joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which;
+	const auto pad = std::find(s_ScriptedPadStates.begin(), s_ScriptedPadStates.end(), which);
+	if (pad == s_ScriptedPadStates.end()) {
+		return false;
+	}
+	const int button = joystickEvent ? inputEvent.jbutton.button : inputEvent.gbutton.button;
+	const bool down = joystickEvent ? inputEvent.jbutton.down : inputEvent.gbutton.down;
+	// An open pad reports the same press as a joystick and as a gamepad event, so only a transition writes the edge.
+	if (button >= 0 && button < static_cast<int>(pad->m_Buttons.size()) && down != pad->m_Buttons[button]) {
+		const size_t index = pad - s_ScriptedPadStates.begin();
+		s_ChangedScriptedPadStates[index].m_Buttons[button] = true;
+		(down ? pad->m_ButtonsPressedSinceSim : pad->m_ButtonsReleasedSinceSim)[button] = true;
+		pad->m_Buttons[button] = down;
+	}
+	return true;
+}
+
 bool UInputMan::AnyStartPress(bool includeSpacebar) {
 	if (KeyPressed(SDLK_ESCAPE) || (includeSpacebar && KeyPressed(SDLK_SPACE))) {
+		return true;
+	}
+	// A scripted pad belongs to no seat, so the menu reads its start at the device.
+	if (ScriptedPadButtonPressed(SDL_GAMEPAD_BUTTON_START)) {
 		return true;
 	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -293,6 +368,9 @@ bool UInputMan::AnyStartPress(bool includeSpacebar) {
 }
 
 bool UInputMan::AnyBackPress() {
+	if (ScriptedPadButtonPressed(SDL_GAMEPAD_BUTTON_BACK)) {
+		return true;
+	}
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (ElementPressed(player, InputElements::INPUT_BACK)) {
 			return true;
@@ -400,6 +478,9 @@ Vector UInputMan::GetMouseMovement(int whichPlayer) const {
 		Vector movement;
 		return InputScript::MouseAt(whichPlayer, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), movement) ? movement : Vector(0, 0);
 	}
+	if (SeatInputTypedInto(whichPlayer)) {
+		return Vector(0, 0);
+	}
 	if (whichPlayer == Players::NoPlayer || (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB && !m_EnableMultiMouseKeyboard)) {
 		return m_MouseStates.at(0).relativeMotion;
 	} else if (m_ControlScheme.at(whichPlayer).GetDevice() == InputDevice::DEVICE_MOUSE_KEYB) {
@@ -478,6 +559,9 @@ void UInputMan::ClearMouseButtons() {
 }
 
 int UInputMan::MouseWheelMovedByPlayer(int player) const {
+	if (SeatInputTypedInto(player)) {
+		return 0;
+	}
 	if (player == Players::NoPlayer || player < Players::PlayerOne || player >= Players::MaxPlayerCount || !m_EnableMultiMouseKeyboard) {
 		return m_MouseStates.at(0).wheelChange;
 	}
@@ -648,6 +732,15 @@ float UInputMan::AnalogAxisValue(int whichJoy, int whichAxis) const {
 }
 
 bool UInputMan::AnyJoyInput(bool checkForPresses) const {
+	// A scripted pad has no seat slot, so its buttons answer here at the device.
+	for (size_t pad = 0; pad < s_ScriptedPadStates.size(); ++pad) {
+		for (size_t button = 0; button < s_ScriptedPadStates[pad].m_Buttons.size(); ++button) {
+			if (s_ScriptedPadStates[pad].m_Buttons[button] && (!checkForPresses || s_ChangedScriptedPadStates[pad].m_Buttons[button])) {
+				return true;
+			}
+		}
+	}
+
 	int gamepadIndex = 0;
 	for (const Gamepad& gamepad: s_PrevJoystickStates) {
 		for (int button = 0; button < gamepad.m_Buttons.size(); ++button) {
@@ -721,8 +814,11 @@ bool UInputMan::GetInputElementState(int whichPlayer, int whichElement, InputSta
 				return false;
 		}
 	}
-	bool elementState = false;
+	if (SeatInputTypedInto(whichPlayer)) {
+		return false;
+	}
 	InputDevice device = m_ControlScheme.at(whichPlayer).GetDevice();
+	bool elementState = false;
 	const InputMapping* element = &(m_ControlScheme.at(whichPlayer).GetInputMappings()->at(whichElement));
 
 	if ((!elementState && device == InputDevice::DEVICE_KEYB_ONLY) || (device == InputDevice::DEVICE_MOUSE_KEYB && !(whichElement == InputElements::INPUT_AIM_UP || whichElement == InputElements::INPUT_AIM_DOWN))) {
@@ -849,6 +945,10 @@ bool UInputMan::GetMouseButtonState(int whichPlayer, int whichButton, InputState
 			default:
 				return false;
 		}
+	}
+
+	if (SeatInputTypedInto(whichPlayer)) {
+		return false;
 	}
 
 	InputDevice playerDevice = InputDevice::DEVICE_COUNT;
@@ -1106,6 +1206,9 @@ void UInputMan::HandleInputEvent(const SDL_Event& inputEvent) {
 		case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
 		case SDL_EVENT_GAMEPAD_BUTTON_UP: {
 			bool joystickEvent = (inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_DOWN || inputEvent.type == SDL_EVENT_JOYSTICK_BUTTON_UP);
+			if (RecordScriptedPadButton(inputEvent)) {
+				break;
+			}
 			if (std::vector<Gamepad>::iterator device = std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), joystickEvent ? inputEvent.jbutton.which : inputEvent.gbutton.which); device != s_PrevJoystickStates.end()) {
 				int button = -1;
 				int down = false;
@@ -1197,6 +1300,12 @@ void UInputMan::EndFrame() {
 		std::fill(gamepad.m_DigitalAxis.begin(), gamepad.m_DigitalAxis.end(), 0);
 	}
 
+	for (Gamepad& pad: s_ChangedScriptedPadStates) {
+		std::fill(pad.m_Buttons.begin(), pad.m_Buttons.end(), false);
+		std::fill(pad.m_Axis.begin(), pad.m_Axis.end(), 0);
+		std::fill(pad.m_DigitalAxis.begin(), pad.m_DigitalAxis.end(), 0);
+	}
+
 	m_TextInput.clear();
 	for (auto& [mouseID, mouse] : m_MouseStates) {
 		mouse.wheelChange = 0;
@@ -1225,6 +1334,10 @@ void UInputMan::EndSimUpdate() {
 	for (Gamepad& gamepad: s_PrevJoystickStates) {
 		std::fill(gamepad.m_ButtonsPressedSinceSim.begin(), gamepad.m_ButtonsPressedSinceSim.end(), false);
 		std::fill(gamepad.m_ButtonsReleasedSinceSim.begin(), gamepad.m_ButtonsReleasedSinceSim.end(), false);
+	}
+	for (Gamepad& pad: s_ScriptedPadStates) {
+		std::fill(pad.m_ButtonsPressedSinceSim.begin(), pad.m_ButtonsPressedSinceSim.end(), false);
+		std::fill(pad.m_ButtonsReleasedSinceSim.begin(), pad.m_ButtonsReleasedSinceSim.end(), false);
 	}
 }
 
@@ -1471,6 +1584,11 @@ void UInputMan::HandleGamepadHotPlug(SDL_JoystickID joystickID) {
 	SDL_Joystick* controller = nullptr;
 	int controllerIndex = 0;
 
+	// A scripted pad takes no seat slot: a seat's control scheme must never read a script's device.
+	if (IsScriptedPad(joystickID)) {
+		return;
+	}
+
 	for (controllerIndex = 0; controllerIndex < s_PrevJoystickStates.size(); ++controllerIndex) {
 		if (s_PrevJoystickStates[controllerIndex].m_JoystickID == joystickID) {
 			return;
@@ -1685,9 +1803,13 @@ bool UInputMan::RunCheckpointSelfTest() {
 
 bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	bool passed = true;
-	const auto check = [&passed](const char* name, bool valid) {
+	const auto check = [&passed](const char* name, bool valid, const std::string& observed = "") {
 		passed = valid && passed;
-		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+		std::cout << "[input-edge-selftest] " << (valid ? "PASS " : "FAIL ") << name;
+		if (!valid && !observed.empty()) {
+			std::cout << ": " << observed;
+		}
+		std::cout << std::endl;
 	};
 	const std::filesystem::path path = std::filesystem::current_path() / "scripted-edge-selftest.txt";
 	{
@@ -1716,8 +1838,184 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	g_TimerMan.RewindSimTo(20, 0);
 	const bool firstRead = GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed);
 	check("press_survives_a_second_read_in_its_frame", firstRead && GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Pressed));
+	{
+		std::ofstream script(path);
+		script << "player=0 1 2 CHAT\n";
+	}
+	check("chat_token", InputScript::Load(path.string(), &error) && InputScript::ElementFromName("CHAT") == InputScript::c_ChatAction &&
+	    InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 1) && !InputScript::HeldAt(Players::PlayerOne, InputScript::c_ChatAction, 3));
+	{
+		std::ofstream script(path);
+		script << "player=0 1 10 FIRE\nplayer=0 1 10 START\n";
+	}
+	check("script_drives_across_chat_entry", InputScript::Load(path.string(), &error) && InputScript::DrivesPlayer(Players::PlayerOne));
+	// What an open entry does: the dialog key mask and the seats' own gameplay mappings.
+	DisableKeys(true);
+	TypeIntoSeatInput(true);
+	g_TimerMan.RewindSimTo(5, 0);
+	check("held_fire_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_FIRE, 5) &&
+	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_FIRE, InputState::Held),
+	    "a scripted FIRE was not held while the entry was open");
+	check("held_start_across_open_entry", InputScript::HeldAt(Players::PlayerOne, InputElements::INPUT_START, 5) &&
+	        GetInputElementState(Players::PlayerOne, InputElements::INPUT_START, InputState::Held),
+	    "a scripted START was not held while the entry was open");
+	DisableKeys(false);
+	TypeIntoSeatInput(false);
+	// The human half of the same rule: the seat's own keyboard and mouse are typed into while the entry is
+	// open, so none of its gameplay mappings reads through.
+	{
+		std::ofstream script(path);
+		script << "# the human arm drives no player\n";
+	}
+	check("script_released_for_the_human_arm", InputScript::Load(path.string(), &error) && !InputScript::DrivesPlayer(Players::PlayerOne));
+	InputScheme& scheme = m_ControlScheme.at(Players::PlayerOne);
+	const InputDevice savedDevice = scheme.GetDevice();
+	const DeviceID savedDeviceID = scheme.GetDeviceID();
+	const InputMapping savedMapping = scheme.GetInputMappings()->at(InputElements::INPUT_L_UP);
+	const bool savedMultiDevice = m_EnableMultiMouseKeyboard;
+	m_EnableMultiMouseKeyboard = false;
+	scheme.SetDevice(InputDevice::DEVICE_MOUSE_KEYB);
+	scheme.SetKeyMapping(InputElements::INPUT_L_UP, SDL_SCANCODE_W);
+	Keyboard& keyboard = m_KeyboardStates[0];
+	Mouse& mouse = m_MouseStates[0];
+	const Keyboard savedKeyboard = keyboard;
+	const Mouse savedMouse = mouse;
+	keyboard.keyStates[SDL_SCANCODE_W] = true;
+	mouse.state[MouseButtons::MOUSE_LEFT] = true;
+	mouse.wheelChange = -1.0F;
+	mouse.relativeMotion = Vector(4, 0);
+	mouse.analogAim = Vector(m_MouseTrapRadius, 0);
+	const bool keyDrives = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	const bool buttonDrives = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("human_mappings_drive_with_the_entry_closed", keyDrives && buttonDrives,
+	    "W read as L_UP " + std::to_string(keyDrives) + " and the left button as fire " + std::to_string(buttonDrives) + " with no entry open");
+	const int wheelDrives = MouseWheelMovedByPlayer(Players::PlayerOne);
+	const Vector aimDrives = AnalogAimValues(Players::PlayerOne);
+	const Vector movementDrives = GetMouseMovement(Players::PlayerOne);
+	check("mouse_axes_drive_with_the_entry_closed", wheelDrives != 0 && !aimDrives.IsZero() && !movementDrives.IsZero(),
+	    "with no entry open the wheel read " + std::to_string(wheelDrives) + ", the aim " + std::to_string(aimDrives.GetX()) + "," +
+	        std::to_string(aimDrives.GetY()) + " and the movement " + std::to_string(movementDrives.GetX()) + "," + std::to_string(movementDrives.GetY()));
+	DisableKeys(true);
+	TypeIntoSeatInput(true);
+	const bool keyWhileTyping = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	check("human_key_silent_while_typing", !keyWhileTyping, "W still read as L_UP while the entry was open");
+	const bool buttonWhileTyping = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("mouse_button_silent_while_typing", !buttonWhileTyping, "the left mouse button still read as fire while the entry was open");
+	const int wheelWhileTyping = MouseWheelMovedByPlayer(Players::PlayerOne);
+	check("mouse_wheel_silent_while_typing", wheelWhileTyping == 0, "the wheel read " + std::to_string(wheelWhileTyping) + " while the entry was open");
+	const Vector aimWhileTyping = AnalogAimValues(Players::PlayerOne);
+	check("mouse_aim_silent_while_typing", aimWhileTyping.IsZero(),
+	    "the aim read " + std::to_string(aimWhileTyping.GetX()) + "," + std::to_string(aimWhileTyping.GetY()) + " while the entry was open");
+	const Vector movementWhileTyping = GetMouseMovement(Players::PlayerOne);
+	check("mouse_movement_silent_while_typing", movementWhileTyping.IsZero(),
+	    "the mouse moved the aim by " + std::to_string(movementWhileTyping.GetX()) + "," + std::to_string(movementWhileTyping.GetY()) + " while the entry was open");
+	// Losing the window is not a text entry: the seat keeps its own mappings through a plain key disable.
+	TypeIntoSeatInput(false);
+	const bool keyAfterFocusLoss = GetInputElementState(Players::PlayerOne, InputElements::INPUT_L_UP, InputState::Held);
+	const bool buttonAfterFocusLoss = MouseButtonHeld(MouseButtons::MOUSE_LEFT, Players::PlayerOne);
+	check("focus_loss_alone_does_not_consume_the_seat", keyAfterFocusLoss && buttonAfterFocusLoss,
+	    "a plain keyboard disable read W as L_UP " + std::to_string(keyAfterFocusLoss) + " and the left button as fire " + std::to_string(buttonAfterFocusLoss));
+	DisableKeys(false);
+	keyboard = savedKeyboard;
+	mouse = savedMouse;
+	scheme.SetDevice(savedDevice);
+	scheme.SetDeviceID(savedDeviceID);
+	scheme.GetInputMappings()->at(InputElements::INPUT_L_UP) = savedMapping;
+	m_EnableMultiMouseKeyboard = savedMultiDevice;
 	std::error_code removeError;
 	std::filesystem::remove(path, removeError);
 	std::cout << "[input-edge-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
+	return passed;
+}
+
+bool UInputMan::RunScriptedPadSeatSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* name, bool valid) {
+		passed = valid && passed;
+		std::cout << "[input-pad-seat-selftest] " << (valid ? "PASS " : "FAIL ") << name << std::endl;
+	};
+
+	constexpr int seat = Players::PlayerFour;
+	constexpr SDL_JoystickID scriptedPadID = 9001;
+	constexpr SDL_JoystickID seatPadID = 9002;
+	const InputDevice seatDevice = m_ControlScheme.at(seat).GetDevice();
+	const InputMapping seatStart = m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START);
+	const InputMapping seatFire = m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE);
+	m_ControlScheme.at(seat).SetDevice(InputDevice::DEVICE_GAMEPAD_2);
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START).SetJoyButton(SDL_GAMEPAD_BUTTON_START);
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE).SetJoyButton(SDL_GAMEPAD_BUTTON_START);
+	const int seatSlot = GetJoystickIndex(InputDevice::DEVICE_GAMEPAD_2);
+
+	g_TimerMan.RewindSimTo(100, 0);
+	EndFrame();
+	check("no_start_press_before_the_pad", !AnyStartPress(false));
+
+	RegisterScriptedPad(scriptedPadID);
+	HandleGamepadHotPlug(scriptedPadID);
+
+	GUIInputWrapper::AcquireJoystickBackgroundEvents();
+	SDL_VirtualJoystickDesc desc{};
+	SDL_INIT_INTERFACE(&desc);
+	desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+	desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+	desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+	desc.button_mask = (1U << SDL_GAMEPAD_BUTTON_COUNT) - 1;
+	desc.axis_mask = (1U << SDL_GAMEPAD_AXIS_COUNT) - 1;
+	desc.name = "Scripted pad seat selftest";
+	const SDL_JoystickID bindableID = SDL_AttachVirtualJoystick(&desc);
+	SDL_Joystick* bindable = nullptr;
+	if (bindableID) {
+		RegisterScriptedPad(bindableID);
+		HandleGamepadHotPlug(bindableID);
+		check("no_seat_slot_binds_a_scripted_pad", IsScriptedPad(bindableID) && std::find(s_PrevJoystickStates.begin(), s_PrevJoystickStates.end(), bindableID) == s_PrevJoystickStates.end());
+		bindable = SDL_OpenJoystick(bindableID);
+	} else {
+		check("no_seat_slot_binds_a_scripted_pad", false);
+	}
+
+	const Gamepad seatPadBefore = s_PrevJoystickStates[seatSlot];
+	const Gamepad seatChangedBefore = s_ChangedJoystickStates[seatSlot];
+	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, scriptedPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+
+	// The seat leak is a held START on GAMEPAD_2, not a Controller::Update.
+	const bool startBefore = ElementHeld(seat, InputElements::INPUT_START) || ElementPressed(seat, InputElements::INPUT_START);
+	SDL_Event padEvent{};
+	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_DOWN;
+	padEvent.jbutton.which = scriptedPadID;
+	padEvent.jbutton.button = static_cast<Uint8>(SDL_GAMEPAD_BUTTON_START);
+	padEvent.jbutton.down = true;
+	HandleInputEvent(padEvent);
+
+	const bool startAfter = ElementHeld(seat, InputElements::INPUT_START) || ElementPressed(seat, InputElements::INPUT_START);
+	check("a scripted pad start moved seat 4's controller", !startBefore && !startAfter);
+	check("the_menu_reads_a_scripted_pad_start", AnyStartPress(false));
+
+	s_PrevJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_ChangedJoystickStates[seatSlot] = Gamepad(seatSlot, seatPadID, SDL_GAMEPAD_AXIS_COUNT, SDL_GAMEPAD_BUTTON_COUNT);
+	s_PrevJoystickStates[seatSlot].m_Buttons[SDL_GAMEPAD_BUTTON_START] = true;
+	s_ChangedJoystickStates[seatSlot].m_Buttons[SDL_GAMEPAD_BUTTON_START] = true;
+	check("a_seat_pad_start_moves_the_seat", ElementPressed(seat, InputElements::INPUT_START));
+	s_PrevJoystickStates[seatSlot] = seatPadBefore;
+	s_ChangedJoystickStates[seatSlot] = seatChangedBefore;
+
+	padEvent.type = SDL_EVENT_JOYSTICK_BUTTON_UP;
+	padEvent.jbutton.down = false;
+	HandleInputEvent(padEvent);
+	check("a_scripted_pad_release_ends_the_menu_read", !AnyStartPress(false));
+
+	if (bindable) SDL_CloseJoystick(bindable);
+	if (bindableID) {
+		ForgetScriptedPad(bindableID);
+		SDL_DetachVirtualJoystick(bindableID);
+	}
+	GUIInputWrapper::ReleaseJoystickBackgroundEvents();
+	ForgetScriptedPad(scriptedPadID);
+	check("forgetting_a_scripted_pad_drops_its_state", !IsScriptedPad(scriptedPadID) && s_ScriptedPadStates.empty() && s_ChangedScriptedPadStates.empty());
+
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_FIRE) = seatFire;
+	m_ControlScheme.at(seat).GetInputMappings()->at(InputElements::INPUT_START) = seatStart;
+	m_ControlScheme.at(seat).SetDevice(seatDevice);
+	std::cout << "[input-pad-seat-selftest] " << (passed ? "PASS " : "FAIL ") << "complete" << std::endl;
 	return passed;
 }

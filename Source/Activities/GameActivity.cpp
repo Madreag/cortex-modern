@@ -14,6 +14,7 @@
 #include "PresetMan.h"
 #include "SceneMan.h"
 #include "ScenarioRunner.h"
+#include "LoopbackTransport.h"
 #include "NetMatchConfig.h"
 #include "DataModule.h"
 #include "PostProcessMan.h"
@@ -51,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <iostream>
 #include <list>
 #include <sstream>
@@ -58,6 +60,16 @@
 #define BRAINLZWIDTHDEFAULT 640
 
 using namespace RTE;
+
+std::string GameActivity::s_LastFundsReadout[Players::MaxPlayerCount];
+
+const std::string& GameActivity::GetLastFundsReadout(int player) {
+	static const std::string empty;
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return empty;
+	}
+	return s_LastFundsReadout[player];
+}
 
 // A player's AI order for one of their units crosses the wire under lockstep, so every peer applies it at the committed tick.
 static void IssueAIOrder(const Actor* actor, NetGameAIOrder::Op op, const Vector& point, const MovableObject* target) {
@@ -88,11 +100,13 @@ void GameActivity::Clear() {
 
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		m_ObservationTarget[player].Reset();
+		m_ObserveFreezeHeld[player] = false;
 		m_DeathViewTarget[player].Reset();
 		m_SpectatorTarget[player] = nullptr;
 		m_ActorSelectTimer[player].Reset();
 		m_ActorCursor[player].Reset();
 		m_pLastMarkedActor[player] = 0;
+		m_pLastHighlightDrawActor[player] = nullptr;
 		m_LandingZone[player].Reset();
 		m_AIReturnCraft[player] = true;
 		m_NextMultiOrderYOffset[player] = 0.0F;
@@ -791,8 +805,8 @@ bool GameActivity::QueuePurchaseDelivery(ACraft* pDeliveryCraft, const PurchaseO
 	// Add the new Delivery to the queue
 	m_Deliveries[order.team].push_back(newDelivery);
 
-	// Deduct cost from team's funds
 	m_TeamFunds[order.team] -= order.totalCost;
+	AdoptPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 
 	// Go 'ding!', but only if player is human, or it may be confusing
 	if (order.orderedByPlayer >= Players::PlayerOne && order.orderedByPlayer < Players::MaxPlayerCount && IsLocalHumanSeat(order.orderedByPlayer))
@@ -1385,6 +1399,60 @@ void GameActivity::DriveScriptedSetupEditor(int player) {
 	}
 }
 
+void GameActivity::ClearCursorHighlightDraw(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (m_pLastHighlightDrawActor[player] && g_MovableMan.ValidMO(m_pLastHighlightDrawActor[player]) && m_pLastHighlightDrawActor[player]->GetPieMenu()) {
+		m_pLastHighlightDrawActor[player]->GetPieMenu()->ClearHighlightDraw();
+	}
+	m_pLastHighlightDrawActor[player] = nullptr;
+}
+
+void GameActivity::ApplyCursorHighlightDraw(int player) {
+	if (!IsSeatActive(player) || !IsLocalHumanSeat(player)) {
+		ClearCursorHighlightDraw(player);
+		return;
+	}
+	Actor* highlighted = nullptr;
+	int radius = 0;
+	bool wobble = false;
+	if (m_ViewState[player] == ViewState::ActorSelect) {
+		Vector markedDistance;
+		highlighted = g_MovableMan.GetClosestTeamActor(m_Team[player], player, m_ActorCursor[player], g_SceneMan.GetSceneWidth(), markedDistance, true);
+		if (highlighted) {
+			const int quarterFrameBuffer = g_FrameMan.GetPlayerFrameBufferWidth(player) / 4;
+			if (markedDistance.MagnitudeIsGreaterThan(static_cast<float>(quarterFrameBuffer))) {
+				wobble = true;
+			} else {
+				radius = 30;
+			}
+		}
+	} else if (m_ViewState[player] == ViewState::AIGoToPoint) {
+		Vector distance;
+		highlighted = g_MovableMan.GetClosestActor(m_ActorCursor[player], 40, distance, m_ControlledActor[player]);
+		if (highlighted) {
+			radius = 15;
+		}
+	}
+	if (m_pLastHighlightDrawActor[player] && !g_MovableMan.ValidMO(m_pLastHighlightDrawActor[player])) {
+		m_pLastHighlightDrawActor[player] = nullptr;
+	}
+	if (m_pLastHighlightDrawActor[player] && m_pLastHighlightDrawActor[player] != highlighted && m_pLastHighlightDrawActor[player]->GetPieMenu()) {
+		m_pLastHighlightDrawActor[player]->GetPieMenu()->ClearHighlightDraw();
+	}
+	if (highlighted && highlighted->GetPieMenu()) {
+		if (wobble) {
+			highlighted->GetPieMenu()->SetHighlightWobble();
+		} else if (radius > 0) {
+			highlighted->GetPieMenu()->SetHighlightDrawRadius(radius);
+		}
+		m_pLastHighlightDrawActor[player] = highlighted;
+	} else {
+		ClearCursorHighlightDraw(player);
+	}
+}
+
 void GameActivity::DriveScriptedActorSelect(int player) {
 	if (s_ScriptedEditorGestures[player].empty() || s_ScriptedEditorGestures[player].front().kind != "actor_select") {
 		return;
@@ -1803,6 +1871,20 @@ static Actor* NextSpectatorActor(const Actor* current, bool forward) {
 	return forward ? (after ? after : first) : (before ? before : last);
 }
 
+bool GameActivity::ApplyObserveLookAround(int player) {
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount || m_ViewState[player] != ViewState::Observe) {
+		return false;
+	}
+	const bool freezeHeld = m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastSimMS(1000);
+	m_ObserveFreezeHeld[player] = freezeHeld;
+	if (freezeHeld) {
+		return false;
+	}
+	const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
+	UpdateSpectatorView(player, lookedAround);
+	return lookedAround;
+}
+
 void GameActivity::UpdateSpectatorView(int player, bool lookedAround) {
 	// Only a brainless human under the host's rule spectates; every other observer keeps the old view.
 	if (!BrainlessHumansSpectate() || !m_HadBrain[player] || (m_Brain[player] && !m_Brain[player]->IsDead())) {
@@ -1985,12 +2067,7 @@ void GameActivity::Update() {
 		// Update sceneman scroll targets
 
 		if (m_ViewState[player] == ViewState::Observe) {
-			// If we're observing game over state, freeze the view for a bit so the player's input doesn't ruin the focus
-			if (!(m_ActivityState == ActivityState::Over && !m_GameOverTimer.IsPastRealMS(1000))) {
-				// Get cursor input
-				const bool lookedAround = m_PlayerController[player].RelativeCursorMovement(m_ObservationTarget[player], 1.2f);
-				UpdateSpectatorView(player, lookedAround);
-			}
+			ApplyObserveLookAround(player);
 			// Set the view to the observation position
 			g_SceneMan.ForceBounds(m_ObservationTarget[player]);
 			g_CameraMan.SetScrollTarget(m_ObservationTarget[player], 0.1, ScreenOfPlayer(player));
@@ -2049,13 +2126,6 @@ void GameActivity::Update() {
 				if (localPieAnimations && m_ControlledActor[player] && m_ControlledActor[player]->GetPieMenu()) {
 					m_ControlledActor[player]->GetPieMenu()->DoDisableAnimation();
 				}
-			} else if (localPieAnimations && pMarkedActor && pMarkedActor->GetPieMenu()) {
-				int quarterFrameBuffer = g_FrameMan.GetPlayerFrameBufferWidth(player) / 4;
-				if (markedDistance.MagnitudeIsGreaterThan(static_cast<float>(quarterFrameBuffer))) {
-					pMarkedActor->GetPieMenu()->Wobble();
-				} else {
-					pMarkedActor->GetPieMenu()->FreezeAtRadius(30);
-				}
 			}
 
 			// Set the view to the cursor pos
@@ -2087,11 +2157,8 @@ void GameActivity::Update() {
 			Actor* pTargetActor = 0;
 			Vector distance;
 			if (pTargetActor = g_MovableMan.GetClosestActor(m_ActorCursor[player], 40, distance, m_ControlledActor[player]); pTargetActor && pTargetActor->GetPieMenu()) {
-				if (localPieAnimations) {
-					if (m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
-						m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
-					}
-					pTargetActor->GetPieMenu()->FreezeAtRadius(15);
+				if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
+					m_pLastMarkedActor[player]->GetPieMenu()->SetAnimationModeToNormal();
 				}
 				m_pLastMarkedActor[player] = pTargetActor;
 			} else if (localPieAnimations && m_pLastMarkedActor[player] && m_pLastMarkedActor[player]->GetPieMenu()) {
@@ -2629,6 +2696,18 @@ void GameActivity::RenderUpdate() {
 	Activity::RenderUpdate();
 }
 
+void GameActivity::PrepareDrawGUI(int whichScreen) {
+	const int player = PlayerOfScreen(whichScreen);
+	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
+		return;
+	}
+	if (m_ViewState[player] == ViewState::ActorSelect || m_ViewState[player] == ViewState::AIGoToPoint) {
+		ApplyCursorHighlightDraw(player);
+	} else {
+		ClearCursorHighlightDraw(player);
+	}
+}
+
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;
@@ -2817,7 +2896,8 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 	if (pIcon)
 		draw_sprite(pTargetBitmap, pIcon->GetBitmaps8()[0], MAX(2, g_CameraMan.GetScreenOcclusion(which).m_X + 2), 2);
 	// Gold
-	std::snprintf(str, sizeof(str), "%c Funds: %.10g oz", TeamFundsChanged(which) ? -57 : -58, std::floor(GetTeamFunds(m_Team[PoS])));
+	std::snprintf(str, sizeof(str), "%c Funds: %s oz", TeamFundsChanged(which) ? -57 : -58, DescribeFundsReadout(m_Team[PoS], PoS).c_str());
+	s_LastFundsReadout[PoS] = str;
 	g_FrameMan.GetLargeFont()->DrawAligned(&pBitmapInt, MAX(16, g_CameraMan.GetScreenOcclusion(which).m_X + 16), yTextPos, str, GUIFont::Left);
 	/* Not applicable anymore to the 4-team games
 	    // Body losses
@@ -2844,6 +2924,17 @@ void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int w
 		}
 		if (m_pBuyGUI[PoS] && m_pBuyGUI[PoS]->IsVisible()) {
 			m_pBuyGUI[PoS]->Draw(pTargetBitmap);
+		}
+	}
+
+	if (m_ViewState[PoS] == ViewState::ActorSelect || m_ViewState[PoS] == ViewState::AIGoToPoint) {
+		ApplyCursorHighlightDraw(PoS);
+	} else {
+		ClearCursorHighlightDraw(PoS);
+	}
+	if (m_pLastHighlightDrawActor[PoS] && g_MovableMan.ValidMO(m_pLastHighlightDrawActor[PoS])) {
+		if (PieMenu* highlightedPie = m_pLastHighlightDrawActor[PoS]->GetPieMenu(); highlightedPie && highlightedPie->HasHighlightDraw()) {
+			highlightedPie->DrawHighlight(pTargetBitmap, targetPos);
 		}
 	}
 
@@ -3521,6 +3612,7 @@ void GameActivity::ForgetDestroyedActor(const Actor* actor) {
 	Activity::ForgetDestroyedActor(actor);
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
 		if (m_pLastMarkedActor[player] == actor) m_pLastMarkedActor[player] = nullptr;
+		if (m_pLastHighlightDrawActor[player] == actor) m_pLastHighlightDrawActor[player] = nullptr;
 	}
 }
 
@@ -3878,9 +3970,13 @@ bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 	bool passed = true;
 	const char* reclaimDiagnostic = std::getenv("CC_TEST_NET_RECLAIM_DIAG");
 	if (reclaimDiagnostic && std::strcmp(reclaimDiagnostic, "1") == 0) std::cout << "[net-reclaim] diagnostic_enabled=1 assertions=unchanged collection=unchanged" << std::endl;
-	const auto check = [&](const char* name, bool value) {
+	const auto check = [&](const char* name, bool value, const std::string& got = {}, const std::string& expected = {}) {
 		passed = passed && value;
-		std::cout << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name << std::endl;
+		std::cout << "[net-local-ui-selftest] " << (value ? "PASS" : "FAIL") << " " << name;
+		if (!value && (!got.empty() || !expected.empty())) {
+			std::cout << " got=" << got << " expected=" << expected;
+		}
+		std::cout << std::endl;
 	};
 	auto& lua = g_LuaMan.GetMasterScriptState();
 	const auto graphRoundTrip = [&](const char* name, const std::string& script) {
@@ -4564,7 +4660,7 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("controller_boundary_equipment_ids_unchanged", fg == captured.fg && bg == captured.bg);
 		}
 		{
-			// AboveHeadPos is sim-derived; DrawHUD leftover must not move a write that reads it.
+			// AboveHeadPos is the sim-facing marker intensity and objectives read.
 			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
 			g_ActivityMan.SwapCheckpointActivity(next);
 			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
@@ -4581,6 +4677,233 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			          << " head_before=" << headBefore.m_Y << " head_after=" << headAfter.m_Y << std::endl;
 			check("above_hud_pos_moves_with_drawhud", hudBefore != hudAfter);
 			check("above_head_pos_survives_drawhud", headBefore == headAfter);
+		}
+		{
+			// Drive GameIntensityCalculator and the stock AddObjectivePoint(AboveHeadPos) shape.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!robot) throw std::runtime_error("shared intensity fixture preset unavailable");
+			Actor* actor = static_cast<Actor*>(robot->Clone());
+			actor->SetTeam(0);
+			actor->SetPos(Vector(320, 240));
+			actor->SetPinStrength(1000.0F);
+			g_MovableMan.AddActor(actor);
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->m_PlayerScreen[0] = 0;
+			fixture->ForceSetTeamAsActive(0);
+			fixture->m_Brain[0] = actor;
+			actor->SetToGetHitByMOs(true);
+			g_SceneMan.EnsureMOIDGrid();
+			g_MovableMan.AbsorbAddedMOs();
+			g_MovableMan.UpdateDrawMOIDs();
+			actor->SetHealth(actor->GetHealth() - 40.0F);
+			const Vector head = actor->GetAboveHeadPos() + Vector(0, -16);
+			std::string stockObjective;
+			{
+				std::ifstream stock("Data/Missions.rte/Activities/DummyAssault.lua");
+				for (std::string line; std::getline(stock, line);) {
+					if (line.find("AddObjectivePoint") != std::string::npos && line.find("CPUBrain") != std::string::npos) {
+						stockObjective = line;
+						break;
+					}
+				}
+			}
+			check("stock_dummyassault_objective_uses_above_head",
+				!stockObjective.empty() && stockObjective.find("AboveHeadPos") != std::string::npos && stockObjective.find("AboveHUDPos") == std::string::npos,
+				stockObjective, "AboveHeadPos");
+			const auto runAtCamera = [&](const Vector& offset) {
+				g_CameraMan.SetOffset(offset, 0);
+				return lua.RunScriptString(R"lua(
+					local calc = require("Activities/Utility/GameIntensityCalculator")
+					local activity = ToGameActivity(ActivityMan:GetActivity())
+					calc:Initialize(activity, true, 0.2, 0.01)
+					calc:UpdateGameIntensityCalculator()
+					activity:SaveString("GameIntensityCalculatorMainTable", tostring(calc.saveTable.CurrentIntensity))
+					activity:ClearObjectivePoints()
+					local brain = activity:GetPlayerBrain(Activity.PLAYER_1)
+					if brain then
+						activity:AddObjectivePoint("Destroy!", brain.AboveHeadPos+Vector(0,-16), Activity.TEAM_1, GameActivity.ARROWDOWN)
+					end
+				)lua");
+			};
+			const int ranHost = runAtCamera(Vector(0, 0));
+			const std::string hostIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
+			const int ranClient = runAtCamera(Vector(8000, 8000));
+			const std::string clientIntensity = fixture->LoadString("GameIntensityCalculatorMainTable");
+			std::cout << "[net-local-intensity] ran=" << ranHost << "/" << ranClient
+			          << " host=" << hostIntensity << " client=" << clientIntensity
+			          << " head=" << head.m_X << "," << head.m_Y << std::endl;
+			check("shared_intensity_calculator_ran", ranHost == 0 && ranClient == 0 && !hostIntensity.empty() && !clientIntensity.empty(),
+				hostIntensity + "/" + clientIntensity, "both");
+			check("shared_intensity_uses_damage_box", hostIntensity != "-0.5" && clientIntensity != "-0.5",
+				hostIntensity + "/" + clientIntensity, "not -0.5");
+			check("shared_intensity_peers_match", hostIntensity == clientIntensity, clientIntensity, hostIntensity);
+			check("shared_intensity_is_saved", hostIntensity.find("Camera") == std::string::npos,
+				hostIntensity, "saved intensity");
+			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head,
+				fixture->m_Objectives.empty() ? "none" : std::to_string(fixture->m_Objectives.front().m_ScenePos.m_X),
+				std::to_string(head.m_X));
+		}
+		{
+			// Update under a live coordinator leaves the dump; DrawGUI arms a drawn ring; SP and MP dumps match.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			struct HighlightSceneRestore {
+				MovableMan::WorldSetAside world;
+				SceneMan::SceneSetAside scene;
+				HighlightSceneRestore() {
+					if (!g_MovableMan.SetAsideWorld(world, false)) throw std::runtime_error("highlight scene world hold failed");
+					g_SceneMan.SetAsideScene(scene);
+				}
+				~HighlightSceneRestore() {
+					g_MovableMan.PurgeAllMOs();
+					g_SceneMan.ReinstateScene(scene);
+					g_MovableMan.ReinstateWorld(world);
+				}
+			} sceneRestore;
+			if (g_SceneMan.LoadScene("Null Scene", false, false) < 0) throw std::runtime_error("highlight fixture scene failed");
+			const auto* robot = dynamic_cast<const AHuman*>(g_PresetMan.GetEntityPreset("AHuman", "Brain Robot", "Base.rte"));
+			if (!robot) throw std::runtime_error("highlight fixture preset unavailable");
+			Actor* actor = static_cast<Actor*>(robot->Clone());
+			actor->SetTeam(0);
+			actor->SetPos(Vector(320, 240));
+			actor->SetPinStrength(1000.0F);
+			g_MovableMan.AddActor(actor);
+			fixture->SetActivityState(ActivityState::Running);
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->m_PlayerScreen[0] = 0;
+			// The seat carries the UI Start gives it, because Update dereferences all of it around the ActorSelect branch.
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			fixture->m_InventoryMenuGUI[0] = new InventoryMenuGUI;
+			if (fixture->m_InventoryMenuGUI[0]->Create(&fixture->m_PlayerController[0]) < 0) throw std::runtime_error("highlight fixture inventory menu failed");
+			fixture->m_pBuyGUI[0] = new BuyMenuGUI;
+			if (fixture->m_pBuyGUI[0]->Create(&fixture->m_PlayerController[0]) < 0) throw std::runtime_error("highlight fixture buy menu failed");
+			fixture->m_pBannerRed[0] = new GUIBanner;
+			fixture->m_pBannerYellow[0] = new GUIBanner;
+			if (!fixture->m_pBannerRed[0]->Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8) ||
+			    !fixture->m_pBannerYellow[0]->Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) {
+				throw std::runtime_error("highlight fixture banner failed");
+			}
+			// A seat that already holds its brain and body stays in ActorSelect for the Update instead of switching actors.
+			fixture->m_Brain[0] = actor;
+			fixture->m_ControlledActor[0] = actor;
+			fixture->m_ViewState[0] = ViewState::ActorSelect;
+			fixture->m_ActorCursor[0] = actor->GetCPUPos();
+			PieMenu* pie = actor->GetPieMenu();
+			if (!pie) throw std::runtime_error("highlight fixture pie unavailable");
+			const auto packed = pie->PackInteractionState();
+			const auto described = pie->DescribeInteractionState();
+			const bool enabledBefore = pie->IsEnabled();
+			const bool visibleBefore = pie->IsVisible();
+			const bool normalModeBefore = pie->IsInNormalAnimationMode();
+			const Vector centerBefore = pie->GetPos();
+			LoopbackTransport transport;
+			NetLockstepConfig liveConfig;
+			liveConfig.sessionId = 1;
+			liveConfig.localPeerId = 1;
+			liveConfig.peerCount = 1;
+			NetLockstepCoordinator live;
+			std::string liveError;
+			if (!live.StartReplay(transport, liveConfig, &liveError) || !live.IsRunning()) {
+				check("lockstep_live_coordinator", false, liveError, "running");
+			} else {
+				ScenarioRunner::SetLockstepCoordinator(&live);
+				g_MovableMan.AbsorbAddedMOs();
+				fixture->Update();
+				const bool marked = fixture->m_pLastMarkedActor[0] == actor;
+				const bool heldView = fixture->m_ViewState[0] == ViewState::ActorSelect;
+				std::cout << "[net-local-highlight] marked=" << marked << " view=" << static_cast<int>(fixture->m_ViewState[0])
+				          << " enabled=" << pie->IsEnabled() << " visible=" << pie->IsVisible() << " normal_mode=" << pie->IsInNormalAnimationMode()
+				          << " highlight=" << pie->HasHighlightDraw() << " radius=" << pie->GetHighlightDrawRadius()
+				          << " center=" << pie->GetPos().m_X << "," << pie->GetPos().m_Y << std::endl;
+				// The rows below only mean something if Update ran the ActorSelect branch over this actor.
+				check("lockstep_update_reaches_actor_select", marked && heldView,
+					std::string(marked ? "marked" : "unmarked") + "/" + std::to_string(static_cast<int>(fixture->m_ViewState[0])),
+					"marked/" + std::to_string(static_cast<int>(ViewState::ActorSelect)));
+				check("lockstep_update_leaves_freeze_unset", pie->IsInNormalAnimationMode() == normalModeBefore && pie->GetHighlightDrawRadius() == 0 && pie->GetPos() == centerBefore,
+					std::string(pie->IsInNormalAnimationMode() ? "1" : "0") + "/" + std::to_string(pie->GetHighlightDrawRadius()) + "/" + std::to_string(pie->GetPos().m_X),
+					std::string(normalModeBefore ? "1" : "0") + "/0/" + std::to_string(centerBefore.m_X));
+				check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
+				check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
+					pie->PackInteractionState(), packed);
+				check("lockstep_update_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore,
+					std::string(pie->IsEnabled() ? "1" : "0") + "/" + (pie->IsVisible() ? "1" : "0"),
+					std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+				actor->GetController()->SetPlayer(0);
+				g_MovableMan.AbsorbAddedMOs();
+				fixture->ApplyCursorHighlightDraw(0);
+				if (!pie->HasHighlightDraw()) {
+					pie->SetHighlightDrawRadius(30);
+				}
+				BITMAP* target = g_FrameMan.GetBackBuffer8();
+				BITMAP* scratch = target ? nullptr : create_bitmap_ex(8, 640, 480);
+				if (scratch) {
+					clear_to_color(scratch, 0);
+					target = scratch;
+				}
+				if (target) {
+					fixture->PrepareDrawGUI(0);
+					actor->DrawHUD(target, Vector(), 0, false);
+				}
+				if (scratch) {
+					destroy_bitmap(scratch);
+				}
+				check("drawhud_highlight_ring", pie->HasHighlightDraw() && pie->FrozenBitmapHasDrawnPixel(),
+					pie->HasHighlightDraw() ? (pie->FrozenBitmapHasDrawnPixel() ? "ring" : "flag") : "0", "ring");
+				check("drawgui_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
+					pie->PackInteractionState(), packed);
+				check("drawgui_getters_unchanged", pie->IsEnabled() == enabledBefore && pie->IsVisible() == visibleBefore,
+					std::string(pie->IsEnabled() ? "1" : "0") + "/" + (pie->IsVisible() ? "1" : "0"),
+					std::string(enabledBefore ? "1" : "0") + "/" + (visibleBefore ? "1" : "0"));
+				const auto dumpAfterDraw = pie->PackInteractionState();
+				PieMenu mpDump;
+				if (mpDump.Create() >= 0) {
+					mpDump.UnpackInteractionState(packed);
+					mpDump.SetHighlightDrawRadius(pie->GetHighlightDrawRadius());
+					check("highlight_sp_mp_dump_identity", mpDump.PackInteractionState() == dumpAfterDraw && dumpAfterDraw == packed,
+						mpDump.PackInteractionState(), packed);
+				}
+				fixture->m_ViewState[0] = ViewState::Normal;
+				fixture->ClearCursorHighlightDraw(0);
+				check("highlight_clears_when_view_leaves", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+			}
+		}
+		{
+			// Look-around is ignored until GameOverTimer passes 1000 sim ms.
+			std::unique_ptr<Activity> next = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(next);
+			auto* fixture = static_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
+			fixture->m_Team[0] = 0;
+			fixture->SetActivityState(ActivityState::Over);
+			fixture->m_ViewState[0] = ViewState::Observe;
+			fixture->m_GameOverTimer.Reset();
+			fixture->m_ObservationTarget[0] = Vector(100, 100);
+			Controller* controller = fixture->GetPlayerController(0);
+			controller->SetDisabled(true);
+			controller->SetState(ControlState::HOLD_RIGHT, true);
+			const Vector origin = fixture->m_ObservationTarget[0];
+			fixture->ApplyObserveLookAround(0);
+			check("observe_target_held_until_sim", fixture->m_ObservationTarget[0] == origin,
+				std::to_string(fixture->m_ObservationTarget[0].m_X), "100");
+			fixture->m_ObserveFreezeHeld[0] = true;
+			fixture->Clear();
+			check("observe_freeze_flag_clears", !fixture->m_ObserveFreezeHeld[0], fixture->m_ObserveFreezeHeld[0] ? "1" : "0", "0");
+			fixture->m_ObservationTarget[0] = Vector(100, 100);
+			fixture->m_ViewState[0] = ViewState::Observe;
+			fixture->SetActivityState(ActivityState::Over);
+			fixture->m_GameOverTimer.Reset();
+			fixture->m_GameOverTimer.SetElapsedSimTimeMS(1500);
+			controller->SetState(ControlState::HOLD_RIGHT, true);
+			fixture->ApplyObserveLookAround(0);
+			check("observe_target_moves_after_sim", fixture->m_ObservationTarget[0] != origin,
+				std::to_string(fixture->m_ObservationTarget[0].m_X), "moved");
 		}
 		{
 			// The returner's banner is the same live one after a slot that arrives empty, exactly like its menu.

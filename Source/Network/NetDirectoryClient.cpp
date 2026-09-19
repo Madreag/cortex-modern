@@ -163,6 +163,14 @@ namespace RTE {
 		m_Listed = true;
 	}
 
+	void NetDirectoryClient::NoteListenAddrs(std::vector<std::string> addrs) {
+		if (addrs == m_Row.listenAddrs) {
+			return;
+		}
+		m_Row.listenAddrs = std::move(addrs);
+		m_ListenAddrsDirty = true;
+	}
+
 	void NetDirectoryClient::Retract() { m_Listed = false; }
 
 	void NetDirectoryClient::PollList(uint64_t nowMs) {
@@ -357,11 +365,22 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
+		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
+			// The stored row token is not this row's any more: register fresh instead of leaving the
+			// world unlisted for the rest of its life.
+			m_Row.resumeSessionId.clear();
+			m_Row.resumeToken.clear();
+			NoteError("register refused (403): the stored directory row is not ours, registering fresh");
+			ScheduleRetry(nowMs);
+			return;
+		}
 		NoteError("register refused: HTTP " + std::to_string(reply.statusCode));
 		SetState(State::Failed);
 	}
 
 	void NetDirectoryClient::HandleHeartbeatReply(const Reply& reply, uint64_t nowMs) {
+		// Addresses the service did not acknowledge are still owed to it.
+		const bool listenAddrsAnswered = std::exchange(m_ListenAddrsInFlight, false);
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("heartbeat: " + (reply.error.empty() ? "transport error" : reply.error));
 			ScheduleRetry(nowMs);
@@ -386,6 +405,9 @@ namespace RTE {
 				}
 				m_ConfirmedListed = *response.listed;
 				m_InFlightListed.reset();
+			}
+			if (listenAddrsAnswered) {
+				m_ListenAddrsDirty = false;
 			}
 			m_HeartbeatS = std::max<int64_t>(c_MinHeartbeatS, response.heartbeatS);
 			m_ExpiresInS = response.expiresInS;
@@ -516,6 +538,10 @@ namespace RTE {
 		} else {
 			m_InFlightListed.reset();
 		}
+		m_ListenAddrsInFlight = m_ListenAddrsDirty;
+		if (m_ListenAddrsDirty) {
+			heartbeat.listenAddrs = m_Row.listenAddrs;
+		}
 		Request request;
 		request.method = "POST";
 		request.path = "/v1/sessions/" + m_SessionId + "/heartbeat";
@@ -551,9 +577,33 @@ namespace RTE {
 		(void)nowMs;
 	}
 
+	bool NetDirectoryClient::TargetsPersistentWorld(const std::vector<GameRow>& rows, int selectedIndex, const std::string& address, uint16_t port,
+	                                                const std::string& lastWorldAddress, uint16_t lastWorldPort, std::string* outActivity) {
+		const auto isWorldRow = [](const GameRow& row) { return row.persistentWorld || row.activity == "Persistent World"; };
+		if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < rows.size()) {
+			const GameRow& row = rows[static_cast<size_t>(selectedIndex)];
+			if (row.address == address && row.port == port && isWorldRow(row)) {
+				if (outActivity && !row.activity.empty()) {
+					*outActivity = row.activity;
+				}
+				return true;
+			}
+		}
+		for (const GameRow& row: rows) {
+			if (row.address == address && row.port == port && isWorldRow(row)) {
+				if (outActivity && !row.activity.empty()) {
+					*outActivity = row.activity;
+				}
+				return true;
+			}
+		}
+		return lastWorldPort != 0 && address == lastWorldAddress && port == lastWorldPort;
+	}
+
 	std::vector<NetDirectoryClient::GameRow> NetDirectoryClient::MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 	                                                                          const std::vector<NetDirectorySessionRow>& directory,
-	                                                                          const NetDirectoryLocalIdentity& local) {
+	                                                                          const NetDirectoryLocalIdentity& local,
+	                                                                          const NetDirectoryLocalIdentity* worldLocal) {
 		std::vector<GameRow> rows;
 		rows.reserve(lan.size() + directory.size());
 		for (const NetLanHostInfo& host : lan) {
@@ -576,7 +626,8 @@ namespace RTE {
 				lanIdentity.sessionIdentityHash = host.compatibility.sessionIdentityHash;
 				lanIdentity.moduleManifestHash = host.compatibility.moduleManifestHash;
 				std::string why;
-				if (NetDirectoryCodec::IsJoinable(lanIdentity, local, &why)) {
+				const bool lanWorld = worldLocal != nullptr && host.compatibility.lockstepCodecVersion == worldLocal->lockstepCodecVersion;
+				if (NetDirectoryCodec::IsJoinable(lanIdentity, lanWorld ? *worldLocal : local, &why)) {
 					row.joinable = true;
 				} else {
 					row.reason = MapMismatchReason(why);
@@ -596,10 +647,12 @@ namespace RTE {
 			}
 			row.port = static_cast<uint16_t>(session.listenPort);
 			row.sessionId = session.sessionId;
+			row.persistentWorld = session.persistentWorld;
 			std::string why;
-			if (!NetDirectoryCodec::IsJoinable(session, local, &why)) {
+			const NetDirectoryLocalIdentity& ident = (session.persistentWorld && worldLocal != nullptr) ? *worldLocal : local;
+			if (!NetDirectoryCodec::IsJoinable(session, ident, &why)) {
 				row.reason = MapMismatchReason(why);
-			} else if (session.seatsFree == 0) {
+			} else if (session.seatsFree == 0 && !session.persistentWorld) {
 				row.reason = "full";
 			} else if ((row.address.empty() || row.port == 0) && session.joinMode != "ice" && session.joinMode != "either") {
 				// An ICE row is reached through its session id, so it has no address to be refused for.

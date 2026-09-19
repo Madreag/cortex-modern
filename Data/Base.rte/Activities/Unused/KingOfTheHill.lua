@@ -90,22 +90,22 @@ function KingOfTheHill:UpdateActivity()
 				self:AddObjectivePoint("Hold this point!", self.HoldArea:GetCenterPoint()+Vector(0,-96), Activity.TEAM_1, GameActivity.ARROWDOWN);
 			end
 			if PointHolder == -1 then
-				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left1/1000) .. " seconds!", Player1.AboveHUDPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
-				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left2/1000) .. " seconds!", Player2.AboveHUDPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
-				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left1/1000) .. " seconds are up!", Player1.AboveHUDPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
-				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left2/1000) .. " seconds are up!", Player2.AboveHUDPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left1/1000) .. " seconds!", Player1.AboveHeadPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left2/1000) .. " seconds!", Player2.AboveHeadPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left1/1000) .. " seconds are up!", Player1.AboveHeadPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left2/1000) .. " seconds are up!", Player2.AboveHeadPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
 				self.Left1 = self.Left1+self.Timer1:LeftTillSimMS(0);
 				self.Left2 = self.Left2+self.Timer2:LeftTillSimMS(0);
 			end
 			if PointHolder == Activity.TEAM_1 then
-				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left1/1000) .. " seconds!", Player1.AboveHUDPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
-				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left1/1000) .. " seconds are up!", Player1.AboveHUDPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left1/1000) .. " seconds!", Player1.AboveHeadPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left1/1000) .. " seconds are up!", Player1.AboveHeadPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
 				self:AddObjectivePoint("Hold this point!", self.HoldArea:GetCenterPoint()+Vector(0,-96), Activity.TEAM_2, GameActivity.ARROWDOWN);
 				self.Left1 = self.Left1+self.Timer1:LeftTillSimMS(0);
 			end
 			if PointHolder == Activity.TEAM_2 then
-				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left2/1000) .. " seconds!", Player2.AboveHUDPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
-				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left2/1000) .. " seconds are up!", Player2.AboveHUDPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Hold for " .. math.ceil(self.Left2/1000) .. " seconds!", Player2.AboveHeadPos + Vector(0,-4), Activity.TEAM_2, GameActivity.ARROWDOWN);
+				self:AddObjectivePoint("Kill before " .. math.ceil(self.Left2/1000) .. " seconds are up!", Player2.AboveHeadPos + Vector(0,-4), Activity.TEAM_1, GameActivity.ARROWDOWN);
 				self:AddObjectivePoint("Hold this point!", self.HoldArea:GetCenterPoint()+Vector(0,-96), Activity.TEAM_1, GameActivity.ARROWDOWN);
 				self.Left2 = self.Left2+self.Timer2:LeftTillSimMS(0);
 			end

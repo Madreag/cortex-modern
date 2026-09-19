@@ -215,9 +215,9 @@ function DoainarMission:UpdateActivity()
 			if actor.PresetName == "Crab" then
 				crabcount = crabcount + 1;
 				if not self.mamaCrab then
-					self:AddObjectivePoint("Kill!", actor.AboveHUDPos, self.PlayerTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Kill!", actor.AboveHeadPos, self.PlayerTeam, GameActivity.ARROWDOWN);
 				elseif not self.mamaAggressive and not self.caveAreaA:IsInside(actor.Pos) and not self.caveAreaB:IsInside(actor.Pos) then
-					self:AddObjectivePoint("Kill!", actor.AboveHUDPos, self.PlayerTeam, GameActivity.ARROWDOWN);
+					self:AddObjectivePoint("Kill!", actor.AboveHeadPos, self.PlayerTeam, GameActivity.ARROWDOWN);
 					crabsOutside = crabsOutside + 1;
 				end
 				if actor.Age < TimerMan.DeltaTimeMS then
@@ -334,7 +334,7 @@ function DoainarMission:UpdateActivity()
 						end
 
 						if MovableMan:IsActor(brain) and self.passedPitfall == false and playerInsideConsoleArea == 0 then
-							self:AddObjectivePoint("Protect!", brain.AboveHUDPos + Vector(0, -8), self.PlayerTeam, GameActivity.ARROWDOWN);
+							self:AddObjectivePoint("Protect!", brain.AboveHeadPos + Vector(0, -8), self.PlayerTeam, GameActivity.ARROWDOWN);
 						end
 					end
 				end
@@ -343,7 +343,7 @@ function DoainarMission:UpdateActivity()
 	end
 
 	if self.mamaDead == false and MovableMan:IsActor(self.mamaCrab) and self.mamaCrab.Status ~= Actor.INACTIVE then
-		self:AddObjectivePoint("Kill!", self.mamaCrab.AboveHUDPos+Vector(0, -16), self.PlayerTeam, GameActivity.ARROWDOWN);
+		self:AddObjectivePoint("Kill!", self.mamaCrab.AboveHeadPos+Vector(0, -16), self.PlayerTeam, GameActivity.ARROWDOWN);
 		if self.mamaJumpTimer:LeftTillSimMS(3000) < 0 and MovableMan:IsActor(self.target) and SceneMan:GetTerrMatter(self.mamaCrab.Pos.X, self.mamaCrab.Pos.Y + self.mamaCrab:GetSpriteHeight() * 0.5) then
 			local jumpVector = Vector((self.target.Pos.X - self.mamaCrab.Pos.X) * 0.045, -15 + ((self.target.Pos.Y - self.mamaCrab.Pos.Y) * 0.025));
 			self.mamaCrab.Vel = self.mamaCrab.Vel + jumpVector:SetMagnitude(math.min(jumpVector.Magnitude, 30));

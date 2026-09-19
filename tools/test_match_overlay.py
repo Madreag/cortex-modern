@@ -49,6 +49,7 @@ TOAST = "LabelNetMatchToastNewest"
 TOAST_FIRST, TOAST_SECOND = "LabelNetMatchToast0", "LabelNetMatchToast1"
 PAUSED = "Match paused by Host"
 RESUMED = "Match resumed by Guest"
+RESUME_REQUESTED = "Resume requested"
 HOLD_BANNER = re.compile(r"Match paused: waiting for (\S+) to return \((\d+)s left\)")
 HOLD_BANNER_LINE = re.compile(r"^\[net-match\] match paused waiting for (\S+) \((\d+)s left, tick (\d+)\)$")
 WIDGET_FILL = (20, 22, 27)
@@ -277,11 +278,13 @@ def probe_script(who, size, arm, mode):
         return mode == "always" or (mode == "auto" and trigger)
     def widget(trigger):
         return shown if wanted(trigger) else hidden
-    def shot(name, visible=None):
+    def shot(name, visible=None, banners=False):
         # The capture oracle reads its expectation back out of the script; the engine ignores the key.
         step = {"op": "screenshot", "name": name}
         if visible is not None:
             step["widget"] = visible
+        if banners:
+            step["banners"] = True
         return step
     status_reads = [label_assert(STATUS, "NET [F6]" if compact else "NET STATUS"),
                     label_assert(STATUS, "delay 3" if compact else "delay 3 ticks / 50.0 ms"),
@@ -341,12 +344,27 @@ def probe_script(who, size, arm, mode):
                 {"op": "key_down", "key": "P", "sim_at": 240}, {"op": "key_up", "key": "P", "sim_at": 241},
                 {"op": "wait", "control": TOAST, "equals": {"visible": True}},
                 label_assert(TOAST, PAUSED),
-                # The panel's top band reserves one toast row: on a compact screen the stack shows
-                # the newest toast only, and every overlay rect stays inside the window. An Off
-                # match has no status widget to clear, so the step says so instead of faking one.
+                # The panel's top band reserves one toast row: oldest first, and every overlay
+                # rect stays inside the window. An Off match has no status widget to clear.
                 {"op": "assert_net_ui_clear", "match": True, "status": wanted(True)},
                 {"op": "screenshot_pair", "name": f"f6-toast-{mode}-host", "widget": wanted(True)},
-                {"op": "key_down", "key": "P", "sim_at": 480}, {"op": "key_up", "key": "P", "sim_at": 481},
+            ]
+            if compact:
+                # The reserved row shows the first toast for 3 s; a second P after 1 s on screen
+                # waits, then takes the same row. sim_at_least lets the second edge fire after pause.
+                steps += [
+                    {"op": "wait", "elapsed_ms": 1000},
+                    {"op": "key_down", "key": "P", "sim_at_least": 241},
+                    {"op": "key_up", "key": "P", "sim_at_least": 241},
+                    {"op": "wait", "elapsed_ms": 3100},
+                    label_assert(TOAST, RESUME_REQUESTED),
+                ]
+            else:
+                # The tail reads a live match at every size; the pause this arm injected has no
+                # other resume, so the same edge pause_on uses fires here at a sim tick.
+                steps += [{"op": "key_down", "key": "P", "sim_at": 480},
+                          {"op": "key_up", "key": "P", "sim_at": 481}]
+            steps += [
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
             ]
@@ -380,7 +398,7 @@ def probe_script(who, size, arm, mode):
                 text_assert(TOAST_SECOND, "s left)"),
                 label_assert(TOAST_SECOND, f"Match paused: waiting for {guest} to return"),
                 # The hold engages seconds after the drop, so the widget's own state is read later.
-                shot(f"toast-hold-banner-{mode}-host", False if mode == "off" else None),
+                shot(f"toast-hold-banner-{mode}-host", wanted(True), banners=True),
             ]
             if mode == "off":
                 # The banners carry the whole recovery story in Off; the widget stays away.
@@ -638,7 +656,24 @@ def image_oracle(path, size, arm, mode, name, tick):
     return result
 
 
-def probe_shot_oracle(path, size, expected_visible, panel_rect):
+def _banner_rows(image, size):
+    width, height = image.size
+    pixels = image.load()
+    toast_width = min(520, width - 32)
+    left = (width - toast_width) // 2
+    rows = []
+    for top in (height - 50, height - 28):
+        background = all(pixels[px, top] == WIDGET_FILL for px in range(left, left + toast_width))
+        toast_ink = sum(pixels[px, py] != WIDGET_FILL for py in range(top + 4, top + 16)
+                        for px in range(left + 8, left + toast_width - 8))
+        toast_rect = (left, top, toast_width, 18)
+        rows.append({"background": background, "ink": toast_ink,
+                     "occluding": occluding_rects(toast_rect, size)})
+    return {"banners": rows, "banners_pass": all(
+        row["background"] and row["ink"] > 0 and not row["occluding"] for row in rows)}
+
+
+def probe_shot_oracle(path, size, expected_visible, panel_rect, banners=False):
     """A probe screenshot judged on its pixels, not on a control's visible flag: the widget's frame whole,
     its text drawn inside it, in the free zone, clear of the HUD and - where the screen has the rows for
     both - of the seats panel. A visible flag on a widget the panel paints over is what this catches."""
@@ -654,11 +689,16 @@ def probe_shot_oracle(path, size, expected_visible, panel_rect):
               "expected_visible": expected_visible, "widget_paint": list(box) if box else None,
               "frame": found["reason"], "panel_rect": list(panel_rect) if panel_rect else None, "pass": True}
     if expected_visible is None:
+        result["pass"] = False
+        result["reason"] = "missing widget expectation"
         result["checks"] = {}
         return result
     if not expected_visible:
         result["pass"] = box is None
         result["checks"] = {"paint_absent": box is None}
+        if banners:
+            result.update(_banner_rows(image, size))
+            result["pass"] = result["pass"] and result["banners_pass"]
         return result
     result["occluding"] = occluding_rects(box, size) if box else ["widget_missing"]
     result["interior_ink"] = interior_ink(image, box) if box else 0
@@ -669,6 +709,9 @@ def probe_shot_oracle(path, size, expected_visible, panel_rect):
                         "in_free_zone": in_free_zone(box, size), "panel_clear": panel_clear}
     result["pass"] = box is not None and not result["occluding"] and result["interior_ink"] > 0 \
         and in_free_zone(box, size) and panel_clear
+    if banners:
+        result.update(_banner_rows(image, size))
+        result["pass"] = result["pass"] and result["banners_pass"]
     return result
 
 
@@ -769,7 +812,8 @@ def inspect_pair(root, records, size, arm, mode, name):
             if step.get("op") not in ("screenshot", "screenshot_pair"):
                 continue
             path = Path(obs["screenshot"]) if "screenshot" in obs else None
-            shot_result = probe_shot_oracle(path, size, step.get("widget"), panel_rects[-1] if panel_rects else None) \
+            shot_result = probe_shot_oracle(path, size, step.get("widget"), panel_rects[-1] if panel_rects else None,
+                                           banners=bool(step.get("banners"))) \
                 if path and path.exists() else {"pass": False, "reason": "missing probe capture", "name": step["name"]}
             if step.get("op") == "screenshot_pair":
                 shot_result["composited"] = obs.get("screenshot_composited")
@@ -852,7 +896,14 @@ def inspect_pair(root, records, size, arm, mode, name):
             checks["Host_f6_toast_live"] = bool(toast_reads)
             checks["Host_f6_toast_clear_read"] = bool(clear_reads) and all(
                 read["toasts"]["visible"] and read["seats_panel"]["visible"] for read in clear_reads)
+            texts = [obs["control"].get("text") for obs in toast_reads if obs.get("control", {}).get("visible")
+                     and obs["control"].get("text")]
+            seen = [text for i, text in enumerate(texts) if i == 0 or text != texts[i - 1]]
+            details["f6_toast_seen"] = seen
             if size[1] < COMPACT_MAX_HEIGHT:
+                resume_seen = [text for text in seen if text.startswith(RESUME_REQUESTED)]
+                checks["Host_f6_toast_order"] = (PAUSED in seen and resume_seen
+                                                and seen.index(PAUSED) < seen.index(resume_seen[0]))
                 # The reserved band shows one toast row: a single-row rect, on screen, above the panel.
                 checks["Host_f6_toast_single_row"] = bool(clear_reads) and all(
                     read["toasts"]["y"] >= 0 and read["toasts"]["h"] <= 22
@@ -953,7 +1004,9 @@ def main():
                     result["checks"][name] = pair["pass"]
                     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
                     if not pair["pass"]:
-                        raise RuntimeError(f"{name}: " + ", ".join(key for key, passed in pair["checks"].items() if not passed))
+                        failed = [key for key, passed in pair["checks"].items() if not passed]
+                        extra = f" seen={pair.get('details', {}).get('f6_toast_seen')}" if "Host_f6_toast_order" in failed else ""
+                        raise RuntimeError(f"{name}: " + ", ".join(failed) + extra)
             for prefix, paused in switches:
                 for who in ("Host", "Guest"):
                     comparison = compare_capture_switch(root / f"{tag}_auto_{prefix}on", root / f"{tag}_auto_{prefix}off", who, paused)

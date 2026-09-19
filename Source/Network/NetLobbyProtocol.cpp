@@ -266,8 +266,22 @@ namespace RTE {
 			AppendU16LE(out, config.inputDelayFrames);
 			AppendU8(out, static_cast<uint8_t>(config.mode));
 			AppendU8(out, static_cast<uint8_t>(config.ownershipPolicy));
-			// Reserved bit 0 carries the dedicated flag; old builds refuse the nonzero word.
-			AppendU16LE(out, config.dedicated ? 1 : 0);
+			// Reserved bit 1 is dedicated; bit 2 means the path-horizon U16 follows the host-options tail;
+			// bit 4 is the persistent world (a v5 config only); bit 8 means the frame-redundancy U16 trails
+			// everything. Only a non-default window sets its bit, so every config published before the
+			// option keeps its exact bytes; an older build refuses a word it does not know.
+			uint16_t reserved = config.dedicated ? NetMatchConfigUtil::c_ReservedDedicatedBit : 0;
+			if (config.version >= 3 && config.pathHorizonTicks != 0) {
+				reserved |= NetMatchConfigUtil::c_ReservedPathHorizonBit;
+			}
+			const bool carriesRedundancy = config.frameRedundancyTicks != NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			if (carriesRedundancy) {
+				reserved |= NetMatchConfigUtil::c_ReservedFrameRedundancyBit;
+			}
+			if (config.persistentWorld) {
+				reserved |= NetMatchConfigUtil::c_ReservedPersistentWorldBit;
+			}
+			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
 			    !AppendString(out, config.sceneName, NetLobbyProtocol::c_MaxShortTextBytes, "scene_name", error) ||
@@ -309,6 +323,17 @@ namespace RTE {
 				AppendU8(out, config.idleWaitMinutes);
 				AppendBool(out, config.automaticRepair);
 				AppendU8(out, static_cast<uint8_t>(config.delayPolicy));
+				if (config.pathHorizonTicks != 0) {
+					AppendU16LE(out, config.pathHorizonTicks);
+				}
+				if (config.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
+					AppendU64LE(out, config.worldBoot);
+				}
+			}
+			// The window trails every versioned block, so a config recorded before the bit still reads.
+			if (carriesRedundancy) {
+				AppendU16LE(out, config.frameRedundancyTicks);
 			}
 			return true;
 		}
@@ -317,8 +342,9 @@ namespace RTE {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
-			// A live peer speaks the current layout; an older one is only read back out of a recording.
-			if (out.version == 0 || out.version > NetMatchConfigUtil::c_Version || (out.version < NetMatchConfigUtil::c_Version && !allowRecordedVersions)) {
+			// A live peer speaks one of the current layouts - an ordinary match still speaks v4, only a
+			// persistent world moves to v5; anything older is read back out of a recording.
+			if (out.version == 0 || out.version > NetMatchConfigUtil::c_PersistentWorldVersion || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
 			}
@@ -331,8 +357,14 @@ namespace RTE {
 			    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "config.reserved")) {
 				return false;
 			}
-			out.dedicated = (reserved & 1) != 0;
-			if (reserved & ~static_cast<uint16_t>(1)) {
+			out.dedicated = (reserved & NetMatchConfigUtil::c_ReservedDedicatedBit) != 0;
+			const bool carriesRedundancy = (reserved & NetMatchConfigUtil::c_ReservedFrameRedundancyBit) != 0;
+			// The world bit is known only on a v5 config; a v4 reader still refuses the whole word, so
+			// an older peer can never read a world's round as an ordinary match.
+			out.persistentWorld = (reserved & NetMatchConfigUtil::c_ReservedPersistentWorldBit) != 0;
+			const uint16_t allowed = static_cast<uint16_t>(NetMatchConfigUtil::c_ReservedKnownMask |
+			                                              (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion ? NetMatchConfigUtil::c_ReservedPersistentWorldBit : 0));
+			if (reserved & ~allowed) {
 				SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 2, "config reserved field must be zero");
 				return false;
 			}
@@ -392,6 +424,31 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadBool(out.autosaveEnabled) && reader.ReadU32LE(out.autosaveIntervalSeconds) &&
 				                     reader.ReadU8(out.idleWaitMinutes) && reader.ReadBool(out.automaticRepair) && reader.ReadU8(policy), reader, error, "host match options")) return false;
 				out.delayPolicy = static_cast<NetMatchDelayPolicy>(policy);
+				out.pathHorizonTicks = 0;
+				if ((reserved & NetMatchConfigUtil::c_ReservedPathHorizonBit) != 0) {
+					if (!ReadOrTruncated(reader.ReadU16LE(out.pathHorizonTicks), reader, error, "path horizon")) return false;
+					if (out.pathHorizonTicks == 0) {
+						SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "path horizon present bit requires a nonzero horizon");
+						return false;
+					}
+				}
+				out.worldId.clear();
+				out.worldBoot = 0;
+				if (out.version >= NetMatchConfigUtil::c_PersistentWorldVersion) {
+					if (!reader.ReadString(out.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error) ||
+					    !ReadOrTruncated(reader.ReadU64LE(out.worldBoot), reader, error, "world_boot")) return false;
+				}
+			}
+			// Without the bit the config carries the default window, whatever the out parameter held.
+			out.frameRedundancyTicks = NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+			if (carriesRedundancy) {
+				uint16_t redundancyTicks = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(redundancyTicks), reader, error, "config.frame_redundancy_ticks")) return false;
+				if (redundancyTicks == 0 || redundancyTicks > NetMatchConfigUtil::c_MaxFrameRedundancyTicks) {
+					SetError(error, NetLobbyErrorCode::InvalidValue, reader.Offset() - 2, "frame_redundancy_ticks is out of range");
+					return false;
+				}
+				out.frameRedundancyTicks = static_cast<uint8_t>(redundancyTicks);
 			}
 			std::string validateError;
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(out, &validateError)) {
@@ -496,6 +553,14 @@ namespace RTE {
 			return true;
 		}
 
+		bool RefuseOversizePeerId(uint8_t peerId, size_t offset, NetLobbyError* error) {
+			if (peerId > NetLobbyProtocol::c_MaxPeers) {
+				SetError(error, NetLobbyErrorCode::InvalidValue, offset, "peer id is invalid");
+				return false;
+			}
+			return true;
+		}
+
 		bool DecodePayload(NetLobbyMessageType type, ByteReader& reader, NetLobbyPayload& out, NetLobbyError* error, bool allowRecordedVersions) {
 			switch (type) {
 				case NetLobbyMessageType::Hello: {
@@ -504,6 +569,7 @@ namespace RTE {
 					if (!ReadOrTruncated(reader.ReadU16LE(payload.minProtocolVersion), reader, error, "min_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU16LE(payload.maxProtocolVersion), reader, error, "max_protocol_version") ||
 					    !ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
 						SetError(error, NetLobbyErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "reserved field must be zero");
@@ -518,6 +584,7 @@ namespace RTE {
 					NetLobbyPeerState payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU32LE(payload.pingMs), reader, error, "ping_ms") ||
@@ -542,6 +609,7 @@ namespace RTE {
 					NetLobbyConfigAck payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.accepted), reader, error, "accepted") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadHash(payload.matchConfigHash), reader, error, "match_config_hash")) return false;
@@ -557,6 +625,7 @@ namespace RTE {
 					NetLobbyReady payload;
 					uint16_t reserved = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadBool(payload.ready), reader, error, "ready") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved), reader, error, "reserved")) return false;
 					if (reserved != 0) {
@@ -586,6 +655,7 @@ namespace RTE {
 					uint8_t reserved8 = 0;
 					uint16_t reserved16 = 0;
 					if (!ReadOrTruncated(reader.ReadU8(payload.peerId), reader, error, "peer_id") ||
+					    !RefuseOversizePeerId(payload.peerId, reader.Offset() - 1, error) ||
 					    !ReadOrTruncated(reader.ReadU8(reserved8), reader, error, "reserved") ||
 					    !ReadOrTruncated(reader.ReadU16LE(reserved16), reader, error, "reserved")) return false;
 					if (reserved8 != 0 || reserved16 != 0) {

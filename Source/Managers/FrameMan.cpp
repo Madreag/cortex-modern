@@ -260,6 +260,12 @@ void FrameMan::FeelBeginDraw() {
 	s_Feel.frame["wraps_y"] = g_SceneMan.SceneWrapsY();
 }
 
+void FrameMan::FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta) {
+	if (!FeelRecordingEnabled()) return;
+	FeelWrite({{"type", "preview_swap"}, {"adoption_tick", adoptionTick}, {"tick", swapTick},
+	    {"adoption_lead_ticks", leadTicks}, {"swap_pose_delta", poseDelta}});
+}
+
 void FrameMan::FeelBeforePresent() {
 	if (!FeelRecordingEnabled()) return;
 	s_Feel.presentBeginMS = FeelNowMS();
@@ -278,7 +284,10 @@ void FrameMan::FeelAfterPresent() {
 	s_Feel.frame["local_prediction"] = {{"previews", LocalPrediction::GetPreviewCount()}, {"ms_total", LocalPrediction::GetPreviewMs()},
 	    {"violations", LocalPrediction::GetViolations()}, {"events_started", PreviewEventLedger::GetEventStartCount()},
 	    {"events_retained", PreviewEventLedger::GetEventStarts().size()}, {"played", PreviewEventLedger::GetCounters().playedAtPreview},
-	    {"adopted", PreviewEventLedger::GetCounters().adoptedAtCommit}, {"expired", PreviewEventLedger::GetCounters().expired}};
+	    {"adopted", PreviewEventLedger::GetCounters().adoptedAtCommit}, {"expired", PreviewEventLedger::GetCounters().expired},
+	    {"ghosts", g_MovableMan.GetPreviewGhostCount()}, {"fill_tick", LocalPrediction::GetLastFillTick()},
+	    {"swaps", g_MovableMan.GetLastPreviewSwap().count}, {"swap_tick", g_MovableMan.GetLastPreviewSwap().tick},
+	    {"adoption_lead_ticks", g_MovableMan.GetLastPreviewSwap().leadTicks}, {"swap_pose_delta", g_MovableMan.GetLastPreviewSwap().poseDelta}};
 	s_Feel.frame["delay"] = ScenarioRunner::GetLockstepLocalInputDelay();
 	s_Feel.frame["input_delay_text"] = g_NetMatchService.GetInputDelayText();
 	s_Feel.frame["peer"] = ScenarioRunner::GetLockstepLocalPeerId();

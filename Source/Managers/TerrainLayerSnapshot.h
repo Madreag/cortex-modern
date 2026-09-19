@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 #include "SceneLayer.h"
+#include "PathFinder.h"
+#include "Scene.h"
 
 struct BITMAP;
 
@@ -39,6 +41,9 @@ namespace RTE {
 		std::array<std::list<Vector>, 4> cleanedPixels;
 		std::array<Vector, 4> unseenPixelSize;
 		std::array<bool, 4> scanScheduled{};
+		std::vector<Scene::HorizonTerrainBox> horizonBoxes;
+		std::array<HorizonFenceState, Activity::Teams::MaxTeamCount + 1> horizonFinders;
+		bool horizonHeld = false;
 
 		static void CopyFrom(BITMAP* bitmap, std::vector<uint8_t>& out);
 		static bool CopyTo(BITMAP* bitmap, const std::vector<uint8_t>& in);

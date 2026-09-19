@@ -47,7 +47,7 @@ namespace {
 	}
 
 	std::string AutosavesDirectory() {
-		return System::GetWorkingDirectory() + "Autosaves";
+		return AutosaveStore::Directory().string();
 	}
 
 	// Creates the directory when absent so the opened folder always exists, then
@@ -154,6 +154,12 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_IdleWaitTextbox->SetNumericOnly(true);
 	m_IdleWaitTextbox->SetMaxTextLength(2);
 
+	m_PathHorizonLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkPathHorizon"));
+	m_PathHorizonHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkPathHorizonHint"));
+	m_PathHorizonTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkPathHorizon"));
+	m_PathHorizonTextbox->SetNumericOnly(true);
+	m_PathHorizonTextbox->SetMaxTextLength(3);
+
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
@@ -172,6 +178,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_ChatTextSizeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkChatTextSize"));
 	m_ChatTextSizeCombo->AddItem("Small");
 	m_ChatTextSizeCombo->AddItem("Large");
+	m_ChatKeyTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkChatKey"));
+	m_ChatKeyTextbox->SetMaxTextLength(5);
 
 	m_AutoReconnectCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoReconnect"));
 	m_OfferRejoinCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkOfferRejoin"));
@@ -203,7 +211,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 		control->GetControlRect(&x, &y, &width, &height);
 		return std::make_pair(control, y);
 	};
-	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel), rowTop(m_AutoRepairCheckbox),
+	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel),
+	                         rowTop(m_PathHorizonLabel), rowTop(m_PathHorizonTextbox), rowTop(m_PathHorizonHintLabel), rowTop(m_AutoRepairCheckbox),
 	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo)};
 
 	ShowSavedValues();
@@ -230,6 +239,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_DelayPolicyFixedRadio->SetCheck(fixed);
 	m_FixedDelayTextbox->SetText(std::to_string(std::clamp(g_SettingsMan.GetNetworkInputDelayFrames(), 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames))));
 	m_IdleWaitTextbox->SetText(std::to_string(g_SettingsMan.GetNetworkHostIdleWaitMinutes()));
+	m_PathHorizonTextbox->SetText(std::to_string(g_SettingsMan.GetNetworkPathHorizonTicks()));
 	m_AutoRepairCheckbox->SetCheck(g_SettingsMan.GetNetworkHostAutoRepair());
 	m_ToastsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
@@ -239,6 +249,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_ChatNotifyCheckbox->SetCheck(g_SettingsMan.GetNetworkChatNotify());
 	m_ChatScopeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatDefaultScope()));
 	m_ChatTextSizeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkChatTextSize()));
+	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
 	m_AutoReconnectCheckbox->SetCheck(g_SettingsMan.GetNetworkAutoReconnect());
 	m_OfferRejoinCheckbox->SetCheck(g_SettingsMan.GetNetworkOfferStoredRejoin());
 	m_DiagDirTextbox->SetText(g_SettingsMan.GetNetworkDiagnosticsDirectory());
@@ -251,8 +262,13 @@ void SettingsNetworkGUI::ShowSavedValues() {
 
 void SettingsNetworkGUI::ApplyTextboxes() {
 	g_SettingsMan.SetNetworkDisplayName(m_DisplayNameTextbox->GetText());
+	g_SettingsMan.SetNetworkChatKey(m_ChatKeyTextbox->GetText());
+	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
 	if (int minutes = 0; ParseWholeNumber(m_IdleWaitTextbox->GetText(), minutes)) {
 		g_SettingsMan.SetNetworkHostIdleWaitMinutes(minutes);
+	}
+	if (int ticks = 0; ParseWholeNumber(m_PathHorizonTextbox->GetText(), ticks)) {
+		g_SettingsMan.SetNetworkPathHorizonTicks(ticks);
 	}
 	if (int frames = 0; ParseWholeNumber(m_FixedDelayTextbox->GetText(), frames)) {
 		g_SettingsMan.SetNetworkInputDelayFrames(std::clamp(frames, 0, static_cast<int>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
@@ -447,7 +463,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
 		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_PathHorizonTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&

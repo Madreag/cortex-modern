@@ -83,6 +83,29 @@ namespace RTE {
 
 		/// Selftest: a scripted element's frame-rate press and release edge once per press, like a device.
 		bool RunScriptedInputEdgeSelfTest();
+
+		/// Selftest: a scripted pad's press reaches the menu at the device and no seat at all.
+		bool RunScriptedPadSeatSelfTest();
+#pragma endregion
+
+#pragma region Scripted Pad Handling
+		/// Registers a pad a script attached, so no seat binds it and only the device-level reads see it.
+		/// @param joystickID The attached pad's joystick ID.
+		static void RegisterScriptedPad(SDL_JoystickID joystickID);
+
+		/// Forgets a scripted pad the script detached.
+		/// @param joystickID The detached pad's joystick ID.
+		static void ForgetScriptedPad(SDL_JoystickID joystickID);
+
+		/// Gets whether a pad was attached by a script.
+		/// @param joystickID The pad's joystick ID.
+		/// @return Whether the pad is a scripted one.
+		static bool IsScriptedPad(SDL_JoystickID joystickID);
+
+		/// Gets whether a scripted pad took a press of this gamepad button this render frame.
+		/// @param whichButton The SDL gamepad button to check.
+		/// @return Whether any scripted pad pressed it.
+		static bool ScriptedPadButtonPressed(int whichButton);
 #pragma endregion
 
 #pragma region Control Scheme and Input Mapping Handling
@@ -228,6 +251,20 @@ namespace RTE {
 		/// Temporarily disables most of the keyboard keys. This is used when typing into a dialog box is required.
 		/// @param disable Whether to disable most keys or not.
 		void DisableKeys(bool disable = true) { m_DisableKeyboard = disable; }
+
+		/// Takes the human seats' own keyboard and mouse for a text entry until it closes. Losing the
+		/// window or opening a dialog does not do this; only something the player types into does.
+		/// @param typing Whether a text entry is holding the seats' input.
+		void TypeIntoSeatInput(bool typing) { m_SeatInputTypedInto = typing; }
+
+		/// Whether a text entry is holding the human seats' keyboard and mouse at all.
+		/// @return Whether something the player types into owns the seats' input.
+		bool SeatInputTypedInto() const { return m_SeatInputTypedInto; }
+
+		/// Whether a text entry holds this player's own keyboard and mouse, so none of it drives its actor.
+		/// @param whichPlayer The player to ask about.
+		/// @return Whether the player's device input is being typed into instead.
+		bool SeatInputTypedInto(int whichPlayer) const;
 
 		/// Gets whether a key is being held right now, by scancode.
 		/// @param scancodeToTest A scancode to test. See SDL_Scancode enumeration.
@@ -548,6 +585,9 @@ namespace RTE {
 		static std::vector<Gamepad> s_PrevJoystickStates; //!< Joystick states as they were the previous update.
 		static std::vector<Gamepad> s_ChangedJoystickStates; //!< Joystick states that have changed.
 
+		static std::vector<Gamepad> s_ScriptedPadStates; //!< Device-level states of the pads a script attached. These take no seat slot.
+		static std::vector<Gamepad> s_ChangedScriptedPadStates; //!< Scripted pad states that have changed.
+
 		std::vector<SDL_Event> m_EventQueue; //!< List of incoming input events.
 
 		uint64_t m_RenderFrameCount{0}; //!< Render frames ended, which is the span a device edge is readable for.
@@ -577,6 +617,7 @@ namespace RTE {
 		bool m_EnableMultiMouseKeyboard{true}; //!< Allow use of multiple mice and keyboards. (Enables relative mouse mode.)
 		bool m_PlayerMouseKeyboardKnown{false}; //!< Whether all player devices are known when multiple mouse and/or keyboards are requested.
 		bool m_DisableKeyboard; //!< Temporarily disable all keyboard input reading.
+		bool m_SeatInputTypedInto = false; //!< A text entry holds the human seats' keyboard and mouse.
 		bool m_DisableMouseMoving; //!< Temporary disable for positioning the mouse, for when the game window is not in focus.
 
 		/// This is set when focus is switched back to the game window and will cause the m_DisableMouseMoving to switch to false when the mouse button is RELEASED.
@@ -669,6 +710,11 @@ namespace RTE {
 		/// Connect a joystick or gamepad device and add it to the joystick list if a slot is available (up to max player count).
 		/// @param joystickID The SDL_JoystickID of the added Gamepad, usually from the corresponding device event.
 		void HandleGamepadHotPlug(SDL_JoystickID joystickID);
+
+		/// Takes a button event of a scripted pad into its device-level state.
+		/// @param inputEvent The joystick or gamepad button event.
+		/// @return Whether the event belonged to a scripted pad, which no seat ever reads.
+		static bool RecordScriptedPadButton(const SDL_Event& inputEvent);
 #pragma endregion
 
 		/// Clears all the member variables of this UInputMan, effectively resetting the members of this abstraction level only.

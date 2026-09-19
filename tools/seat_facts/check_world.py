@@ -89,7 +89,10 @@ def world(path):
 def compare(left, right, damage=False):
     a, host = world(left)
     b, client = world(right)
-    checks = {"complete_world_block_equal": a == b, "brain_records_equal": host["brains"] == client["brains"],
+    brains_present = host["brains"] is not None and client["brains"] is not None
+    checks = {"brain_records_present": brains_present,
+              "complete_world_block_equal": a == b,
+              "brain_records_equal": brains_present and host["brains"] == client["brains"],
               "alarm_records_equal": host["alarm_bits"] == client["alarm_bits"]}
     if damage:
         bits = lambda value: struct.unpack("<i", struct.pack("<f", value))[0]

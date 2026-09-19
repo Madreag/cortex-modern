@@ -71,6 +71,13 @@ namespace RTE {
 		/// Whether the sim runs unpaced by real time.
 		bool IsFreeRunSim() const { return m_FreeRunSim; }
 
+		/// Accrues extra fixed ticks so a world joiner can apply the tail faster than real time.
+		void GrantSimUpdates(int count) {
+			if (count > 0) {
+				m_SimAccumulator += static_cast<long long>(count) * m_DeltaTime;
+			}
+		}
+
 		/// Rewinds the sim clock to a captured point, so a rollback re-runs the same tick numbers
 		/// and sim times the first pass saw.
 		/// @param simUpdateCount The captured update count.
