@@ -1,9 +1,11 @@
 """In-match chat band: host send appears on the guest, and the band overlaps no occupier.
 
 Writes the network-UI probe scripts the completion pass runs. Does not launch unless --launch
-is set. Viewports 640x360, 960x540 and 1280x720, each at both chat text sizes. The host send_chat
-step is the line; the guest waits for LabelMatchChatNewest within 120 renders; both put a seat
-message on screen and open the seats panel, so the layout assertion names two occupiers that are
+is set. Viewports 640x360, 960x540 and 1280x720, each at both chat text sizes. The steps measure
+the running match they launch, which is past its setup editor by sim 60, so every layout step reads
+in match mode. The host send_chat step is the line; the guest waits for LabelMatchChatNewest within
+120 renders; both put a seat message on screen and open the seats panel, so the layout assertion
+names the two occupiers that are
 really there, then open the entry with the chat key and assert what the carved run holds at that
 size: a history row above the entry at every supported size and text size, 640x360 with Large
 included, where the entry shrinks and then the panel gives up rows to make room for it (see
@@ -70,12 +72,12 @@ def open_entry_steps(size, text_size):
         {"op": "wait", "renders": 4, "chat_entry_open": True},
         {"op": "assert_control", "control": "TextMatchChatInput", "equals": {"visible": True}},
         *rows,
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": True,
+        {"op": "assert_net_ui_clear", "match": True, "chat_layout": True, "entry_open": True,
          "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
         {"op": "key_down", "key": "Escape"},
         {"op": "key_up", "key": "Escape"},
         {"op": "wait", "renders": 4, "chat_entry_open": False},
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False,
+        {"op": "assert_net_ui_clear", "match": True, "chat_layout": True, "entry_open": False,
          "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
     ]
 
