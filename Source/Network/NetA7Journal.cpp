@@ -1,6 +1,7 @@
 #include "NetA7Journal.h"
 
 #include "System/FaultInjection.h"
+#include "System.h"
 
 #include <algorithm>
 #include <array>
@@ -97,22 +98,6 @@ namespace RTE {
 			if (value.empty()) return false;
 			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), result);
 			return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && result > 0;
-		}
-
-		std::filesystem::path ExecutablePath() {
-		#ifdef _WIN32
-			std::array<wchar_t, 32768> path{};
-			const DWORD size = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-			return size && size < path.size() ? std::filesystem::path(std::wstring(path.data(), size)) : std::filesystem::path();
-		#elif defined(__APPLE__)
-			uint32_t size = 0;
-			_NSGetExecutablePath(nullptr, &size);
-			std::vector<char> path(size);
-			return _NSGetExecutablePath(path.data(), &size) == 0 ? std::filesystem::path(path.data()) : std::filesystem::path();
-		#else
-			std::error_code error;
-			return std::filesystem::read_symlink("/proc/self/exe", error);
-		#endif
 		}
 
 		std::string FileSha(const std::filesystem::path& path) {
@@ -218,7 +203,7 @@ namespace RTE {
 		auto fail = [error](const char* message) { if (error) *error = message; return false; };
 		if (!Token(run) || !Token(peer) || log.empty() || expected.size() != 64 || s_State.file) return fail("A7 requires one fresh E2E journal and complete process identity");
 		for (char c: expected) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return fail("A7 binary identity must be lowercase SHA-256");
-		s_State.exeSha = FileSha(ExecutablePath());
+		s_State.exeSha = System::GetThisExeSha256();
 		if (s_State.exeSha != expected) return fail("A7 executable hash differs from the guarded launch identity, or SHA-256 is unavailable");
 		s_State.fault = Env("CC_FAULT_INJECT");
 		if (!s_State.fault.empty()) {
