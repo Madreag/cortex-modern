@@ -199,6 +199,9 @@ namespace RTE {
 		static bool IsWorldAuthor();
 		/// The world's durable id, or "" outside a persistent world.
 		static std::string GetWorldId();
+		/// The world's configured respawn delay in committed frames - the one number both the seat
+		/// respawn the host authors and the preset's own unseated-team respawn clock.
+		static int GetWorldRespawnDelayFrames();
 		/// Submits one host-authored world transition. Off a synced round it applies here and now, so
 		/// the persistent preset behaves the same way with no network under it.
 		/// @return Whether the transition was queued or applied.
@@ -326,6 +329,9 @@ namespace RTE {
 		/// team's policy owner (a surviving teammate's AI picks them up). Synced: every peer consumes
 		/// the frame with identical leave knowledge.
 		static void PurgeLockstepControlOverridesForGonePeers(uint64_t frame);
+		/// Drops every handoff this peer holds, so a seat its player left cleanly leaves its actors
+		/// unowned. A committed transition applies it, so the map moves the same way on every peer.
+		static void ReleaseLockstepControlOverridesOf(uint8_t ownerPeerId);
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
 		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).

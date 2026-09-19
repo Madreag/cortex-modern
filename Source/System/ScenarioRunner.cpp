@@ -1050,6 +1050,16 @@ namespace RTE {
 		return config != nullptr ? config->worldId : std::string();
 	}
 
+	int ScenarioRunner::GetWorldRespawnDelayFrames() {
+		if (const NetMatchConfig* config = GetLockstepMatchConfig(); config != nullptr) {
+			return static_cast<int>(WorldRespawnDelayFrames(*config));
+		}
+		// With no round attached the preset runs alone on the world's own default. Built once: a
+		// script author asks for this every tick.
+		static const NetMatchConfig unconfigured;
+		return static_cast<int>(WorldRespawnDelayFrames(unconfigured));
+	}
+
 	bool ScenarioRunner::SubmitWorldTransition(const NetGameWorldTransition& transition) {
 		if (s_LockstepCoordinator && !IsPersistentWorld()) {
 			return false;
@@ -1285,6 +1295,21 @@ namespace RTE {
 				// Admission can observe the drop after this frame has released its control handoffs.
 				NoteE2eOwnerTransfer(it->first);
 				s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
+				it = s_LockstepControlOverrides.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
+
+	void ScenarioRunner::ReleaseLockstepControlOverridesOf(uint8_t ownerPeerId) {
+		if (ownerPeerId == 0) {
+			return;
+		}
+		for (auto it = s_LockstepControlOverrides.begin(); it != s_LockstepControlOverrides.end();) {
+			if (it->second == ownerPeerId) {
+				// Erased, not zeroed: an entry of 0 would read as an owner rather than as no handoff.
+				NoteE2eOwnerTransfer(it->first);
 				it = s_LockstepControlOverrides.erase(it);
 			} else {
 				++it;

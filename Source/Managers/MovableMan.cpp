@@ -693,6 +693,11 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				g_ConsoleMan.PrintString("ERROR: Rejected a stale WorldTransition: " + transitionError);
 				continue;
 			}
+			if (transition->kind == NetGameWorldTransition::Release) {
+				// The seat's player left, so its characters are nobody's again and the next Activate
+				// may seat the brain it left behind instead of cloning a second resident.
+				ScenarioRunner::ReleaseLockstepControlOverridesOf(transition->peerId);
+			}
 			Actor* seated = nullptr;
 			if (transition->kind == NetGameWorldTransition::Activate) {
 				// The candidates come from lockstep state alone - the committed roster's order and the

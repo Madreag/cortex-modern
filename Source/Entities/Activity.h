@@ -415,6 +415,11 @@ namespace RTE {
 		/// @return Whether this machine may submit a world transition.
 		bool IsWorldAuthor() const;
 
+		/// The world's configured respawn delay, in simulation ticks, so a world script clocks the
+		/// same wait the engine's own seat respawn does.
+		/// @return The delay in committed frames.
+		int GetWorldRespawnDelayFrames() const;
+
 		/// Submits one host-authored respawn for a team: every machine spawns the identical resident at
 		/// the same committed tick, in one order. Refused off the world author.
 		/// @param team The team the resident belongs to.
