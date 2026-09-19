@@ -1,11 +1,14 @@
 """In-match chat band: host send appears on the guest, and the band overlaps no occupier.
 
 Writes the network-UI probe scripts the completion pass runs. Does not launch unless --launch
-is set. Viewports 640x360, 960x540 and 1280x720. The host send_chat step is the line; the guest
-waits for LabelMatchChatNewest within 120 renders; both put a seat message on screen and open the
-seats panel, so the layout assertion names two occupiers that are really there, then open the entry
-with the chat key and assert what the carved area holds at that size: a history row above the entry
-at every supported size, 640x360 included, where the entry itself shrinks to make room for it (see
+is set. Viewports 640x360, 960x540 and 1280x720, each at both chat text sizes. The steps measure
+the running match they launch, which is past its setup editor by sim 60, so every layout step reads
+in match mode. The host send_chat step is the line; the guest waits for LabelMatchChatNewest within
+120 renders; both put a seat message on screen and open the seats panel, so the layout assertion
+names the two occupiers that are
+really there, then open the entry with the chat key and assert what the carved run holds at that
+size: a history row above the entry at every supported size and text size, 640x360 with Large
+included, where the entry shrinks and then the panel gives up rows to make room for it (see
 history_row_fits).
 """
 
@@ -20,14 +23,50 @@ import threading
 from pathlib import Path
 
 SIZES = ((640, 360), (960, 540), (1280, 720))
+TEXT_SIZES = ("small", "large")
 # The row rule holds at every size the game supports; the detector launches the three shortest of them.
 SUPPORTED_HEIGHTS = (360, 540, 720, 1080)
 CHAT_LINE = "hello from host"
 SEAT_MESSAGE = "chat layout occupier"
 TICKS = 900
-# This detector owns 48700-48705 (two peers per size). The launch driver owns 48320-48539 and
-# 48630-48649, the menu readback 48270-48279/48380-48399/48530-48559/48840-48859/49180-49199.
+# This detector owns 48700-48711 (two peers per size and text size). The launch driver owns
+# 48320-48539 and 48630-48649, the menu readback 48270-48279/48380-48399/48530-48559/48840-48859/
+# 49180-49199, the autosave restore 48720-48739.
 PORT_BASE = 48700
+
+# The layout the band is held to, as NetModerationGUI lays it out. The fonts are the two skin fonts
+# (Base.rte/GUIs/Skins/FontSmall.png is 10 rows tall, FontLarge.png 15), and a row is floored at 12
+# rows however short the font is.
+SMALL_FONT_HEIGHT, LARGE_FONT_HEIGHT = 10, 15
+LINE_HEIGHT = {"small": max(12, SMALL_FONT_HEIGHT) + 4, "large": max(12, LARGE_FONT_HEIGHT) + 4}
+PANEL_GAP, PANEL_HEIGHT, COMPACT_MAX_HEIGHT = 4, 344, 480
+STRIP_BAND_BOTTOM, STATUS_BOX_TOP, STATUS_BOX_HEIGHT = 20, 32, 76
+PANEL_ROW_HEIGHT = max(12, SMALL_FONT_HEIGHT) + 8
+# The seat message these steps put on screen: the non-centered band the large font lays out at y=12.
+MESSAGE_TOP, MESSAGE_HEIGHT = 12, LARGE_FONT_HEIGHT
+
+
+def chat_top_limit(height):
+    """The first row the band may use: under the seat's message where the message is in the top half."""
+    return MESSAGE_TOP + MESSAGE_HEIGHT + 4 if MESSAGE_TOP + MESSAGE_HEIGHT <= height // 2 else 4
+
+
+def panel_top(height, line_height):
+    """Where the open seats panel sits, including the run it reserves for an open chat entry."""
+    band = (STRIP_BAND_BOTTOM if height < COMPACT_MAX_HEIGHT else STATUS_BOX_TOP + STATUS_BOX_HEIGHT) + PANEL_GAP
+    lowest = max(0, height - PANEL_HEIGHT - PANEL_GAP)
+    centred = min(max((height - PANEL_HEIGHT) // 2, min(band, lowest)), lowest)
+    if height >= COMPACT_MAX_HEIGHT:
+        return centred
+    # A compact screen keeps the strip band with its toast row above the panel, and an open entry's
+    # history row with its tight entry above that, so the panel takes the rows under the lower run.
+    return max(centred, STRIP_BAND_BOTTOM + PANEL_ROW_HEIGHT + PANEL_GAP,
+               chat_top_limit(height) + line_height + (line_height + 4) + PANEL_GAP)
+
+
+def chat_available(height, line_height):
+    """The run the band owns: under the seat's message and above the open seats panel."""
+    return panel_top(height, line_height) - PANEL_GAP - chat_top_limit(height)
 
 
 def occupier_steps():
@@ -41,41 +80,42 @@ def occupier_steps():
     ]
 
 
-def history_row_fits(height):
-    """One history row rides above the entry at every supported size, the shortest included.
+def history_row_fits(height, text_size):
+    """Whether the run the band owns holds one history row above the tight entry at that size.
 
-    With the seats panel open the band lives above it: available = PanelTop(h) - 8, and at 640x360
-    PanelTop is F + 32, so available is F + 24 = 36 for the small font's F = 12. A row is lineH = F + 4
-    and the entry takes F + 10 where the band still holds a row above it and F + 8 where those two
-    pixels are what buys the row, so 640x360 seats 16 + 20 in its 36 exactly and the taller sizes keep
-    the roomy entry with rows to spare.
+    The arithmetic is the band's own: a row is lineH = max(12, font height) + 4 and the tight entry
+    is lineH + 4, so the run has to reach 2 * lineH + 4 - 36 for the small font, 42 for the large.
+    The run is chat_available(): under the seat's message band, which is 12 + 15 + 4 = 31 here, and
+    above the seats panel, whose top reserves that same minimum on a compact screen.
     """
     if height not in SUPPORTED_HEIGHTS:
         raise ValueError(f"{height} is not a supported screen height")
-    return True
+    line_height = LINE_HEIGHT[text_size]
+    return chat_available(height, line_height) >= line_height + (line_height + 4)
 
 
-def open_entry_steps(size):
+def open_entry_steps(size, text_size):
     """The chat key opens the entry; the band keeps what fits above it and nothing else."""
     width, height = size
-    rows = [{"op": "assert_control", "control": "LabelMatchChat0", "equals": {"visible": history_row_fits(height)}}]
+    rows = [{"op": "assert_control", "control": "LabelMatchChat0",
+             "equals": {"visible": history_row_fits(height, text_size)}}]
     return [
         {"op": "key_down", "key": "CHAT"},
         {"op": "key_up", "key": "CHAT"},
         {"op": "wait", "renders": 4, "chat_entry_open": True},
         {"op": "assert_control", "control": "TextMatchChatInput", "equals": {"visible": True}},
         *rows,
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": True,
+        {"op": "assert_net_ui_clear", "match": True, "chat_layout": True, "entry_open": True,
          "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
         {"op": "key_down", "key": "Escape"},
         {"op": "key_up", "key": "Escape"},
         {"op": "wait", "renders": 4, "chat_entry_open": False},
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False,
+        {"op": "assert_net_ui_clear", "match": True, "chat_layout": True, "entry_open": False,
          "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
     ]
 
 
-def host_steps(size):
+def host_steps(size, text_size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
@@ -83,21 +123,26 @@ def host_steps(size):
         {"op": "wait", "renders": 8, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         *occupier_steps(),
-        *open_entry_steps(size),
+        *open_entry_steps(size, text_size),
         {"op": "finish"},
     ]
 
 
-def guest_steps(size):
+def guest_steps(size, text_size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
         {"op": "wait", "renders": 120, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         *occupier_steps(),
-        *open_entry_steps(size),
+        *open_entry_steps(size, text_size),
         {"op": "finish"},
     ]
+
+
+def cases():
+    """Every viewport at every chat text size, in the order their ports are handed out."""
+    return [(size, text_size) for size in SIZES for text_size in TEXT_SIZES]
 
 
 def script(steps):
@@ -106,11 +151,12 @@ def script(steps):
 
 def write_scripts(root: Path) -> dict[str, str]:
     written = {}
-    for width, height in SIZES:
-        for who, steps in (("host", host_steps((width, height))), ("guest", guest_steps((width, height)))):
-            path = root / f"match-chat-{width}x{height}-{who}.json"
+    for (width, height), text_size in cases():
+        for who, steps in (("host", host_steps((width, height), text_size)),
+                           ("guest", guest_steps((width, height), text_size))):
+            path = root / f"match-chat-{width}x{height}-{text_size}-{who}.json"
             path.write_text(json.dumps(script(steps), indent=2) + "\n", encoding="utf-8")
-            written[f"{width}x{height}-{who}"] = str(path)
+            written[f"{width}x{height}-{text_size}-{who}"] = str(path)
     return written
 
 
@@ -139,20 +185,21 @@ def set_settings(runtime, values):
     path.write_text(settings, encoding="utf-8")
 
 
-def launch_size(make_run, repo, root, size, port, timeout):
+def launch_size(make_run, repo, root, size, text_size, port, timeout):
     width, height = size
-    case = root / f"{width}x{height}"
+    case = root / f"{width}x{height}-{text_size}"
     case.mkdir(parents=True, exist_ok=False)
     records, runs = {}, {}
     try:
-        for who, steps in (("host", host_steps(size)), ("guest", guest_steps(size))):
+        for who, steps in (("host", host_steps(size, text_size)), ("guest", guest_steps(size, text_size))):
             inputs = case / f"{who}_inputs"
             inputs.mkdir()
             probe = inputs / "probe.json"
             probe.write_text(json.dumps(script(steps), indent=2) + "\n", encoding="utf-8")
             env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_UI_SCRIPT": str(probe)}
             runs[who] = make_run(repo, peer_args(who, port, case), case / who, timeout, env=env)
-            set_settings(runs[who].cwd, {"ResolutionX": width, "ResolutionY": height, "NetworkChatVisible": 1})
+            set_settings(runs[who].cwd, {"ResolutionX": width, "ResolutionY": height,
+                                         "NetworkChatVisible": 1, "NetworkChatTextSize": text_size})
 
         def drive(who):
             try:
@@ -172,9 +219,9 @@ def launch_size(make_run, repo, root, size, port, timeout):
     return {"records": records, "logs": {who: str(case / who) for who in ("host", "guest")}}
 
 
-def inspect(root: Path, size) -> dict:
+def inspect(root: Path, size, text_size) -> dict:
     width, height = size
-    case = root / f"{width}x{height}"
+    case = root / f"{width}x{height}-{text_size}"
     detail = {"pass": False, "guest_saw_line": False, "layout": {}}
     for who in ("host", "guest"):
         result = case / f"{who}_inputs" / "net-ui-result.json"
@@ -214,10 +261,11 @@ def main() -> int:
     from run_sim_test import make_run  # noqa: PLC0415
     os.environ["CCCP_HEADLESS"] = "1"
     result = {"pass": False, "sizes": {}}
-    for index, size in enumerate(SIZES):
-        outcome = launch_size(make_run, options.repo.resolve(), root, size,
+    for index, (size, text_size) in enumerate(cases()):
+        outcome = launch_size(make_run, options.repo.resolve(), root, size, text_size,
                               PORT_BASE + index * 2, options.timeout)
-        result["sizes"][f"{size[0]}x{size[1]}"] = {"outcome": outcome, "inspect": inspect(root, size)}
+        result["sizes"][f"{size[0]}x{size[1]}-{text_size}"] = {
+            "outcome": outcome, "inspect": inspect(root, size, text_size)}
     result["pass"] = all(row["inspect"]["pass"] for row in result["sizes"].values())
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"pass": result["pass"]}, indent=2))

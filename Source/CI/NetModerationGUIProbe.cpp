@@ -215,6 +215,7 @@ namespace {
 		    {"chat_row_height", chatBand.rowHeight},
 		    {"chat_entry_height", chatBand.entryHeight},
 		    {"chat_history_visible", chatBand.historyVisible},
+		    {"chat_text_size_reduced", chatBand.reducedTextSize},
 		    {"seat_input_typed_into", g_UInputMan.SeatInputTypedInto()},
 		    {"seats_panel", seats}};
 		observed["controllers"] = Json::array();
@@ -598,7 +599,8 @@ namespace {
 						Require(bandRows >= 1 && bandHeight >= rowHeight + entryHeight,
 						    "the chat band drew " + std::to_string(bandRows) + " history rows above the entry: band h=" +
 						        std::to_string(bandHeight) + ", row h=" + std::to_string(rowHeight) + ", entry h=" +
-						        std::to_string(entryHeight) + " at " + std::to_string(backbuffer->w) + "x" + std::to_string(backbuffer->h));
+						        std::to_string(entryHeight) + " at " + std::to_string(backbuffer->w) + "x" + std::to_string(backbuffer->h) +
+						        (observed["net_ui"].at("chat_text_size_reduced").get<bool>() ? " with the text size already dropped" : ""));
 					}
 				}
 				// A band measured against nothing proves nothing: the step names the occupiers that had to

@@ -3930,6 +3930,15 @@ namespace RTE {
 				         " keys for its own stream and the capable client " + std::to_string(clientA.ObservationBindingsSpelled(2));
 				return false;
 			}
+			// The relay spends the forwarded sender's table too: with no dictionary there the keys still
+			// reach the packet, so only the host's table for that sender says the forward was bound.
+			for (const int relayed: {2, 3}) {
+				if (host.ObservationBindingsSpelled(static_cast<uint8_t>(relayed)) == 0) {
+					*error = "the relay of peer " + std::to_string(relayed) + "'s frames spelled " +
+					         std::to_string(host.ObservationBindingsSpelled(static_cast<uint8_t>(relayed))) + " keys into the host's table for it";
+					return false;
+				}
+			}
 			const auto hostToClassic = host.GetStats().peers.find(3);
 			if (hostToClassic == host.GetStats().peers.end()) {
 				*error = "the host never sent the classic sibling a frame, so the strip was never exercised";
