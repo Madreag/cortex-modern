@@ -7,7 +7,6 @@
 #include "NetLobbySession.h"
 #include "NetLockstep.h"
 #include "NetMatchRunner.h"
-#include "NetHostBanStore.h"
 #include "NetParticipantCrypto.h"
 #include "NetSession.h"
 #include "System/System.h"

@@ -118,6 +118,8 @@ namespace RTE {
 		ActionUnavailable = 5,
 		PersistenceFailed = 6,
 		UnknownIdentity = 7,
+		/// Marshaled onto the setup worker; the applied result replaces this one at the next drain.
+		Queued = 8,
 	};
 
 	const char* NetKickBanResultName(NetKickBanResult result);
@@ -518,8 +520,11 @@ namespace RTE {
 		void ReleaseSeat(SeatState& seat);
 		void CloseSeatWithoutHold(SeatState& seat);
 		void CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs);
+		/// Ends every transaction a removed link still had open, on every seat.
+		void DropRemovedTransactions(NetPeerId connection);
 		bool RefuseIfBanned(NetPeerId connection);
 		bool LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const;
+		void UnbindParticipantId(NetPeerId connection);
 		void CaptureParticipant(SeatState& seat, NetPeerId connection);
 		void IssueReseat(const SeatState& seat);
 		void QueueHoldResolution(uint8_t lockstepPeerId, NetHoldResolution resolution);
