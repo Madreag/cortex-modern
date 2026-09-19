@@ -1176,6 +1176,10 @@ bool Activity::IsWorldAuthor() const {
 	return ScenarioRunner::IsWorldAuthor();
 }
 
+int Activity::GetWorldRespawnDelayFrames() const {
+	return ScenarioRunner::GetWorldRespawnDelayFrames();
+}
+
 bool Activity::SubmitWorldRespawn(int team, const std::string& className, const std::string& preset, const std::string& module, const Vector& position, int aiMode) {
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || className.empty() || preset.empty()) {
 		return false;

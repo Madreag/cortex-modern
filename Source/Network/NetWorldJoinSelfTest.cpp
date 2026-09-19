@@ -3372,6 +3372,39 @@ namespace RTE {
 		return 0;
 	}
 
+	// The preset's respawn clock and the engine's seat respawn read one configured number.
+	int TestWorldRespawnDelayHasOneSource() {
+		NetMatchConfig config = MakeWorldConfig();
+		// The rate comes from the production helper itself, so no literal tick count rides this row.
+		config.worldRespawnDelaySeconds = 1;
+		const uint64_t ticksPerSecond = WorldRespawnDelayFrames(config);
+		if (ticksPerSecond == 0) {
+			return Fail("world-respawn-delay-is-not-the-config: a one second world clocked no frames");
+		}
+		config.worldRespawnDelaySeconds = 5;
+		if (WorldRespawnDelayFrames(config) != 5 * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: a 5 s world clocked " +
+			            std::to_string(WorldRespawnDelayFrames(config)) + " frames");
+		}
+		config.worldRespawnDelaySeconds = NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds;
+		if (WorldRespawnDelayFrames(config) != NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: the longest configured wait clocked " +
+			            std::to_string(WorldRespawnDelayFrames(config)) + " frames");
+		}
+		// What the preset reads. With no round attached it is the world's own default, never a literal.
+		const NetMatchConfig unconfigured;
+		if (ScenarioRunner::GetWorldRespawnDelayFrames() != static_cast<int>(WorldRespawnDelayFrames(unconfigured))) {
+			return Fail("world-respawn-delay-has-two-sources: the script author reads " +
+			            std::to_string(ScenarioRunner::GetWorldRespawnDelayFrames()) + " frames while the seat respawn clocks " +
+			            std::to_string(WorldRespawnDelayFrames(unconfigured)));
+		}
+		if (WorldRespawnDelayFrames(unconfigured) != NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: an unconfigured world clocked " +
+			            std::to_string(WorldRespawnDelayFrames(unconfigured)) + " frames");
+		}
+		return 0;
+	}
+
 	// The Release the world commits hands the departed seat's characters back before the next Activate.
 	int TestWorldReleaseFreesTheDepartedBrain() {
 		NetMatchConfig config = MakeWorldConfig();
@@ -5088,6 +5121,10 @@ namespace RTE {
 			s_FailTag = "net-world-release-control-selftest";
 			return TestWorldReleaseFreesTheDepartedBrain();
 		}
+		if (std::strcmp(name, "respawn-delay") == 0 || std::strcmp(name, "-net-world-respawn-delay-selftest") == 0) {
+			s_FailTag = "net-world-respawn-delay-selftest";
+			return TestWorldRespawnDelayHasOneSource();
+		}
 		if (std::strcmp(name, "reclaim") == 0 || std::strcmp(name, "-net-world-reclaim-selftest") == 0) {
 			s_FailTag = "net-world-reclaim-selftest";
 			return TestReclaimOutranksAFreshJoin();
@@ -5286,6 +5323,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldRespawnDelayHasOneSource(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReclaimOutranksAFreshJoin(); result != 0) {

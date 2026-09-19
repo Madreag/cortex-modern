@@ -199,6 +199,9 @@ namespace RTE {
 		static bool IsWorldAuthor();
 		/// The world's durable id, or "" outside a persistent world.
 		static std::string GetWorldId();
+		/// The world's configured respawn delay in committed frames - the one number both the seat
+		/// respawn the host authors and the preset's own unseated-team respawn clock.
+		static int GetWorldRespawnDelayFrames();
 		/// Submits one host-authored world transition. Off a synced round it applies here and now, so
 		/// the persistent preset behaves the same way with no network under it.
 		/// @return Whether the transition was queued or applied.
