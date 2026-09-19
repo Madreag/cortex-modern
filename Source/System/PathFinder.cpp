@@ -589,20 +589,31 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 		deferred->request = pathRequest;
 		deferred->callback = callback;
 		deferred->completeTick = completeTick;
+		deferred->start = start;
+		deferred->end = end;
+		deferred->jumpHeight = jumpHeight;
+		deferred->digStrength = digStrength;
+		deferred->committedHorizon = committedHorizon;
+		deferred->pinnedGeneration = pinned;
 		std::lock_guard lock(m_DeferredPathMutex);
 		deferred->sequence = ++m_DeferredPathSequence;
 		m_DeferredPathRequests.push_back(deferred);
 	}
 
 	const int delayMs = m_PathRequestDelayMs;
+	const bool lostSolve = deferred && FaultInjected("path_request_lost");
 	++m_CurrentPathingRequests;
 	try {
 		g_ThreadMan.GetBackgroundThreadPool().push_task(
-		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held, deferred, delayMs](std::shared_ptr<volatile PathRequest> volRequest) {
+		    [this, start, end, jumpHeight, digStrength, callback, committedHorizon, pinned, held, deferred, delayMs, lostSolve](std::shared_ptr<volatile PathRequest> volRequest) {
 			    PathingRequestScope scope{m_CurrentPathingRequests};
 			    HorizonReadScope horizon(this, committedHorizon, pinned, held);
 
 			    if (deferred) {
+				    if (lostSolve) {
+					    // Armed fault: the solver returns without answering, as a dying thread would.
+					    return;
+				    }
 				    deferred->status = CalculatePathImpl(start, end, deferred->path, deferred->totalCost, jumpHeight, digStrength);
 				    if (delayMs > 0) {
 					    std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
@@ -645,11 +656,16 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 
 void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	int64_t waitUs = 0;
+	bool expired = false;
 	if (!deferred.solved.load(std::memory_order_acquire)) {
 		// A solve that is not finished at its commit tick stalls this tick, the same as a horizon job that is not ready.
 		const auto started = std::chrono::steady_clock::now();
 		while (!deferred.solved.load(std::memory_order_acquire)) {
 			waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+			if (waitUs >= c_HorizonWaitCapUs) {
+				expired = true;
+				break;
+			}
 			std::this_thread::yield();
 		}
 	}
@@ -663,12 +679,32 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 		stats.requestWaitMaxUs = std::max(stats.requestWaitMaxUs, waitUs);
 	}
 	if (waitUs > 0) {
-		std::cout << "[horizon-path] request_wait_us=" << waitUs << " commit=" << deferred.completeTick << std::endl;
+		std::cout << "[horizon-path] request_wait_us=" << waitUs << " commit=" << deferred.completeTick
+		          << " expired=" << (expired ? 1 : 0) << std::endl;
 	}
 	PathRequest& request = const_cast<PathRequest&>(*deferred.request);
-	request.path = std::move(deferred.path);
-	request.totalCost = deferred.totalCost;
-	request.status = deferred.status;
+	if (expired) {
+		// The solver is not coming. Every peer publishes an answer on this frame, so this one is solved here from the
+		// pinned grid the request was launched against; the solver's own buffers are left to it.
+		std::list<Vector> path;
+		float totalCost = 0.0F;
+		++m_CurrentPathingRequests;
+		PathingRequestScope scope{m_CurrentPathingRequests};
+		// This thread is the one that applies overlays, so it reads the request's pin without registering as a reader.
+		const bool previousRead = s_ReadCommittedHorizon;
+		const uint64_t previousGeneration = s_PinnedHorizonGeneration;
+		s_ReadCommittedHorizon = deferred.committedHorizon;
+		s_PinnedHorizonGeneration = deferred.pinnedGeneration;
+		request.status = CalculatePathImpl(deferred.start, deferred.end, path, totalCost, deferred.jumpHeight, deferred.digStrength);
+		s_ReadCommittedHorizon = previousRead;
+		s_PinnedHorizonGeneration = previousGeneration;
+		request.path = std::move(path);
+		request.totalCost = totalCost;
+	} else {
+		request.path = std::move(deferred.path);
+		request.totalCost = deferred.totalCost;
+		request.status = deferred.status;
+	}
 	request.pathLength = request.path.size();
 	if (deferred.callback) {
 		deferred.callback(deferred.request);
@@ -1305,9 +1341,14 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 	job->delayMs = m_HorizonWorkerDelayMs;
 	job->late = m_HorizonWorkerLate || FaultInjected("horizon_worker_late");
+	job->lost = FaultInjected("horizon_worker_lost");
 	job->hold.store(m_HorizonWorkerHold.load(std::memory_order_relaxed), std::memory_order_relaxed);
 	const bool compute = job->materials.empty();
+	job->computes = compute;
 	auto finish = [job, compute]() {
+		if (job->lost) {
+			return;
+		}
 		while (job->hold.load(std::memory_order_acquire)) {
 			std::this_thread::yield();
 		}
@@ -1327,25 +1368,32 @@ void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 		return;
 	}
 	if (ThreadMan::IsConstructed()) {
-		g_ThreadMan.GetBackgroundThreadPool().push_task(finish);
-		return;
+		try {
+			g_ThreadMan.GetBackgroundThreadPool().push_task(finish);
+			return;
+		} catch (const std::exception&) {
+		}
 	}
-	std::thread(finish).detach();
+	// Nothing would own a detached worker, so a launch that cannot be owned finishes here instead of parking a later commit.
+	job->hold.store(false, std::memory_order_release);
+	job->delayMs = 0;
+	job->late = false;
+	finish();
 }
 
-void PathFinder::ApplyHorizonJob(const HorizonJob& job, uint64_t generation) {
+void PathFinder::ApplyHorizonJob(const HorizonJob& job, const std::vector<std::array<const Material*, 8>>& materials, uint64_t generation) {
 	for (size_t index = 0; index < job.nodeIds.size(); ++index) {
 		const int nodeId = job.nodeIds[index];
-		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || index >= job.materials.size()) {
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || index >= materials.size()) {
 			continue;
 		}
 		// A node the live grid already carries needs no cell; every live write of one is preceded by a Note that pins it again.
-		if (m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials == job.materials[index]) {
+		if (m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials == materials[index]) {
 			m_HorizonNodes.erase(nodeId);
 			continue;
 		}
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
-		overlay.committedMaterials = job.materials[index];
+		overlay.committedMaterials = materials[index];
 		overlay.generation = generation;
 	}
 }
@@ -1562,14 +1610,29 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		return lhs->commitTick < rhs->commitTick;
 	});
 	bool stalled = false;
-	for (const auto& job: due) {
+	// A worker that never answers must not park the tick, and dropping its cells would move the shared grid on one peer only,
+	// so the wait is bounded and this thread finishes the job from the snapshot it carries: the same cells on every peer.
+	std::vector<std::vector<std::array<const Material*, 8>>> selfComputed(due.size());
+	for (size_t index = 0; index < due.size(); ++index) {
+		const std::shared_ptr<HorizonJob>& job = due[index];
 		int64_t waitUs = 0;
+		bool expired = false;
 		if (!job->ready.load()) {
 			// A job that is not ready at its commit tick stalls this tick, the same as a lockstep frame that has not arrived.
 			const auto started = std::chrono::steady_clock::now();
 			while (!job->ready.load()) {
 				waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				if (waitUs >= c_HorizonWaitCapUs) {
+					expired = true;
+					break;
+				}
 				std::this_thread::yield();
+			}
+		}
+		if (expired) {
+			m_LastHorizonExpired += 1;
+			if (job->computes) {
+				ComputeHorizonMaterialsFromSnapshots(job->nodes, job->patches, selfComputed[index]);
 			}
 		}
 		m_LastHorizonWaitUs = waitUs;
@@ -1577,7 +1640,7 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		if (waitUs > 0) {
 			stalled = true;
 			std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
-			          << " count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
+			          << " expired=" << (expired ? 1 : 0) << " count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
 		}
 	}
 	const uint64_t applyGeneration = m_HorizonGeneration.load() + 1;
@@ -1587,8 +1650,9 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		const auto started = std::chrono::steady_clock::now();
 		m_HorizonApplyCv.wait(lock, [this, applyGeneration] { return !HasOlderHorizonReaders(applyGeneration); });
 		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
-		for (const auto& job: due) {
-			ApplyHorizonJob(*job, applyGeneration);
+		for (size_t index = 0; index < due.size(); ++index) {
+			const std::shared_ptr<HorizonJob>& job = due[index];
+			ApplyHorizonJob(*job, selfComputed[index].empty() ? job->materials : selfComputed[index], applyGeneration);
 			m_HorizonJobs.erase(std::remove(m_HorizonJobs.begin(), m_HorizonJobs.end(), job), m_HorizonJobs.end());
 		}
 		// The cells and the generation that makes them visible are published together.
@@ -2567,15 +2631,64 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const bool stallComplete = stallRequest->complete;
 		const int64_t stallWaitUs = stallFinder.LastPathRequestWaitUs();
 		const size_t stallPending = stallFinder.TestDeferredPathRequestCount();
-		if (!stallComplete || stallPending != 0) {
-			std::cout << Tag << " FAIL async stall complete=" << stallComplete << " pending=" << stallPending << std::endl;
-			return 1;
-		}
 		if (stallWaitUs < 25000) {
 			std::cout << Tag << " FAIL async stall wait_us=" << stallWaitUs << std::endl;
 			return 1;
 		}
+		if (!stallComplete || stallPending != 0) {
+			std::cout << Tag << " FAIL async stall complete=" << stallComplete << " pending=" << stallPending << std::endl;
+			return 1;
+		}
 		std::cout << Tag << " PASS shared-async-stall" << std::endl;
+	}
+
+	// request-solver-lost: a deferred solve that never answers is finished on the commit thread, with the same answer.
+	{
+		PathFinder answeredSolver;
+		PathFinder lostSolver;
+		answeredSolver.TestInstallGrid(8, 4, 20, &air);
+		lostSolver.TestInstallGrid(8, 4, 20, &air);
+		auto answeredRequest = answeredSolver.CalculatePathAsync(Vector(10, 50), Vector(150, 50), FLT_MAX, 1.0F, nullptr, true, 90);
+		answeredSolver.CommitPathRequestsThrough(90);
+		TestArmFaultInject("path_request_lost");
+		auto lostRequest = lostSolver.CalculatePathAsync(Vector(10, 50), Vector(150, 50), FLT_MAX, 1.0F, nullptr, true, 90);
+		lostSolver.CommitPathRequestsThrough(90);
+		TestArmFaultInject("");
+		if (!lostRequest->complete || lostSolver.TestDeferredPathRequestCount() != 0) {
+			std::cout << Tag << " FAIL lost solve complete=" << lostRequest->complete << " pending=" << lostSolver.TestDeferredPathRequestCount() << std::endl;
+			return 1;
+		}
+		if (lostRequest->status != answeredRequest->status || lostRequest->totalCost != answeredRequest->totalCost || lostRequest->pathLength != answeredRequest->pathLength) {
+			std::cout << Tag << " FAIL lost solve answer status=" << lostRequest->status << " cost=" << lostRequest->totalCost
+			          << " len=" << lostRequest->pathLength << std::endl;
+			return 1;
+		}
+		if (lostSolver.LastPathRequestWaitUs() < c_HorizonWaitCapUs) {
+			std::cout << Tag << " FAIL lost solve wait_us=" << lostSolver.LastPathRequestWaitUs() << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS request-solver-lost" << std::endl;
+	}
+
+	// horizon-worker-lost: a worker that never answers bounds the commit's wait and still applies the job's cells.
+	{
+		ResetHorizonWaitStats();
+		TestArmFaultInject("horizon_worker_lost");
+		PathFinder lostWorker;
+		lostWorker.TestInstallGrid(8, 4, 20, &air);
+		lostWorker.QueueHorizonDelta(1, 1, wall, blocked);
+		lostWorker.CommitHorizonThrough(2);
+		TestArmFaultInject("");
+		const std::array<const Material*, 8> lostCell = lostWorker.TestViewMaterials(wall, lostWorker.TestHorizonGeneration());
+		if (lostCell != blocked) {
+			std::cout << Tag << " FAIL lost worker cell right=" << (lostCell[4] ? static_cast<int>(lostCell[4]->GetIndex()) : -1) << std::endl;
+			return 1;
+		}
+		if (lostWorker.LastHorizonWaitUs() < c_HorizonWaitCapUs) {
+			std::cout << Tag << " FAIL lost worker wait_us=" << lostWorker.LastHorizonWaitUs() << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS horizon-worker-lost" << std::endl;
 	}
 
 	// (iv) wait_us is zero when ready before wait, and the late fault is 50 ms plus slack.

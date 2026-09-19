@@ -326,6 +326,8 @@ namespace RTE {
 			std::vector<HorizonPatchRef> patches;
 			int delayMs = 0;
 			bool late = false;
+			bool lost = false; //!< Armed fault: the worker returns without answering, as a dying thread would.
+			bool computes = false; //!< Whether the worker fills materials; fixed before launch so the commit can read it.
 			std::atomic<bool> hold{false};
 			std::atomic<bool> ready{false};
 		};
@@ -351,6 +353,13 @@ namespace RTE {
 			std::list<Vector> path;
 			float totalCost = 0.0F;
 			int status = MicroPather::NO_SOLUTION;
+			// The query, so a commit whose solver never answers can solve it here instead of parking the tick.
+			Vector start;
+			Vector end;
+			float jumpHeight = 0.0F;
+			float digStrength = 0.0F;
+			bool committedHorizon = false;
+			uint64_t pinnedGeneration = 0;
 		};
 		std::deque<std::shared_ptr<DeferredPathRequest>> m_DeferredPathRequests;
 		mutable std::mutex m_DeferredPathMutex;
@@ -370,7 +379,7 @@ namespace RTE {
 		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonPatchRef>& patches, std::vector<std::array<const Material*, 8>>& materials);
 		HorizonNodeSnapshot SnapshotNode(int nodeId) const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
-		void ApplyHorizonJob(const HorizonJob& job, uint64_t generation);
+		void ApplyHorizonJob(const HorizonJob& job, const std::vector<std::array<const Material*, 8>>& materials, uint64_t generation);
 		void ClearHorizonState();
 		bool HasOlderHorizonReaders(uint64_t applyGeneration) const;
 
