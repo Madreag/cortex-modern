@@ -24,11 +24,23 @@ namespace RTE {
 			         {"closed", state.closed}, {"dropped", state.dropped}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName},
 			         {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated},
 			         {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
+			if (state.hasParticipantId) {
+				row["participant_id"] = state.participantId;
+			}
 			if (const auto* ledger = m_Ledger.Find(state.seat.stableSeat)) row["ledger"] = {ledger->peerId, ledger->team, ledger->droppedAtFrame, ledger->actorUIDs};
 			seats.push_back(std::move(row));
 		}
 		const auto& identity = m_LocalIdentity;
+		json bans = json::array();
+		if (m_BanStore) {
+			for (const auto& ban : m_BanStore->List()) {
+				if (ban.scope == NetHostBanScope::UntilRemoved || ban.sessionId == m_HostSessionId) {
+					bans.push_back({ban.identity, static_cast<uint8_t>(ban.scope), ban.createdUnixMs, ban.displayAlias, ban.reason});
+				}
+			}
+		}
 		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats},
+		                         {"bans", bans},
 		                         {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId,
 		                                       identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
@@ -40,6 +52,9 @@ namespace RTE {
 			NetSeatAuthRegistry nextRegistry;
 			if (object.at("version") != 1 || object.at("session").get<uint64_t>() != config.sessionId || !object.at("seats").is_array() || object.at("seats").size() != config.players.size() || !nextRegistry.ImportMigrationState(object.at("registry").get<std::vector<uint8_t>>())) return false;
 			NetReconnectHost next;
+			next.m_BanStore = m_BanStore;
+			next.m_ProofRequired = m_ProofRequired;
+			next.m_PersistentWorld = m_PersistentWorld;
 			NetH4Identity identity;
 			const auto& fields = object.at("identity");
 			identity.controllerFrameVersion = fields.at(0).get<uint16_t>(); identity.controllerFrameEncodedSize = fields.at(1).get<uint16_t>();
@@ -73,13 +88,40 @@ namespace RTE {
 				if (retiredRemaining > c_ProvisionalExpiryMs) return false;
 				state->retiredUntilMs = retiredRemaining != 0 ? nowMs + retiredRemaining : 0;
 				state->identity = identity;
+				if (row.contains("participant_id")) {
+					state->participantId = row.at("participant_id").get<NetAuthBytes32>();
+					state->hasParticipantId = true;
+				}
 				if (state->committed && nextRegistry.GetActiveGeneration(seat) != state->holderGeneration) return false;
-				if (const auto peer = transports.find(state->seat.lockstepPeerId); peer != transports.end()) { state->activeConnection = peer->second; state->dropped = false; }
+				if (const auto peer = transports.find(state->seat.lockstepPeerId); peer != transports.end()) {
+					if (!state->committed || state->closed) return false;
+					state->activeConnection = peer->second;
+					state->dropped = false;
+					if (state->hasParticipantId) next.BindParticipantId(peer->second, state->participantId);
+				}
 				else if (state->committed && !state->seat.local) { state->dropped = true; state->droppedAtMs = nowMs; }
 				if (row.contains("ledger")) {
 					const auto& ledger = row.at("ledger");
 					next.m_Ledger.RecordDrop(seat, ledger.at(0).get<uint8_t>(), ledger.at(1).get<int32_t>(), ledger.at(2).get<uint64_t>(), ledger.at(3).get<std::vector<int64_t>>());
 				}
+			}
+			std::vector<NetHostBanRecord> bans;
+			if (object.contains("bans")) {
+				for (const auto& row : object.at("bans")) {
+					NetHostBanRecord ban;
+					ban.identity = row.at(0).get<NetAuthBytes32>();
+					const auto scope = row.at(1).get<uint8_t>();
+					if (scope > static_cast<uint8_t>(NetHostBanScope::UntilRemoved)) return false;
+					ban.scope = static_cast<NetHostBanScope>(scope);
+					ban.createdUnixMs = row.at(2).get<uint64_t>();
+					ban.displayAlias = row.at(3).get<std::string>();
+					ban.reason = row.at(4).get<std::string>();
+					if (ban.displayAlias.size() > NetProtocol::c_MaxShortTextBytes || ban.reason.size() > NetProtocol::c_MaxShortTextBytes) return false;
+					bans.push_back(std::move(ban));
+				}
+			}
+			for (const auto& ban : bans) {
+				if (!next.m_BanStore || !next.m_BanStore->Ban(ban.identity, ban.scope, ban.displayAlias, ban.reason, config.sessionId, ban.createdUnixMs)) return false;
 			}
 			registry = std::move(nextRegistry); next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource; next.m_DropOwnershipContext = m_DropOwnershipContext;

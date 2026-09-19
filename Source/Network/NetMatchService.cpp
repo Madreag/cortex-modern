@@ -2714,12 +2714,22 @@ static std::string ResyncSaveName() {
 		m_MigratedTransport = std::move(wire);
 		auto liveTransports = result.transports;
 		if (m_IsHost) for (uint8_t peer : result.resyncPeers) liveTransports.erase(peer);
+		if (m_IsHost) {
+			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
+			(void)m_BanStore.Load(nullptr);
+			m_ReconnectHost.SetBanStore(&m_BanStore);
+			m_ReconnectHost.SetParticipantProofRequired(true);
+			m_ReconnectHost.SetPersistentWorld(config.persistentWorld);
+			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+		}
 		if (m_IsHost && !m_ReconnectHost.ImportMigrationState(m_MigrationAdmissionState, m_SeatAuth, config, m_LocalPeerId, liveTransports, AdmissionNowMs())) { m_Coordinator->Complete("host handover admission state is invalid"); return; }
 		m_PendingSessionEvents.clear();
 		if (!m_Session->AdoptHostMigration(*m_MigratedTransport, m_LocalPeerId, result.hostPeerId, config, liveTransports, AdmissionNowMs())) { m_Coordinator->Complete("host handover session roster is invalid"); return; }
 		m_ChatSession = m_Session.get();
 		if (m_IsHost) {
 			m_Session->SetReconnectClient(nullptr); m_Session->SetReconnectHost(&m_ReconnectHost);
+			m_Session->SetHostBanStore(&m_BanStore);
+			m_Session->EnableParticipantProof(nullptr);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			m_ReconnectHost.SetLiveMatch(true); m_ReconnectHost.SetMigrationHold(result.snapshotProviderPeerId != 0, AdmissionNowMs());
 			const SimCensusScope census;
