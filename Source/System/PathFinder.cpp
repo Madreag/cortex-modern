@@ -1112,43 +1112,28 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 	auto neighborPresent = [](const HorizonNodeSnapshot& node, int dir) {
 		return node.neighborIds[dir] >= 0;
 	};
+	auto RayOffset = [](int dir) {
+		// The same ray offsets UpdateNodeCosts uses for right, down, up-right and right-down.
+		switch (dir) {
+			case 2: return Vector(0.0F, 3.0F);
+			case 4: return Vector(3.0F, 0.0F);
+			case 1: return Vector(2.0F, 2.0F);
+			default: return Vector(2.0F, -2.0F);
+		}
+	};
 	auto raysStay = [&](const HorizonNodeSnapshot& node, int dir) {
-		if (!neighborPresent(node, dir)) {
-			return true;
-		}
-		Vector offset(0.0F, 0.0F);
-		if (dir == 2) {
-			offset = Vector(0.0F, 3.0F);
-		} else if (dir == 4) {
-			offset = Vector(3.0F, 0.0F);
-		} else if (dir == 1) {
-			offset = Vector(2.0F, 2.0F);
-		} else if (dir == 3) {
-			offset = Vector(2.0F, -2.0F);
-		}
+		const Vector offset = RayOffset(dir);
 		return HorizonRayStaysInPatches(node.pos - offset, node.neighborPos[dir] - offset, patches) && HorizonRayStaysInPatches(node.pos + offset, node.neighborPos[dir] + offset, patches);
 	};
 	for (const HorizonNodeSnapshot& node: nodes) {
 		std::array<const Material*, 8> next = node.materials;
-		// Halo adjacency can walk past the noted box; keep the origin-tick pin instead of writing Air.
-		const bool keepOrigin = !raysStay(node, 2) || !raysStay(node, 4) || !raysStay(node, 1) || !raysStay(node, 3);
-		if (!keepOrigin) {
-			if (neighborPresent(node, 2)) {
-				Vector offset(0.0F, 3.0F);
-				next[2] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[2] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[2] + offset, patches));
+		for (int dir: {2, 4, 1, 3}) {
+			// Halo adjacency can walk past the noted box; that direction keeps its origin-tick pin instead of reading Air.
+			if (!neighborPresent(node, dir) || !raysStay(node, dir)) {
+				continue;
 			}
-			if (neighborPresent(node, 4)) {
-				Vector offset(3.0F, 0.0F);
-				next[4] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[4] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[4] + offset, patches));
-			}
-			if (neighborPresent(node, 1)) {
-				Vector offset(2.0F, 2.0F);
-				next[1] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[1] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[1] + offset, patches));
-			}
-			if (neighborPresent(node, 3)) {
-				Vector offset(2.0F, -2.0F);
-				next[3] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[3] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[3] + offset, patches));
-			}
+			const Vector offset = RayOffset(dir);
+			next[dir] = getStrongerMaterial(StrongestMaterialAlongPatch(node.pos - offset, node.neighborPos[dir] - offset, patches), StrongestMaterialAlongPatch(node.pos + offset, node.neighborPos[dir] + offset, patches));
 		}
 		computed[node.nodeId] = next;
 	}
