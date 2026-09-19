@@ -6,7 +6,8 @@ param(
     [string]$Repo = 'D:\Projects\control-build',
     [string]$OutDir = "D:\mx\gameplay_$(Get-Date -Format yyyyMMdd_HHmmss)_$PID",
     [int]$Delay = 3,
-    [int]$PortBase = 47661,
+    # The fixtures' own block, 47730-47739: the heal driver's resync_heal case holds 47661.
+    [int]$PortBase = 47730,
     [string[]]$Only = @(),
     [string]$Lane = $PSScriptRoot,
     [string]$HarnessCommon = (Join-Path $PSScriptRoot 'harness_common.ps1'),
