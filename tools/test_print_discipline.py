@@ -124,8 +124,10 @@ FPRINTF_STDERR = re.compile(r'std::fprintf\(stderr,\s*"RTE ')
 WRITER = re.compile(r"void WriteWholeLine\(std::ostream& stream, const std::string& line\)")
 LOCKED_WRITE = re.compile(r"std::scoped_lock printLock\(PrintLock\(\)\);")
 FAULT_WRITE = re.compile(r"std::unique_lock<std::mutex> printLock\(PrintLock\(\), std::try_to_lock\);")
-# Any line of a captured log that carries a second tag after its first one is a torn line.
-TWO_TAGS = re.compile(r"^\[[a-z0-9-]+\][^\n]*\[[a-z0-9-]+\]")
+# A second writer's line spliced into a first one leaves the first writer's tail as a line of its own:
+# a second tag start plus an untagged tail line. A composed line is one write, and the next line is tagged.
+TAG_START = re.compile(r"^\[[a-z0-9-]+\]")
+SECOND_TAG = re.compile(r"^\[[a-z0-9-]+\].*?\[[a-z0-9-]+\]")
 
 
 def streamed(tag: str) -> re.Pattern:
@@ -164,9 +166,15 @@ def check(repo: Path, logs: list) -> dict:
         if not path.is_file():
             torn.append({"file": str(path), "line": 0, "text": "log missing"})
             continue
-        for number, text in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            if TWO_TAGS.match(text):
-                torn.append({"file": str(path), "line": number, "text": text.strip()[:300]})
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for number, text in enumerate(lines, 1):
+            if not SECOND_TAG.match(text):
+                continue
+            tail = lines[number] if number < len(lines) else None
+            if tail is None:
+                torn.append({"file": str(path), "line": number, "text": (text.strip() + " | tail past the end of the log")[:300]})
+            elif tail and not TAG_START.match(tail):
+                torn.append({"file": str(path), "line": number, "text": (text.strip() + " | tail: " + tail.strip())[:300]})
     if logs:
         rows["captured_log_has_no_torn_line"] = torn
     return rows
