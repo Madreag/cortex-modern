@@ -571,6 +571,8 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
                       if (autosaves / f"{world_id}-{fields['SavedTick']}.ccmanifest").exists())
     # D5b: the world's checkpoints carry the tick's agreed lockstep state, not an empty one.
     manifest = (autosaves / f"{world_id}-{resume_tick}.ccmanifest").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^ManifestSchema = 3$", manifest), "the world checkpoint has no ordered manifest schema"
+    assert re.search(rf"(?m)^WorldBoot = {boot_one}$", manifest), "the checkpoint manifest names a different boot"
     owners = re.findall(r"(?m)^ControlOwner = (-?\d+),(\d+)$", manifest)
     applied = re.findall(r"(?m)^Applied = (\d+),(\d+)$", manifest)
     assert len(applied) >= 1, f"the world's manifest carries no applied command sequence: {manifest}"
@@ -633,6 +635,10 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
     old_rounds = {fields["RoundId"] for fields in held_two.values()}
     assert any(fields["RoundId"] not in old_rounds for fields in fresh_held.values()), \
         "retention discarded every checkpoint of the fresh world in favor of the previous round's higher ticks"
+    for fields in fresh_held.values():
+        fresh_manifest = (fresh / "host/runtime/Autosaves" / f"{world_id}-{fields['SavedTick']}.ccmanifest").read_text(encoding="utf-8")
+        assert re.search(rf"(?m)^WorldBoot = {boot_one + 2}$", fresh_manifest), \
+            "retention kept the previous boot ahead of the fresh world's completed checkpoints"
     return {"world_id": world_id, "boot": boot_one, "resume_tick": resume_tick,
             "kill_capture_tick": records["_kill_capture_tick"], "resume_end": resume_end,
             "manifest_control_owners": len(owners), "manifest_applied_sequences": len(applied),
