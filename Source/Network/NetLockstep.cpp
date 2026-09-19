@@ -1987,7 +1987,7 @@ namespace RTE {
 						}
 					}
 					size_t consumed = 0;
-					if (!ControllerFrameCodec::DecodeDelta(reader.Current(), reader.Remaining(), frame, previous, &consumed, &frameError)) {
+					if (!ControllerFrameCodec::DecodeDelta(reader.Current(), reader.Remaining(), frame, previous, &consumed, &frameError, controllerFrameVersion)) {
 						SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "ControllerFrame delta decode failed: " + frameError);
 						return false;
 					}
@@ -4317,7 +4317,8 @@ namespace RTE {
 				continue;
 			}
 			const std::vector<uint8_t>& bytes = bytesFor(peerId);
-			if (bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
+			// Only a frame has a reserved byte there; another payload's byte 1 means something else.
+			if (frame && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
 			// Behind an undrained backlog, or this peer's stream would arrive out of order.
@@ -4416,7 +4417,8 @@ namespace RTE {
 				continue;
 			}
 			const std::vector<uint8_t>& bytes = windowed && FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
-			if (bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
+			// Only a frame has a reserved byte there; another payload's byte 1 means something else.
+			if (relayed && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
 			// Behind an undrained backlog, or this peer's stream would arrive out of order.
@@ -4610,6 +4612,8 @@ namespace RTE {
 				// A cleanly-left peer's socket closing behind its notice is expected.
 				if (lockstepPeer != 0 && m_PeerLeaveFrames.find(lockstepPeer) != m_PeerLeaveFrames.end()) {
 					m_RemoteTransports.erase(lockstepPeer);
+					// The capability belonged to that peer, not to the id a refilled seat may reuse.
+					m_RemoteFrameWindow.erase(lockstepPeer);
 					break;
 				}
 				// A superseded incarnation's socket finally closing says nothing about the seat: its live
@@ -4617,6 +4621,7 @@ namespace RTE {
 				// leaves the round with it, or the next send names a peer the transport has forgotten.
 				if (m_RelayHost && lockstepPeer != 0 && SeatStateOf(lockstepPeer, event.peerId).fencedTransport) {
 					m_RemoteTransports.erase(lockstepPeer);
+					m_RemoteFrameWindow.erase(lockstepPeer);
 					++m_Stats.ignoredAdmissionFaults;
 					break;
 				}
@@ -5297,6 +5302,7 @@ namespace RTE {
 		const auto transportIt = m_RemoteTransports.find(peerId);
 		const NetPeerId transportId = transportIt != m_RemoteTransports.end() ? transportIt->second : c_InvalidNetPeerId;
 		m_RemoteTransports.erase(peerId);
+		m_RemoteFrameWindow.erase(peerId);
 		// A seat the round took keeps nothing. Its packets still cost receive work, and on a link that
 		// fails one way they keep the connection's own timeout alive; a returner comes back on a new
 		// connection through the reconnect path, so this is not the way back. The transport flushes what
