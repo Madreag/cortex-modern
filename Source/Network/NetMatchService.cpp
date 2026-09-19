@@ -1032,6 +1032,8 @@ static std::string ResyncSaveName() {
 		m_SeatPresence.Clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
+		// A kick queued for a setup worker that is gone belongs to no session and is dropped here.
+		m_PendingRemovals.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -1146,6 +1148,7 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_LastRoundId = 0;
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_State = NetMatchServiceState::Idle;
@@ -1907,7 +1910,8 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
-				m_ReconnectClient.SetRound(static_cast<uint32_t>(m_Coordinator->GetRoundId()));
+				m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+				m_ReconnectClient.SetRound(m_LastRoundId);
 				// The coordinator owns the transport queue mid-match, so this pump is the only
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
@@ -1932,6 +1936,9 @@ static std::string ResyncSaveName() {
 		const SimCensusScope censusScope;
 		// Chat entries stamp the frame they arrived on, on every peer, not only the host's plane.
 		m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+		if (m_Coordinator) {
+			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+		}
 		m_ReconnectClient.SetRound(m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
@@ -2757,7 +2764,7 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.Start(SteadyNowMs());
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
-		runnerConfig.pumpHost = [this] { DrainPendingRemoval(); };
+		AttachHostPump(runnerConfig);
 
 		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
 		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
@@ -2925,16 +2932,18 @@ static std::string ResyncSaveName() {
 		return result;
 	}
 
-	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session) {
 		const uint64_t nowMs = AdmissionNowMs();
-		const uint64_t sessionId = m_Session->GetSessionId();
-		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : 0;
+		const uint64_t sessionId = session.GetSessionId();
+		// Between rounds the coordinator is gone and both peers still hold the round they played, so
+		// that is what the notice is stamped with; a fresh stamp of 0 would read as stale on the client.
+		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : m_LastRoundId;
 		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
 		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
 		if (m_LastKickBanResult != NetKickBanResult::Ok) {
 			return m_LastKickBanResult;
 		}
-		m_Session->BroadcastControl(m_LastRemovalIssue.notice);
+		session.BroadcastControl(m_LastRemovalIssue.notice);
 		if (m_Coordinator && m_State == NetMatchServiceState::Running && m_LastRemovalIssue.lockstepPeerId != 0) {
 			const char* why = action == NetParticipantRemovalAction::Kick ? "removed from the session" : "banned from the session";
 			m_Coordinator->EvictRemovedPeer(m_LastRemovalIssue.lockstepPeerId, why, nowMs);
@@ -2942,9 +2951,9 @@ static std::string ResyncSaveName() {
 		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
 			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
 			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
-			m_Session->DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
+			session.DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
 		}
-		m_Session->TickAdmissionPlane(nowMs);
+		session.TickAdmissionPlane(nowMs);
 		if (m_State == NetMatchServiceState::Running) {
 			PublishModerationView();
 		}
@@ -2953,14 +2962,26 @@ static std::string ResyncSaveName() {
 		return m_LastKickBanResult;
 	}
 
-	void NetMatchService::DrainPendingRemoval() {
+	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
+		config.pumpHost = [this](NetSession& session) { DrainPendingRemoval(session); };
+	}
+
+	void NetMatchService::DrainPendingRemoval(NetSession& session) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (!m_PendingRemoval || m_State != NetMatchServiceState::Starting || !m_Session) {
+		if (m_PendingRemovals.empty() || m_State != NetMatchServiceState::Starting) {
 			return;
 		}
-		const PendingRemoval pending = *m_PendingRemoval;
-		m_PendingRemoval.reset();
-		ApplyRemovalLocked(pending.selection, pending.action);
+		std::vector<PendingRemoval> pending;
+		pending.swap(m_PendingRemovals);
+		NetKickBanResult issue = NetKickBanResult::Ok;
+		for (const PendingRemoval& removal : pending) {
+			const NetKickBanResult result = ApplyRemovalLocked(removal.selection, removal.action, session);
+			if (issue == NetKickBanResult::Ok) {
+				issue = result;
+			}
+		}
+		// The host is told about the first kick that was refused, not the last one that worked.
+		m_LastKickBanResult = issue;
 	}
 
 	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
@@ -2970,16 +2991,27 @@ static std::string ResyncSaveName() {
 			m_LastKickBanResult = NetKickBanResult::NotHosting;
 			return m_LastKickBanResult;
 		}
-		if (!m_Session || (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting)) {
+		if (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting) {
 			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
 			return m_LastKickBanResult;
 		}
 		if (m_State == NetMatchServiceState::Starting) {
-			m_PendingRemoval = PendingRemoval{selection, action};
-			m_LastKickBanResult = NetKickBanResult::Ok;
+			// The setup worker owns the session for the whole of Start, so the kick is applied there and
+			// the result is not known yet. A queue no lobby could fill is a flood, and it is refused.
+			constexpr size_t c_MaxPendingRemovals = 16;
+			if (m_PendingRemovals.size() >= c_MaxPendingRemovals) {
+				m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+				return m_LastKickBanResult;
+			}
+			m_PendingRemovals.push_back(PendingRemoval{selection, action});
+			m_LastKickBanResult = NetKickBanResult::Queued;
 			return m_LastKickBanResult;
 		}
-		return ApplyRemovalLocked(selection, action);
+		if (!m_Session) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		return ApplyRemovalLocked(selection, action, *m_Session);
 	}
 
 	NetKickBanResult NetMatchService::GetLastKickBanResult() const {
