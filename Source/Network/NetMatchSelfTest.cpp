@@ -5307,6 +5307,12 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
+		// The worker never touches the on-screen queue: its line waits for the game thread's pump.
+		if (service.m_PendingToasts.size() != 1) {
+			*error = "the setup worker pushed its moderation toast instead of queueing it";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
 		SetNetAuthCryptoForTest(nullptr);
 		std::filesystem::remove_all(lane, code);
 		std::cout << "[net-match-selftest] PASS kick: Starting RemoveParticipant marshals onto the setup worker" << std::endl;
