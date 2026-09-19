@@ -454,6 +454,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
   if (p->measure && p->nupvalues) {
     /* The graph as the window leaves it: a slot that differs is a write no rollback undoes. */
     size_t at, unique = 0;
+    double scanned = p->timed ? preview_clock() : 0.0;  /* The scan's own cost, kept out of the window's. */
     qsort(p->upvalues, p->nupvalues, sizeof(LJPreviewUV), preview_by_uv);
     for (at = 0; at < p->nupvalues; at++)
       if (!unique || p->upvalues[unique-1].uv != p->upvalues[at].uv)
@@ -466,6 +467,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     if (preview_object(p, obj2gco(p->root)) &&
 	(!p->registry || preview_object(p, obj2gco(p->registry))))
       preview_walk(p, 1);
+    if (p->timed) p->stats.measure_ms += preview_clock()-scanned;
   }
   started = p->timed ? preview_clock() : 0.0;
   while (p->lastwrite) {
@@ -538,6 +540,12 @@ LUA_API size_t luaJIT_preview_upvalue_writes(lua_State *L)
 {
   LJPreview *p = G(L)->preview;
   return p ? p->stats.upvalue_writes : 0;
+}
+
+LUA_API int luaJIT_preview_registry_rooted(lua_State *L)
+{
+  LJPreview *p = G(L)->preview;
+  return p && p->active && p->registry ? 1 : 0;
 }
 
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats)
