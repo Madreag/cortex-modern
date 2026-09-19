@@ -654,7 +654,7 @@ namespace RTE {
 		// peers that stayed acknowledge, and the panels mirroring the adopted config re-seed from it.
 		NetMatchConfig opened = m_Config.matchConfig;
 		bool seatOpened = false;
-		const std::string unseated = NetMatchConfigUtil::UnseatedSlotName(peerId);
+		const std::string unseated = NetMatchConfigUtil::UnseatedSlotName(peerId, opened.persistentWorld);
 		for (NetMatchPlayerSlot& slot: opened.players) {
 			if (slot.peerId == peerId && !slot.cpu && slot.displayName != unseated) {
 				slot.displayName = unseated;

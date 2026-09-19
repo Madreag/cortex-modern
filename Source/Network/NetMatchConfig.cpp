@@ -152,8 +152,8 @@ namespace RTE {
 		return config;
 	}
 
-	std::string NetMatchConfigUtil::UnseatedSlotName(uint8_t peerId) {
-		return "Client " + std::to_string(peerId);
+	std::string NetMatchConfigUtil::UnseatedSlotName(uint8_t peerId, bool persistentWorld) {
+		return persistentWorld ? "Open" : "Client " + std::to_string(peerId);
 	}
 
 	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {

@@ -5022,7 +5022,7 @@ static std::string ResyncSaveName() {
 			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
-			                                               : NetMatchConfigUtil::UnseatedSlotName(peerId);
+			                                               : NetMatchConfigUtil::UnseatedSlotName(peerId, false);
 			config.players.push_back(slot);
 		}
 		for (uint32_t cpu = 0; cpu < cpuCount; ++cpu) {
@@ -5039,7 +5039,7 @@ static std::string ResyncSaveName() {
 				slot.peerId = peerId;
 				slot.team = static_cast<uint8_t>(peerId - firstHumanPeer);
 				slot.cpu = false;
-				slot.displayName = "Open";
+				slot.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId, true);
 				config.players.push_back(slot);
 			}
 		}
