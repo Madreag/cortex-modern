@@ -3524,7 +3524,7 @@ namespace RTE {
 			if (windowCopy) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
-			return;
+				return;
 			}
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame targets the sender's delay window");
 			return;
@@ -4534,16 +4534,18 @@ namespace RTE {
 		m_PeerFrameWaivers.erase(peerId);
 		m_DroppedSeats.erase(peerId);
 		m_DroppedSeatResolutions.erase(peerId);
-		m_PeerEffectiveStart[peerId] = firstRequiredFrame;
+		// The member's round starts at E, so its own first produced target is E plus its input delay.
+		// The frames before that are the ones this admission replays; the round must not wait on the
+		// member for frames it was never in a position to produce.
+		m_PeerEffectiveStart[peerId] = firstRequiredFrame + NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId);
 		m_RemoteTransports[peerId] = transportPeerId;
 		if (!alreadyListed) {
 			m_RemotePeerIds.push_back(peerId);
 			std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
 		}
 		RefreshLeftSeatHolds();
-		// From here every sender spells its observation keys out again, so the member's empty table
-		// reads the replay and everything after it exactly as the peers that have been here do.
-		SetObservationEpoch(firstRequiredFrame);
+		// The epoch was set when this activation was announced, ahead of every frame the round has
+		// sent, so the live stream has already restarted at it for the members that were here.
 		// Everything already on the wire for its first required frames went out before it was a peer.
 		m_LastAdmissionReplayFrames = ReplaySentFramesTo(peerId, firstRequiredFrame);
 		return true;
@@ -4605,15 +4607,19 @@ namespace RTE {
 			return 0;
 		}
 		size_t replayed = 0;
+		// The live tables belong to the members already here: they read the restart the announced
+		// epoch put in the live stream and nothing else may move under them. The replay spells its
+		// own stream out against a table that starts empty, exactly as the admitted member's does,
+		// so when it ends the member holds what the live table holds and the frames after it decode.
+		std::map<uint8_t, NetSoundObservationDictionary> scratch;
 		for (uint64_t target = fromFrame; target <= m_LastQueuedTargetFrame; ++target) {
 			// This peer's own frame first, then the members' in peer id order: the same order every
 			// receiver already read them in, so the member's tables bind the same keys in the same way.
 			NetLockstepFrame own;
 			if (FindLocalInput(target, own)) {
-				ApplyObservationEpoch(m_Config.localPeerId, target);
 				own.priorWindow.clear();
 				std::string error;
-				if (SendPacket({own}, m_Config.frameLane, &error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), nullptr, peerId)) ++replayed;
+				if (SendPacket({own}, m_Config.frameLane, &error, &scratch[m_Config.localPeerId], nullptr, peerId)) ++replayed;
 			}
 			for (uint8_t sender: m_RemotePeerIds) {
 				if (sender == peerId) {
@@ -4623,9 +4629,8 @@ namespace RTE {
 				if (!BuildPendingRemoteFrame(target, sender, held)) {
 					continue;
 				}
-				ApplyObservationEpoch(sender, target);
 				std::string error;
-				if (SendPacket({held}, m_Config.frameLane, &error, &m_ObservationEncodeTables.Exactly(sender), nullptr, peerId)) ++replayed;
+				if (SendPacket({held}, m_Config.frameLane, &error, &scratch[sender], nullptr, peerId)) ++replayed;
 			}
 		}
 		std::cout << "[lockstep] replayed " << replayed << " frames for targets " << fromFrame << ".."
