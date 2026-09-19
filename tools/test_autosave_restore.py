@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import threading
+import unittest
 import zipfile
 from pathlib import Path
 
@@ -68,6 +69,8 @@ RETAINED_AUTOSAVES = 3  # The default of the NetworkAutosavesKept option (Autosa
 
 
 WORLD_IDENTITY = re.compile(r"^\[net-world\] identity (\S+) boot=(\d+) round=(\d+)$", re.MULTILINE)
+WORLD_START = re.compile(r"^\[net-lockstep\] start round=(\d+) frame=(\d+) local_peer=(\d+) peers=(\d+) input_delay=(\d+)$", re.MULTILINE)
+WORLD_LOBBY = re.compile(r"^\[net-match-service-e2e\] lobby_snapshot: [^\n]*\bactivity=Persistent World\b[^\n]*$", re.MULTILINE)
 
 
 def _seat_rows(root: Path, who: str) -> dict:
@@ -456,6 +459,36 @@ def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
             shutil.copy2(carried, runtime / "Userdata" / name)
 
 
+def _world_seated_tick(host_log: str, client_log: str):
+    """The initial host roster proves lobby seating without ordering separate process logs."""
+    entered = WORLD_LOBBY.search(client_log)
+    if entered is None:
+        return None
+    client_start = WORLD_START.search(client_log)
+    local = re.search(r"\| peer(\d+)=[^|\n]*\(team-?\d+,local,ready,ping\d+ms\)", entered[0])
+    peer = int(client_start[3]) if client_start else int(local[1]) if local else None
+    if peer is None:
+        return None
+    first_capture = CAPTURE.search(host_log)
+    initial_log = host_log[:first_capture.start()] if first_capture else ""
+    host_start = WORLD_START.search(initial_log)
+    if (host_start and client_start and host_start[1] == client_start[1]
+            and host_start[2] == client_start[2] == "1"):
+        for snapshot in WORLD_LOBBY.finditer(initial_log):
+            if (" is_host=1 " in snapshot[0] and " remote_ready=1 " in snapshot[0]
+                    and re.search(rf"\| peer{peer}=[^|\n]*\(team-?\d+,remote,ready,ping\d+ms\)", snapshot[0])):
+                return 1
+    activations = re.findall(rf"(?m)^\[net-world\] activate peer={peer} at=(\d+)$", host_log)
+    return int(activations[-1]) if activations else None
+
+
+def _world_kill_ready(host_log: str, client_log: str, kill_past: int, published: list[int], ticket_exists: bool) -> bool:
+    seated_tick = _world_seated_tick(host_log, client_log)
+    return (seated_tick is not None and ticket_exists
+            and any(int(row[0]) >= kill_past for row in CAPTURE.findall(host_log))
+            and any(tick >= seated_tick for tick in published))
+
+
 def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict, kill_past: int = 0,
                      carry=None) -> dict:
     """One round of a persistent world. `carry` is the previous round's root: its world state is
@@ -486,8 +519,6 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                 waiter.wait(0.1)
                 host_log, client_log = peer_log(root, "host"), peer_log(root, "client")
                 captures = [int(row[0]) for row in CAPTURE.findall(host_log)]
-                activations = re.findall(r"(?m)^\[net-world\] activate peer=\d+ at=(\d+)$", host_log)
-                entered = re.search(r"(?m)^\[net-match-service-e2e\] lobby_snapshot: .*activity=Persistent World\b", client_log)
                 identity = WORLD_IDENTITY.search(host_log)
                 ticket = root / "client/runtime/Userdata/reconnect.ticket"
                 published = []
@@ -495,11 +526,7 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
                     store = root / "host/runtime/Autosaves"
                     published = [int(path.stem.rsplit("-", 1)[1]) for path in store.glob(f"{identity[1]}-*.ccmanifest")
                                  if path.with_suffix(".ccsave").exists() and (store / f"{identity[1]}.admission").exists()]
-                # A late join must activate before the checkpoint whose seat this restart reclaims.
-                seated = bool(activations) or "[net-world] offer " not in host_log
-                seated_tick = int(activations[-1]) if activations else 1
-                if (any(tick >= kill_past for tick in captures) and entered and seated and ticket.exists()
-                        and any(tick >= seated_tick for tick in published)):
+                if _world_kill_ready(host_log, client_log, kill_past, published, ticket.exists()):
                     runs["host"].terminate(code=137, reason="world host process killed")
                     killed = True
                     records["_kill_capture_tick"] = max(captures)
@@ -644,6 +671,43 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
             "manifest_control_owners": len(owners), "manifest_applied_sequences": len(applied),
             "seats": sorted(seats_two), "fresh_first_capture": min(fresh_captures),
             "peer_comparison": compared, "fresh_peer_comparison": fresh_compared}
+
+
+class WorldRestartOracleTests(unittest.TestCase):
+    HOST_START = "[net-lockstep] start round=2610485712550324653 frame=1 local_peer=1 peers=2 input_delay=3\n"
+    CLIENT_START = "[net-lockstep] start round=2610485712550324653 frame=1 local_peer=2 peers=2 input_delay=3\n"
+    HOST_LOBBY = ("[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=1 local_ready=1 "
+                  "remote_ready=1 activity=Persistent World scene=Grasslands mode=pvp-skirmish | peer2=Client(team0,remote,ready,ping0ms)\n")
+    CLIENT_LOBBY = ("[net-match-service-e2e] lobby_snapshot: state=Running is_host=0 members=1 local_ready=1 "
+                    "remote_ready=0 activity=Persistent World scene=Grasslands mode=pvp-skirmish | peer2=Client(team0,local,ready,ping0ms)\n")
+    CAPTURES = '[autosave] tick=61 capture_ms=149.037 bytes=29499529\n[net-world] offer {"tick":61}\n[autosave] tick=421 capture_ms=190.0 bytes=29499529\n'
+
+    def test_lobby_join_with_published_offers_can_be_killed(self):
+        host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES
+        client = self.CLIENT_START + self.CLIENT_LOBBY
+        self.assertEqual(_world_seated_tick(host, client), 1)
+        self.assertTrue(_world_kill_ready(host, client, 400, [61, 361], True))
+        self.assertTrue(_world_kill_ready(host, "client-only output\n" * 100 + client, 400, [61, 361], True))
+
+    def test_late_join_waits_for_its_activation_and_checkpoint(self):
+        host = self.HOST_START + self.CAPTURES
+        client = self.CLIENT_START.replace("frame=1 ", "frame=360 ") + self.CLIENT_LOBBY
+        self.assertFalse(_world_kill_ready(host, client, 400, [361], True))
+        self.assertFalse(_world_kill_ready(host + "[net-world] activate peer=3 at=360\n", client, 400, [361], True))
+        host += "[net-world] activate peer=2 at=360\n"
+        self.assertEqual(_world_seated_tick(host, client), 360)
+        self.assertFalse(_world_kill_ready(host, client, 400, [359], True))
+        self.assertTrue(_world_kill_ready(host, client, 400, [360], True))
+
+    def test_empty_lobby_and_incomplete_kill_evidence_wait(self):
+        host = self.HOST_START + self.HOST_LOBBY + self.CAPTURES
+        client = self.CLIENT_START + self.CLIENT_LOBBY
+        self.assertFalse(_world_kill_ready(host, self.CLIENT_START, 400, [361], True))
+        self.assertFalse(_world_kill_ready(host, client, 400, [361], False))
+        self.assertFalse(_world_kill_ready(host, client, 400, [], True))
+        self.assertFalse(_world_kill_ready(host, client, 422, [361], True))
+        self.assertFalse(_world_kill_ready(self.HOST_START + self.CAPTURES + self.HOST_LOBBY, client, 400, [361], True))
+        self.assertFalse(_world_kill_ready(host.replace("peer2=Client", "peer3=Client"), client, 400, [361], True))
 
 
 def main() -> int:
