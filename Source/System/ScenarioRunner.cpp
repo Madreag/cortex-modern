@@ -937,7 +937,11 @@ namespace RTE {
 	}
 
 	uint8_t ScenarioRunner::GetLockstepHostPeerId() {
-		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().matchConfig.hostPeerId : 0;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->GetHostPeerId() : 0;
+	}
+
+	bool ScenarioRunner::IsHostMigrationCatchUp() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsMigrationCatchUp();
 	}
 
 	uint8_t ScenarioRunner::ResolveTeamCommandAuthority(int team) {
@@ -1038,7 +1042,15 @@ namespace RTE {
 		if (!s_LockstepCoordinator || team < 0) {
 			return true;
 		}
-		return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
+		if (s_LockstepCoordinator->GetConfig().matchConfig.successorOrder.empty()) return NetActorOwnership::IsTeamCommandAuthority(s_LockstepCoordinator->GetConfig().matchConfig, static_cast<uint8_t>(team), senderPeerId);
+		bool human = false;
+		for (const auto& player : s_LockstepCoordinator->GetConfig().matchConfig.players) {
+			if (!player.cpu && player.team == team && !s_LockstepCoordinator->IsPeerGoneAtFrame(player.peerId, s_LockstepCoordinator->GetResumeFrame())) {
+				human = true;
+				if (player.peerId == senderPeerId) return true;
+			}
+		}
+		return !human && senderPeerId == s_LockstepCoordinator->GetHostPeerId();
 	}
 
 	bool ScenarioRunner::IsLockstepAIWriteAuthorized(uint8_t senderPeerId, int32_t team, int64_t actorUID, int64_t writerUID) {
@@ -1337,7 +1349,7 @@ namespace RTE {
 		} else if (const Activity* activity = g_ActivityMan.GetActivity()) {
 			NetGamePlayerBindings bindings;
 			activity->CaptureNetPlayerBindings(bindings);
-			if (config.localPeerId == config.matchConfig.hostPeerId) bindings.appliedCommands = s_AppliedCommandSequences;
+			if (config.localPeerId == s_LockstepCoordinator->GetHostPeerId()) bindings.appliedCommands = s_AppliedCommandSequences;
 			commands.push_back({config.localPeerId, bindings});
 		}
 		const bool queued = s_LockstepCoordinator->QueueLocalInput(tick, frames, commands, error, g_AudioMan.SampleSoundObservations(), SampleValueObservations());
@@ -2027,7 +2039,7 @@ namespace RTE {
 				}
 				nextOverlayMs = stallMs + 200;
 			}
-			if (holdPause) {
+			if (holdPause || s_LockstepCoordinator->IsMigrating()) {
 				heldThisWait = true;
 			} else {
 				if (heldThisWait) {
