@@ -826,13 +826,20 @@ static std::string ResyncSaveName() {
 			// The host, and only the host, names the checkpoint this match may rewind to: one policy,
 			// one answer, carried to every peer instead of each of them choosing for itself. The archive
 			// thread proved it restorable when it published it, so the game thread reads no archive here.
-			const std::optional<AutosaveDescriptor> anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
-			if (anchor && anchor->savedTick <= state.savedTick) {
-				state.rewindMatchId = anchor->matchId;
-				state.rewindTick = anchor->savedTick;
+			std::optional<AutosaveDescriptor> anchor;
+			if (isHost) {
+				anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
+				if (anchor && anchor->savedTick <= state.savedTick) {
+					state.rewindMatchId = anchor->matchId;
+					state.rewindTick = anchor->savedTick;
+				}
+			} else {
+				const auto agreed = GetRewindAnchor();
+				state.rewindMatchId = agreed.matchId;
+				state.rewindTick = agreed.tick;
 			}
 			if (!NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
-			if (!state.rewindMatchId.empty()) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, true, anchor ? &*anchor : nullptr);
+			if (isHost && !state.rewindMatchId.empty()) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, true, anchor ? &*anchor : nullptr);
 			const uint64_t archiveBytes = stateBytes.size();
 			const uint64_t envelopeBytes = envelope.size();
 			const uint64_t saveMs = static_cast<uint64_t>(std::max(0LL, g_ActivityMan.LastSaveMainMs()));
@@ -2626,7 +2633,8 @@ static std::string ResyncSaveName() {
 		const auto admission = m_ReconnectHost.ExportMigrationState();
 		if (admission.empty()) return false;
 		const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"key", m_MigrationKey}, {"admission", admission}, {"directory_row", NetDirectoryCodec::EncodeRegisterRequest(row)},
-		    {"directory_session", m_DirectorySessionId}, {"directory_token", m_DirectoryToken}, {"authority", authority}, {"members", members}, {"generation", m_MigrationGeneration}, {"autosave_match_id", m_AutosaveMatchId}});
+		    {"directory_session", m_DirectorySessionId}, {"directory_token", m_DirectoryToken}, {"authority", authority}, {"members", members}, {"generation", m_MigrationGeneration}, {"autosave_match_id", m_AutosaveMatchId},
+		    {"autosave_round", m_AutosaveIdentity.roundId}, {"autosave_interval", m_AutosaveIdentity.intervalSeconds}});
 		std::vector<uint8_t> context(configHash.begin(), configHash.end()); context.push_back(peerId);
 		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
 	}
@@ -2662,7 +2670,13 @@ static std::string ResyncSaveName() {
 			m_MigrationKey = key; m_MigrationAdmissionState = admission; m_MigrationAuthority = authority; m_MigrationMembers = members;
 			m_MigrationGeneration = body.at("generation").get<uint64_t>();
 			const auto autosaveId = body.at("autosave_match_id").get<std::string>();
-			if (!autosaveId.empty() && m_AutosaveMatchId.empty()) m_AutosaveMatchId = autosaveId;
+			if (!autosaveId.empty() && m_AutosaveMatchId.empty()) {
+				m_AutosaveMatchId = autosaveId;
+				m_AutosaveIdentity.sessionId = m_ReconnectClient.GetRecord().hostSessionId;
+				m_AutosaveIdentity.roundId = body.at("autosave_round").get<uint64_t>();
+				m_AutosaveIdentity.intervalSeconds = body.at("autosave_interval").get<uint32_t>();
+				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+			}
 			m_MigrationDirectorySession = directorySession; m_MigrationDirectoryToken = directoryToken; m_DirectoryRow = std::move(row);
 			std::fill(plaintext.begin(), plaintext.end(), 0);
 			return true;
