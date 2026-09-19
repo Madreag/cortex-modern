@@ -51,7 +51,7 @@ ARCHIVED_PROPERTY = re.compile(r"NewPropertyWithValue\(\s*\"[^\"]*\"\s*,\s*(?:Ch
 ARCHIVED_MEMBER = re.compile(r"\b(?:self\.)?(m_[A-Za-z0-9_]+)")
 SETTER = re.compile(
     r"\b(?P<qualifier>(?:[A-Za-z_]\w*(?:<[^;{}\n]*>)?::)*)"
-    r"(?P<name>(?:Set|Add|Clear|Reset|Enable|Disable|Remove)[A-Za-z0-9_]*)\s*"
+    r"(?P<name>(?:Set|Add|Clear|Reset|Enable|Disable|Remove|Request)[A-Za-z0-9_]*)\s*"
     r"\([^;{}]*\)\s*(?:const\s*)?(?:noexcept\s*)?(?:override\s*)?(?:final\s*)?\{", re.MULTILINE)
 ASSIGNS = re.compile(r"\b(m_[A-Za-z0-9_]+)(?:\s*\[[^;\]\n]+\]|\.[A-Za-z_]\w*)*\s*(?:=(?!=)|[+*/%&|^-]=|\+\+|--)")
 PREFIX_WRITE = re.compile(r"(?:\+\+|--)\s*(m_[A-Za-z0-9_]+)")
