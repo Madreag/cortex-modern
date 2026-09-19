@@ -2074,6 +2074,8 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		// Every activation this pump announces is chosen ahead of what the round has already sent.
+		m_WorldJoin.NoteSentInputThrough(m_Coordinator->SentInputThrough());
 		PumpWorldJoinLobby(nowMs);
 		const std::vector<NetSessionPeerInfo> readyPeers = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> liveConnections;
