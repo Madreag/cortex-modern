@@ -131,6 +131,12 @@ def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secr
     identity = json.loads(contents["JoinIdentity.json"])
     assert IDENTITY_FIELDS == set(identity["deterministic_config"]), "identity inputs incomplete"
     assert re.fullmatch(r"[0-9a-f]{64}", identity["module_manifest_hash"]), "module manifest hash"
+    # The identity hashes every module's files, so the game thread must not be the one that did it.
+    identity_build = {key: manifest.get(key) for key in ("identity_build_ms", "main_thread_id", "identity_thread_id")}
+    assert identity_build["main_thread_id"], f"manifest names no main thread: {identity_build}"
+    if identity_build["identity_build_ms"]:
+        assert identity_build["identity_thread_id"] and identity_build["identity_thread_id"] != identity_build["main_thread_id"], \
+            f"identity built on the game thread: {identity_build}"
     executable = json.loads(contents["Executable.json"])
     assert executable["sha256"] == exe_sha, "executable digest"
     assert executable["version"], "executable version"

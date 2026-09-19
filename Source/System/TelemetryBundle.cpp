@@ -121,6 +121,12 @@ namespace RTE {
 			}
 		};
 
+		std::string ThreadIdText(std::thread::id id) {
+			std::ostringstream text;
+			text << id;
+			return text.str();
+		}
+
 		std::string Digest(const std::string& bytes) {
 			Sha256 hash;
 			hash.Add(bytes.data(), bytes.size());
@@ -298,11 +304,24 @@ namespace RTE {
 			bool busy = false, stop = false, captureRequested = false, lastSucceeded = true;
 			std::thread worker;
 			std::filesystem::path runtime;
-			std::string gpu;
+			std::string gpu, mainThread;
 			~State() { TelemetryBundle::Finish(); }
 		} s_State;
 
 		void WriteBundle(Job job) {
+			std::string identityThread;
+			if (job.snapshot.identityPending) {
+				// The module hashing costs about a second: it runs here, never on the frame path.
+				std::string identityError;
+				if (g_NetMatchService.BuildCapturedDiagnosticIdentity(&identityError, &job.snapshot.identityBuildMs)) {
+					identityThread = ThreadIdText(std::this_thread::get_id());
+					job.snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
+					System::PrintDiagnosticLine(std::format("[telemetry] identity built in {:.3f} ms", job.snapshot.identityBuildMs));
+				} else {
+					job.snapshot.joinIdentity = json{{"error", identityError}}.dump(2);
+				}
+			}
+			if (job.snapshot.joinIdentity.empty()) job.snapshot.joinIdentity = json{{"error", "identity unavailable before module loading completes"}}.dump(2);
 			std::vector<std::pair<std::string, std::string>> members;
 			json omissions = json::array();
 			const auto add = [&](const std::string& name, std::string data) {
@@ -336,7 +355,8 @@ namespace RTE {
 			add("SystemInfo.json", SystemInfo(job.gpu).dump(2));
 			add("Executable.json", json{{"sha256", System::GetThisExeSha256()}, {"version", c_VersionString}}.dump(2));
 			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
-			              {"identity_build_ms", job.snapshot.identityBuildMs}, {"redacted", redacted}};
+			              {"identity_build_ms", job.snapshot.identityBuildMs}, {"main_thread_id", s_State.mainThread},
+			              {"identity_thread_id", identityThread}, {"redacted", redacted}};
 			for (const auto& [name, data]: members) {
 				json entry{{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}};
 				if (name == "Replay.ccrp") entry["truncated"] = job.snapshot.replayTruncated;
@@ -384,6 +404,7 @@ namespace RTE {
 	void TelemetryBundle::Initialize(const std::string& gpu) {
 		if (s_State.worker.joinable()) return;
 		s_State.runtime = System::GetWorkingDirectory();
+		s_State.mainThread = ThreadIdText(std::this_thread::get_id());
 		s_State.gpu = gpu;
 		s_State.stop = false;
 		s_State.out = std::make_unique<LogMirror>(std::cout.rdbuf(), s_State.log);
@@ -447,15 +468,11 @@ namespace RTE {
 			snapshot.consoleTail = g_ConsoleMan.CopyLogTail(c_LogTailLimit);
 			snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
 			if (snapshot.joinIdentity.empty()) {
+				// Only the manager reads happen here; the worker hashes the modules and caches the identity.
 				std::string error;
-				if (g_NetMatchService.RefreshDiagnosticIdentity(&error, &snapshot.identityBuildMs)) {
-					std::cout << std::format("[telemetry] identity built in {:.3f} ms\n", snapshot.identityBuildMs) << std::flush;
-					snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
-				} else {
-					snapshot.joinIdentity = json{{"error", error}}.dump(2);
-				}
+				snapshot.identityPending = g_NetMatchService.CaptureDiagnosticIdentityInputs(&error);
+				if (!snapshot.identityPending) snapshot.joinIdentity = json{{"error", error}}.dump(2);
 			}
-			if (snapshot.joinIdentity.empty()) snapshot.joinIdentity = json{{"error", "identity unavailable before module loading completes"}}.dump(2);
 			snapshot.desyncHeal = g_NetMatchService.ExportDiagnosticDesyncHeal();
 			if (ScenarioRunner::CopyLockstepReplayForDiagnostics(snapshot.replay, snapshot.replayTruncated)) {
 				snapshot.replayReason = snapshot.replayTruncated ? "complete-record prefix at member limit" : "complete recorded ticks";

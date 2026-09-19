@@ -356,6 +356,12 @@ namespace RTE {
 		static void SeatSavedOptions(NetMatchServiceRequest& request);
 		/// Builds diagnostic identity on request; match startup supplies the cached join inputs.
 		bool RefreshDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
+		/// Reads the identity's live manager inputs and keeps them for a build off this thread. Cheap:
+		/// the module hashing that costs the second is left to the build below.
+		bool CaptureDiagnosticIdentityInputs(std::string* error = nullptr);
+		/// Hashes the captured inputs and caches the identity. Reads no manager, so the diagnostics
+		/// worker runs it while the game thread keeps drawing.
+		bool BuildCapturedDiagnosticIdentity(std::string* error = nullptr, double* buildMs = nullptr);
 		/// Returns the cached join inputs without reading settings, modules, or simulation state.
 		std::string ExportDiagnosticIdentity() const;
 		/// Returns the last runtime error and heal record without exposing reconnect credentials.
@@ -498,6 +504,8 @@ namespace RTE {
 
 		mutable std::mutex m_Mutex;
 		std::string m_DiagnosticIdentity;
+		NetIdentityManifest m_DiagnosticIdentityInputs; //!< The manager reads a captured build is waiting on.
+		bool m_DiagnosticIdentityInputsPending = false;
 		std::string m_DiagnosticRuntimeError;
 		static uint32_t s_AutosaveSeconds;
 		static bool s_AutosaveSecondsOverridden;

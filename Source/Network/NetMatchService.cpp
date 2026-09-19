@@ -2170,13 +2170,48 @@ static std::string ResyncSaveName() {
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
 	}
 
+	namespace {
+		NetIdentityBuildOptions DiagnosticIdentityOptions() {
+			NetIdentityBuildOptions options;
+			options.buildId = "stage2-p2d-local";
+			options.sessionRulesTag = "stage2-p2-session-rules";
+			return options;
+		}
+	} // namespace
+
 	bool NetMatchService::RefreshDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
-		NetIdentityBuildOptions options;
-		options.buildId = "stage2-p2d-local";
-		options.sessionRulesTag = "stage2-p2-session-rules";
+		const NetIdentityBuildOptions options = DiagnosticIdentityOptions();
 		const auto started = std::chrono::steady_clock::now();
 		const bool built = NetIdentity::BuildCurrentManifest(manifest, error, options);
+		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+		if (!built) return false;
+		CacheDiagnosticIdentity(manifest);
+		return true;
+	}
+
+	bool NetMatchService::CaptureDiagnosticIdentityInputs(std::string* error) {
+		NetIdentityManifest inputs;
+		if (!NetIdentity::CaptureManifestInputs(inputs, error, DiagnosticIdentityOptions())) return false;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputs = std::move(inputs);
+		m_DiagnosticIdentityInputsPending = true;
+		return true;
+	}
+
+	bool NetMatchService::BuildCapturedDiagnosticIdentity(std::string* error, double* buildMs) {
+		NetIdentityManifest manifest;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_DiagnosticIdentityInputsPending) {
+				if (error) *error = "no captured identity inputs";
+				return false;
+			}
+			manifest = m_DiagnosticIdentityInputs;
+			m_DiagnosticIdentityInputsPending = false;
+		}
+		const auto started = std::chrono::steady_clock::now();
+		const bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 		if (!built) return false;
 		CacheDiagnosticIdentity(manifest);
