@@ -3701,6 +3701,10 @@ void RunGameLoop() {
 			g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::SimTotal);
 
 			const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick == 1) {
+				// The isolation and same-tick rows need a live scene, which the standalone flag has not got.
+				RTE::RunCheckpointSceneRows();
+			}
 			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
 				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
 				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
