@@ -366,7 +366,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x314D4843;
 		static constexpr uint16_t c_Version = 1;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
-		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024;
+		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
 		static bool LooksLikePacket(const std::vector<uint8_t>& bytes);
 		static bool Encode(const NetHostMigrationMessage& message, const NetHash32& key, std::vector<uint8_t>& bytes);
@@ -386,6 +386,8 @@ namespace RTE {
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
+		std::map<uint8_t, uint64_t> committedPeerLeaves;
+		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
 		std::map<uint8_t, size_t> remoteFrameCounts;
 		std::vector<ControllerFrame> localFrames;
@@ -728,6 +730,7 @@ namespace RTE {
 
 	private:
 		void TickHostMigration(uint64_t nowMs);
+		void TickMigrationRollCallLinks(uint64_t nowMs);
 		void HandleMigrationEvent(const NetTransportEvent& event, uint64_t nowMs);
 		bool SendMigration(NetPeerId peer, NetHostMigrationMessage message);
 		NetHostMigrationMessage MigrationMessage(NetHostMigrationMessageType type) const;
@@ -741,6 +744,8 @@ namespace RTE {
 		void RetainMigrationFrame(const NetLockstepReadyFrame& ready);
 		NetHostMigrationPhase m_MigrationPhase = NetHostMigrationPhase::None;
 		std::unique_ptr<INetTransport> m_MigrationTransport;
+		std::unique_ptr<INetTransport> m_MigrationListener;
+		std::map<uint8_t, std::unique_ptr<INetTransport>> m_MigrationProbes;
 		uint64_t m_MigrationGeneration = 0;
 		uint64_t m_MigrationWireRound = 0;
 		uint64_t m_MigrationSinceMs = 0;
@@ -753,6 +758,7 @@ namespace RTE {
 		NetPeerId m_MigrationHostTransport = c_InvalidNetPeerId;
 		bool m_MigrationNotice = false;
 		bool m_MigrationNeedsResync = false;
+		bool m_MigrationCommitQueued = false;
 		NetHostMigrationResult m_MigrationResult;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
 		std::map<uint8_t, NetPeerId> m_MigrationPeers;
@@ -762,6 +768,7 @@ namespace RTE {
 		std::map<NetPeerId, std::deque<std::vector<uint8_t>>> m_MigrationOutbox;
 		std::deque<std::tuple<NetPeerId, uint64_t, size_t>> m_MigrationFrameQueue;
 		std::vector<NetTransportEvent> m_MigrationAdmissionEvents;
+		std::vector<NetTransportEvent> m_MigrationEarlyInputs;
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
 		/// Sends to every remote, or to one when onlyPeerId names it.
 		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0, size_t* outValueObservationsEncoded = nullptr);
@@ -901,6 +908,7 @@ namespace RTE {
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
 		uint64_t m_WaitingFrame = 0;
 		uint64_t m_WaitStartMs = 0;
+		uint64_t m_AuthorityLastHeardMs = 0;
 		uint64_t m_LastStallFrame = UINT64_MAX;
 		std::map<uint64_t, std::vector<ControllerFrame>> m_LocalFrames;
 		std::map<uint64_t, std::map<uint8_t, std::vector<ControllerFrame>>> m_RemoteFrames; //!< frame -> (peerId -> frames)
