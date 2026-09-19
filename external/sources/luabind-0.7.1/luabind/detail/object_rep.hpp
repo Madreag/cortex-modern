@@ -70,6 +70,10 @@ namespace luabind { namespace detail
 
 		void add_dependency(lua_State* L, int index);
 		detail::lua_reference const& get_dependencies() const { return m_dependency_ref; }
+		void set_checkpoint_parent(object_rep* parent) { m_checkpoint_parent = parent; }
+		object_rep* checkpoint_parent() const { return m_checkpoint_parent; }
+		void set_checkpoint_owner(void* owner, void (*write)(void*)) { m_checkpoint_owner = owner; m_checkpoint_owner_write = write; }
+		void checkpoint_owner_written() { if (m_checkpoint_owner_write) m_checkpoint_owner_write(m_checkpoint_owner); }
 
 		static int garbage_collector(lua_State* L);
 
@@ -83,6 +87,9 @@ namespace luabind { namespace detail
 		void(*m_destructor)(void*); // this could be in class_rep? it can't: see intrusive_ptr
 		int m_dependency_cnt; // counts dependencies
 		detail::lua_reference m_dependency_ref; // reference to lua table holding dependency references
+		object_rep* m_checkpoint_parent = 0;
+		void* m_checkpoint_owner = 0;
+		void (*m_checkpoint_owner_write)(void*) = 0;
 
 		// ======== the new way, separate object_rep from the holder
 //		instance_holder* m_instance;
@@ -124,6 +131,15 @@ namespace luabind { namespace detail
 		{
 			obj->set_flags(obj->flags() & ~object_rep::checkpoint_trap);
 			if (checkpoint_object_write) checkpoint_object_write(obj->ptr());
+		}
+	}
+
+	inline void checkpoint_alias_mutated(object_rep* obj)
+	{
+		for (object_rep* parent = obj ? obj->checkpoint_parent() : 0; parent; parent = parent->checkpoint_parent())
+		{
+			checkpoint_object_mutated(parent);
+			parent->checkpoint_owner_written();
 		}
 	}
 

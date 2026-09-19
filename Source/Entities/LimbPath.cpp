@@ -53,6 +53,15 @@ LimbPath::~LimbPath() {
 }
 
 void LimbPath::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_BaseScaleMultiplier, m_BaseTravelSpeedMultiplier, m_CurrentScaleMultiplier, m_CurrentSegment == m_Segments.end(), m_CurrentTravelSpeedMultiplier, m_Ended,
+			m_FootCollisionsDisabledSegment, m_HFlipped, m_JointPos, m_JointVel, m_PathTimer, m_PositionOffset,
+			m_PushForce, m_RegularLength, m_Rotation, m_RotationOffset, m_SegProgress, m_SegTimer,
+			m_SegmentDone, m_SegmentEndedThreshold, m_Segments.empty(), m_Start, m_StartSegCount, m_TimeLeft,
+			m_TotalLength, m_TravelSpeed);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Start.Reset();
 	m_StartSegCount = 0;
 	m_Segments.clear();
@@ -113,7 +122,7 @@ int LimbPath::Create(const Vector &startPoint,
     if (aSegArray)
     {
         for (int i = 0; i < m_SegCount; ++i)
-            m_Segments[i] = aSegArray[i];
+			m_Segments[i] = aSegArray[i];
     }
 
     return 0;

@@ -131,7 +131,7 @@ namespace RTE {
 		void TempEraseOrRedrawDoorMaterial(bool erase);
 
 		/// Resets the sensor Timer for this ADoor, effectively making it ignore Actors.
-		void ResetSensorTimer() { m_SensorTimer.Reset(); }
+		void ResetSensorTimer() { CheckpointChange changed(*this, [this] { return CheckpointFields(m_SensorTimer); }); m_SensorTimer.Reset(); }
 #pragma endregion
 
 #pragma region Virtual Override Methods
@@ -227,6 +227,8 @@ namespace RTE {
 		/// @param updateMaterialArea Whether to tell the Scene's Terrain that this door has modified the material layer..
 		/// @return Whether the fill erasure was successful (if the same material as the door was found and erased).
 		bool EraseDoorMaterial(bool updateMaterialArea = true);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this ADoor, effectively resetting the members of this abstraction level only.
 		void Clear();

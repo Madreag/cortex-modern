@@ -23,6 +23,13 @@ ACDropShip::~ACDropShip() {
 }
 
 void ACDropShip::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AutoStabilize, m_HatchOpeness, m_HatchSwingRange, m_HoverHeightModifier, m_LateralControl, m_LateralControlSpeed,
+			m_MaxEngineAngle, m_PersistedACDropShipRuntime.empty(), m_PersistedBodyGroupCheckpoint.empty(), m_pBodyAG, m_pLHatch, m_pLThruster,
+			m_pRHatch, m_pRThruster, m_pULThruster, m_pURThruster);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedACDropShipRuntime.clear();
 	m_PersistedBodyGroupCheckpoint.clear();
 	m_pBodyAG = 0;
@@ -486,6 +493,7 @@ void ACDropShip::PreControllerUpdate() {
 }
 
 void ACDropShip::SetRightThruster(AEmitter* newThruster) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pRThruster); });
 	if (m_pRThruster && m_pRThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRThruster);
 	}
@@ -509,6 +517,7 @@ void ACDropShip::SetRightThruster(AEmitter* newThruster) {
 }
 
 void ACDropShip::SetLeftThruster(AEmitter* newThruster) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pLThruster); });
 	if (m_pLThruster && m_pLThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLThruster);
 	}
@@ -532,6 +541,7 @@ void ACDropShip::SetLeftThruster(AEmitter* newThruster) {
 }
 
 void ACDropShip::SetURightThruster(AEmitter* newThruster) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pURThruster); });
 	if (m_pURThruster && m_pURThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pURThruster);
 	}
@@ -554,6 +564,7 @@ void ACDropShip::SetURightThruster(AEmitter* newThruster) {
 }
 
 void ACDropShip::SetULeftThruster(AEmitter* newThruster) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pULThruster); });
 	if (m_pULThruster && m_pULThruster->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pULThruster);
 	}
@@ -576,6 +587,7 @@ void ACDropShip::SetULeftThruster(AEmitter* newThruster) {
 }
 
 void ACDropShip::SetRightHatch(Attachable* newHatch) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pRHatch); });
 	if (m_pRHatch && m_pRHatch->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRHatch);
 	}
@@ -597,6 +609,7 @@ void ACDropShip::SetRightHatch(Attachable* newHatch) {
 }
 
 void ACDropShip::SetLeftHatch(Attachable* newHatch) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pLHatch); });
 	if (m_pLHatch && m_pLHatch->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLHatch);
 	}

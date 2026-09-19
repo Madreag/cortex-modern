@@ -506,7 +506,7 @@ namespace RTE {
 		/// Sets the walk path rotation for the specified Layer.
 		/// @param whichLayer The Layer in question.
 		/// @param angle The angle to set.
-		void SetWalkAngle(AHuman::Layer whichLayer, float angle) { m_WalkAngle[whichLayer] = Matrix(angle); }
+		void SetWalkAngle(AHuman::Layer whichLayer, float angle) { const Matrix value(angle); if (m_WalkAngle[whichLayer] != value) TouchCheckpoint(); m_WalkAngle[whichLayer] = value; }
 
 		/// Gets whether this AHuman has just taken a stride this frame.
 		/// @return Whether this AHuman has taken a stride this frame or not.
@@ -572,7 +572,7 @@ namespace RTE {
 		/// Sets the target rot angle for the given MovementState.
 		/// @param movementState The MovementState to get the rot angle target for.
 		/// @param newRotAngleTarget The new rot angle target to use.
-		void SetRotAngleTarget(MovementState movementState, float newRotAngleTarget) { m_RotAngleTargets[movementState] = newRotAngleTarget; }
+		void SetRotAngleTarget(MovementState movementState, float newRotAngleTarget) { if (m_RotAngleTargets[movementState] != newRotAngleTarget) TouchCheckpoint(); m_RotAngleTargets[movementState] = newRotAngleTarget; }
 
 		/// Gets the duration it takes this AHuman to fully charge a throw.
 		/// @return The duration it takes to fully charge a throw in MS.
@@ -827,6 +827,8 @@ namespace RTE {
 		std::string m_PersistedAHumanRuntime;
 		std::string SaveAHumanRuntime() const;
 		bool LoadAHumanRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this AHuman, effectively
 		/// resetting the members of this abstraction level only.

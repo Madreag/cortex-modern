@@ -49,6 +49,13 @@ MetaPlayer::~MetaPlayer() {
 }
 
 void MetaPlayer::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_Aggressiveness, m_BrainPool, m_ForeignCostMult, m_Funds, m_GameOverRound, m_Human,
+			m_InGamePlayer, m_Name, m_NativeCostMult, m_NativeTechModule, m_OffensiveBudget, m_OffensiveTarget,
+			m_Team);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Name = "";
 	m_Team = Activity::NoTeam;
 	m_Human = true;

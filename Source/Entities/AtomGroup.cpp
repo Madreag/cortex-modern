@@ -41,6 +41,14 @@ const std::unordered_map<std::string, AtomGroup::AreaDistributionType> AtomGroup
     {"Square", AtomGroup::AreaDistributionType::Square}};
 
 void AtomGroup::Clear() {
+	if (m_OwnerMOSR) TouchCheckpoint();
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AreaDistributionSurfaceAreaMultiplier, m_AreaDistributionType, m_Atoms.empty(), m_AutoGenerate, m_CheckpointMaterialReference.empty(), m_CheckpointOwnerID,
+			m_Depth, m_HasCheckpointOwner, m_IgnoreMOIDs.empty(), m_JointOffset, m_LimbPos, m_Material,
+			m_MomentOfInertia, m_OwnerMOSR, m_Resolution, m_StoredOwnerMass, m_SubGroups.empty());
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_CheckpointMaterialReference.clear();
 	m_CheckpointOwnerID = 0;
 	m_HasCheckpointOwner = false;
@@ -331,11 +339,22 @@ void AtomGroup::Destroy(bool notInherited) {
 	Clear();
 }
 
+void AtomGroup::TouchCheckpoint() {
+	Entity::TouchCheckpoint();
+	if (m_OwnerMOSR) m_OwnerMOSR->TouchCheckpoint();
+}
+
+void AtomGroup::BindCheckpointOwner(Atom* atom) {
+	atom->SetCheckpointOwner(m_OwnerMOSR);
+}
+
 void AtomGroup::SetAtomList(const std::vector<Atom*>& newAtoms) {
+	if (m_Atoms != newAtoms) TouchCheckpoint();
 	for (const Atom* atom: m_Atoms) {
 		delete atom;
 	}
 	m_Atoms = newAtoms;
+	for (Atom* atom: m_Atoms) atom->SetCheckpointOwner(m_OwnerMOSR);
 }
 
 std::vector<long long> AtomGroup::GetTravelResidue() const {
@@ -419,6 +438,7 @@ void AtomGroup::SetAtomOffsets(const std::vector<Vector>& offsets, const std::ve
 				ordered.push_back(atom);
 			}
 		}
+		if (m_Atoms != ordered) TouchCheckpoint();
 		m_Atoms.swap(ordered);
 	}
 }
@@ -501,9 +521,11 @@ float AtomGroup::CalculateMaxRadius() const {
 }
 
 void AtomGroup::SetOwner(MOSRotating* newOwner) {
+	if (m_OwnerMOSR != newOwner) TouchCheckpoint();
 	m_OwnerMOSR = newOwner;
 	for (Atom* atom: m_Atoms) {
 		atom->SetOwner(m_OwnerMOSR);
+		atom->SetCheckpointOwner(m_OwnerMOSR);
 	}
 }
 
@@ -533,6 +555,7 @@ float AtomGroup::GetMomentOfInertia() {
 }
 
 void AtomGroup::AddAtoms(const std::vector<Atom*>& atomList, long subgroupID, const Vector& offset, const Matrix& offsetRotation) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atoms.size(), m_SubGroups.size(), m_MomentOfInertia, m_StoredOwnerMass); });
 	if (m_SubGroups.count(subgroupID) == 0) {
 		m_SubGroups.insert({subgroupID, std::vector<Atom*>()});
 	}
@@ -556,6 +579,7 @@ void AtomGroup::AddAtoms(const std::vector<Atom*>& atomList, long subgroupID, co
 }
 
 bool AtomGroup::RemoveAtoms(long removeID) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atoms.size(), m_SubGroups.size(), m_MomentOfInertia, m_StoredOwnerMass); });
 	std::size_t oldSize = m_Atoms.size();
 
 	m_Atoms.erase(
@@ -2116,6 +2140,7 @@ void AtomGroup::GenerateAtomGroup(MOSRotating* ownerMOSRotating) {
 }
 
 void AtomGroup::AddAtomToGroup(MOSRotating* ownerMOSRotating, const Vector& spriteOffset, int x, int y, bool calcNormal) {
+	TouchCheckpoint();
 	Atom* atomToAdd = new Atom(Vector(static_cast<float>(x) + spriteOffset.GetFloorIntX(), static_cast<float>(y) + spriteOffset.GetFloorIntY()), m_Material, ownerMOSRotating);
 	if (calcNormal) {
 		atomToAdd->CalculateNormal(ownerMOSRotating->GetSpriteFrame(), -ownerMOSRotating->GetSpriteOffset());

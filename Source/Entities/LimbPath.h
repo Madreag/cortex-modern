@@ -299,6 +299,7 @@ namespace RTE {
 		/// anything along this path each frame.
 		/// @param rotation A Matrix with the updated rotation info.
 		void SetRotation(const Matrix& rotation) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Rotation); });
 			m_Rotation = rotation;
 			m_Rotation.SetXFlipped(m_HFlipped);
 		}
@@ -440,6 +441,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this LimbPath, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

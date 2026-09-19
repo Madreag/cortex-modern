@@ -239,13 +239,13 @@ namespace RTE {
 
 		/// Sets the angle of direction that the emitted particles will be shot at.
 		/// @param m_EmitAngle.SetRadAngle(angle A float with the angle in radians.
-		void SetEmitAngle(const float angle) { m_EmitAngle.SetRadAngle(angle); }
+		void SetEmitAngle(const float angle) { if (m_EmitAngle.GetRadAngle() != angle) TouchCheckpoint(); m_EmitAngle.SetRadAngle(angle); }
 
 		/// Sets the normalized throttle scalar which controls how to affect the
 		/// emission rate as per the emisison rate range.
 		/// @param m_Throttle A float with the normalized throttle scalar. 1.0 means max throttle, (default: throttle > 1.0f ? 1.0f : (throttle < -1.0f ? -1.0f : throttle)
 		/// 0 means normal, -1.0 means least emission rate.
-		void SetThrottle(float throttle) { m_Throttle = throttle > 1.0f ? 1.0f : (throttle < -1.0f ? -1.0f : throttle); }
+		void SetThrottle(float throttle) { const float value = throttle > 1.0f ? 1.0f : (throttle < -1.0f ? -1.0f : throttle); if (m_Throttle != value) TouchCheckpoint(); m_Throttle = value; }
 
 		/*
 		/// Sets the angle spread of velocity of the emitted MO's to each side of
@@ -293,6 +293,7 @@ namespace RTE {
 		/// prevent backed up emissions to come out all at once while this has been
 		/// held dormant in an inventory.
 		void ResetAllTimers() override {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_BurstTimer, m_LastEmitTmr); });
 			Attachable::ResetAllTimers();
 			m_BurstTimer.Reset();
 			m_LastEmitTmr.Reset();
@@ -460,6 +461,8 @@ namespace RTE {
 		std::string m_PersistedAEmitterRuntime;
 		std::string SaveAEmitterRuntime() const;
 		bool LoadAEmitterRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this AEmitter, effectively
 		/// resetting the members of this abstraction level only.

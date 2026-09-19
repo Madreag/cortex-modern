@@ -122,6 +122,8 @@ namespace RTE {
 		const MovableObject* m_StrikerLever; //!< Striker lever particle MovableObject preset instance.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this ThrownDevice, effectively resetting the members of this abstraction level only.
 		void Clear();
 

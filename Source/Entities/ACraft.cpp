@@ -46,6 +46,7 @@ ACraft::~ACraft() {
 }
 
 void ACraft::Exit::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Offset, m_Velocity, m_VelSpread, m_Radius, m_Range, m_Clear, m_pIncomingMO); }, m_CheckpointOwner != nullptr);
 	m_Offset.Reset();
 	m_Velocity.Reset();
 	m_VelSpread = 0.2f;
@@ -265,6 +266,7 @@ int ACraft::Create(const ACraft& reference) {
 		m_CollectedInventory.push_back(dynamic_cast<MovableObject*>((*niItr)->Clone()));
 	for (std::list<Exit>::const_iterator eItr = reference.m_Exits.begin(); eItr != reference.m_Exits.end(); ++eItr)
 		m_Exits.push_back(*eItr);
+	for (Exit& exit: m_Exits) exit.SetCheckpointOwner(this);
 	m_CurrentExit = m_Exits.begin();
 	m_PersistedCurrentExit = -1;
 	m_ExitInterval = reference.m_ExitInterval;
@@ -347,6 +349,7 @@ int ACraft::ReadProperty(const std::string_view& propName, Reader& reader) {
 		              Exit exit;
 		              reader >> exit;
 		              m_Exits.push_back(exit);
+		              m_Exits.back().SetCheckpointOwner(this);
 	              });
 	MatchProperty("DeliveryDelayMultiplier", { reader >> m_DeliveryDelayMultiplier; });
 	MatchProperty("ExitInterval", { reader >> m_ExitInterval; });

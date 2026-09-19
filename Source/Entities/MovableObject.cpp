@@ -155,6 +155,23 @@ MovableObject::~MovableObject() {
 }
 
 void MovableObject::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AgeTimer, m_AirResistance, m_AirThreshold, m_AlreadyHitBy.empty(), m_ApplyWoundBurstDamageOnCollision, m_ApplyWoundDamageOnCollision,
+			m_CanBeSquished, m_CheckTerrIntersection, m_DamageOnCollision, m_DamageOnPenetration, m_DidWrap, m_DistanceTravelled,
+			m_EffectAlwaysShows, m_EffectStartStrength, m_EffectStartTime, m_EffectStopStrength, m_EffectStopTime, m_EnabledScripts.empty(),
+			m_ForceIntoMasterLuaState, m_Forces.empty(), m_GetsHitByMOs, m_GlobalAccScalar, m_HUDVisible, m_HasEverBeenAddedToMovableMan,
+			m_HitsMOs, m_IgnoreTerrain, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits, m_IgnoresAtomGroupHits, m_IgnoresTeamHits,
+			m_ImpulseForces.empty(), m_InheritEffectRotAngle, m_IsTraveling, m_IsUpdated, m_LastCollisionSimFrameNumber, m_Lifetime,
+			m_MOID, m_MOIDFootprint, m_MOIDHit, m_MOIgnoreTimer, m_MOType, m_Mass,
+			m_MissionCritical, m_NumberValueMap.empty(), m_ParticleUniqueIDHit, m_PersistedMovableObjectRuntime.empty(), m_PinStrength, m_PostEffectEnabled,
+			m_PrevPos, m_PrevVel, m_RandomizeEffectRotAngle, m_RandomizeEffectRotAngleEveryFrame, m_RemoveOrphanTerrainMaxArea, m_RemoveOrphanTerrainRadius,
+			m_RemoveOrphanTerrainRate, m_RequestedSyncedUpdate, m_RestThreshold, m_RestTimer, m_RootMOID, m_Scale,
+			m_ScreenEffectFile, m_ScreenEffectHash, m_Sharpness, m_SimUpdatesBetweenScriptedUpdates, m_SimUpdatesSinceLastScriptedUpdate, m_StringValueMap.empty(),
+			m_TerrainMatHit, m_ToDelete, m_ToSettle, m_Vel, m_VelOscillations, m_WoundDamageMultiplier,
+			m_WrapDoubleDraw, m_pScreenEffect);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	MovableObjectReference::Expire(this);
 	m_pMOToNotHit.m_ExpiryIdentity = &m_MOToNotHitUID;
 	m_PersistedMovableObjectRuntime.clear();
@@ -1297,10 +1314,12 @@ float MovableObject::GetAltitude(int max, int accuracy) {
 }
 
 void MovableObject::AddAbsForce(const Vector& force, const Vector& absPos) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Forces.size()); });
 	m_Forces.push_back(std::make_pair(force, g_SceneMan.ShortestDistance(m_Pos, absPos) * c_MPP));
 }
 
 void MovableObject::AddAbsImpulseForce(const Vector& impulse, const Vector& absPos) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ImpulseForces.size()); });
 	if (impulse.IsZero()) {
 		return;
 	}
@@ -1359,6 +1378,7 @@ unsigned char MovableObject::HitWhatTerrMaterial() const {
 }
 
 void MovableObject::SetHitWhatTerrMaterial(unsigned char matID) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_TerrainMatHit); });
 	m_TerrainMatHit = matID;
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
 	RunScriptedFunctionInAppropriateScripts("OnCollideWithTerrain", false, false, {}, {std::to_string(m_TerrainMatHit)});
@@ -1843,6 +1863,7 @@ MOID MovableObject::HitWhatMOID() const {
 }
 
 void MovableObject::SetHitWhatMOID(MOID id) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_MOIDHit); });
 	m_MOIDHit = id;
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
 }
@@ -1852,6 +1873,7 @@ long int MovableObject::HitWhatParticleUniqueID() const {
 }
 
 void MovableObject::SetHitWhatParticleUniqueID(long int id) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_ParticleUniqueIDHit); });
 	m_ParticleUniqueIDHit = id;
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
 }

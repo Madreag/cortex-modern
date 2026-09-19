@@ -110,6 +110,8 @@ namespace RTE {
 
 		std::vector<std::unique_ptr<PieSlice>> m_PieSlicesToAdd; //!< A vector of PieSlices that should be added to any PieMenus opened while this GlobalScript is active.
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this GlobalScript, effectively resetting the members of this abstraction level only.
 		void Clear();
 

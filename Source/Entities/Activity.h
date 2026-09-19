@@ -212,7 +212,7 @@ namespace RTE {
 
 		/// Sets the name of the scene this is associated with.
 		/// @param sceneName The new name of the scene to load next game.
-		void SetSceneName(std::string sceneName) { m_SceneName = std::move(sceneName); }
+		void SetSceneName(std::string sceneName) { if (m_SceneName != sceneName) TouchCheckpoint(); m_SceneName = std::move(sceneName); }
 
 		/// Gets whether craft must be considered orbited if they reach the map border on non-wrapped maps.
 		/// @return Whether craft are considered orbited when at the border of a non-wrapping map.
@@ -345,7 +345,7 @@ namespace RTE {
 		/// Sets the current viewing state for a specific player. See the ViewState enumeration for values.
 		/// @param whichViewState The state to set to.
 		/// @param whichPlayer Which player to set the view state for.
-		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { if (LocalInputOfPlayer(whichPlayer) != Players::NoPlayer) m_ViewState[whichPlayer] = whichViewState; }
+		void SetViewState(ViewState whichViewState, int whichPlayer = 0) { if (LocalInputOfPlayer(whichPlayer) != Players::NoPlayer) { if (m_ViewState[whichPlayer] != whichViewState) TouchCheckpoint(); m_ViewState[whichPlayer] = whichViewState; } }
 
 		/// Resets the message timer for one player.
 		/// @param player The player to reset the message timer for.
@@ -376,6 +376,7 @@ namespace RTE {
 		/// @param newName The name to set it to.
 		void SetTeamName(int whichTeam, const std::string& newName) {
 			if (whichTeam >= Teams::TeamOne && whichTeam < Teams::MaxTeamCount) {
+				if (m_TeamNames[whichTeam] != newName) TouchCheckpoint();
 				m_TeamNames[whichTeam] = newName;
 			}
 		}
@@ -390,6 +391,7 @@ namespace RTE {
 		/// @param newIcon The Icon to set it to.
 		void SetTeamIcon(int whichTeam, const Icon& newIcon) {
 			if (whichTeam >= Teams::TeamOne && whichTeam < Teams::MaxTeamCount) {
+				CheckpointChange changed(*this, [this, whichTeam] { return CheckpointFields(m_TeamIcons[whichTeam]); });
 				m_TeamIcons[whichTeam] = newIcon;
 			}
 		}
@@ -472,6 +474,7 @@ namespace RTE {
 		/// @param which A float with the funds tally for the requested team.
 		void SetTeamFunds(float newFunds, int whichTeam = 0) {
 			if (whichTeam >= Teams::TeamOne && whichTeam < Teams::MaxTeamCount) {
+				if (m_TeamFunds[whichTeam] != newFunds) TouchCheckpoint();
 				m_TeamFunds[whichTeam] = newFunds;
 			}
 		}
@@ -568,8 +571,10 @@ namespace RTE {
 		/// @param player Which player to set whether he had a Brain or not.
 		/// @param hadBrain Whether he should be flagged as having had a Brain.
 		void SetPlayerHadBrain(int player, bool hadBrain = true) {
-			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount)
+			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+				if (m_HadBrain[player] != hadBrain) TouchCheckpoint();
 				m_HadBrain[player] = hadBrain;
+			}
 		}
 
 		/// Shows whether a specific player's Brain was evacuated into orbit so far.
@@ -582,6 +587,7 @@ namespace RTE {
 		/// @param evacuated Whether it was evacuated yet.
 		void SetBrainEvacuated(int player = 0, bool evacuated = true) {
 			if (player >= Players::PlayerOne && player < Players::MaxPlayerCount) {
+				if (m_BrainEvacuated[player] != evacuated) TouchCheckpoint();
 				m_BrainEvacuated[player] = evacuated;
 			}
 		}
@@ -622,7 +628,7 @@ namespace RTE {
 
 		/// Sets the current difficulty setting.
 		/// @param newDifficulty The new difficulty setting.
-		void SetDifficulty(int newDifficulty) { m_Difficulty = Limit(newDifficulty, DifficultySetting::MaxDifficulty, DifficultySetting::MinDifficulty); }
+		void SetDifficulty(int newDifficulty) { const int value = Limit(newDifficulty, DifficultySetting::MaxDifficulty, DifficultySetting::MinDifficulty); if (m_Difficulty != value) TouchCheckpoint(); m_Difficulty = value; }
 #pragma endregion
 
 #pragma region AI Handling
@@ -641,7 +647,9 @@ namespace RTE {
 		/// @param skill AI skill level, 1-100.
 		void SetTeamAISkill(int team, int skill) {
 			if (team >= Teams::TeamOne && team < Teams::MaxTeamCount) {
-				m_TeamAISkillLevels[team] = Limit(skill, AISkillSetting::UnfairSkill, AISkillSetting::MinSkill);
+				const int value = Limit(skill, AISkillSetting::UnfairSkill, AISkillSetting::MinSkill);
+				if (m_TeamAISkillLevels[team] != value) TouchCheckpoint();
+				m_TeamAISkillLevels[team] = value;
 			}
 		}
 #pragma endregion
@@ -861,6 +869,8 @@ namespace RTE {
 		/// @param team Which team to switch to next Actor on.
 		/// @param skip An Actor pointer to skip in the sequence.
 		void SwitchToPrevOrNextActor(bool nextActor, int player, int team, const Actor* skip = 0);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Activity, effectively resetting the members of this abstraction level only.
 		void Clear();

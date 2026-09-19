@@ -118,6 +118,7 @@ namespace RTE {
 		/// Resets the emission timers so they start counting time as to wheter
 		/// emissions are clearer.
 		void ResetEmissionTimers() {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_StartTimer, m_StopTimer); });
 			m_StartTimer.Reset();
 			m_StopTimer.Reset();
 		}
@@ -223,6 +224,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Emission, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

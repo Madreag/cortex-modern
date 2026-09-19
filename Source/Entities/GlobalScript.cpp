@@ -23,6 +23,11 @@ GlobalScript::~GlobalScript() {
 }
 
 void GlobalScript::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_HasStarted, m_IsActive, m_LateUpdate, m_LuaClassName.empty(), m_PieSlicesToAdd.empty(), m_ScriptPath.empty());
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_ScriptPath.clear();
 	m_LuaClassName.clear();
 	m_IsActive = true;

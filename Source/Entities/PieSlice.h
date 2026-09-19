@@ -93,7 +93,7 @@ namespace RTE {
 
 		/// Sets the SliceType of this PieSlice.
 		/// @param newType The new SliceType of this PieSlice.
-		void SetType(PieSliceType newType) { m_Type = newType; }
+		void SetType(PieSliceType newType) { if (m_Type != newType) TouchCheckpoint(); m_Type = newType; }
 
 		/// Gets the Direction of this PieSlice.
 		/// @return The Direction of this PieSlice.
@@ -103,6 +103,7 @@ namespace RTE {
 		/// @param newDirection The new Direction of this PieSlice.
 		void SetDirection(Directions newDirection) {
 			if (newDirection != Directions::None) {
+				if (m_Direction != newDirection) TouchCheckpoint();
 				m_Direction = newDirection;
 			}
 		}
@@ -142,7 +143,7 @@ namespace RTE {
 
 		/// Sets the new Icon for this PieSlice. Ownership IS transferred.
 		/// @param newIcon The new Icon for this PieSlice.
-		void SetIcon(Icon* newIcon) { m_Icon = std::unique_ptr<Icon>(newIcon); }
+		void SetIcon(Icon* newIcon) { if (m_Icon.get() != newIcon) TouchCheckpoint(); m_Icon = std::unique_ptr<Icon>(newIcon); }
 
 		/// Gets the LuabindObjectWrapper for the function this PieSlice should run when activated.
 		/// @return The LuabindObjectWrapper this PieSlice should run when activated.
@@ -155,6 +156,7 @@ namespace RTE {
 		/// Sets the file path of the scripted file this PieSlice should run when activated.
 		/// @param newScriptPath The file path of the Lua file this PieSlice should run when activated.
 		void SetScriptPath(const std::string& newScriptPath) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(GetScriptPath(), m_LuabindFunctionObject.get()); });
 			m_LuabindFunctionObject = std::make_unique<LuabindObjectWrapper>(nullptr, newScriptPath);
 			ReloadScripts();
 		}
@@ -166,6 +168,7 @@ namespace RTE {
 		/// Sets the name of the Lua function to run when this PieSlice is activated as a scripted pie menu option.
 		/// @param newFunctionName The name of the Lua function to run when this PieSlice is activated.
 		void SetFunctionName(const std::string& newFunctionName) {
+			CheckpointChange changed(*this, [this] { return m_FunctionName; });
 			m_FunctionName = newFunctionName;
 			ReloadScripts();
 		}
@@ -253,6 +256,8 @@ namespace RTE {
 
 		/// Recalculates this PieSlice's mid angle based on its start angle and slot count.
 		void RecalculateMidAngle();
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this PieSlice, effectively resetting the members of this abstraction level only.
 		void Clear();

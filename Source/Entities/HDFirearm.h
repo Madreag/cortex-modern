@@ -158,6 +158,7 @@ namespace RTE {
 		/// Sets the base time this HDFirearm takes to reload, in milliseconds.
 		/// @param delay The base time this HDFirearm should take to reload, in milliseconds.
 		void SetBaseReloadTime(int newReloadTime) {
+			CheckpointChange changed(*this, [this] { return m_BaseReloadTime; });
 			m_BaseReloadTime = newReloadTime;
 			CorrectReloadTimerForSupportAvailable();
 		};
@@ -379,6 +380,7 @@ namespace RTE {
 		/// prevent backed up emissions to come out all at once while this has been
 		/// held dormant in an inventory.
 		void ResetAllTimers() override {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastFireTmr, m_ReloadTmr); });
 			HeldDevice::ResetAllTimers();
 			m_LastFireTmr.Reset();
 			m_ReloadTmr.Reset();
@@ -390,7 +392,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's reload progress as a scalar from 0 to 1.
 		/// @param progress The reload progress as a scalar from 0 to 1.
-		void SetReloadProgress(float progress) { m_ReloadTmr.SetSimTimeLimitProgress(progress); }
+		void SetReloadProgress(float progress) { CheckpointChange changed(*this, [this] { return CheckpointFields(m_ReloadTmr); }); m_ReloadTmr.SetSimTimeLimitProgress(progress); }
 
 		/// Gets this HDFirearm's underlying reload timer.
 		/// @return This firearm's reload timer.
@@ -442,6 +444,7 @@ namespace RTE {
 		/// Sets whether this HDFirearm is reloadable or not and halts the reloading process.
 		/// @param isReloadable Whether this HDFirearm is reloadable.
 		void SetReloadable(bool isReloadable) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Reloadable, m_Reloading); });
 			m_Reloadable = isReloadable;
 			m_Reloading = m_Reloading && m_Reloadable;
 		}
@@ -510,6 +513,7 @@ namespace RTE {
 		/// Additionally, sets this HDFirearm as not firing or reloading, and resets its reload timer.
 		/// @param newParent A pointer to the MOSRotating to set as the new parent. Ownership is NOT transferred!
 		void SetParent(MOSRotating* newParent) override {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_ReloadTmr, m_Reloading); });
 			HeldDevice::SetParent(newParent);
 			if (!AttachKeepsLiveState()) {
 				Deactivate();
@@ -642,6 +646,8 @@ namespace RTE {
 
 		/// Ensures the reload Timer's time limit is set accordingly, based on whether the HDFirearm has support available.
 		void CorrectReloadTimerForSupportAvailable() { m_ReloadTmr.SetSimTimeLimitMS(static_cast<double>(static_cast<float>(m_BaseReloadTime) * (m_SupportAvailable ? 1.0F : m_OneHandedReloadTimeMultiplier))); }
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this HDFirearm, effectively
 		/// resetting the members of this abstraction level only.

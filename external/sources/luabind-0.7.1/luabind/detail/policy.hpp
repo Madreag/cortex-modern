@@ -529,7 +529,7 @@ namespace luabind { namespace detail
 			const class_rep* crep = obj->crep();
 
 			T* ptr = reinterpret_cast<T*>(crep->convert_to(LUABIND_TYPEID(T), obj, target));
-			if (checkpoint_write) checkpoint_object_mutated(obj);
+			if (checkpoint_write) { checkpoint_object_mutated(obj); checkpoint_alias_mutated(obj); }
 
 			if ((void*)ptr == (char*)target) destructor = detail::destruct_only_s<T>::apply;
 			assert(!destructor || sizeof(T) <= 32);

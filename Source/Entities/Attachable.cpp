@@ -29,6 +29,17 @@ Attachable::~Attachable() {
 }
 
 void Attachable::Clear() {
+	if (m_CheckpointInitialized && m_Parent) m_Parent->TouchCheckpoint();
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_ApplyTransferredForcesAtOffset, m_AtomSubgroupID, m_BreakWound, m_CollidesWithTerrainWhileAttached, m_DamageCount, m_DeleteWhenRemovedFromParent,
+			m_DrawAfterParent, m_DrawnNormallyByParent, m_GibWhenRemovedFromParent, m_GibWithParentChance, m_IgnoresParticlesWhileAttached, m_InheritedRotAngleOffset,
+			m_InheritsAngularVelWhenDetached, m_InheritsFrame, m_InheritsHFlipped, m_InheritsRotAngle, m_InheritsVelWhenDetached, m_IsWound,
+			m_JointOffset, m_JointPos, m_JointStiffness, m_JointStrength, m_MountedRotAngleOffset, m_ParentBreakWound,
+			m_ParentGibBlastStrengthMultiplier, m_ParentOffset, m_PersistedAttachableRuntime.empty(), m_PieSlices.empty(), m_PreUpdateHasRunThisFrame, m_PrevJointOffset,
+			m_PrevParentOffset, m_PrevRotAngleOffset);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAttachableRuntime.clear();
 	m_Parent = nullptr;
 	m_ParentOffset.Reset();
@@ -251,11 +262,13 @@ void Attachable::SaveSnapshotConfiguration(Writer& writer) const {
 }
 
 void Attachable::SetOwnedBreakWound(AEmitter* wound) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_BreakWound); });
 	m_OwnedBreakWound.reset(wound);
 	m_BreakWound = wound;
 }
 
 void Attachable::SetOwnedParentBreakWound(AEmitter* wound) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ParentBreakWound); });
 	m_OwnedParentBreakWound.reset(wound);
 	m_ParentBreakWound = wound;
 }
@@ -401,6 +414,7 @@ float Attachable::CollectDamage() {
 }
 
 void Attachable::SetCollidesWithTerrainWhileAttached(bool collidesWithTerrainWhileAttached) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_CollidesWithTerrainWhileAttached); });
 	if (m_CollidesWithTerrainWhileAttached != collidesWithTerrainWhileAttached) {
 		bool previousTerrainCollisionValue = CanCollideWithTerrain();
 		m_CollidesWithTerrainWhileAttached = collidesWithTerrainWhileAttached;
@@ -654,6 +668,7 @@ bool Attachable::AttachKeepsLiveState() {
 }
 
 void Attachable::SetParent(MOSRotating* newParent) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AngularVel, m_HFlipped, m_IsWound, m_MountedRotAngleOffset, m_PrevPos, m_RestTimer, m_RootMOID, m_Team); });
 	if (newParent == m_Parent) {
 		return;
 	}

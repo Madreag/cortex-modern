@@ -53,6 +53,16 @@ MOSRotating::~MOSRotating() {
 }
 
 void MOSRotating::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AttachableAndWoundMass, m_DamageMultiplier, m_DeepCheck, m_DeepHardness, m_DetachAttachablesBeforeGibbingFromWounds, m_EffectOnGib,
+			m_EntryWoundBurstSoundPlayedThisFrame, m_ExitWoundBurstSoundPlayedThisFrame, m_FarthestAttachableDistanceAndRadius, m_FlashWhiteTimer, m_ForceDeepCheck, m_GibAtEndOfLifetime,
+			m_GibBlastStrength, m_GibImpulseLimit, m_GibScreenShakeAmount, m_GibSound, m_GibWoundLimit, m_Gibs.empty(),
+			m_LoudnessOnGib, m_NoSetDamageMultiplier, m_OrientToVel, m_PersistedAtomGroupCheckpoint.empty(), m_PersistedDeepGroupCheckpoint.empty(), m_PersistedMOSRotatingRuntime.empty(),
+			m_RecoilForce, m_RecoilOffset, m_Recoiled, m_SpriteCenter, m_TravelImpulse, m_WoundCountAffectsImpulseLimitRatio,
+			m_pAtomGroup, m_pDeepGroup, m_pFlipBitmap, m_pFlipBitmapS);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedMOSRotatingRuntime.clear();
 	m_PersistedAtomGroupCheckpoint.clear();
 	m_PersistedDeepGroupCheckpoint.clear();
@@ -279,6 +289,7 @@ int MOSRotating::Create(const MOSRotating& reference) {
 
 	for (const Gib* gib: reference.m_Gibs) {
 		m_Gibs.push_back(new Gib(*gib));
+		m_Gibs.back()->SetCheckpointOwner(this);
 	}
 
 	m_GibImpulseLimit = reference.m_GibImpulseLimit;
@@ -441,6 +452,7 @@ int MOSRotating::ReadProperty(const std::string_view& propName, Reader& reader) 
 		              Gib* gib = new Gib();
 		              reader >> *gib;
 		              m_Gibs.push_back(gib);
+		              gib->SetCheckpointOwner(this);
 	              });
 	MatchProperty("GibImpulseLimit", { reader >> m_GibImpulseLimit; });
 	MatchForwards("GibWoundLimit") MatchProperty("WoundLimit", { reader >> m_GibWoundLimit; });
@@ -602,6 +614,7 @@ void MOSRotating::DetachAttachablesFromImpulse(Vector& impulseVector) {
 }
 
 void MOSRotating::AddWoundExt(AEmitter* woundToAdd, const Vector& parentOffsetToSet, bool checkGibWoundLimit, bool isEntryWound, bool isExitWound) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_EntryWoundBurstSoundPlayedThisFrame, m_ExitWoundBurstSoundPlayedThisFrame, m_Wounds.size()); });
 	if (woundToAdd && !m_ToDelete) {
 		if (checkGibWoundLimit && m_GibWoundLimit > 0 && m_Wounds.size() + 1 >= m_GibWoundLimit) {
 			// Find and detach an attachable near the new wound before gibbing the object itself. TODO: Perhaps move this to Actor, since it's more relevant there?
@@ -652,6 +665,7 @@ void MOSRotating::AddWound(AEmitter* woundToAdd, const Vector& parentOffsetToSet
 }
 
 float MOSRotating::RemoveWounds(int numberOfWoundsToRemove, bool includePositiveDamageAttachables, bool includeNegativeDamageAttachables, bool includeNoDamageAttachables) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_Wounds.size()); });
 	float damage = 0;
 	int woundCount = GetWoundCount(includePositiveDamageAttachables, includeNegativeDamageAttachables, includeNoDamageAttachables);
 
@@ -798,6 +812,7 @@ void MOSRotating::SetToHitMOs(bool hitMOs)
 */
 
 void MOSRotating::AddRecoil() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_RecoilForce, m_RecoilOffset, m_Recoiled); });
 	m_RecoilOffset.SetXY(1, 0);
 	m_RecoilOffset.RadRotate(m_Rotation.GetRadAngle() + c_PI);
 	m_Recoiled = true;
@@ -1836,12 +1851,14 @@ bool MOSRotating::AttachableIsHardcoded(const Attachable* attachableToCheck) con
 }
 
 void MOSRotating::AddAttachable(Attachable* attachable) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_Attachables.size()); });
 	if (attachable) {
 		AddAttachable(attachable, attachable->GetParentOffset());
 	}
 }
 
 void MOSRotating::AddAttachable(Attachable* attachable, const Vector& parentOffsetToSet) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_Attachables.size()); });
 	if (attachable) {
 		RTEAssert(!attachable->IsAttached(), "Tried to add Attachable " + attachable->GetModuleAndPresetName() + " but it already has a parent, " + (attachable->IsAttached() ? attachable->GetParent()->GetModuleAndPresetName() : "ERROR") + ".");
 		if (g_MovableMan.ValidMO(attachable)) {
@@ -1856,6 +1873,7 @@ void MOSRotating::AddAttachable(Attachable* attachable, const Vector& parentOffs
 }
 
 Attachable* MOSRotating::RemoveAttachable(long attachableUniqueID, bool addToMovableMan, bool addBreakWounds) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_FarthestAttachableDistanceAndRadius, m_Attachables.size()); });
 	if (MovableObject* attachableAsMovableObject = g_MovableMan.FindObjectByUniqueID(attachableUniqueID)) {
 		return RemoveAttachable(dynamic_cast<Attachable*>(attachableAsMovableObject), addToMovableMan, addBreakWounds);
 	}
@@ -1863,6 +1881,7 @@ Attachable* MOSRotating::RemoveAttachable(long attachableUniqueID, bool addToMov
 }
 
 Attachable* MOSRotating::RemoveAttachable(Attachable* attachable, bool addToMovableMan, bool addBreakWounds) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AttachableAndWoundMass, m_FarthestAttachableDistanceAndRadius, m_Attachables.size()); });
 	if (!attachable || !attachable->IsAttached()) {
 		return attachable;
 	}

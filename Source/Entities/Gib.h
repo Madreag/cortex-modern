@@ -5,6 +5,7 @@
 namespace RTE {
 
 	class MovableObject;
+	class MOSRotating;
 
 	/// Something to bundle the properties of Gib piece together.
 	class Gib : public Serializable {
@@ -16,6 +17,8 @@ namespace RTE {
 	public:
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;
+		void SetCheckpointOwner(MOSRotating* owner) { m_CheckpointOwner = owner; }
+		void TouchCheckpoint();
 
 		/// Different types of logic for the Gib to use when applying velocity to its GibParticles.
 		enum SpreadMode {
@@ -50,7 +53,7 @@ namespace RTE {
 
 		/// Sets the reference particle to be used as a Gib. Ownership is NOT transferred!
 		/// @param newParticlePreset A pointer to the new particle to be used as a Gib.
-		void SetParticlePreset(const MovableObject* newParticlePreset) { m_GibParticle = newParticlePreset; m_PersistedParticleUniqueID = 0; }
+		void SetParticlePreset(const MovableObject* newParticlePreset) { if (m_GibParticle != newParticlePreset || m_PersistedParticleUniqueID != 0) TouchCheckpoint(); m_GibParticle = newParticlePreset; m_PersistedParticleUniqueID = 0; }
 
 		/// Resolves the saved particle reference against the restored world.
 		void ResolveParticlePreset();
@@ -74,7 +77,7 @@ namespace RTE {
 
 		/// Sets the specified minimum velocity a GibParticle object can have when spawned.
 		/// @param newMinVelocity The new minimum velocity in m/s.
-		void SetMinVelocity(float newMinVelocity) { m_MinVelocity = newMinVelocity; }
+		void SetMinVelocity(float newMinVelocity) { if (m_MinVelocity != newMinVelocity) TouchCheckpoint(); m_MinVelocity = newMinVelocity; }
 
 		/// Gets the specified maximum velocity a GibParticle object can have when spawned.
 		/// @return The maximum velocity a GibParticle can have when spawned in m/s.
@@ -82,7 +85,7 @@ namespace RTE {
 
 		/// Sets the specified maximum velocity a GibParticle object can have when spawned.
 		/// @param newMaxVelocity The new maximum velocity in m/s.
-		void SetMaxVelocity(float newMaxVelocity) { m_MaxVelocity = newMaxVelocity; }
+		void SetMaxVelocity(float newMaxVelocity) { if (m_MaxVelocity != newMaxVelocity) TouchCheckpoint(); m_MaxVelocity = newMaxVelocity; }
 
 		/// Gets the specified variation in Lifetime of the GibParticle objects.
 		/// @return The life variation rationally expressed. 0.1 = up to 10% variation.
@@ -106,7 +109,7 @@ namespace RTE {
 
 		/// Sets this Gib's spread mode, which determines how velocity angles are applied to the GibParticles.
 		/// @param newSpreadMode The new spread mode of this Gib. See the SpreadMode enumeration.
-		void SetSpreadMode(SpreadMode newSpreadMode) { m_SpreadMode = (newSpreadMode < SpreadMode::SpreadRandom || newSpreadMode > SpreadMode::SpreadSpiral) ? SpreadMode::SpreadRandom : newSpreadMode; }
+		void SetSpreadMode(SpreadMode newSpreadMode) { const auto value = (newSpreadMode < SpreadMode::SpreadRandom || newSpreadMode > SpreadMode::SpreadSpiral) ? SpreadMode::SpreadRandom : newSpreadMode; if (m_SpreadMode != value) TouchCheckpoint(); m_SpreadMode = value; }
 #pragma endregion
 
 	protected:
@@ -124,6 +127,7 @@ namespace RTE {
 		SpreadMode m_SpreadMode; //!< Determines what kind of logic is used when applying velocity to the GibParticle objects.
 
 	private:
+		MOSRotating* m_CheckpointOwner = nullptr;
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
 		/// Clears all the member variables of this Gib, effectively resetting the members of this abstraction level only.

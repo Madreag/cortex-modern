@@ -19,6 +19,12 @@ MOPixel::~MOPixel() {
 }
 
 void MOPixel::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_Atom, m_Color, m_MaxLethalRange, m_MinLethalRange, m_PersistedAtomCheckpoint.empty(), m_PostEffectEnabled,
+			m_Staininess);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAtomCheckpoint.clear();
 	m_Atom = 0;
 	m_PersistedAtomResidue = 0;
@@ -214,6 +220,7 @@ int MOPixel::GetDrawPriority() const { return m_Atom->GetMaterial()->GetPriority
 const Material* MOPixel::GetMaterial() const { return m_Atom->GetMaterial(); }
 
 void MOPixel::SetAtom(Atom* newAtom) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Atom); });
 	delete m_Atom;
 	m_Atom = newAtom;
 	m_Atom->SetOwner(this);

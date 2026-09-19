@@ -25,6 +25,7 @@ namespace RTE {
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("15 SoundContainer3 ") ? "SoundContainer3" : (text.starts_with("15 SoundContainer2 ") ? "SoundContainer2" : "SoundContainer1"); }
 		uint64_t GetCheckpointIdentity() const { return m_CheckpointIdentity; }
+		auto CheckpointStampValue() const { return CheckpointFields(m_CheckpointIdentity, m_TopLevelSoundSet.get(), m_CheckpointWriteGeneration); }
 		void SetPreviewOrigin(SoundContainer* origin) { m_PreviewOrigin = origin; }
 		SoundContainer* GetPreviewOrigin() const { return m_PreviewOrigin; }
 		SoundContainer* PreviewPlaybackOwner() { return m_PreviewOrigin ? m_PreviewOrigin->PreviewPlaybackOwner() : this; }
@@ -196,11 +197,11 @@ namespace RTE {
 
 		/// Adds a channel index to the SoundContainer's collection of playing channels.
 		/// @param channel The channel index to add.
-		void AddPlayingChannel(int channel) { m_PlayingChannels.insert(channel); }
+		void AddPlayingChannel(int channel) { if (!m_PlayingChannels.contains(channel)) TouchCheckpoint(); m_PlayingChannels.insert(channel); }
 
 		/// Removes a channel index from the SoundContainer's collection of playing channels.
 		/// @param channel The channel index to remove.
-		void RemovePlayingChannel(int channel) { m_PlayingChannels.erase(channel); }
+		void RemovePlayingChannel(int channel) { if (m_PlayingChannels.contains(channel)) TouchCheckpoint(); m_PlayingChannels.erase(channel); }
 
 		/// Gets the SoundOverlapMode of this SoundContainer, which is used to determine how it should behave when it's told to play while already playing.
 		/// @return The SoundOverlapMode of this SoundContainer.
@@ -210,6 +211,7 @@ namespace RTE {
 		/// @param newSoundOverlapMode The new SoundOverlapMode this SoundContainer should use.
 		void SetSoundOverlapMode(SoundOverlapMode newSoundOverlapMode) {
 			if (DeferProperty(PendingOp::OverlapMode, 0.0F, 0.0F, newSoundOverlapMode)) return;
+			if (m_SoundOverlapMode != newSoundOverlapMode) TouchCheckpoint();
 			m_SoundOverlapMode = newSoundOverlapMode;
 		}
 #pragma endregion
@@ -224,6 +226,7 @@ namespace RTE {
 		/// @param newBusRoute The new bus for this sound to route to.
 		void SetBusRouting(BusRouting newBusRoute) {
 			if (DeferProperty(PendingOp::BusRoute, 0.0F, 0.0F, newBusRoute)) return;
+			if (m_BusRouting != newBusRoute) TouchCheckpoint();
 			m_BusRouting = newBusRoute;
 		}
 
@@ -235,6 +238,7 @@ namespace RTE {
 		/// @param immobile The new immobile setting.
 		void SetImmobile(bool immobile) {
 			if (DeferProperty(PendingOp::Immobile, 0.0F, 0.0F, immobile ? 1 : 0)) return;
+			if (m_Immobile != immobile || m_SoundPropertiesUpToDate) TouchCheckpoint();
 			m_Immobile = immobile;
 			m_SoundPropertiesUpToDate = false;
 		}
@@ -248,6 +252,7 @@ namespace RTE {
 		void SetAttenuationStartDistance(float attenuationStartDistance) {
 			attenuationStartDistance = (attenuationStartDistance < 0) ? c_DefaultAttenuationStartDistance : attenuationStartDistance;
 			if (DeferProperty(PendingOp::AttenuationStart, attenuationStartDistance)) return;
+			if (m_AttenuationStartDistance != attenuationStartDistance || m_SoundPropertiesUpToDate) TouchCheckpoint();
 			m_AttenuationStartDistance = attenuationStartDistance;
 			m_SoundPropertiesUpToDate = false;
 		}
@@ -268,6 +273,7 @@ namespace RTE {
 		/// @param panningStrengthMultiplier The new panning strength multiplier.
 		void SetPanningStrengthMultiplier(float panningStrengthMultiplier) {
 			if (DeferProperty(PendingOp::PanningStrength, panningStrengthMultiplier)) return;
+			if (m_PanningStrengthMultiplier != panningStrengthMultiplier || m_SoundPropertiesUpToDate) TouchCheckpoint();
 			m_PanningStrengthMultiplier = panningStrengthMultiplier;
 			m_SoundPropertiesUpToDate = false;
 		}
@@ -282,6 +288,7 @@ namespace RTE {
 		void SetLoopSetting(int loops) {
 			if (loops < -1) loops = -1;
 			if (DeferProperty(PendingOp::Loops, 0.0F, 0.0F, loops)) return;
+			if (m_Loops != loops || m_SoundPropertiesUpToDate) TouchCheckpoint();
 			m_Loops = loops;
 			m_SoundPropertiesUpToDate = false;
 		}
@@ -299,6 +306,7 @@ namespace RTE {
 		void SetPriority(int priority) {
 			priority = std::clamp(priority, 0, 256);
 			if (DeferProperty(PendingOp::Priority, 0.0F, 0.0F, priority)) return;
+			if (m_Priority != priority) TouchCheckpoint();
 			m_Priority = priority;
 		}
 
@@ -310,6 +318,7 @@ namespace RTE {
 		/// @param affectedByGlobalPitch The new affected by global pitch setting.
 		void SetAffectedByGlobalPitch(bool affectedByGlobalPitch) {
 			if (DeferProperty(PendingOp::GlobalPitch, 0.0F, 0.0F, affectedByGlobalPitch ? 1 : 0)) return;
+			if (m_AffectedByGlobalPitch != affectedByGlobalPitch) TouchCheckpoint();
 			m_AffectedByGlobalPitch = affectedByGlobalPitch;
 		}
 
@@ -353,6 +362,7 @@ namespace RTE {
 		/// @param newValue The pitch variation the sounds in this SoundContainer are played at.
 		void SetPitchVariation(float newValue) {
 			if (DeferProperty(PendingOp::PitchVariation, newValue)) return;
+			if (m_PitchVariation != newValue) TouchCheckpoint();
 			m_PitchVariation = newValue;
 		}
 
@@ -372,6 +382,7 @@ namespace RTE {
 		/// @param newValue The new MusicPreEntryTime for this SoundContainer in MS.
 		void SetMusicPreEntryTime(float newValue) {
 			if (DeferProperty(PendingOp::MusicPreEntry, newValue)) return;
+			if (m_MusicPreEntryTime != newValue) TouchCheckpoint();
 			m_MusicPreEntryTime = newValue;
 		}
 
@@ -383,6 +394,7 @@ namespace RTE {
 		/// @param newValue The new MusicExitTime for this SoundContainer in MS.
 		void SetMusicExitTime(float newValue) {
 			if (DeferProperty(PendingOp::MusicExit, newValue)) return;
+			if (m_MusicExitTime != newValue) TouchCheckpoint();
 			m_MusicExitTime = newValue;
 		}
 #pragma endregion
@@ -618,6 +630,8 @@ namespace RTE {
 		bool m_Paused; //!< Whether this SoundContainer is paused or not.
 		float m_MusicPreEntryTime; //!< The time in MS before the music starts in this SoundContainer.
 		float m_MusicExitTime; //!< The time position in MS at which the music ends in this SoundContainer.
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this SoundContainer, effectively resetting the members of this abstraction level only.
 		void Clear();

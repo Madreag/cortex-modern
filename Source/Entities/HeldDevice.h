@@ -66,6 +66,7 @@ namespace RTE {
 		void Reset() override {
 			Clear();
 			Attachable::Reset();
+			if (m_MOType != MovableObject::TypeHeldDevice) TouchCheckpoint();
 			m_MOType = MovableObject::TypeHeldDevice;
 		}
 
@@ -152,7 +153,7 @@ namespace RTE {
 
 		/// Sets whether this HeldDevice is currently supported by a second Arm.
 		/// @param supported Whether this HeldDevice is being supported.
-		void SetSupported(bool supported) { m_Supported = m_Supportable && supported; }
+		void SetSupported(bool supported) { const bool value = m_Supportable && supported; if (m_Supported != value) TouchCheckpoint(); m_Supported = value; }
 
 		/// Gets whether this HeldDevice's parent has a second Arm available to provide support (or this is on a Turret).
 		/// @return Whether this HeldDevice's parent has a second Arm available to provide support (or this is on a Turret).
@@ -160,7 +161,7 @@ namespace RTE {
 
 		/// Sets whether this HeldDevice's parent has a second Arm available to provide support (or this is on a Turret).
 		/// @param supported Whether this HeldDevice's parent has a second Arm available to provide support (or this is on a Turret).
-		void SetSupportAvailable(bool supportAvailable) { m_SupportAvailable = m_Supportable && supportAvailable; }
+		void SetSupportAvailable(bool supportAvailable) { const bool value = m_Supportable && supportAvailable; if (m_SupportAvailable != value) TouchCheckpoint(); m_SupportAvailable = value; }
 
 		/// Gets whether this HeldDevice while be held at the support offset with the off-hand when reloading.
 		/// @return Whether this HeldDevice while be held at the support offset with the off-hand when reloading.
@@ -199,6 +200,7 @@ namespace RTE {
 		/// @param presetName The PresetName of an object that should be able to pick up this HeldDevice.
 		void AddPickupableByPresetName(const std::string& presetName) {
 			SetUnPickupable(false);
+			if (!m_PickupableByPresetNames.contains(presetName)) TouchCheckpoint();
 			m_PickupableByPresetNames.insert(presetName);
 		}
 
@@ -358,6 +360,7 @@ namespace RTE {
 
 		/// Resest all the timers used by this. Can be emitters, etc. This is to prevent backed up emissions to come out all at once while this has been held dormant in an inventory.
 		void ResetAllTimers() override {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_ActivationTimer); });
 			Attachable::ResetAllTimers();
 			m_ActivationTimer.Reset();
 		}
@@ -431,6 +434,8 @@ namespace RTE {
 		std::string m_PersistedHeldDeviceRuntime;
 		std::string SaveHeldDeviceRuntime() const;
 		bool LoadHeldDeviceRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this HeldDevice, effectively
 		/// resetting the members of this abstraction level only.

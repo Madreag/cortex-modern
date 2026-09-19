@@ -42,6 +42,17 @@ AHuman::~AHuman() {
 }
 
 void AHuman::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_Aiming, m_ArmClimbing, m_ArmSwingRate, m_ArmsState, m_BGArmFlailScalar, m_BackupBGFootGroup,
+			m_BackupFGFootGroup, m_CanActivateBGItem, m_CrouchAmount, m_CrouchAmountOverride, m_DeviceArmSwayRate, m_EquipHUDTimer,
+			m_FGArmFlailScalar, m_LookToAimRatio, m_MaxWalkPathCrouchShift, m_MovementState, m_PendingDeferredEquips.empty(), m_PersistedAHumanRuntime.empty(),
+			m_ProneState, m_ProneTimer, m_RotAngleTargets, m_SharpAimRevertTimer, m_StrideFrame, m_StrideSound,
+			m_StrideStart, m_ThrowPrepTime, m_ThrowTmr, m_TriggerPulled, m_WaitingToReloadOffhand, m_WalkAngle,
+			m_WalkPathOffset, m_pBGArm, m_pBGFootGroup, m_pBGHandGroup, m_pBGLeg, m_pFGArm,
+			m_pFGFootGroup, m_pFGHandGroup, m_pFGLeg, m_pHead, m_pJetpack);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAHumanRuntime.clear();
 	m_pHead = 0;
 	m_LookToAimRatio = 0.7F;
@@ -854,6 +865,7 @@ Vector AHuman::GetEyePos() const {
 }
 
 void AHuman::SetHead(Attachable* newHead) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pHead); });
 	if (m_pHead && m_pHead->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pHead);
 	}
@@ -878,6 +890,7 @@ void AHuman::SetHead(Attachable* newHead) {
 }
 
 void AHuman::SetJetpack(AEJetpack* newJetpack) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pJetpack); });
 	if (m_pJetpack && m_pJetpack->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pJetpack);
 	}
@@ -901,6 +914,7 @@ void AHuman::SetJetpack(AEJetpack* newJetpack) {
 }
 
 void AHuman::SetFGArm(Arm* newArm) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pFGArm); });
 	if (m_pFGArm && m_pFGArm->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pFGArm);
 	}
@@ -925,6 +939,7 @@ void AHuman::SetFGArm(Arm* newArm) {
 }
 
 void AHuman::SetBGArm(Arm* newArm) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pBGArm); });
 	if (m_pBGArm && m_pBGArm->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pBGArm);
 	}
@@ -948,6 +963,7 @@ void AHuman::SetBGArm(Arm* newArm) {
 }
 
 void AHuman::SetFGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pFGLeg); });
 	if (m_pFGLeg && m_pFGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pFGLeg);
 	}
@@ -970,6 +986,7 @@ void AHuman::SetFGLeg(Leg* newLeg) {
 }
 
 void AHuman::SetBGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pBGLeg); });
 	if (m_pBGLeg && m_pBGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pBGLeg);
 	}

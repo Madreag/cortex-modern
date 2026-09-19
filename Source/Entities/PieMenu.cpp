@@ -67,6 +67,12 @@ PieMenu::~PieMenu() {
 }
 
 void PieMenu::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_BackgroundBorderColor, m_BackgroundColor, m_BackgroundSeparatorSize, m_BackgroundThickness, m_CurrentPieSlices.empty(), m_DrawBackgroundTransparent,
+			m_FullInnerRadius, m_IconSeparatorMode, m_Owner, m_Rotation, m_SelectedItemBackgroundColor);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedRuntime.clear();
 	m_LargeFont = nullptr;
 
@@ -662,6 +668,7 @@ bool PieMenu::RunHoverOpenDelayPinSelfTest(std::string* error) {
 }
 
 void PieMenu::SetOwner(Actor* newOwner) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Owner); });
 	RTEAssert((newOwner == nullptr) ? true : (newOwner->GetPieMenu() == this || IsSubPieMenu()), "Tried to set Pie Menu owning Actor to Actor with different Pie Menu.");
 	if (m_Owner) {
 		for (PieSlice* pieSlice: m_CurrentPieSlices) {

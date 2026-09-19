@@ -52,6 +52,14 @@ SoundContainer::~SoundContainer() {
 }
 
 void SoundContainer::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AffectedByGlobalPitch, m_AttenuationStartDistance, m_BusRouting, m_CheckpointIdentity, m_CustomPanValue, m_Immobile,
+            CheckpointFields(m_LogicalPlayback.identity.value.domain, m_LogicalPlayback.identity.value.objectUID, m_LogicalPlayback.identity.value.tick, m_LogicalPlayback.identity.value.phase, m_LogicalPlayback.identity.value.occurrence, m_LogicalPlayback.identity.value.ordinal, m_LogicalPlayback.lastObjectUID, m_LogicalPlayback.voices.empty()), m_Loops, m_MusicExitTime, m_MusicPreEntryTime, m_PanningStrengthMultiplier, m_Paused,
+			m_Pitch, m_PitchVariation, m_PlayingChannels.empty(), m_Pos, m_Priority, m_SoundOverlapMode,
+			m_SoundPropertiesUpToDate, m_TopLevelSoundSet, m_Volume, m_WasFadedOut);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	g_AudioMan.UnregisterLogicalSound(this);
 	g_AudioMan.ClearPendingSoundOps(this);
 	m_LogicalPlayback = {};
@@ -312,6 +320,7 @@ float SoundContainer::GetLength(LengthOfSoundType type) const {
 
 void SoundContainer::SetTopLevelSoundSet(const SoundSet& newTopLevelSoundSet) {
 	if (Deferring() && QueuePendingStructure(PendingOp::SetTopLevelSet, {}, newTopLevelSoundSet.SaveStructure(), 0, newTopLevelSoundSet.HasAnySounds())) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_TopLevelSoundSet->SaveStructure(), m_TopLevelSoundSet->SaveSimulationCheckpoint(), m_SoundPropertiesUpToDate); });
 	*m_TopLevelSoundSet = newTopLevelSoundSet;
 	m_TopLevelSoundSet->SetOwnerContainer(this);
 	m_SoundPropertiesUpToDate = false;
@@ -340,8 +349,10 @@ const SoundData* SoundContainer::GetSoundDataForSound(const FMOD::Sound* sound) 
 }
 
 void SoundContainer::SetCustomPanValue(float customPanValue) {
+
 	customPanValue = std::clamp(customPanValue, -1.0f, 1.0f);
 	if (DeferProperty(PendingOp::CustomPan, customPanValue)) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_CustomPanValue); });
 	m_CustomPanValue = customPanValue;
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsCustomPanValue(this);
@@ -349,10 +360,12 @@ void SoundContainer::SetCustomPanValue(float customPanValue) {
 }
 
 void SoundContainer::SetPosition(const Vector& newPosition) {
+
 	if (std::as_const(*this).CurrentImmobile() || newPosition == std::as_const(*this).CurrentPos()) {
 		return;
 	}
 	if (DeferProperty(PendingOp::Position, newPosition.m_X, newPosition.m_Y)) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Pos); });
 	m_Pos = newPosition;
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsPosition(this);
@@ -369,8 +382,10 @@ float SoundContainer::GetAudibleVolume() const {
 }
 
 void SoundContainer::SetVolume(float newVolume) {
+
 	newVolume = std::clamp(newVolume, 0.0F, 10.0F);
 	if (DeferProperty(PendingOp::Volume, newVolume)) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Volume); });
 	if (IsBeingPlayed()) {
 		g_AudioMan.ChangeSoundContainerPlayingChannelsVolume(this, newVolume);
 	}
@@ -378,8 +393,10 @@ void SoundContainer::SetVolume(float newVolume) {
 }
 
 void SoundContainer::SetPitch(float newPitch) {
+
 	newPitch = std::clamp(newPitch, 0.125F, 8.0F);
 	if (DeferProperty(PendingOp::Pitch, newPitch)) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Pitch); });
 	const bool logical = UsesLogicalPlayback();
 	if (logical) FoldLogicalVoices();
 	m_Pitch = newPitch;
@@ -392,8 +409,10 @@ void SoundContainer::SetPitch(float newPitch) {
 }
 
 void SoundContainer::SetPaused(bool paused) {
+
 	if (paused == std::as_const(*this).CurrentPaused()) return;
 	if (DeferProperty(PendingOp::Paused, 0.0F, 0.0F, paused ? 1 : 0)) return;
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Paused); });
 	if (UsesLogicalPlayback()) {
 		FoldLogicalVoices();
 		for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.paused = paused;
@@ -544,9 +563,10 @@ void SoundContainer::AdoptSharedAliasWrite() {
 }
 
 void SoundContainer::SettleSharedAliasWrite() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Pos); });
 	// Outside the AI pass a change to the position this container holds for Lua is a shared write, so
 	// it lands on shared state now rather than waiting for a drain that may never visit again.
-	if (m_Pos != m_SharedAliasBaseline) m_SharedAliasBaseline = m_Pos;
+	if (m_Pos != m_SharedAliasBaseline) { TouchCheckpoint(); m_SharedAliasBaseline = m_Pos; }
 	if (!(m_Pending.written & LocalPos) || m_Pending.m_Pos == m_PendingAliasBaseline) return;
 	m_Pos = m_Pending.m_Pos;
 	m_PendingAliasBaseline = m_Pending.m_Pos;
@@ -873,6 +893,7 @@ bool SoundContainer::HasLiveLogicalVoices() const {
 }
 
 void SoundContainer::RetireFinishedLogicalVoices() {
+	CheckpointChange changed(*this, [this] { return CurrentLogicalPlayback().voices.size(); });
 	const long long now = g_TimerMan.GetSimTimeTicks();
 	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
 	std::erase_if(CurrentLogicalPlayback().voices, [&](const LogicalSoundVoice& voice) { return voice.At(now, ticksPerSecond).finished; });
@@ -882,7 +903,11 @@ void SoundContainer::FoldLogicalVoices() {
 	RetireFinishedLogicalVoices();
 	const long long now = g_TimerMan.GetSimTimeTicks();
 	const long long ticksPerSecond = g_TimerMan.GetTicksPerSecond();
-	for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) voice.Fold(now, ticksPerSecond);
+	for (LogicalSoundVoice& voice: CurrentLogicalPlayback().voices) {
+		const auto before = CheckpointFields(voice.anchorTicks, voice.anchorPosition, voice.loops);
+		voice.Fold(now, ticksPerSecond);
+		if (before != CheckpointFields(voice.anchorTicks, voice.anchorPosition, voice.loops)) TouchCheckpoint();
+	}
 }
 
 FMOD_RESULT SoundContainer::UpdateSoundProperties() {

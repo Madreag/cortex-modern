@@ -167,6 +167,8 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void CopyCheckpointFrom(const Controller& reference);
+		void TouchCheckpoint();
+		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
 #pragma endregion
 
 #pragma region Destruction
@@ -187,6 +189,7 @@ namespace RTE {
 		/// Sets whether this is a disabled controller that doesn't give any new output.
 		/// @param disabled Disabled or not.
 		void SetDisabled(bool disabled = true) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Disabled, m_ReleaseTimer, m_LocalProductionValid); });
 			if (m_Disabled != disabled) {
 				m_ReleaseTimer.Reset();
 				ResetCommandState();
@@ -199,6 +202,7 @@ namespace RTE {
 		/// the disable is still in flight, so the frames committed until it lands cannot enable it again.
 		/// @param tick The sim tick the order landed on.
 		void HoldDisabledForSyncedOrder(int64_t tick) {
+			if (m_SyncedOrderDisableTick != tick) TouchCheckpoint();
 			m_SyncedOrderDisableTick = tick;
 			SetDisabled(true);
 		}
@@ -207,6 +211,7 @@ namespace RTE {
 		/// @param tick The current sim tick.
 		void ExpireSyncedOrderDisable(int64_t tick) {
 			if (m_SyncedOrderDisableTick >= 0 && tick - m_SyncedOrderDisableTick >= c_SyncedOrderDisableMaxHoldTicks) {
+				TouchCheckpoint();
 				m_SyncedOrderDisableTick = -1;
 			}
 		}
@@ -216,7 +221,7 @@ namespace RTE {
 		bool IsSyncedOrderDisableHeld() const { return m_SyncedOrderDisableTick >= 0; }
 
 		/// Drops the hold at a point every peer reaches at the same tick, like a control handoff.
-		void ClearSyncedOrderDisable() { m_SyncedOrderDisableTick = -1; }
+		void ClearSyncedOrderDisable() { if (m_SyncedOrderDisableTick != -1) TouchCheckpoint(); m_SyncedOrderDisableTick = -1; }
 
 		/// Shows whether the current controller is in a specific state.
 		/// @param controlState What control state to check for.
@@ -236,6 +241,7 @@ namespace RTE {
 		/// sim-facing mode follows the wire at the committed tick, on every peer alike.
 		/// @param newMode The new InputMode for this controller to use.
 		void SetInputMode(InputMode newMode) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_InputMode, m_SeatMode, m_ReleaseTimer); });
 			if (m_SeatMode != newMode) {
 				m_ReleaseTimer.Reset();
 			}
@@ -278,7 +284,7 @@ namespace RTE {
 
 		/// Sets the analog movement vector state of this.
 		/// @param newMove The new analog movement vector.
-		void SetAnalogMove(const Vector& newMove) { m_AnalogMove = newMove; }
+		void SetAnalogMove(const Vector& newMove) { if (m_AnalogMove != newMove) TouchCheckpoint(); m_AnalogMove = newMove; }
 
 		/// Gets the analog aiming input data.
 		/// @return A vector with the analog aiming data, both axes ranging form -1.0 to 1.0.
@@ -286,7 +292,7 @@ namespace RTE {
 
 		/// Sets the analog aiming vector state of this.
 		/// @param newAim The new analog aiming vector.
-		void SetAnalogAim(const Vector& newAim) { m_AnalogAim = newAim; }
+		void SetAnalogAim(const Vector& newAim) { if (m_AnalogAim != newAim) TouchCheckpoint(); m_AnalogAim = newAim; }
 
 		/// Gets the analog menu input data.
 		/// @return A vector with the analog menu data, both axes ranging form -1.0 to 1.0.
@@ -294,15 +300,15 @@ namespace RTE {
 
 		/// Sets the analog cursor to the specified position.
 		/// @param newAnalogCursor The position the analog cursor should be set to.
-		void SetAnalogCursor(const Vector& newAnalogCursor) { m_AnalogCursor = newAnalogCursor; }
+		void SetAnalogCursor(const Vector& newAnalogCursor) { if (m_AnalogCursor != newAnalogCursor) TouchCheckpoint(); m_AnalogCursor = newAnalogCursor; }
 
 		/// Sets the analog cursor angle limits for the given player (does nothing for player -1). The limit end is always CCW from the limit start.
 		/// @param angleLimitStart The starting angle limit for the analog cursor.
 		/// @param angleLimitEnd The ending angle limit for the analog cursor.
-		void SetAnalogCursorAngleLimits(float angleLimitStart, float angleLimitEnd) { m_AnalogCursorAngleLimits = {{angleLimitStart, angleLimitEnd}, true}; }
+		void SetAnalogCursorAngleLimits(float angleLimitStart, float angleLimitEnd) { const auto value = std::make_pair(std::make_pair(angleLimitStart, angleLimitEnd), true); if (m_AnalogCursorAngleLimits != value) TouchCheckpoint(); m_AnalogCursorAngleLimits = value; }
 
 		/// Clears the analog cursor aim limits for the given player (does nothing for player -1).
-		void ClearAnalogCursorAngleLimits() { m_AnalogCursorAngleLimits.second = false; }
+		void ClearAnalogCursorAngleLimits() { if (m_AnalogCursorAngleLimits.second) TouchCheckpoint(); m_AnalogCursorAngleLimits.second = false; }
 
 		/// Adds relative movement to a passed-in vector. Uses the appropriate input method currently of this.
 		/// @param cursorPos The vector to alter.
@@ -337,6 +343,7 @@ namespace RTE {
 		/// Sets the raw player index without changing the input mode.
 		/// @param player The player index to store.
 		void SetPlayerRaw(int player) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Player, m_SeatPlayer); });
 			m_SeatPlayer = player;
 			if (!IsWireOwned()) {
 				m_Player = player;
@@ -350,6 +357,7 @@ namespace RTE {
 		/// Sets which player's input this is listening to, and will enable player input mode.
 		/// @param player The player number.
 		void SetPlayer(int player) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Player, m_SeatPlayer, m_InputMode, m_SeatMode); });
 			m_SeatPlayer = player;
 			if (m_SeatPlayer >= Players::PlayerOne) {
 				m_SeatMode = InputMode::CIM_PLAYER;
@@ -376,7 +384,7 @@ namespace RTE {
 
 		/// Sets which Actor is supposed to be controlled by this.
 		/// @param controlledActor A pointer to a an Actor which is being controlled by this. Ownership is NOT transferred!
-		void SetControlledActor(Actor* controlledActor = nullptr) { m_ControlledActor = controlledActor; }
+		void SetControlledActor(Actor* controlledActor = nullptr) { if (m_ControlledActor != controlledActor) TouchCheckpoint(); m_ControlledActor = controlledActor; }
 
 		/// Returns whether the AI should be updated this frame.
 		/// @return Whether the AI should be updated this frame.
@@ -412,7 +420,7 @@ namespace RTE {
 		static WireDeviceClass ClassifyDevice(int inputDevice);
 
 		/// Marks the sim tick a lockstep wire frame was applied, so saves can tell wire-backed state from local AI residue.
-		void SetWireApplyTick(int64_t simTick) { m_WireApplyTick = simTick; }
+		void SetWireApplyTick(int64_t simTick) { if (m_WireApplyTick != simTick) TouchCheckpoint(); m_WireApplyTick = simTick; }
 		int64_t GetWireApplyTick() const { return m_WireApplyTick; }
 #pragma endregion
 
@@ -464,7 +472,7 @@ namespace RTE {
 		InputMode m_InputMode; //!< The current controller input mode, like AI, player etc.
 		InputMode m_SeatMode; //!< How this machine samples into the controller; equals m_InputMode outside lockstep.
 
-		Actor* m_ControlledActor; //!< The actor controlled by this.
+		Actor* m_ControlledActor = nullptr; //!< The actor controlled by this.
 
 		/// The last player this controlled. This is necessary so we still have some control after controlled's death.
 		/// If this is -1, no player is controlling/ed, even if in player control input mode.
@@ -494,6 +502,7 @@ namespace RTE {
 
 		//!< The command state of one input sample: what a producing pass makes and what a wire frame carries.
 		struct InputSample {
+			bool operator==(const InputSample&) const = default;
 			std::array<bool, ControlState::CONTROLSTATECOUNT> controlStates{};
 			Vector analogMove;
 			Vector analogAim;
@@ -514,6 +523,8 @@ namespace RTE {
 		std::pair<std::pair<float, float>, bool> m_AnalogCursorAngleLimits; //!< Analog aim value limits, as well as whether or not the limit is actually enabled.
 
 	private:
+		bool m_CheckpointInitialized = false;
+		bool m_CheckpointValueTrap = false;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ControlStates, self.m_AnalogMove, self.m_AnalogAim, self.m_AnalogCursor,
 				self.m_Disabled, self.m_WireApplyTick, self.m_WireSchemeValid, self.m_WireDeviceClass, self.m_WireDigitalAimSpeed,

@@ -23,6 +23,14 @@ SLBackground::~SLBackground() {
 }
 
 void SLBackground::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AutoScrollOffset, m_AutoScrollStep, m_AutoScrollStepInterval, m_AutoScrollStepTimer, m_Bitmaps.empty(), m_CanAutoScrollX,
+			m_CanAutoScrollY, m_FillColorDown, m_FillColorLeft, m_FillColorRight, m_FillColorUp, m_Frame,
+			m_FrameCount, m_IgnoreAutoScale, m_IsAnimatedManually, m_SpriteAnimDuration, m_SpriteAnimIsReversingFrames, m_SpriteAnimMode,
+			m_SpriteAnimTimer, m_ZOrder);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_CheckpointBitmaps.clear();
 	m_Bitmaps.clear();
 	m_FrameCount = 1;

@@ -112,6 +112,7 @@ namespace RTE {
 		void Reset() override {
 			Clear();
 			MOSRotating::Reset();
+			if (m_MOType != MovableObject::TypeActor) TouchCheckpoint();
 			m_MOType = MovableObject::TypeActor;
 		}
 
@@ -352,6 +353,7 @@ namespace RTE {
 		/// Sets this Actor's aim angle.
 		/// @param newAngle A new angle, in radians.
 		void SetAimAngle(float newAngle) {
+			CheckpointChange changed(*this, [this] { return m_AimAngle; });
 			m_AimAngle = newAngle;
 			Clamp(m_AimAngle, m_AimRange, -m_AimRange);
 		}
@@ -583,6 +585,7 @@ namespace RTE {
 		/// Clears the list of coordinates in this' current MovePath, ie the path
 		/// to the next Waypoint.
 		void ClearMovePath() {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_MovePath.empty(), m_MoveTarget, m_MoveVector); });
 			m_MovePath.clear();
 			m_MoveTarget = m_Pos;
 			m_MoveVector.Reset();
@@ -592,6 +595,7 @@ namespace RTE {
 		/// closest to this Actor.
 		/// @param newCoordinate The new coordinate to add to the front of the MovePath.
 		void AddToMovePathBeginning(Vector newCoordinate) {
+			TouchCheckpoint();
 			m_MovePath.push_front(newCoordinate);
 			m_MoveTarget = newCoordinate;
 			m_MoveVector.Reset();
@@ -600,7 +604,7 @@ namespace RTE {
 		/// Adds a coordinate to the end of the MovePath, meaning the one
 		/// closest to this Actor's next waypoint.
 		/// @param m_MovePath.push_back(newCoordinate The new coordinate to add to the end of the MovePath.
-		void AddToMovePathEnd(Vector newCoordinate) { m_MovePath.push_back(newCoordinate); }
+		void AddToMovePathEnd(Vector newCoordinate) { TouchCheckpoint(); m_MovePath.push_back(newCoordinate); }
 
 		/// Gets the last position in this Actor's move path, or otherwise the current move target.
 		/// @return The last position in this Actor's move path, or otherwise the current move target.
@@ -622,6 +626,7 @@ namespace RTE {
 		/// is empty.
 		bool RemoveMovePathBeginning() {
 			if (!m_MovePath.empty()) {
+				TouchCheckpoint();
 				m_MovePath.pop_front();
 				m_MoveTarget = m_MovePath.empty() ? m_Pos : m_MovePath.front();
 				m_MoveVector.Reset();
@@ -636,6 +641,7 @@ namespace RTE {
 		/// is empty.
 		bool RemoveMovePathEnd() {
 			if (!m_MovePath.empty()) {
+				TouchCheckpoint();
 				m_MovePath.pop_back();
 				return true;
 			}
@@ -997,7 +1003,7 @@ namespace RTE {
 		/// Sets the X and Y thresholds for how fast the actor can travel before losing stability.
 		/// @param newVelX New value for how fast the actor can travel before losing stability on X axis.
 		/// @param newVelY New value for how fast the actor can travel before losing stability on Y axis.
-		void SetStableVel(float newVelX, float newVelY) { m_StableVel.SetXY(newVelX, newVelY); }
+		void SetStableVel(float newVelX, float newVelY) { if (m_StableVel != Vector(newVelX, newVelY)) TouchCheckpoint(); m_StableVel.SetXY(newVelX, newVelY); }
 
 		/// Sets the X and Y thresholds for how fast the actor can travel before losing stability.
 		/// @param newVelVector Vector with new values for how fast the actor can travel before losing stability on both axis.
@@ -1329,6 +1335,8 @@ namespace RTE {
 		bool LoadActorRuntime(std::string_view text, bool validateOnly = false);
 
 		std::unique_ptr<PieMenu> m_PieMenu;
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Actor, effectively
 		/// resetting the members of this abstraction level only.
