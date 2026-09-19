@@ -191,6 +191,7 @@ namespace RTE {
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
 		std::optional<uint16_t> pathHorizonTicks;
+		std::optional<uint8_t> frameRedundancyTicks;
 		// The host's checkpoint cadence in simulation seconds; 0 disables autosaves. Unset keeps the
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;

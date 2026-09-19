@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -386,7 +386,19 @@ def scripts(case, port, root):
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
-    if case == "landing":
+    if case == "host-defaults":
+        text = LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
+        text += (f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 5\n"
+                 "activate TabHostPageNetwork\nwait 3\n"
+                 "assert_label ComboHostNetRedundancy 6 ticks\n"
+                 "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
+                 "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
+                 "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 3\n"
+                 "assert_enabled ButtonHostOptApply 0\ndump_host_options\n"
+                 "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
+                 "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\n"
+                 "assert_label ComboHostNetRedundancy 7 ticks\ndump_host_options\nexit\n")
+    elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
         text += checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
         text += "assert_visible ButtonMultiplayerCreate 0\n"
@@ -838,6 +850,9 @@ def scripts(case, port, root):
         text += "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
         text += "assert_label LabelHostOptionsTitle N E T W O R K   O P T I O N S\n"
         text += checks("ComboHostNetPolicy", "CollectionBoxHostPageNetwork")
+        text += checks("LabelHostNetRedundancy", "CollectionBoxHostPageNetwork")
+        text += checks("ComboHostNetRedundancy", "CollectionBoxHostPageNetwork")
+        text += "assert_label ComboHostNetRedundancy 6 ticks\n"
         text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
@@ -1192,6 +1207,9 @@ def run_case(options, case, root, failing=None):
             argv[who] = args
             runs[who] = make_run(options.repo, args, root / who, 180, env=env)
             set_visual_resolution(runs[who], *map(int, options.size.split("x")))
+            if case in ("lobby", "host-defaults"):
+                (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
+                    "Version = 1\nFrameRedundancyTicks = 6\n", encoding="utf-8")
             if who in seeded:
                 seed_settings(runs[who].cwd / "Userdata/Settings.ini", seeded[who])
 

@@ -1369,6 +1369,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRulesSkillSlider = dynamic_cast<GUISlider*>(get("SliderHostRulesSkill"));
 	m_HostRulesSkillValue = dynamic_cast<GUILabel*>(get("LabelHostRulesSkillValue"));
 	m_HostNetPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetPolicy"));
+	m_HostNetRedundancyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetRedundancy"));
 	m_HostNetMinDelayBox = dynamic_cast<GUITextBox*>(get("TextHostNetMinDelay"));
 	m_HostNetEffectiveLabel = dynamic_cast<GUILabel*>(get("LabelHostNetEffective"));
 	for (int peer = 0; peer < 4; ++peer) {
@@ -1472,6 +1473,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPolicyCombo->AddItem("Automatic");
 		m_HostNetPolicyCombo->AddItem("Fixed");
 	}
+	if (m_HostNetRedundancyCombo) {
+		m_HostNetRedundancyCombo->ClearList();
+		for (int ticks = 1; ticks <= NetMatchConfigUtil::c_MaxFrameRedundancyTicks; ++ticks) {
+			m_HostNetRedundancyCombo->AddItem(std::to_string(ticks) + " ticks");
+		}
+	}
 	if (m_HostFilesWidgetCombo) {
 		m_HostFilesWidgetCombo->ClearList();
 		m_HostFilesWidgetCombo->AddItem("Off");
@@ -1569,6 +1576,10 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		}
 		request.humans = humanSeats;
 		request.cpuSlots = cpuSeats;
+		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+	} else {
+		NetHostDefaultsTemplate saved;
+		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
 	}
 	NetMatchService::SeatSavedOptions(request);
 	return request;
@@ -1822,6 +1833,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
+	HostOptSelectComboIndex(m_HostNetRedundancyCombo, m_HostOptionsDraft.frameRedundancyTicks - 1);
 	if (m_HostNetMinDelayBox && !HostOptBoxFocused(m_HostNetMinDelayBox)) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
 	}
@@ -1852,6 +1864,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	HostOptSetEditable(m_HostNetPolicyCombo, editable);
+	HostOptSetEditable(m_HostNetRedundancyCombo, editable);
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
 	// figures are the answer, so the button stays off there.
@@ -2039,6 +2052,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		        || m_HostOptionsDraft.delayPolicy != m_HostSetupOptions->delayPolicy
 		        || m_HostOptionsDraft.idleWaitMinutes != m_HostSetupOptions->idleWaitMinutes
 		        || m_HostOptionsDraft.automaticRepair != m_HostSetupOptions->automaticRepair
+		        || m_HostOptionsDraft.frameRedundancyTicks != m_HostSetupOptions->frameRedundancyTicks
 		        || m_HostOptionsDraft.autosaveEnabled != m_HostSetupOptions->autosaveEnabled
 		        || m_HostOptionsDraft.autosaveIntervalSeconds != m_HostSetupOptions->autosaveIntervalSeconds
 		        || m_HostOptionsDraft.inputDelayFrames != m_HostSetupOptions->inputDelayFrames;
@@ -2120,6 +2134,9 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	// Network.
 	if (m_HostNetPolicyCombo) {
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+	}
+	if (m_HostNetRedundancyCombo) {
+		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 	}
 	if (m_HostNetMinDelayBox) {
 		const long parsed = std::strtol(m_HostNetMinDelayBox->GetText().c_str(), nullptr, 10);
@@ -2738,6 +2755,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
 		return;
 	}
+	if (guiEventControl == m_HostNetRedundancyCombo) {
+		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
+		return;
+	}
 	if (guiEventControl == m_HostNetRecalcButton) {
 		// The auto policy already re-derives each sender's figure from the live link; the button is
 		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
@@ -2841,6 +2862,10 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		uint32_t cpuSeats = 0;
 		for (const NetMatchPlayerSlot& slot : m_HostSetupOptions->players) cpuSeats += slot.cpu ? 1 : 0;
 		request.cpuSlots = cpuSeats;
+		request.frameRedundancyTicks = m_HostSetupOptions->frameRedundancyTicks;
+	} else if (host) {
+		NetHostDefaultsTemplate saved;
+		if (NetHostDefaults::Load(saved, nullptr)) request.frameRedundancyTicks = saved.frameRedundancyTicks;
 	}
 	// The host picks the roster size and the lockstep input-delay buffer; clients adopt both via
 	// the lobby config sync. The delay box writes back to the setting so the choice persists.
