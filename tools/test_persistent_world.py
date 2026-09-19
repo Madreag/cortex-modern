@@ -66,6 +66,13 @@ RED_EXISTING_MEMBER_DICTIONARY = "existing-member-lost-the-dictionary-across-an-
 RED_REPLAY_TABLE_DIVERGED = "replayed-member-table-diverged-from-the-live-table"
 RED_IMAGE_BEFORE_WRITE = "world-image-published-before-the-archive-was-written"
 RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
+RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
+RED_CAPACITY_MOVED_ORDINARY = "world-capacity-moved-an-ordinary-config"
+RED_CAPACITY_HASH = "world-capacity-left-the-v5-hash"
+RED_CAPACITY_UNBOUNDED = "world-capacity-decoded-past-its-bound"
+RED_CAPACITY_VALIDATED = "world-capacity-passed-validation"
+RED_CAPACITY_SLOTS = "world-capacity-left-the-slot-table"
+RED_CAPACITY_RECORD = "world-capacity-left-the-identity-record"
 
 CASES = (
     {
@@ -291,6 +298,20 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "world-capacity-rides-the-v5-config",
+        "argv": ["-net-world-capacity-selftest"],
+        "red": RED_CAPACITY_WIRE,
+        "also_red": (
+            RED_CAPACITY_MOVED_ORDINARY,
+            RED_CAPACITY_HASH,
+            RED_CAPACITY_UNBOUNDED,
+            RED_CAPACITY_VALIDATED,
+            RED_CAPACITY_SLOTS,
+            RED_CAPACITY_RECORD,
+        ),
+        "pass_token": "[net-world-capacity-selftest] PASS",
     },
     {
         "name": "host-bootstrap-refusals-and-retries",

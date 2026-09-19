@@ -245,16 +245,33 @@ namespace RTE {
 		// Every pre-v4 config predates the spectate byte, so it cannot carry anything but the pre-spectate rule.
 		if (config.version < 4 && config.brainlessHumansSpectate) return refuse("pre-spectate config cannot carry the spectate rule");
 		// The persistent world's fields reached the wire in v5; an ordinary match stays on v4 and hashes as it always did.
+		const auto carriesWorldCapacity = [&] {
+			return config.worldMaxSpectators != 0 || config.worldRespawnDelaySeconds != 0 ||
+			       std::any_of(config.worldTeamCapacity.begin(), config.worldTeamCapacity.end(), [](uint8_t capacity) { return capacity != 0; });
+		};
 		if (config.version < c_PersistentWorldVersion) {
 			if (config.persistentWorld) return refuse("pre-world config cannot carry the persistent world rule");
 			if (!config.worldId.empty() || config.worldBoot != 0) return refuse("pre-world config cannot carry a world identity");
+			if (carriesWorldCapacity()) return refuse("pre-world config cannot carry world capacity");
 		} else if (config.persistentWorld) {
 			if (!IsWorldId(config.worldId)) return refuse("a persistent world needs a canonical world id");
 			if (config.worldBoot == 0) return refuse("a persistent world needs a nonzero host boot incarnation");
 			// The world ticks on whether or not a human is seated, so the brain rules never end it.
 			if (!config.dedicated) return refuse("a persistent world is hosted by a dedicated host");
+			// The host authors the capacity; it can never promise more seats than the roster has peers for.
+			const size_t worldSeats = config.peerCount > 0 ? static_cast<size_t>(config.peerCount) - 1 : 0;
+			size_t capacitySum = 0;
+			for (const uint8_t capacity: config.worldTeamCapacity) {
+				capacitySum += capacity;
+			}
+			// An all-zero capacity is a host that authored none; the preset fills the default before it publishes.
+			if (capacitySum > worldSeats) return refuse("world team capacity exceeds the roster's human slots");
+			if (config.worldMaxSpectators > c_MaxWorldSpectators) return refuse("world_max_spectators is out of range");
+			if (config.worldRespawnDelaySeconds > c_MaxWorldRespawnDelaySeconds) return refuse("world_respawn_delay_seconds is out of range");
 		} else if (!config.worldId.empty() || config.worldBoot != 0) {
 			return refuse("an ordinary match cannot carry a world identity");
+		} else if (carriesWorldCapacity()) {
+			return refuse("an ordinary match cannot carry world capacity");
 		}
 		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
 		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
@@ -418,6 +435,14 @@ namespace RTE {
 		if (config.persistentWorld) {
 			fields.emplace_back("persistent_world", "true");
 			fields.emplace_back("world_id", config.worldId);
+			// The capacity is the host's contract with every joiner, so it is part of what a joiner validates.
+			std::string capacities;
+			for (size_t team = 0; team < config.worldTeamCapacity.size(); ++team) {
+				capacities += (team == 0 ? "" : ",") + std::to_string(config.worldTeamCapacity[team]);
+			}
+			fields.emplace_back("world_team_capacity", capacities);
+			fields.emplace_back("world_max_spectators", std::to_string(config.worldMaxSpectators));
+			fields.emplace_back("world_respawn_delay_s", std::to_string(config.worldRespawnDelaySeconds));
 		}
 		if (config.version >= 3) {
 			const auto rules = RuleFields(config);
@@ -441,6 +466,9 @@ namespace RTE {
 			{"persistent_world", config.persistentWorld},
 			{"world_id", config.worldId},
 			{"world_boot", config.worldBoot},
+			{"world_team_capacity", config.worldTeamCapacity},
+			{"world_max_spectators", static_cast<int>(config.worldMaxSpectators)},
+			{"world_respawn_delay_seconds", config.worldRespawnDelaySeconds},
 			{"peer_count", static_cast<int>(config.peerCount)},
 			{"input_delay_frames", config.inputDelayFrames},
 			{"peer_input_delays", config.peerInputDelayFrames},
