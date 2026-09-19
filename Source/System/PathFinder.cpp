@@ -901,6 +901,34 @@ std::vector<int> PathFinder::GetNodeIdsInBox(Box box) const {
 	return result;
 }
 
+std::vector<int> PathFinder::GetHorizonNodeIdsInBox(const Box& box) const {
+	std::vector<int> result = GetNodeIdsInBox(box);
+	if (m_NodeGrid.empty()) {
+		return result;
+	}
+	// UpdateNodeList also mirrors each updated node's right and down transitions into those neighbours, so they change too.
+	std::unordered_set<int> seen(result.begin(), result.end());
+	const size_t inBox = result.size();
+	for (size_t index = 0; index < inBox; ++index) {
+		const int nodeId = result[index];
+		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
+			continue;
+		}
+		const PathNode& node = m_NodeGrid[nodeId];
+		for (int dir: {1, 2, 3, 4}) {
+			const PathNode* neighbor = node.AdjacentNodes[dir];
+			if (!neighbor) {
+				continue;
+			}
+			const int neighborId = static_cast<int>(neighbor - m_NodeGrid.data());
+			if (neighborId >= 0 && static_cast<size_t>(neighborId) < m_NodeGrid.size() && seen.insert(neighborId).second) {
+				result.push_back(neighborId);
+			}
+		}
+	}
+	return result;
+}
+
 float PathFinder::GetNodeAverageTransitionCost(const PathNode& node) const {
 	float totalCostOfAdjacentNodes = 0.0F;
 	int count = 0;
@@ -1206,7 +1234,7 @@ void PathFinder::PinHorizonFromLive(const Box& box) {
 		return;
 	}
 	std::lock_guard lock(m_HorizonMutex);
-	for (int nodeId: GetNodeIdsInBox(box)) {
+	for (int nodeId: GetHorizonNodeIdsInBox(box)) {
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || m_HorizonNodes.count(nodeId) != 0) {
 			continue;
 		}
@@ -1243,7 +1271,7 @@ void PathFinder::CaptureHorizonNodeSnapshots(const Box& box, std::vector<Horizon
 	if (m_NodeGrid.empty()) {
 		return;
 	}
-	for (int nodeId: GetNodeIdsInBox(box)) {
+	for (int nodeId: GetHorizonNodeIdsInBox(box)) {
 		nodes.push_back(SnapshotNode(nodeId));
 	}
 }
@@ -1293,7 +1321,7 @@ void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, 
 	if (job->nodes.empty()) {
 		std::unordered_set<int> seen;
 		for (const Box& box: boxes) {
-			for (int nodeId: GetNodeIdsInBox(box)) {
+			for (int nodeId: GetHorizonNodeIdsInBox(box)) {
 				if (seen.insert(nodeId).second) {
 					job->nodes.push_back(SnapshotNode(nodeId));
 				}

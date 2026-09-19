@@ -366,6 +366,9 @@ namespace RTE {
 		/// @return A list of the PathNode ids inside the box.
 		std::vector<int> GetNodeIdsInBox(Box box) const;
 
+		/// Every PathNode a live area update writes: the nodes in the box plus the neighbours UpdateNodeList mirrors into.
+		std::vector<int> GetHorizonNodeIdsInBox(const Box& box) const;
+
 		/// Helper function to determine if a node is on solid fround.
 		/// @param node The node we're checking.
 		/// @return Whether the node is on solid ground.
