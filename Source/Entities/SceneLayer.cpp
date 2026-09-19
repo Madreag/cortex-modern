@@ -65,6 +65,20 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(const ContentFile& bi
 }
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
+void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::TestAdoptBitmap(BITMAP* bitmap, bool wrapX, bool wrapY) {
+	if (m_MainBitmap && m_MainBitmapOwned) {
+		destroy_bitmap(m_MainBitmap);
+	}
+	m_MainBitmap = bitmap;
+	m_MainBitmapOwned = bitmap != nullptr;
+	m_WrapX = wrapX;
+	m_WrapY = wrapY;
+	if (bitmap) {
+		m_ScaledDimensions.SetXY(static_cast<float>(bitmap->w), static_cast<float>(bitmap->h));
+	}
+}
+
+template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Create(BITMAP* bitmap, bool drawMasked, const Vector& offset, bool wrapX, bool wrapY, const Vector& scrollInfo) {
 	m_MainBitmap = bitmap;
 	RTEAssert(m_MainBitmap, "Null bitmap passed in when creating SceneLayerImpl!");

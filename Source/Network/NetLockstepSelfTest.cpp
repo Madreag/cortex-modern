@@ -4,6 +4,7 @@
 #include "LoopbackTransport.h"
 #include "NetLockstep.h"
 #include "PieMenu.h"
+#include "PathFinder.h"
 #include "NetMatchReplay.h"
 #include "NetProtocol.h"
 #include "NetReconnectLedger.h"
@@ -13409,6 +13410,10 @@ namespace RTE {
 			std::cerr << "[net-lockstep-selftest] FAIL: " << message << std::endl;
 			return 1;
 		};
+
+		if (PathFinder::RunHorizonGridSelfTest() != 0) {
+			return fail("horizon path grid self-test failed");
+		}
 
 		std::string piePinError;
 		if (!PieMenu::RunHoverOpenDelayPinSelfTest(&piePinError)) {

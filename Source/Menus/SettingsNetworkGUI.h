@@ -60,12 +60,15 @@ namespace RTE {
 		GUILabel* m_IdleWaitLabel;
 		GUILabel* m_IdleWaitHintLabel;
 		GUITextBox* m_IdleWaitTextbox;
+		GUILabel* m_PathHorizonLabel;
+		GUILabel* m_PathHorizonHintLabel;
+		GUITextBox* m_PathHorizonTextbox;
 		GUICheckbox* m_AutoRepairCheckbox;
 		GUICheckbox* m_ToastsCheckbox;
 		GUICheckbox* m_PredictionCheckbox;
 		GUIComboBox* m_StatusModeCombo;
 		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
-		std::array<std::pair<GUIControl*, int>, 8> m_RowsUnderFixedDelay;
+		std::array<std::pair<GUIControl*, int>, 11> m_RowsUnderFixedDelay;
 
 		// Chat page.
 		GUICheckbox* m_ChatVisibleCheckbox;

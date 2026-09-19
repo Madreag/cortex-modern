@@ -74,6 +74,7 @@ namespace RTE {
 		uint32_t autosaveIntervalSeconds = 0;
 		uint8_t idleWaitMinutes = 10;
 		bool automaticRepair = true;
+		uint16_t pathHorizonTicks = 0;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
@@ -83,7 +84,12 @@ namespace RTE {
 
 	class NetMatchConfigUtil {
 	public:
-		static constexpr uint16_t c_Version = 4; // v4 added the spectate rule; v3 and v2 envelopes stay readable.
+		static constexpr uint16_t c_Version = 4;
+		static constexpr uint16_t c_ReservedDedicatedBit = 1;
+		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
+		static constexpr uint16_t c_ReservedKnownMask = 3;
+		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
+		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
 		static constexpr uint32_t c_InfiniteGold = 1000000000;
 		static constexpr uint8_t c_MinPeerCount = 2;
