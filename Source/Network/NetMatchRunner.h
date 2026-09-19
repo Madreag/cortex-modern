@@ -191,6 +191,7 @@ namespace RTE {
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
 		const std::string& GetSetupError() const { return m_SetupError; }
+		bool HasRefusedHostOptions() const { return m_HostOptionsRefused; }
 
 		std::string BuildReportJson(const NetSession& session, const NetLockstepCoordinator& coordinator) const;
 
@@ -230,6 +231,7 @@ namespace RTE {
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;
+		bool m_HostOptionsRefused = false;
 		std::vector<uint8_t> m_RematchRoster; //!< Client: the peers its last round still had; consumed by the next rematch.
 		NetMatchConfig m_RematchConfig;       //!< This peer's own derivation of the rematch roster.
 		uint8_t m_RematchDerivedPeerId = 0;   //!< Client: its own seat in m_RematchConfig, before the host reseats it.

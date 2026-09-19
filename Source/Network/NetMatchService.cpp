@@ -1289,7 +1289,9 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
 		std::string error;
-		const bool started = runner->StartNextMatch(*link.Wire(), *session, *coordinator, &error, {}, std::move(link.lobbyEvents));
+		const bool started = runner->StartNextMatch(*link.Wire(), *session, *coordinator, &error, {}, link.lobbyEvents);
+		const bool optionsRefused = !started && runner->HasRefusedHostOptions();
+		if (!optionsRefused) link.lobbyEvents.clear();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (started) {
@@ -1319,6 +1321,11 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
 				m_ErrorText.clear();
+			} else if (optionsRefused) {
+				m_State = NetMatchServiceState::Completed;
+				m_StatusText = "Correct the host options before starting the rematch";
+				m_ErrorText = error;
+				m_AdoptedMatchConfig = m_Runner->GetMatchConfig();
 			} else {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Rematch setup failed";
@@ -4194,6 +4201,7 @@ static std::string ResyncSaveName() {
 		// round republishes it to every peer at once and a closed one starts its rematch on it. The
 		// draft stays staged here too: it is what the options panel re-seeds from either way.
 		m_HostOptionsRequest.Post(*m_PendingHostOptions);
+		if (m_ErrorText.starts_with("Host options refused: ")) m_ErrorText.clear();
 		return true;
 	}
 

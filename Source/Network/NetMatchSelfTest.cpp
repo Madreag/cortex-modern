@@ -3263,9 +3263,21 @@ namespace RTE {
 			service.WaitForPendingWork();
 			const std::string refusal = service.GetErrorText();
 			const auto retained = service.GetPendingHostOptions();
-			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Failed ||
+			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Completed ||
 			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetLobbySnapshot().errorText != refusal) {
 				*error = "the host lost the refused rematch draft or its status: " + refusal + "; " + service.GetErrorText();
+				return false;
+			}
+			NetMatchConfig corrected = service.GetLobbyMatchConfig();
+			corrected.difficulty = 27;
+			if (corrected.configRevision != runner.GetMatchConfig().configRevision ||
+			    !service.SubmitHostOptions(corrected.configRevision, corrected, error) || !service.GetErrorText().empty()) return false;
+			observe = [&] {
+				if (runner.GetLobbySession().IsConfigAcked(2) && runner.GetLobbySession().IsRemoteReady(2)) start.store(true);
+			};
+			if (!ReturnToLobby(error)) return false;
+			if (Pending() || runner.HasRefusedHostOptions() || clientLobby.GetMatchConfig().difficulty != 27) {
+				*error = "the corrected rematch draft did not reach the peer";
 				return false;
 			}
 			return true;
