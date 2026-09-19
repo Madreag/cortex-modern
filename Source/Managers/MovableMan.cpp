@@ -563,7 +563,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				continue;
 			}
 			if (delivery->queuedPurchase) {
-				MovableMan::ApplyQueuedPurchaseDelivery(*activity, *delivery, command.senderPeerId, craft);
+				MovableMan::ApplyQueuedPurchaseDelivery(*gameActivity, *delivery, command.senderPeerId, craft);
 			} else {
 				// Load the manifest in order so both peers clone the same presets and assign matching unique ids.
 				int loaded = 0;
@@ -2463,30 +2463,7 @@ std::vector<MovableMan::PreviewGhostState> MovableMan::GetPreviewGhostStates() c
 	return out;
 }
 
-bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft) {
-	GameActivity* gameActivity = dynamic_cast<GameActivity*>(&activity);
-	if (!gameActivity || !std::isfinite(delivery.cost) || delivery.cost < 0.0F || !std::isfinite(delivery.waypointX) || !std::isfinite(delivery.waypointY)) {
-		delete craft;
-		ClearRejectedPurchaseView(activity, delivery, senderPeerId);
-		g_ConsoleMan.PrintString("ERROR: Buy order rejected - bad order fields");
-		std::cout << "[net-match] buy order rejected: bad order fields" << std::endl;
-		return false;
-	}
-	if (!craft) {
-		const Entity* craftPreset = g_PresetMan.GetEntityPreset(delivery.craftClassName, delivery.craftPreset, delivery.craftModule);
-		if (!craftPreset) {
-			ClearRejectedPurchaseView(activity, delivery, senderPeerId);
-			g_ConsoleMan.PrintString("ERROR: Delivery rejected - unknown craft preset \"" + delivery.craftPreset + "\"");
-			return false;
-		}
-		Entity* craftClone = craftPreset->Clone();
-		craft = dynamic_cast<ACraft*>(craftClone);
-		if (!craft) {
-			delete craftClone;
-			ClearRejectedPurchaseView(activity, delivery, senderPeerId);
-			return false;
-		}
-	}
+bool MovableMan::ApplyQueuedPurchaseDelivery(GameActivity& activity, const NetGameDeliverCargo& delivery, uint8_t senderPeerId, ACraft* craft) {
 	std::list<const SceneObject*> purchases;
 	for (const NetGameCargoItem& item: delivery.cargo) {
 		const SceneObject* purchase = dynamic_cast<const SceneObject*>(g_PresetMan.GetEntityPreset(item.className, item.preset, item.module));
@@ -2525,9 +2502,9 @@ bool MovableMan::ApplyQueuedPurchaseDelivery(Activity& activity, const NetGameDe
 		std::cout << "[net-match] buy order rejected: team " << delivery.team << " cost " << delivery.cost << " > funds " << fundsBefore << std::endl;
 		return false;
 	}
-	if (!gameActivity->QueuePurchaseDelivery(craft, order)) {
+	if (!activity.QueuePurchaseDelivery(craft, order)) {
 		delete craft;
-		gameActivity->ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
+		activity.ClearPreviewedPurchase(order.orderedByPlayer, order.team, order.totalCost);
 		g_ConsoleMan.PrintString("NETWORK: buy order did not queue: team " + std::to_string(delivery.team));
 		std::cout << "[net-match] buy order did not queue: team " << delivery.team << std::endl;
 		return false;
