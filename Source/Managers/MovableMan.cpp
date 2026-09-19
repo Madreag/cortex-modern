@@ -906,6 +906,10 @@ uint64_t RTE::LockstepPlayedFrame() {
 	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
 }
 
+void RTE::ResetLockstepPausedFrames() {
+	s_LockstepPausedFrames = 0;
+}
+
 void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
 	// A round that restarts its frame numbering restarts the count with it.
 	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {

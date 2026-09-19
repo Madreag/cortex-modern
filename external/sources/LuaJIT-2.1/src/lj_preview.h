@@ -23,6 +23,8 @@ typedef struct LJPreview {
   int active;
   int timed;
   double window_ms;
+  double *samples;
+  size_t nsamples, samplescap;
   luaJIT_PreviewStats stats;
 } LJPreview;
 
