@@ -467,7 +467,8 @@ class SessionDirectory:
                 token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
             if resume is not None:
-                sess.state = "running"
+                if not first_world:
+                    sess.state = "running"
                 self._resume_tokens.pop(session_id, None)
             self._sessions[session_id] = sess
         return {
