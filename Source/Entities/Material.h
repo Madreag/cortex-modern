@@ -174,6 +174,8 @@ namespace RTE {
                 self.m_SpawnMaterialIndex, self.m_IsScrap, self.m_Color, self.m_UseOwnColor,
                 self.m_FGTextureFile, self.m_BGTextureFile);
         }
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Material, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

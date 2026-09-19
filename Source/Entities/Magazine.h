@@ -50,6 +50,7 @@ namespace RTE {
 		void Reset() override {
 			Clear();
 			Attachable::Reset();
+			if (m_CollidesWithTerrainWhileAttached) TouchCheckpoint();
 			m_CollidesWithTerrainWhileAttached = false;
 		}
 
@@ -161,6 +162,8 @@ namespace RTE {
 		std::string m_PersistedMagazineRuntime;
 		std::string SaveMagazineRuntime() const;
 		bool LoadMagazineRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Magazine, effectively
 		/// resetting the members of this abstraction level only.

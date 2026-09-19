@@ -12,10 +12,58 @@
 #include <vector>
 #include <stdexcept>
 #include <unordered_map>
+#include <array>
+#include <optional>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 
 struct BITMAP;
 
 namespace RTE {
+	template <typename Value> auto CheckpointField(const Value& value) {
+		if constexpr (std::is_array_v<Value>) {
+			std::array<decltype(CheckpointField(value[0])), std::extent_v<Value>> copy;
+			for (size_t index = 0; index < copy.size(); ++index) copy[index] = CheckpointField(value[index]);
+			return copy;
+		} else if constexpr (requires { value.GetStartSimTimeMS(); value.GetSimTimeLimitTicks(); value.GetStartRealTimeMS(); value.GetRealTimeLimitTicks(); }) {
+			return std::tuple(value.GetStartSimTimeMS(), value.GetSimTimeLimitTicks(), value.GetStartRealTimeMS(), value.GetRealTimeLimitTicks());
+		} else if constexpr (requires { value.GetRadAngle(); value.GetXFlipped(); value.GetYFlipped(); }) {
+			return std::tuple(value.GetRadAngle(), value.GetXFlipped(), value.GetYFlipped());
+		} else if constexpr (requires { value.GetR(); value.GetG(); value.GetB(); }) {
+			return std::tuple(value.GetR(), value.GetG(), value.GetB());
+		} else if constexpr (requires { value.GetDataPath(); }) {
+			return value.GetDataPath();
+		} else if constexpr (requires { value.get(); }) {
+			return value.get();
+		} else if constexpr (requires { value.CheckpointStampValue(); }) {
+			return value.CheckpointStampValue();
+		} else if constexpr (requires { value.m_SavedNumbers.m_Data; value.m_SavedStrings.m_Data; value.m_SavedEncodedStrings.m_Data; }) {
+			return std::tuple(value.m_SavedNumbers.m_Data, value.m_SavedStrings.m_Data, value.m_SavedEncodedStrings.m_Data);
+		} else {
+			return value;
+		}
+	}
+
+	template <typename... Values> auto CheckpointFields(const Values&... values) {
+		return std::tuple(CheckpointField(values)...);
+	}
+
+	/// Stamps the final values, including branches that return early.
+	template <typename Owner, typename Observe> class CheckpointChange {
+	public:
+		CheckpointChange(Owner& owner, Observe observe, bool enabled = true) : m_Owner(owner), m_Observe(std::move(observe)) {
+			if (enabled) m_Before.emplace(m_Observe());
+		}
+		~CheckpointChange() { if (m_Before && *m_Before != m_Observe()) m_Owner.TouchCheckpoint(); }
+		CheckpointChange(const CheckpointChange&) = delete;
+		CheckpointChange& operator=(const CheckpointChange&) = delete;
+	private:
+		Owner& m_Owner;
+		Observe m_Observe;
+		std::optional<std::invoke_result_t<Observe>> m_Before;
+	};
+
 	struct BitmapSnapshot;
 	bool RunOwnedCheckpointSelfTest();
 

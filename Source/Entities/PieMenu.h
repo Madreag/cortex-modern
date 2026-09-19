@@ -124,7 +124,7 @@ namespace RTE {
 
 		/// Sets the absolute rotation of this PieMenu to the specified rad angle.
 		/// @param rotAngle The angle in radians describing the new rotation of this PieMenu.
-		void SetRotAngle(float rotAngle) { m_Rotation.SetRadAngle(rotAngle); }
+		void SetRotAngle(float rotAngle) { if (m_Rotation.GetRadAngle() != rotAngle) TouchCheckpoint(); m_Rotation.SetRadAngle(rotAngle); }
 
 		/// Gets the full inner radius of this PieMenu.
 		/// @return Gets the full inner radius of this PieMenu.
@@ -134,6 +134,7 @@ namespace RTE {
 		/// @param fullInnerRadius The new full inner radius of this PieMenu.
 		void SetFullInnerRadius(int fullInnerRadius) {
 			if (m_FullInnerRadius != fullInnerRadius) {
+				TouchCheckpoint();
 				if (m_CurrentInnerRadius == m_FullInnerRadius) {
 					m_CurrentInnerRadius = fullInnerRadius;
 				}
@@ -513,6 +514,8 @@ namespace RTE {
 		/// If the Controller for this PieMenu is mouse or gamepad controlled, sets up analog cursor angle limits and positions for when the pie menu is enabled or disabled. Also used when a sub-PieMenu of this PieMenu is disabled.
 		/// @param enable Whether the PieMenu is being enabled or disabled.
 		void PrepareAnalogCursorForEnableOrDisable(bool enable) const;
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this PieMenu, effectively resetting the members of this abstraction level only.
 		void Clear();

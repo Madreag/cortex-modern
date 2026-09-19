@@ -61,6 +61,7 @@ int TerrainObject::Create(const TerrainObject& reference) {
 
 	for (const SceneObject::SOPlacer& childObject: reference.m_ChildObjects) {
 		m_ChildObjects.emplace_back(childObject);
+		m_ChildObjects.back().SetCheckpointOwner(this);
 	}
 	return 0;
 }
@@ -89,6 +90,7 @@ int TerrainObject::ReadProperty(const std::string_view& propName, Reader& reader
 		reader >> newChildObject;
 		newChildObject.SetTeam(m_Team);
 		m_ChildObjects.emplace_back(newChildObject);
+		m_ChildObjects.back().SetCheckpointOwner(this);
 	});
 	MatchProperty("ClearChildObjects", {
 		bool clearChildObjects;

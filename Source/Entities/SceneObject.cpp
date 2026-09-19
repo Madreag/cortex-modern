@@ -18,6 +18,7 @@ SceneObject::~SceneObject() {
 }
 
 void SceneObject::SOPlacer::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pObjectReference, m_Offset, m_RotAngle, m_HFlipped, m_Team); }, m_CheckpointOwner != nullptr);
 	m_pObjectReference = 0;
 	m_Offset.Reset();
 	m_RotAngle = 0;

@@ -23,6 +23,16 @@ AEmitter::~AEmitter() {
 }
 
 void AEmitter::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AvgBurstImpulse, m_AvgImpulse, m_BurstDamage, m_BurstScale, m_BurstSound, m_BurstSoundFollowsEmitter,
+			m_BurstSpacing, m_BurstTimer, m_BurstTriggered, m_EmissionList.empty(), m_EmissionOffset, m_EmissionSound,
+			m_EmissionsIgnoreThis, m_EmitAngle, m_EmitCount, m_EmitCountLimit, m_EmitDamage, m_EmitEnabled,
+			m_EmitterDamageMultiplier, m_EndSound, m_FlashOnlyOnBurst, m_FlashScale, m_LastEmitTmr, m_LoudnessOnEmit,
+			m_NegativeThrottleMultiplier, m_PersistedAEmitterRuntime.empty(), m_PlayBurstSound, m_PositiveThrottleMultiplier, m_SustainBurstSound, m_Throttle,
+			m_WasEmitting, m_pFlash);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAEmitterRuntime.clear();
 	m_EmissionList.clear();
 	m_EmissionSound = nullptr;
@@ -416,6 +426,7 @@ void AEmitter::Destroy(bool notInherited) {
 }
 
 void AEmitter::ResetEmissionTimers() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastEmitTmr); });
 	m_LastEmitTmr.Reset();
 	for (Emission* emission: m_EmissionList) {
 		emission->ResetEmissionTimers();
@@ -423,6 +434,7 @@ void AEmitter::ResetEmissionTimers() {
 }
 
 void AEmitter::EnableEmission(bool enable) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_EmitCount, m_EmitEnabled, m_Frame, m_LastEmitTmr); });
 	if (!m_EmitEnabled && enable) {
 		m_LastEmitTmr.Reset();
 		// Reset counter
@@ -506,6 +518,7 @@ float AEmitter::GetScaledThrottle(float throttle, float multiplier) const {
 }
 
 void AEmitter::SetFlash(Attachable* newFlash) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pFlash); });
 	if (m_pFlash && m_pFlash->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pFlash);
 	}

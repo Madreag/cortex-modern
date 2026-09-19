@@ -83,6 +83,7 @@ namespace RTE {
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
 			std::string SaveCheckpoint() const;
+			void TouchCheckpoint();
 			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 			/// Constructor method used to instantiate a Area object in system

@@ -163,6 +163,7 @@ namespace RTE {
 		/// @param offset A vector with the recoil offset in pixels.
 		/// @param recoil Whether recoil should be activated or not for the next Draw(). (default: true)
 		void SetRecoil(const Vector& force, const Vector& offset, bool recoil = true) {
+			if (m_RecoilForce != force || m_RecoilOffset != offset || m_Recoiled != recoil) TouchCheckpoint();
 			m_RecoilForce = force;
 			m_RecoilOffset = offset;
 			m_Recoiled = recoil;
@@ -489,6 +490,7 @@ namespace RTE {
 		/// Sets damage multiplier of this attachable.
 		/// @param newValue New multiplier value.
 		void SetDamageMultiplier(float newValue) {
+			if (m_DamageMultiplier != newValue || m_NoSetDamageMultiplier) TouchCheckpoint();
 			m_DamageMultiplier = newValue;
 			m_NoSetDamageMultiplier = false;
 		}
@@ -668,6 +670,8 @@ namespace RTE {
 		std::string m_PersistedMOSRotatingRuntime;
 		std::string SaveMOSRotatingRuntime() const;
 		bool LoadMOSRotatingRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this MOSRotating, effectively
 		/// resetting the members of this abstraction level only.

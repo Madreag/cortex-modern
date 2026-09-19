@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -228,8 +229,13 @@ Scene::~Scene() {
 }
 
 void Scene::Area::Clear() {
+	if (!m_BoxList.empty() || !m_Name.empty()) TouchCheckpoint();
 	m_BoxList.clear();
 	m_Name.clear();
+}
+
+void Scene::Area::TouchCheckpoint() {
+	CheckpointValueWritten(this);
 }
 
 int Scene::Area::Create(const Area& reference) {
@@ -311,6 +317,7 @@ bool Scene::Area::AddBox(const Box& newBox) {
 
 	std::unique_lock<std::shared_mutex> guard(g_sceneAreaMutex);
 	m_BoxList.push_back(new Box(newBox));
+	TouchCheckpoint();
 	return true;
 }
 
@@ -320,6 +327,7 @@ bool Scene::Area::RemoveBox(const Box& boxToRemove) {
 	std::vector<Box*>::iterator boxToRemoveIterator = std::find(m_BoxList.begin(), m_BoxList.end(), &boxToRemove);
 	if (boxToRemoveIterator != m_BoxList.end()) {
 		m_BoxList.erase(boxToRemoveIterator);
+		TouchCheckpoint();
 		return true;
 	}
 	return false;
@@ -485,6 +493,7 @@ Box Scene::Area::RemoveBoxInside(const Vector& point) {
 				// Remove the BoxList box, not the inconsequential wrapped copy
 				returnBox = (**aItr);
 				m_BoxList.erase(aItr);
+				TouchCheckpoint();
 				return returnBox;
 			}
 		}

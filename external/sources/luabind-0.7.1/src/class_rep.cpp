@@ -670,7 +670,9 @@ int luabind::detail::class_rep::function_dispatcher(lua_State* L)
 		// A non-const overload may write it, which is what the checkpoint's trap wants to hear.
 		if (!o.is_const())
 		{
-			checkpoint_object_mutated(is_class_object(L, 1));
+			object_rep* self = is_class_object(L, 1);
+			checkpoint_object_mutated(self);
+			checkpoint_alias_mutated(self);
 		}
 
         if (force_static_call && !o.has_static())

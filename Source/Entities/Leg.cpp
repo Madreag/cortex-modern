@@ -19,6 +19,12 @@ Leg::~Leg() {
 }
 
 void Leg::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AnkleOffset, m_ContractedOffset, m_ExtendedOffset, m_Foot, m_IdleOffset, m_MaxExtension,
+			m_MinExtension, m_MoveSpeed, m_NormalizedExtension, m_PersistedLegRuntime.empty(), m_TargetPosition, m_WillIdle);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedLegRuntime.clear();
 	m_Foot = nullptr;
 
@@ -142,6 +148,7 @@ int Leg::Save(Writer& writer) const {
 }
 
 void Leg::SetFoot(Attachable* newFoot) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Foot); });
 	if (m_Foot && m_Foot->IsAttached()) {
 		RemoveAndDeleteAttachable(m_Foot);
 	}

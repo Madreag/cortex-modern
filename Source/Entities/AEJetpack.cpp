@@ -18,6 +18,12 @@ AEJetpack::~AEJetpack() {
 }
 
 void AEJetpack::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AdjustsThrottleForWeight, m_CanAdjustAngleWhileFiring, m_JetAngleRange, m_JetReplenishRate, m_JetThrustBonusMultiplier, m_JetTimeLeft,
+			m_JetTimeTotal, m_JetpackType, m_MinimumFuelRatio, m_PersistedAEJetpackRuntime.empty());
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedAEJetpackRuntime.clear();
 	m_JetpackType = JetpackType::Standard;
 	m_JetTimeTotal = 0.0F;

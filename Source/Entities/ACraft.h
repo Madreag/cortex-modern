@@ -57,6 +57,8 @@ namespace RTE {
 		public:
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
+			void SetCheckpointOwner(ACraft* owner) { m_CheckpointOwner = owner; }
+			void TouchCheckpoint() { if (m_CheckpointOwner) m_CheckpointOwner->TouchCheckpoint(); }
 
 			/// Constructor method used to instantiate a Exit object in system
 			/// memory. Create() should be called before using the object.
@@ -139,6 +141,7 @@ namespace RTE {
 			/// Private member variable and method declarations
 		private:
 			static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
+			ACraft* m_CheckpointOwner = nullptr;
 
 			/// Clears all the member variables of this Exit, effectively
 			/// resetting the members of this abstraction level only.

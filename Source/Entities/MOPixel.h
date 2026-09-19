@@ -115,7 +115,7 @@ namespace RTE {
 
 		/// Sets the color value of this MOPixel via index.
 		/// @param newColor An int specifying the new color index value.
-		void SetColorIndex(int newColorIndex) { m_Color.SetRGBWithIndex(newColorIndex); }
+		void SetColorIndex(int newColorIndex) { CheckpointChange changed(*this, [this] { return CheckpointFields(m_Color); }); m_Color.SetRGBWithIndex(newColorIndex); }
 
 		/// Travel distance until the bullet start to lose lethality.
 		/// @return The factor that modifies the base value.
@@ -203,6 +203,8 @@ namespace RTE {
 		float m_Staininess; //!< How likely a pixel is to stain a surface when it collides with it. Defaults to 0 (never stain).
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this MOPixel, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

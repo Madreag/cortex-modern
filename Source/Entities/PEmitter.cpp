@@ -22,6 +22,15 @@ PEmitter::~PEmitter() {
 }
 
 void PEmitter::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AvgBurstImpulse, m_AvgImpulse, m_BurstScale, m_BurstSound, m_BurstSoundFollowsEmitter, m_BurstSpacing,
+			m_BurstTimer, m_BurstTriggered, m_EmissionList.empty(), m_EmissionOffset, m_EmissionSound, m_EmissionsIgnoreThis,
+			m_EmitAngle, m_EmitCount, m_EmitCountLimit, m_EmitEnabled, m_EndSound, m_FlashOnlyOnBurst,
+			m_FlashScale, m_LastEmitTmr, m_LoudnessOnEmit, m_NegativeThrottleMultiplier, m_PersistedPEmitterRuntime.empty(), m_PlayBurstSound,
+			m_PositiveThrottleMultiplier, m_SustainBurstSound, m_Throttle, m_WasEmitting);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedPEmitterRuntime.clear();
 	m_EmissionList.clear();
 	m_EmissionSound.Reset();
@@ -287,12 +296,14 @@ void PEmitter::Destroy(bool notInherited) {
 }
 
 void PEmitter::ResetEmissionTimers() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastEmitTmr); });
 	m_LastEmitTmr.Reset();
 	for (Emission* emission: m_EmissionList)
 		emission->ResetEmissionTimers();
 }
 
 void PEmitter::EnableEmission(bool enable) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_EmitCount, m_EmitEnabled, m_LastEmitTmr); });
 	if (!m_EmitEnabled && enable) {
 		m_LastEmitTmr.Reset();
 		// Reset counter

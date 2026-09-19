@@ -28,6 +28,13 @@ Arm::~Arm() {
 }
 
 void Arm::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_GripStrength, m_HandCurrentOffset, m_HandHasReachedCurrentTarget, m_HandIdleOffset, m_HandIdleRotation, m_HandMovementDelayTimer,
+			m_HandPos, m_HandPrevPos, m_HandSpriteFile, m_HandTargets.empty(), m_HeldDevice, m_MaxLength,
+			m_MoveSpeed, m_PersistedArmRuntime.empty(), m_ThrowStrength);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedArmRuntime.clear();
 	m_MaxLength = 0;
 	m_MoveSpeed = 0;
@@ -209,14 +216,18 @@ void Arm::AddHandTarget(const std::string& description, const Vector& handTarget
 		if (m_HandTargets.empty()) {
 			m_HandHasReachedCurrentTarget = false;
 		} else if (description == m_HandTargets.back().Description) {
+			const HandTarget& previous = m_HandTargets.back();
+			if (previous.TargetOffset != handTargetOffsetToAdd || previous.DelayAtTarget != std::max(previous.DelayAtTarget, delayAtTarget) || previous.HFlippedWhenTargetWasCreated != m_HFlipped) TouchCheckpoint();
 			m_HandTargets.back() = {description, handTargetOffsetToAdd, std::max(m_HandTargets.back().DelayAtTarget, delayAtTarget), m_HFlipped};
 			return;
 		}
+		TouchCheckpoint();
 		m_HandTargets.emplace(description, handTargetOffsetToAdd, delayAtTarget, m_HFlipped);
 	}
 }
 
 void Arm::SetHeldDevice(HeldDevice* newHeldDevice) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HeldDevice); });
 	if (const MovableObject* rootParent = SceneMan::GetTrackedUIDs().empty() ? nullptr : GetRootParent(); rootParent && SceneMan::IsTrackedUID(rootParent->GetUniqueID())) {
 		SceneMan::TraceTerrainEvent("shld", newHeldDevice ? static_cast<int>(newHeldDevice->GetUniqueID()) : 0, m_HeldDevice ? static_cast<int>(m_HeldDevice->GetUniqueID()) : 0, static_cast<int>(GetUniqueID()), 0, static_cast<int>(rootParent->GetUniqueID()));
 	}
@@ -499,6 +510,7 @@ std::vector<CheckpointText> Arm::CaptureHandTargetsForSave() const {
 }
 
 void Arm::AddHandTargetFromSave(const std::string& packed) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HandTargets.size()); });
 	std::istringstream in(packed);
 	std::string x;
 	std::string y;

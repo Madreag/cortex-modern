@@ -52,6 +52,7 @@ namespace RTE {
 		/// @param rhs A HitData reference.
 		/// @return A reference to the changed HitData.
 		HitData& operator=(const HitData& rhs);
+		bool operator==(const HitData&) const = default;
 
 		/// Clears all the member variables of this HitData, effectively resetting the members of this abstraction level only.
 		void Clear();
@@ -144,6 +145,7 @@ namespace RTE {
 		/// Moves the owner's checkpoint stamp. An Atom is archived as part of its owner and is not an
 		/// Entity itself, so a write here has to reach the stamp the owner's shadow is keyed on.
 		void TouchCheckpoint();
+		void SetCheckpointOwner(MovableObject* owner) { m_CheckpointOwner = owner; }
 
 		/// Gets the group ID of this Atom.
 		/// @return The group ID of this Atom.
@@ -249,7 +251,7 @@ namespace RTE {
 
 		/// AtomGroup may set this shared list of ignored MOIDs to avoid setting and removing ignored MOIDs for every atom one by one. The list is maintained only by AtomGroup, Atom never owns it.
 		/// @param ignoreMOIDsByGroup New MOIDs list to ignore.
-		void SetIgnoreMOIDsByGroup(std::vector<MOID> const* ignoreMOIDsByGroup) { m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
+		void SetIgnoreMOIDsByGroup(std::vector<MOID> const* ignoreMOIDsByGroup) { if (m_IgnoreMOIDsByGroup != ignoreMOIDsByGroup) TouchCheckpoint(); m_IgnoreMOIDsByGroup = ignoreMOIDsByGroup; };
 
 		/// Clear the list of MOIDs that this Atom is set to ignore collisions with during its next travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
@@ -414,7 +416,8 @@ namespace RTE {
 		bool m_MOHitsDisabled; //!< Temporary disabling of MO collisions for this.
 		bool m_TerrainHitsDisabled; //!< Temporary disabling of terrain collisions for this. Will be re-enabled once out of terrain again.
 
-		MovableObject* m_OwnerMO; //!< The owner of this Atom. The owner is obviously not owned by this Atom.
+		MovableObject* m_OwnerMO = nullptr; //!< The owner of this Atom. The owner is obviously not owned by this Atom.
+		MovableObject* m_CheckpointOwner = nullptr;
 		MOID m_IgnoreMOID; //!< Special ignored MOID.
 		std::vector<MOID> m_IgnoreMOIDs; //!< ignore hits with MOs of these IDs.
 		std::vector<MOID> const* m_IgnoreMOIDsByGroup; //!< Also ignore hits with MOs of these IDs. This one may be set externally by atom group.
@@ -483,6 +486,8 @@ namespace RTE {
 
 	private:
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this.
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Atom, effectively resetting the members of this abstraction level only.
 		void Clear();

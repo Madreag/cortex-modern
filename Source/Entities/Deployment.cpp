@@ -27,6 +27,11 @@ Deployment::~Deployment() {
 }
 
 void Deployment::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_HFlipped, m_Icon, m_LoadoutName, m_SpawnRadius, m_WalkRadius);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_LoadoutName = "Default";
 	m_Icon.Reset();
 	m_SpawnRadius = 40;

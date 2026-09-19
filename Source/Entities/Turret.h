@@ -103,6 +103,8 @@ namespace RTE {
 		/// @param mountedDeviceToRemove A pointer to the mounted device to remove.
 		void RemoveMountedDevice(const HeldDevice* mountedDeviceToRemove);
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Turret, effectively resetting the members of this abstraction level only.
 		void Clear();
 

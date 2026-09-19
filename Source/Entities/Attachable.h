@@ -184,7 +184,7 @@ namespace RTE {
 		/// Sets the stiffness scalar of the joint of this Attachable, limited between 0 and 1.0.
 		/// 1.0 means impulse forces on this attachable will be transferred to the parent with 100% strength, 0 means they will not transfer at all.
 		/// @param jointStiffness A float describing the normalized stiffness scalar of this Attachable's joint. It will automatically be limited between 0 and 1.0.
-		virtual void SetJointStiffness(float jointStiffness) { m_JointStiffness = std::clamp(jointStiffness, 0.0F, 1.0F); }
+		virtual void SetJointStiffness(float jointStiffness) { const float value = std::clamp(jointStiffness, 0.0F, 1.0F); if (m_JointStiffness != value) TouchCheckpoint(); m_JointStiffness = value; }
 
 		/// Gets the offset of the joint (the point around which this Attachable and its parent hinge) from this Attachable's center of mass/origin.
 		/// @return A const reference Vector describing the offset of the joint relative to this Attachable's origin/center of mass position.
@@ -226,7 +226,7 @@ namespace RTE {
 #pragma region Damage and Wound Management
 		/// Adds the specified number of damage points to this attachable.
 		/// @param damageAmount The amount of damage to add.
-		void AddDamage(float damageAmount) { m_DamageCount += damageAmount; }
+		void AddDamage(float damageAmount) { if (m_DamageCount != m_DamageCount + damageAmount) TouchCheckpoint(); m_DamageCount += damageAmount; }
 		float GetDamageCount() const { return m_DamageCount; }
 
 		/// Calculates the amount of damage this Attachable has sustained since the last time this method was called and returns it, modified by the Attachable's damage multiplier.
@@ -544,6 +544,8 @@ namespace RTE {
 		/// @param pieMenuToModify The PieMenu to modify, passed in to keep the recursion simple and clean.
 		/// @param addToPieMenu Whether to add this Attachable's PieSlices and listeners to, or remove them from, the root parent's PieMenu.
 		void AddOrRemovePieSlicesAndListenersFromPieMenu(PieMenu* pieMenuToModify, bool addToPieMenu);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Attachable, effectively resetting the members of this abstraction level only.
 		void Clear();
