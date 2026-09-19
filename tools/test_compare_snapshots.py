@@ -163,6 +163,16 @@ class SnapshotComparisonTests(unittest.TestCase):
                 options = [f"--local-seat-{side}={seat}" for side, seat in zip("ab", seats) if seat is not None]
                 self.assertEqual(self.compare(BASE, BASE, extra=options), 1)
 
+    def test_only_the_master_state_index_is_held_to_equal_birth_numbers(self):
+        """The capture writes the master state first, then the threaded ones (CaptureScriptGraphs)."""
+        node = table(2, ((string("k"), "n7;"),))
+        even, odd = [birth_graph("SG6", (node,), globals=(("t", "#2;"),), serial=value) for value in (5, 6)]
+        head = "Activity = GameActivity\n\tActivityState = 3\nScene = Scene\n\tPresetName = Shared\n"
+        base = head + graph_line(even, 0) + graph_line(even, 1)
+        self.assertEqual(self.compare(base, base), 0)
+        self.assertEqual(self.compare(base, head + graph_line(odd, 0) + graph_line(even, 1)), 1)
+        self.assertEqual(self.compare(base, head + graph_line(even, 0) + graph_line(odd, 1)), 0)
+
     def test_configured_start_activity_is_compared_with_local_slot_scope(self):
         first = BASE + "HasCheckpointStartActivity = 1\nCheckpointStartActivity = GameActivity\n\tTeamOfPlayer1 = 0\n\tStartingGold = 100\n"
         second = first.replace("TeamOfPlayer1 = 0", "TeamOfPlayer1 = 1")
@@ -343,6 +353,43 @@ class GraphIdentityTests(unittest.TestCase):
             self.compare(first, make(checkpoint.replace(b"\xff", b"\xfe")))
         with self.assertRaises(ValueError):
             self.compare(make(checkpoint[:-1]), make(checkpoint[:-1]))
+
+
+class StateBirthNumberTests(unittest.TestCase):
+    """The master state's birth numbers are shared; a threaded state runs this machine's own AI."""
+
+    def counter_pair(self, first_serial, second_serial):
+        node = table(2, ((string("k"), "n7;"),))
+        return [birth_graph("SG6", (node,), globals=(("t", "#2;"),), serial=value)
+                for value in (first_serial, second_serial)]
+
+    def test_a_counter_difference_is_named_as_a_birth_number_difference(self):
+        first, second = self.counter_pair(5, 6)
+        with self.assertRaises(checker.GraphMismatch) as raised:
+            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
+        self.assertIn("table birth numbers differ across peers", str(raised.exception))
+        self.assertIn("state counters 5 and 6", str(raised.exception))
+
+    def test_a_threaded_state_carries_its_own_birth_counter(self):
+        first, second = self.counter_pair(5, 6)
+        report = checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second),
+                                        lockstep_master=False)
+        self.assertEqual(report["serial"], {"a": 5, "b": 6})
+        self.assertEqual((report["moved_nodes"], report["lockstep_master"]), (0, False))
+        with self.assertRaises(checker.GraphMismatch):
+            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
+
+    def test_a_threaded_state_still_requires_the_shared_birth_order(self):
+        nodes = lambda a, b: (table(2, ((string("k"), a),)), table(3, ((string("k"), b),)))
+        first = birth_graph("SG6", nodes("n1;", "n2;"), globals=(("a", "#2;"), ("b", "#3;")), serial=5)
+        second = birth_graph("SG6", nodes("n2;", "n1;"), globals=(("a", "#3;"), ("b", "#2;")), serial=5)
+        for master, wanted in ((False, "birth order differs across peers"),
+                               (True, "table birth numbers differ across peers")):
+            with self.subTest(master=master):
+                with self.assertRaises(checker.GraphMismatch) as raised:
+                    checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second),
+                                           lockstep_master=master)
+                self.assertIn(wanted, str(raised.exception))
 
 
 class RuntimeProjectionTests(unittest.TestCase):
