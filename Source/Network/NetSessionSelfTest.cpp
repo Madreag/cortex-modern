@@ -603,8 +603,8 @@ namespace RTE {
 				NetSession host, client;
 				auto hostConfig = MakeConfig(port, 1501, "Host");
 				auto clientConfig = MakeConfig(port, 1502, "Client");
-				hostConfig.localIdentity.deterministicConfig.lockstepCodecVersion = versions[index].first;
-				clientConfig.localIdentity.deterministicConfig.lockstepCodecVersion = versions[index].second;
+				hostConfig.localIdentity.deterministicConfig.supportedLockstepCodecVersion = versions[index].first;
+				clientConfig.localIdentity.deterministicConfig.supportedLockstepCodecVersion = versions[index].second;
 				hostConfig.localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(hostConfig.localIdentity.deterministicConfig);
 				clientConfig.localIdentity.deterministicConfigHash = NetIdentity::HashDeterministicConfig(clientConfig.localIdentity.deterministicConfig);
 				if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error) ||

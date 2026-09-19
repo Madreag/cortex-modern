@@ -4635,7 +4635,12 @@ static std::string ResyncSaveName() {
 			{"particle_settling", config.particleSettling}, {"mo_subtraction", config.moSubtraction},
 			{"num_lua_states", config.numLuaStates}, {"num_lua_states_override", config.numLuaStatesOverride},
 			{"selected_module", config.selectedModule}, {"scenario_test_module_loaded", config.scenarioTestModuleLoaded},
-			{"lockstep_codec_version", config.lockstepCodecVersion}, {"enabled_global_scripts", config.enabledGlobalScripts}};
+			{"lockstep_codec_version", config.lockstepCodecVersion}, {"match_config_version", config.matchConfigVersion},
+			{"supported_lockstep_codec_version", config.supportedLockstepCodecVersion},
+			{"supported_world_lockstep_codec_version", config.supportedWorldLockstepCodecVersion},
+			{"supported_match_config_version", config.supportedMatchConfigVersion},
+			{"supported_world_match_config_version", config.supportedWorldMatchConfigVersion},
+			{"lobby_protocol_version", config.lobbyProtocolVersion}, {"enabled_global_scripts", config.enabledGlobalScripts}};
 		const json identity{{"schema", manifest.schema}, {"build_id", manifest.buildId}, {"game_version", manifest.gameVersion},
 			{"platform", manifest.platform}, {"deterministic_config", fields},
 			{"module_manifest_hash", NetIdentity::HashHex(manifest.moduleManifestHash)},
