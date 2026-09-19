@@ -3255,6 +3255,46 @@ do
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
 	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved", 1, true) ~= nil and string.find(cacheFirst, "s5:moved", 1, true) == nil)
 	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
+)lua"
+    R"lua(
+	-- A table no walk recorded is in no chunk, so a write to one stales nothing. The gate used to
+	-- refuse the whole cache over it, and on a live match a fresh table is born every interval.
+	local unknownDirt = _ScriptGraphDirtyRoots
+	local unknownReused, unknownRewritten
+	_ScriptGraphDirtyRoots = function() local seen = unknownDirt() seen.unknown = true return seen end
+	_ScriptGraphNoteRootReuse = function(r, w) unknownReused, unknownRewritten = r, w return noteReuse(r, w) end
+	local cacheFourth = _ScriptGraph.serialize(cacheRoots)
+	_ScriptGraphDirtyRoots = unknownDirt
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("a_new_table_does_not_disable_the_cache", unknownReused == 2 and unknownRewritten == 0 and cacheFourth == cacheThird,
+	      "reused=" .. tostring(unknownReused) .. " rewritten=" .. tostring(unknownRewritten))
+	-- A Vector's X and a Timer's ticks are written into the chunk as text and no table store carries
+	-- them, so the mutating setter is what has to move the root.
+	local valueVector, valueTimer = Vector(3, 4), Timer()
+	local valueRoot = { v = valueVector, t = valueTimer }
+	_ScriptGraph.serialize({ ["41"] = valueRoot })
+	valueVector.X = 9
+	local afterProperty = _ScriptGraphDirtyRoots().roots["41"] ~= nil
+	_ScriptGraph.serialize({ ["41"] = valueRoot })
+	valueTimer:Reset()
+	local afterCall = _ScriptGraphDirtyRoots().roots["41"] ~= nil
+	check("userdata_write_marks_its_root", afterProperty and afterCall,
+	      "property=" .. tostring(afterProperty) .. " call=" .. tostring(afterCall))
+	-- A chunk that reached an upvalue cell or a coroutine carries state no barrier watches, so it is
+	-- written again every capture however quiet the barrier was.
+	local unwatchedRoot = (function()
+		local held = 0
+		return { read = function() return held end, bump = function(to) held = to end }
+	end)()
+	local unwatchedRoots = { ["51"] = unwatchedRoot }
+	local unwatchedFirst = _ScriptGraph.serialize(unwatchedRoots)
+	local unwatchedReused
+	_ScriptGraphNoteRootReuse = function(r, w) unwatchedReused = r return noteReuse(r, w) end
+	unwatchedRoot.bump(7)
+	local unwatchedText = _ScriptGraph.serialize(unwatchedRoots)
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("an_upvalue_cell_keeps_its_root_out_of_the_cache", unwatchedReused == 0 and unwatchedText ~= unwatchedFirst,
+	      "reused=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst))
 	-- A node one root defines and another names keeps its id when the other root is written again.
 	local sharedLeaf = { shared = true }
 	local shareRootOne, shareRootTwo = { leaf = sharedLeaf }, { leaf = sharedLeaf, tag = "a" }
@@ -6630,6 +6670,8 @@ bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	LoadScriptGraphHelper();
+	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
+	ArmLuaCheckpointValueBarrier();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
 	// a birth number an identity every peer agrees on.
