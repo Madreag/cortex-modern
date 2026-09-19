@@ -2127,6 +2127,21 @@ namespace RTE {
 		return s_ReplayWriter.CopyDiagnosticReplay(bytes, truncated);
 	}
 
+	bool ScenarioRunner::BeginLockstepWorldSegmentRecord(const NetMatchConfig& config, const NetWorldSegmentHeader& header, const std::string& path, std::string* error) {
+		// A process that was never asked to record still records nothing, resumed round or not.
+		if (s_ReplayRecordArmedPath.empty()) {
+			return false;
+		}
+		if (header.worldDigest.empty()) {
+			if (error) *error = "the checkpoint this round stands on named no world-structure digest";
+			return false;
+		}
+		++s_ReplayRecordRound;
+		s_ReplayRecordConfig = config;
+		ArmLockstepWorldSegment(header, path);
+		return SealLockstepWorldSegment(header.worldDigest, error);
+	}
+
 	void ScenarioRunner::ArmLockstepWorldSegment(const NetWorldSegmentHeader& header, const std::string& path) {
 		// A checkpoint that arrives while the previous one's archive is still unwritten takes the chain
 		// over; the frames that waited are said to be lost rather than dropped in silence.

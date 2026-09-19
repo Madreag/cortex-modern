@@ -4261,6 +4261,115 @@ namespace RTE {
 		return true;
 	}
 
+	// The segment header as it really lies on disk, decoded here rather than through the reader: a row
+	// that checks the writer with the writer's own reader proves nothing about the bytes.
+	bool ReadSegmentHeaderFromDisk(const std::filesystem::path& path, NetWorldSegmentHeader& out, std::string* error) {
+		std::ifstream in(path, std::ios::binary);
+		std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+		const auto u32 = [&bytes](size_t at) {
+			return static_cast<uint32_t>(bytes.at(at)) | (static_cast<uint32_t>(bytes.at(at + 1)) << 8) |
+			       (static_cast<uint32_t>(bytes.at(at + 2)) << 16) | (static_cast<uint32_t>(bytes.at(at + 3)) << 24);
+		};
+		const auto u64 = [&bytes](size_t at) {
+			uint64_t value = 0;
+			for (size_t i = 8; i-- > 0;) value = (value << 8) | static_cast<uint64_t>(bytes.at(at + i));
+			return value;
+		};
+		if (bytes.size() < 13 || u32(0) != NetMatchReplayWriter::c_Magic) {
+			*error = "resumed-world-segment-header-wrong: " + path.string() + " is not a replay file";
+			return false;
+		}
+		const uint16_t version = static_cast<uint16_t>(bytes.at(4)) | (static_cast<uint16_t>(bytes.at(5)) << 8);
+		if (version != NetMatchReplayWriter::c_Version) {
+			*error = "resumed-world-segment-header-wrong: " + path.string() + " is version " + std::to_string(version);
+			return false;
+		}
+		size_t at = 12 + u32(8);
+		if (bytes.at(at++) != 1) {
+			*error = "resumed-world-segment-header-wrong: " + path.string() + " carries no segment block";
+			return false;
+		}
+		const auto text = [&](std::string& value) {
+			const size_t length = bytes.at(at++);
+			value.assign(bytes.begin() + static_cast<long>(at), bytes.begin() + static_cast<long>(at + length));
+			at += length;
+		};
+		text(out.worldId);
+		out.tick = u64(at);
+		out.round = u64(at + 8);
+		out.boot = u64(at + 16);
+		at += 24;
+		text(out.worldDigest);
+		return true;
+	}
+
+	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
+	// ordinary file that names no world.
+	bool TestResumedWorldRecordsASegment(std::string* error) {
+		WorldSegmentScratch scratch;
+		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000f4";
+		const NetMatchConfig config = MakeStoredWorldConfig(worldId);
+		const std::string digest(64, 'a');
+		const NetWorldSegmentHeader expected = MakeSegmentHeader(worldId, 900, 4242, 2, digest);
+		const std::filesystem::path armed = scratch.store / "resumed-armed.ccreplay";
+		const std::filesystem::path segment = AutosaveStore::SegmentPath(scratch.store, worldId, 900);
+		const std::filesystem::path never = scratch.store / "resumed-unarmed.ccreplay";
+		scratch.Note(armed);
+		scratch.Note(segment);
+		scratch.Note(never);
+		std::error_code ignored;
+		std::filesystem::remove(armed, ignored);
+		std::filesystem::remove(segment, ignored);
+
+		ScenarioRunner::ArmLockstepReplayRecord(armed.string());
+		if (!ScenarioRunner::BeginLockstepWorldSegmentRecord(config, expected, segment.string(), error)) return false;
+		if (ScenarioRunner::HasPendingLockstepWorldSegment()) {
+			*error = "resumed-world-held-its-first-frames: the round's segment waited for a digest it already had";
+			return false;
+		}
+		if (!ScenarioRunner::IsLockstepReplayRecording() || ScenarioRunner::GetLockstepWorldSegment() != expected) {
+			*error = "resumed-world-segment-header-wrong: the recorder stands on tick " +
+			         std::to_string(ScenarioRunner::GetLockstepWorldSegment().tick) + ", the checkpoint is 900";
+			return false;
+		}
+		ScenarioRunner::CloseLockstepReplayRecord();
+		if (!std::filesystem::is_regular_file(segment, ignored)) {
+			*error = "resumed-world-wrote-no-segment: nothing was written at " + segment.string();
+			return false;
+		}
+		if (std::filesystem::exists(armed, ignored)) {
+			*error = "resumed-world-recorded-an-ordinary-file: " + armed.string() +
+			         " was written for a round that stands on checkpoint 900";
+			return false;
+		}
+		NetWorldSegmentHeader onDisk;
+		if (!ReadSegmentHeaderFromDisk(segment, onDisk, error)) return false;
+		if (onDisk != expected) {
+			*error = "resumed-world-segment-header-wrong: the file reads (" + onDisk.worldId + ", " +
+			         std::to_string(onDisk.tick) + ", " + std::to_string(onDisk.round) + ", " +
+			         std::to_string(onDisk.boot) + ", " + onDisk.worldDigest + ")";
+			return false;
+		}
+
+		// A checkpoint with no digest is refused rather than recorded under an empty one.
+		if (ScenarioRunner::BeginLockstepWorldSegmentRecord(config, MakeSegmentHeader(worldId, 1800, 4242, 2, std::string()), never.string(), error)) {
+			*error = "resumed-world-recorded-without-a-digest: a segment opened on a checkpoint that named none";
+			return false;
+		}
+		// An unarmed process records nothing at all, resumed round or not.
+		ScenarioRunner::ArmLockstepReplayRecord(std::string());
+		if (ScenarioRunner::BeginLockstepWorldSegmentRecord(config, MakeSegmentHeader(worldId, 1800, 4242, 2, digest), never.string(), error)) {
+			*error = "resumed-world-recorded-unarmed: a process with no -net-replay-out wrote a segment";
+			return false;
+		}
+		if (std::filesystem::exists(never, ignored)) {
+			*error = "resumed-world-recorded-unarmed: " + never.string() + " was written anyway";
+			return false;
+		}
+		error->clear();
+		return true;
+	}
+
 	// (c) The playback staging: the checkpoint the segment names, the manifest's own side state, and the
 	// four refusals, each with the words the player is shown.
 	bool TestWorldSegmentPlaybackStandsOnTheCheckpoint(std::string* error) {
@@ -4649,6 +4758,11 @@ namespace RTE {
 			std::string error;
 			return TestWorldRecorderRollsAtCheckpoint(&error) ? 0 : Fail(error);
 		}
+		if (std::strcmp(name, "segment-resume") == 0 || std::strcmp(name, "-net-world-segment-resume-selftest") == 0) {
+			s_FailTag = "net-world-segment-resume-selftest";
+			std::string error;
+			return TestResumedWorldRecordsASegment(&error) ? 0 : Fail(error);
+		}
 		if (std::strcmp(name, "segment-playback") == 0 || std::strcmp(name, "-net-world-segment-playback-selftest") == 0) {
 			s_FailTag = "net-world-segment-playback-selftest";
 			std::string error;
@@ -4804,6 +4918,7 @@ namespace RTE {
 			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
 			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
+			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
 			if (!TestHealCapIsAWindow(&error)) return Fail(error);
 			if (!TestBrowserWorldRowText(&error)) return Fail(error);
