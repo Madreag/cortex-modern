@@ -4687,9 +4687,11 @@ void RunGameLoop() {
 				RTE::RunCheckpointSceneRows();
 			}
 			if (s_cowCheckpointAutosave && g_ActivityMan.ActivityRunning() && simTick > 0 && (simTick == 1 || simTick % 60 == 0)) {
+				// The capture freezes the sim thread, so its budget is one sim tick.
+				constexpr int64_t captureBudgetUs = 16700;
 				const bool saved = g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", simTick);
 				const int64_t freezeUs = CheckpointCow::Get().LastFreezeUs();
-				const bool under = saved && freezeUs > 0 && freezeUs < 16700;
+				const bool under = saved && freezeUs > 0 && freezeUs < captureBudgetUs;
 				{
 					std::ostringstream line;
 					line << "[cow-checkpoint-selftest] " << (under ? "PASS" : "FAIL")
@@ -4698,15 +4700,17 @@ void RunGameLoop() {
 					     << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)";
 					System::PrintDiagnosticLine(line.str());
 				}
-				// A capture must leave an archive behind, and a second one must follow it in the
-				// same process: a nested value composed by hand refuses every capture instead.
-				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick;
+				// A capture must leave an archive behind, return inside its budget, and a second one
+				// must follow it in the same process.
+				const double captureMs = g_ActivityMan.LastAutosaveCaptureMs();
+				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick &&
+				                      captureMs > 0.0 && captureMs * 1000.0 < static_cast<double>(captureBudgetUs);
 				if (++s_cowCheckpointCaptures <= 2) {
 					std::ostringstream line;
 					line << "[cow-checkpoint-selftest] " << (archived ? "PASS" : "FAIL")
 					     << (s_cowCheckpointCaptures == 1 ? " autosave_capture_leaves_an_archive" : " autosave_capture_follows_another_in_the_same_process")
 					     << " tick=" << simTick << " saved=" << saved << " bytes=" << g_ActivityMan.LastAutosaveBytes()
-					     << " capture_ms=" << g_ActivityMan.LastAutosaveCaptureMs();
+					     << " capture_ms=" << captureMs << " budget_ms=" << static_cast<double>(captureBudgetUs) / 1000.0;
 					System::PrintDiagnosticLine(line.str());
 				}
 			}
