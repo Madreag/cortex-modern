@@ -1397,11 +1397,11 @@ void PathFinder::TestQueueHorizonCompute(uint64_t originTick, uint16_t horizonTi
 }
 
 uint64_t PathFinder::BeginCommittedHorizonRead() {
+	std::unique_lock lock(m_HorizonMutex);
+	// A read that arrives mid-commit pins the generation the commit publishes, never the one it is replacing.
+	m_HorizonApplyCv.wait(lock, [this] { return !m_HorizonApplyPending; });
 	const uint64_t generation = m_HorizonGeneration.load();
-	{
-		std::lock_guard lock(m_HorizonMutex);
-		m_HorizonReaderCounts[generation] += 1;
-	}
+	m_HorizonReaderCounts[generation] += 1;
 	m_CommittedHorizonReaders.fetch_add(1);
 	return generation;
 }
@@ -1418,31 +1418,19 @@ void PathFinder::EndCommittedHorizonRead(uint64_t generation) {
 		}
 	}
 	m_CommittedHorizonReaders.fetch_sub(1);
+	m_HorizonApplyCv.notify_all();
 }
 
-void PathFinder::WaitForOlderHorizonReaders(uint64_t applyGeneration) {
-	const auto started = std::chrono::steady_clock::now();
-	for (;;) {
-		bool older = false;
-		{
-			std::lock_guard lock(m_HorizonMutex);
-			for (const auto& [generation, count]: m_HorizonReaderCounts) {
-				if (generation < applyGeneration && count > 0) {
-					older = true;
-					break;
-				}
-			}
+bool PathFinder::HasOlderHorizonReaders(uint64_t applyGeneration) const {
+	for (const auto& [generation, count]: m_HorizonReaderCounts) {
+		if (generation < applyGeneration && count > 0) {
+			return true;
 		}
-		if (!older) {
-			m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
-			return;
-		}
-		std::this_thread::yield();
 	}
+	return false;
 }
 
 void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
-	const uint64_t applyGeneration = m_HorizonGeneration.load() + 1;
 	std::vector<std::shared_ptr<HorizonJob>> due;
 	{
 		std::lock_guard lock(m_HorizonMutex);
@@ -1455,17 +1443,17 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 	if (due.empty()) {
 		return;
 	}
-	WaitForOlderHorizonReaders(applyGeneration);
 	std::stable_sort(due.begin(), due.end(), [](const auto& lhs, const auto& rhs) {
 		if (lhs->originTick != rhs->originTick) {
 			return lhs->originTick < rhs->originTick;
 		}
 		return lhs->commitTick < rhs->commitTick;
 	});
-	bool applied = false;
+	bool stalled = false;
 	for (const auto& job: due) {
 		int64_t waitUs = 0;
 		if (!job->ready.load()) {
+			// A job that is not ready at its commit tick stalls this tick, the same as a lockstep frame that has not arrived.
 			const auto started = std::chrono::steady_clock::now();
 			while (!job->ready.load()) {
 				waitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
@@ -1474,17 +1462,29 @@ void PathFinder::CommitHorizonThrough(uint64_t nowTick) {
 		}
 		m_LastHorizonWaitUs = waitUs;
 		RecordHorizonWait(waitUs);
-		std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
-		          << " stalled=" << (waitUs > 0 ? 1 : 0) << " count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
-		{
-			std::lock_guard lock(m_HorizonMutex);
+		if (waitUs > 0) {
+			stalled = true;
+			std::cout << "[horizon-path] wait_us=" << waitUs << " tick=" << nowTick << " origin=" << job->originTick
+			          << " count=" << HorizonWaitCount() << " p99_us=" << HorizonWaitP99Us() << std::endl;
+		}
+	}
+	const uint64_t applyGeneration = m_HorizonGeneration.load() + 1;
+	{
+		std::unique_lock lock(m_HorizonMutex);
+		m_HorizonApplyPending = true;
+		const auto started = std::chrono::steady_clock::now();
+		m_HorizonApplyCv.wait(lock, [this, applyGeneration] { return !HasOlderHorizonReaders(applyGeneration); });
+		m_LastHorizonReaderWaitUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+		for (const auto& job: due) {
 			ApplyHorizonJob(*job, applyGeneration);
 			m_HorizonJobs.erase(std::remove(m_HorizonJobs.begin(), m_HorizonJobs.end(), job), m_HorizonJobs.end());
 		}
-		applied = true;
-	}
-	if (applied) {
+		// The cells and the generation that makes them visible are published together.
 		m_HorizonGeneration.store(applyGeneration);
+		m_HorizonApplyPending = false;
+	}
+	m_HorizonApplyCv.notify_all();
+	if (stalled) {
 		WriteHorizonWaitReport();
 	}
 }
