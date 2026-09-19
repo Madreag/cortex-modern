@@ -5,6 +5,8 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchRunner.h"
 #include "NetMuxTransport.h"
+#include "NetHostBanStore.h"
+#include "NetParticipantCrypto.h"
 #include "NetReconnectSession.h"
 #include "NetReconnectTicketStore.h"
 #include "NetReconnectUx.h"
@@ -311,6 +313,12 @@ namespace RTE {
 		/// The seat-presence plane — where dropped seats get their reclaim-hold marks.
 		const NetSeatPresence& GetSeatPresence() const { return m_SeatPresence; }
 		NetH4ModerationResult ApplyModeration(const NetModerationSelection& selection, NetModerationAction action);
+		/// Host: close this holder without a reclaim hold. The host confirmation dialog calls this.
+		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action);
+		NetKickBanResult GetLastKickBanResult() const;
+		NetParticipantRemovalIssue GetLastRemovalIssue() const;
+		NetKickBanResult UnbanParticipant(const NetAuthBytes32& identity);
+		std::vector<NetHostBanRecord> GetBanRecords() const;
 
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
@@ -477,6 +485,8 @@ namespace RTE {
 		friend bool TestRosterBannerNamesThePlayerOnce(std::string* error);
 		friend bool TestAiOnlyHostSeatsNoJoiner(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
+		friend bool TestServiceKick(std::string* error);
+		friend bool TestStartingKickMarshals(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
@@ -582,6 +592,8 @@ namespace RTE {
 		NetReconnectHost m_ReconnectHost;
 		NetReconnectClient m_ReconnectClient;
 		NetReconnectTicketStore m_TicketStore;
+		NetParticipantIdentityStore m_ParticipantStore;
+		NetHostBanStore m_BanStore;
 		NetReconnectUx m_ReconnectUx;
 		NetSeatPresence m_SeatPresence;
 		struct RosterTransition {
@@ -595,6 +607,27 @@ namespace RTE {
 		uint32_t m_RosterTransitionsDropped = 0;
 		std::map<uint8_t, std::pair<std::string, std::string>> m_LastRosterPair;
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
+		NetKickBanResult m_LastKickBanResult = NetKickBanResult::NotHosting;
+		NetParticipantRemovalIssue m_LastRemovalIssue;
+		/// One host moderation action waiting for the setup worker: a removal, or an unban of an identity.
+		struct PendingModeration {
+			bool unban = false;
+			NetModerationSelection selection;
+			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
+			NetAuthBytes32 identity{};
+		};
+		std::vector<PendingModeration> m_PendingModeration; //!< Starting-state kicks and unbans, in the order the host asked for them.
+		std::vector<std::string> m_PendingToasts;      //!< Moderation lines a worker produced, for the game thread to show.
+		/// Shows what a worker-side removal produced. Game thread only; never called under the lock.
+		void PushPendingToasts();
+		uint32_t m_LastRoundId = 0;                    //!< The round the peers last played; what a kick between rounds is stamped with.
+		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session);
+		NetKickBanResult ApplyUnbanLocked(const NetAuthBytes32& identity);
+		/// Queues a Starting-state action for the setup worker, or refuses a flood no lobby could produce.
+		NetKickBanResult QueueModerationLocked(const PendingModeration& pending);
+		/// Wires the setup worker's host pump. The runner calls it with the session it ticks.
+		void AttachHostPump(NetMatchRunnerConfig& config);
+		void DrainPendingModeration(NetSession& session);
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.

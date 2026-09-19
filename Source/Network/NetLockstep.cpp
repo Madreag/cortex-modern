@@ -3649,6 +3649,28 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const {
+		outCommands.clear();
+		if (peerId == m_Config.localPeerId) {
+			const auto found = m_LocalCommands.find(frame);
+			if (found == m_LocalCommands.end()) {
+				return false;
+			}
+			outCommands = found->second;
+			return true;
+		}
+		const auto frameIt = m_RemoteCommands.find(frame);
+		if (frameIt == m_RemoteCommands.end()) {
+			return false;
+		}
+		const auto peerIt = frameIt->second.find(peerId);
+		if (peerIt == frameIt->second.end()) {
+			return false;
+		}
+		outCommands = peerIt->second;
+		return true;
+	}
+
 	uint8_t NetLockstepCoordinator::ResolveActorOwnerBeforeLeaves(int64_t actorUniqueID, int actorTeam, bool cpuControlled) const {
 		if (m_Config.peerCount == 0 || m_Config.localPeerId == 0) {
 			return m_Config.localPeerId;
@@ -4764,6 +4786,20 @@ namespace RTE {
 		ApplyHoldResolution(peerId, resolution, nowMs, true);
 	}
 
+	void NetLockstepCoordinator::EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs) {
+		if (!m_RelayHost || peerId == 0 || peerId == m_Config.localPeerId) {
+			return;
+		}
+		if (m_DroppedSeats.find(peerId) != m_DroppedSeats.end()) {
+			ApplyHoldResolution(peerId, NetLockstepHoldResolution::Expired, nowMs, true);
+			return;
+		}
+		if (m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
+			return;
+		}
+		ApplyPeerLeave(peerId, FirstFrameWithout(peerId), message, nowMs, true, false);
+	}
+
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
 		if (resolution == NetLockstepHoldResolution::None || m_DroppedSeats.find(peerId) == m_DroppedSeats.end()) {
 			return;
@@ -4890,6 +4926,14 @@ namespace RTE {
 			m_Transport->Disconnect(transportId, "seat taken: " + message);
 		}
 		ForgetCongestion(peerId);
+		for (auto it = m_RemoteCommands.begin(); it != m_RemoteCommands.end();) {
+			it->second.erase(peerId);
+			if (it->second.empty()) {
+				it = m_RemoteCommands.erase(it);
+			} else {
+				++it;
+			}
+		}
 		m_LastLeaveMessage = message;
 		// The relay host is the star's hub: with it gone no survivor can reach another, and its own team
 		// would keep resolving to a peer that produces nothing for it. The round ends for every survivor.

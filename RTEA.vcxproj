@@ -925,6 +925,8 @@
     <ClInclude Include="Source\Network\NetActorOwnership.h" />
     <ClInclude Include="Source\Network\NetAdmissionSelfTest.h" />
     <ClInclude Include="Source\Network\NetAuthCrypto.h" />
+    <ClInclude Include="Source\Network\NetHostBanStore.h" />
+    <ClInclude Include="Source\Network\NetParticipantCrypto.h" />
     <ClInclude Include="Source\Network\NetAuthSelfTest.h" />
     <ClInclude Include="Source\Network\NetDirectoryClient.h" />
     <ClInclude Include="Source\Network\NetDirectoryCodec.h" />
@@ -1549,6 +1551,8 @@
     <ClCompile Include="Source\Network\NetActorOwnership.cpp" />
     <ClCompile Include="Source\Network\NetAdmissionSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp" />
+    <ClCompile Include="Source\Network\NetHostBanStore.cpp" />
+    <ClCompile Include="Source\Network\NetParticipantCrypto.cpp" />
     <ClCompile Include="Source\Network\NetAuthSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryClient.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp" />

@@ -588,6 +588,8 @@ namespace RTE {
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
+		/// The in-flight commands this coordinator still holds for one seat at a frame.
+		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -639,6 +641,8 @@ namespace RTE {
 		NetLockstepHoldResolution HeldSeatResolution(uint8_t peerId) const;
 		/// Host: end one held seat and tell every peer at the held frame.
 		void ResolveHeldSeat(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs);
+		/// Host: remove one remote as a clean leave. A held seat expires; a live seat never opens a hold.
+		void EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs);
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
 		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
 		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
@@ -661,6 +665,7 @@ namespace RTE {
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
+		friend bool TestServiceKick(std::string* error);
 
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});

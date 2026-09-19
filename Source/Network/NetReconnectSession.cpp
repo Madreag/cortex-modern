@@ -4,6 +4,7 @@
 #include "System/FaultInjection.h"
 
 #include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
 
@@ -26,6 +27,57 @@ namespace RTE {
 			return key;
 		}
 	} // namespace
+
+	const char* NetParticipantRemovalVerdictName(NetParticipantRemovalVerdict verdict) {
+		switch (verdict) {
+			case NetParticipantRemovalVerdict::Accept: return "Accept";
+			case NetParticipantRemovalVerdict::RejectForgedClient: return "RejectForgedClient";
+			case NetParticipantRemovalVerdict::RejectRemappedSeat: return "RejectRemappedSeat";
+			case NetParticipantRemovalVerdict::RejectWrongEpoch: return "RejectWrongEpoch";
+			case NetParticipantRemovalVerdict::RejectDuplicate: return "RejectDuplicate";
+			case NetParticipantRemovalVerdict::RejectStaleBinding: return "RejectStaleBinding";
+			case NetParticipantRemovalVerdict::RejectOldVersion: return "RejectOldVersion";
+		}
+		return "Unknown";
+	}
+
+	const char* NetKickBanResultName(NetKickBanResult result) {
+		switch (result) {
+			case NetKickBanResult::Ok: return "Ok";
+			case NetKickBanResult::NotHosting: return "NotHosting";
+			case NetKickBanResult::UnknownSeat: return "UnknownSeat";
+			case NetKickBanResult::ForbiddenTarget: return "ForbiddenTarget";
+			case NetKickBanResult::StaleSelection: return "StaleSelection";
+			case NetKickBanResult::ActionUnavailable: return "ActionUnavailable";
+			case NetKickBanResult::PersistenceFailed: return "PersistenceFailed";
+			case NetKickBanResult::UnknownIdentity: return "UnknownIdentity";
+			case NetKickBanResult::Queued: return "Queued";
+		}
+		return "Unknown";
+	}
+
+	NetParticipantRemovalVerdict NetAcceptParticipantRemoval(const NetParticipantRemoval& notice, bool fromHost, const NetParticipantRemovalBinding& current, bool alreadyAppliedTx) {
+		if (!fromHost) {
+			return NetParticipantRemovalVerdict::RejectForgedClient;
+		}
+		if (notice.version != c_NetParticipantRemovalVersion) {
+			return NetParticipantRemovalVerdict::RejectOldVersion;
+		}
+		if (!(notice.epoch == current.epoch)) {
+			return NetParticipantRemovalVerdict::RejectWrongEpoch;
+		}
+		if (notice.stableSeat != current.stableSeat) {
+			return NetParticipantRemovalVerdict::RejectRemappedSeat;
+		}
+		if (alreadyAppliedTx) {
+			return NetParticipantRemovalVerdict::RejectDuplicate;
+		}
+		if (notice.sessionId != current.sessionId || notice.round != current.round ||
+		    notice.holderGeneration != current.holderGeneration || notice.incarnation != current.incarnation) {
+			return NetParticipantRemovalVerdict::RejectStaleBinding;
+		}
+		return NetParticipantRemovalVerdict::Accept;
+	}
 
 	std::vector<NetH4Seat> NetH4BuildSeatTable(const NetMatchConfig& config) {
 		std::vector<NetH4Seat> seats;
@@ -299,16 +351,20 @@ namespace RTE {
 			HandleSubstitutionAck(connection, *ack, nowMs);
 			return true;
 		}
-		// TicketOffer, Challenge, JoinCommitted, LeaveAck, ApplicantAck and SubstitutionOffer are the
-		// host's own replies; a client that sends one is talking out of turn.
+		// TicketOffer, Challenge, JoinCommitted, LeaveAck, ApplicantAck, SubstitutionOffer and
+		// ParticipantRemoval are the host's own replies; a client that sends one is talking out of turn.
 		return std::holds_alternative<NetH4TicketOffer>(payload) || std::holds_alternative<NetH4Challenge>(payload) ||
 		       std::holds_alternative<NetH4JoinCommitted>(payload) || std::holds_alternative<NetH4LeaveAck>(payload) ||
-		       std::holds_alternative<NetH4ApplicantAck>(payload) || std::holds_alternative<NetH4SubstitutionOffer>(payload);
+		       std::holds_alternative<NetH4ApplicantAck>(payload) || std::holds_alternative<NetH4SubstitutionOffer>(payload) ||
+		       std::holds_alternative<NetParticipantRemoval>(payload);
 	}
 
 	void NetReconnectHost::HandleNewJoin(NetPeerId connection, const NetH4NewJoin& message, uint64_t nowMs) {
 		++m_Stats.newJoins;
 		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::NewJoin, 0, 0, message.identity);
@@ -375,6 +431,11 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleTicketStoredAck(NetPeerId connection, const NetH4TicketStoredAck& message, uint64_t nowMs) {
+		// The ack is what commits the seat, so it is admission: the acking connection has to be the
+		// proven one, and it has to be admitted now, not when the offer went out.
+		if (RefuseIfBanned(connection)) {
+			return;
+		}
 		// The ack carries no identity block, so the seat's own recorded identity rebuilds the key the
 		// commit was cached against - a lost JoinCommitted must never read as a failure.
 		if (const SeatState* seat = FindSeat(message.stableSeat); seat != nullptr && seat->committed && seat->holderGeneration == message.holderGeneration) {
@@ -440,6 +501,9 @@ namespace RTE {
 
 	void NetReconnectHost::HandleReclaim(NetPeerId connection, const NetH4Reclaim& message, uint64_t nowMs) {
 		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::Reclaim, message.stableSeat, message.holderGeneration, message.identity);
@@ -607,20 +671,7 @@ namespace RTE {
 		}
 		m_Admission.DropConnection(connection);
 		if (m_LiveMatch) {
-			if (m_Registry != nullptr) {
-				m_Registry->RevokeSeat(message.stableSeat);
-			}
-			seat->closed = true;
-			seat->committed = false;
-			seat->activeConnection = c_InvalidNetPeerId;
-			seat->dropped = false;
-			BumpSeatGeneration(*seat);
-			seat->retiredGeneration = 0;
-			seat->retiredUntilMs = 0;
-			m_Ledger.ClearSeat(message.stableSeat);
-			m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [&message](const Fence& fence) {
-				return fence.stableSeat == message.stableSeat;
-			}), m_Fences.end());
+			CloseSeatWithoutHold(*seat);
 		} else {
 			// A lobby leave takes nothing with it: the seat goes back in the pool so the next player -
 			// this one returning or somebody new - joins exactly as they did before H4 existed.
@@ -651,6 +702,7 @@ namespace RTE {
 		seat.activeConnection = connection;
 		seat.dropped = false;
 		seat.holdExpired = false;
+		CaptureParticipant(seat, connection);
 		BumpSeatGeneration(seat);
 		// Returner wins: whoever commits first takes the seat, and a substitution that was still
 		// waiting for its ack is invalidated and removed here, not left to be discovered later.
@@ -692,6 +744,163 @@ namespace RTE {
 		}
 	}
 
+	void NetReconnectHost::CloseSeatWithoutHold(SeatState& seat) {
+		if (m_Registry != nullptr) {
+			m_Registry->RevokeSeat(seat.seat.stableSeat);
+		}
+		seat.closed = true;
+		seat.committed = false;
+		seat.activeConnection = c_InvalidNetPeerId;
+		seat.dropped = false;
+		BumpSeatGeneration(seat);
+		seat.retiredGeneration = 0;
+		seat.retiredUntilMs = 0;
+		m_Ledger.ClearSeat(seat.seat.stableSeat);
+		const uint16_t stableSeat = seat.seat.stableSeat;
+		m_Fences.erase(std::remove_if(m_Fences.begin(), m_Fences.end(), [stableSeat](const Fence& fence) {
+			return fence.stableSeat == stableSeat;
+		}), m_Fences.end());
+	}
+
+	void NetReconnectHost::BindParticipantId(NetPeerId connection, const NetAuthBytes32& id) {
+		for (auto& entry : m_ConnectionIds) {
+			if (entry.first == connection) {
+				entry.second = id;
+				return;
+			}
+		}
+		m_ConnectionIds.push_back({connection, id});
+	}
+
+	void NetReconnectHost::UnbindParticipantId(NetPeerId connection) {
+		// A proof binds one live connection. Transport ids are reused, so a dead one must not leave an
+		// identity behind for whoever takes the number next.
+		m_ConnectionIds.erase(std::remove_if(m_ConnectionIds.begin(), m_ConnectionIds.end(), [connection](const std::pair<NetPeerId, NetAuthBytes32>& entry) {
+			return entry.first == connection;
+		}), m_ConnectionIds.end());
+	}
+
+	bool NetReconnectHost::LookupParticipantId(NetPeerId connection, NetAuthBytes32& out) const {
+		for (const auto& entry : m_ConnectionIds) {
+			if (entry.first == connection) {
+				out = entry.second;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	void NetReconnectHost::CaptureParticipant(SeatState& seat, NetPeerId connection) {
+		if (LookupParticipantId(connection, seat.participantId)) {
+			seat.hasParticipantId = true;
+		}
+	}
+
+	bool NetReconnectHost::RefuseIfBanned(NetPeerId connection) {
+		NetAuthBytes32 id{};
+		const bool bound = LookupParticipantId(connection, id);
+		if (m_ProofRequired && !bound) {
+			Send(connection, NetJoinRejected{NetRejectReason::IdentityUnproven, "this connection is not bound", "participant_identity", "", ""});
+			++m_Stats.identityRejections;
+			return true;
+		}
+		if (m_BanStore == nullptr || !bound || !m_BanStore->IsBanned(id, m_HostSessionId)) {
+			return false;
+		}
+		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});
+		++m_Stats.identityRejections;
+		return true;
+	}
+
+	void NetReconnectHost::CancelHolderTransactions(uint16_t stableSeat, uint64_t nowMs) {
+		ReleaseProvisional(stableSeat);
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].stableSeat == stableSeat) {
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the holder was removed", nowMs);
+				continue;
+			}
+			++index;
+		}
+		m_Applicants.erase(std::remove_if(m_Applicants.begin(), m_Applicants.end(), [stableSeat](const Applicant& applicant) {
+			return applicant.stableSeat == stableSeat;
+		}), m_Applicants.end());
+		m_PendingReclaims.erase(std::remove_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [stableSeat](const PendingReclaim& pending) {
+			return pending.stableSeat == stableSeat;
+		}), m_PendingReclaims.end());
+	}
+
+	NetKickBanResult NetReconnectHost::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued) {
+		issued = {};
+		m_NowMs = std::max(m_NowMs, nowMs);
+		SeatState* seat = FindSeat(selection.stableSeat);
+		if (seat == nullptr) {
+			return NetKickBanResult::UnknownSeat;
+		}
+		if (seat->seat.local || seat->seat.cpu) {
+			return NetKickBanResult::ForbiddenTarget;
+		}
+		if (!(selection.epoch == m_ConfiguredEpoch) || selection.holderGeneration != seat->holderGeneration ||
+		    selection.incarnation != seat->incarnation || selection.seatGeneration != seat->seatGeneration) {
+			return NetKickBanResult::StaleSelection;
+		}
+		if (!seat->committed && !seat->closed && !seat->dropped) {
+			return NetKickBanResult::ActionUnavailable;
+		}
+		if (seat->closed) {
+			return NetKickBanResult::ActionUnavailable;
+		}
+		issued.connection = seat->activeConnection;
+		issued.lockstepPeerId = seat->seat.lockstepPeerId;
+		issued.identity = seat->identity;
+		if (seat->hasParticipantId) {
+			issued.participantId = seat->participantId;
+			issued.hasParticipantId = true;
+		} else {
+			issued.hasParticipantId = LookupParticipantId(seat->activeConnection, issued.participantId);
+		}
+		if (action != NetParticipantRemovalAction::Kick) {
+			if (!issued.hasParticipantId) {
+				return NetKickBanResult::UnknownIdentity;
+			}
+			if (m_BanStore == nullptr) {
+				return NetKickBanResult::ActionUnavailable;
+			}
+		}
+		issued.notice.sessionId = sessionId;
+		issued.notice.round = round;
+		issued.notice.epoch = m_ConfiguredEpoch;
+		issued.notice.stableSeat = seat->seat.stableSeat;
+		issued.notice.holderGeneration = seat->holderGeneration;
+		issued.notice.incarnation = seat->incarnation;
+		issued.notice.boundaryFrame = boundaryFrame;
+		issued.notice.reason = action == NetParticipantRemovalAction::Kick ? NetParticipantRemovalReason::HostKick : NetParticipantRemovalReason::HostBan;
+		issued.notice.action = action;
+		if (!NetH4DrawTxId(issued.notice.txId)) {
+			return NetKickBanResult::ActionUnavailable;
+		}
+		if (action != NetParticipantRemovalAction::Kick) {
+			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
+			std::string persistError;
+			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, unixNowMs, &persistError)) {
+				return NetKickBanResult::PersistenceFailed;
+			}
+		}
+		if (issued.connection != c_InvalidNetPeerId) {
+			m_Admission.DropConnection(issued.connection);
+		}
+		CancelHolderTransactions(seat->seat.stableSeat, nowMs);
+		if (m_LiveMatch || seat->committed || seat->dropped) {
+			CloseSeatWithoutHold(*seat);
+		} else {
+			ReleaseSeat(*seat);
+		}
+		m_LastRemovalTx = issued.notice.txId;
+		m_HasRemovalTx = true;
+		m_LastRemovedConnection = issued.connection;
+		++m_Stats.seatsRemoved;
+		return NetKickBanResult::Ok;
+	}
+
 	void NetReconnectHost::ReleaseSeat(SeatState& seat) {
 		++m_Stats.seatsReleased;
 		if (m_Registry != nullptr) {
@@ -706,6 +915,8 @@ namespace RTE {
 		seat.dropped = false;
 		seat.holdExpired = false;
 		seat.identity = {};
+		seat.participantId = {};
+		seat.hasParticipantId = false;
 		seat.retiredGeneration = 0;
 		seat.retiredUntilMs = 0;
 		BumpSeatGeneration(seat);
@@ -909,6 +1120,9 @@ namespace RTE {
 		// P5: identity first, before the seat is looked at, so a mismatch never says whether the seat
 		// exists. An applicant is re-validated exactly like a NewJoin and a Reclaim.
 		if (!ValidateIdentity(connection, message.identity)) {
+			return;
+		}
+		if (RefuseIfBanned(connection)) {
 			return;
 		}
 		const NetH4TxKey key = MakeKey(NetMessageType::Applicant, message.stableSeat, 0, message.identity);
@@ -1139,6 +1353,11 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::HandleSubstitutionAck(NetPeerId connection, const NetH4SubstitutionAck& message, uint64_t nowMs) {
+		// The ack takes the seat, so it is re-admitted here: an identity banned since the offer went
+		// out never commits, and an unbound connection never commits while proof is required.
+		if (RefuseIfBanned(connection)) {
+			return;
+		}
 		const NetH4TxKey key = SubstitutionKey(message.stableSeat, message.holderGeneration);
 		// A lost commit result, or an ack that arrives after the transaction ended, replays the
 		// terminal result it already earned - success or refusal.
@@ -1234,7 +1453,36 @@ namespace RTE {
 		});
 	}
 
+	void NetReconnectHost::DropRemovedTransactions(NetPeerId connection) {
+		DropApplicantsFor(connection);
+		for (size_t index = 0; index < m_Substitutions.size();) {
+			if (m_Substitutions[index].connection == connection) {
+				m_Substitutions[index].connection = c_InvalidNetPeerId;
+				AbandonSubstitution(index, NetH4DenialReason::SeatNotSubstitutable, "the substitute was removed from the session", m_NowMs);
+				continue;
+			}
+			++index;
+		}
+		m_PendingReclaims.erase(std::remove_if(m_PendingReclaims.begin(), m_PendingReclaims.end(), [connection](const PendingReclaim& pending) {
+			return pending.connection == connection;
+		}), m_PendingReclaims.end());
+		// Unlike an ordinary drop there is no resume window: a removal ends every transaction this link
+		// had open, on every seat, not only the one it was removed from.
+		m_Provisionals.erase(std::remove_if(m_Provisionals.begin(), m_Provisionals.end(), [connection](const Provisional& pending) {
+			return pending.connection == connection;
+		}), m_Provisionals.end());
+	}
+
 	NetH4DisconnectOutcome NetReconnectHost::NotifyDisconnect(NetPeerId connection, uint64_t frame) {
+		if (connection != c_InvalidNetPeerId) {
+			UnbindParticipantId(connection);
+		}
+		if (connection != c_InvalidNetPeerId && connection == m_LastRemovedConnection) {
+			m_LastRemovedConnection = c_InvalidNetPeerId;
+			m_Admission.DropConnection(connection);
+			DropRemovedTransactions(connection);
+			return NetH4DisconnectOutcome::Removed;
+		}
 		const auto fence = std::find_if(m_Fences.begin(), m_Fences.end(), [connection](const Fence& entry) {
 			return entry.connection == connection;
 		});
@@ -1295,6 +1543,10 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::EndHostedSession() {
+		if (m_BanStore != nullptr) {
+			m_BanStore->EndSession(m_HostSessionId);
+		}
+		m_ConnectionIds.clear();
 		if (m_Registry != nullptr) {
 			m_Registry->EndSession();
 		}
@@ -1313,6 +1565,9 @@ namespace RTE {
 		m_Commits.clear();
 		m_LiveMatch = false;
 		m_MatchEnded = false;
+		m_HasRemovalTx = false;
+		m_LastRemovalTx = {};
+		m_LastRemovedConnection = c_InvalidNetPeerId;
 		for (SeatState& seat : m_Seats) {
 			seat.holderGeneration = 0;
 			seat.incarnation = 0;
@@ -1325,6 +1580,8 @@ namespace RTE {
 			seat.retiredGeneration = 0;
 			seat.retiredUntilMs = 0;
 			seat.substituteName.clear();
+			seat.participantId = {};
+			seat.hasParticipantId = false;
 			BumpSeatGeneration(seat);
 		}
 	}
@@ -1572,9 +1829,11 @@ namespace RTE {
 	bool NetReconnectClient::AbsorbRejection(uint64_t nowMs, NetRejectReason reason) {
 		m_LastRejectReason = reason;
 		m_HasLastRejectReason = true;
-		if (reason == NetRejectReason::SeatReassigned) {
-			// The host gave this seat away. There is nothing left to retry, and a fresh join into a
-			// live match would only be refused again.
+		if (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved ||
+		    reason == NetRejectReason::ParticipantBanned) {
+			if (reason != NetRejectReason::SeatReassigned) {
+				NotifyParticipantRemoved(reason);
+			}
 			return false;
 		}
 		if (!m_UsedStoredTicket || m_FellBackToNewJoin || m_State == NetH4ClientState::Joined) {
@@ -1851,6 +2110,31 @@ namespace RTE {
 			m_State = NetH4ClientState::Left;
 			return true;
 		}
+		if (const auto* notice = std::get_if<NetParticipantRemoval>(&payload)) {
+			const bool already = m_Removed && notice->txId == m_LastRemovalTx;
+			NetParticipantRemovalBinding current;
+			if (m_HasRecord) {
+				current.sessionId = m_Record.hostSessionId;
+				current.round = m_Round;
+				current.epoch = m_Record.epoch;
+				current.stableSeat = m_Record.stableSeat;
+				current.holderGeneration = m_Record.holderGeneration;
+				current.incarnation = m_Incarnation;
+			} else {
+				current.sessionId = notice->sessionId;
+				current.round = m_Round;
+				current.epoch = notice->epoch;
+				current.stableSeat = notice->stableSeat;
+				current.holderGeneration = notice->holderGeneration;
+				current.incarnation = notice->incarnation;
+			}
+			if (NetAcceptParticipantRemoval(*notice, true, current, already) == NetParticipantRemovalVerdict::Accept &&
+			    m_HasRecord && notice->stableSeat == m_Record.stableSeat) {
+				m_LastRemovalTx = notice->txId;
+				NotifyParticipantRemoved(notice->reason == NetParticipantRemovalReason::HostBan ? NetRejectReason::ParticipantBanned : NetRejectReason::ParticipantRemoved);
+			}
+			return true;
+		}
 		if (std::holds_alternative<NetH4NewJoin>(payload) || std::holds_alternative<NetH4TicketStoredAck>(payload) ||
 		    std::holds_alternative<NetH4Reclaim>(payload) || std::holds_alternative<NetH4Proof>(payload) ||
 		    std::holds_alternative<NetH4LeaveRequest>(payload) || std::holds_alternative<NetH4Applicant>(payload) ||
@@ -1859,6 +2143,20 @@ namespace RTE {
 			return true;
 		}
 		return false;
+	}
+
+	void NetReconnectClient::NotifyParticipantRemoved(NetRejectReason reason) {
+		m_Removed = true;
+		m_LastRejectReason = reason;
+		m_HasLastRejectReason = true;
+		m_HasPendingRequest = false;
+		if (m_Store != nullptr && m_Store->HasRecord()) {
+			m_Store->Clear();
+			++m_Stats.ticketsCleared;
+		}
+		m_HasRecord = false;
+		m_Record = {};
+		m_State = NetH4ClientState::Left;
 	}
 
 	void NetReconnectClient::Tick(uint64_t nowMs) {

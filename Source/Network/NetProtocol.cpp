@@ -290,6 +290,9 @@ namespace RTE {
 				case NetRejectReason::InternalError:
 				case NetRejectReason::SessionEnded:
 				case NetRejectReason::SeatReassigned:
+				case NetRejectReason::ParticipantRemoved:
+				case NetRejectReason::ParticipantBanned:
+				case NetRejectReason::IdentityUnproven:
 					out = static_cast<NetRejectReason>(rawReason);
 					return true;
 			}
@@ -602,6 +605,64 @@ namespace RTE {
 				SetError(error, NetProtocolErrorCode::PayloadTooLarge, out.size(), "module digest payload exceeds max digest size");
 				return false;
 			}
+			return true;
+		}
+
+		bool EncodePayload(const NetParticipantRemoval& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.version != c_NetParticipantRemovalVersion) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant removal version is unsupported");
+				return false;
+			}
+			if (payload.holderGeneration == 0U) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "holder generation 0 is reserved for an unheld seat");
+				return false;
+			}
+			if (payload.reason != NetParticipantRemovalReason::HostKick && payload.reason != NetParticipantRemovalReason::HostBan) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant removal reason is invalid");
+				return false;
+			}
+			if (payload.action != NetParticipantRemovalAction::Kick && payload.action != NetParticipantRemovalAction::BanSession &&
+			    payload.action != NetParticipantRemovalAction::BanUntilRemoved) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant removal action is invalid");
+				return false;
+			}
+			AppendU16LE(out, payload.version);
+			AppendU64LE(out, payload.sessionId);
+			AppendU32LE(out, payload.round);
+			AppendBytes(out, payload.txId);
+			AppendBytes(out, payload.epoch);
+			AppendU16LE(out, payload.stableSeat);
+			AppendU32LE(out, payload.holderGeneration);
+			AppendU32LE(out, payload.incarnation);
+			AppendU64LE(out, payload.boundaryFrame);
+			AppendU8(out, static_cast<uint8_t>(payload.reason));
+			AppendU8(out, static_cast<uint8_t>(payload.action));
+			return true;
+		}
+
+		bool EncodePayload(const NetParticipantChallenge& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.version != c_NetParticipantIdentityVersion) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant identity version is unsupported");
+				return false;
+			}
+			AppendU16LE(out, payload.version);
+			AppendBytes(out, payload.hostBinding);
+			AppendU64LE(out, payload.sessionId);
+			AppendBytes(out, payload.connectionBinding);
+			AppendBytes(out, payload.challenge);
+			return true;
+		}
+
+		bool EncodePayload(const NetParticipantProof& payload, std::vector<uint8_t>& out, NetProtocolError* error) {
+			if (payload.version != c_NetParticipantIdentityVersion) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, out.size(), "participant identity version is unsupported");
+				return false;
+			}
+			AppendU16LE(out, payload.version);
+			AppendBytes(out, payload.publicId);
+			AppendBytes(out, payload.connectionBinding);
+			AppendBytes(out, payload.challenge);
+			AppendBytes(out, payload.signature);
 			return true;
 		}
 
@@ -1060,6 +1121,72 @@ namespace RTE {
 			}
 			return true;
 		}
+
+		bool DecodePayload(ByteReader& reader, NetParticipantRemoval& payload, NetProtocolError* error) {
+			uint8_t reason = 0;
+			uint8_t action = 0;
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.version), reader, error, "removal_version") ||
+			    !ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
+			    !ReadOrTruncated(reader.ReadU32LE(payload.round), reader, error, "round") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.txId), reader, error, "tx_id") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.epoch), reader, error, "epoch") ||
+			    !ReadOrTruncated(reader.ReadU16LE(payload.stableSeat), reader, error, "stable_seat") ||
+			    !ReadH4HolderGeneration(reader, payload.holderGeneration, error) ||
+			    !ReadOrTruncated(reader.ReadU32LE(payload.incarnation), reader, error, "incarnation") ||
+			    !ReadOrTruncated(reader.ReadU64LE(payload.boundaryFrame), reader, error, "boundary_frame") ||
+			    !ReadOrTruncated(reader.ReadU8(reason), reader, error, "removal_reason") ||
+			    !ReadOrTruncated(reader.ReadU8(action), reader, error, "removal_action")) {
+				return false;
+			}
+			if (payload.version != c_NetParticipantRemovalVersion) {
+				SetError(error, NetProtocolErrorCode::UnsupportedVersion, reader.Offset() - 66, "unsupported participant removal version");
+				return false;
+			}
+			if (reason != static_cast<uint8_t>(NetParticipantRemovalReason::HostKick) &&
+			    reason != static_cast<uint8_t>(NetParticipantRemovalReason::HostBan)) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 2, "participant removal reason is invalid");
+				return false;
+			}
+			if (action != static_cast<uint8_t>(NetParticipantRemovalAction::Kick) &&
+			    action != static_cast<uint8_t>(NetParticipantRemovalAction::BanSession) &&
+			    action != static_cast<uint8_t>(NetParticipantRemovalAction::BanUntilRemoved)) {
+				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset() - 1, "participant removal action is invalid");
+				return false;
+			}
+			payload.reason = static_cast<NetParticipantRemovalReason>(reason);
+			payload.action = static_cast<NetParticipantRemovalAction>(action);
+			return true;
+		}
+
+		bool DecodePayload(ByteReader& reader, NetParticipantChallenge& payload, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.version), reader, error, "identity_version") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.hostBinding), reader, error, "host_binding") ||
+			    !ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.connectionBinding), reader, error, "connection_binding") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.challenge), reader, error, "identity_challenge")) {
+				return false;
+			}
+			if (payload.version != c_NetParticipantIdentityVersion) {
+				SetError(error, NetProtocolErrorCode::UnsupportedVersion, reader.Offset() - 74, "unsupported participant identity version");
+				return false;
+			}
+			return true;
+		}
+
+		bool DecodePayload(ByteReader& reader, NetParticipantProof& payload, NetProtocolError* error) {
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.version), reader, error, "identity_version") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.publicId), reader, error, "public_id") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.connectionBinding), reader, error, "connection_binding") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.challenge), reader, error, "identity_challenge") ||
+			    !ReadOrTruncated(reader.ReadBytes(payload.signature), reader, error, "identity_signature")) {
+				return false;
+			}
+			if (payload.version != c_NetParticipantIdentityVersion) {
+				SetError(error, NetProtocolErrorCode::UnsupportedVersion, reader.Offset() - 130, "unsupported participant identity version");
+				return false;
+			}
+			return true;
+		}
 	}
 
 	bool NetProtocol::IsH4MessageType(NetMessageType type) {
@@ -1077,6 +1204,7 @@ namespace RTE {
 			case NetMessageType::ApplicantAck:
 			case NetMessageType::SubstitutionOffer:
 			case NetMessageType::SubstitutionAck:
+			case NetMessageType::ParticipantRemoval:
 				return true;
 			default:
 				return false;
@@ -1088,10 +1216,16 @@ namespace RTE {
 	}
 
 	bool NetProtocol::IsMessageTypeInVersion(NetMessageType type, uint16_t headerVersion) {
-		if (headerVersion != 1) {
-			return headerVersion == c_Version;
+		if (headerVersion == 1) {
+			return !IsModuleDigestMessageType(type) && type != NetMessageType::Chat && type != NetMessageType::ParticipantRemoval &&
+			       type != NetMessageType::ParticipantChallenge && type != NetMessageType::ParticipantProof;
 		}
-		return !IsModuleDigestMessageType(type) && type != NetMessageType::Chat;
+		if (headerVersion == 2) {
+			return type != NetMessageType::ParticipantRemoval &&
+			       static_cast<uint16_t>(type) >= static_cast<uint16_t>(NetMessageType::ClientHello) &&
+			       static_cast<uint16_t>(type) <= static_cast<uint16_t>(NetMessageType::Chat);
+		}
+		return headerVersion == c_Version;
 	}
 
 	NetMessageType NetProtocol::MessageTypeOf(const NetPayload& payload) {
@@ -1122,6 +1256,9 @@ namespace RTE {
 			[](const NetModuleDigestRequest&) { return NetMessageType::ModuleDigestRequest; },
 			[](const NetModuleDigests&) { return NetMessageType::ModuleDigests; },
 			[](const NetChat&) { return NetMessageType::Chat; },
+			[](const NetParticipantRemoval&) { return NetMessageType::ParticipantRemoval; },
+			[](const NetParticipantChallenge&) { return NetMessageType::ParticipantChallenge; },
+			[](const NetParticipantProof&) { return NetMessageType::ParticipantProof; },
 		}, payload);
 	}
 
@@ -1153,6 +1290,9 @@ namespace RTE {
 			case NetMessageType::ModuleDigestRequest: return "ModuleDigestRequest";
 			case NetMessageType::ModuleDigests: return "ModuleDigests";
 			case NetMessageType::Chat: return "Chat";
+			case NetMessageType::ParticipantRemoval: return "ParticipantRemoval";
+			case NetMessageType::ParticipantChallenge: return "ParticipantChallenge";
+			case NetMessageType::ParticipantProof: return "ParticipantProof";
 		}
 		return "Unknown";
 	}
@@ -1176,6 +1316,9 @@ namespace RTE {
 			case NetRejectReason::InternalError: return "InternalError";
 			case NetRejectReason::SessionEnded: return "SessionEnded";
 			case NetRejectReason::SeatReassigned: return "SeatReassigned";
+			case NetRejectReason::ParticipantRemoved: return "ParticipantRemoved";
+			case NetRejectReason::ParticipantBanned: return "ParticipantBanned";
+			case NetRejectReason::IdentityUnproven: return "IdentityUnproven";
 		}
 		return "Unknown";
 	}
@@ -1204,9 +1347,9 @@ namespace RTE {
 	}
 
 	bool NetProtocol::CanEncodeAtVersion(uint16_t headerVersion) {
-		// Only versions whose payload schema this build still writes. v1 shares every payload it had
-		// with v2, so a v1 peer can still be told, in its own envelope, why it was refused.
-		return headerVersion == c_Version || headerVersion == 1;
+		// v1 and v2 share every payload they had with this build, so an older peer can still be told,
+		// in its own envelope, why it was refused.
+		return headerVersion == c_Version || headerVersion == 1 || headerVersion == 2;
 	}
 
 	bool NetProtocol::PeekHeaderVersion(const uint8_t* data, size_t size, uint16_t& outVersion) {
@@ -1529,6 +1672,24 @@ namespace RTE {
 				NetChat value;
 				decoded = DecodePayload(payloadReader, value, &payloadError);
 				payload = std::move(value);
+				break;
+			}
+			case NetMessageType::ParticipantRemoval: {
+				NetParticipantRemoval value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::ParticipantChallenge: {
+				NetParticipantChallenge value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
+				break;
+			}
+			case NetMessageType::ParticipantProof: {
+				NetParticipantProof value;
+				decoded = DecodePayload(payloadReader, value, &payloadError);
+				payload = value;
 				break;
 			}
 			default:
