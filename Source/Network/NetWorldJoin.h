@@ -239,7 +239,6 @@ namespace RTE {
 	/// Overflow spectators bind lobby ids in [first, last], one per connection, above member seats.
 	inline constexpr uint8_t c_WorldSpectatorLobbyPeerFirst = 32;
 	inline constexpr uint8_t c_WorldSpectatorLobbyPeerLast = 47;
-	inline constexpr uint8_t c_WorldSpectatorLobbyPeer = c_WorldSpectatorLobbyPeerFirst;
 	inline constexpr size_t c_WorldSpectatorLobbyCap = static_cast<size_t>(c_WorldSpectatorLobbyPeerLast - c_WorldSpectatorLobbyPeerFirst + 1);
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {

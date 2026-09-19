@@ -2103,7 +2103,10 @@ static std::string ResyncSaveName() {
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {
 			std::string startError;
-			if (!m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &startError)) {
+			const bool running = m_Runner->IsWorldJoinLockstepStarting()
+			                         ? m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, &startError)
+			                         : m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &startError);
+			if (!running && !startError.empty()) {
 				std::cout << "[net-world] joiner lockstep start: " << startError << std::endl;
 			}
 		}

@@ -660,11 +660,39 @@ namespace RTE {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		if (!StartLockstep(transport, session, coordinator, m_Config, error) || !WaitForLockstepRunning(coordinator, m_Config.lockstepWaitMs, error)) {
+		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
+		// because a wait loop would hold the sim update it runs inside.
+		m_WorldJoinStartMs = std::max<uint64_t>(1, NetLockstepNowMs());
+		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
 			return false;
 		}
-		m_State = NetMatchRuntimeState::Running;
-		return true;
+		return PumpWorldJoinLockstepStart(coordinator, error);
+	}
+
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, std::string* error) {
+		if (!IsWorldJoinLockstepStarting()) {
+			return m_State == NetMatchRuntimeState::Running;
+		}
+		const uint64_t nowMs = NetLockstepNowMs();
+		coordinator.Tick(nowMs);
+		if (coordinator.IsRunning()) {
+			m_State = NetMatchRuntimeState::Running;
+			m_WorldJoinStartMs = 0;
+			return true;
+		}
+		if (coordinator.IsFailed() || coordinator.IsStopped()) {
+			m_WorldJoinStartMs = 0;
+			SetFailed(coordinator.GetStats().timeoutReason);
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		if (nowMs - m_WorldJoinStartMs > m_Config.lockstepWaitMs) {
+			m_WorldJoinStartMs = 0;
+			SetFailed("timed out waiting for lockstep start");
+			if (error) *error = m_SetupError;
+			return false;
+		}
+		return false;
 	}
 
 	void NetMatchRunner::SetFailed(const std::string& error) {
