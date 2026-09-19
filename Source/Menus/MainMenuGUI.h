@@ -186,6 +186,15 @@ namespace RTE {
 			AssemblyEditorButton,
 			GibEditorButton,
 			ActorEditorButton,
+			MultiplayerLobbyOptionsButton,
+			MultiplayerHostOptionsButton,
+			HostOptionsBackButton,
+			HostOptionsApplyButton,
+			HostOptionsDefaultsButton,
+			HostSeatDialogCloseButton,
+			HostRepairNowButton,
+			HostFilesSaveDiagButton,
+			HostSessionEndButton,
 			ButtonCount
 		};
 
@@ -196,7 +205,8 @@ namespace RTE {
 			JoinSetup,
 			Lobby,
 			Moderation,
-			ReplayBrowser
+			ReplayBrowser,
+			HostOptions
 		};
 
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
@@ -299,6 +309,69 @@ namespace RTE {
 		GUITextBox* m_MultiplayerLobbyChatInput;
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
+		// §9.2/9.3's host options panel: six pages over the lobby, or the host-setup draft of the next one.
+		GUICollectionBox* m_HostOptionsPanel = nullptr;
+		GUILabel* m_HostOptionsTitle = nullptr;
+		static constexpr int c_HostOptionsPageCount = 6;
+		std::array<GUITab*, c_HostOptionsPageCount> m_HostOptionsTabs{};
+		std::array<GUICollectionBox*, c_HostOptionsPageCount> m_HostOptionsPages{};
+		int m_HostOptionsPage = 0;
+		GUILabel* m_HostOptionsStatusLabel = nullptr;
+		GUIComboBox* m_HostSeatPlayersCombo = nullptr;
+		GUILabel* m_HostSeatCapacityHint = nullptr;
+		std::array<GUILabel*, 5> m_HostSeatNameLabels{};
+		std::array<GUIComboBox*, 5> m_HostSeatTeamCombos{};
+		std::array<GUILabel*, 5> m_HostSeatDelayLabels{};
+		std::array<GUILabel*, 5> m_HostSeatStateLabels{};
+		std::array<GUIButton*, 5> m_HostSeatDetailsButtons{};
+		GUIComboBox* m_HostRulesActivityCombo = nullptr;
+		GUIComboBox* m_HostRulesSceneCombo = nullptr;
+		GUIComboBox* m_HostRulesModeCombo = nullptr;
+		GUISlider* m_HostRulesDifficultySlider = nullptr;
+		GUILabel* m_HostRulesDifficultyValue = nullptr;
+		GUISlider* m_HostRulesGoldSlider = nullptr;
+		GUILabel* m_HostRulesGoldValue = nullptr;
+		GUICheckbox* m_HostRulesFogCheck = nullptr;
+		GUICheckbox* m_HostRulesClearPathCheck = nullptr;
+		GUICheckbox* m_HostRulesDeployCheck = nullptr;
+		GUIComboBox* m_HostRulesBrainlessCombo = nullptr; //!< L33's "When every human brain is lost" row.
+		GUIComboBox* m_HostRulesTeamCombo = nullptr;
+		GUIComboBox* m_HostRulesTechCombo = nullptr;
+		GUISlider* m_HostRulesSkillSlider = nullptr;
+		GUILabel* m_HostRulesSkillValue = nullptr;
+		GUIComboBox* m_HostNetPolicyCombo = nullptr;
+		GUITextBox* m_HostNetMinDelayBox = nullptr;
+		GUILabel* m_HostNetEffectiveLabel = nullptr;
+		std::array<GUILabel*, 4> m_HostNetPeerLabels{};
+		std::array<GUITextBox*, 4> m_HostNetPeerDelayBoxes{};
+		GUIButton* m_HostNetRecalcButton = nullptr;
+		GUILabel* m_HostNetPingLabel = nullptr;
+		GUICheckbox* m_HostRecRepairCheck = nullptr;
+		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
+		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
+		GUILabel* m_HostRecLastSaveLabel = nullptr;
+		GUILabel* m_HostRecWaitingLabel = nullptr;
+		GUILabel* m_HostFilesSavePathLabel = nullptr;
+		GUILabel* m_HostFilesDiagPathLabel = nullptr;
+		GUILabel* m_HostFilesDiagResultLabel = nullptr;
+		GUIComboBox* m_HostFilesWidgetCombo = nullptr;
+		GUILabel* m_HostSessHostingLabel = nullptr;
+		GUILabel* m_HostSessSeatsLabel = nullptr;
+		GUIComboBox* m_HostSessIdleCombo = nullptr;
+		GUICollectionBox* m_HostSeatDialog = nullptr;
+		GUILabel* m_HostSeatDlgName = nullptr;
+		GUILabel* m_HostSeatDlgSeat = nullptr;
+		GUILabel* m_HostSeatDlgTeam = nullptr;
+		GUILabel* m_HostSeatDlgState = nullptr;
+		GUILabel* m_HostSeatDlgStatus = nullptr;
+		NetMatchConfig m_HostOptionsDraft;              //!< The complete config the panel edits.
+		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
+		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
+		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
+		std::optional<NetMatchConfig> m_HostSetupOptions; //!< The setup draft Apply accepted; the next request carries it.
+		int m_HostOptionsSeatRow = -1;                  //!< The seat row the details dialog describes.
+		std::vector<std::string> m_HostOptionsScenes;   //!< Scene presets the Site combo offers.
+		std::vector<std::string> m_HostOptionsTechModules; //!< Tech combo's resolved module names (-All-/-Random- first).
 		std::string m_ReconnectStatusShown; //!< The last §11 line this screen wrote, so it may clear its own.
 		std::string m_PendingAutomationCommand; //!< Control waiting to raise Command after Update clears the queue.
 		NetMatchServiceRequest m_MultiplayerJoinRequest; //!< The join the player last asked for, so an application reuses it.
@@ -444,6 +517,29 @@ namespace RTE {
 
 		/// Rebuilds the host activity picker's choices from the loaded presets, keeping the current pick.
 		void RefreshMultiplayerHostActivities();
+
+		/// §9.2: fetches the options panel's controls and fills the fixed combo lists once.
+		void CreateHostOptionsControls();
+		/// Opens the panel seeded from the staged request (host setup) or the adopted config (lobby).
+		void OpenHostOptions(bool setupDraft);
+		/// Shows one of the six pages and checks its tab.
+		void ShowHostOptionsPage(int page);
+		/// Mirrors the draft into every visible control each frame; in a lobby it also re-reads the adopted state.
+		void RefreshHostOptionsControls(const NetLobbySnapshot& snapshot);
+		/// Reads every editable control back into the draft (Apply, and before roster re-derivation).
+		void DraftHostOptionsFromControls();
+		/// Rebuilds the draft's roster after a capacity/mode change, keeping the edited rules.
+		void RederiveHostOptionsRoster();
+		/// The request the host-setup fields would send today, so the setup draft seeds the same config.
+		NetMatchServiceRequest HostRequestDraft() const;
+		/// Apply: the setup path stages the draft for the next request; the lobby path submits it.
+		void ApplyHostOptions();
+		/// Writes the draft's host-owned fields to the persisted host defaults.
+		void SaveHostOptionsDefaults();
+		/// The seat details dialog's contents for one roster row.
+		void ShowHostSeatDetails(int row);
+		/// The panel's own event channel; only reached while the sub-screen is up.
+		void HandleHostOptionsInputEvents(const GUIControl* guiEventControl);
 		/// Sizes the activity combo to its longest row plus the list pad and scrollbar, clipped to the panel's right pad.
 		void FitHostActivityCombo();
 		/// Writes the picked activity's preset and module onto the setup screen's own display.
