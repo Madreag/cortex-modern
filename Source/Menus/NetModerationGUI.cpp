@@ -151,6 +151,13 @@ namespace {
 		return area;
 	}
 
+	/// The chat band's row height for the text size the settings ask for.
+	int ChatLineHeight(bool large) {
+		GUIFont* font = large ? g_FrameMan.GetLargeFont(true) : g_FrameMan.GetSmallFont(true);
+		if (!font) font = g_FrameMan.GetSmallFont(true);
+		return std::max(12, font ? font->GetFontHeight() : 12) + 4;
+	}
+
 	/// The first row the chat may use: under every message band that sits in the top half, which the band
 	/// keeps clear of rather than draw across, and the window's own margin where there is no message.
 	int ChatTopLimit(const EditorArea& area, int screenHeight) {
@@ -160,6 +167,9 @@ namespace {
 		}
 		return top;
 	}
+
+	/// The run an open entry needs above the seats panel: one history row and the tight entry.
+	int ChatEntryMinimum(int lineHeight) { return lineHeight + lineHeight + 4; }
 
 	std::string DisplayName(std::string text) {
 		for (char& c: text) if (static_cast<unsigned char>(c) < 32) c = ' ';
@@ -398,12 +408,19 @@ void NetModerationGUI::LayoutPanel() {
 	int top = PanelTop(screenHeight);
 	int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight < c_CompactMaxHeight) {
-		const int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
+		const EditorArea area = FreeArea(g_WindowMan.GetResX());
+		int highestTop = std::max(top, c_StripBandBottom + rowHeight + c_PanelGap);
+		// An open chat entry owns the run above the panel: the panel gives up rows to its compact form
+		// before the history gives up its last one, and takes them back when the entry closes.
+		if (m_ChatEntryOpen && g_SettingsMan.GetNetworkChatVisible()) {
+			const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
+			highestTop = std::max(highestTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
+		}
 		// While the editor holds the world every seat's message band owns its own rows and the toast
 		// row under them, so the panel takes the highest run of rows no band holds - above a band as
 		// readily as below one, which a lowest-band reservation could not do on a top/bottom split.
 		std::vector<PanelBand> bands;
-		for (const auto& band: FreeArea(g_WindowMan.GetResX()).textBands) {
+		for (const auto& band: area.textBands) {
 			bands.push_back({band.y, band.y + band.h + rowHeight + 2 * c_PanelGap});
 		}
 		const int wanted = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - highestTop));
@@ -958,10 +975,10 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	}
 
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
-	GUIFont* font = g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large ?
-	    g_FrameMan.GetLargeFont(true) : g_FrameMan.GetSmallFont(true);
+	const bool wantsLarge = g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large;
+	GUIFont* font = wantsLarge ? g_FrameMan.GetLargeFont(true) : g_FrameMan.GetSmallFont(true);
 	if (!font) font = g_FrameMan.GetSmallFont(true);
-	const int lineH = std::max(12, font->GetFontHeight()) + 4;
+	int lineH = std::max(12, font->GetFontHeight()) + 4;
 	EditorArea area = FreeArea(backbuffer->w);
 	if (m_StatusRect.visible) {
 		area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
@@ -995,8 +1012,17 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 
 	int rows = showHistory ? static_cast<int>(std::min(m_MatchChat.size(), m_MatchChatLines.size())) : 0;
 	const int available = std::max(0, bottom - topLimit);
-	// The entry gives up its two spare pixels before the history gives up a row: a roomy entry takes the whole
-	// carved band at 640x360 with the panel open, where the tight one leaves exactly one row above it.
+	// The size is the last thing to give, after the entry's spare pixels and the panel's rows: a run that
+	// still cannot hold the chosen size's row above the entry takes the smaller one for this band alone.
+	bool reducedTextSize = false;
+	if (wantsLarge && showHistory && m_ChatEntryOpen && available < ChatEntryMinimum(lineH)) {
+		if (GUIFont* small = g_FrameMan.GetSmallFont(true); small && std::max(12, small->GetFontHeight()) + 4 < lineH) {
+			font = small;
+			lineH = std::max(12, small->GetFontHeight()) + 4;
+			reducedTextSize = true;
+		}
+	}
+	// The entry gives up its two spare pixels before the history gives up a row.
 	const int roomyInputH = lineH + 6;
 	const int tightInputH = lineH + 4;
 	const int inputH = !m_ChatEntryOpen ? 0 : (available - roomyInputH >= lineH ? roomyInputH : tightInputH);
@@ -1039,7 +1065,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	const int width = std::max(1, std::min(420, std::max(c_ChatMinWidth, freeRight - freeLeft - 8)));
 	const int x = std::max(0, std::min(backbuffer->w - width, freeLeft + std::max(0, (freeRight - freeLeft - width) / 2)));
 	m_ChatRect = {x, top, width, height, true};
-	m_ChatBand = {lineH, inputH, rows, showHistory};
+	m_ChatBand = {lineH, inputH, rows, showHistory, reducedTextSize};
 
 	const long long nowUs = g_TimerMan.GetAbsoluteTime();
 	const size_t first = m_MatchChatLines.size() > static_cast<size_t>(rows) ? m_MatchChatLines.size() - static_cast<size_t>(rows) : 0;
