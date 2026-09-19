@@ -96,6 +96,7 @@ void Activity::Clear() {
 		m_ControlledActor[player] = 0;
 		m_RenderSubstituteActor[player] = nullptr;
 		m_PresentationView[player] = PresentationView{};
+		m_PlayerController[player].SetCheckpointOwner(this);
 		m_PlayerController[player].Reset();
 		m_MessageTimer[player].Reset();
 	}

@@ -11,6 +11,7 @@
 namespace RTE {
 
 	class Actor;
+	class Entity;
 
 	//!< Enumerate control states.
 	enum ControlState {
@@ -169,6 +170,7 @@ namespace RTE {
 		void CopyCheckpointFrom(const Controller& reference);
 		void TouchCheckpoint();
 		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
+		void SetCheckpointOwner(Entity* owner) { m_CheckpointOwner = owner; }
 		auto CheckpointStampValue() const {
 			return CheckpointFields(m_ControlledActor, m_ControlStates, m_AnalogMove, m_AnalogAim, m_AnalogCursor,
 				m_InputMode, m_SeatMode, m_Team, m_Player, m_SeatPlayer, m_Disabled, m_SyncedOrderDisableTick,
@@ -534,6 +536,7 @@ namespace RTE {
 	private:
 		bool m_CheckpointInitialized = false;
 		bool m_CheckpointValueTrap = false;
+		Entity* m_CheckpointOwner = nullptr;
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ControlStates, self.m_AnalogMove, self.m_AnalogAim, self.m_AnalogCursor,
 				self.m_Disabled, self.m_WireApplyTick, self.m_WireSchemeValid, self.m_WireDeviceClass, self.m_WireDigitalAimSpeed,

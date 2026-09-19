@@ -113,12 +113,13 @@ void Actor::Clear() {
 			m_PointingTarget, m_PrevHealth, m_PrevPathTarget, m_RecentMovement, m_ReloadOffset, m_SeenTargetPos,
 			m_SharpAimDelay, m_SharpAimMaxedOut, m_SharpAimProgress, m_SharpAimTimer, m_SightDistance, m_StableRecoverDelay,
 			m_StableVel, m_Status, m_TravelImpulseDamage, m_UpdateMovePath, m_ViewPoint, m_WaypointCursor,
-			m_Waypoints.empty(), m_pControllerIcon, m_pTeamIcon);
+			m_Waypoints.empty(), m_pControllerIcon, m_pTeamIcon, m_Controller);
 	}, m_CheckpointInitialized);
 	m_CheckpointInitialized = true;
 	m_PersistedActorRuntime.clear();
 	m_PersistedActorIconReferences = {};
 	m_PersistedControllerCheckpoint.clear();
+	m_Controller.SetCheckpointOwner(this);
 	m_Controller.Reset();
 	m_PersistedControllerInputMode = -1;
 	m_PersistedControllerQuickDisabled = -1;
