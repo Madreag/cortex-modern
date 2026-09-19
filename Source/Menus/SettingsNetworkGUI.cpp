@@ -47,7 +47,7 @@ namespace {
 	}
 
 	std::string AutosavesDirectory() {
-		return System::GetWorkingDirectory() + "Autosaves";
+		return AutosaveStore::Directory().string();
 	}
 
 	// Creates the directory when absent so the opened folder always exists, then

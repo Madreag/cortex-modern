@@ -745,6 +745,8 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 			if (!stagedImages->Add(modulePath + "/" + name, image.get())) throw std::runtime_error("could not stage " + name);
 			image.release();
 		}
+		// The label names the reader's data module, so it stays inside the saves module wherever the archive
+		// itself lives; a refusal below names the archive that was read.
 		Reader reader(std::make_unique<std::istringstream>(text), filePath + "/Save.ini", true, nullptr, true);
 		reader.SetCheckpoint(true);
 		reader.SetThrowOnError(true);
@@ -875,7 +877,8 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		out.images = std::move(stagedImages);
 		return true;
 	} catch (const std::exception& error) {
-		const std::string message = "Could not load game \"" + fileName + "\": " + error.what();
+		// The reason keeps its shape for the refusal classifiers; the archive it was read from rides after it.
+		const std::string message = "Could not load game \"" + fileName + "\": " + error.what() + " (read from " + archivePath + ")";
 		g_ConsoleMan.PrintString("ERROR: " + message);
 		RTEError::ShowMessageBox(message);
 		return false;
