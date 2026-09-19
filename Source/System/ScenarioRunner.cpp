@@ -1292,6 +1292,21 @@ namespace RTE {
 		}
 	}
 
+	void ScenarioRunner::ReleaseLockstepControlOverridesOf(uint8_t ownerPeerId) {
+		if (ownerPeerId == 0) {
+			return;
+		}
+		for (auto it = s_LockstepControlOverrides.begin(); it != s_LockstepControlOverrides.end();) {
+			if (it->second == ownerPeerId) {
+				// Erased, not zeroed: an entry of 0 would read as an owner rather than as no handoff.
+				NoteE2eOwnerTransfer(it->first);
+				it = s_LockstepControlOverrides.erase(it);
+			} else {
+				++it;
+			}
+		}
+	}
+
 	bool ScenarioRunner::TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame) {
 		if (!s_LockstepCoordinator) {
 			return false;

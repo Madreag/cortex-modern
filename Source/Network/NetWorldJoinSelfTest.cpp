@@ -3372,6 +3372,80 @@ namespace RTE {
 		return 0;
 	}
 
+	// The Release the world commits hands the departed seat's characters back before the next Activate.
+	int TestWorldReleaseFreesTheDepartedBrain() {
+		NetMatchConfig config = MakeWorldConfig();
+		// Co-op: both members share team 0, so the next Activate names the team the leaver played.
+		config.players = {
+		    NetMatchPlayerSlot{1, 0, true, "World"},
+		    NetMatchPlayerSlot{2, 0, false, "First"},
+		    NetMatchPlayerSlot{3, 0, false, "Second"},
+		};
+		config.peerCount = 3;
+		NetWorldJoinSession leaver;
+		leaver.connection = 7;
+		leaver.assignedPeerId = 2;
+		leaver.team = 0;
+		leaver.activationTick = 120;
+		NetWorldJoinSession next = leaver;
+		next.connection = 8;
+		next.assignedPeerId = 3;
+		const NetGameWorldTransition leaverActivate = BuildWorldActivateTransition(leaver, config, 1);
+		const NetGameWorldTransition nextActivate = BuildWorldActivateTransition(next, config, 1);
+		// What the Activate's apply does on every peer (MovableMan's world transition branch).
+		if (!WorldTransitionSeatsMember(leaverActivate) || !WorldTransitionSeatsMember(nextActivate)) {
+			return Fail("release-kept-the-departed-control: an Activate no longer seats a member");
+		}
+		ScenarioRunner::SetLockstepControlOverride(910, leaverActivate.peerId);
+		ScenarioRunner::SetLockstepControlOverride(911, nextActivate.peerId);
+		const auto brainsNow = [] {
+			// The candidate list MovableMan builds: each brain with the owner the handoff map names.
+			return std::vector<NetWorldBrainCandidate>{
+			    NetWorldBrainCandidate{910, 0, ScenarioRunner::GetLockstepControlOverrideOwner(910)},
+			    NetWorldBrainCandidate{911, 0, ScenarioRunner::GetLockstepControlOverrideOwner(911)}};
+		};
+		const auto cleanUp = [] {
+			ScenarioRunner::ReleaseLockstepControlOverridesOf(2);
+			ScenarioRunner::ReleaseLockstepControlOverridesOf(3);
+		};
+		if (ChooseWorldActivateBrain(brainsNow(), nextActivate) != 0) {
+			cleanUp();
+			return Fail("release-took-a-live-members-control: a seated member's brain was offered to another activation");
+		}
+		// The Release DriveWorldJoins commits for a clean leave, and its apply.
+		NetGameWorldTransition release;
+		release.kind = NetGameWorldTransition::Release;
+		release.peerId = leaverActivate.peerId;
+		release.holderGeneration = 1;
+		release.team = 0;
+		if (WorldTransitionSeatsMember(release) || WorldTransitionBindsBrain(release, true)) {
+			cleanUp();
+			return Fail("release-kept-the-departed-control: a Release seats or binds, which it must not");
+		}
+		ScenarioRunner::ReleaseLockstepControlOverridesOf(release.peerId);
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(910) != 0) {
+			cleanUp();
+			return Fail("release-kept-the-departed-control: actor 910 still reads owner " +
+			            std::to_string(static_cast<int>(ScenarioRunner::GetLockstepControlOverrideOwner(910))) +
+			            " after peer " + std::to_string(static_cast<int>(release.peerId)) + " left");
+		}
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(911) != nextActivate.peerId) {
+			cleanUp();
+			return Fail("release-took-a-live-members-control: actor 911 lost peer " +
+			            std::to_string(static_cast<int>(nextActivate.peerId)) + "'s handoff");
+		}
+		if (ChooseWorldActivateBrain(brainsNow(), nextActivate) != 910) {
+			cleanUp();
+			return Fail("release-left-the-brain-to-a-clone: the departed seat's brain was refused, so the "
+			            "activation of peer " + std::to_string(static_cast<int>(nextActivate.peerId)) + " spawns a second resident");
+		}
+		cleanUp();
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(911) != 0) {
+			return Fail("release-took-a-live-members-control: the fixture did not give actor 911 back");
+		}
+		return 0;
+	}
+
 	// A watcher that has been streaming is the one a freed slot goes to, at its own announced E.
 	int TestFreedSlotPromotesTheOldestSpectator() {
 		NetWorldJoinHost host;
@@ -5010,6 +5084,10 @@ namespace RTE {
 			s_FailTag = "net-world-reclaim-hold-selftest";
 			return TestWorldReclaimHoldFollowsTheSeatsSlot();
 		}
+		if (std::strcmp(name, "release-control") == 0 || std::strcmp(name, "-net-world-release-control-selftest") == 0) {
+			s_FailTag = "net-world-release-control-selftest";
+			return TestWorldReleaseFreesTheDepartedBrain();
+		}
 		if (std::strcmp(name, "reclaim") == 0 || std::strcmp(name, "-net-world-reclaim-selftest") == 0) {
 			s_FailTag = "net-world-reclaim-selftest";
 			return TestReclaimOutranksAFreshJoin();
@@ -5205,6 +5283,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldReclaimHoldFollowsTheSeatsSlot(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReclaimOutranksAFreshJoin(); result != 0) {

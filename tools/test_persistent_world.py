@@ -97,6 +97,9 @@ RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
 RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
 RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
 RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
+RED_RELEASE_KEPT_CONTROL = "release-kept-the-departed-control"
+RED_RELEASE_TOOK_LIVE_CONTROL = "release-took-a-live-members-control"
+RED_RELEASE_CLONED_BRAIN = "release-left-the-brain-to-a-clone"
 RED_RECLAIM_HOLD_SLOT = "reclaim-hold-missed-the-slot"
 RED_RECLAIM_HOLD_WRONG_SLOT = "reclaim-hold-fenced-the-wrong-slot"
 RED_RECLAIM_HOLD_STRANGER = "reclaim-hold-let-a-stranger-in"
@@ -449,6 +452,13 @@ CASES = (
         "red": RED_CLEAN_LEAVE_WRONG_SEAT,
         "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
         "pass_token": "[net-world-clean-leave-selftest] PASS",
+    },
+    {
+        "name": "release-frees-the-departed-brain",
+        "argv": ["-net-world-release-control-selftest"],
+        "red": RED_RELEASE_KEPT_CONTROL,
+        "also_red": (RED_RELEASE_TOOK_LIVE_CONTROL, RED_RELEASE_CLONED_BRAIN),
+        "pass_token": "[net-world-release-control-selftest] PASS",
     },
     {
         "name": "reclaim-hold-follows-the-seats-slot",

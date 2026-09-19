@@ -326,6 +326,9 @@ namespace RTE {
 		/// team's policy owner (a surviving teammate's AI picks them up). Synced: every peer consumes
 		/// the frame with identical leave knowledge.
 		static void PurgeLockstepControlOverridesForGonePeers(uint64_t frame);
+		/// Drops every handoff this peer holds, so a seat its player left cleanly leaves its actors
+		/// unowned. A committed transition applies it, so the map moves the same way on every peer.
+		static void ReleaseLockstepControlOverridesOf(uint8_t ownerPeerId);
 		/// Erases a dropped claim whose claimant is gone and whose seat is no longer held.
 		static bool TakeExpiredDroppedClaim(int64_t actorUniqueID, uint64_t frame);
 		/// Whether this peer may issue team commands for the team (any of a shared team's human peers may).
