@@ -92,4 +92,7 @@ namespace RTE {
 	uint64_t LuaCheckpointWriteGeneration();
 
 	bool RunCheckpointImageSelfTest();
+
+	/// Runs the checkpoint rows that need a live scene; call from a running match.
+	bool RunCheckpointSceneRows();
 } // namespace RTE
