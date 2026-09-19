@@ -26,6 +26,7 @@
 #include <SDL3/SDL.h>
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -55,6 +56,15 @@ namespace {
 		bool holdsPad = false;
 	};
 	Probe probe;
+	std::atomic<uint64_t> rendezvousCount{0};
+
+	// The moment this peer's script stops waiting on another peer: named on its own line, and
+	// counted so an engine watchdog can measure the wait that follows it, not the one before.
+	void NoteRendezvous(const std::string& name) {
+		const uint64_t count = rendezvousCount.fetch_add(1) + 1;
+		System::PrintDiagnosticLine("[net-ui-probe] rendezvous " + name + " count=" + std::to_string(count) +
+		                            " tick=" + std::to_string(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())));
+	}
 
 	GUIControlManager* MenuControls() {
 		if (auto* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationManager();
@@ -609,14 +619,18 @@ namespace {
 				observed["screenshot"] = path.string();
 			}
 		} else if (op == "signal") {
-			auto path = Leaf(step.at("name").get<std::string>());
+			const std::string name = step.at("name").get<std::string>();
+			auto path = Leaf(name);
 			path += ".json";
 			Require(!std::filesystem::exists(path), "signal already exists");
 			std::ofstream output(path);
 			output << observed.dump() << '\n';
 			Require(static_cast<bool>(output), "cannot write signal");
+			NoteRendezvous(name);
 		} else if (op == "wait_file") {
-			if (!std::filesystem::is_regular_file(step.at("path").get<std::string>())) return false;
+			const std::string path = step.at("path").get<std::string>();
+			if (!std::filesystem::is_regular_file(path)) return false;
+			NoteRendezvous(std::filesystem::path(path).stem().generic_string());
 		} else if (op == "finish") {
 			GUIInputWrapper::SetAutomationDriving(false);
 			ReleaseProbePad();
@@ -674,6 +688,8 @@ namespace {
 		}
 	}
 }
+
+uint64_t RendezvousCount() { return rendezvousCount.load(); }
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() { Process(Phase::Draw); }

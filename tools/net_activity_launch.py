@@ -772,6 +772,15 @@ def launch(options):
                                               for rows in result["commits"].values())
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            # The host signals and the client waits on it: each peer passes exactly one rendezvous, and the
+            # engine's editor watchdog counts its ticks from that line, not from the start of the hold.
+            result["rendezvous"] = {peer: [line for line in log.splitlines() if line.startswith("[net-ui-probe] rendezvous ")]
+                                    for peer, log in logs.items()}
+            checks["rendezvous_counted"] = all(len(lines) == 1 and WAITING_SEEN_SIGNAL in lines[0]
+                                               for lines in result["rendezvous"].values())
+            if not checks["rendezvous_counted"]:
+                for peer, lines in result["rendezvous"].items():
+                    print(f"{root / peer / 'stdout.log'}: rendezvous lines {lines}")
             def pad_held(probe):
                 named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
                          if step.get("name") == "pad_held"]
