@@ -271,6 +271,13 @@ namespace RTE {
 		/// New-session host visibility. Default LAN.
 		NetworkHostVisibility GetNetworkHostVisibility() const { return m_NetworkHostVisibility; }
 		void SetNetworkHostVisibility(NetworkHostVisibility visibility) { m_NetworkHostVisibility = visibility; }
+		/// The host-defaults template beside Settings.ini. "Save As Host Defaults" writes it and a new
+		/// hosted lobby seeds its draft from it; the network layer owns the template's own versioned
+		/// format, so this only carries the text to and from the file.
+		static std::string NetworkHostDefaultsPath();
+		bool HasNetworkHostDefaults() const;
+		bool LoadNetworkHostDefaultsText(std::string& outText, std::string* error = nullptr) const;
+		bool SaveNetworkHostDefaultsText(const std::string& text, std::string* error = nullptr) const;
 		/// Round-trips the Network* preferences through Writer/Reader and checks validation.
 		static int RunNetworkPreferencesSelfTest();
 #pragma endregion

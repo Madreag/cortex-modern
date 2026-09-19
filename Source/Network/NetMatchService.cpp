@@ -2163,6 +2163,313 @@ static std::string ResyncSaveName() {
 		return m_PendingHostOptions;
 	}
 
+	NetHostDefaultsTemplate NetHostDefaults::FromConfig(const NetMatchConfig& config) {
+		NetHostDefaultsTemplate saved;
+		saved.version = c_Version;
+		saved.rules = static_cast<const NetMatchStandardRules&>(config);
+		saved.peerCount = config.peerCount;
+		saved.dedicated = config.dedicated;
+		saved.delayPolicy = config.delayPolicy;
+		saved.inputDelayFrames = config.inputDelayFrames;
+		saved.autosaveEnabled = config.autosaveEnabled;
+		saved.autosaveIntervalSeconds = config.autosaveIntervalSeconds;
+		saved.idleWaitMinutes = config.idleWaitMinutes;
+		saved.automaticRepair = config.automaticRepair;
+		saved.frameRedundancyTicks = config.frameRedundancyTicks;
+		for (const NetMatchPlayerSlot& slot : config.players) {
+			// A seat's position, kind and intent only: never its occupant's name or peer identity.
+			saved.seats.push_back(NetHostDefaultsTemplate::Seat{
+			    slot.team, slot.cpu, slot.cpu ? static_cast<uint16_t>(0) : NetMatchConfigUtil::PeerInputDelay(config, slot.peerId)});
+		}
+		return saved;
+	}
+
+	bool NetHostDefaults::ApplyTo(const NetHostDefaultsTemplate& saved, NetMatchConfig& config, std::string* error) {
+		NetMatchConfig seeded = config;
+		static_cast<NetMatchStandardRules&>(seeded) = saved.rules;
+		seeded.modePreset = NetMatchConfigUtil::ModeName(saved.rules.mode);
+		seeded.delayPolicy = saved.delayPolicy;
+		seeded.inputDelayFrames = saved.inputDelayFrames;
+		seeded.autosaveEnabled = saved.autosaveEnabled;
+		seeded.autosaveIntervalSeconds = saved.autosaveIntervalSeconds;
+		seeded.idleWaitMinutes = saved.idleWaitMinutes;
+		seeded.automaticRepair = saved.automaticRepair;
+		seeded.frameRedundancyTicks = saved.frameRedundancyTicks;
+		// A template never reshapes a roster: the saved capacity lands only where the seats the
+		// caller already built still fit inside it, and otherwise the draft keeps its own.
+		const bool capacityFits = saved.peerCount >= NetMatchConfigUtil::c_MinPeerCount && saved.peerCount <= NetMatchConfigUtil::c_MaxPeerCount &&
+		                          seeded.hostPeerId <= saved.peerCount &&
+		                          std::none_of(seeded.players.begin(), seeded.players.end(),
+		                                       [&saved](const NetMatchPlayerSlot& slot) { return slot.peerId > saved.peerCount; });
+		if (capacityFits) {
+			seeded.peerCount = saved.peerCount;
+		}
+		// Seat intent is by position and kind: the team a host wants on seat i, never who sits there.
+		for (size_t seat = 0; seat < seeded.players.size() && seat < saved.seats.size(); ++seat) {
+			if (seeded.players[seat].cpu == saved.seats[seat].cpu) {
+				seeded.players[seat].team = saved.seats[seat].team;
+			}
+		}
+		if (saved.delayPolicy == NetMatchDelayPolicy::Fixed) {
+			// The per-sender vector is the saved intent raised to the manual floor, which is what a
+			// fixed policy means; an automatic policy carries none and measures its own.
+			std::vector<uint16_t> delays(seeded.peerCount, saved.inputDelayFrames);
+			for (size_t seat = 0; seat < seeded.players.size() && seat < saved.seats.size(); ++seat) {
+				const NetMatchPlayerSlot& slot = seeded.players[seat];
+				if (!slot.cpu && slot.peerId >= 1 && slot.peerId <= seeded.peerCount) {
+					delays[slot.peerId - 1] = std::max(saved.inputDelayFrames, saved.seats[seat].delayFrames);
+				}
+			}
+			seeded.peerInputDelayFrames = std::move(delays);
+		} else {
+			seeded.peerInputDelayFrames.clear();
+		}
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(seeded, error)) {
+			return false;
+		}
+		config = std::move(seeded);
+		return true;
+	}
+
+	std::string NetHostDefaults::Serialize(const NetHostDefaultsTemplate& saved) {
+		auto line = [](const std::string& key, const std::string& value) { return key + " = " + value + "\n"; };
+		auto number = [&line](const std::string& key, uint32_t value) { return line(key, std::to_string(value)); };
+		auto flag = [&line](const std::string& key, bool value) { return line(key, value ? "1" : "0"); };
+		std::string text = "// Cortex Command host match defaults, written by Host Options - Save As Host Defaults.\n";
+		text += number("Version", c_Version);
+		text += line("Mode", NetMatchConfigUtil::ModeName(saved.rules.mode));
+		text += number("PeerCount", saved.peerCount);
+		text += flag("Dedicated", saved.dedicated);
+		text += line("ActivityModule", saved.rules.activityModule);
+		text += line("ActivityType", saved.rules.activityType);
+		text += line("ActivityPreset", saved.rules.activityPreset);
+		text += line("SceneModule", saved.rules.sceneModule);
+		text += line("SceneName", saved.rules.sceneName);
+		text += number("Difficulty", saved.rules.difficulty);
+		text += number("StartingGold", saved.rules.startingGold);
+		text += flag("FogOfWar", saved.rules.fogOfWar);
+		text += flag("RequireClearPathToOrbit", saved.rules.requireClearPathToOrbit);
+		text += flag("DeployUnits", saved.rules.deployUnits);
+		text += flag("BrainlessHumansSpectate", saved.rules.brainlessHumansSpectate);
+		for (size_t team = 0; team < saved.rules.teamRules.size(); ++team) {
+			const std::string prefix = "Team" + std::to_string(team);
+			text += line(prefix + "Technology", saved.rules.teamRules[team].technologyIntent);
+			text += line(prefix + "TechnologyModule", saved.rules.teamRules[team].technologyModule);
+			text += number(prefix + "AISkill", saved.rules.teamRules[team].aiSkill);
+		}
+		text += line("DelayPolicy", saved.delayPolicy == NetMatchDelayPolicy::Fixed ? "fixed" : "auto");
+		text += number("InputDelayFrames", saved.inputDelayFrames);
+		text += flag("AutosaveEnabled", saved.autosaveEnabled);
+		text += number("AutosaveIntervalSeconds", saved.autosaveIntervalSeconds);
+		text += number("IdleWaitMinutes", saved.idleWaitMinutes);
+		text += flag("AutomaticRepair", saved.automaticRepair);
+		text += number("FrameRedundancyTicks", saved.frameRedundancyTicks);
+		text += number("SeatCount", static_cast<uint32_t>(saved.seats.size()));
+		for (size_t seat = 0; seat < saved.seats.size(); ++seat) {
+			const std::string prefix = "Seat" + std::to_string(seat);
+			text += number(prefix + "Team", saved.seats[seat].team);
+			text += flag(prefix + "CPU", saved.seats[seat].cpu);
+			text += number(prefix + "Delay", saved.seats[seat].delayFrames);
+		}
+		return text;
+	}
+
+	bool NetHostDefaults::Parse(const std::string& text, NetHostDefaultsTemplate& out, std::string* error) {
+		auto refuse = [error](const std::string& reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		auto trim = [](const std::string& value) {
+			const size_t first = value.find_first_not_of(" \t\r");
+			const size_t last = value.find_last_not_of(" \t\r");
+			return first == std::string::npos ? std::string() : value.substr(first, last - first + 1);
+		};
+		auto number = [](const std::string& value, uint32_t& parsed) {
+			if (value.empty() || value.size() > 10 || value.find_first_not_of("0123456789") != std::string::npos) {
+				return false;
+			}
+			parsed = static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, 10));
+			return true;
+		};
+
+		NetHostDefaultsTemplate parsed;
+		parsed.seats.clear();
+		std::map<size_t, NetHostDefaultsTemplate::Seat> seatsByIndex;
+		size_t seatCount = 0;
+		bool sawVersion = false;
+		size_t lineNumber = 0;
+		std::istringstream lines(text);
+		std::string raw;
+		while (std::getline(lines, raw)) {
+			++lineNumber;
+			const size_t comment = raw.find("//");
+			const std::string statement = trim(comment == std::string::npos ? raw : raw.substr(0, comment));
+			if (statement.empty()) {
+				continue;
+			}
+			const size_t equals = statement.find('=');
+			if (equals == std::string::npos) {
+				return refuse("host defaults line " + std::to_string(lineNumber) + " is not a key = value line");
+			}
+			const std::string key = trim(statement.substr(0, equals));
+			const std::string value = trim(statement.substr(equals + 1));
+			if (key.empty()) {
+				return refuse("host defaults line " + std::to_string(lineNumber) + " names no key");
+			}
+			uint32_t asNumber = 0;
+			auto readNumber = [&](uint32_t& target, const char* what) {
+				if (!number(value, asNumber)) {
+					return refuse(std::string("host defaults ") + what + " is not a number");
+				}
+				target = asNumber;
+				return true;
+			};
+			// The version line comes first so a template a newer build wrote is refused whole, never
+			// half-read into this one's fields.
+			if (!sawVersion) {
+				if (key != "Version") {
+					return refuse("the host defaults template must begin with its Version line");
+				}
+				if (!number(value, asNumber) || asNumber == 0) {
+					return refuse("the host defaults template names an invalid version");
+				}
+				if (asNumber > c_Version) {
+					return refuse("the host defaults template is version " + std::to_string(asNumber) +
+					              "; this build reads version " + std::to_string(c_Version));
+				}
+				parsed.version = static_cast<uint16_t>(asNumber);
+				sawVersion = true;
+				continue;
+			}
+			if (key.starts_with("Seat") && key != "SeatCount") {
+				const size_t digitsEnd = key.find_first_not_of("0123456789", 4);
+				uint32_t index = 0;
+				if (digitsEnd == std::string::npos || digitsEnd == 4 || !number(key.substr(4, digitsEnd - 4), index) || index >= NetMatchConfigUtil::c_MaxPlayers) {
+					std::cout << "[net-host-defaults] ignoring unknown key '" << key << "'" << std::endl;
+					continue;
+				}
+				NetHostDefaultsTemplate::Seat& seat = seatsByIndex[index];
+				const std::string field = key.substr(digitsEnd);
+				if (field == "Team") {
+					if (!number(value, asNumber)) return refuse("host defaults seat team is not a number");
+					seat.team = static_cast<uint8_t>(asNumber);
+				} else if (field == "CPU") {
+					if (!number(value, asNumber)) return refuse("host defaults seat kind is not a number");
+					seat.cpu = asNumber != 0;
+				} else if (field == "Delay") {
+					if (!number(value, asNumber)) return refuse("host defaults seat delay is not a number");
+					seat.delayFrames = static_cast<uint16_t>(std::min<uint32_t>(asNumber, NetMatchConfigUtil::c_MaxInputDelayFrames));
+				} else {
+					std::cout << "[net-host-defaults] ignoring unknown key '" << key << "'" << std::endl;
+				}
+				continue;
+			}
+			if (key.starts_with("Team") && key.size() > 5) {
+				uint32_t team = 0;
+				if (number(key.substr(4, 1), team) && team < parsed.rules.teamRules.size()) {
+					const std::string field = key.substr(5);
+					if (field == "Technology") {
+						parsed.rules.teamRules[team].technologyIntent = value;
+						continue;
+					}
+					if (field == "TechnologyModule") {
+						parsed.rules.teamRules[team].technologyModule = value;
+						continue;
+					}
+					if (field == "AISkill") {
+						if (!number(value, asNumber)) return refuse("host defaults team AI skill is not a number");
+						parsed.rules.teamRules[team].aiSkill = static_cast<uint8_t>(asNumber);
+						continue;
+					}
+				}
+			}
+			if (key == "Mode") {
+				if (!NetMatchConfigUtil::ParseMode(value, parsed.rules.mode)) return refuse("host defaults names an unknown match mode");
+			} else if (key == "PeerCount") {
+				if (!readNumber(asNumber, "peer count")) return false;
+				parsed.peerCount = static_cast<uint8_t>(asNumber);
+			} else if (key == "Dedicated") {
+				if (!readNumber(asNumber, "dedicated flag")) return false;
+				parsed.dedicated = asNumber != 0;
+			} else if (key == "ActivityModule") {
+				parsed.rules.activityModule = value;
+			} else if (key == "ActivityType") {
+				parsed.rules.activityType = value;
+			} else if (key == "ActivityPreset") {
+				parsed.rules.activityPreset = value;
+			} else if (key == "SceneModule") {
+				parsed.rules.sceneModule = value;
+			} else if (key == "SceneName") {
+				parsed.rules.sceneName = value;
+			} else if (key == "Difficulty") {
+				if (!readNumber(asNumber, "difficulty")) return false;
+				parsed.rules.difficulty = static_cast<uint8_t>(asNumber);
+			} else if (key == "StartingGold") {
+				if (!readNumber(parsed.rules.startingGold, "starting gold")) return false;
+			} else if (key == "FogOfWar") {
+				if (!readNumber(asNumber, "fog of war")) return false;
+				parsed.rules.fogOfWar = asNumber != 0;
+			} else if (key == "RequireClearPathToOrbit") {
+				if (!readNumber(asNumber, "clear path rule")) return false;
+				parsed.rules.requireClearPathToOrbit = asNumber != 0;
+			} else if (key == "DeployUnits") {
+				if (!readNumber(asNumber, "deploy units rule")) return false;
+				parsed.rules.deployUnits = asNumber != 0;
+			} else if (key == "BrainlessHumansSpectate") {
+				if (!readNumber(asNumber, "spectate rule")) return false;
+				parsed.rules.brainlessHumansSpectate = asNumber != 0;
+			} else if (key == "DelayPolicy") {
+				if (value != "auto" && value != "fixed") return refuse("host defaults names an unknown delay policy");
+				parsed.delayPolicy = value == "fixed" ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+			} else if (key == "InputDelayFrames") {
+				if (!readNumber(asNumber, "input delay")) return false;
+				parsed.inputDelayFrames = static_cast<uint16_t>(std::min<uint32_t>(asNumber, NetMatchConfigUtil::c_MaxInputDelayFrames));
+			} else if (key == "AutosaveEnabled") {
+				if (!readNumber(asNumber, "autosave switch")) return false;
+				parsed.autosaveEnabled = asNumber != 0;
+			} else if (key == "AutosaveIntervalSeconds") {
+				if (!readNumber(parsed.autosaveIntervalSeconds, "autosave interval")) return false;
+			} else if (key == "IdleWaitMinutes") {
+				if (!readNumber(asNumber, "idle wait")) return false;
+				parsed.idleWaitMinutes = static_cast<uint8_t>(std::min<uint32_t>(asNumber, 60));
+			} else if (key == "AutomaticRepair") {
+				if (!readNumber(asNumber, "automatic repair")) return false;
+				parsed.automaticRepair = asNumber != 0;
+			} else if (key == "FrameRedundancyTicks") {
+				if (!readNumber(asNumber, "frame redundancy window")) return false;
+				parsed.frameRedundancyTicks = static_cast<uint8_t>(std::clamp<uint32_t>(asNumber, 1, NetMatchConfigUtil::c_MaxFrameRedundancyTicks));
+			} else if (key == "SeatCount") {
+				if (!readNumber(asNumber, "seat count")) return false;
+				seatCount = std::min<size_t>(asNumber, NetMatchConfigUtil::c_MaxPlayers);
+			} else {
+				// An unknown key is a later build's field, or a hand edit: it is named and skipped,
+				// never guessed at.
+				std::cout << "[net-host-defaults] ignoring unknown key '" << key << "'" << std::endl;
+			}
+		}
+		if (!sawVersion) {
+			return refuse("the host defaults template has no version line");
+		}
+		for (size_t seat = 0; seat < seatCount; ++seat) {
+			const auto found = seatsByIndex.find(seat);
+			parsed.seats.push_back(found == seatsByIndex.end() ? NetHostDefaultsTemplate::Seat{} : found->second);
+		}
+		out = std::move(parsed);
+		return true;
+	}
+
+	bool NetHostDefaults::Load(NetHostDefaultsTemplate& out, std::string* error) {
+		std::string text;
+		if (!g_SettingsMan.LoadNetworkHostDefaultsText(text, error)) {
+			return false;
+		}
+		return Parse(text, out, error);
+	}
+
+	bool NetHostDefaults::Save(const NetHostDefaultsTemplate& saved, std::string* error) {
+		return g_SettingsMan.SaveNetworkHostDefaultsText(Serialize(saved), error);
+	}
+
 	bool NetMatchService::SendChat(uint8_t scope, const std::string& text) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// Only a live lobby or match can carry a line to the wire: after LeaveWorkerMain the
