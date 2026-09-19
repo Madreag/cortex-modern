@@ -354,6 +354,9 @@ namespace RTE {
 	/// sim never advances on, and those must not spend a capped match's tick budget.
 	uint64_t LockstepPlayedFrame();
 
+	/// Clears the paused-frame discount a coordinator handoff or resync relaunch starts from zero.
+	void ResetLockstepPausedFrames();
+
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
 	struct NetLockstepPeerStats {

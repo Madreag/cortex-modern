@@ -61,6 +61,7 @@ namespace RTE {
 			bool        scriptGraphSelfTest = false; // -script-graph-selftest: run the script graph's contract tests in the master state and exit.
 			bool        renderWindowScriptsSelfTest = false; // -render-window-scripts-selftest: freeze contract of the render window.
 			bool        textWrapSelfTest = false; // -text-wrap-selftest: word-aware wrap cases.
+			bool        saveRefusalDiagnosisSelfTest = false; // -save-refusal-diagnosis-selftest: player-facing save refusal.
 			bool        freeRunSim = false; // -free-run-sim: a lockstep match runs its ticks as fast as the frames arrive, one per loop iteration, drawing nothing.
 			bool        selftestRematch = false; // -net-match-e2e-rematch: when match 1 ends, return to the lobby and run a second match.
 			bool        selftestLeave = false; // -net-match-e2e-leave: this peer quits to the menu at tick 300 like a pause-menu leave.
@@ -242,8 +243,10 @@ namespace RTE {
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
 		static const std::vector<NetUiToastRecord>& GetNetUiToastLog();
-		/// The newest three unexpired presentation events, in display order.
+		/// Unexpired presentation events, oldest first. A toast with no shown stamp is still waiting.
 		static std::vector<NetUiToastRecord> GetVisibleNetUiToasts();
+		/// Stamps the drawn slice; a newest-3 skip drops the older prefix.
+		static void NoteNetUiToastsDrawn(size_t first, size_t count);
 		/// Names of peers whose next input frame is missing, for the stalled render path.
 		static std::string GetLockstepMissingPeers();
 		/// Counts resync wait-screen draws for the report (also counted headless).

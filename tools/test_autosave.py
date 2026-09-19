@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import subprocess
+import sys
 import threading
 import zipfile
 from pathlib import Path
@@ -117,6 +119,22 @@ def inspect_autosaves(root: Path, who: str, enabled: bool) -> dict:
             "capture_ms_max": max(row["capture_ms"] for row in captures)}
 
 
+def compare_peer_checkpoints(repo: Path, left: Path, right: Path, report_a: Path, report_b: Path, log: Path) -> None:
+    comparer = repo / "tools" / "compare_snapshots.py"
+    env = {**os.environ, "CCCP_TOOLS_DIR": str(repo / "tools")}
+    proc = subprocess.run(
+        [sys.executable, str(comparer), str(left), str(right),
+         "--peer-report-a", str(report_a), "--peer-report-b", str(report_b),
+         "--cross-process"],
+        capture_output=True, text=True, env=env,
+    )
+    output = (proc.stdout or "") + (proc.stderr or "")
+    log.write_text(output, encoding="utf-8")
+    first_fail = next((line for line in output.splitlines() if "FAIL" in line),
+                      (output.strip().splitlines() or ["no comparer output"])[0])
+    assert proc.returncode == 0, f"peer checkpoint compare failed: {first_fail}"
+
+
 def exact_role_compare(control: Path, saved: Path, ticks: int) -> None:
     left = json.loads(control.read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]
     right = json.loads(saved.read_text(encoding="utf-8-sig"))["runs"][0]["tick_hashes"]
@@ -202,6 +220,18 @@ def main() -> int:
             passed, comparison = strict_compare(arm_root / "host_trace.json", arm_root / "client_trace.json", args.ticks)
             details["peer_comparison"] = comparison
             assert passed, comparison
+            host_files = {Path(path).name: Path(path) for path in details.get("host", {}).get("files", [])}
+            client_files = {Path(path).name: Path(path) for path in details.get("client", {}).get("files", [])}
+            shared = sorted(set(host_files) & set(client_files))
+            if host_files or client_files:
+                assert shared, "peer autosaves share no file names for the comparer"
+                details["snapshot_compares"] = []
+                for name in shared:
+                    log = arm_root / f"snapshot_compare_{name}.txt"
+                    compare_peer_checkpoints(
+                        repo, host_files[name], client_files[name],
+                        arm_root / "host_report.json", arm_root / "client_report.json", log)
+                    details["snapshot_compares"].append(str(log))
             if arm == "host-option":
                 ticks_by_peer = {who: [row["tick"] for row in details[who]["captures"]] for who in cadence}
                 details["capture_ticks"] = ticks_by_peer

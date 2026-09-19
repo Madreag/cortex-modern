@@ -94,6 +94,9 @@ namespace RTE {
 		/// Sets a text box's text by control name.
 		bool AutomationSetText(const std::string& controlName, const std::string& text);
 
+		/// Pins the lobby share-address host the status row draws.
+		void AutomationSetShareAddress(const std::string& address);
+
 		/// Sets a checkbox's state by control name, then runs the same change path a click would.
 		bool AutomationSetCheck(const std::string& controlName, bool checked);
 
@@ -252,7 +255,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerHostInputDelayTextBox;
 		GUILabel* m_MultiplayerHostInputDelayPolicyLabel; //!< Names the saved delay policy beside the box, the same parenthetical the lobby row carries.
 		GUICheckbox* m_MultiplayerHostPortMapCheckbox;
-		GUIButton* m_MultiplayerHostModeButton;
+		GUIComboBox* m_MultiplayerHostModeCombo = nullptr; //!< PvP / Co-op PvE / PvPvE for request.mode.
 		GUIComboBox* m_MultiplayerHostActivityCombo = nullptr; //!< The host's pick-list of lockstep-runnable activities.
 		GUIComboBox* m_MultiplayerHostSceneCombo = nullptr; //!< Compatible scenes for the picked activity.
 		GUILabel* m_MultiplayerHostInfoLabel;
@@ -447,6 +450,8 @@ namespace RTE {
 		void RefreshMultiplayerHostActivities();
 		/// Rebuilds the scene list for the picked activity, keeping the current scene when it is still compatible.
 		void RefreshMultiplayerHostScenes();
+		/// Sizes the activity and scene combos to their own longest row plus the list pad and scrollbar, clipped to the panel's right pad; the mode combo follows the activity's width.
+		void FitHostActivityCombo();
 		/// Writes the picked activity and scene onto the setup screen's own display.
 		void ApplyMultiplayerHostActivity();
 		/// Starts hosting or joining a multiplayer match from the setup screen fields.

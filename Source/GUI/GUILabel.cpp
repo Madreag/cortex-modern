@@ -127,7 +127,11 @@ void GUILabel::Draw(GUIBitmap* Bitmap, bool overwiteFontColorAndKerning) {
 
 	if (m_Font) {
 		if (overwiteFontColorAndKerning) {
-			m_Font->SetColor(m_FontColor);
+			unsigned long color = m_FontColor;
+			if (!GetEnabled() && m_Skin) {
+				color = m_Skin->DimColor(m_FontColor, Bitmap->GetColorDepth());
+			}
+			m_Font->SetColor(color);
 			m_Font->SetKerning(m_FontKerning);
 		}
 

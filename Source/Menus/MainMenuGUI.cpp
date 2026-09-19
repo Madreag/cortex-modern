@@ -32,6 +32,7 @@
 #include "GUITextBox.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
+#include "GUIListPanel.h"
 
 #include "Resources/Credits.h"
 
@@ -50,12 +51,106 @@
 
 using namespace RTE;
 
+// Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
+static bool Cp1252FromCodepoint(int codepoint, char& out) {
+	if (codepoint < 0) {
+		return false;
+	}
+	if (codepoint < 0x80 || (codepoint >= 0xA0 && codepoint <= 0xFF)) {
+		out = static_cast<char>(codepoint);
+		return true;
+	}
+	switch (codepoint) {
+		case 0x20AC: out = static_cast<char>(0x80); return true;
+		case 0x201A: out = static_cast<char>(0x82); return true;
+		case 0x0192: out = static_cast<char>(0x83); return true;
+		case 0x201E: out = static_cast<char>(0x84); return true;
+		case 0x2026: out = static_cast<char>(0x85); return true;
+		case 0x2020: out = static_cast<char>(0x86); return true;
+		case 0x2021: out = static_cast<char>(0x87); return true;
+		case 0x02C6: out = static_cast<char>(0x88); return true;
+		case 0x2030: out = static_cast<char>(0x89); return true;
+		case 0x0160: out = static_cast<char>(0x8A); return true;
+		case 0x2039: out = static_cast<char>(0x8B); return true;
+		case 0x0152: out = static_cast<char>(0x8C); return true;
+		case 0x017D: out = static_cast<char>(0x8E); return true;
+		case 0x2018: out = static_cast<char>(0x91); return true;
+		case 0x2019: out = static_cast<char>(0x92); return true;
+		case 0x201C: out = static_cast<char>(0x93); return true;
+		case 0x201D: out = static_cast<char>(0x94); return true;
+		case 0x2022: out = static_cast<char>(0x95); return true;
+		case 0x2013: out = static_cast<char>(0x96); return true;
+		case 0x2014: out = static_cast<char>(0x97); return true;
+		case 0x02DC: out = static_cast<char>(0x98); return true;
+		case 0x2122: out = static_cast<char>(0x99); return true;
+		case 0x0161: out = static_cast<char>(0x9A); return true;
+		case 0x203A: out = static_cast<char>(0x9B); return true;
+		case 0x0153: out = static_cast<char>(0x9C); return true;
+		case 0x017E: out = static_cast<char>(0x9E); return true;
+		case 0x0178: out = static_cast<char>(0x9F); return true;
+		default: return false;
+	}
+}
+
+static int NextUtf8Codepoint(const std::string& text, size_t& index) {
+	const unsigned char lead = static_cast<unsigned char>(text[index]);
+	if (lead < 0x80) {
+		++index;
+		return lead;
+	}
+	size_t need = 0;
+	int codepoint = 0;
+	if ((lead & 0xE0) == 0xC0) {
+		need = 1;
+		codepoint = lead & 0x1F;
+	} else if ((lead & 0xF0) == 0xE0) {
+		need = 2;
+		codepoint = lead & 0x0F;
+	} else if ((lead & 0xF8) == 0xF0) {
+		need = 3;
+		codepoint = lead & 0x07;
+	} else {
+		++index;
+		return -1;
+	}
+	if (index + 1 + need > text.size()) {
+		++index;
+		return -1;
+	}
+	for (size_t trail = 1; trail <= need; ++trail) {
+		const unsigned char byte = static_cast<unsigned char>(text[index + trail]);
+		if ((byte & 0xC0) != 0x80) {
+			++index;
+			return -1;
+		}
+		codepoint = (codepoint << 6) | (byte & 0x3F);
+	}
+	index += 1 + need;
+	return codepoint;
+}
+
+static std::string Utf8ToCp1252(const std::string& utf8) {
+	std::string out;
+	out.reserve(utf8.size());
+	for (size_t index = 0; index < utf8.size();) {
+		char mapped = '?';
+		if (!Cp1252FromCodepoint(NextUtf8Codepoint(utf8, index), mapped)) {
+			mapped = '?';
+		}
+		out.push_back(mapped);
+	}
+	return out;
+}
+
 // The lobby and the network settings page show one saved name; "Player" is only the empty fallback.
 static std::string SavedMultiplayerName() {
 	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
 }
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
+
+static std::string s_ShareAddress;
+static bool s_ShareResolved = false;
 
 static std::optional<size_t> ReplayRowIndex(const std::string& name) {
 	const std::string prefix = "LabelReplayRow";
@@ -108,7 +203,7 @@ void MainMenuGUI::Clear() {
 	m_MultiplayerHostInputDelayTextBox = nullptr;
 	m_MultiplayerHostInputDelayPolicyLabel = nullptr;
 	m_MultiplayerHostPortMapCheckbox = nullptr;
-	m_MultiplayerHostModeButton = nullptr;
+	m_MultiplayerHostModeCombo = nullptr;
 	m_MultiplayerHostActivityCombo = nullptr;
 	m_MultiplayerHostSceneCombo = nullptr;
 	m_MultiplayerHostInfoLabel = nullptr;
@@ -259,10 +354,17 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	m_MultiplayerHostInputDelayTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextHostInputDelay"));
 	m_MultiplayerHostInputDelayPolicyLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInputDelayPolicy"));
 	m_MultiplayerHostPortMapCheckbox = dynamic_cast<GUICheckbox*>(m_SubMenuScreenGUIControlManager->GetControl("CheckHostPortMap"));
-	m_MultiplayerHostModeButton = dynamic_cast<GUIButton*>(m_SubMenuScreenGUIControlManager->GetControl("ButtonHostMode"));
+	m_MultiplayerHostModeCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostMode"));
 	m_MultiplayerHostActivityCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostActivity"));
 	m_MultiplayerHostSceneCombo = dynamic_cast<GUIComboBox*>(m_SubMenuScreenGUIControlManager->GetControl("ComboHostScene"));
 	m_MultiplayerHostInfoLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("LabelHostInfo"));
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->ClearList();
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPSkirmish));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::CoopPvE));
+		m_MultiplayerHostModeCombo->AddItem(NetMatchConfigUtil::ModeLabel(NetMatchMode::PvPvE));
+		m_MultiplayerHostModeCombo->SetSelectedIndex(0);
+	}
 	ApplyMultiplayerHostActivity();
 	m_MultiplayerJoinAddressTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinAddress"));
 	m_MultiplayerJoinPortTextBox = dynamic_cast<GUITextBox*>(m_SubMenuScreenGUIControlManager->GetControl("TextJoinPort"));
@@ -398,16 +500,11 @@ void MainMenuGUI::CreateCreditsScreen() {
 
 	m_CreditsTextLabel = dynamic_cast<GUILabel*>(m_SubMenuScreenGUIControlManager->GetControl("CreditsLabel"));
 
-	// TODO: Get Unicode going!
-	// Hack here to change the special characters over 128 in the ANSI ASCII table to match our font files
-	for (char& stringChar: s_CreditsText) {
-		if (stringChar == -60) {
-			stringChar = static_cast<unsigned char>(142); //'Ä'
-		} else if (stringChar == -42) {
-			stringChar = static_cast<unsigned char>(153); //'Ö'
-		} else if (stringChar == -87) {
-			stringChar = static_cast<unsigned char>(221); //'©'
-		}
+	// Credits.h is UTF-8; transcode to cp1252 so the menu Latin-1 atlas draws the letters.
+	static bool s_CreditsAreCp1252 = false;
+	if (!s_CreditsAreCp1252) {
+		s_CreditsText = Utf8ToCp1252(s_CreditsText);
+		s_CreditsAreCp1252 = true;
 	}
 	m_CreditsTextLabel->SetText(s_CreditsText);
 	m_CreditsTextLabel->ResizeHeightToFit();
@@ -746,7 +843,8 @@ bool MainMenuGUI::HandleInputEvents() {
 		} else if (guiEvent.GetType() == GUIEvent::Notification && (guiEvent.GetControl() == m_MultiplayerLanGamesList || guiEvent.GetControl() == m_ReplayList)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUIComboBox::Closed &&
-		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostSceneCombo)) {
+		           (guiEvent.GetControl() == m_MultiplayerHostActivityCombo || guiEvent.GetControl() == m_MultiplayerHostSceneCombo ||
+		            guiEvent.GetControl() == m_MultiplayerHostModeCombo)) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUICheckbox::Changed && guiEvent.GetControl() == m_MultiplayerHostPortMapCheckbox) {
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
@@ -871,13 +969,14 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		g_SettingsMan.SetNetworkPortMapEnable(m_MultiplayerHostPortMapCheckbox->GetCheck() == GUICheckbox::Checked);
 		g_SettingsMan.UpdateSettingsFile();
 		g_GUISound.ItemChangeSound()->Play();
-	} else if (guiEventControl == m_MultiplayerHostModeButton) {
-		// Cycle PvP -> Co-op PvE -> PvPvE. PvE modes add a CPU team the host's AI drives.
-		m_MultiplayerHostMode = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? NetMatchMode::CoopPvE : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? NetMatchMode::PvPvE : NetMatchMode::PvPSkirmish);
-		const char* modeText = m_MultiplayerHostMode == NetMatchMode::PvPSkirmish ? "Mode: PvP" : (m_MultiplayerHostMode == NetMatchMode::CoopPvE ? "Mode: Co-op PvE" : "Mode: PvPvE");
-		m_MultiplayerHostModeButton->SetText(modeText);
+	} else if (guiEventControl == m_MultiplayerHostModeCombo) {
+		const int selected = m_MultiplayerHostModeCombo ? m_MultiplayerHostModeCombo->GetSelectedIndex() : -1;
+		static const NetMatchMode modes[] = {NetMatchMode::PvPSkirmish, NetMatchMode::CoopPvE, NetMatchMode::PvPvE};
+		if (selected >= 0 && selected < 3) {
+			m_MultiplayerHostMode = modes[selected];
+		}
 		ApplyMultiplayerHostActivity();
-		g_GUISound.ButtonPressSound()->Play();
+		g_GUISound.ItemChangeSound()->Play();
 	} else if (guiEventControl == m_MultiplayerHostActivityCombo) {
 		// A closed pick-list carries its selection; the index is the request fields' source.
 		const int selected = m_MultiplayerHostActivityCombo ? m_MultiplayerHostActivityCombo->GetSelectedIndex() : -1;
@@ -1046,7 +1145,64 @@ void MainMenuGUI::RefreshMultiplayerHostScenes() {
 			m_MultiplayerHostSceneCombo->AddItem(name + (names[name] > 1 && !sceneModule.empty() ? " - " + sceneModule : ""));
 		}
 	}
+	FitHostActivityCombo();
 	ApplyMultiplayerHostActivity();
+}
+
+void MainMenuGUI::FitHostActivityCombo() {
+	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
+		return;
+	}
+	constexpr int namePad = 8;
+	constexpr int scrollThickness = 17;
+	constexpr int panelPad = 12;
+	const int valueX = m_MultiplayerHostPortTextBox->GetRelXPos();
+	const int maxWidth = std::max(80, m_MultiplayerHostPanel->GetWidth() - valueX - panelPad);
+	// Every picker in the value column is measured the same way: its own longest row plus the list
+	// pad and, when the rows overflow the drop, the scrollbar.
+	const auto fit = [&](GUIComboBox* combo) {
+		GUIListPanel* list = combo->GetListPanel();
+		GUIFont* font = list ? list->GetFont() : nullptr;
+		if (!font && m_SubMenuScreenGUIControlManager && m_SubMenuScreenGUIControlManager->GetSkin()) {
+			GUISkin* skin = m_SubMenuScreenGUIControlManager->GetSkin();
+			std::string fontName;
+			if (skin->GetValue("Listbox", "Font", &fontName)) {
+				font = skin->GetFont(fontName);
+			}
+			if (!font) {
+				font = skin->GetFont("FontLarge.png");
+			}
+		}
+		int longest = 0;
+		if (font) {
+			for (int i = 0; i < combo->GetCount(); ++i) {
+				if (const GUIListPanel::Item* item = combo->GetItem(i)) {
+					longest = std::max(longest, font->CalculateWidth(item->m_Name));
+				}
+			}
+		}
+		const int rowHeight = font ? font->GetFontHeight() : 0;
+		const int stackHeight = std::max(list ? list->GetStackHeight() : 0, rowHeight * combo->GetCount());
+		const int scroll = (rowHeight > 0 && stackHeight > combo->GetDropHeight()) ? scrollThickness : 0;
+		const int needed = longest > 0 ? longest + namePad + scroll : combo->GetWidth();
+		const int width = std::clamp(std::max(needed, 80), 80, maxWidth);
+		combo->SetPositionRel(valueX, combo->GetRelYPos());
+		if (combo->GetWidth() != width) {
+			combo->Resize(width, combo->GetHeight());
+		}
+		return width;
+	};
+	const int activityWidth = fit(m_MultiplayerHostActivityCombo);
+	if (m_MultiplayerHostSceneCombo) {
+		fit(m_MultiplayerHostSceneCombo);
+	}
+	// The mode rows are short words, so the mode picker follows the activity picker's width.
+	if (m_MultiplayerHostModeCombo) {
+		m_MultiplayerHostModeCombo->SetPositionRel(valueX, m_MultiplayerHostModeCombo->GetRelYPos());
+		if (m_MultiplayerHostModeCombo->GetWidth() != activityWidth) {
+			m_MultiplayerHostModeCombo->Resize(activityWidth, m_MultiplayerHostModeCombo->GetHeight());
+		}
+	}
 }
 
 void MainMenuGUI::ApplyMultiplayerHostActivity() {
@@ -1058,6 +1214,7 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 		if (picked) {
 			m_MultiplayerHostActivityCombo->SetSelectedIndex(static_cast<int>(m_MultiplayerHostActivityIndex));
 		} else {
+			// No preset enumerated yet: the closed combo still names what the request would send.
 			m_MultiplayerHostActivityCombo->SetText(preset + (module.empty() ? "" : " - " + module));
 		}
 	}
@@ -1070,6 +1227,10 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 		} else {
 			m_MultiplayerHostSceneCombo->SetText(sceneName);
 		}
+	}
+	if (m_MultiplayerHostModeCombo) {
+		const int modeIndex = m_MultiplayerHostMode == NetMatchMode::CoopPvE ? 1 : (m_MultiplayerHostMode == NetMatchMode::PvPvE ? 2 : 0);
+		m_MultiplayerHostModeCombo->SetSelectedIndex(modeIndex);
 	}
 	if (m_MultiplayerHostInfoLabel) {
 		if (!m_MultiplayerHostPickNotice.empty()) {
@@ -1491,8 +1652,9 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		lobbyRowTailBare[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
-	static std::string s_shareAddress;
-	static bool s_shareResolved = false;
+	const int contentWidth = 300;
+	const int rowBoxWidth = contentWidth - 24;
+	bool addressOnOwnRow = false;
 	// The host's join and ready-up hints belong to the lobby it opened itself; a lobby that follows
 	// a played match already carries its own line - the result and the rematch offer - like the client's.
 	if (snapshot.isHost && snapshot.inLobby && !snapshot.remoteReady && !snapshot.playedAMatch) {
@@ -1503,15 +1665,36 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 		if (connectedCount < 2) {
-			if (!s_shareResolved) {
-				s_shareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
-				s_shareResolved = true;
+			if (!s_ShareResolved) {
+				s_ShareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
+				s_ShareResolved = true;
 			}
-			m_MultiplayerStatusLabel->SetText(s_shareAddress.empty()
-			                                      ? "Waiting for a player to join..."
-			                                      : "Waiting for a player to join... share " + s_shareAddress + ":" + m_MultiplayerHostPortTextBox->GetText());
+			if (s_ShareAddress.empty()) {
+				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+			} else {
+				const std::string address = s_ShareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
+				std::string prose = "Waiting for a player to join... share";
+				// The status label's skin font is FontLarge; draw and measure the share row in FontSmall.
+				if (m_MultiplayerLobbyPlayerRowFallbackFont) {
+					m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
+					m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFallbackFont);
+				}
+				if (GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont) {
+					if (font->CalculateWidth(prose) > rowBoxWidth) {
+						while (!prose.empty() && font->CalculateWidth(prose + "...") > rowBoxWidth) {
+							prose.pop_back();
+						}
+						prose += "...";
+					}
+				}
+				m_MultiplayerStatusLabel->SetText(prose + "\n" + address);
+				addressOnOwnRow = true;
+				const bool addressScrolls = m_MultiplayerStatusLabel->GetMaxWordWidth() > rowBoxWidth;
+				m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(addressScrolls);
+				m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(addressScrolls);
+			}
 		} else {
-			s_shareResolved = false;
+			s_ShareResolved = false;
 			if (connectedCount < snapshot.members.size()) {
 				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
 			} else {
@@ -1519,14 +1702,17 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		}
 	} else {
-		s_shareResolved = false;
+		s_ShareResolved = false;
 		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+	}
+	if (!addressOnOwnRow) {
+		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
+		m_MultiplayerStatusLabel->ActivateDeactivateOverflowScroll(false);
 	}
 	// The lobby panel is one width on every peer: a longer row or status elides inside its box
 	// rather than widening the panel, so host and client land on the same rectangle.
-	const int contentWidth = 300;
-	const int rowBoxWidth = contentWidth - 24;
-	if (m_MultiplayerLobbyPlayerRowFont) {
+	if (!addressOnOwnRow && m_MultiplayerLobbyPlayerRowFont) {
+		m_MultiplayerStatusLabel->SetFont(m_MultiplayerLobbyPlayerRowFont);
 		std::string statusText = m_MultiplayerStatusLabel->GetText();
 		while (!statusText.empty() &&
 		       m_MultiplayerLobbyPlayerRowFont->CalculateWidth(statusText + "...", m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
@@ -1536,7 +1722,6 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			m_MultiplayerStatusLabel->SetText(statusText + "...");
 		}
 	}
-	// The status line can wrap; reserve its real height and let everything below slide with it.
 	const int statusHeight = std::max(16, m_MultiplayerStatusLabel->GetTextHeight() + 4);
 	if (m_MultiplayerStatusLabel->GetHeight() != statusHeight) {
 		m_MultiplayerStatusLabel->Resize(m_MultiplayerStatusLabel->GetWidth(), statusHeight);
@@ -1682,11 +1867,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	FitMultiplayerScreen(contentWidth, screenHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
-	// The Leave/Seats pair centres on the panel the way Start does; the gap between them holds parity.
-	const int leaveWidth = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->GetWidth();
-	const int seatsWidth = m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->GetWidth();
-	const int pairLeft = (contentWidth - leaveWidth - 2 - seatsWidth) / 2;
-	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetPositionRel(pairLeft, 236 + extraHeight);
+	// Leave 100 + Seats 82 + 8 matches Start Match's 190: Leave keeps the wider half as the exit.
+	GUIButton* leave = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton];
+	GUIButton* seats = m_MainMenuButtons[MenuButton::MultiplayerModerateButton];
+	constexpr int pairGap = 8;
+	if (leave->GetWidth() != 100) {
+		leave->Resize(100, leave->GetHeight());
+	}
+	if (seats->GetWidth() != 82) {
+		seats->Resize(82, seats->GetHeight());
+	}
+	const int pairLeft = (contentWidth - leave->GetWidth() - pairGap - seats->GetWidth()) / 2;
+	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 
 	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetVisible(!snapshot.isHost);
@@ -1696,7 +1888,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetEnabled(snapshot.isHost && snapshot.inLobby && snapshot.remoteReady);
 	m_MainMenuButtons[MenuButton::MultiplayerLeaveButton]->SetEnabled(true);
 	// §9b: moderation is a match feature - a lobby seat whose holder leaves goes straight back in the pool.
-	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetPositionRel(contentWidth - pairLeft - seatsWidth, 236 + extraHeight);
+	seats->SetPositionRel(pairLeft + leave->GetWidth() + pairGap, 236 + extraHeight);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetVisible(snapshot.isHost);
 	m_MainMenuButtons[MenuButton::MultiplayerModerateButton]->SetEnabled(snapshot.isHost && snapshot.running);
 }
@@ -1993,6 +2185,11 @@ bool MainMenuGUI::AutomationSetText(const std::string& controlName, const std::s
 		return true;
 	}
 	return false;
+}
+
+void MainMenuGUI::AutomationSetShareAddress(const std::string& address) {
+	s_ShareAddress = address;
+	s_ShareResolved = true;
 }
 
 bool MainMenuGUI::AutomationSetCheck(const std::string& controlName, bool checked) {
@@ -2302,11 +2499,7 @@ void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
 		g_NetMatchService.Destroy();
 		return;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		m_MultiplayerErrorLabel->SetText("The launch activity differs from the agreed setup.");
-		g_NetMatchService.Destroy();
-		return;
-	}
+	(void)activityPreset; // ConsumeReadyToLaunch already adopted this preset into the roster.
 	const int localTeam = g_NetMatchService.GetLocalTeam();
 	std::string setupError;
 	Activity* activity = NetActivitySetup::CreateConfiguredActivity(*config, localTeam, &setupError);

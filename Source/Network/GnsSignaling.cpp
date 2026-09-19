@@ -341,7 +341,7 @@ namespace RTE {
 			{"poll_windows", windows},
 			{"channel", json::parse(m_Channel.BuildReportJson(), nullptr, false)},
 		};
-		return report.dump();
+		return report.dump(-1, ' ', false, json::error_handler_t::replace);
 	}
 
 	void GnsDirectorySignalDispatcher::Note(const std::string& line) const {

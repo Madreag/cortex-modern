@@ -400,6 +400,10 @@ namespace RTE {
 			s_Args.textWrapSelfTest = true;
 			return 1;
 		}
+		if (a == "-save-refusal-diagnosis-selftest") {
+			s_Args.saveRefusalDiagnosisSelfTest = true;
+			return 1;
+		}
 		if (a == "-net-match-e2e-rematch") {
 			// Arm the return-to-lobby rematch ride-through. Boolean flag.
 			s_Args.selftestRematch = true;
@@ -708,7 +712,6 @@ namespace RTE {
 		}
 		NetUiToast toast;
 		toast.record = {tick, kind, text, senderPeerId};
-		toast.shownAtMs = NetLockstepNowMs();
 		s_NetUiToasts.push_back(toast);
 		s_NetUiToastLog.push_back(toast.record);
 	}
@@ -719,8 +722,12 @@ namespace RTE {
 
 	void ScenarioRunner::DrawNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
-		while (!s_NetUiToasts.empty() && nowMs >= s_NetUiToasts.front().shownAtMs + c_NetUiToastMs) {
-			s_NetUiToasts.pop_front();
+		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
+			if (it->shownAtMs != 0 && nowMs >= it->shownAtMs + c_NetUiToastMs) {
+				it = s_NetUiToasts.erase(it);
+			} else {
+				++it;
+			}
 		}
 		if (auto* panel = g_MenuMan.GetNetworkPanel()) panel->DrawMatchToasts();
 	}
@@ -732,13 +739,42 @@ namespace RTE {
 	std::vector<ScenarioRunner::NetUiToastRecord> ScenarioRunner::GetVisibleNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
 		std::vector<NetUiToastRecord> visible;
-		for (auto toast = s_NetUiToasts.rbegin(); toast != s_NetUiToasts.rend() && visible.size() < 3; ++toast) {
-			if (nowMs < toast->shownAtMs + c_NetUiToastMs) {
-				visible.push_back(toast->record);
+		for (const auto& toast : s_NetUiToasts) {
+			if (toast.shownAtMs == 0 || nowMs < toast.shownAtMs + c_NetUiToastMs) {
+				visible.push_back(toast.record);
 			}
 		}
-		std::reverse(visible.begin(), visible.end());
 		return visible;
+	}
+
+	void ScenarioRunner::NoteNetUiToastsDrawn(size_t first, size_t count) {
+		const uint64_t nowMs = NetLockstepNowMs();
+		size_t visibleIndex = 0;
+		for (auto& toast : s_NetUiToasts) {
+			if (toast.shownAtMs != 0 && nowMs >= toast.shownAtMs + c_NetUiToastMs) {
+				continue;
+			}
+			if (visibleIndex >= first && visibleIndex < first + count && toast.shownAtMs == 0) {
+				toast.shownAtMs = nowMs;
+			}
+			++visibleIndex;
+		}
+		if (first == 0) {
+			return;
+		}
+		visibleIndex = 0;
+		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
+			if (it->shownAtMs != 0 && nowMs >= it->shownAtMs + c_NetUiToastMs) {
+				++it;
+				continue;
+			}
+			if (visibleIndex < first) {
+				it = s_NetUiToasts.erase(it);
+				++visibleIndex;
+				continue;
+			}
+			break;
+		}
 	}
 
 	std::string ScenarioRunner::GetLockstepMissingPeers() {
@@ -798,6 +834,7 @@ namespace RTE {
 		}
 		if (coordinator) { s_CommandSessionId = coordinator->GetConfig().sessionId; s_CommandEpoch = coordinator->GetConfig().seatPresenceEpoch; }
 		s_LockstepAppliedFrame = 0;
+		ResetLockstepPausedFrames();
 		s_LockstepControlOverrides.clear();
 		s_LockstepDroppedControlOverrides.clear();
 		// A coordinator handoff ends any synced pause; the next match must not inherit a frozen clock.
