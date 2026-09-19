@@ -9218,6 +9218,69 @@ namespace RTE {
 
 	// A rematch lobby only one peer came back to is destroyed when its wait runs out: the kept lease
 	// is deleted once and never beaten again. A lobby seated in time keeps playing.
+	// The diagnostics worker completes an identity the game thread captured. A persistent-world match's
+	// hashes must name the world versions there too: they are stamped into every checkpoint it writes.
+	bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error) {
+		struct Observed {
+			uint16_t capturedLockstep = 0;
+			uint16_t capturedMatchConfig = 0;
+			uint16_t completedLockstep = 0;
+			std::string configHash;
+		};
+		const auto run = [](bool world, Observed& observed, std::string& failure) {
+			NetMatchService service;
+			service.m_MatchConfig.persistentWorld = world;
+			std::string captureError;
+			if (!service.CaptureDiagnosticIdentityInputs(&captureError)) {
+				failure = "capture refused: " + captureError;
+				return;
+			}
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				observed.capturedLockstep = service.m_DiagnosticIdentityInputs.deterministicConfig.lockstepCodecVersion;
+				observed.capturedMatchConfig = service.m_DiagnosticIdentityInputs.deterministicConfig.matchConfigVersion;
+			}
+			// Off the game thread, where the telemetry bundle's worker builds it.
+			bool built = false;
+			std::string buildError;
+			std::thread worker([&] { built = service.BuildCapturedDiagnosticIdentity(&buildError, nullptr); });
+			worker.join();
+			if (!built) {
+				failure = "build refused: " + buildError;
+				return;
+			}
+			const nlohmann::json identity = nlohmann::json::parse(service.ExportDiagnosticIdentity(), nullptr, false);
+			if (identity.is_discarded() || !identity.contains("deterministic_config")) {
+				failure = "the cached identity did not parse";
+				return;
+			}
+			observed.completedLockstep = identity["deterministic_config"].value("lockstep_codec_version", 0);
+			observed.configHash = service.m_AutosaveIdentity.deterministicConfigHash;
+		};
+		Observed ordinary, persistent;
+		std::string failure;
+		run(false, ordinary, failure);
+		if (failure.empty()) run(true, persistent, failure);
+		if (!failure.empty()) {
+			if (error) *error = "captured world identity: " + failure;
+			return false;
+		}
+		const auto seen = [](const Observed& observed) {
+			return "{captured_lockstep=" + std::to_string(observed.capturedLockstep) +
+			       " captured_match_config=" + std::to_string(observed.capturedMatchConfig) +
+			       " completed_lockstep=" + std::to_string(observed.completedLockstep) +
+			       " config_hash=" + observed.configHash.substr(0, 16) + "}";
+		};
+		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
+		    persistent.completedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		    persistent.configHash.empty() || persistent.configHash == ordinary.configHash) {
+			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
+			return false;
+		}
+		return true;
+	}
+
 	bool TestCompletedLobbyExpires(std::string* error) {
 		struct Wire {
 			std::deque<NetDirectoryClient::Reply> replies;
@@ -10294,6 +10357,7 @@ namespace RTE {
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
+		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
 		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
 		if (!stopCancelError.empty()) return fail(stopCancelError);
 		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);

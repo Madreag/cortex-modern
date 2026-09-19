@@ -876,6 +876,7 @@ namespace RTE {
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
+		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
 		friend bool TestChatSendRefusedOutsideCarry(std::string* error);
 		friend bool TestServiceReportCarriesActivityPreset(std::string* error);
 		friend bool RowRestartKey(NetMatchService& service, const std::filesystem::path& scratch, std::array<uint8_t, 32>& key, std::string* error);
@@ -934,6 +935,7 @@ namespace RTE {
 		std::string m_DiagnosticIdentity;
 		NetIdentityManifest m_DiagnosticIdentityInputs; //!< The manager reads a captured build is waiting on.
 		bool m_DiagnosticIdentityInputsPending = false;
+		bool m_DiagnosticIdentityInputsWorld = false; //!< The target the inputs were captured for, so the build stamps the same versions.
 		uint64_t m_DiagnosticIdentityGeneration = 0; //!< Bumped by every cached identity, so an older build knows it lost.
 		uint64_t m_DiagnosticIdentityInputsGeneration = 0;
 		std::string m_DiagnosticRuntimeError;

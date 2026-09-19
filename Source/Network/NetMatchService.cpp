@@ -4575,10 +4575,15 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::CaptureDiagnosticIdentityInputs(std::string* error) {
 		NetIdentityManifest inputs;
-		if (!NetIdentity::CaptureManifestInputs(inputs, error, DiagnosticIdentityOptions())) return false;
+		NetIdentityBuildOptions options = DiagnosticIdentityOptions();
+		// The world flag rides with the inputs: the build off this thread must hash the same versions.
+		const bool world = m_MatchConfig.persistentWorld;
+		NetIdentity::StampOptionsForTarget(options, world);
+		if (!NetIdentity::CaptureManifestInputs(inputs, error, options)) return false;
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentityInputs = std::move(inputs);
 		m_DiagnosticIdentityInputsPending = true;
+		m_DiagnosticIdentityInputsWorld = world;
 		m_DiagnosticIdentityInputsGeneration = m_DiagnosticIdentityGeneration;
 		return true;
 	}
@@ -4592,6 +4597,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::BuildCapturedDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
 		uint64_t capturedGeneration = 0;
+		bool capturedWorld = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_DiagnosticIdentityInputsPending) {
@@ -4600,17 +4606,20 @@ static std::string ResyncSaveName() {
 			}
 			manifest = m_DiagnosticIdentityInputs;
 			capturedGeneration = m_DiagnosticIdentityInputsGeneration;
+			capturedWorld = m_DiagnosticIdentityInputsWorld;
 			m_DiagnosticIdentityInputsPending = false;
 			m_DiagnosticIdentityInputs = NetIdentityManifest{};
 		}
+		NetIdentityBuildOptions options = DiagnosticIdentityOptions();
+		NetIdentity::StampOptionsForTarget(options, capturedWorld);
 		const NetIdentityManifest captured = manifest;
 		const auto started = std::chrono::steady_clock::now();
 		// The game thread can write a module tree while this walk reads it, so one failed walk is retried
 		// from the captured inputs before it is reported.
-		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, options);
 		if (!built) {
 			manifest = captured;
-			built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+			built = NetIdentity::CompleteManifestFromInputs(manifest, error, options);
 		}
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 		if (!built) return false;
