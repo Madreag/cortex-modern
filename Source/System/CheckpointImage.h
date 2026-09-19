@@ -181,6 +181,8 @@ namespace RTE {
 	};
 
 	void ArmLuaCheckpointBarrier();
+	/// Arms the native-value half of the barrier alone, for a harness that cannot afford the table half.
+	void ArmLuaCheckpointValueBarrier();
 	uint64_t LuaCheckpointWriteGeneration();
 
 	/// Reports a write to a script-owned native whose values a cached chunk carries. The engine calls
