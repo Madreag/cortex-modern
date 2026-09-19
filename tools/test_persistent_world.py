@@ -116,6 +116,8 @@ RED_PROMOTED_FENCE_STRANGER = "promoted-fence-held-a-stranger"
 RED_PROMOTED_RESEAT_SEAT_ID = "promoted-reseat-named-the-seats-id"
 RED_PROMOTED_RESEAT_ACTORS = "promoted-reseat-took-the-wrong-actors"
 RED_PROMOTED_RESEAT_HOLD = "promoted-reseat-resolved-the-wrong-hold"
+RED_WORLD_FIRST_SEAT = "world-first-seat-unnamable"
+RED_WORLD_FIRST_SEAT_MATCH = "world-first-seat-moved-a-match"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -511,6 +513,13 @@ CASES = (
             RED_PROMOTED_RESEAT_HOLD,
         ),
         "pass_token": "[net-world-promoted-seat-id-selftest] PASS",
+    },
+    {
+        "name": "dedicated-world-first-seat-can-be-named",
+        "argv": ["-net-world-first-seat-selftest"],
+        "red": RED_WORLD_FIRST_SEAT,
+        "also_red": (RED_WORLD_FIRST_SEAT_MATCH,),
+        "pass_token": "[net-world-first-seat-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",
