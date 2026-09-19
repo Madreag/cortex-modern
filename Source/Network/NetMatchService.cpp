@@ -1797,6 +1797,10 @@ static std::string ResyncSaveName() {
 					// The admission table says which seats a late joiner could still take: the host's
 					// own seat and the CPU slot never count, a committed or closed one is taken.
 					for (const NetH4SeatStatus& seat : m_SeatStatuses) {
+						// A world's watcher seats are counted as watchers, not as gameplay seats.
+						if (seat.lockstepPeerId >= c_WorldSpectatorLobbyPeerFirst) {
+							continue;
+						}
 						if (NetH4SeatIsOpen(seat.lockstepPeerId, m_LocalPeerId, seat.committed, seat.closed)) {
 							++directorySeatsFree;
 						}
@@ -2534,33 +2538,58 @@ static std::string ResyncSaveName() {
 		return false;
 	}
 
+	namespace {
+		// The one seat-to-slot binding both planes read: the slot this admission seat holds, preferring
+		// the held one. A bootstrap cancelled before it activated gave the slot back, and that is still
+		// the slot SlotOfSeat hands its holder on a reclaim, so an unheld binding answers too.
+		const NetWorldSlot* BoundWorldSlot(const NetWorldMembership& membership, uint16_t stableSeat) {
+			if (stableSeat == 0) {
+				return nullptr;
+			}
+			const NetWorldSlot* bound = nullptr;
+			for (const NetWorldSlot& slot: membership.Slots()) {
+				if (slot.stableSeat != stableSeat) {
+					continue;
+				}
+				if (slot.held) {
+					return &slot;
+				}
+				if (bound == nullptr) {
+					bound = &slot;
+				}
+			}
+			return bound;
+		}
+	} // namespace
+
 	std::vector<uint8_t> NetMatchService::WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership) {
 		std::vector<uint8_t> holds;
 		for (const NetH4SeatStatus& status: statuses) {
 			if (status.stableSeat == 0 || !(status.dropped || status.reclaiming)) {
 				continue;
 			}
-			// The hold belongs on the slot the seat holds, not on the slot its lockstep id names. A
-			// bootstrap cancelled before it activated gave the slot back, and that is the slot the
-			// holder reclaims (SlotOfSeat's own choice), so it is fenced too.
-			const NetWorldSlot* bound = nullptr;
-			for (const NetWorldSlot& slot: membership.Slots()) {
-				if (slot.stableSeat != status.stableSeat) {
-					continue;
-				}
-				if (slot.held) {
-					bound = &slot;
-					break;
-				}
-				if (bound == nullptr) {
-					bound = &slot;
-				}
-			}
-			if (bound != nullptr) {
+			// The hold belongs on the slot the seat holds, not on the slot its lockstep id names.
+			if (const NetWorldSlot* bound = BoundWorldSlot(membership, status.stableSeat)) {
 				holds.push_back(bound->peerId);
 			}
 		}
 		return holds;
+	}
+
+	NetH4SeatSimIdentity NetMatchService::WorldSimIdentityOfSeat(const NetWorldMembership& membership, uint16_t stableSeat) {
+		const NetWorldSlot* bound = BoundWorldSlot(membership, stableSeat);
+		if (bound == nullptr) {
+			return {};
+		}
+		return {bound->peerId, static_cast<int32_t>(bound->team), true};
+	}
+
+	NetH4SeatSimIdentity NetMatchService::SeatSimIdentitySource(void* context, uint16_t stableSeat) {
+		auto* service = static_cast<NetMatchService*>(context);
+		if (service == nullptr) {
+			return {};
+		}
+		return WorldSimIdentityOfSeat(service->m_WorldJoin.Membership(), stableSeat);
 	}
 
 	bool NetMatchService::NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough) {
@@ -3713,6 +3742,7 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetParticipantProofRequired(true);
 			m_ReconnectHost.SetPersistentWorld(config.persistentWorld);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+			m_ReconnectHost.SetSeatSimIdentitySource(&NetMatchService::SeatSimIdentitySource, this);
 		}
 		if (m_IsHost && !m_ReconnectHost.ImportMigrationState(m_MigrationAdmissionState, m_SeatAuth, config, m_LocalPeerId, liveTransports, AdmissionNowMs())) {
 			m_Coordinator->Complete("host handover admission state is invalid");
@@ -3730,6 +3760,7 @@ static std::string ResyncSaveName() {
 			m_Session->SetHostBanStore(&m_BanStore);
 			m_Session->EnableParticipantProof(nullptr);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+			m_ReconnectHost.SetSeatSimIdentitySource(&NetMatchService::SeatSimIdentitySource, this);
 			m_ReconnectHost.SetLiveMatch(true);
 			m_ReconnectHost.SetMigrationHold(result.snapshotProviderPeerId != 0, AdmissionNowMs());
 			m_ModerationSeats = m_ReconnectHost.GetModerationView();
@@ -5773,6 +5804,7 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetLiveMatch(false);
 			m_ReconnectHost.SetPersistentWorld(matchConfig.persistentWorld);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
+			m_ReconnectHost.SetSeatSimIdentitySource(&NetMatchService::SeatSimIdentitySource, this);
 			session.SetReconnectHost(&m_ReconnectHost);
 			session.EnableParticipantProof(nullptr);
 			m_BanStore.SetPath(NetHostBanStore::DefaultPath());

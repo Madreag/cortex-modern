@@ -42,6 +42,17 @@ namespace RTE {
 	/// application for a named seat does not already answer, and saves a joiner guessing seat numbers.
 	constexpr uint16_t c_NetH4AnySubstitutableSeat = UINT16_MAX;
 
+	/// The sim identity a seat's holder actually plays under. In an ordinary match that is the seat's
+	/// own lockstep id and team. In a persistent world the world plane owns it: a promoted watcher
+	/// keeps its seat but plays the slot that seat is bound to, whose id and team are the slot's.
+	struct NetH4SeatSimIdentity {
+		uint8_t peerId = 0;
+		int32_t team = 0;
+		bool fromWorldSlot = false; //!< The world plane answered; a false here is the seat's own pair.
+
+		bool operator==(const NetH4SeatSimIdentity&) const = default;
+	};
+
 	enum class NetHoldResolution : uint16_t {
 		Expired = 0,
 		Reclaimed = 1,
@@ -346,6 +357,11 @@ namespace RTE {
 		/// The actors the ledger records when a seat drops. Supplied by the match runner at the drop
 		/// frame; without one, a drop records an empty ownership list and no reseat is issued.
 		void SetDropOwnershipSource(std::vector<NetH4LedgerActor> (*source)(void*), void* context);
+		/// The world plane's answer to "which slot is this seat bound to". Supplied by the owner of
+		/// both planes; without one every seat plays its own lockstep id, which is the match case.
+		void SetSeatSimIdentitySource(NetH4SeatSimIdentity (*source)(void*, uint16_t), void* context);
+		/// The id and team this seat's holder plays on: the bound world slot's when there is one.
+		NetH4SeatSimIdentity SimIdentityOfSeat(const NetH4Seat& seat) const;
 
 		/// Routes one decoded H4 message. Non-H4 payloads are ignored.
 		/// @return Whether the payload was an H4 message this plane handled.
@@ -602,6 +618,8 @@ namespace RTE {
 		bool m_MatchEnded = false;
 		std::vector<NetH4LedgerActor> (*m_DropOwnershipSource)(void*) = nullptr;
 		void* m_DropOwnershipContext = nullptr;
+		NetH4SeatSimIdentity (*m_SeatSimIdentitySource)(void*, uint16_t) = nullptr;
+		void* m_SeatSimIdentityContext = nullptr;
 
 		NetReconnectAdmission m_Admission;
 		NetReconnectTxCache m_TxCache;
