@@ -212,6 +212,12 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_DirPinTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkDirPin"));
 	m_DirStatusLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetDirStatus"));
 	m_InternetError = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetError"));
+	if (auto* natButton = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonNetNatRelay"))) {
+		natButton->SetText("NAT setup");
+	}
+	if (auto* reason = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetReason"))) {
+		reason->SetText("NAT traversal: Host Options > Network. No relay is provided.");
+	}
 
 	const auto rowTop = [](GUIControl* control) {
 		int x = 0, y = 0, width = 0, height = 0;
