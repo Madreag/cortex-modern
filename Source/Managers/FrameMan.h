@@ -355,6 +355,12 @@ namespace RTE {
 		/// @param nameBase The filename of the file to save to, WITHOUT EXTENSION.
 		/// @return 0 for success, anything below 0 is a sign of failure.
 		int SaveWorldPreviewToPNG(const char* nameBase) { return SaveBitmap(ScenePreviewDump, nameBase); }
+
+		/// Hands the frame just presented to the video recorder, when one is armed and the frame is due.
+		/// @param screen The menu, pause or game screen name the automation seam exposes.
+		/// @param serviceState The match service's state, empty when no service exists.
+		void RecordVideoFrame(const std::string& screen, const std::string& serviceState);
+
 		/// Checks image saves and writes source pixels for the diagnostic runner.
 		bool RunBitmapSaveSelfTest();
 		std::string SaveCheckpoint() const;

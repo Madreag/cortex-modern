@@ -1,0 +1,76 @@
+# The host's own path: landing, host setup, every host options page, create, lobby, ready, start.
+# The match itself is driven by this peer's probe; the script picks the lobby up again afterwards
+# for the rematch round.
+wait 60
+activate ButtonMainToMultiplayer
+wait 15
+assert_substate Landing
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait 12
+assert_substate HostSetup
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+wait 15
+activate ButtonHostOptions
+wait 12
+activate TabHostPageSeats
+wait 20
+assert_visible CollectionBoxHostPageSeats 1
+dump_host_options
+activate TabHostPageRules
+wait 20
+assert_visible CollectionBoxHostPageRules 1
+dump_host_options
+activate TabHostPageNetwork
+wait 20
+assert_visible CollectionBoxHostPageNetwork 1
+dump_host_options
+activate TabHostPageRecovery
+wait 20
+assert_visible CollectionBoxHostPageRecovery 1
+dump_host_options
+activate TabHostPageFiles
+wait 20
+assert_visible CollectionBoxHostPageFiles 1
+dump_host_options
+activate TabHostPageSession
+wait 20
+assert_visible CollectionBoxHostPageSession 1
+dump_host_options
+activate ButtonHostOptBack
+wait 12
+assert_substate HostSetup
+activate ButtonMultiplayerCreate
+wait 25
+assert_substate Lobby
+wait_connected 2
+wait 25
+dump_lobby
+activate ButtonLobbyOptions
+wait 15
+assert_substate HostOptions
+activate TabHostPageSeats
+wait 20
+assert_visible CollectionBoxHostPageSeats 1
+dump_host_options
+activate ButtonHostOptBack
+wait 15
+assert_substate Lobby
+activate ButtonMultiplayerReady
+wait 15
+wait_all_ready 90
+dump_lobby
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/done.json 240
+wait 40
+assert_substate Lobby
+dump_lobby
+wait 30
+activate ButtonMultiplayerReady
+wait 30
+dump_lobby
+# The client leaves on its own script; the lobby row it vacates is what this last stretch records.
+wait 200
+dump_lobby
+exit
