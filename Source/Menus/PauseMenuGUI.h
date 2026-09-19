@@ -29,7 +29,9 @@ namespace RTE {
 			NoEvent,
 			BackToMain,
 			ActivityResumed,
-			MatchLeft
+			MatchLeft,
+			/// The host ended the round; the game loop's own Complete path lands every peer in the rematch lobby.
+			MatchEnded
 		};
 
 #pragma region Creation
@@ -104,10 +106,13 @@ namespace RTE {
 			SaveDiagnosticsButton,
 			PauseMatchButton,
 			LeaveMatchButton,
+			MatchOptionsButton,
+			EndMatchButton,
 			ResumeButton,
 			// The confirmation's buttons follow the rows, in their own box: the row layout stops at the resume row.
 			LeaveConfirmButton,
 			LeaveCancelButton,
+			MatchOptionsCloseButton,
 			ButtonCount
 		};
 
@@ -154,6 +159,12 @@ namespace RTE {
 		GUICollectionBox* m_LeaveConfirmBox;
 		GUILabel* m_LeaveConfirmLabel;
 
+		/// The match's adopted options, shown read-only mid-match: the same panel the lobby's Details
+		/// and the F6 seats panel's Options view read from.
+		GUICollectionBox* m_MatchOptionsBox;
+		GUILabel* m_MatchOptionsLabel;
+		bool m_MatchOptionsShown;
+
 #pragma region Menu Screen Handling
 		/// Sets the PauseMenuGUI to display a menu screen.
 		/// @param screenToShow Which menu screen to display. See PauseMenuScreen enumeration.
@@ -182,6 +193,9 @@ namespace RTE {
 
 		/// Shows or hides the leave confirmation in place of the menu rows.
 		void ShowLeaveConfirm(bool show);
+
+		/// Shows or hides the match options view in place of the menu rows, refilled on open.
+		void ShowMatchOptions(bool show);
 
 		/// The one line of what leaving costs this player, from the session's own hold.
 		std::string LeaveConsequenceText() const;

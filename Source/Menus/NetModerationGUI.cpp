@@ -4,6 +4,7 @@
 #include "CameraMan.h"
 #include "GameActivity.h"
 #include "NetMatchService.h"
+#include "NetHostOptionsText.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "WindowMan.h"
@@ -242,6 +243,9 @@ NetModerationGUI::NetModerationGUI(AllegroScreen* screen) :
 	m_Status = label("NetworkSeatsStatus", 282, 30);
 	m_Roster = label("NetworkSeatsRoster", 40, 240);
 	m_Close = button("NetworkSeatsClose", "Close seats  [F6 / Esc]", width - 224, 318, 214);
+	m_OptionsToggle = button("NetworkSeatsOptions", "Match options", 10, 318, 160);
+	m_Options = label("NetworkSeatsOptionsText", 40, 240);
+	m_Options->SetVisible(false);
 	for (size_t row = 0; row < m_Seats.size(); ++row) {
 		const std::string suffix = std::to_string(row);
 		const int y = 40 + static_cast<int>(row) * 80;
@@ -289,6 +293,8 @@ bool NetModerationGUI::SetOpen(bool open) {
 	} else {
 		m_Panel->ReleaseMouse();
 		m_Close->SetPushed(false);
+		m_OptionsToggle->SetPushed(false);
+		m_OptionsView = false;
 		for (auto& seat: m_Seats) {
 			seat.applicant->SetPushed(false);
 			for (auto* button: seat.actions) button->SetPushed(false);
@@ -332,11 +338,15 @@ void NetModerationGUI::LayoutPanel() {
 	}
 	// The roster yields the reserved rows and scrolls for what no longer fits; the status row gives up
 	// its second line first, then moves up with the close row instead of clipping at the panel's bottom.
+	// The options view shares that band, so it takes the same shrink and the same scroll.
 	if (m_Roster->GetHeight() != 240 - lost) {
 		m_Roster->Resize(m_Roster->GetWidth(), 240 - lost);
+		m_Options->Resize(m_Options->GetWidth(), 240 - lost);
 	}
 	m_Roster->SetVerticalOverflowScroll(lost != 0);
 	m_Roster->ActivateDeactivateOverflowScroll(lost != 0);
+	m_Options->SetVerticalOverflowScroll(true);
+	m_Options->ActivateDeactivateOverflowScroll(true);
 	const int statusY = std::max(0, 282 - std::max(0, lost - 20));
 	if (m_Status->GetRelYPos() != statusY) {
 		m_Status->SetPositionRel(10, statusY);
@@ -348,6 +358,7 @@ void NetModerationGUI::LayoutPanel() {
 	const int closeY = std::max(0, 318 - lost);
 	if (m_Close->GetRelYPos() != closeY) {
 		m_Close->SetPositionRel(width - 224, closeY);
+		m_OptionsToggle->SetPositionRel(10, closeY);
 	}
 }
 
@@ -359,7 +370,26 @@ void NetModerationGUI::Refresh() {
 	std::string holdName;
 	uint32_t holdSeconds = 0;
 	const bool holdPause = ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
-	m_Title->SetText(NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
+	m_Title->SetText(m_OptionsView ? "MATCH OPTIONS" :
+	    NetModerationPanelTitle(snapshot.serviceState == "Running", holdPause, DisplayName(holdName), holdSeconds));
+	m_OptionsToggle->SetText(m_OptionsView ? "Back to seats" : "Match options");
+	m_Options->SetVisible(m_OptionsView);
+	if (m_OptionsView) {
+		// The adopted config every peer runs this round by - read-only here the way the lobby's
+		// Details reads it for a client; the editable pages are the lobby's own Options.
+		m_Options->SetText(WrapText(m_LabelFont, NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), snapshot), m_Options->GetWidth()));
+		m_Summary->SetText(snapshot.isHost ? "The lobby's Options changes the next round."
+		                                 : "The host's options for this round.");
+		m_Status->SetVisible(false);
+		m_Roster->SetVisible(false);
+		for (auto& seat: m_Seats) {
+			seat.name->SetVisible(false);
+			seat.detail->SetVisible(false);
+			seat.applicant->SetVisible(false);
+			for (auto* action: seat.actions) action->SetVisible(false);
+		}
+		return;
+	}
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
 	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
 	// A compact panel that lost its rows to the toast reservation has no room for the status line
@@ -401,6 +431,7 @@ void NetModerationGUI::HandleEvents() {
 	while (m_Controls->GetEvent(&event)) {
 		const auto* control = event.GetControl();
 		if (event.GetType() == GUIEvent::Command && control == m_Close) { SetOpen(false); continue; }
+		if (event.GetType() == GUIEvent::Command && control == m_OptionsToggle) { m_OptionsView = !m_OptionsView; continue; }
 		if (!m_Open) continue;
 		for (size_t row = 0; row < m_Seats.size(); ++row) {
 			const auto& widgets = m_Seats[row];
@@ -831,6 +862,27 @@ bool NetModerationGUI::AutomationModerate(const std::string& action, int stableS
 	HandleEvents();
 	Refresh();
 	return m_ActionResult == NetH4ModerationResult::Ok;
+}
+
+bool NetModerationGUI::AutomationPostCommand(const std::string& name) {
+	GUIControl* control = GetControl(name);
+	if (!control || !control->GetEnabled() || !control->GetVisible()) return false;
+	int x = 0, y = 0, width = 0, height = 0;
+	control->GetControlRect(&x, &y, &width, &height);
+	GUIPanel* panel = control->GetPanel();
+	panel->OnMouseDown(x + width / 2, y + height / 2, GUIPanel::MOUSE_LEFT, 0);
+	HandleEvents();
+	panel->OnMouseUp(x + width / 2, y + height / 2, GUIPanel::MOUSE_LEFT, 0);
+	HandleEvents();
+	Refresh();
+	return true;
+}
+
+bool NetModerationGUI::AutomationLabelText(const std::string& name, std::string& text) const {
+	auto* label = dynamic_cast<GUILabel*>(GetControl(name));
+	if (!label) return false;
+	text = label->GetText();
+	return true;
 }
 
 GUIControl* NetModerationGUI::GetControl(const std::string& name) const {

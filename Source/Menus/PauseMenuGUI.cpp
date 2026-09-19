@@ -14,6 +14,7 @@
 
 #include "NetLockstep.h"
 #include "NetMatchService.h"
+#include "NetHostOptionsText.h"
 #include "ScenarioRunner.h"
 
 #include "GUI.h"
@@ -65,6 +66,10 @@ void PauseMenuGUI::Clear() {
 
 	m_LeaveConfirmBox = nullptr;
 	m_LeaveConfirmLabel = nullptr;
+
+	m_MatchOptionsBox = nullptr;
+	m_MatchOptionsLabel = nullptr;
+	m_MatchOptionsShown = false;
 }
 
 void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
@@ -88,9 +93,12 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuButtons[PauseMenuButton::SaveDiagnosticsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonSaveDiagnostics"));
 	m_PauseMenuButtons[PauseMenuButton::PauseMatchButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonPauseMatch"));
 	m_PauseMenuButtons[PauseMenuButton::LeaveMatchButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonLeaveMatch"));
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMatchOptions"));
+	m_PauseMenuButtons[PauseMenuButton::EndMatchButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonEndMatch"));
 	m_PauseMenuButtons[PauseMenuButton::ResumeButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonResume"));
 	m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonLeaveConfirm"));
 	m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonLeaveCancel"));
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->GetControl("ButtonMatchOptionsClose"));
 
 	for (size_t pauseMenuButton = 0; pauseMenuButton < m_PauseMenuButtons.size(); ++pauseMenuButton) {
 		std::string buttonText = m_PauseMenuButtons[pauseMenuButton]->GetText();
@@ -110,6 +118,10 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_LeaveConfirmBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("LeaveConfirmBox"));
 	m_LeaveConfirmBox->CenterInParent(true, true);
 	m_LeaveConfirmLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelLeaveConfirm"));
+
+	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
+	m_MatchOptionsBox->CenterInParent(true, true);
+	m_MatchOptionsLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchOptions"));
 
 	int boxPosX = 0;
 	int boxPosY = 0;
@@ -198,6 +210,7 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 	}
 	m_NetworkMatchMode = networkMatch;
 	ShowLeaveConfirm(false);
+	ShowMatchOptions(false);
 	SetActiveMenuScreen(PauseMenuScreen::MainScreen, false);
 
 	// The match rows take the slots and the half row shift of the pause menu without its mod manager row.
@@ -205,12 +218,16 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 		switch (button) {
 			case PauseMenuButton::LeaveMatchButton:
 				return 0;
+			case PauseMenuButton::MatchOptionsButton:
+				return 20;
 			case PauseMenuButton::PauseMatchButton:
 				return 40;
 			case PauseMenuButton::SettingsButton:
 				return 60;
 			case PauseMenuButton::SaveDiagnosticsButton:
 				return 80;
+			case PauseMenuButton::EndMatchButton:
+				return 100;
 			case PauseMenuButton::ResumeButton:
 				return 120;
 			default:
@@ -227,7 +244,9 @@ void PauseMenuGUI::SetNetworkMatchMode(bool networkMatch) {
 
 	for (int button = 0; button < PauseMenuButton::LeaveConfirmButton; ++button) {
 		const int matchRow = matchRowOffset(button);
-		const bool onMenu = networkMatch ? matchRow >= 0 : button != PauseMenuButton::PauseMatchButton && button != PauseMenuButton::LeaveMatchButton;
+		const bool onMenu = networkMatch ? matchRow >= 0
+		                                 : button != PauseMenuButton::PauseMatchButton && button != PauseMenuButton::LeaveMatchButton &&
+		                                       button != PauseMenuButton::MatchOptionsButton && button != PauseMenuButton::EndMatchButton;
 		PlaceButtonRow(button, networkMatch && onMenu ? matchRow : m_ButtonHomeY[button]);
 		m_PauseMenuButtons[button]->SetEnabled(onMenu);
 		m_PauseMenuButtons[button]->SetVisible(onMenu);
@@ -242,6 +261,8 @@ void PauseMenuGUI::UpdateMatchPauseRow(bool force) {
 		return;
 	}
 	const bool matchPaused = ScenarioRunner::IsLockstepPaused();
+	// End Match is the host's: it finishes the round the way the match's own end would.
+	m_PauseMenuButtons[PauseMenuButton::EndMatchButton]->SetEnabled(g_NetMatchService.IsHost() && g_NetMatchService.GetState() == NetMatchServiceState::Running);
 	if (!force && matchPaused == m_MatchPausedShown) {
 		return;
 	}
@@ -267,6 +288,20 @@ void PauseMenuGUI::ShowLeaveConfirm(bool show) {
 	}
 	m_LeaveConfirmBox->SetVisible(show);
 	m_LeaveConfirmBox->SetEnabled(show);
+	m_PauseMenuBox->SetVisible(!show);
+	m_PauseMenuBox->SetEnabled(!show);
+}
+
+void PauseMenuGUI::ShowMatchOptions(bool show) {
+	m_MatchOptionsShown = show;
+	if (show) {
+		// Mid-match every peer reads the adopted config: the same panel the lobby's Details shows,
+		// read-only because the open round's edits live in the lobby that follows.
+		m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(),
+		                                                 g_NetMatchService.GetLobbySnapshot()));
+	}
+	m_MatchOptionsBox->SetVisible(show);
+	m_MatchOptionsBox->SetEnabled(show);
 	m_PauseMenuBox->SetVisible(!show);
 	m_PauseMenuBox->SetEnabled(!show);
 }
@@ -338,6 +373,13 @@ void PauseMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 		}
 		return;
 	}
+	if (m_MatchOptionsShown) {
+		if (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE)) {
+			ShowMatchOptions(false);
+			g_GUISound.BackButtonPressSound()->Play();
+		}
+		return;
+	}
 	if (!m_ActiveDialogBox && (backButtonPressed || g_UInputMan.KeyPressed(SDLK_ESCAPE))) {
 		if (m_ActiveMenuScreen != PauseMenuScreen::MainScreen) {
 			if (m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen || m_ActiveMenuScreen == PauseMenuScreen::ModManagerScreen) {
@@ -362,7 +404,7 @@ bool PauseMenuGUI::HandleInputEvents() {
 		int mousePosX;
 		int mousePosY;
 		m_GUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mousePosX, &mousePosY);
-		UpdateHoveredButton(dynamic_cast<GUIButton*>(m_GUIControlManager->GetControlUnderPoint(mousePosX, mousePosY, m_LeaveConfirmShown ? m_LeaveConfirmBox : m_PauseMenuBox, 1)));
+		UpdateHoveredButton(dynamic_cast<GUIButton*>(m_GUIControlManager->GetControlUnderPoint(mousePosX, mousePosY, m_LeaveConfirmShown ? m_LeaveConfirmBox : (m_MatchOptionsShown ? m_MatchOptionsBox : m_PauseMenuBox), 1)));
 	}
 	m_GUIControlManager->Update();
 	if (!m_PendingAutomationCommand.empty()) {
@@ -390,6 +432,15 @@ bool PauseMenuGUI::HandleInputEvents() {
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{g_NetMatchService.GetLocalTeam(), !ScenarioRunner::IsLockstepPaused()}});
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveMatchButton]) {
 				ShowLeaveConfirm(true);
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::MatchOptionsButton]) {
+				ShowMatchOptions(true);
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]) {
+				ShowMatchOptions(false);
+				g_GUISound.BackButtonPressSound()->Play();
+			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::EndMatchButton]) {
+				// H33: the host's End Match is the round's own completion, so every peer takes the
+				// same rematch path a played-out match takes. Leave stays the session's way out.
+				m_UpdateResult = PauseMenuUpdateResult::MatchEnded;
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveConfirmButton]) {
 				m_UpdateResult = PauseMenuUpdateResult::MatchLeft;
 			} else if (guiEvent.GetControl() == m_PauseMenuButtons[PauseMenuButton::LeaveCancelButton]) {
@@ -439,6 +490,9 @@ GUIControlManager* PauseMenuGUI::AutomationManager() const {
 
 std::string PauseMenuGUI::AutomationActiveScreenName() const {
 	if (m_ActiveMenuScreen == PauseMenuScreen::MainScreen) {
+		if (m_MatchOptionsShown) {
+			return "PauseMatchOptions";
+		}
 		return m_LeaveConfirmShown ? "PauseLeaveConfirm" : "Pause";
 	}
 	return m_ActiveMenuScreen == PauseMenuScreen::SettingsScreen ? "PauseSettings" : "PauseOther";
