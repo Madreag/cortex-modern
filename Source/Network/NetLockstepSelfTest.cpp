@@ -1349,6 +1349,40 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestBoundedHoldKeepsCommitting(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A02, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A02, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 18;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(48892, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
+			NetLockstepReadyFrame ready;
+			for (uint64_t now = 10; now < 60; ++now) {
+				host.Tick(now);
+				host.NoteFrameWait(0, now);
+				if (host.PopReadyFrame(ready)) { *error = "the held peer lost its input before the configured wait bound"; return false; }
+			}
+			if (!host.NoteFrameWait(0, 60) || !host.PopReadyFrame(ready) || ready.frame != 0 || !host.AnyDroppedSeatHeld() ||
+			    !host.IsSeatUnderAI(2, 0) || host.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || host.GetStats().longestStallMs > 50) {
+				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
+			}
+			host.FinishFrameWait(60);
+			for (uint64_t tick = 1; tick <= 5; ++tick) {
+				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
+				host.Tick(60 + tick);
+				if (!host.PopReadyFrame(ready) || ready.frame != tick || !ready.remoteFrames.empty()) {
+					*error = "an unresolved held seat paused a survivor or supplied late input"; return false;
+				}
+			}
+			return host.IsRunning();
+		}
+
 		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -15098,6 +15132,7 @@ namespace RTE {
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestTimingDecisionCodec(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
+		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||

@@ -35,6 +35,7 @@ namespace RTE {
 	};
 
 	enum class NetMatchDelayPolicy : uint8_t { Auto = 1, Fixed = 2 };
+	enum class NetSlowPlayerPolicy : uint8_t { Substitute = 1, Pause = 2 };
 
 	/// Samples the active transport's RTT and delays decreases until the link settles.
 	class NetInputDelayEstimator {
@@ -84,7 +85,7 @@ namespace RTE {
 
 	// Inherited rules retain the existing activity/mode member names without duplicate values.
 	struct NetMatchConfig : NetMatchStandardRules {
-		uint16_t version = 4;
+		uint16_t version = 6;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 1;
 		uint64_t configRevision = 1;
@@ -102,6 +103,8 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
+		uint16_t slowPlayerBoundTicks = 3;
+		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
 		uint8_t idleWaitMinutes = 10;
@@ -124,11 +127,13 @@ namespace RTE {
 		static constexpr uint16_t c_MigrationVersion = 1;
 		static constexpr uint16_t c_MigrationConfigFlag = 16;
 		static constexpr size_t c_MaxMigrationAddresses = 8;
-		static constexpr uint16_t c_Version = 4; // Ordinary live layout. A persistent world speaks c_PersistentWorldVersion.
-		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
-		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
-		static constexpr uint16_t c_LiveMinVersion = 4;
-		static constexpr uint16_t c_PersistentWorldVersion = 5;
+		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_LiveMinVersion = 6;
+		static constexpr uint16_t c_PersistentWorldVersion = 6;
+		static constexpr uint16_t c_WorldLayoutVersion = 5;
+		static constexpr uint16_t c_TimingOptionsVersion = 6;
+		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
+		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
 		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;

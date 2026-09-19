@@ -1501,7 +1501,7 @@ namespace RTE {
 	bool ScenarioRunner::DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft) {
 		outWho.clear();
 		outSecondsLeft = 0;
-		if (!s_LockstepCoordinator || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
+		if (!s_LockstepCoordinator || s_LockstepCoordinator->UsesBoundedWait() || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
 			return false;
 		}
 		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
@@ -2488,6 +2488,7 @@ namespace RTE {
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
+					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
@@ -2533,6 +2534,7 @@ namespace RTE {
 					return false;
 				}
 			}
+			if (s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs())) continue;
 			// Parked on a tick the sim has not run with the round already ending: a frame owed by a
 			// connection the pump has fenced is never coming, so stop requiring it and let the tick commit.
 			if (s_LockstepCoordinator->WaivePendingPeersWhileWaiting(tick)) {

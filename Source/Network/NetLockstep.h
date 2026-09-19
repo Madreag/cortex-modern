@@ -383,6 +383,8 @@ namespace RTE {
 		bool joinsRunningRound = false;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
+		bool substituteSlowPeers = false;
+		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 	};
 
 	enum class NetHostMigrationPhase : uint8_t {
@@ -504,6 +506,11 @@ namespace RTE {
 		uint32_t jitterMs = 0;
 		uint16_t delayFrames = 0;
 		uint64_t reportedNextFrame = 0;
+		uint64_t longestWaitMs = 0;
+		uint32_t waits = 0;
+		uint32_t holds = 0;
+		uint32_t substitutions = 0;
+		uint32_t rejoins = 0;
 	};
 
 	struct NetLockstepStats {
@@ -736,6 +743,12 @@ namespace RTE {
 		bool TimingDecisionPendingAt(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
+		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		bool NoteFrameWait(uint64_t frame, uint64_t nowMs);
+		void FinishFrameWait(uint64_t nowMs);
+		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
+		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -1044,6 +1057,7 @@ namespace RTE {
 		void HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport);
 		void TickTiming(uint64_t nowMs);
 		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
+		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing);
 		uint64_t FutureTimingFrame() const;
@@ -1060,6 +1074,14 @@ namespace RTE {
 		uint64_t m_NextTimingRevision = 1;
 		uint64_t m_LastTimingSampleMs = UINT64_MAX;
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;
+		uint64_t m_TimingNowMs = 0;
+		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::optional<uint64_t> m_ConsumerWaitingFrame;
+		std::optional<uint64_t> m_LastDeliveredFrame;
+		uint64_t m_ConsumerWaitStartMs = 0;
+		bool m_ConsumerWaitCounted = false;
+		bool m_LocalSeatHeld = false;
+		bool m_Playback = false;
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;
