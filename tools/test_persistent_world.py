@@ -94,6 +94,7 @@ RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
 RED_RECLAIM_REFUSED = "reclaim-was-refused"
 RED_EXPIRED_HOLD = "expired-hold-never-promoted"
+RED_RECLAIM_DOUBLED = "reclaim-doubled-the-bootstrap"
 RED_CONCURRENT_CAPTURE = "concurrent-joins-recaptured-the-world"
 RED_CONCURRENT_RESTART = "concurrent-join-dropped-the-first-restart"
 RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
@@ -375,6 +376,7 @@ CASES = (
             RED_SEAT_SUBSTITUTED,
             RED_RECLAIM_REFUSED,
             RED_EXPIRED_HOLD,
+            RED_RECLAIM_DOUBLED,
         ),
         "pass_token": "[net-world-reclaim-selftest] PASS",
     },
