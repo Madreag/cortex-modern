@@ -458,7 +458,7 @@ void NetModerationGUI::Refresh() {
 			    ? "Ready - pause menu > Match Options" : NetHostRepairHint(g_NetMatchService));
 		}
 		m_Options->SetText(WrapText(m_LabelFont, options, m_Options->GetWidth()));
-		m_Summary->SetText(snapshot.isHost ? "The lobby's Options changes the next round."
+		m_Summary->SetText(snapshot.isHost ? NetHostOptionsApplyText(g_NetMatchService.GetState())
 		                                 : "The host's options for this round.");
 		m_Status->SetVisible(false);
 		m_Roster->SetVisible(false);

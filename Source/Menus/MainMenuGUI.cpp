@@ -1682,17 +1682,13 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const std::optional<NetMatchConfig> pending = g_NetMatchService.GetPendingHostOptions(&refusal);
 		if (!refusal.empty()) {
 			m_HostOptionsStatusLabel->SetText(refusal);
-		} else if (pending || m_HostOptionsAwaitedRevision > adopted.configRevision) {
-			// A rematch lobby's draft is staged for the next match; an open lobby's Apply is a live
-			// republish the peers acknowledge before it counts. "Applied" lands when the adopted
-			// mirror reaches the awaited revision - the runner queue publishes it for every peer.
-			m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
-			                                      ? "Options staged for the next match."
-			                                      : "Waiting for peers to confirm the new options...");
+		} else if ((pending && pending->configRevision > adopted.configRevision) || m_HostOptionsAwaitedRevision > adopted.configRevision) {
+			// A returned lobby publishes immediately even though it has played a round.
+			m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 		}
 		if (m_HostOptionsAwaitedRevision != 0 && adopted.configRevision >= m_HostOptionsAwaitedRevision) {
 			m_HostOptionsAwaitedRevision = 0;
-			m_HostOptionsStatusLabel->SetText("Applied.");
+			m_HostOptionsStatusLabel->SetText("Applied: this lobby was republished.");
 		}
 	}
 	// A Queued kick/ban drains on the setup worker's host pump; the applied result lands in the
@@ -2208,10 +2204,7 @@ void MainMenuGUI::ApplyHostOptions() {
 		}
 		// The adopted revision keeps Apply pending until the runner publishes it.
 		m_HostOptionsAwaitedRevision = m_HostOptionsBaseRevision + 1;
-		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		m_HostOptionsStatusLabel->SetText(snapshot.playedAMatch
-		                                      ? "Options staged for the next match."
-		                                      : "Waiting for peers to confirm the new options...");
+		m_HostOptionsStatusLabel->SetText(NetHostOptionsApplyText(g_NetMatchService.GetState()));
 	}
 	g_GUISound.ButtonPressSound()->Play();
 }
