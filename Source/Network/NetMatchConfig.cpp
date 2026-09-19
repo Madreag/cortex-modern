@@ -411,6 +411,7 @@ namespace RTE {
 		// Same for the redundancy window: only a host's non-default choice rides it.
 		if (config.frameRedundancyTicks != c_DefaultFrameRedundancyTicks) {
 			fields.emplace_back("frame_redundancy_ticks", std::to_string(config.frameRedundancyTicks));
+		}
 		// The world identity is frozen for the world's life: its members' rosters change under a
 		// separate revision, so what a joiner validates against stays the same string every boot. Only
 		// a world takes the v5 domain, so every ordinary roster hashes as it always did.
