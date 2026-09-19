@@ -1,15 +1,16 @@
 # Gameplay fixtures under lockstep with input delay and local prediction: each case is a 2-peer e2e
 # (host==client sim-gated, replay identical, controller boundary clean) plus a semantic assertion read
 # off both peers' dumps or the harness's own mode assertions. Every case keeps its own evidence dir.
-# One script for every case, the three 3b ones included; -Only picks the subset a caller wants.
+# One case table drives them all; -Only picks the subset a caller wants.
 param(
     [string]$Repo = 'D:\Projects\control-build',
     [string]$OutDir = "D:\mx\gameplay_$(Get-Date -Format yyyyMMdd_HHmmss)_$PID",
     [int]$Delay = 3,
     [int]$PortBase = 47661,
     [string[]]$Only = @(),
-    [string]$Lane = 'D:\Projects\reviews\takeover-20260909\grok-workers\fg6d-battery',
-    [string]$HarnessCommon = 'D:\Projects\stage2_p4\harness_common.ps1'
+    [string]$Lane = $PSScriptRoot,
+    [string]$HarnessCommon = (Join-Path $PSScriptRoot 'harness_common.ps1'),
+    [string]$FixtureRoot = (Join-Path $PSScriptRoot 'fixtures')
 )
 $ErrorActionPreference = 'Continue'
 . $HarnessCommon
@@ -62,7 +63,10 @@ function Check-Case([string]$Name, [string]$Dir, [string[]]$Extra = @()) {
     Add-Check "$Name.semantic" ($LASTEXITCODE -eq 0) (Get-Content (Join-Path $OutDir "$Name.check.txt") -Raw).Trim().Split("`n")[-1]
 }
 
-# F60 humans-vs-CPU: Co-op PvE on stock Skirmish Defense. Each human seat is driven through the setup editor.
+# The input scripts the engine reads; the engine takes forward slashes on every platform.
+$fixtures = ($FixtureRoot -replace '\\', '/').TrimEnd('/')
+# F60 humans-vs-CPU: Co-op PvE on stock Skirmish Defense. Each human seat is driven through the setup
+# editor, whose scripts are written before the table because the table captures their paths by value.
 $hostUi = ''
 $clientUi = ''
 if ($Only.Count -eq 0 -or 'humans_vs_cpu' -in $Only) {
@@ -72,23 +76,24 @@ if ($Only.Count -eq 0 -or 'humans_vs_cpu' -in $Only) {
     $clientUi = Join-Path $uiRoot 'client-ui\ui-script.json'
 }
 
-# Every gameplay case in one table: name, the harness switches, the sim dump window, the input script,
+# Every case: its name, the harness switches, the sim dump window, the input script under $fixtures,
 # and the extra arguments its semantic check needs. Each case is its own e2e dir under OutDir.
 $cases = @(
-    @{ name = 'fire_reload'; harness = @(); dump = '27:520'; script = 'D:/Projects/stage2_p4/fixtures/fire_reload.txt'; check = $null }
-    @{ name = 'weapon_switch'; harness = @(); dump = '27:210'; script = 'D:/Projects/stage2_p4/fixtures/weapon_switch.txt'; check = $null }
-    @{ name = 'jetpack'; harness = @(); dump = '27:145'; script = 'D:/Projects/stage2_p4/fixtures/jetpack.txt'; check = $null }
-    @{ name = 'terrain_fire'; harness = @(); dump = '27:225'; script = 'D:/Projects/stage2_p4/fixtures/terrain_fire.txt'; check = { param($dir) @('--host-trace', (Join-Path $dir 'host_trace.json')) } }
-    @{ name = 'pie_reload'; harness = @(); dump = '27:240'; script = 'D:/Projects/stage2_p4/fixtures/pie_reload.txt'; check = $null }
+    @{ name = 'fire_reload'; harness = @(); dump = '27:520'; script = 'fire_reload.txt'; check = $null }
+    @{ name = 'weapon_switch'; harness = @(); dump = '27:210'; script = 'weapon_switch.txt'; check = $null }
+    @{ name = 'jetpack'; harness = @(); dump = '27:145'; script = 'jetpack.txt'; check = $null }
+    @{ name = 'terrain_fire'; harness = @(); dump = '27:225'; script = 'terrain_fire.txt'; check = { param($dir) @('--host-trace', (Join-Path $dir 'host_trace.json')) } }
+    @{ name = 'pie_reload'; harness = @(); dump = '27:240'; script = 'pie_reload.txt'; check = $null }
     @{ name = 'ai_orders'; harness = @('-AIOrderCommandHost', '-Ticks', '900'); dump = '27:640'; script = ''; check = $null }
-    @{ name = 'door_pass'; harness = @('-Ticks', '520', '-E2eSpawn', 'ADoor:Door Slide Short:Base.rte:980:715:40:0'); dump = '27:500'; script = 'D:/Projects/stage2_p4/fixtures/door_pass.txt'; check = $null }
-    @{ name = 'crab_ai_order'; harness = @('-Ticks', '450', '-E2eSpawn', 'ACrab:Crab:Base.rte:920:760:20'); dump = '27:400'; script = 'D:/Projects/stage2_p4/fixtures/crab_ai_order.txt'; check = $null }
+    @{ name = 'door_pass'; harness = @('-Ticks', '520', '-E2eSpawn', 'ADoor:Door Slide Short:Base.rte:980:715:40:0'); dump = '27:500'; script = 'door_pass.txt'; check = $null }
+    @{ name = 'crab_ai_order'; harness = @('-Ticks', '450', '-E2eSpawn', 'ACrab:Crab:Base.rte:920:760:20'); dump = '27:400'; script = 'crab_ai_order.txt'; check = $null }
     @{ name = 'craft_cargo'; harness = @('-DeliverCommandHost', '-Ticks', '700'); dump = '27:640'; script = ''; check = $null }
     @{ name = 'humans_vs_cpu'; harness = @('-Ticks', '900', '-MatchPreset', 'Skirmish Defense', '-MatchMode', 'coop-pve', '-HostUiScript', $hostUi, '-ClientUiScript', $clientUi); dump = '27:890'; script = ''; check = { param($dir) @('--host-log', (Join-Path $dir 'host.out.txt'), '--client-log', (Join-Path $dir 'client.out.txt')) } }
 )
 
 foreach ($case in $cases) {
-    $d = Run-Case $case.name $case.harness $case.dump $case.script
+    $inputScript = $(if ($case.script) { "$fixtures/$($case.script)" } else { '' })
+    $d = Run-Case $case.name $case.harness $case.dump $inputScript
     if (-not $d) { continue }
     $extra = @()
     if ($case.check) { $extra = @(& $case.check $d) }
