@@ -171,6 +171,12 @@ namespace RTE {
 		/// @return The scene, ownership IS NOT TRANSFERRED!
 		Scene* GetScene() const { return m_pCurrentScene; }
 		void TestBindCurrentScene(Scene* scene) { m_pCurrentScene = scene; }
+		/// Installs a palette entry for a detecting test and hands back the one it replaced. Ownership is NOT transferred.
+		Material* TestInstallMaterial(unsigned char index, Material* material) {
+			Material* previous = m_apMatPalette[index];
+			m_apMatPalette[index] = material;
+			return previous;
+		}
 		struct SceneSetAside {
 			Scene* scene = nullptr;
 			SceneLayerTracked* color = nullptr;

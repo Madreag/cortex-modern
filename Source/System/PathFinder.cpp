@@ -338,7 +338,6 @@ void PathFinder::CaptureHorizonFence(HorizonFenceState& out) const {
 	for (const auto& [nodeId, node]: m_HorizonNodes) {
 		HorizonFenceState::Cell cell;
 		cell.materials = node.committedMaterials;
-		cell.navigable = node.committedNavigable;
 		cell.generation = node.generation;
 		out.overlay.emplace(nodeId, cell);
 	}
@@ -355,7 +354,6 @@ void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 	for (const auto& [nodeId, cell]: in.overlay) {
 		HorizonNode node;
 		node.committedMaterials = cell.materials;
-		node.committedNavigable = cell.navigable;
 		node.generation = cell.generation;
 		m_HorizonNodes.emplace(nodeId, node);
 	}
@@ -367,8 +365,8 @@ void PathFinder::RestoreHorizonFence(const HorizonFenceState& in) {
 	m_HorizonGeneration.store(in.generation);
 }
 
-void PathFinder::TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const {
-	ComputeHorizonMaterialsFromSnapshots(nodes, patches, materials, navigable);
+void PathFinder::TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) const {
+	ComputeHorizonMaterialsFromSnapshots(nodes, patches, materials);
 }
 
 void PathFinder::Clear() {
@@ -518,7 +516,7 @@ int PathFinder::CalculatePathImpl(Vector start, Vector end, std::list<Vector>& p
 
 	// If end node is invalid, there's no path
 	PathNode* endNode = GetPathNodeAtGridCoords(endNodeX, endNodeY);
-	if (endNode && ViewNode(endNode).navigable) {
+	if (endNode && endNode->m_Navigable) {
 		result = GetPather()->Solve(static_cast<void*>(GetPathNodeAtGridCoords(startNodeX, startNodeY)), static_cast<void*>(endNode), &statePath, &totalCostResult);
 	}
 
@@ -659,7 +657,7 @@ float PathFinder::LeastCostEstimate(void* startState, void* endState) {
 
 void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* adjacentList) {
 	const PathNode* node = static_cast<PathNode*>(state);
-	const NodeCostView view = ViewNode(node);
+	const std::array<const Material*, 8> view = ViewNodeMaterials(node);
 	micropather::StateCost adjCost;
 
 	// We do a little trick here, where we radiate out a little percentage of our average cost in all directions.
@@ -670,24 +668,20 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 	bool isInNoGrav = !m_SelfTestGrid && g_SceneMan.IsPointInNoGravArea(node->Pos);
 	bool allowDiagonal = !isInNoGrav; // We don't allow diagonals in nograv to improve automover behaviour
 
-	auto neighborOpen = [this](PathNode* neighbor) {
-		return neighbor && ViewNode(neighbor).navigable;
-	};
-
-	if (neighborOpen(node->Down)) {
-		adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[4]) + radiatedCost;
+	if (node->Down && node->Down->m_Navigable) {
+		adjCost.cost = 1.0F + GetMaterialTransitionCost(*view[4]) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->Down);
 		adjacentList->push_back(adjCost);
 	}
 
-	if (neighborOpen(node->RightDown) && allowDiagonal) {
-		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view.materials[3]) * 1.4F) + radiatedCost;
+	if (node->RightDown && node->RightDown->m_Navigable && allowDiagonal) {
+		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view[3]) * 1.4F) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->RightDown);
 		adjacentList->push_back(adjCost);
 	}
 
-	if (neighborOpen(node->DownLeft) && allowDiagonal) {
-		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view.materials[5]) * 1.4F) + radiatedCost;
+	if (node->DownLeft && node->DownLeft->m_Navigable && allowDiagonal) {
+		adjCost.cost = 1.4F + (GetMaterialTransitionCost(*view[5]) * 1.4F) + radiatedCost;
 		adjCost.state = static_cast<void*>(node->DownLeft);
 		adjacentList->push_back(adjCost);
 	}
@@ -697,14 +691,14 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		const float extraUpCost = 3.0F;
 
 		// We can only go straight left or right if we're on solid ground, otherwise we need to go downwards
-		if (neighborOpen(node->Left)) {
-			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[6]) + radiatedCost;
+		if (node->Left && node->Left->m_Navigable) {
+			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view[6]) + radiatedCost;
 			adjCost.state = static_cast<void*>(node->Left);
 			adjacentList->push_back(adjCost);
 		}
 
-		if (neighborOpen(node->Right)) {
-			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view.materials[2]) + radiatedCost;
+		if (node->Right && node->Right->m_Navigable) {
+			adjCost.cost = 1.0F + GetMaterialTransitionCost(*view[2]) + radiatedCost;
 			adjCost.state = static_cast<void*>(node->Right);
 			adjacentList->push_back(adjCost);
 		}
@@ -715,8 +709,8 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 			const PathNode* currentNode = node;
 			float totalMaterialCost = 0.0F;
 			for (int i = 0; i < s_JumpHeightVertical; ++i) {
-				const NodeCostView currentView = ViewNode(currentNode);
-				if (currentNode->Up == nullptr || !ViewNode(currentNode->Up).navigable || currentView.materials[0]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const std::array<const Material*, 8> currentView = ViewNodeMaterials(currentNode);
+				if (currentNode->Up == nullptr || !currentNode->Up->m_Navigable || currentView[0]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -724,7 +718,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.0F + extraUpCost + extraJumpCost + (GetMaterialTransitionCost(*currentView.materials[0]) * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.0F + extraUpCost + extraJumpCost + (GetMaterialTransitionCost(*currentView[0]) * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->Up);
@@ -732,8 +726,8 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 
 				currentNode = currentNode->Up;
 			}
-		} else if (neighborOpen(node->Up)) {
-			adjCost.cost = 1.0F + (extraUpCost) + (GetMaterialTransitionCost(*view.materials[1]) * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		} else if (node->Up && node->Up->m_Navigable) {
+			adjCost.cost = 1.0F + (extraUpCost) + (GetMaterialTransitionCost(*view[1]) * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->Up);
 			adjacentList->push_back(adjCost);
 		}
@@ -741,10 +735,10 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		// Jumping diagonally
 		if (s_JumpHeight < FLT_MAX && node->UpRight && !isInNoGrav) {
 			const PathNode* currentNode = node->UpRight;
-			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[1]) * 1.4F * 3.0F) + radiatedCost;
+			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view[1]) * 1.4F * 3.0F) + radiatedCost;
 			for (int i = 0; i < s_JumpHeightDiagonal; ++i) {
-				const NodeCostView currentView = ViewNode(currentNode);
-				if (currentNode->UpRight == nullptr || !ViewNode(currentNode->UpRight).navigable || currentView.materials[1]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const std::array<const Material*, 8> currentView = ViewNodeMaterials(currentNode);
+				if (currentNode->UpRight == nullptr || !currentNode->UpRight->m_Navigable || currentView[1]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -752,7 +746,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView.materials[1]) * 1.4F * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView[1]) * 1.4F * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->UpRight);
@@ -764,10 +758,10 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 
 		if (s_JumpHeight < FLT_MAX && node->LeftUp && !isInNoGrav) {
 			const PathNode* currentNode = node->LeftUp;
-			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[7]) * 1.4F * 3.0F) + radiatedCost;
+			float totalMaterialCost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view[7]) * 1.4F * 3.0F) + radiatedCost;
 			for (int i = 0; i < s_JumpHeightDiagonal; ++i) {
-				const NodeCostView currentView = ViewNode(currentNode);
-				if (currentNode->LeftUp == nullptr || !ViewNode(currentNode->LeftUp).navigable || currentView.materials[7]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
+				const std::array<const Material*, 8> currentView = ViewNodeMaterials(currentNode);
+				if (currentNode->LeftUp == nullptr || !currentNode->LeftUp->m_Navigable || currentView[7]->GetIntegrity() > c_PathFindingDefaultDigStrength) {
 					// solid ceiling, stop
 					break;
 				}
@@ -775,7 +769,7 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 				float f = i + 2; // Exponential cost increase for jumping higher
 				float extraJumpCost = f * f * 0.5F; // Exponential cost increase for jumping higher
 
-				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView.materials[7]) * 1.4F * 3.0F) + radiatedCost;
+				totalMaterialCost += 1.4F + (extraUpCost * 1.4F) + (extraJumpCost * 1.4f) + (GetMaterialTransitionCost(*currentView[7]) * 1.4F * 3.0F) + radiatedCost;
 
 				adjCost.cost = totalMaterialCost;
 				adjCost.state = static_cast<void*>(currentNode->LeftUp);
@@ -786,14 +780,14 @@ void PathFinder::AdjacentCost(void* state, std::vector<micropather::StateCost>* 
 		}
 
 		// Add cost for digging at 45 degrees and for digging upwards.
-		if (neighborOpen(node->UpRight) && allowDiagonal) {
-			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[1]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		if (node->UpRight && node->UpRight->m_Navigable && allowDiagonal) {
+			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view[1]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->UpRight);
 			adjacentList->push_back(adjCost);
 		}
 
-		if (neighborOpen(node->LeftUp) && allowDiagonal) {
-			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view.materials[7]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
+		if (node->LeftUp && node->LeftUp->m_Navigable && allowDiagonal) {
+			adjCost.cost = 1.4F + (extraUpCost * 1.4F) + (GetMaterialTransitionCost(*view[7]) * 1.4F * 3.0F) + radiatedCost; // Three times more expensive when digging.
 			adjCost.state = static_cast<void*>(node->LeftUp);
 			adjacentList->push_back(adjCost);
 		}
@@ -809,8 +803,7 @@ bool PathFinder::PositionsAreTheSamePathNode(const Vector& pos1, const Vector& p
 }
 
 bool PathFinder::NodeIsOnSolidGround(const PathNode& node) const {
-	const NodeCostView view = ViewNode(&node);
-	return s_JumpHeight == FLT_MAX || (node.Down && view.materials[4]->GetIntegrity() > c_PathFindingDefaultDigStrength);
+	return s_JumpHeight == FLT_MAX || (node.Down && ViewNodeMaterials(&node)[4]->GetIntegrity() > c_PathFindingDefaultDigStrength);
 }
 
 float PathFinder::GetMaterialTransitionCost(const Material& material) const {
@@ -1040,28 +1033,24 @@ int PathFinder::ConvertCoordsToNodeId(int x, int y) const {
 	return (y * m_GridWidth) + x;
 }
 
-PathFinder::NodeCostView PathFinder::ViewNode(const PathNode* node) const {
-	NodeCostView view;
+std::array<const Material*, PathNode::c_MaxAdjacentNodeCount> PathFinder::ViewNodeMaterials(const PathNode* node) const {
 	if (!node) {
-		return view;
+		return {};
 	}
-	view.materials = node->AdjacentNodeBlockingMaterials;
-	view.navigable = node->m_Navigable;
 	if (!s_ReadCommittedHorizon || m_NodeGrid.empty()) {
-		return view;
+		return node->AdjacentNodeBlockingMaterials;
 	}
 	const int nodeId = static_cast<int>(node - m_NodeGrid.data());
 	if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
-		return view;
+		return node->AdjacentNodeBlockingMaterials;
 	}
 	std::lock_guard lock(m_HorizonMutex);
 	const auto found = m_HorizonNodes.find(nodeId);
 	// An overlay cell stays visible from its apply generation through every later pin.
 	if (found != m_HorizonNodes.end() && found->second.generation <= s_PinnedHorizonGeneration) {
-		view.materials = found->second.committedMaterials;
-		view.navigable = found->second.committedNavigable;
+		return found->second.committedMaterials;
 	}
-	return view;
+	return node->AdjacentNodeBlockingMaterials;
 }
 
 const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches) {
@@ -1102,9 +1091,8 @@ const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, con
 	return strongest;
 }
 
-void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) {
+void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) {
 	materials.assign(nodes.size(), {});
-	navigable.assign(nodes.size(), 1);
 	std::unordered_map<int, std::array<const Material*, 8>> computed;
 	computed.reserve(nodes.size());
 	auto getStrongerMaterial = [](const Material* first, const Material* second) {
@@ -1180,7 +1168,6 @@ void PathFinder::ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonN
 	for (size_t index = 0; index < nodes.size(); ++index) {
 		const auto found = computed.find(nodes[index].nodeId);
 		materials[index] = found != computed.end() ? found->second : nodes[index].materials;
-		navigable[index] = nodes[index].navigable ? 1 : 0;
 	}
 }
 
@@ -1194,7 +1181,7 @@ void PathFinder::LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job) {
 			std::this_thread::yield();
 		}
 		if (compute) {
-			ComputeHorizonMaterialsFromSnapshots(job->nodes, job->patches, job->materials, job->navigable);
+			ComputeHorizonMaterialsFromSnapshots(job->nodes, job->patches, job->materials);
 		}
 		if (job->delayMs > 0) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(job->delayMs));
@@ -1221,16 +1208,13 @@ void PathFinder::ApplyHorizonJob(const HorizonJob& job, uint64_t generation) {
 		if (nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size() || index >= job.materials.size()) {
 			continue;
 		}
-		const PathNode& live = m_NodeGrid[nodeId];
-		const char navigable = index < job.navigable.size() ? job.navigable[index] : 1;
-		const bool liveMatches = live.AdjacentNodeBlockingMaterials == job.materials[index] && (live.m_Navigable ? 1 : 0) == navigable;
-		if (liveMatches) {
+		// A node the live grid already carries needs no cell; every live write of one is preceded by a Note that pins it again.
+		if (m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials == job.materials[index]) {
 			m_HorizonNodes.erase(nodeId);
 			continue;
 		}
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = job.materials[index];
-		overlay.committedNavigable = navigable != 0;
 		overlay.generation = generation;
 	}
 }
@@ -1246,7 +1230,6 @@ void PathFinder::PinHorizonFromLive(const Box& box) {
 		}
 		HorizonNode& overlay = m_HorizonNodes[nodeId];
 		overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
-		overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
 		overlay.generation = m_HorizonGeneration.load();
 	}
 }
@@ -1349,7 +1332,7 @@ void PathFinder::QueueHorizonUpdate(uint64_t originTick, uint16_t horizonTicks, 
 	LaunchHorizonWorker(job);
 }
 
-void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials, bool navigable) {
+void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials) {
 	if (horizonTicks == 0 || nodeId < 0 || static_cast<size_t>(nodeId) >= m_NodeGrid.size()) {
 		return;
 	}
@@ -1359,14 +1342,12 @@ void PathFinder::QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, i
 	job->nodeIds = {nodeId};
 	job->nodes = {SnapshotNode(nodeId)};
 	job->materials = {materials};
-	job->navigable = {static_cast<char>(navigable ? 1 : 0)};
 	job->ready.store(false);
 	{
 		std::lock_guard lock(m_HorizonMutex);
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
-			overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
 			overlay.generation = m_HorizonGeneration.load();
 		}
 		m_HorizonJobs.push_back(job);
@@ -1389,7 +1370,6 @@ void PathFinder::TestQueueHorizonCompute(uint64_t originTick, uint16_t horizonTi
 		if (m_HorizonNodes.count(nodeId) == 0) {
 			HorizonNode& overlay = m_HorizonNodes[nodeId];
 			overlay.committedMaterials = m_NodeGrid[nodeId].AdjacentNodeBlockingMaterials;
-			overlay.committedNavigable = m_NodeGrid[nodeId].m_Navigable;
 			overlay.generation = m_HorizonGeneration.load();
 		}
 		m_HorizonJobs.push_back(job);
@@ -1602,15 +1582,27 @@ void PathFinder::TestSetWraps(bool wrapX, bool wrapY) {
 	}
 }
 
+void PathFinder::TestReleaseHorizonWorker() {
+	m_HorizonWorkerHold.store(false);
+	std::lock_guard lock(m_HorizonMutex);
+	for (const auto& job: m_HorizonJobs) {
+		job->hold.store(false, std::memory_order_release);
+	}
+}
+
 size_t PathFinder::TestHorizonOverlayCount() const {
 	std::lock_guard lock(m_HorizonMutex);
 	return m_HorizonNodes.size();
 }
 
-bool PathFinder::TestHorizonWrapRayMatches(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const {
-	const Material* live = StrongestMaterialAlongLine(start, end);
+int PathFinder::TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const {
 	const Material* fromPatch = StrongestMaterialAlongPatch(start, end, {patch});
-	return live && fromPatch && live->GetIndex() == fromPatch->GetIndex();
+	return fromPatch ? static_cast<int>(fromPatch->GetIndex()) : -1;
+}
+
+int PathFinder::TestLiveRayMaterialId(const Vector& start, const Vector& end) const {
+	const Material* live = StrongestMaterialAlongLine(start, end);
+	return live ? static_cast<int>(live->GetIndex()) : -1;
 }
 
 std::array<const Material*, 8> PathFinder::TestViewMaterials(int nodeId, uint64_t generation) const {
@@ -1622,7 +1614,7 @@ std::array<const Material*, 8> PathFinder::TestViewMaterials(int nodeId, uint64_
 	const uint64_t previousGen = s_PinnedHorizonGeneration;
 	s_ReadCommittedHorizon = true;
 	s_PinnedHorizonGeneration = generation;
-	materials = ViewNode(&m_NodeGrid[nodeId]).materials;
+	materials = ViewNodeMaterials(&m_NodeGrid[nodeId]);
 	s_ReadCommittedHorizon = previousRead;
 	s_PinnedHorizonGeneration = previousGen;
 	return materials;
@@ -1637,9 +1629,52 @@ int PathFinder::RunHorizonGridSelfTest() {
 		}
 	};
 	TestMaterial air;
+	TestMaterial bounds;
+	TestMaterial gold;
 	TestMaterial rock;
-	air.Arm(0, 0.0F);
+	TestMaterial sand;
+	air.Arm(MaterialColorKeys::g_MaterialAir, 0.0F);
+	bounds.Arm(MaterialColorKeys::g_MaterialOutOfBounds, 1000000.0F);
+	gold.Arm(MaterialColorKeys::g_MaterialGold, 250.0F);
 	rock.Arm(5, 200.0F);
+	sand.Arm(MaterialColorKeys::g_MaterialSand, 50.0F);
+
+	// The raycasts read real Materials out of the palette, which is empty in this process until we seat them.
+	struct PaletteSeat {
+		std::vector<std::pair<unsigned char, Material*>> previous;
+		void Seat(unsigned char index, Material* material) { previous.emplace_back(index, g_SceneMan.TestInstallMaterial(index, material)); }
+		~PaletteSeat() {
+			for (auto entry = previous.rbegin(); entry != previous.rend(); ++entry) {
+				g_SceneMan.TestInstallMaterial(entry->first, entry->second);
+			}
+		}
+	};
+	PaletteSeat palette;
+	palette.Seat(MaterialColorKeys::g_MaterialAir, &air);
+	palette.Seat(MaterialColorKeys::g_MaterialOutOfBounds, &bounds);
+	palette.Seat(MaterialColorKeys::g_MaterialGold, &gold);
+	palette.Seat(5, &rock);
+	palette.Seat(MaterialColorKeys::g_MaterialSand, &sand);
+
+	// A fixture Scene does not own its stack terrain, and SceneMan must not keep it after the row.
+	struct FixtureBinding {
+		Scene* scene = nullptr;
+		void Bind(Scene* fixture, SLTerrain* terrain) {
+			scene = fixture;
+			fixture->TestSetTerrain(terrain);
+			g_SceneMan.TestBindCurrentScene(fixture);
+		}
+		~FixtureBinding() {
+			if (scene) {
+				scene->TestSetTerrain(nullptr);
+			}
+			g_SceneMan.TestBindCurrentScene(nullptr);
+		}
+	};
+	struct LockstepBinding {
+		~LockstepBinding() { ScenarioRunner::SetLockstepCoordinator(nullptr); }
+	};
+
 	std::array<const Material*, 8> blocked{};
 	blocked.fill(&rock);
 
@@ -1657,8 +1692,6 @@ int PathFinder::RunHorizonGridSelfTest() {
 		std::cout << Tag << " FAIL " << text << std::endl;
 		g_CurrentAIActor = nullptr;
 		TestArmFaultInject("");
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		return 1;
 	};
 
@@ -1692,16 +1725,16 @@ int PathFinder::RunHorizonGridSelfTest() {
 		return 1;
 	}
 	if (sharedA != sharedB) {
-		std::cout << Tag << " FAIL shared CalculatePath returned the per-machine answer a=" << sharedA.second << " b=" << sharedB.second << std::endl;
+		std::cout << Tag << " FAIL two-peer shared cost_a=" << sharedA.second << " cost_b=" << sharedB.second << std::endl;
 		return 1;
 	}
 	if (liveA == liveB) {
-		std::cout << Tag << " FAIL two-peer live costs matched a=" << liveA.second << " b=" << liveB.second << std::endl;
+		std::cout << Tag << " FAIL two-peer live cost_a=" << liveA.second << " cost_b=" << liveB.second << std::endl;
 		return 1;
 	}
 	std::cout << Tag << " PASS two-peer-determinism" << std::endl;
 
-	// (ii) a change at T is visible at T+H and not at T+H-1 on both peers.
+	// (ii) a change at T is visible at T+H and not at T+H-1 on both peers, and the live grid never carries it.
 	ResetHorizonWaitStats();
 	PathFinder horizonA;
 	PathFinder horizonB;
@@ -1711,177 +1744,186 @@ int PathFinder::RunHorizonGridSelfTest() {
 	const auto beforeB = pathCost(horizonB, true);
 	horizonA.QueueHorizonDelta(20, 4, wall, blocked);
 	horizonB.QueueHorizonDelta(20, 4, wall, blocked);
-	horizonA.TestSetNodeMaterials(wall, blocked);
-	horizonB.TestSetNodeMaterials(wall, blocked);
 	horizonA.CommitHorizonThrough(23);
 	horizonB.CommitHorizonThrough(23);
 	const auto earlyA = pathCost(horizonA, true);
 	const auto earlyB = pathCost(horizonB, true);
 	if (earlyA != beforeA || earlyB != beforeB) {
-		std::cout << Tag << " FAIL horizon change visible at T+H-1 cost_a=" << earlyA.second << " cost_b=" << earlyB.second << std::endl;
+		std::cout << Tag << " FAIL horizon T+H-1 cost_a=" << earlyA.second << " cost_b=" << earlyB.second << " before=" << beforeA.second << std::endl;
 		return 1;
 	}
 	horizonA.CommitHorizonThrough(24);
 	horizonB.CommitHorizonThrough(24);
 	const auto lateA = pathCost(horizonA, true);
 	const auto lateB = pathCost(horizonB, true);
+	const auto liveAfterA = pathCost(horizonA, false);
 	if (lateA == beforeA || lateB == beforeB || lateA != lateB) {
-		std::cout << Tag << " FAIL T+H cost_a=" << lateA.second << " cost_b=" << lateB.second << " before=" << beforeA.second << std::endl;
+		std::cout << Tag << " FAIL horizon T+H cost_a=" << lateA.second << " cost_b=" << lateB.second << " before=" << beforeA.second << std::endl;
+		return 1;
+	}
+	if (liveAfterA != beforeA) {
+		std::cout << Tag << " FAIL horizon live cost=" << liveAfterA.second << " before=" << beforeA.second << std::endl;
 		return 1;
 	}
 	std::cout << Tag << " PASS horizon-visibility" << std::endl;
 
-	// (iii) + production path: SLTerrain stamp, Scene::CalculatePath, AI vs shared at T+1.
-	LoopbackTransport idle;
-	NetLockstepConfig lockstep;
-	lockstep.localPeerId = 1;
-	lockstep.remotePeerId = 2;
-	lockstep.peerCount = 2;
-	lockstep.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
-	lockstep.matchConfig.pathHorizonTicks = 4;
-	NetLockstepCoordinator seated;
-	std::string lockstepError;
-	if (!seated.StartReplay(idle, lockstep, &lockstepError)) {
-		return fail("lockstep replay did not start");
-	}
-	ScenarioRunner::SetLockstepCoordinator(&seated);
-	ScenarioRunner::SetLockstepAppliedFrame(10);
-	Scene scene;
-	SLTerrain terrain;
-	if (terrain.TestInstallMaterialBitmap(160, 80) < 0) {
-		return fail("scene fixture material bitmap was not installed");
-	}
-	scene.TestSetTerrain(&terrain);
-	scene.TestInstallHorizonPathFinders(8, 4, 20, &air);
-	g_SceneMan.TestBindCurrentScene(&scene);
-	if (g_SceneMan.GetScene() != &scene || scene.GetTerrain() != &terrain) {
-		return fail("SceneMan test bind did not install the fixture scene and terrain");
-	}
-	PathFinder& sceneFinder = scene.GetPathFinder(Activity::Teams::NoTeam);
-	const int sceneWall = sceneFinder.TestNodeIdAt(3, 2);
-	if (sceneWall < 0) {
-		return fail("scene fixture grid did not produce a wall node");
-	}
-	const Box sceneBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
-	for (int y = 30; y < 70; ++y) {
-		for (int x = 50; x < 90; ++x) {
-			terrain.SetMaterialPixel(x, y, MaterialColorKeys::g_MaterialSand);
+	// (iii) + production path: SLTerrain stamp, Scene::CalculatePath, AI vs shared at T+1, committed change at T+H.
+	{
+		LoopbackTransport idle;
+		NetLockstepConfig lockstep;
+		lockstep.localPeerId = 1;
+		lockstep.remotePeerId = 2;
+		lockstep.peerCount = 2;
+		lockstep.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+		lockstep.matchConfig.pathHorizonTicks = 4;
+		NetLockstepCoordinator seated;
+		std::string lockstepError;
+		if (!seated.StartReplay(idle, lockstep, &lockstepError)) {
+			return fail("lockstep replay did not start");
 		}
-	}
-	terrain.AddUpdatedMaterialArea(sceneBox);
-	if (scene.TestHorizonBoxCount() == 0) {
-		std::cout << Tag << " FAIL AddUpdatedMaterialArea box count=" << scene.TestHorizonBoxCount() << std::endl;
-		return 1;
-	}
-	HorizonTerrainPatch scenePatch;
-	std::vector<HorizonNodeSnapshot> sceneNodes;
-	sceneFinder.CaptureHorizonPatch(sceneBox, scenePatch);
-	sceneFinder.CaptureHorizonNodeSnapshots(sceneBox, sceneNodes);
-	std::vector<std::array<const Material*, 8>> sceneExpected;
-	std::vector<char> sceneExpectedNav;
-	sceneFinder.TestComputeHorizon(sceneNodes, {scenePatch}, sceneExpected, sceneExpectedNav);
-	const float beforeShared = sceneCost(scene);
-	sceneFinder.TestApplyLiveUpdate(sceneWall, blocked);
-	ScenarioRunner::SetLockstepAppliedFrame(11);
-	const float sharedAtT1 = sceneCost(scene);
-	Actor aiActor;
-	g_CurrentAIActor = &aiActor;
-	const float aiAtT1 = sceneCost(scene);
-	g_CurrentAIActor = nullptr;
-	if (sharedAtT1 != beforeShared) {
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
-		std::cout << Tag << " FAIL shared T+1 cost=" << sharedAtT1 << " before=" << beforeShared << std::endl;
-		return 1;
-	}
-	if (aiAtT1 == beforeShared) {
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
-		std::cout << Tag << " FAIL AI T+1 cost=" << aiAtT1 << " before=" << beforeShared << std::endl;
-		return 1;
-	}
-	ScenarioRunner::SetLockstepAppliedFrame(13);
-	const float sharedBeforeCommit = sceneCost(scene);
-	ScenarioRunner::SetLockstepAppliedFrame(14);
-	const float sharedAtCommit = sceneCost(scene);
-	const uint64_t sceneGen = sceneFinder.TestHorizonGeneration();
-	bool sceneOverlayMatches = !sceneExpected.empty();
-	for (size_t index = 0; index < sceneNodes.size() && index < sceneExpected.size(); ++index) {
-		if (sceneFinder.TestViewMaterials(sceneNodes[index].nodeId, sceneGen) != sceneExpected[index]) {
-			sceneOverlayMatches = false;
-			break;
+		LockstepBinding lockstepBinding;
+		ScenarioRunner::SetLockstepCoordinator(&seated);
+		ScenarioRunner::SetLockstepAppliedFrame(10);
+		Scene scene;
+		SLTerrain terrain;
+		FixtureBinding binding;
+		if (terrain.TestInstallMaterialBitmap(160, 80) < 0) {
+			return fail("scene fixture material bitmap was not installed");
 		}
+		binding.Bind(&scene, &terrain);
+		scene.TestInstallHorizonPathFinders(8, 4, 20, &air);
+		if (g_SceneMan.GetScene() != &scene || scene.GetTerrain() != &terrain) {
+			return fail("SceneMan test bind did not install the fixture scene and terrain");
+		}
+		PathFinder& sceneFinder = scene.GetPathFinder(Activity::Teams::NoTeam);
+		const int sceneWall = sceneFinder.TestNodeIdAt(3, 2);
+		if (sceneWall < 0) {
+			return fail("scene fixture grid did not produce a wall node");
+		}
+		const Box sceneBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
+		for (int y = 30; y < 70; ++y) {
+			for (int x = 50; x < 90; ++x) {
+				terrain.SetMaterialPixel(x, y, MaterialColorKeys::g_MaterialSand);
+			}
+		}
+		terrain.AddUpdatedMaterialArea(sceneBox);
+		if (scene.TestHorizonBoxCount() == 0) {
+			std::cout << Tag << " FAIL AddUpdatedMaterialArea box count=" << scene.TestHorizonBoxCount() << std::endl;
+			return 1;
+		}
+		HorizonTerrainPatch scenePatch;
+		std::vector<HorizonNodeSnapshot> sceneNodes;
+		sceneFinder.CaptureHorizonPatch(sceneBox, scenePatch);
+		sceneFinder.CaptureHorizonNodeSnapshots(sceneBox, sceneNodes);
+		std::vector<std::array<const Material*, 8>> sceneExpected;
+		sceneFinder.TestComputeHorizon(sceneNodes, {scenePatch}, sceneExpected);
+		const float beforeShared = sceneCost(scene);
+		sceneFinder.TestApplyLiveUpdate(sceneWall, blocked);
+		ScenarioRunner::SetLockstepAppliedFrame(11);
+		const float sharedAtT1 = sceneCost(scene);
+		Actor aiActor;
+		g_CurrentAIActor = &aiActor;
+		const float aiAtT1 = sceneCost(scene);
+		g_CurrentAIActor = nullptr;
+		if (sharedAtT1 != beforeShared) {
+			std::cout << Tag << " FAIL shared T+1 cost=" << sharedAtT1 << " before=" << beforeShared << std::endl;
+			return 1;
+		}
+		if (aiAtT1 == beforeShared) {
+			std::cout << Tag << " FAIL AI T+1 cost=" << aiAtT1 << " before=" << beforeShared << std::endl;
+			return 1;
+		}
+		ScenarioRunner::SetLockstepAppliedFrame(13);
+		const float sharedBeforeCommit = sceneCost(scene);
+		ScenarioRunner::SetLockstepAppliedFrame(14);
+		const float sharedAtCommit = sceneCost(scene);
+		const uint64_t sceneGen = sceneFinder.TestHorizonGeneration();
+		int sceneOverlayMismatch = -1;
+		for (size_t index = 0; index < sceneNodes.size() && index < sceneExpected.size(); ++index) {
+			if (sceneFinder.TestViewMaterials(sceneNodes[index].nodeId, sceneGen) != sceneExpected[index]) {
+				sceneOverlayMismatch = sceneNodes[index].nodeId;
+				break;
+			}
+		}
+		if (sharedBeforeCommit != beforeShared) {
+			std::cout << Tag << " FAIL shared T+H-1 cost=" << sharedBeforeCommit << " before=" << beforeShared << std::endl;
+			return 1;
+		}
+		if (sceneExpected.empty() || sceneOverlayMismatch >= 0) {
+			std::cout << Tag << " FAIL committed overlay nodes=" << sceneExpected.size() << " mismatch_node=" << sceneOverlayMismatch << std::endl;
+			return 1;
+		}
+		if (sharedAtCommit == beforeShared) {
+			std::cout << Tag << " FAIL shared T+H cost=" << sharedAtCommit << " before=" << beforeShared << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS ai-live-grid" << std::endl;
+		std::cout << Tag << " PASS scene-production-path" << std::endl;
 	}
-	g_SceneMan.TestBindCurrentScene(nullptr);
-	ScenarioRunner::SetLockstepCoordinator(nullptr);
-	if (sharedBeforeCommit != beforeShared) {
-		std::cout << Tag << " FAIL shared T+H-1 cost=" << sharedBeforeCommit << " before=" << beforeShared << std::endl;
-		return 1;
-	}
-	if (sharedAtCommit == beforeShared || !sceneOverlayMatches) {
-		std::cout << Tag << " FAIL shared T+H cost=" << sharedAtCommit << " before=" << beforeShared << " overlay_matches=" << sceneOverlayMatches << std::endl;
-		return 1;
-	}
-	std::cout << Tag << " PASS ai-live-grid" << std::endl;
-	std::cout << Tag << " PASS scene-production-path" << std::endl;
 
-	// wrap-identity: live GetTerrMatter and the horizon walk read the same wrapping pixels.
+	// wrap-identity: a seam-crossing ray reads the same pixels live and out of a production-sized patch.
 	{
 		Scene wrapScene;
 		SLTerrain wrapTerrain;
+		FixtureBinding binding;
 		if (wrapTerrain.TestInstallMaterialBitmap(160, 80, true, false) < 0) {
 			return fail("wrap fixture material bitmap was not installed");
 		}
 		for (int y = 0; y < 80; ++y) {
 			wrapTerrain.SetMaterialPixel(0, y, MaterialColorKeys::g_MaterialGold);
-			wrapTerrain.SetMaterialPixel(159, y, MaterialColorKeys::g_MaterialGold);
 		}
-		wrapScene.TestSetTerrain(&wrapTerrain);
-		g_SceneMan.TestBindCurrentScene(&wrapScene);
+		binding.Bind(&wrapScene, &wrapTerrain);
 		PathFinder wrapFinder;
 		wrapFinder.TestInstallGrid(8, 4, 20, &air);
 		wrapFinder.TestSetWraps(true, false);
 		HorizonTerrainPatch wrapPatch;
-		wrapFinder.CaptureHorizonPatch(Box(Vector(0.0F, 0.0F), 160.0F, 80.0F), wrapPatch);
-		if (wrapPatch.pixels.empty()) {
-			g_SceneMan.TestBindCurrentScene(nullptr);
-			return fail("wrap CaptureHorizonPatch stored no pixels");
-		}
-		std::vector<HorizonNodeSnapshot> wrapNodes;
-		wrapFinder.CaptureHorizonNodeSnapshots(Box(Vector(0.0F, 0.0F), 160.0F, 80.0F), wrapNodes);
-		const Vector wrapStart(150.0F, 40.0F);
-		const Vector wrapEnd(10.0F, 40.0F);
-		const Material* wrapLive = g_SceneMan.CastMaxStrengthRayMaterial(wrapStart, wrapEnd, 0, MaterialColorKeys::g_MaterialAir);
-		if (!wrapFinder.TestHorizonWrapRayMatches(wrapStart, wrapEnd, wrapPatch)) {
-			const unsigned char liveId = wrapLive ? wrapLive->GetIndex() : 255;
-			g_SceneMan.TestBindCurrentScene(nullptr);
-			std::cout << Tag << " FAIL wrap edge ray live_id=" << static_cast<int>(liveId) << std::endl;
+		// A noted box beside the seam: the patch holds x=160 but not the x=0 pixel it wraps onto.
+		const Box wrapBox(Vector(140.0F, 0.0F), 20.0F, 80.0F);
+		wrapFinder.CaptureHorizonPatch(wrapBox, wrapPatch);
+		if (wrapPatch.pixels.empty() || wrapPatch.ContainsUnwrapped(0, 40)) {
+			std::cout << Tag << " FAIL wrap patch pixels=" << wrapPatch.pixels.size() << " origin_x=" << wrapPatch.originX << " width=" << wrapPatch.width << std::endl;
 			return 1;
 		}
-		bool wrapRay = false;
+		std::vector<HorizonNodeSnapshot> wrapNodes;
+		wrapFinder.CaptureHorizonNodeSnapshots(wrapBox, wrapNodes);
+		const Vector wrapStart(150.0F, 40.0F);
+		const Vector wrapEnd(170.0F, 40.0F);
+		const int liveSeamId = wrapFinder.TestLiveRayMaterialId(wrapStart, wrapEnd);
+		const int patchSeamId = wrapFinder.TestHorizonPatchMaterialId(wrapStart, wrapEnd, wrapPatch);
+		if (liveSeamId != static_cast<int>(MaterialColorKeys::g_MaterialGold)) {
+			std::cout << Tag << " FAIL wrap fixture live seam id=" << liveSeamId << std::endl;
+			return 1;
+		}
+		if (patchSeamId != liveSeamId) {
+			std::cout << Tag << " FAIL wrap edge ray live_id=" << liveSeamId << " patch_id=" << patchSeamId << std::endl;
+			return 1;
+		}
+		int wrapRays = 0;
 		for (const HorizonNodeSnapshot& node: wrapNodes) {
 			if (node.neighborIds[2] < 0) {
 				continue;
 			}
-			if (!wrapFinder.TestHorizonWrapRayMatches(node.pos, node.neighborPos[2], wrapPatch)) {
-				g_SceneMan.TestBindCurrentScene(nullptr);
-				std::cout << Tag << " FAIL wrap neighbour ray from=(" << node.pos.m_X << "," << node.pos.m_Y << ")" << std::endl;
+			const Vector offset(0.0F, 3.0F);
+			const int neighborLiveId = wrapFinder.TestLiveRayMaterialId(node.pos + offset, node.neighborPos[2] + offset);
+			const int neighborPatchId = wrapFinder.TestHorizonPatchMaterialId(node.pos + offset, node.neighborPos[2] + offset, wrapPatch);
+			if (neighborPatchId != neighborLiveId) {
+				std::cout << Tag << " FAIL wrap neighbour ray from_x=" << node.pos.m_X << " live_id=" << neighborLiveId << " patch_id=" << neighborPatchId << std::endl;
 				return 1;
 			}
-			wrapRay = true;
+			++wrapRays;
 		}
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		if (!wrapRay) {
-			std::cout << Tag << " FAIL wrap fixture Right neighbour count=0" << std::endl;
+		if (wrapRays == 0) {
+			std::cout << Tag << " FAIL wrap fixture Right neighbour rays=" << wrapRays << std::endl;
 			return 1;
 		}
 		std::cout << Tag << " PASS wrap-identity" << std::endl;
 	}
 
-	// snapshot: a live rewrite after Note does not change the overlay computed from the origin snapshot.
+	// snapshot: the worker answers from the origin-tick snapshot even after the live node and the terrain move under it.
 	{
 		Scene snapScene;
 		SLTerrain snapTerrain;
+		FixtureBinding binding;
 		if (snapTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
 			return fail("snapshot fixture material bitmap was not installed");
 		}
@@ -1891,8 +1933,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 				snapTerrain.SetMaterialPixel(x, y, MaterialColorKeys::g_MaterialSand);
 			}
 		}
-		snapScene.TestSetTerrain(&snapTerrain);
-		g_SceneMan.TestBindCurrentScene(&snapScene);
+		binding.Bind(&snapScene, &snapTerrain);
 		PathFinder snapFinder;
 		snapFinder.TestInstallGrid(8, 4, 20, &air);
 		std::vector<HorizonNodeSnapshot> snapNodes;
@@ -1900,13 +1941,11 @@ int PathFinder::RunHorizonGridSelfTest() {
 		snapFinder.CaptureHorizonNodeSnapshots(snapBox, snapNodes);
 		snapFinder.CaptureHorizonPatch(snapBox, snapPatch);
 		if (snapPatch.pixels.empty() || snapNodes.empty()) {
-			g_SceneMan.TestBindCurrentScene(nullptr);
 			std::cout << Tag << " FAIL snapshot capture pixels=" << snapPatch.pixels.size() << " nodes=" << snapNodes.size() << std::endl;
 			return 1;
 		}
 		std::vector<std::array<const Material*, 8>> snapExpected;
-		std::vector<char> snapExpectedNav;
-		snapFinder.TestComputeHorizon(snapNodes, {snapPatch}, snapExpected, snapExpectedNav);
+		snapFinder.TestComputeHorizon(snapNodes, {snapPatch}, snapExpected);
 		snapFinder.TestHoldHorizonWorker();
 		snapFinder.PinHorizonFromLive(snapBox);
 		snapFinder.QueueHorizonUpdate(30, 4, {snapBox}, {snapPatch}, snapNodes);
@@ -1923,26 +1962,29 @@ int PathFinder::RunHorizonGridSelfTest() {
 		snapFinder.CommitHorizonThrough(34);
 		const auto snapLate = pathCost(snapFinder, true);
 		const uint64_t snapGen = snapFinder.TestHorizonGeneration();
-		bool snapOverlayMatches = !snapExpected.empty();
+		int snapOverlayMismatch = -1;
 		for (size_t index = 0; index < snapNodes.size() && index < snapExpected.size(); ++index) {
 			if (snapFinder.TestViewMaterials(snapNodes[index].nodeId, snapGen) != snapExpected[index]) {
-				snapOverlayMatches = false;
+				snapOverlayMismatch = snapNodes[index].nodeId;
 				break;
 			}
 		}
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		if (snapEarly != snapLate) {
-			std::cout << Tag << " FAIL snapshot early cost=" << snapEarly.second << " late=" << snapLate.second << std::endl;
+		if (snapExpected.empty() || snapOverlayMismatch >= 0) {
+			std::cout << Tag << " FAIL snapshot overlay nodes=" << snapExpected.size() << " mismatch_node=" << snapOverlayMismatch << std::endl;
 			return 1;
 		}
-		if (snapLive == snapLate || !snapOverlayMatches) {
-			std::cout << Tag << " FAIL snapshot live cost=" << snapLive.second << " late=" << snapLate.second << " overlay_matches=" << snapOverlayMatches << std::endl;
+		if (snapLate == snapEarly) {
+			std::cout << Tag << " FAIL snapshot committed cost=" << snapLate.second << " pinned=" << snapEarly.second << std::endl;
+			return 1;
+		}
+		if (snapLate == snapLive) {
+			std::cout << Tag << " FAIL snapshot committed cost=" << snapLate.second << " live=" << snapLive.second << std::endl;
 			return 1;
 		}
 		std::cout << Tag << " PASS snapshot-isolation" << std::endl;
 	}
 
-	// generation: ViewNode ignores a newer overlay, and commit waits for the older reader.
+	// generation: an earlier overlay cell stays visible under a later pin, and a commit waits for the older reader.
 	{
 		PathFinder genFinder;
 		genFinder.TestInstallGrid(8, 4, 20, &air);
@@ -1952,7 +1994,8 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const auto staleView = genFinder.TestViewMaterials(wall, currentGen - 1);
 		const auto freshView = genFinder.TestViewMaterials(wall, currentGen);
 		if (staleView == freshView) {
-			std::cout << Tag << " FAIL ViewNode stale and fresh materials matched" << std::endl;
+			std::cout << Tag << " FAIL ViewNode stale_id=" << static_cast<int>(staleView[2] ? staleView[2]->GetIndex() : 255)
+			          << " fresh_id=" << static_cast<int>(freshView[2] ? freshView[2]->GetIndex() : 255) << std::endl;
 			return 1;
 		}
 		const int other = genFinder.TestNodeIdAt(5, 2);
@@ -1981,17 +2024,19 @@ int PathFinder::RunHorizonGridSelfTest() {
 		reader.join();
 		const auto laterView = genFinder.TestViewMaterials(wall, genFinder.TestHorizonGeneration());
 		if (laterView != freshView) {
-			std::cout << Tag << " FAIL later apply hid earlier overlay gen=" << genFinder.TestHorizonGeneration() << std::endl;
+			std::cout << Tag << " FAIL later apply id=" << static_cast<int>(laterView[2] ? laterView[2]->GetIndex() : 255)
+			          << " earlier_id=" << static_cast<int>(freshView[2] ? freshView[2]->GetIndex() : 255)
+			          << " gen=" << genFinder.TestHorizonGeneration() << std::endl;
 			return 1;
 		}
 		if (genFinder.LastHorizonReaderWaitUs() == 0) {
-			std::cout << Tag << " FAIL reader wait_us=" << genFinder.LastHorizonReaderWaitUs() << " worker wait_us=" << genFinder.LastHorizonWaitUs() << std::endl;
+			std::cout << Tag << " FAIL reader wait_us=" << genFinder.LastHorizonReaderWaitUs() << std::endl;
 			return 1;
 		}
 		std::cout << Tag << " PASS overlay-generation" << std::endl;
 	}
 
-	// speculation: a preview terrain write never Notes; restore clears the horizon state.
+	// speculation: a preview terrain write never Notes, and the terrain fence carries the committed horizon across a restore.
 	{
 		LoopbackTransport idleSpec;
 		NetLockstepConfig lockstepSpec;
@@ -2005,22 +2050,23 @@ int PathFinder::RunHorizonGridSelfTest() {
 		if (!seatedSpec.StartReplay(idleSpec, lockstepSpec, &specError)) {
 			return fail("speculation lockstep replay did not start");
 		}
+		LockstepBinding lockstepBinding;
 		ScenarioRunner::SetLockstepCoordinator(&seatedSpec);
 		ScenarioRunner::SetLockstepAppliedFrame(40);
 		Scene specScene;
 		SLTerrain specTerrain;
+		FixtureBinding binding;
 		if (specTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			return fail("speculation fixture material bitmap was not installed");
 		}
-		specScene.TestSetTerrain(&specTerrain);
+		binding.Bind(&specScene, &specTerrain);
 		specScene.TestInstallHorizonPathFinders(8, 4, 20, &air);
-		g_SceneMan.TestBindCurrentScene(&specScene);
+		const Box specBox(Vector(50.0F, 30.0F), 40.0F, 40.0F);
 		g_MovableMan.BeginSpeculation();
-		specTerrain.AddUpdatedMaterialArea(Box(Vector(50.0F, 30.0F), 40.0F, 40.0F));
+		specTerrain.AddUpdatedMaterialArea(specBox);
 		const size_t notedWhileSpeculative = specScene.TestHorizonBoxCount();
 		g_MovableMan.EndSpeculation();
-		specTerrain.AddUpdatedMaterialArea(Box(Vector(50.0F, 30.0F), 40.0F, 40.0F));
+		specTerrain.AddUpdatedMaterialArea(specBox);
 		const size_t notedWhenCanonical = specScene.TestHorizonBoxCount();
 		PathFinder& specFinder = specScene.GetPathFinder(Activity::Teams::NoTeam);
 		specFinder.QueueHorizonDelta(40, 4, specFinder.TestNodeIdAt(3, 2), blocked);
@@ -2029,22 +2075,26 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const size_t overlayAtCapture = specFinder.TestHorizonOverlayCount();
 		TerrainLayerSnapshot specSnap;
 		if (!specSnap.Capture()) {
-			g_SceneMan.TestBindCurrentScene(nullptr);
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			std::cout << Tag << " FAIL speculation Capture boxes=" << boxesAtCapture << " overlay=" << overlayAtCapture << std::endl;
 			return 1;
 		}
-		specScene.RestoreHorizonAfterPreview();
+		// Move both halves of the state the fence has to put back.
+		specTerrain.AddUpdatedMaterialArea(specBox);
+		specFinder.QueueHorizonDelta(44, 1, specFinder.TestNodeIdAt(5, 2), blocked);
+		specFinder.CommitHorizonThrough(45);
+		const size_t boxesBeforeRestore = specScene.TestHorizonBoxCount();
+		const size_t overlayBeforeRestore = specFinder.TestHorizonOverlayCount();
+		if (boxesBeforeRestore == boxesAtCapture || overlayBeforeRestore == overlayAtCapture) {
+			std::cout << Tag << " FAIL speculation fixture boxes=" << boxesBeforeRestore << " overlay=" << overlayBeforeRestore
+			          << " captured_boxes=" << boxesAtCapture << " captured_overlay=" << overlayAtCapture << std::endl;
+			return 1;
+		}
 		if (!specSnap.Restore()) {
-			g_SceneMan.TestBindCurrentScene(nullptr);
-			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			std::cout << Tag << " FAIL speculation Restore boxes=" << specScene.TestHorizonBoxCount() << std::endl;
 			return 1;
 		}
 		const size_t boxesAfterRestore = specScene.TestHorizonBoxCount();
 		const size_t overlayAfterRestore = specFinder.TestHorizonOverlayCount();
-		g_SceneMan.TestBindCurrentScene(nullptr);
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		if (notedWhileSpeculative != 0) {
 			std::cout << Tag << " FAIL preview terrain write Noted boxes=" << notedWhileSpeculative << std::endl;
 			return 1;
@@ -2068,7 +2118,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 	onTime.QueueHorizonDelta(1, 1, wall, blocked);
 	onTime.CommitHorizonThrough(2);
 	if (onTime.LastHorizonWaitUs() != 0) {
-		std::cout << Tag << " FAIL horizon_wait_us was " << onTime.LastHorizonWaitUs() << " when the worker was on time" << std::endl;
+		std::cout << Tag << " FAIL on-time worker wait_us=" << onTime.LastHorizonWaitUs() << std::endl;
 		return 1;
 	}
 	TestArmFaultInject("horizon_worker_late");
@@ -2080,7 +2130,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 	constexpr int64_t lateSleepUs = 50000;
 	constexpr int64_t lateSlackUs = 25000;
 	if (late.LastHorizonWaitUs() < lateSleepUs || late.LastHorizonWaitUs() > lateSleepUs + lateSlackUs) {
-		std::cout << Tag << " FAIL late worker wait " << late.LastHorizonWaitUs() << " was not the injected 50 ms plus slack" << std::endl;
+		std::cout << Tag << " FAIL late worker wait_us=" << late.LastHorizonWaitUs() << std::endl;
 		return 1;
 	}
 	std::cout << Tag << " PASS stall-instrumentation" << std::endl;
