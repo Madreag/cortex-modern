@@ -648,6 +648,17 @@ namespace RTE {
 		m_RemoteNamesByPeer.erase(peerId);
 		m_RemotePingByPeer.erase(peerId);
 		m_RemotePlatformsByPeer.erase(peerId);
+		// The seat is open again, so it carries the unseated name once more: a kicked or departed
+		// member's name on a seat nobody holds is a roster row that lies to every peer.
+		for (NetMatchPlayerSlot& slot: m_Config.matchConfig.players) {
+			if (slot.peerId == peerId && !slot.cpu) slot.displayName = NetMatchConfigUtil::UnseatedSlotName(peerId);
+		}
+		const NetHash32 openedHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
+		if (openedHash != m_MatchConfigHash) {
+			for (auto& [remainingPeer, acked]: m_ConfigAckedByPeer) acked = false;
+			m_MatchConfigHash = openedHash;
+			m_ConfigResendDue = true;
+		}
 		m_PeerStatePending = true;
 		m_StartRequested = m_Config.autoStart;
 		m_State = NetLobbyState::WaitingForConfigAck;

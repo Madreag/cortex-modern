@@ -152,6 +152,10 @@ namespace RTE {
 		return config;
 	}
 
+	std::string NetMatchConfigUtil::UnseatedSlotName(uint8_t peerId) {
+		return "Client " + std::to_string(peerId);
+	}
+
 	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
