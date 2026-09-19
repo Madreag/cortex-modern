@@ -165,6 +165,12 @@ RED_SEGMENT_DIGEST = "world-segment-digest-differs-from-its-archive"
 RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
 RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
 RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
+RED_RESUMED_NO_SEGMENT = "resumed-world-wrote-no-segment"
+RED_RESUMED_ORDINARY_FILE = "resumed-world-recorded-an-ordinary-file"
+RED_RESUMED_HEADER_WRONG = "resumed-world-segment-header-wrong"
+RED_RESUMED_HELD_FRAMES = "resumed-world-held-its-first-frames"
+RED_RESUMED_NO_DIGEST = "resumed-world-recorded-without-a-digest"
+RED_RESUMED_UNARMED = "resumed-world-recorded-unarmed"
 
 CASES = (
     {
@@ -561,6 +567,19 @@ CASES = (
         "pass_token": "[net-world-segment-roll-selftest] PASS",
     },
     {
+        "name": "resumed-world-records-a-segment",
+        "argv": ["-net-world-segment-resume-selftest"],
+        "red": RED_RESUMED_NO_SEGMENT,
+        "also_red": (
+            RED_RESUMED_ORDINARY_FILE,
+            RED_RESUMED_HEADER_WRONG,
+            RED_RESUMED_HELD_FRAMES,
+            RED_RESUMED_NO_DIGEST,
+            RED_RESUMED_UNARMED,
+        ),
+        "pass_token": "[net-world-segment-resume-selftest] PASS",
+    },
+    {
         "name": "world-segment-playback-stands-on-the-checkpoint",
         "argv": ["-net-world-segment-playback-selftest"],
         "red": RED_SEGMENT_PLAYBACK_MISSING,
@@ -603,6 +622,8 @@ CASES = (
         "argv": [],
         "red": RED_SEGMENT_NOT_WRITTEN,
         "also_red": (
+            RED_RESUMED_NO_SEGMENT,
+            RED_RESUMED_HEADER_WRONG,
             RED_SEGMENT_LOST_ITS_CHECKPOINT,
             RED_SEGMENT_HEADER_MISSING,
             RED_SEGMENT_DIGEST,
@@ -757,6 +778,35 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT) -> Non
     # Every canonical tick hash of the replayed world equals the recording host's, from checkpoint+1.
     passed, compared = restore.strict_compare(world / "host_trace.json", trace, first_tick=first_tick + 1)
     assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
+
+    # The restarted world: its round opens ON a checkpoint, so its FIRST recording is a segment named
+    # for the tick it resumed from - not an ordinary file that names no world.
+    restarted = out / "restarted"
+    restarted.mkdir(parents=True, exist_ok=True)
+    for who in ("host", "client"):
+        (restarted / who).mkdir(parents=True, exist_ok=True)
+        restore._carry_world_state(world, restarted, who)
+    again = restore._run_world_round(repo, restarted, port + 2, 600,
+                                     {"host": ["-net-replay-out", str(restarted / "host" / "match.ccreplay")]})
+    for who in ("host", "client"):
+        assert again[who].get("exit_code") == 0, (who, again[who].get("exit_code"), again[who].get("error"))
+    restarted_log = restore.peer_log(restarted, "host")
+    resuming = restore.RESUMING.search(restarted_log)
+    assert resuming, f"{RED_RESUMED_NO_SEGMENT}: the restarted world never reported the checkpoint it opened on"
+    resume_tick = int(resuming[2])
+    resumed_segment = restarted / "host" / "runtime/Autosaves" / f"{world_id}-{resume_tick}.ccreplay"
+    assert resumed_segment.is_file(),         f"{RED_RESUMED_NO_SEGMENT}: no segment stands on the resumed tick {resume_tick}"
+    assert not (restarted / "host" / "match.ccreplay").exists(),         f"{RED_RESUMED_ORDINARY_FILE}: the resumed round wrote an ordinary recording too"
+    verify_two = run_sim_test.make_run(repo, ["-net-replay-verify", str(resumed_segment)],
+                                       out / "verify_resumed", timeout=180, env={"CCCP_HEADLESS": "1"})
+    verify_two.start().finish()
+    resumed_log = (out / "verify_resumed" / "stdout.log").read_text(encoding="utf-8", errors="replace")
+    resumed_line = next((text for text in resumed_log.splitlines() if "[net-replay-verify]" in text), "")
+    assert resumed_line, f"{RED_RESUMED_HEADER_WRONG}: -net-replay-verify printed nothing for {resumed_segment.name}"
+    resumed_report = json.loads(resumed_line.split("[net-replay-verify]", 1)[1].strip())
+    assert resumed_report.get("segment") is True and resumed_report.get("segment_tick") == resume_tick, resumed_report
+    assert resumed_report.get("world_id") == world_id, (resumed_report.get("world_id"), world_id)
+    assert resumed_report.get("first_frame") == resume_tick + 1, (resumed_report.get("first_frame"), resume_tick)
 
 def _printed_world_id(text: str) -> str:
     for line in (text or "").splitlines():
