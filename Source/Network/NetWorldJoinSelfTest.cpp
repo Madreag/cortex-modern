@@ -2141,6 +2141,36 @@ namespace RTE {
 		if (!world.AdmitWorldMember(2, 1, activation, &error)) {
 			return Fail("a due activation cancelled instead of admitting: " + error);
 		}
+		// A second world round, this one with input already on the wire: a member admitted at a frame
+		// the host has already sent would wait forever for input it was not a peer for.
+		LoopbackTransport sentTransport;
+		if (!sentTransport.StartHost(47123, &error)) {
+			return Fail("admit sent-input loopback: " + error);
+		}
+		NetLockstepCoordinator sent;
+		NetLockstepConfig sentConfig = worldConfig;
+		sentConfig.sessionId = 13;
+		sentConfig.inputDelayFrames = 4;
+		if (!sent.Start(sentTransport, sentConfig, &error)) {
+			return Fail("admit sent-input world start: " + error);
+		}
+		const uint64_t produced = sent.GetStats().nextFrame;
+		const uint64_t target = produced + sentConfig.inputDelayFrames;
+		if (!sent.QueueLocalInput(produced, {}, {}, &error)) {
+			return Fail("admit sent-input queue: " + error);
+		}
+		std::string refusal;
+		if (sent.AdmitWorldMember(2, 1, target, &refusal)) {
+			return Fail("world-member-admitted-behind-the-sent-input: frame " + std::to_string(target) +
+			            " was admitted although the host had already sent its input for it");
+		}
+		if (refusal.find(std::to_string(target)) == std::string::npos) {
+			return Fail("world-member-admitted-behind-the-sent-input: the refusal did not name the frame, it said \"" + refusal + "\"");
+		}
+		if (!sent.AdmitWorldMember(2, 1, target + 1, &error)) {
+			return Fail("world-member-admitted-behind-the-sent-input: frame " + std::to_string(target + 1) +
+			            " is ahead of the sent input and was still refused: " + error);
+		}
 		return 0;
 	}
 

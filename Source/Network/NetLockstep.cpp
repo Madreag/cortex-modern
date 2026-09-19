@@ -4088,6 +4088,14 @@ namespace RTE {
 			if (error) *error = "a world member's first required frame must be announced ahead of the committed frame";
 			return false;
 		}
+		// Every input already sent went out before this member was a peer, so a first required frame
+		// inside the input-delay window names frames it can never receive. The bootstrap takes a later
+		// E instead of waiting on a frame that is already gone.
+		if (m_LastQueuedTargetFrame != std::numeric_limits<uint64_t>::max() && firstRequiredFrame <= m_LastQueuedTargetFrame) {
+			if (error) *error = "world member first required frame " + std::to_string(firstRequiredFrame) +
+			                    " is not ahead of the input already sent through " + std::to_string(m_LastQueuedTargetFrame);
+			return false;
+		}
 		// A fresh member is not a returning seat: it enters the required set at its announced frame and
 		// never through the dropped-seat hold, so nothing about it can pause the world.
 		m_PeerLeaveFrames.erase(peerId);
