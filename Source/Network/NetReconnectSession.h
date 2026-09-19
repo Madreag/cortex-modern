@@ -674,6 +674,10 @@ namespace RTE {
 		/// world plane instead of the ordinary one.
 		void SetWorldTarget(bool world) { m_WorldTarget = world; }
 		void SetDirectorySessionId(std::string directorySessionId);
+		/// Points the record at the directory row it really belongs to, rewriting one already on disk.
+		/// A persistent world registers under its own UUID, which the client only learns from the
+		/// configuration it adopts, and that id is what its return watch browses for.
+		void AdoptDirectorySessionId(const std::string& directorySessionId);
 
 		/// Starts the §4 transaction the session was accepted into: a stored record for THIS host is
 		/// reclaimed, anything else is a fresh join.

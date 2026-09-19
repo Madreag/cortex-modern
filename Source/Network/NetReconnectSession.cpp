@@ -2124,6 +2124,18 @@ namespace RTE {
 		m_Record.directorySessionId = m_DirectorySessionId;
 	}
 
+	void NetReconnectClient::AdoptDirectorySessionId(const std::string& directorySessionId) {
+		if (directorySessionId.empty() || directorySessionId == m_DirectorySessionId) {
+			return;
+		}
+		m_DirectorySessionId = directorySessionId;
+		m_Record.directorySessionId = directorySessionId;
+		// A record already durable is rewritten: the watch reads the file, not this object.
+		if (m_HasRecord && m_Store != nullptr) {
+			(void)m_Store->Store(m_Record, nullptr);
+		}
+	}
+
 	bool NetReconnectClient::IsAdmissionPending() const {
 		// Applied waits for a human, which is why it is bounded by the same P2 window everything else
 		// on this plane is, rather than by the handshake ladder.
