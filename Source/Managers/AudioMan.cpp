@@ -31,6 +31,7 @@
 #include "SceneObject.h"
 #include "Writer.h"
 #include "Reader.h"
+#include "System.h"
 
 #include "backward/backward.hpp"
 
@@ -68,10 +69,13 @@ namespace {
 		const size_t frames = stack.size() < 8 ? stack.size() : 8;
 		for (size_t index = 0; index < frames; ++index) {
 			const backward::ResolvedTrace trace = resolver.resolve(stack[index]);
-			std::cout << "[audio-checkpoint]   #" << index << " " << (trace.object_function.empty() ? "?" : trace.object_function);
-			if (!trace.source.filename.empty()) std::cout << " " << trace.source.filename << ":" << trace.source.line;
-			else if (!trace.object_filename.empty()) std::cout << " " << trace.object_filename;
-			std::cout << std::endl;
+			{
+				std::ostringstream line;
+			line << "[audio-checkpoint]   #" << index << " " << (trace.object_function.empty() ? "?" : trace.object_function);
+			if (!trace.source.filename.empty()) line << " " << trace.source.filename << ":" << trace.source.line;
+			else if (!trace.object_filename.empty()) line << " " << trace.object_filename;
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 	}
 }
@@ -97,9 +101,12 @@ SoundSimulationScope::SoundSimulationScope(uint64_t objectUID, uint64_t phase, S
 	// CC_TRACE_SOUND_SCOPE_OBJECT=<uid> prints every scope opened for that object or directly under it, so two peers' key derivations can be compared.
 	static const uint64_t tracedObject = [] { const char* value = std::getenv("CC_TRACE_SOUND_SCOPE_OBJECT"); return value ? std::strtoull(value, nullptr, 10) : 0ULL; }();
 	if (tracedObject && (objectUID == tracedObject || (m_Previous && m_Previous->m_Key.objectUID == tracedObject))) {
-		std::cout << "[sound-scope] tick=" << m_Key.tick << " domain=" << static_cast<int>(domain) << " uid=" << objectUID << " phase=" << phase << " occurrence=" << occurrence;
-		if (m_Previous) std::cout << " parent(uid=" << m_Previous->m_Key.objectUID << " phase=" << m_Previous->m_Key.phase << " occurrence=" << m_Previous->m_Key.occurrence << " shared=" << m_Previous->m_ChildOrdinal << " local=" << m_Previous->m_LocalChildOrdinal << ")";
-		std::cout << std::endl;
+		{
+			std::ostringstream line;
+		line << "[sound-scope] tick=" << m_Key.tick << " domain=" << static_cast<int>(domain) << " uid=" << objectUID << " phase=" << phase << " occurrence=" << occurrence;
+		if (m_Previous) line << " parent(uid=" << m_Previous->m_Key.objectUID << " phase=" << m_Previous->m_Key.phase << " occurrence=" << m_Previous->m_Key.occurrence << " shared=" << m_Previous->m_ChildOrdinal << " local=" << m_Previous->m_LocalChildOrdinal << ")";
+			System::PrintDiagnosticLine(line.str());
+		}
 	}
 }
 
@@ -251,11 +258,11 @@ bool AudioMan::Initialize() {
 		FMOD_OUTPUTTYPE actualOutput = FMOD_OUTPUTTYPE_AUTODETECT;
 		const FMOD_RESULT outputResult = audioSystemSetupResult == FMOD_OK ? m_AudioSystem->getOutput(&actualOutput) : audioSystemSetupResult;
 		m_InaudibleTestOutputVerified = outputResult == FMOD_OK && actualOutput == FMOD_OUTPUTTYPE_NOSOUND;
-		std::cout << "[audio-test-output] requested=NOSOUND verified=" << m_InaudibleTestOutputVerified << " output=" << static_cast<int>(actualOutput) << " result=" << static_cast<int>(outputResult) << std::endl;
+		{ std::ostringstream line; line <<  "[audio-test-output] requested=NOSOUND verified=" << m_InaudibleTestOutputVerified << " output=" << static_cast<int>(actualOutput) << " result=" << static_cast<int>(outputResult); System::PrintDiagnosticLine(line.str()); }
 		if (!m_InaudibleTestOutputVerified) audioSystemSetupResult = outputResult == FMOD_OK ? FMOD_ERR_OUTPUT_INIT : outputResult;
 	} else if (audioSystemSetupResult != FMOD_OK) {
 		// Simulation sounds need sample metadata on every peer, so a missing device still gets a silent backend.
-		std::cout << "[audio-output] device unavailable, using silent output: " << FMOD_ErrorString(audioSystemSetupResult) << std::endl;
+		{ std::ostringstream line; line <<  "[audio-output] device unavailable, using silent output: " << FMOD_ErrorString(audioSystemSetupResult); System::PrintDiagnosticLine(line.str()); }
 		m_OutputSilenced = true;
 		audioSystemSetupResult = InitializeAudioSystem(true);
 	}
@@ -551,8 +558,12 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 	const bool physicalPlay = audibleHere && !s_PlaybackSuppressed && m_AudioEnabled;
 	if (restoring && physicalPlay) ++s_RestorePlayCount;
 	if (restoring || (phase && std::strcmp(phase, "staging") == 0)) {
-		std::cout << "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
-		          << " owner-class " << soundContainer->GetClass().GetName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0) << std::endl;
+		{
+			std::ostringstream line;
+			line <<  "[audio-checkpoint] play during restore: preset \"" << soundContainer->GetPresetName() << "\" identity " << soundContainer->GetCheckpointIdentity()
+		          << " owner-class " << soundContainer->GetClass().GetName() << " phase " << (phase && phase[0] ? phase : "none") << " restoring=" << (restoring ? 1 : 0);
+			System::PrintDiagnosticLine(line.str());
+		}
 		PrintRestorePlayBacktrace();
 	}
 	const bool logical = soundContainer->UsesLogicalPlayback();
@@ -666,8 +677,12 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		if (predicting) predictedVoices.push_back(channelIndex);
 		if (noteStart) { PreviewEventLedger::NoteEventStart(PreviewEventLedger::CommittedTick(), eventKey, predicting); noteStart = false; }
 		if (PreviewEventLedger::TraceEnabled()) {
-			std::cout << "[preview-event] voice committed=" << PreviewEventLedger::CommittedTick() << " tick=" << eventKey.tick << " uid=" << eventKey.emitterUID << " previewed=" << PreviewEventLedger::IsPreviewedEmitter(eventKey.emitterUID)
-			          << " asset=" << eventKey.assetIdentity << " preset=" << eventKey.presetHash << " seq=" << eventKey.seq << " preset_name=\"" << soundContainer->GetPresetName() << "\" path=" << soundData->SoundFile.GetDataPath() << std::endl;
+			{
+				std::ostringstream line;
+				line <<  "[preview-event] voice committed=" << PreviewEventLedger::CommittedTick() << " tick=" << eventKey.tick << " uid=" << eventKey.emitterUID << " previewed=" << PreviewEventLedger::IsPreviewedEmitter(eventKey.emitterUID)
+			          << " asset=" << eventKey.assetIdentity << " preset=" << eventKey.presetHash << " seq=" << eventKey.seq << " preset_name=\"" << soundContainer->GetPresetName() << "\" path=" << soundData->SoundFile.GetDataPath();
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 
 		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end()) {
@@ -1929,7 +1944,7 @@ void AudioMan::StartAwaitingSampleVoices() {
 		FMOD::Sound* sound = cached == ContentFile::s_LoadedSamples.end() ? nullptr : cached->second;
 		const FMOD_OPENSTATE open = CachedSampleOpenState(sound);
 		if (!sound || open == FMOD_OPENSTATE_ERROR) {
-			std::cout << "[audio] deferred voice dropped: " << description.path << " state=" << static_cast<int>(open) << std::endl;
+			{ std::ostringstream line; line <<  "[audio] deferred voice dropped: " << description.path << " state=" << static_cast<int>(open); System::PrintDiagnosticLine(line.str()); }
 			dropped.push_back(identity);
 			s_PendingSamples.erase(description.path);
 			continue;
@@ -2203,7 +2218,7 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 			uint64_t ownerIdentity = voice.owner ? voice.owner->GetCheckpointIdentity() : 0;
 			if (contained && ownerIdentity && !contained(ownerIdentity, voice.owner)) {
 				if (disownedPresets.insert(voice.owner->GetPresetName()).second) {
-					std::cout << "[audio-checkpoint] disowned voice owner " << voice.owner->GetPresetName() << std::endl;
+					{ std::ostringstream line; line <<  "[audio-checkpoint] disowned voice owner " << voice.owner->GetPresetName(); System::PrintDiagnosticLine(line.str()); }
 				}
 				ownerIdentity = 0;
 			}
@@ -2290,8 +2305,12 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 						if (!liveNearby.empty()) nearby = nearby.empty() ? "live:" + liveNearby : nearby + " live:" + liveNearby;
 					}
 				}
-				std::cout << "[audio-checkpoint] voice " << voice.identity << " has no registered owner " << voice.owner
-				          << (preset.empty() ? "" : " (" + preset + ")") << " nearby " << (nearby.empty() ? "none" : nearby) << std::endl;
+				{
+					std::ostringstream line;
+					line <<  "[audio-checkpoint] voice " << voice.identity << " has no registered owner " << voice.owner
+				          << (preset.empty() ? "" : " (" + preset + ")") << " nearby " << (nearby.empty() ? "none" : nearby);
+					System::PrintDiagnosticLine(line.str());
+				}
 				throw std::runtime_error("voice " + std::to_string(voice.identity) + " has no registered owner " + std::to_string(voice.owner) + (preset.empty() ? "" : " (" + preset + ")") + " nearby " + (nearby.empty() ? "none" : nearby));
 			}
 			if (owner) ownerChannels[owner].insert(voice.identity);
@@ -2436,7 +2455,7 @@ bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const st
 	} catch (const std::exception& error) {
 		if (refusal) *refusal = error.what();
 		g_ConsoleMan.PrintString(std::string("ERROR: Could not restore audio checkpoint: ") + error.what());
-		std::cout << "[audio-checkpoint] " << error.what() << std::endl;
+		{ std::ostringstream line; line <<  "[audio-checkpoint] " << error.what(); System::PrintDiagnosticLine(line.str()); }
 		return false;
 	}
 }
@@ -2477,7 +2496,7 @@ void AudioMan::TraceCheckpointBoundary(const char* stage) const {
 		}
 		std::cout << trace.str() << std::flush;
 	} catch (const std::exception& error) {
-		std::cout << "[audio-boundary] stage=" << stage << " error=" << error.what() << std::endl;
+		{ std::ostringstream line; line <<  "[audio-boundary] stage=" << stage << " error=" << error.what(); System::PrintDiagnosticLine(line.str()); }
 	}
 }
 
@@ -2492,7 +2511,7 @@ bool AudioMan::PerturbCheckpointCursorForSelfTest() {
 		voice.lifetime.anchorTicks = now;
 		const unsigned after = static_cast<unsigned>(std::max(0.0, voice.lifetime.At(now, ticksPerSecond).position));
 		const unsigned reported = static_cast<unsigned>(std::max(0.0, before.position));
-		std::cout << "[audio-cursor-negative] id=" << identity << " before=" << reported << " after=" << after << std::endl;
+		{ std::ostringstream line; line <<  "[audio-cursor-negative] id=" << identity << " before=" << reported << " after=" << after; System::PrintDiagnosticLine(line.str()); }
 		return after == reported + 1;
 	}
 	return false;
@@ -2537,19 +2556,23 @@ bool AudioMan::RunCheckpointPlaybackContinuationSelfTest() const {
 			const auto voice = m_PlayingVoices.find(identity);
 			if (voice == m_PlayingVoices.end() || !voice->second.Channel()) {
 				++completed;
-				std::cout << "[audio-playback-progress] id=" << identity << " before=" << before << " completed=1" << std::endl;
+				{ std::ostringstream line; line <<  "[audio-playback-progress] id=" << identity << " before=" << before << " completed=1"; System::PrintDiagnosticLine(line.str()); }
 				continue;
 			}
 			unsigned int after;
 			if (voice->second.Channel()->getPosition(&after, FMOD_TIMEUNIT_PCM) != FMOD_OK) { queryFailed = true; continue; }
 			if (after != before) ++advanced;
-			std::cout << "[audio-playback-progress] id=" << identity << " before=" << before;
-			if (const auto observed = positionsBeforeUpdate.find(identity); observed != positionsBeforeUpdate.end()) std::cout << " before_update=" << observed->second;
-			std::cout << " after=" << after << std::endl;
+			{
+				std::ostringstream line;
+			line << "[audio-playback-progress] id=" << identity << " before=" << before;
+			if (const auto observed = positionsBeforeUpdate.find(identity); observed != positionsBeforeUpdate.end()) line << " before_update=" << observed->second;
+			line << " after=" << after << std::endl;
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 	}
 	const bool passed = !queryFailed && (advanced > 0 || completed > 0);
-	std::cout << "[audio-playback-continuation] " << (passed ? "PASS" : "FAIL") << " unpaused=" << positions.size() << " advanced=" << advanced << " completed=" << completed << " query_failed=" << queryFailed << " update_result=" << static_cast<int>(updateResult) << std::endl;
+	{ std::ostringstream line; line <<  "[audio-playback-continuation] " << (passed ? "PASS" : "FAIL") << " unpaused=" << positions.size() << " advanced=" << advanced << " completed=" << completed << " query_failed=" << queryFailed << " update_result=" << static_cast<int>(updateResult); System::PrintDiagnosticLine(line.str()); }
 	return passed;
 }
 
@@ -2603,7 +2626,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(m_AudioSystem->createDSPByType(FMOD_DSP_TYPE_MULTIBAND_EQ, &effect));
 			AudioCheckpoint::Require(originalChannel->addDSP(0, effect));
 			AudioCheckpoint::Require(originalChannel->setPaused(false));
-			const auto arm = [&ok](const char* name, bool passed) { std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << std::endl; ok = ok && passed; };
+			const auto arm = [&ok](const char* name, bool passed) { { std::ostringstream line; line <<  "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
 			// The mixer idles a voice's DSP on its own thread, which is how two peers' saves disagree on the flag.
 			AudioCheckpoint::Require(effect->setActive(false));
 			const auto control = AudioCheckpoint::Control::Capture(originalChannel, false);
@@ -2619,7 +2642,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			arm("restore_reactivates_an_idled_effect", active);
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
-		const auto reportArm = [&ok](const char* name, bool passed) { std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << std::endl; ok = ok && passed; };
+		const auto reportArm = [&ok](const char* name, bool passed) { { std::ostringstream line; line <<  "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
 		try {
 			std::unique_ptr<SoundContainer> held(static_cast<SoundContainer*>(preset->Clone()));
 			held->SetPaused(true); held->SetImmobile(true); held->SetLoopSetting(0);
@@ -2658,11 +2681,11 @@ bool AudioMan::RunCheckpointSelfTest() {
 				injected = true;
 			}
 			reportArm("held_voice_playing_is_stable_across_mixer_progress", firstFound && secondFound && firstPlaying == secondPlaying);
-			if (injected) std::cout << "[audio-checkpoint-selftest] held_voice_playing argued at the mixer, proved at the bookkeeping" << std::endl;
+			if (injected) { std::ostringstream line; line <<  "[audio-checkpoint-selftest] held_voice_playing argued at the mixer, proved at the bookkeeping"; System::PrintDiagnosticLine(line.str()); }
 			if (held->IsBeingPlayed()) held->Stop();
 			if (m_PlayingVoices.contains(heldId)) RetireVoice(heldId);
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -2693,11 +2716,11 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (tail->IsBeingPlayed()) tail->Stop();
 			if (m_PlayingVoices.contains(tailId)) RetireVoice(tailId);
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL AudioRuntime voices lists differ at a sound's tail " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL AudioRuntime voices lists differ at a sound's tail " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		const auto cursorArm = [&ok](const char* name, bool passed, const std::string& detail) {
-			std::cout << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << " " << detail << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name << " " << detail; System::PrintDiagnosticLine(line.str()); }
 			ok = ok && passed;
 		};
 		const long long cursorArmUpdateCount = g_TimerMan.GetSimUpdateCount();
@@ -2780,7 +2803,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (m_PlayingVoices.contains(cursorId)) RetireVoice(cursorId);
 		} catch (const std::exception& error) {
 			g_TimerMan.RestoreSimTickAfterPreview(cursorArmUpdateCount, cursorArmTimeTicks);
-			std::cout << "[audio-checkpoint-selftest] FAIL voice_cursor_is_sim_times_not_the_mixers " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL voice_cursor_is_sim_times_not_the_mixers " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -2821,7 +2844,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (looping->IsBeingPlayed()) looping->Stop();
 			if (m_PlayingVoices.contains(loopId)) RetireVoice(loopId);
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL out_of_range_loop_survives_retire " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL out_of_range_loop_survives_retire " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -2886,7 +2909,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 				ContentFile::s_LoadedSamples[path] = ready;
 			}
 			reportArm("loading_sample_is_archived", archived && uncaptured && settingsSurvived);
-			if (!archived) std::cout << "[audio-checkpoint-selftest] loading_sample refusal " << refusal << std::endl;
+			if (!archived) { std::ostringstream line; line <<  "[audio-checkpoint-selftest] loading_sample refusal " << refusal; System::PrintDiagnosticLine(line.str()); }
 			bool deferredVoice = false;
 			if (archived) {
 				AudioCheckpoint::Require(ready->setMode(archivedMode));
@@ -2912,7 +2935,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (archived && !LoadCheckpoint(beforeLoading)) throw std::runtime_error("loading-sample row did not restore the prior audio checkpoint");
 			AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL loading_sample_is_archived " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -2959,7 +2982,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!LoadCheckpoint(beforeError)) throw std::runtime_error("error-sample row did not restore the prior audio checkpoint");
 			reportArm("deferred_voice_drops_on_sample_error", dropped);
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL deferred_voice_drops_on_sample_error " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL deferred_voice_drops_on_sample_error " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -2986,7 +3009,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!LoadCheckpoint(beforePending)) throw std::runtime_error("match-start row did not restore the prior audio checkpoint");
 			reportArm("pending_audio_clears_on_match_start", loaded && (held.first > 0 || held.second > 0) && cleared.first == 0 && cleared.second == 0);
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL pending_audio_clears_on_match_start " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL pending_audio_clears_on_match_start " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		AudioCheckpoint::Require(GetVoiceChannel(identity, &originalChannel));
@@ -3024,21 +3047,21 @@ bool AudioMan::RunCheckpointSelfTest() {
 			boolReader(first, second, bits);
 			boolReader.Finish();
 			if (first || !second || bits != std::vector<bool>{true, false, true}) throw std::runtime_error("an assigned bool did not survive the archive");
-			std::cout << "[audio-checkpoint-selftest] PASS assigned_bools_round_trip" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS assigned_bools_round_trip"; System::PrintDiagnosticLine(line.str()); }
 			AudioRuntime unset;
 			const unsigned char rawByte = 100;
 			std::memcpy(&unset.muteOnFocusLoss, &rawByte, sizeof(rawByte));
 			const std::string unsetText = unset.Save();
 			if (!unsetText.starts_with("13 AudioRuntime3 0 0 0 0 0 0 100 ")) throw std::runtime_error("the writer did not carry the setting's own byte into the archive: " + unsetText.substr(0, 40));
-			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_reaches_the_archive" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS unset_setting_byte_reaches_the_archive"; System::PrintDiagnosticLine(line.str()); }
 			std::string unsetRefusal;
 			if (unset.Load(unsetText, &unsetRefusal)) throw std::runtime_error("an audio setting that is neither true nor false was accepted");
 			if (unsetRefusal.find("'100'") == std::string::npos) throw std::runtime_error("the refusal did not name the offending value: " + unsetRefusal);
-			std::cout << "[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named " << unsetRefusal << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS unset_setting_byte_is_refused_and_named " << unsetRefusal; System::PrintDiagnosticLine(line.str()); }
 			unsigned char liveByte = 0;
 			std::memcpy(&liveByte, &m_MuteAudioOnFocusLoss, sizeof(liveByte));
 			if (liveByte > 1) throw std::runtime_error("MuteAudioOnFocusLoss was never initialised: byte " + std::to_string(liveByte));
-			std::cout << "[audio-checkpoint-selftest] PASS mute_on_focus_loss_initialised" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS mute_on_focus_loss_initialised"; System::PrintDiagnosticLine(line.str()); }
 		}
 		AudioRuntime invalid;
 		std::string refusal;
@@ -3089,7 +3112,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 		if (!replacement->Stop()) throw std::runtime_error("could not stop playback before restoration");
 		AudioCheckpoint::Require(m_AudioSystem->update());
 		if (!LoadCheckpoint(checkpoint) || replacement->SaveCheckpoint() != native || GetSoundContainerPlaybackCheckpoint(replacement.get()) != playback) throw std::runtime_error("saved audio cohort did not resume stopped playback");
-		std::cout << "[audio-checkpoint-selftest] stale-owner controls/firearm cleanup, additional and stopped playback restore PASS" << std::endl;
+		{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] stale-owner controls/firearm cleanup, additional and stopped playback restore PASS"; System::PrintDiagnosticLine(line.str()); }
 		try {
 			const auto* actorPreset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
 			const auto* woundPreset = dynamic_cast<const AEmitter*>(g_PresetMan.GetEntityPreset("AEmitter", "Leaking Machinery", "Base.rte"));
@@ -3120,9 +3143,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 				if (!LoadCheckpoint(audio) || m_PlayingVoices.at(woundVoice).owner) throw std::runtime_error("disowned wound voice did not apply on a clean owner");
 			}
 			delete kept;
-			std::cout << "[audio-checkpoint-selftest] PASS orphaned_wound_owner_is_disowned" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS orphaned_wound_owner_is_disowned"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL orphaned_wound_owner_is_disowned " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL orphaned_wound_owner_is_disowned " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -3146,9 +3169,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 			}
 			g_LuaMan.GetMasterScriptState().RunScriptString("_W19OwnerSound = nil; _W19OwnerPlayed = nil");
 			g_LuaMan.CollectGarbageForCheckpoint();
-			std::cout << "[audio-checkpoint-selftest] PASS lua_copy_owner_is_disowned" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS lua_copy_owner_is_disowned"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL lua_copy_owner_is_disowned " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL lua_copy_owner_is_disowned " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -3175,7 +3198,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 				if (m_PlayingVoices.at(leftoverVoice).owner != clone.get()) throw std::runtime_error("written owner resolved to the leftover object");
 			}
 			RestoreCheckpointSoundRegistry(live);
-			std::cout << "[audio-checkpoint-selftest] PASS written_owner_resolves_to_clone" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS written_owner_resolves_to_clone"; System::PrintDiagnosticLine(line.str()); }
 			bool leftoverApply = false, cleanApply = false;
 			{
 				RestoredSoundRegistryScope restored;
@@ -3191,18 +3214,18 @@ bool AudioMan::RunCheckpointSelfTest() {
 			RestoreCheckpointSoundRegistry(live);
 			if (leftoverApply != cleanApply) throw std::runtime_error("leftover and clean apply differed");
 			if (!leftover->LoadCheckpoint(leftoverAudio)) throw std::runtime_error("could not restore leftover apply fixture");
-			std::cout << "[audio-checkpoint-selftest] PASS leftover_and_clean_apply_match" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS leftover_and_clean_apply_match"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL leftover_or_clone_apply " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL leftover_or_clone_apply " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
 			SoundCheckpointSaveScope scope;
 			const std::string audio = ContainedAudioSave(scope);
 			CheckCarriedAudioOwners(audio, scope.Carried());
-			std::cout << "[audio-checkpoint-selftest] PASS carried_owners_match_archive" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS carried_owners_match_archive"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL carried_owners_match_archive " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL carried_owners_match_archive " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -3224,9 +3247,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 			if (!accepted) throw std::runtime_error("the archive the save wrote was refused: " + refusal);
 			if (lateOwner <= liveCursor) throw std::runtime_error("the late owner did not take an identity past the pinned cursor");
 			if (ArchivedVoiceOwner(archive, lateVoice) != lateOwner) throw std::runtime_error("the archive dropped the late voice's owner");
-			std::cout << "[audio-checkpoint-selftest] PASS cursor_covers_every_owner_the_archive_names" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS cursor_covers_every_owner_the_archive_names"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL cursor_covers_every_owner_the_archive_names " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL cursor_covers_every_owner_the_archive_names " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		try {
@@ -3278,16 +3301,16 @@ bool AudioMan::RunCheckpointSelfTest() {
 				if (!FindCheckpointSoundContainer(identity)) throw std::runtime_error("restored burst identity " + std::to_string(identity) + " is not registered");
 			}
 			if (RestorePlayPhaseScope::RestorePlayCount() != 0) throw std::runtime_error("play during restore count " + std::to_string(RestorePlayPhaseScope::RestorePlayCount()));
-			std::cout << "[audio-checkpoint-selftest] PASS saved_wounds_survive_snapshot_read" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS saved_wounds_survive_snapshot_read"; System::PrintDiagnosticLine(line.str()); }
 		} catch (const std::exception& error) {
-			std::cout << "[audio-checkpoint-selftest] FAIL saved_wounds_survive_snapshot_read " << error.what() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL saved_wounds_survive_snapshot_read " << error.what(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		}
 		if (RestorePlayPhaseScope::RestorePlayCount() != 0) {
-			std::cout << "[audio-checkpoint-selftest] FAIL play_during_restore count " << RestorePlayPhaseScope::RestorePlayCount() << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] FAIL play_during_restore count " << RestorePlayPhaseScope::RestorePlayCount(); System::PrintDiagnosticLine(line.str()); }
 			ok = false;
 		} else {
-			std::cout << "[audio-checkpoint-selftest] PASS play_during_restore" << std::endl;
+			{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] PASS play_during_restore"; System::PrintDiagnosticLine(line.str()); }
 		}
 		if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("owner selftests left the audio checkpoint unrestored");
 		std::unique_ptr<SoundContainer> orphan(static_cast<SoundContainer*>(preset->Clone()));
@@ -3299,7 +3322,7 @@ bool AudioMan::RunCheckpointSelfTest() {
 		const std::string withOrphan = SaveCheckpoint();
 		if (!LoadCheckpoint(withOrphan) || !m_PlayingVoices.contains(orphanID) || m_PlayingVoices.at(orphanID).owner || !m_PlayingVoices.at(orphanID).Channel()) throw std::runtime_error("orphan playback did not survive restoration");
 	} catch (const std::exception& error) {
-		std::cout << "[audio-checkpoint-selftest] " << error.what() << std::endl;
+		{ std::ostringstream line; line <<  "[audio-checkpoint-selftest] " << error.what(); System::PrintDiagnosticLine(line.str()); }
 		ok = false;
 	}
 	for (const auto& [owner, checkpoint]: originalOwners) ok = owner->LoadCheckpoint(checkpoint) && ok;
@@ -3373,8 +3396,12 @@ void AudioMan::CommitSoundObservations(uint64_t frame, const std::vector<NetSoun
 	for (const NetSoundObservation* observation: observations) {
 		const SoundObservationKey key = KeyOf(*observation);
 		if (TraceAudibility() && !m_CommittedAudibility.contains(key)) {
-			std::cout << "[audibility] first reading object=" << key.objectUID << " tick=" << key.tick << " phase=" << key.phase << " occurrence=" << key.occurrence << " ordinal=" << key.ordinal
-			          << " from peer " << static_cast<int>(observation->senderPeerId) << " value=" << observation->value << " frame=" << frame << std::endl;
+			{
+				std::ostringstream line;
+				line <<  "[audibility] first reading object=" << key.objectUID << " tick=" << key.tick << " phase=" << key.phase << " occurrence=" << key.occurrence << " ordinal=" << key.ordinal
+			          << " from peer " << static_cast<int>(observation->senderPeerId) << " value=" << observation->value << " frame=" << frame;
+				System::PrintDiagnosticLine(line.str());
+			}
 		}
 		m_CommittedAudibility[key][observation->senderPeerId] = {frame, observation->value};
 	}
@@ -3394,8 +3421,12 @@ float AudioMan::GetCommittedAudibility(const SoundContainer& container) const {
 		if (TraceAudibility()) {
 			std::lock_guard lock(m_AudibilityMissMutex);
 			if (m_ReportedAudibilityMisses.insert(KeyOf(identity)).second) {
-				std::cout << "[audibility] no committed reading for " << container.GetPresetName() << " object=" << identity.objectUID << " tick=" << identity.tick << " phase=" << identity.phase
-				          << " occurrence=" << identity.occurrence << " ordinal=" << identity.ordinal << " at " << g_TimerMan.GetSimUpdateCount() << " (table " << m_CommittedAudibility.size() << ")" << std::endl;
+				{
+					std::ostringstream line;
+					line <<  "[audibility] no committed reading for " << container.GetPresetName() << " object=" << identity.objectUID << " tick=" << identity.tick << " phase=" << identity.phase
+				          << " occurrence=" << identity.occurrence << " ordinal=" << identity.ordinal << " at " << g_TimerMan.GetSimUpdateCount() << " (table " << m_CommittedAudibility.size() << ")";
+					System::PrintDiagnosticLine(line.str());
+				}
 			}
 		}
 		return 0.0F;
@@ -3420,7 +3451,7 @@ void AudioMan::ClearCommittedAudibility() {
 bool AudioMan::RunLogicalPlaybackSelfTest() {
 	bool passed = true;
 	const auto check = [&passed](const char* name, bool ok, const std::string& detail = std::string()) {
-		std::cout << "[audio-logical-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail) << std::endl;
+		{ std::ostringstream line; line <<  "[audio-logical-selftest] " << (ok ? "PASS " : "FAIL ") << name << (detail.empty() ? "" : " " + detail); System::PrintDiagnosticLine(line.str()); }
 		passed = passed && ok;
 	};
 	if (!m_AudioEnabled) {
