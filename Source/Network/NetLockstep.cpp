@@ -4289,23 +4289,24 @@ namespace RTE {
 		std::vector<uint8_t> classicBytes;
 		NetLockstepError encodeError;
 		const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload);
-		const bool windowed = frame && !frame->priorWindow.empty() && blocks;
+		bool windowed = frame && !frame->priorWindow.empty() && blocks;
 		NetLockstepFrame classic;
 		if (windowed) {
 			classic = *frame;
 			classic.priorWindow.clear();
 		}
 		// The classic packet is encoded first and is the only one that spends the dictionary; the window
-		// packet repeats the blocks that encode kept. Both carry the same observation bytes, so a peer
-		// without the capability commits what the advertised peers commit and sees the frame it would
-		// have seen without the window at all.
+		// packet repeats the blocks it kept. Both carry the same observation bytes, so a peer without the
+		// capability commits what the advertised peers commit and sees the frame it would have seen
+		// without the window at all.
 		if (!NetLockstepCodec::Encode(windowed ? NetLockstepPacket{classic} : packet, classicBytes, &encodeError, dictionary, outObservationsEncoded, outValueObservationsEncoded, blocks)) {
 			if (error) *error = encodeError.message;
 			return false;
 		}
+		// The redundancy is what a peer can do without; the tick is not.
 		if (windowed && !NetLockstepCodec::Encode(packet, windowBytes, &encodeError, nullptr, nullptr, nullptr, blocks)) {
-			if (error) *error = encodeError.message;
-			return false;
+			windowBytes.clear();
+			windowed = false;
 		}
 		auto bytesFor = [&](uint8_t peerId) -> const std::vector<uint8_t>& {
 			return windowed && FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
@@ -4384,7 +4385,7 @@ namespace RTE {
 		size_t valueObservationsEncoded = 0;
 		const NetLockstepFrame* relayed = std::get_if<NetLockstepFrame>(&packet.payload);
 		NetLockstepObservationBlocks* blocks = relayed ? &ObservationBlocksOf(fromPeerId, relayed->targetFrame) : nullptr;
-		const bool windowed = relayed && !relayed->priorWindow.empty() && blocks;
+		bool windowed = relayed && !relayed->priorWindow.empty() && blocks;
 		NetLockstepFrame classic;
 		if (windowed) {
 			classic = *relayed;
@@ -4395,8 +4396,10 @@ namespace RTE {
 		if (!NetLockstepCodec::Encode(windowed ? NetLockstepPacket{classic} : packet, classicBytes, nullptr, &m_ObservationEncodeTables.Exactly(fromPeerId), &observationsEncoded, &valueObservationsEncoded, blocks)) {
 			return;
 		}
+		// A window this host cannot build costs the forward its redundancy, never the tick.
 		if (windowed && !NetLockstepCodec::Encode(packet, windowBytes, nullptr, nullptr, nullptr, nullptr, blocks)) {
-			return;
+			windowBytes.clear();
+			windowed = false;
 		}
 		// The table this re-encodes from is the one that just decoded the packet, so every key is already
 		// a slot and the forward is never longer than what arrived. If it ever were, the peers behind the
