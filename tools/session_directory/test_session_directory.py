@@ -1612,6 +1612,69 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertEqual(err, {"error": "full"})
 
+    def test_world_resume_keeps_its_fields_and_rotates_the_token(self) -> None:
+        self.start()
+        world_id = str(uuid.uuid4())
+        world = {
+            "persistent_world": True,
+            "world_id": world_id,
+            "world_boot": 1,
+            "resume_session_id": world_id,
+        }
+        status, first = self.register(**world)
+        self.assertEqual((status, first["session_id"]), (200, world_id), first)
+        status, second = self.register(
+            **{**world, "world_boot": 2, "resume_token": first["token"]}
+        )
+        self.assertEqual((status, second["session_id"]), (200, world_id), second)
+        self.assertNotEqual(second["token"], first["token"], second)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        rows = listed["sessions"]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(
+            (rows[0].get("persistent_world"), rows[0].get("world_id"), rows[0].get("world_boot")),
+            (True, world_id, 2),
+            rows[0],
+        )
+        # The rotated token is the live one: the old token no longer beats the row.
+        status, refused = self.beat(world_id, first["token"])
+        self.assertEqual(status, 403, refused)
+        status, ok = self.beat(world_id, second["token"])
+        self.assertEqual(status, 200, ok)
+
+    def test_world_resume_without_the_row_token_is_refused(self) -> None:
+        self.start()
+        world_id = str(uuid.uuid4())
+        world = {
+            "persistent_world": True,
+            "world_id": world_id,
+            "world_boot": 1,
+            "resume_session_id": world_id,
+        }
+        status, first = self.register(**world)
+        self.assertEqual(status, 200, first)
+        status, seized = self.register(**{**world, "world_boot": 9})
+        self.assertEqual((status, seized), (403, {"error": "forbidden"}), seized)
+        status, wrong = self.register(
+            **{**world, "world_boot": 9, "resume_token": "not-the-row-token"}
+        )
+        self.assertEqual((status, wrong), (403, {"error": "forbidden"}), wrong)
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(listed["sessions"][0].get("world_boot"), 1, listed["sessions"][0])
+        # The real holder still owns the row.
+        status, ok = self.beat(world_id, first["token"])
+        self.assertEqual(status, 200, ok)
+
+    def test_full_precedes_field_validation(self) -> None:
+        self.start()
+        with mock.patch.object(session_directory, "MAX_ROWS", 1):
+            status, created = self.register(name="only")
+            self.assertEqual(status, 200, created)
+            status, err = self.register(name="second", listen_port=0)
+            self.assertEqual((status, err), (503, {"error": "full"}), err)
+
     def test_legacy_requests_default_visible(self) -> None:
         self.start()
         status, created = self.register()

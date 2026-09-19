@@ -263,7 +263,20 @@ namespace RTE {
 			}
 			NetWorldIdentity decoded;
 			if (!NetWorldIdentityFile::Decode(NetWorldIdentityFile::Encode(second), decoded, &error) || decoded != second) {
-				return Fail("identity encode did not round-trip");
+				return Fail("world-identity-record-did-not-round-trip: encode read back world " + decoded.worldId + " boot " +
+				            std::to_string(decoded.boot) + " token \"" + decoded.directoryToken + "\", wrote boot " +
+				            std::to_string(second.boot) + " token \"" + second.directoryToken + "\"");
+			}
+			// The directory row token is the world's own; a reboot resumes its row by presenting it.
+			NetWorldIdentity tokened = second;
+			tokened.directoryToken = "row-token-value";
+			if (!NetWorldIdentityFile::Write(path, tokened, &error)) {
+				return Fail("world-identity-record-did-not-round-trip: the token could not be written: " + error);
+			}
+			NetWorldIdentity third;
+			if (!NetWorldIdentityFile::OpenForBoot(path, third, &error) || third.directoryToken != tokened.directoryToken) {
+				return Fail("world-identity-record-did-not-round-trip: a reboot read token \"" + third.directoryToken +
+				            "\", the stored token is \"" + tokened.directoryToken + "\"");
 			}
 			return 0;
 		}
@@ -1973,6 +1986,20 @@ namespace RTE {
 		if (std::strcmp(name, "stale") == 0 || std::strcmp(name, "-net-world-stale-selftest") == 0) {
 			s_FailTag = "net-world-stale-selftest";
 			return TestStaleWorldTransitionRefused();
+		}
+		// The resume proof rides the same row: a reboot presents the token its last register issued.
+		body["world_boot"] = 2;
+		body["resume_token"] = "row-token-value";
+		if (!NetDirectoryCodec::DecodeRegisterRequest(body.dump(), decoded, reason) || decoded.resumeToken != "row-token-value") {
+			return Fail("world_boot 0 was accepted on the C++ register decoder: resume_token decoded as \"" +
+			            decoded.resumeToken + "\", the row carries \"row-token-value\" (" + reason + ")");
+		}
+		const std::string encoded = NetDirectoryCodec::EncodeRegisterRequest(decoded);
+		NetDirectoryRegisterRequest roundTrip;
+		if (!NetDirectoryCodec::DecodeRegisterRequest(encoded, roundTrip, reason) || roundTrip.resumeToken != decoded.resumeToken ||
+		    roundTrip.resumeSessionId != decoded.resumeSessionId) {
+			return Fail("world_boot 0 was accepted on the C++ register decoder: the encoder wrote resume \"" +
+			            roundTrip.resumeSessionId + "\"/\"" + roundTrip.resumeToken + "\" (" + reason + ")");
 		}
 		if (std::strcmp(name, "ready-frame") == 0 || std::strcmp(name, "-net-world-ready-frame-selftest") == 0) {
 			s_FailTag = "net-world-ready-frame-selftest";

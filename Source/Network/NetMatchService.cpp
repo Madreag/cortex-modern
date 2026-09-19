@@ -426,6 +426,8 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.worldId = matchConfig.worldId;
 					m_DirectoryRow.worldBoot = static_cast<int64_t>(matchConfig.worldBoot);
 					m_DirectoryRow.resumeSessionId = matchConfig.worldId;
+					// The previous boot's row token, so this boot resumes the world's own row.
+					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
 				}
 			}
 			m_DirectoryRetracted = false;
@@ -1460,6 +1462,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryToken = m_Directory.GetToken();
 			m_DirectoryRegistered = m_Directory.GetState() == NetDirectoryClient::State::Registered;
 		}
+		PersistWorldDirectoryToken();
 		if (m_WorldCatchUp.active) {
 			PumpSessionEvents();
 		}
@@ -2124,6 +2127,39 @@ static std::string ResyncSaveName() {
 		}
 		m_SeatPresence.NoteFrame(ScenarioRunner::GetLockstepAppliedFrame());
 		CaptureA7SeatView();
+	void NetMatchService::PersistWorldDirectoryToken() {
+		if (!m_WorldIdentity.IsValid() || m_Directory.GetState() != NetDirectoryClient::State::Registered) {
+			return;
+		}
+		const std::string& issued = m_Directory.GetToken();
+		if (issued.empty() || issued == m_WorldIdentity.directoryToken || m_WorldJoin.IdentityPath().empty()) {
+			return;
+		}
+		// The token outlives this process: the next boot proves the row is the world's own with it.
+		NetWorldIdentity stored = m_WorldIdentity;
+		stored.directoryToken = issued;
+		std::string writeError;
+		if (!NetWorldIdentityFile::Write(m_WorldJoin.IdentityPath(), stored, &writeError)) {
+			std::cout << "[net-world] directory token not persisted: " << writeError << std::endl;
+			return;
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_WorldIdentity.directoryToken = issued;
+		m_DirectoryRow.resumeToken = issued;
+	}
+
+	bool NetMatchService::ReleaseWorldCatchUpOnceRunning(bool coordinatorRunning, NetWorldCatchUpClient& catchUp) {
+		if (!coordinatorRunning || !catchUp.active) {
+			return false;
+		}
+		// The coordinator owns the wire and the pacing from the moment it runs. A catch-up left armed
+		// past that drains the round's own packets into the session and keeps reporting a finished
+		// bootstrap the host answers with "that bootstrap is not catching up".
+		catchUp = {};
+		ScenarioRunner::ReleaseWorldCatchUp();
+		return true;
+	}
+
 	}
 
 	void NetMatchService::PublishModerationView() {

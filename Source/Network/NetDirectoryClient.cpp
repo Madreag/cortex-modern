@@ -357,6 +357,15 @@ namespace RTE {
 			ScheduleRetry(nowMs);
 			return;
 		}
+		if (reply.statusCode == 403 && !m_Row.resumeSessionId.empty()) {
+			// The stored row token is not this row's any more: register fresh instead of leaving the
+			// world unlisted for the rest of its life.
+			m_Row.resumeSessionId.clear();
+			m_Row.resumeToken.clear();
+			NoteError("register refused (403): the stored directory row is not ours, registering fresh");
+			ScheduleRetry(nowMs);
+			return;
+		}
 		NoteError("register refused: HTTP " + std::to_string(reply.statusCode));
 		SetState(State::Failed);
 	}

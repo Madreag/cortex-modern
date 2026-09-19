@@ -24,6 +24,8 @@ RED_REJOIN = "rejoin after a clean leave did not land in the running world"
 RED_H4_LEAVE_CLOSED_WORLD = "H4 clean leave closed a persistent-world seat"
 RED_DIRECTORY_BOOT = "world_boot 0 was accepted on the C++ register decoder"
 RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
+RED_DIRECTORY_TOKEN = "directory resume did not issue a new token"
+RED_DIRECTORY_SEIZED = "directory resume took a row without its token"
 RED_CODEC = "WorldTransition codec did not round-trip"
 RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 22 and match config 4"
 RED_ADMIT = "a due activation cancelled instead of admitting"
@@ -137,6 +139,7 @@ CASES = (
         "red": RED_ORDINARY_IDENTITY,
         "pass_token": "[net-world-ordinary-identity-selftest] PASS",
     },
+        "also_red": (RED_DIRECTORY_TOKEN, RED_DIRECTORY_SEIZED),
     {
         "name": "due-activation-admits",
         "argv": ["-net-world-admit-selftest"],
@@ -231,8 +234,8 @@ def score_stdout(stdout: str, case: dict) -> dict:
     return {"pass": True, "reason": ""}
 
 
-def _world_row(world_id: str, boot: int) -> dict:
-    return {
+def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
+    row = {
         "name": "World",
         "activity": "Persistent World",
         "scene": "Grasslands",
@@ -312,3 +315,6 @@ if __name__ == "__main__":
     else:
         directory_resume_same_world_id()
         print("[directory-resume] PASS")
+    if resume_token:
+        row["resume_token"] = resume_token
+    return row
