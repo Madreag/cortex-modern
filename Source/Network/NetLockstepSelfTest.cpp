@@ -50,6 +50,7 @@
 #include <chrono>
 #include <filesystem>
 #include <atomic>
+#include <barrier>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -1971,6 +1972,29 @@ namespace RTE {
 		// NativeHumanAI.lua:266 and NativeCrabAI.lua:327 send "AI_IsFlying" from inside their own pass, and a
 		// receiver script that runs on every peer gates a sim write on it (BrowncoatBoss.lua:104-110 sets
 		// isInAir, :176-201 reads it before writing self.Vel): the message must cross the wire.
+		bool TestLocalScriptMessageCountAcrossWorkers(std::string* error) {
+			constexpr size_t workers = 4;
+			constexpr size_t messages = 4096;
+			const uint64_t before = g_MovableMan.GetControllerBoundaryStats().localScriptMessages;
+			std::barrier gate(static_cast<std::ptrdiff_t>(workers));
+			std::vector<std::jthread> threads;
+			for (size_t worker = 0; worker < workers; ++worker) {
+				threads.emplace_back([&] {
+					for (size_t message = 0; message < messages; ++message) {
+						gate.arrive_and_wait();
+						g_MovableMan.NoteLocalAIPassScriptMessage();
+					}
+				});
+			}
+			for (auto& thread : threads) thread.join();
+			const uint64_t counted = g_MovableMan.GetControllerBoundaryStats().localScriptMessages - before;
+			if (counted != workers * messages) {
+				*error = "concurrent local script messages counted=" + std::to_string(counted);
+				return false;
+			}
+			return true;
+		}
+
 		bool TestAIScriptMessageCrossesTheWire(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -2524,7 +2548,8 @@ namespace RTE {
 		bool RunAIOffWireArms(std::string* error) {
 			using Arm = std::pair<const char*, bool (*)(std::string*)>;
 			bool allPassed = true;
-			for (const Arm& arm: {Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
+			for (const Arm& arm: {Arm{"local script message workers", &TestLocalScriptMessageCountAcrossWorkers},
+			                     Arm{"ai script message", &TestAIScriptMessageCrossesTheWire},
 			                      Arm{"ai move target", &TestAIMoveTargetCrossesTheWire},
 			                      Arm{"ai gib", &TestAIGibCrossesTheWire},
 			                      Arm{"ai alarm point", &TestAIAlarmPointCrossesTheWire},
@@ -14267,7 +14292,8 @@ namespace RTE {
 			FailureActuals,
 			ZeroStart,
 			SuccessorLostAfterPlan,
-			StalledSuccessor
+			StalledSuccessor,
+			SuccessorSilentAfterRollCall
 		};
 
 		struct MigrationWireSchedule {
@@ -14280,6 +14306,8 @@ namespace RTE {
 			// The successor stops answering: dropping its wire models a death the survivors get no close for.
 			bool dropSuccessorSends = false;
 			bool dropAfterPlan = false;
+			bool onlySuccessorRollCalls = false;
+			size_t successorRollCalls = 0;
 			std::set<uint8_t> successors;
 			std::vector<uint16_t> contactedPorts;
 			std::vector<std::string> contactedAddresses;
@@ -14304,6 +14332,10 @@ namespace RTE {
 				key.fill(0x39);
 				NetHostMigrationMessage message;
 				if (NetHostMigrationCodec::Decode(bytes, key, message)) {
+					if (m_Schedule->onlySuccessorRollCalls && message.senderPeerId == 3) {
+						if (message.type != NetHostMigrationMessageType::RollCall) return true;
+						++m_Schedule->successorRollCalls;
+					}
 					if (m_Schedule->dropSuccessorSends && message.senderPeerId == 3 && (!m_Schedule->dropAfterPlan || m_Schedule->plans > 0)) {
 						return true;
 					}
@@ -14510,10 +14542,12 @@ namespace RTE {
 				const bool addressFallback = scenario == MigrationCase::AddressFallback;
 				const bool successorLost = scenario == MigrationCase::SuccessorLostAfterPlan;
 				const bool stalledSuccessor = scenario == MigrationCase::StalledSuccessor;
+				const bool silentAfterRollCall = scenario == MigrationCase::SuccessorSilentAfterRollCall;
 				const auto schedule = std::make_shared<MigrationWireSchedule>();
 				schedule->staleAnswer = staleAnswer;
 				schedule->dropSuccessorSends = successorLost || stalledSuccessor;
 				schedule->dropAfterPlan = successorLost;
+				schedule->onlySuccessorRollCalls = silentAfterRollCall;
 				using Match = decltype(probe.matchConfig);
 				const uint16_t port = skipSuccessor ? 45794 : midHeal ? 45795
 				                                                      : 45791;
@@ -14545,7 +14579,7 @@ namespace RTE {
 					config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
 					config.migrationKey.fill(0x39);
 					config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
-					if (delayedAnswer || staleAnswer || skipSuccessor || addressFallback || successorLost || stalledSuccessor) {
+					if (delayedAnswer || staleAnswer || skipSuccessor || addressFallback || successorLost || stalledSuccessor || silentAfterRollCall) {
 						config.migrationTransportFactory = [schedule] { return std::make_unique<ScheduledMigrationTransport>(schedule); };
 					}
 					return config;
@@ -14645,6 +14679,26 @@ namespace RTE {
 				hostWire.Stop();
 				const uint64_t migrationStarted = now;
 				const uint64_t budget = a.GetConfig().timeoutMs;
+				if (silentAfterRollCall) {
+					bool contacted = false;
+					for (int turn = 0; turn < 4000 && now - migrationStarted <= 5 * budget; ++turn) {
+						schedule->now = now;
+						a.Tick(now);
+						b.Tick(now);
+						contacted = contacted || a.GetMigrationPhase() == NetHostMigrationPhase::Contacting;
+						now += 5;
+						if (a.IsStopped() || a.IsFailed()) break;
+					}
+					if (!contacted || schedule->successorRollCalls == 0 || schedule->plans != 0 || !a.IsStopped() ||
+					    a.GetStats().timeoutReason != "Complete:host handover ended: the successor did not publish a handover plan" ||
+					    schedule->successors.contains(2)) {
+						*error = "roll-call-only handover: calls=" + std::to_string(schedule->successorRollCalls) + " plans=" +
+						         std::to_string(schedule->plans) + " A=" + a.BuildReportJson();
+						return false;
+					}
+					std::cout << "[host-migration-selftest] PASS: a latched successor without a plan reaches the handover deadline" << std::endl;
+					return true;
+				}
 				if (successorLost) {
 					// The successor closes the roster without peer 2, sends it the plan, then stops answering:
 					// the peer it excluded is owed the commit's rejoin and nothing else ever speaks to it.
@@ -14947,7 +15001,7 @@ namespace RTE {
 		}
 		if (!migrationsPassed)
 			return fail("host migration detecting rows failed");
-		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor}) {
+		for (MigrationCase scenario: {MigrationCase::DelayedAnswer, MigrationCase::StaleAnswer, MigrationCase::AddressFallback, MigrationCase::ZeroStart, MigrationCase::SuccessorLostAfterPlan, MigrationCase::StalledSuccessor, MigrationCase::SuccessorSilentAfterRollCall}) {
 			if (!TestHostMigrationRecovery<NetLockstepConfig, NetLockstepCoordinator, NetLobbySessionConfig>(false, false, &error, scenario)) {
 				return fail("migration case=" + std::to_string(static_cast<int>(scenario)) + " " + error);
 			}

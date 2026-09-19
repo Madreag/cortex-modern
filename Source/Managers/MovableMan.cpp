@@ -3132,10 +3132,8 @@ void MovableMan::ReportControllerBoundaryViolation(const char* what, const Actor
 }
 
 void MovableMan::NoteLocalAIPassScriptMessage() {
-	// No peer can be told which table, function or refused name the call carried, so it stays where it
-	// was made and delivers there, exactly as it did before the wire existed. Counted, never a violation:
-	// the call writes no canonical actor state, and what its OnMessage does write defers like the pass's own.
-	++m_ControllerBoundaryStats.localScriptMessages;
+	// Threaded AI states deliver local messages concurrently.
+	m_ControllerBoundaryStats.localScriptMessages.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool MovableMan::IsHiddenFromRender(const MovableObject* mo) const {

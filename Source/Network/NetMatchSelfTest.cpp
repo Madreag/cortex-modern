@@ -3263,9 +3263,35 @@ namespace RTE {
 			service.WaitForPendingWork();
 			const std::string refusal = service.GetErrorText();
 			const auto retained = service.GetPendingHostOptions();
-			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Failed ||
-			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetLobbySnapshot().errorText != refusal) {
+			const auto lobby = service.GetLobbySnapshot();
+			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Completed ||
+			    refusal != "Host options refused: the draft names a stale configuration revision" || lobby.errorText != refusal ||
+			    !lobby.inLobby || lobby.remoteReady || !service.NeedsHostOptionsCorrection()) {
 				*error = "the host lost the refused rematch draft or its status: " + refusal + "; " + service.GetErrorText();
+				return false;
+			}
+			std::string repeated;
+			if (service.ReturnToLobby(&repeated) || repeated != refusal) {
+				*error = "the refused draft restarted before the host corrected it";
+				return false;
+			}
+			NetMatchConfig corrected = service.GetLobbyMatchConfig();
+			corrected.difficulty = 27;
+			if (corrected.configRevision != runner.GetMatchConfig().configRevision) {
+				*error = "the refused draft left a stale revision in the options panel";
+				return false;
+			}
+			if (!service.SubmitHostOptions(corrected.configRevision, corrected, error)) return false;
+			if (!service.GetErrorText().empty() || service.NeedsHostOptionsCorrection()) {
+				*error = "the corrected draft retained the previous refusal";
+				return false;
+			}
+			observe = [&] {
+				if (runner.GetLobbySession().IsConfigAcked(2) && runner.GetLobbySession().IsRemoteReady(2)) start.store(true);
+			};
+			if (!ReturnToLobby(error)) return false;
+			if (Pending() || runner.HasRefusedHostOptions() || clientLobby.GetMatchConfig().difficulty != 27) {
+				*error = "the corrected rematch draft did not reach the peer";
 				return false;
 			}
 			return true;
@@ -3273,6 +3299,39 @@ namespace RTE {
 		void Fail(const std::string& reason) {
 			if (failure.empty()) failure = reason;
 			cancel.store(true);
+		}
+		bool RepairEndsBeforeItsBoundary(std::string* error) {
+			struct ActivityScope {
+				std::unique_ptr<Activity> previous = std::make_unique<Activity>();
+				ActivityScope() {
+					previous->SetActivityState(Activity::Running);
+					g_ActivityMan.SwapCheckpointActivity(previous);
+				}
+				~ActivityScope() { g_ActivityMan.SwapCheckpointActivity(previous); }
+			} activity;
+			service.m_State = NetMatchServiceState::Running;
+			service.m_ResyncOnDesync = true;
+			hostCoordinator.DeferStopsToTickBoundary();
+			if (!service.RequestHostRepair(error)) return false;
+			bool inFlight = false;
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (!inFlight || !hostCoordinator.HasPendingRecoveryStop()) {
+				*error = "the requested repair was not pending at its boundary";
+				return false;
+			}
+			service.Complete("round ended before the repair boundary");
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (inFlight || service.IsMatchResyncing()) {
+				*error = "an ended round retained its queued repair";
+				return false;
+			}
+			service.Destroy();
+			service.GetResyncStatus(&inFlight, nullptr, nullptr);
+			if (inFlight) {
+				*error = "a destroyed session retained its repair";
+				return false;
+			}
+			return true;
 		}
 		bool Pending() const { return service.m_HostOptionsRequest.pending.load(); }
 		bool Run(std::string* error) {
@@ -3322,6 +3381,14 @@ namespace RTE {
 	};
 
 	namespace {
+		bool TestHostRepairEndsBeforeItsBoundary(std::string* error) {
+			HostOptionsLobbyRow row(43153);
+			row.observe = [&] {
+				if (row.runner.GetLobbySession().IsConfigAcked(2) && row.runner.GetLobbySession().IsRemoteReady(2)) row.start.store(true);
+			};
+			return row.Run(error) && row.RepairEndsBeforeItsBoundary(error);
+		}
+
 		bool TestLobbyRepublishesHostOptionsRevision(std::string* error) {
 			HostOptionsLobbyRow row(43137);
 			NetHash32 firstHash{};
@@ -10779,6 +10846,7 @@ namespace RTE {
 		if (!TestLobbyStateMachineHappyPath(&error)) return fail(error);
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
+		if (!TestHostRepairEndsBeforeItsBoundary(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
