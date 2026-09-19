@@ -765,7 +765,7 @@ namespace RTE {
 		void DriveWorldJoinClient(uint64_t nowMs);
 		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
 		/// row the world re-registers under on its next boot.
-		void AdoptWorldTicketSession();
+		void AdoptWorldTicketSession(const NetMatchConfig& config);
 		/// Host: watches each seated member's brain and authors one respawn per death.
 		void DriveWorldSeatRespawns(uint64_t nowFrame);
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
