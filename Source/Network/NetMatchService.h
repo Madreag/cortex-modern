@@ -579,6 +579,23 @@ namespace RTE {
 		/// Whether a bootstrap can be started at all. A bootstrap with no world lobby id never can, so
 		/// the world ends it instead of building its image again every tick.
 		static bool WorldBootstrapCanStart(const NetWorldJoinSession& session, std::string* reason);
+		/// The world slot a clean leave frees, named the way the Release transition names it.
+		struct WorldCleanLeave {
+			uint8_t peerId = 0;         //!< The slot's lockstep id, which is what the member played on.
+			uint16_t stableSeat = 0;    //!< The admission seat the slot was bound to.
+			uint32_t holderGeneration = 0;
+			int8_t team = -1;
+			NetPeerId connection = c_InvalidNetPeerId; //!< The departed member's bootstrap.
+		};
+		/// The slot whose holder left through the admission plane: its seat is open again while the
+		/// slot is still held by an Active member. Keyed on the SEAT the slot is bound to, never on
+		/// the seat's lockstep id - a promoted watcher plays on a slot its own seat does not name, so
+		/// a leftover row naming that id would release whoever holds it next.
+		static bool FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave);
+		/// The world slots a dropped or reclaiming seat is waiting for, by the slot each seat holds.
+		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
+		/// that id would leave its slot open and fence a slot nobody is coming back to.
+		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership);
 		/// Records what the lobby did with a bootstrap's image. A refusal is not a start: the bootstrap
 		/// stays unstarted so the next pump retries it.
 		static bool NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough);

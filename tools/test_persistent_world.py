@@ -26,6 +26,7 @@ RED_TRANSFER_DIGEST = "world-join-transfer-digest-mismatch"
 RED_APPLIED_THROUGH = "appliedThrough-did-not-reach-E-minus-1"
 RED_BINDING_MISSING = "activate-binding-missing"
 RED_REJOIN = "rejoin after a clean leave did not land in the running world"
+RED_REJOIN_FIRST_OFFER = "the world offered the first join no ticket"
 RED_H4_LEAVE_CLOSED_WORLD = "H4 clean leave closed a persistent-world seat"
 RED_DIRECTORY_BOOT = "world_boot 0 was accepted on the C++ register decoder"
 RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
@@ -94,6 +95,19 @@ RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
 RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
 RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
 RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_CLEAN_LEAVE_WRONG_SEAT = "clean-leave-released-the-wrong-seat"
+RED_CLEAN_LEAVE_LIVE_MEMBER = "clean-leave-released-a-live-member"
+RED_CLEAN_LEAVE_MISSED = "clean-leave-was-not-detected"
+RED_DUE_WALK_SKIPPED = "due-walk-skipped-the-member"
+RED_RESPAWN_DELAY_SOURCES = "world-respawn-delay-has-two-sources"
+RED_RESPAWN_DELAY_NOT_CONFIG = "world-respawn-delay-is-not-the-config"
+RED_RELEASE_KEPT_CONTROL = "release-kept-the-departed-control"
+RED_RELEASE_TOOK_LIVE_CONTROL = "release-took-a-live-members-control"
+RED_RELEASE_CLONED_BRAIN = "release-left-the-brain-to-a-clone"
+RED_RECLAIM_HOLD_SLOT = "reclaim-hold-missed-the-slot"
+RED_RECLAIM_HOLD_WRONG_SLOT = "reclaim-hold-fenced-the-wrong-slot"
+RED_RECLAIM_HOLD_STRANGER = "reclaim-hold-let-a-stranger-in"
+RED_RECLAIM_HOLD_OWN_HOLDER = "reclaim-hold-refused-its-own-holder"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -195,6 +209,7 @@ CASES = (
         "name": "rejoin-after-clean-leave",
         "argv": ["-net-world-rejoin-selftest"],
         "red": RED_REJOIN,
+        "also_red": (RED_REJOIN_FIRST_OFFER,),
         "pass_token": "[net-world-rejoin-selftest] PASS",
     },
     {
@@ -435,6 +450,44 @@ CASES = (
             RED_PROMOTION_BEHIND_INPUT,
         ),
         "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "clean-leave-releases-only-the-seat-that-left",
+        "argv": ["-net-world-clean-leave-selftest"],
+        "red": RED_CLEAN_LEAVE_WRONG_SEAT,
+        "also_red": (RED_CLEAN_LEAVE_LIVE_MEMBER, RED_CLEAN_LEAVE_MISSED),
+        "pass_token": "[net-world-clean-leave-selftest] PASS",
+    },
+    {
+        "name": "due-spectator-leaves-the-member-due",
+        "argv": ["-net-world-due-walk-selftest"],
+        "red": RED_DUE_WALK_SKIPPED,
+        "pass_token": "[net-world-due-walk-selftest] PASS",
+    },
+    {
+        "name": "world-respawn-delay-has-one-source",
+        "argv": ["-net-world-respawn-delay-selftest"],
+        "red": RED_RESPAWN_DELAY_SOURCES,
+        "also_red": (RED_RESPAWN_DELAY_NOT_CONFIG,),
+        "pass_token": "[net-world-respawn-delay-selftest] PASS",
+    },
+    {
+        "name": "release-frees-the-departed-brain",
+        "argv": ["-net-world-release-control-selftest"],
+        "red": RED_RELEASE_KEPT_CONTROL,
+        "also_red": (RED_RELEASE_TOOK_LIVE_CONTROL, RED_RELEASE_CLONED_BRAIN),
+        "pass_token": "[net-world-release-control-selftest] PASS",
+    },
+    {
+        "name": "reclaim-hold-follows-the-seats-slot",
+        "argv": ["-net-world-reclaim-hold-selftest"],
+        "red": RED_RECLAIM_HOLD_SLOT,
+        "also_red": (
+            RED_RECLAIM_HOLD_WRONG_SLOT,
+            RED_RECLAIM_HOLD_STRANGER,
+            RED_RECLAIM_HOLD_OWN_HOLDER,
+        ),
+        "pass_token": "[net-world-reclaim-hold-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",

@@ -2017,7 +2017,7 @@ namespace RTE {
 			}
 		}
 		if (!offered) {
-			return Fail("rejoin after a clean leave did not land in the running world");
+			return Fail("the world offered the first join no ticket");
 		}
 		host.HandleMessage(12, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true}, 5);
 		host.TakeOutbound();
@@ -3071,6 +3071,504 @@ namespace RTE {
 		config.worldTeamCapacity = {1, 1, 0, 0};
 		config.worldMaxSpectators = 4;
 		return config;
+	}
+
+	// Commits one H4 seat for a connection and hands back the offer it was given.
+	bool CommitWorldSeat(NetReconnectHost& admission, const NetH4Identity& identity, NetPeerId connection, const char* name, NetH4TicketOffer& offer) {
+		NetH4NewJoin join;
+		join.identity = identity;
+		join.displayName = name;
+		join.txId.fill(static_cast<uint8_t>(connection));
+		admission.HandleMessage(connection, join, 0);
+		bool found = false;
+		for (const NetH4Outbound& outbound: admission.TakeOutbound()) {
+			if (const auto* ticket = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+				offer = *ticket;
+				found = true;
+			}
+		}
+		if (!found) {
+			return false;
+		}
+		admission.HandleMessage(connection, NetH4TicketStoredAck{c_NetH4Version, offer.txId, offer.stableSeat, offer.holderGeneration, true}, 5);
+		admission.TakeOutbound();
+		return true;
+	}
+
+	// The H4 row a world leave leaves behind names a lockstep id the next holder of that slot plays on.
+	int TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		// One host seat and two joinable seats, so the promotee's seat is not the leaver's.
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 1, false, 2, false}, {2, 2, 1, false, 3, false}};
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("clean-leave-released-the-wrong-seat: the registry did not arm");
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x5747ULL, identity);
+		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		NetH4TicketOffer leaverOffer;
+		NetH4TicketOffer watcherOffer;
+		if (!CommitWorldSeat(admission, identity, 51, "alice", leaverOffer) ||
+		    !CommitWorldSeat(admission, identity, 52, "bob", watcherOffer) ||
+		    leaverOffer.stableSeat == watcherOffer.stableSeat) {
+			return Fail("clean-leave-released-the-wrong-seat: the fixture could not seat two players");
+		}
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(MakeWorldConfig(), MakeIdentity(), &error)) {
+			return Fail("clean-leave-released-the-wrong-seat: the world plane refused its config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		world.PublishImage(image);
+		// The world has one slot: alice takes it, bob watches on the other H4 seat.
+		if (!world.BeginJoin(51, leaverOffer.stableSeat, "alice", 1000, &error) ||
+		    !world.BeginJoin(52, watcherOffer.stableSeat, "bob", 1010, &error)) {
+			return Fail("clean-leave-released-the-wrong-seat: the world refused a join (" + error + ")");
+		}
+		const NetWorldJoinSession* member = world.FindSession(51);
+		if (member == nullptr || member->spectator || member->assignedPeerId != 2) {
+			return Fail("clean-leave-released-the-wrong-seat: alice did not take the world's only slot");
+		}
+		uint64_t memberE = 0;
+		if (!world.NoteTransferComplete(51, 32, &error) || !world.NoteTransferStarted(52, 7, 1, 400)) {
+			return Fail("clean-leave-released-the-wrong-seat: the fixture could not deliver an image (" + error + ")");
+		}
+		if (!world.NoteCatchUpProgress(51, 400, 1, 1, 440, &memberE, &error) || memberE == 0 ||
+		    !world.NoteCatchUpProgress(51, memberE - 1, 1, 1, memberE - 1, nullptr, &error) ||
+		    !world.CompleteActivation(51, memberE - 1, &error)) {
+			return Fail("clean-leave-released-the-wrong-seat: alice never reached Active (" + error + ")");
+		}
+		uint64_t watcherE = 0;
+		if (!world.ScheduleSpectatorActivation(52, memberE, &watcherE, &error) || watcherE == 0 ||
+		    !world.CompleteActivation(52, watcherE, &error)) {
+			return Fail("clean-leave-released-the-wrong-seat: bob never reached his stream (" + error + ")");
+		}
+		NetMatchService::WorldCleanLeave leave;
+		if (NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave)) {
+			return Fail("clean-leave-released-a-live-member: a seated player reads as a leave on peer " +
+			            std::to_string(static_cast<int>(leave.peerId)));
+		}
+		// The production leave: the H4 row stays open with alice's lockstep id on it.
+		NetH4LeaveRequest departure;
+		departure.txId.fill(31);
+		departure.epoch = leaverOffer.epoch;
+		departure.stableSeat = leaverOffer.stableSeat;
+		departure.holderGeneration = leaverOffer.holderGeneration;
+		admission.HandleMessage(51, departure, 10);
+		admission.TakeOutbound();
+		const std::vector<NetH4SeatStatus> afterLeave = admission.GetSeatStatuses();
+		bool leftRowIsOpen = false;
+		uint8_t leftRowLockstep = 0;
+		for (const NetH4SeatStatus& status: afterLeave) {
+			if (status.stableSeat == leaverOffer.stableSeat) {
+				leftRowIsOpen = !status.committed && !status.closed && !status.dropped && !status.reclaiming;
+				leftRowLockstep = status.lockstepPeerId;
+			}
+		}
+		if (!leftRowIsOpen || leftRowLockstep != 2) {
+			return Fail("clean-leave-released-the-wrong-seat: the fixture's leave did not leave an open row on lockstep 2");
+		}
+		if (!NetMatchService::FindWorldCleanLeave(afterLeave, world, leave) || leave.peerId != 2 ||
+		    leave.stableSeat != leaverOffer.stableSeat || leave.connection != 51) {
+			return Fail("clean-leave-was-not-detected: the departed seat read peer " +
+			            std::to_string(static_cast<int>(leave.peerId)) + " seat " + std::to_string(leave.stableSeat) +
+			            " connection " + std::to_string(leave.connection));
+		}
+		// What DriveWorldJoins does with it, then the promotion the freed slot earns.
+		if (!world.Membership().Release(leave.peerId, &error)) {
+			return Fail("clean-leave-was-not-detected: the release was refused (" + error + ")");
+		}
+		world.CancelJoin(leave.connection, "clean leave");
+		world.NoteSentInputThrough(memberE + 40);
+		uint64_t promotedAt = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		if (!world.PromoteWaitingSpectator(memberE + 50, &promotedAt, &promoted, &error) || promoted != 52) {
+			return Fail("clean-leave-was-not-detected: the freed slot promoted nobody (" + error + ")");
+		}
+		if (!world.NoteCatchUpProgress(52, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
+		    !world.CompleteActivation(52, promotedAt - 1, &error)) {
+			return Fail("clean-leave-was-not-detected: the promotee never reached Active (" + error + ")");
+		}
+		const NetWorldJoinSession* seated = world.FindSession(52);
+		if (seated == nullptr || seated->assignedPeerId != 2 || seated->stableSeat != watcherOffer.stableSeat) {
+			return Fail("clean-leave-was-not-detected: the promotee does not hold the freed slot");
+		}
+		// THE RED: bob plays on lockstep 2 while his H4 seat names lockstep 3, and alice's row still
+		// names lockstep 2. Two more pumps against the same statuses must find nothing to release.
+		for (int pump = 0; pump < 2; ++pump) {
+			if (NetMatchService::FindWorldCleanLeave(afterLeave, world, leave)) {
+				return Fail("clean-leave-released-the-wrong-seat: pump " + std::to_string(pump + 1) +
+				            " released peer " + std::to_string(static_cast<int>(leave.peerId)) + " on seat " +
+				            std::to_string(leave.stableSeat) + " for connection " + std::to_string(leave.connection) +
+				            " while the departed seat is " + std::to_string(leaverOffer.stableSeat));
+			}
+		}
+		const NetWorldJoinSession* survivor = world.FindSession(52);
+		if (survivor == nullptr || survivor->phase != NetWorldJoinPhase::Active) {
+			return Fail("clean-leave-released-the-wrong-seat: the promotee's bootstrap did not survive the pumps");
+		}
+		// Bob's own leave is still found, on the slot he actually holds.
+		NetH4LeaveRequest second;
+		second.txId.fill(32);
+		second.epoch = watcherOffer.epoch;
+		second.stableSeat = watcherOffer.stableSeat;
+		second.holderGeneration = watcherOffer.holderGeneration;
+		admission.HandleMessage(52, second, 20);
+		admission.TakeOutbound();
+		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) || leave.peerId != 2 ||
+		    leave.stableSeat != watcherOffer.stableSeat || leave.connection != 52) {
+			return Fail("clean-leave-was-not-detected: the promotee's own leave read peer " +
+			            std::to_string(static_cast<int>(leave.peerId)) + " seat " + std::to_string(leave.stableSeat));
+		}
+		return 0;
+	}
+
+	// A promoted watcher's transport dies: the hold must land on the slot it plays, not on its seat's id.
+	int TestWorldReclaimHoldFollowsTheSeatsSlot() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		// Three joinable seats over a two-slot world, so the third player watches until a slot frees.
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 0, false, 2, false},
+		                                      {2, 2, 1, false, 3, false}, {3, 3, 0, false, 4, false}};
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("reclaim-hold-missed-the-slot: the registry did not arm");
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x5748ULL, identity);
+		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		NetH4TicketOffer aliceOffer;
+		NetH4TicketOffer bobOffer;
+		NetH4TicketOffer daveOffer;
+		if (!CommitWorldSeat(admission, identity, 61, "alice", aliceOffer) ||
+		    !CommitWorldSeat(admission, identity, 62, "bob", bobOffer) ||
+		    !CommitWorldSeat(admission, identity, 63, "dave", daveOffer)) {
+			return Fail("reclaim-hold-missed-the-slot: the fixture could not seat three players");
+		}
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("reclaim-hold-missed-the-slot: the world plane refused its config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		world.PublishImage(image);
+		if (!world.BeginJoin(61, aliceOffer.stableSeat, "alice", 1000, &error) ||
+		    !world.BeginJoin(62, bobOffer.stableSeat, "bob", 1010, &error) ||
+		    !world.BeginJoin(63, daveOffer.stableSeat, "dave", 1020, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: the world refused a join (" + error + ")");
+		}
+		uint64_t aliceE = 0;
+		if (!world.NoteTransferComplete(61, 32, &error) || !world.NoteTransferStarted(63, 7, 1, 400) ||
+		    !world.NoteCatchUpProgress(61, 400, 1, 1, 440, &aliceE, &error) || aliceE == 0 ||
+		    !world.NoteCatchUpProgress(61, aliceE - 1, 1, 1, aliceE - 1, nullptr, &error) ||
+		    !world.CompleteActivation(61, aliceE - 1, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: alice never reached Active (" + error + ")");
+		}
+		uint64_t daveWatchE = 0;
+		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
+		    !world.CompleteActivation(63, daveWatchE, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: dave never reached his stream (" + error + ")");
+		}
+		// Alice leaves and dave is promoted onto her slot, keeping his own H4 seat.
+		NetH4LeaveRequest departure;
+		departure.txId.fill(41);
+		departure.epoch = aliceOffer.epoch;
+		departure.stableSeat = aliceOffer.stableSeat;
+		departure.holderGeneration = aliceOffer.holderGeneration;
+		admission.HandleMessage(61, departure, 10);
+		admission.TakeOutbound();
+		NetMatchService::WorldCleanLeave leave;
+		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) ||
+		    !world.Membership().Release(leave.peerId, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: the clean leave did not free a slot (" + error + ")");
+		}
+		world.CancelJoin(leave.connection, "clean leave");
+		world.NoteSentInputThrough(daveWatchE + 40);
+		uint64_t promotedAt = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
+		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
+			return Fail("reclaim-hold-missed-the-slot: dave was not promoted into the freed slot (" + error + ")");
+		}
+		const NetWorldJoinSession* seated = world.FindSession(63);
+		if (seated == nullptr || seated->assignedPeerId != 2 || seated->stableSeat != daveOffer.stableSeat) {
+			return Fail("reclaim-hold-missed-the-slot: dave does not hold the freed slot");
+		}
+		const uint32_t daveGeneration = seated->holderGeneration;
+		// His seat names lockstep 4 and he plays on slot 2: that gap is what the hold is keyed through.
+		uint8_t daveSeatLockstep = 0;
+		for (const NetH4Seat& seat: seats) {
+			if (seat.stableSeat == daveOffer.stableSeat) {
+				daveSeatLockstep = seat.lockstepPeerId;
+			}
+		}
+		if (daveSeatLockstep == seated->assignedPeerId) {
+			return Fail("reclaim-hold-missed-the-slot: the fixture did not produce a promotee whose seat names another id");
+		}
+		// His transport dies.
+		admission.NotifyDisconnect(63, promotedAt);
+		const std::vector<NetH4SeatStatus> afterDrop = admission.GetSeatStatuses();
+		const std::vector<uint8_t> holds = NetMatchService::WorldReclaimHoldSlots(afterDrop, world.Membership());
+		if (holds.size() != 1 || holds.front() != seated->assignedPeerId) {
+			std::string named;
+			for (const uint8_t peerId: holds) {
+				named += (named.empty() ? "" : ",") + std::to_string(static_cast<int>(peerId));
+			}
+			return Fail("reclaim-hold-missed-the-slot: the drop held {" + named + "} while the promotee plays slot " +
+			            std::to_string(static_cast<int>(seated->assignedPeerId)));
+		}
+		world.NoteReclaimHolds(holds);
+		for (const NetWorldSlot& slot: world.Membership().Slots()) {
+			if (slot.reclaimHold != (slot.peerId == 2)) {
+				return Fail("reclaim-hold-fenced-the-wrong-slot: slot " + std::to_string(static_cast<int>(slot.peerId)) +
+				            (slot.reclaimHold ? " carries a hold it should not" : " lost the hold it should carry"));
+			}
+		}
+		// A stranger presenting the held seat without the credential is turned away.
+		if (world.BeginJoin(64, daveOffer.stableSeat, "stranger", 1400, &error, false)) {
+			return Fail("reclaim-hold-let-a-stranger-in: a fresh connection took the held seat");
+		}
+		if (error != "that seat is held for its player") {
+			return Fail("reclaim-hold-let-a-stranger-in: the refusal read \"" + error + "\"");
+		}
+		// The holder comes back on a new transport and takes its own slot, generation unmoved.
+		if (!world.BeginJoin(65, daveOffer.stableSeat, "dave", 1500, &error, true)) {
+			return Fail("reclaim-hold-refused-its-own-holder: the reclaim was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* returned = world.FindSession(65);
+		if (returned == nullptr || returned->assignedPeerId != 2 || returned->holderGeneration != daveGeneration) {
+			return Fail("reclaim-hold-refused-its-own-holder: the returning holder did not take slot 2 under its generation");
+		}
+		size_t onThatSlot = 0;
+		for (const NetWorldJoinSession& session: world.Sessions()) {
+			if (session.assignedPeerId == 2) {
+				++onThatSlot;
+			}
+		}
+		if (onThatSlot != 1) {
+			return Fail("reclaim-hold-refused-its-own-holder: " + std::to_string(onThatSlot) + " bootstraps name slot 2");
+		}
+		// A holder that never activated gave its slot back on the way out; the drop still fences it.
+		world.CancelJoin(62, "connection lost");
+		admission.NotifyDisconnect(62, promotedAt);
+		const std::vector<uint8_t> afterUnheld = NetMatchService::WorldReclaimHoldSlots(admission.GetSeatStatuses(), world.Membership());
+		if (std::find(afterUnheld.begin(), afterUnheld.end(), uint8_t{3}) == afterUnheld.end()) {
+			return Fail("reclaim-hold-missed-the-slot: a dropped holder whose bootstrap was released left slot 3 open");
+		}
+		world.NoteReclaimHolds(afterUnheld);
+		for (const NetWorldSlot& slot: world.Membership().Slots()) {
+			if (slot.peerId == 3 && !slot.reclaimHold) {
+				return Fail("reclaim-hold-fenced-the-wrong-slot: the released slot 3 carries no hold for its dropped holder");
+			}
+		}
+		if (world.Membership().FirstFreeSlot() != nullptr) {
+			return Fail("reclaim-hold-let-a-stranger-in: a fenced slot is still offered as the first free one");
+		}
+		return 0;
+	}
+
+	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
+	int TestDueSpectatorLeavesTheMemberDue() {
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("due-walk-skipped-the-member: the world plane refused its config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		host.PublishImage(image);
+		// Both slots filled, then the watcher; one member then leaves and a new one takes its slot, so
+		// the watcher sits ahead of a member in the order the walk reads.
+		if (!host.BeginJoin(69, 69, "seat-a", 1000, &error) || !host.BeginJoin(70, 70, "seat-b", 1005, &error) ||
+		    !host.BeginJoin(71, 71, "watcher", 1010, &error)) {
+			return Fail("due-walk-skipped-the-member: the fixture could not fill the world (" + error + ")");
+		}
+		host.CancelJoin(69, "clean leave");
+		if (!host.Membership().Release(2, &error) || !host.BeginJoin(72, 72, "member", 1020, &error)) {
+			return Fail("due-walk-skipped-the-member: the freed slot took no new member (" + error + ")");
+		}
+		const NetWorldJoinSession* watcher = host.FindSession(71);
+		const NetWorldJoinSession* member = host.FindSession(72);
+		if (watcher == nullptr || member == nullptr || !watcher->spectator || member->spectator) {
+			return Fail("due-walk-skipped-the-member: the fixture did not open one watcher and one member");
+		}
+		const uint64_t nowFrame = 440;
+		uint64_t watcherE = 0;
+		uint64_t memberE = 0;
+		if (!host.NoteTransferStarted(71, 7, 1, 400) || !host.ScheduleSpectatorActivation(71, nowFrame, &watcherE, &error) ||
+		    !host.NoteTransferComplete(72, 32, &error) || !host.NoteCatchUpProgress(72, 400, 1, 1, nowFrame, &memberE, &error)) {
+			return Fail("due-walk-skipped-the-member: the fixture could not announce both activations (" + error + ")");
+		}
+		if (watcherE == 0 || watcherE != memberE) {
+			return Fail("due-walk-skipped-the-member: the fixture announced " + std::to_string(watcherE) + " and " +
+			            std::to_string(memberE) + " instead of one frame");
+		}
+		if (!host.NoteCatchUpProgress(72, memberE - 1, 1, 1, memberE - 1, nullptr, &error)) {
+			return Fail("due-walk-skipped-the-member: the member never applied through E-1 (" + error + ")");
+		}
+		// One pump reads one frame: the walk the service runs over it must reach both.
+		const uint64_t nextFrame = watcherE - 1;
+		const NetWorldJoinSession* first = host.DueActivation(nextFrame);
+		if (first == nullptr || first->connection != 71) {
+			return Fail("due-walk-skipped-the-member: the watcher is not the first due bootstrap of the pump");
+		}
+		const NetWorldActivationPlan watcherPlan = PlanWorldActivation(*first, nextFrame, false);
+		if (watcherPlan.admit) {
+			return Fail("due-walk-skipped-the-member: a watcher's plan admitted it to a seat");
+		}
+		if (!host.CompleteActivation(first->connection, watcherPlan.firstRequired, &error)) {
+			return Fail("due-walk-skipped-the-member: the watcher's stream was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* second = host.DueActivation(nextFrame);
+		if (second == nullptr || second->connection != 72) {
+			return Fail("due-walk-skipped-the-member: the member is not due behind the streamed watcher at frame " +
+			            std::to_string(nextFrame));
+		}
+		const NetWorldActivationPlan memberPlan = PlanWorldActivation(*second, nextFrame, false);
+		if (!memberPlan.admit || memberPlan.firstRequired != memberE) {
+			return Fail(std::string("due-walk-skipped-the-member: the member's plan reads admit ") +
+			            (memberPlan.admit ? "true" : "false") + " at frame " + std::to_string(memberPlan.firstRequired));
+		}
+		if (!host.CompleteActivation(second->connection, memberPlan.firstRequired - 1, &error)) {
+			return Fail("due-walk-skipped-the-member: the member's activation was refused (" + error + ")");
+		}
+		if (host.DueActivation(nextFrame) != nullptr || host.LateActivation(nextFrame) != nullptr) {
+			return Fail("due-walk-skipped-the-member: a bootstrap is still due after the pump walked both");
+		}
+		return 0;
+	}
+
+	// The preset's respawn clock and the engine's seat respawn read one configured number.
+	int TestWorldRespawnDelayHasOneSource() {
+		NetMatchConfig config = MakeWorldConfig();
+		// The rate comes from the production helper itself, so no literal tick count rides this row.
+		config.worldRespawnDelaySeconds = 1;
+		const uint64_t ticksPerSecond = WorldRespawnDelayFrames(config);
+		if (ticksPerSecond == 0) {
+			return Fail("world-respawn-delay-is-not-the-config: a one second world clocked no frames");
+		}
+		config.worldRespawnDelaySeconds = 5;
+		if (WorldRespawnDelayFrames(config) != 5 * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: a 5 s world clocked " +
+			            std::to_string(WorldRespawnDelayFrames(config)) + " frames");
+		}
+		config.worldRespawnDelaySeconds = NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds;
+		if (WorldRespawnDelayFrames(config) != NetMatchConfigUtil::c_MaxWorldRespawnDelaySeconds * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: the longest configured wait clocked " +
+			            std::to_string(WorldRespawnDelayFrames(config)) + " frames");
+		}
+		// What the preset reads. With no round attached it is the world's own default, never a literal.
+		const NetMatchConfig unconfigured;
+		if (ScenarioRunner::GetWorldRespawnDelayFrames() != static_cast<int>(WorldRespawnDelayFrames(unconfigured))) {
+			return Fail("world-respawn-delay-has-two-sources: the script author reads " +
+			            std::to_string(ScenarioRunner::GetWorldRespawnDelayFrames()) + " frames while the seat respawn clocks " +
+			            std::to_string(WorldRespawnDelayFrames(unconfigured)));
+		}
+		if (WorldRespawnDelayFrames(unconfigured) != NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds * ticksPerSecond) {
+			return Fail("world-respawn-delay-is-not-the-config: an unconfigured world clocked " +
+			            std::to_string(WorldRespawnDelayFrames(unconfigured)) + " frames");
+		}
+		return 0;
+	}
+
+	// The Release the world commits hands the departed seat's characters back before the next Activate.
+	int TestWorldReleaseFreesTheDepartedBrain() {
+		NetMatchConfig config = MakeWorldConfig();
+		// Co-op: both members share team 0, so the next Activate names the team the leaver played.
+		config.players = {
+		    NetMatchPlayerSlot{1, 0, true, "World"},
+		    NetMatchPlayerSlot{2, 0, false, "First"},
+		    NetMatchPlayerSlot{3, 0, false, "Second"},
+		};
+		config.peerCount = 3;
+		NetWorldJoinSession leaver;
+		leaver.connection = 7;
+		leaver.assignedPeerId = 2;
+		leaver.team = 0;
+		leaver.activationTick = 120;
+		NetWorldJoinSession next = leaver;
+		next.connection = 8;
+		next.assignedPeerId = 3;
+		const NetGameWorldTransition leaverActivate = BuildWorldActivateTransition(leaver, config, 1);
+		const NetGameWorldTransition nextActivate = BuildWorldActivateTransition(next, config, 1);
+		// What the Activate's apply does on every peer (MovableMan's world transition branch).
+		if (!WorldTransitionSeatsMember(leaverActivate) || !WorldTransitionSeatsMember(nextActivate)) {
+			return Fail("release-kept-the-departed-control: an Activate no longer seats a member");
+		}
+		ScenarioRunner::SetLockstepControlOverride(910, leaverActivate.peerId);
+		ScenarioRunner::SetLockstepControlOverride(911, nextActivate.peerId);
+		const auto brainsNow = [] {
+			// The candidate list MovableMan builds: each brain with the owner the handoff map names.
+			return std::vector<NetWorldBrainCandidate>{
+			    NetWorldBrainCandidate{910, 0, ScenarioRunner::GetLockstepControlOverrideOwner(910)},
+			    NetWorldBrainCandidate{911, 0, ScenarioRunner::GetLockstepControlOverrideOwner(911)}};
+		};
+		const auto cleanUp = [] {
+			ScenarioRunner::ReleaseLockstepControlOverridesOf(2);
+			ScenarioRunner::ReleaseLockstepControlOverridesOf(3);
+		};
+		if (ChooseWorldActivateBrain(brainsNow(), nextActivate) != 0) {
+			cleanUp();
+			return Fail("release-took-a-live-members-control: a seated member's brain was offered to another activation");
+		}
+		// The Release DriveWorldJoins commits for a clean leave, and its apply.
+		NetGameWorldTransition release;
+		release.kind = NetGameWorldTransition::Release;
+		release.peerId = leaverActivate.peerId;
+		release.holderGeneration = 1;
+		release.team = 0;
+		if (WorldTransitionSeatsMember(release) || WorldTransitionBindsBrain(release, true)) {
+			cleanUp();
+			return Fail("release-kept-the-departed-control: a Release seats or binds, which it must not");
+		}
+		ScenarioRunner::ReleaseLockstepControlOverridesOf(release.peerId);
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(910) != 0) {
+			cleanUp();
+			return Fail("release-kept-the-departed-control: actor 910 still reads owner " +
+			            std::to_string(static_cast<int>(ScenarioRunner::GetLockstepControlOverrideOwner(910))) +
+			            " after peer " + std::to_string(static_cast<int>(release.peerId)) + " left");
+		}
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(911) != nextActivate.peerId) {
+			cleanUp();
+			return Fail("release-took-a-live-members-control: actor 911 lost peer " +
+			            std::to_string(static_cast<int>(nextActivate.peerId)) + "'s handoff");
+		}
+		if (ChooseWorldActivateBrain(brainsNow(), nextActivate) != 910) {
+			cleanUp();
+			return Fail("release-left-the-brain-to-a-clone: the departed seat's brain was refused, so the "
+			            "activation of peer " + std::to_string(static_cast<int>(nextActivate.peerId)) + " spawns a second resident");
+		}
+		cleanUp();
+		if (ScenarioRunner::GetLockstepControlOverrideOwner(911) != 0) {
+			return Fail("release-took-a-live-members-control: the fixture did not give actor 911 back");
+		}
+		return 0;
 	}
 
 	// A watcher that has been streaming is the one a freed slot goes to, at its own announced E.
@@ -4703,6 +5201,26 @@ namespace RTE {
 			s_FailTag = "net-world-promotion-selftest";
 			return TestFreedSlotPromotesTheOldestSpectator();
 		}
+		if (std::strcmp(name, "clean-leave") == 0 || std::strcmp(name, "-net-world-clean-leave-selftest") == 0) {
+			s_FailTag = "net-world-clean-leave-selftest";
+			return TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft();
+		}
+		if (std::strcmp(name, "reclaim-hold") == 0 || std::strcmp(name, "-net-world-reclaim-hold-selftest") == 0) {
+			s_FailTag = "net-world-reclaim-hold-selftest";
+			return TestWorldReclaimHoldFollowsTheSeatsSlot();
+		}
+		if (std::strcmp(name, "release-control") == 0 || std::strcmp(name, "-net-world-release-control-selftest") == 0) {
+			s_FailTag = "net-world-release-control-selftest";
+			return TestWorldReleaseFreesTheDepartedBrain();
+		}
+		if (std::strcmp(name, "respawn-delay") == 0 || std::strcmp(name, "-net-world-respawn-delay-selftest") == 0) {
+			s_FailTag = "net-world-respawn-delay-selftest";
+			return TestWorldRespawnDelayHasOneSource();
+		}
+		if (std::strcmp(name, "due-walk") == 0 || std::strcmp(name, "-net-world-due-walk-selftest") == 0) {
+			s_FailTag = "net-world-due-walk-selftest";
+			return TestDueSpectatorLeavesTheMemberDue();
+		}
 		if (std::strcmp(name, "reclaim") == 0 || std::strcmp(name, "-net-world-reclaim-selftest") == 0) {
 			s_FailTag = "net-world-reclaim-selftest";
 			return TestReclaimOutranksAFreshJoin();
@@ -4892,6 +5410,21 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestFreedSlotPromotesTheOldestSpectator(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldCleanLeaveReleasesOnlyTheSeatThatLeft(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldReclaimHoldFollowsTheSeatsSlot(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldRespawnDelayHasOneSource(); result != 0) {
+			return result;
+		}
+		if (const int result = TestDueSpectatorLeavesTheMemberDue(); result != 0) {
 			return result;
 		}
 		if (const int result = TestReclaimOutranksAFreshJoin(); result != 0) {

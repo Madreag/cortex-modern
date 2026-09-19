@@ -2501,6 +2501,70 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	bool NetMatchService::FindWorldCleanLeave(const std::vector<NetH4SeatStatus>& statuses, const NetWorldJoinHost& world, WorldCleanLeave& outLeave) {
+		outLeave = WorldCleanLeave{};
+		for (const NetH4SeatStatus& status: statuses) {
+			// A dropped or reclaiming seat keeps its slot for its own holder; a committed one has one.
+			if (status.stableSeat == 0 || status.committed || status.dropped || status.reclaiming) {
+				continue;
+			}
+			const NetWorldSlot* slot = nullptr;
+			for (const NetWorldSlot& candidate: world.Membership().Slots()) {
+				// The seat the slot is bound to is the one binding between the two planes.
+				if (candidate.held && candidate.stableSeat == status.stableSeat) {
+					slot = &candidate;
+					break;
+				}
+			}
+			if (slot == nullptr) {
+				continue;
+			}
+			for (const NetWorldJoinSession& session: world.Sessions()) {
+				// The slot's CURRENT holder: a stale generation is somebody the world already let go.
+				if (session.phase != NetWorldJoinPhase::Active || session.stableSeat != status.stableSeat ||
+				    session.assignedPeerId != slot->peerId || session.holderGeneration != slot->generation) {
+					continue;
+				}
+				outLeave.peerId = slot->peerId;
+				outLeave.stableSeat = slot->stableSeat;
+				outLeave.holderGeneration = slot->generation;
+				outLeave.team = slot->team;
+				outLeave.connection = session.connection;
+				return true;
+			}
+		}
+		return false;
+	}
+
+	std::vector<uint8_t> NetMatchService::WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership) {
+		std::vector<uint8_t> holds;
+		for (const NetH4SeatStatus& status: statuses) {
+			if (status.stableSeat == 0 || !(status.dropped || status.reclaiming)) {
+				continue;
+			}
+			// The hold belongs on the slot the seat holds, not on the slot its lockstep id names. A
+			// bootstrap cancelled before it activated gave the slot back, and that is the slot the
+			// holder reclaims (SlotOfSeat's own choice), so it is fenced too.
+			const NetWorldSlot* bound = nullptr;
+			for (const NetWorldSlot& slot: membership.Slots()) {
+				if (slot.stableSeat != status.stableSeat) {
+					continue;
+				}
+				if (slot.held) {
+					bound = &slot;
+					break;
+				}
+				if (bound == nullptr) {
+					bound = &slot;
+				}
+			}
+			if (bound != nullptr) {
+				holds.push_back(bound->peerId);
+			}
+		}
+		return holds;
+	}
+
 	bool NetMatchService::NoteImageTransferOutcome(NetLobbyStateTransfer outcome, NetLobbySession& lobby, NetWorldJoinHost& host, NetPeerId connection, uint64_t deliveredThrough) {
 		if (outcome == NetLobbyStateTransfer::Refused) {
 			// Never taken and never kept, so the bootstrap stays unstarted and the next pump retries.
@@ -2565,13 +2629,7 @@ static std::string ResyncSaveName() {
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
 		// A dropped or reclaiming seat keeps its slot: only that holder may take it back, and a
 		// fresh join that arrives meanwhile watches instead of allocating it.
-		std::vector<uint8_t> reclaimHolds;
-		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
-			if (status.lockstepPeerId != 0 && (status.dropped || status.reclaiming)) {
-				reclaimHolds.push_back(status.lockstepPeerId);
-			}
-		}
-		m_WorldJoin.NoteReclaimHolds(reclaimHolds);
+		m_WorldJoin.NoteReclaimHolds(WorldReclaimHoldSlots(m_ReconnectHost.GetSeatStatuses(), m_WorldJoin.Membership()));
 		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
 		bool answeredRefusal = false;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
@@ -2683,41 +2741,22 @@ static std::string ResyncSaveName() {
 			m_WorldJoin.CancelJoin(cancelled, "the joiner missed the announced activation");
 			std::cout << "[net-world] cancel slow join connection=" << cancelled << std::endl;
 		}
-		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
-			if (status.lockstepPeerId == 0 || status.committed || status.dropped || status.reclaiming) {
-				continue;
-			}
-			const NetWorldSlot* slot = nullptr;
-			for (const NetWorldSlot& candidate: m_WorldJoin.Membership().Slots()) {
-				if (candidate.peerId == status.lockstepPeerId && candidate.held) {
-					slot = &candidate;
-					break;
-				}
-			}
-			if (slot == nullptr) {
-				continue;
-			}
-			bool active = false;
-			NetPeerId connection = c_InvalidNetPeerId;
-			for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-				if (session.assignedPeerId == status.lockstepPeerId && session.phase == NetWorldJoinPhase::Active) {
-					active = true;
-					connection = session.connection;
-					break;
-				}
-			}
-			if (!active) {
-				continue;
+		const std::vector<NetH4SeatStatus> seatStatuses = m_ReconnectHost.GetSeatStatuses();
+		// One clean leave per slot at most: each Release frees the slot it names, so the walk ends.
+		for (size_t leaves = m_WorldJoin.Membership().Slots().size(); leaves > 0; --leaves) {
+			WorldCleanLeave leave;
+			if (!FindWorldCleanLeave(seatStatuses, m_WorldJoin, leave)) {
+				break;
 			}
 			NetGameWorldTransition release;
 			release.kind = NetGameWorldTransition::Release;
-			release.peerId = status.lockstepPeerId;
-			release.holderGeneration = slot->generation;
-			release.team = slot->team;
-			(void)m_WorldJoin.Membership().Release(status.lockstepPeerId, nullptr);
+			release.peerId = leave.peerId;
+			release.holderGeneration = leave.holderGeneration;
+			release.team = leave.team;
+			(void)m_WorldJoin.Membership().Release(leave.peerId, nullptr);
 			(void)ScenarioRunner::SubmitWorldTransition(release);
-			m_WorldJoin.CancelJoin(connection, "clean leave");
-			std::cout << "[net-world] release peer=" << static_cast<int>(status.lockstepPeerId) << std::endl;
+			m_WorldJoin.CancelJoin(leave.connection, "clean leave");
+			std::cout << "[net-world] release peer=" << static_cast<int>(leave.peerId) << std::endl;
 			uint64_t promotedAt = 0;
 			NetPeerId promoted = c_InvalidNetPeerId;
 			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
@@ -2738,18 +2777,23 @@ static std::string ResyncSaveName() {
 		}
 		DriveWorldSeatRespawns(nowFrame);
 		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
-		const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
-		bool late = false;
-		if (due == nullptr) {
-			due = m_WorldJoin.LateActivation(nextFrame);
-			late = due != nullptr;
-		}
-		if (due != nullptr) {
+		// A streaming watcher costs the round nothing, so it never stands in front of a member that
+		// is due at the same frame. Each stream takes its bootstrap out of the due set, so this ends.
+		for (size_t walked = m_WorldJoin.Sessions().size() + 1; walked > 0; --walked) {
+			const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
+			bool late = false;
+			if (due == nullptr) {
+				due = m_WorldJoin.LateActivation(nextFrame);
+				late = due != nullptr;
+			}
+			if (due == nullptr) {
+				break;
+			}
 			const NetWorldActivationPlan plan = PlanWorldActivation(*due, nextFrame, late);
 			if (!plan.admit) {
 				(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 				std::cout << "[net-world] spectator stream at=" << plan.firstRequired << std::endl;
-				return;
+				continue;
 			}
 			std::string admitError;
 			if (!m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, plan.firstRequired, &admitError)) {
@@ -2763,6 +2807,8 @@ static std::string ResyncSaveName() {
 			}
 			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
+			// One member admission per pump, as before: two brains never enter at one tick.
+			break;
 		}
 	}
 

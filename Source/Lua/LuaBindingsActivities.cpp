@@ -27,6 +27,7 @@ LuaBindingRegisterFunctionDefinitionForType(ActivityLuaBindings, Activity) {
 	    .def("GetLockstepHumanSlotIndex", &Activity::GetLockstepHumanSlotIndex)
 	    .def("IsPersistentWorld", &Activity::IsPersistentWorld)
 	    .def("IsWorldAuthor", &Activity::IsWorldAuthor)
+	    .def("GetWorldRespawnDelayFrames", &Activity::GetWorldRespawnDelayFrames)
 	    .def("SubmitWorldRespawn", &Activity::SubmitWorldRespawn)
 	    .def("GetTeamOfPlayer", &Activity::GetTeamOfPlayer)
 	    .def("SetTeamOfPlayer", &Activity::SetTeamOfPlayer)
