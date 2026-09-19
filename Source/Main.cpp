@@ -4716,7 +4716,15 @@ void RunGameLoop() {
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
 			if (s_netReplayReturnPending) {
+				// CC_FAULT_INJECT=queued_restart_at_replay_end presses the rematch on the frame the replay's
+				// end clears: the guard has to keep the queue, and the flag goes back the way the run found it.
+				const bool injectedRestart = FaultInjected("queued_restart_at_replay_end");
+				if (injectedRestart) g_ActivityMan.SetRestartActivity(true);
 				g_ActivityMan.ClearEndedReplayActivity();
+				if (injectedRestart) {
+					System::PrintDiagnosticLine(std::string("[replay-end] injected queued restart kept=") + (g_ActivityMan.ActivitySetToRestart() ? "1" : "0"));
+					g_ActivityMan.SetRestartActivity(false);
+				}
 			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
