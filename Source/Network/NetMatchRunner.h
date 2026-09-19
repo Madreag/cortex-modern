@@ -9,6 +9,8 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -25,6 +27,39 @@ namespace RTE {
 		Failed,
 	};
 
+	/// The one host-options draft waiting for the runner thread, posted by the service's Apply. Newest
+	/// wins: a second Apply before the round takes the first replaces it, which is what the host meant.
+	/// The flag is the cheap poll the lobby loop reads every tick; the mutex only guards the config
+	/// itself, so the runner never blocks the game thread for the length of a copy.
+	struct NetHostOptionsSlot {
+		std::atomic<bool> pending{false};
+		std::mutex mutex;
+		NetMatchConfig config;
+
+		/// Service thread: stages the accepted draft for the runner.
+		void Post(const NetMatchConfig& draft) {
+			std::lock_guard<std::mutex> lock(mutex);
+			config = draft;
+			pending.store(true, std::memory_order_release);
+		}
+		/// Runner thread: takes the staged draft, if one is waiting.
+		bool Take(NetMatchConfig& out) {
+			if (!pending.load(std::memory_order_acquire)) {
+				return false;
+			}
+			std::lock_guard<std::mutex> lock(mutex);
+			out = config;
+			pending.store(false, std::memory_order_release);
+			return true;
+		}
+		/// Drops a draft whose session is gone, so the next one never inherits it.
+		void Clear() {
+			std::lock_guard<std::mutex> lock(mutex);
+			config = {};
+			pending.store(false, std::memory_order_release);
+		}
+	};
+
 	struct NetMatchRunnerConfig {
 		bool host = false;
 		std::string joinAddress;
@@ -35,7 +70,13 @@ namespace RTE {
 		bool useLobbyProtocol = false;
 		uint64_t startFrame = 0;
 		uint32_t sessionWaitMs = 15000;
+		// The technical deadline a setup round waits to HEAR from its peers. It is fixed by the
+		// protocol, never by a host's policy, and it is what a client's round patience reads.
 		uint32_t lobbyWaitMs = 15000;
+		// Host: how long an unseated lobby stays open waiting for people, which is the host's own idle
+		// policy. 0 means Never and the round only ends when the host or a peer ends it; unset keeps
+		// the message deadline as the budget, which is what a round without a seating policy had.
+		std::optional<uint32_t> lobbySeatingWaitMs;
 		uint32_t lockstepWaitMs = 5000;
 		// In-match missing-frame grace before the match is declared dead; the setup wait above stays short.
 		uint32_t missingFrameGraceMs = 20000;
@@ -47,6 +88,9 @@ namespace RTE {
 		const std::atomic<bool>* readyRequested = nullptr;
 		std::atomic<bool>* startRequested = nullptr;
 		const std::atomic<bool>* cancelRequested = nullptr;
+		// Host: accepted host-options drafts on their way to this thread. The lobby loop republishes
+		// one as the round's next configuration revision; a rematch starts its round on it.
+		NetHostOptionsSlot* hostOptions = nullptr;
 		std::function<void(const NetLobbySnapshot&)> publishLobby;
 		// The session's clock. Supplied by the service so setup, play and every resync share one elapsed
 		// time; without it each wait clocks from its own start, which the admission deadlines cannot use.
@@ -68,6 +112,16 @@ namespace RTE {
 		/// Keeps lobby wait intervals separate from admission's session-elapsed deadlines.
 		static NetMatchRunnerClocks ResolveRoundClocks(uint64_t roundMs, bool hasSessionClock, uint64_t sessionClockMs) {
 			return {roundMs, hasSessionClock ? sessionClockMs : roundMs, roundMs};
+		}
+
+		/// Whether a setup round has waited out its seating time. The host's Never (a seating wait of
+		/// 0) never does, however long the lobby stays open; a round with no seating policy of its own
+		/// budgets by its message deadline, which is what every round did before the two were split.
+		static bool SeatingWaitExpired(const std::optional<uint32_t>& seatingWaitMs, uint32_t messageDeadlineMs, uint64_t sinceProgressMs) {
+			if (seatingWaitMs && *seatingWaitMs == 0) {
+				return false;
+			}
+			return sinceProgressMs > seatingWaitMs.value_or(messageDeadlineMs);
 		}
 
 		bool Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error = nullptr);
@@ -106,6 +160,11 @@ namespace RTE {
 		static const char* StateName(NetMatchRuntimeState state);
 
 	private:
+		/// Host: takes the staged host-options draft as the config the NEXT round publishes. Runner
+		/// thread only; a draft for another session or behind the played revision is dropped.
+		bool AdoptStagedHostOptions();
+		/// Host: takes the seating wait from the published idle policy, so a live edit of it lands.
+		void SyncSeatingWaitToConfig();
 		/// Re-forms the roster the next round is played on and re-seats everything that depends on it.
 		bool PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error);
 		/// Client: the host's proposal must fit the roster this peer derived, on the seat it was admitted on.

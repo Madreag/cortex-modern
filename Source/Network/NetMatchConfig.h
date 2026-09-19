@@ -75,6 +75,9 @@ namespace RTE {
 		uint8_t idleWaitMinutes = 10;
 		bool automaticRepair = true;
 		uint16_t pathHorizonTicks = 0;
+		// Redundant controller-frame window: each frame packet repeats the last N ticks so one lost
+		// datagram costs nothing. 1 sends each tick once.
+		uint8_t frameRedundancyTicks = 4;
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
@@ -87,7 +90,8 @@ namespace RTE {
 		static constexpr uint16_t c_Version = 4;
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
-		static constexpr uint16_t c_ReservedKnownMask = 3;
+		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit;
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
 		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr uint32_t c_MaxFiniteStartingGold = 29999;
@@ -95,6 +99,8 @@ namespace RTE {
 		static constexpr uint8_t c_MinPeerCount = 2;
 		static constexpr uint8_t c_MaxPeerCount = 4;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60; // Mirrors NetLockstepCodec::c_MaxInputDelayFrames.
+		static constexpr uint8_t c_DefaultFrameRedundancyTicks = 4;
+		static constexpr uint8_t c_MaxFrameRedundancyTicks = 8; // Mirrors NetLockstepCodec::c_MaxWindowTicks.
 		static constexpr size_t c_MaxPlayers = 7; // Four co-op human peers plus the three peerless CPU teams left.
 		static constexpr size_t c_MaxNameBytes = 64;
 		static constexpr size_t c_MaxPresetBytes = 128;

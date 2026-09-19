@@ -16,8 +16,10 @@
 #include <charconv>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <iterator>
 #include <map>
 #include <random>
 #include <unordered_set>
@@ -656,6 +658,47 @@ void SettingsMan::SetNetworkChatKey(const std::string& key) {
 	if (normalized.size() == 1 && normalized[0] >= 'A' && normalized[0] <= 'Z') {
 		m_NetworkChatKey = normalized;
 	}
+}
+
+std::string SettingsMan::NetworkHostDefaultsPath() {
+	return System::GetWorkingDirectory() + System::GetUserdataDirectory() + "NetworkHostDefaults.ini";
+}
+
+bool SettingsMan::HasNetworkHostDefaults() const {
+	std::error_code ignored;
+	return std::filesystem::exists(NetworkHostDefaultsPath(), ignored);
+}
+
+bool SettingsMan::LoadNetworkHostDefaultsText(std::string& outText, std::string* error) const {
+	// No template yet is the ordinary first run, not a failure: the caller keeps its own draft and
+	// has nothing to say about it.
+	if (!HasNetworkHostDefaults()) {
+		if (error) error->clear();
+		return false;
+	}
+	std::ifstream file(NetworkHostDefaultsPath(), std::ios::binary);
+	if (!file) {
+		if (error) *error = "the host defaults template could not be opened";
+		return false;
+	}
+	outText.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+	return true;
+}
+
+bool SettingsMan::SaveNetworkHostDefaultsText(const std::string& text, std::string* error) const {
+	std::error_code ignored;
+	std::filesystem::create_directories(System::GetWorkingDirectory() + System::GetUserdataDirectory(), ignored);
+	std::ofstream file(NetworkHostDefaultsPath(), std::ios::binary | std::ios::trunc);
+	if (!file) {
+		if (error) *error = "the host defaults template could not be written";
+		return false;
+	}
+	file << text;
+	if (!file) {
+		if (error) *error = "the host defaults template was not written completely";
+		return false;
+	}
+	return true;
 }
 
 void SettingsMan::WriteNetworkPreferences(Writer& writer) const {

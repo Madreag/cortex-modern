@@ -55,6 +55,7 @@ namespace RTE {
 		uint32_t ignoredSessionPackets = 0;
 		uint32_t configPacketsSent = 0;
 		uint32_t configAcksReceived = 0;
+		uint32_t configRepublishes = 0; //!< Host: accepted options drafts adopted as a new revision mid-round.
 		uint32_t readyPacketsReceived = 0;
 		uint32_t startPacketsSent = 0;
 		uint32_t startPacketsReceived = 0;
@@ -78,6 +79,8 @@ namespace RTE {
 		bool IsLocalReady() const { return m_LocalReady; }
 		bool IsRemoteReady() const { return AllRemoteReady(); }
 		bool IsRemoteReady(uint8_t peerId) const;
+		/// Host: whether that remote has acknowledged the configuration revision now published.
+		bool IsConfigAcked(uint8_t peerId) const;
 		const std::string& GetRemoteName() const;
 		const std::string& GetRemoteName(uint8_t peerId) const;
 		/// Whether this peer's periodic state has been heard at all (directly or host-relayed).
@@ -93,6 +96,14 @@ namespace RTE {
 
 		void SetLocalReady(bool ready);
 		void RequestStart();
+
+		/// Host: adopts an accepted host-options draft as this round's next configuration revision and
+		/// republishes it to every peer. Every ack and readiness is reset, so the hash-checked Start
+		/// waits for the new revision the same way the round's first config did.
+		/// THREADING: this session is not synchronized. It may be called only from the thread that
+		/// owns it - the match runner's lobby loop, between its Tick calls - never from the service or
+		/// GUI thread. The runner takes the draft off NetHostOptionsSlot for exactly that reason.
+		bool RepublishMatchConfig(const NetMatchConfig& config, std::string* error = nullptr);
 
 		/// Queues a match-state file (a resync/rejoin snapshot) to stream to every remote before the
 		/// lobby starts: chunks pace out through Tick and the Start rides the same ordered lane, so a
@@ -158,6 +169,7 @@ namespace RTE {
 		uint64_t m_LastReceiveMs = 0;
 		uint64_t m_SessionClockBaseMs = 0;
 		bool m_PeerStatePending = false;
+		bool m_ConfigResendDue = false; //!< A republished revision goes out on the next tick, not a resend interval later.
 		bool m_LocalReady = false;
 		bool m_ReadySent = false;
 		bool m_StartRequested = false;
