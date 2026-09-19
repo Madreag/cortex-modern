@@ -833,6 +833,9 @@ namespace RTE {
 		bool SendMigration(NetPeerId peer, NetHostMigrationMessage message);
 		NetHostMigrationMessage MigrationMessage(NetHostMigrationMessageType type) const;
 		bool ContactMigrationSuccessor(uint64_t nowMs);
+		bool RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs);
+		bool IsLostMigrationSuccessor(uint8_t peerId) const;
+		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
 		void ApplyMigrationMembership(uint64_t nowMs);
@@ -858,6 +861,7 @@ namespace RTE {
 		uint64_t m_MigrationGeneration = 0;
 		uint64_t m_MigrationWireRound = 0;
 		uint64_t m_MigrationSinceMs = 0;
+		uint64_t m_MigrationStartedMs = 0;
 		uint64_t m_MigrationLastSendMs = 0;
 		uint64_t m_MigrationBoundary = 0;
 		uint64_t m_MigrationFirstNeeded = 0;
@@ -869,6 +873,8 @@ namespace RTE {
 		bool m_MigrationNeedsResync = false;
 		bool m_MigrationCommitQueued = false;
 		bool m_MigrationAuthoritySeen = false;
+		//!< Successors this peer gave up on; a later election in this handover chain must not dial them again.
+		std::vector<uint8_t> m_MigrationLostSuccessors;
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
