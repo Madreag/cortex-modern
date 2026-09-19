@@ -3679,12 +3679,18 @@ static std::string ResyncSaveName() {
 		m_MigrationRepairPending = true;
 		const auto endpoint = std::find_if(config.migrationPeers.begin(), config.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == result.hostPeerId; });
 		if (endpoint != config.migrationPeers.end()) {
-			const std::string address = endpoint->listenAddrs.front() + ":" + std::to_string(endpoint->listenPort);
+			const std::string& connected = m_Coordinator->GetMigrationAddress();
+			const std::string address = (connected.empty() ? endpoint->listenAddrs.front() : connected) + ":" + std::to_string(endpoint->listenPort);
 			if (!m_IsHost) {
 				(void)m_ReconnectClient.MigrateHostContext(address, m_MigrationDirectorySession, NetMatchConfigUtil::HashConfig(config));
 				if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
 					NetSessionConfig sessionConfig = m_Session->GetConfig();
-					sessionConfig.p2pJoin = {};
+					sessionConfig.port = endpoint->listenPort;
+					sessionConfig.p2pJoin.connect = [peer = *endpoint](INetTransport& transport, std::string* connectError) {
+						size_t nextAddress = 0;
+						std::string connectedAddress;
+						return NetLockstepCoordinator::ConnectMigrationEndpoint(transport, peer, nextAddress, connectedAddress, connectError);
+					};
 					std::string error;
 					if (!m_Session->StartClient(*m_MigratedTransport, address, sessionConfig, &error))
 						m_Coordinator->Complete("handover rejoin failed: " + error);
@@ -3702,7 +3708,6 @@ static std::string ResyncSaveName() {
 				m_BeaconGamePort = endpoint->listenPort;
 			}
 		}
-		m_IceEnabled = false;
 		m_IceRoute = "ip";
 		m_StatusText = "Host left - " + m_Coordinator->DescribePeer(result.hostPeerId) + " is now hosting";
 		m_MigrationStatusUntilMs = SteadyNowMs() + 3000;
