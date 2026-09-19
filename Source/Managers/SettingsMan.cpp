@@ -1,4 +1,5 @@
 #include "SettingsMan.h"
+#include "GnsTransport.h"
 #include "ConsoleMan.h"
 #include "CameraMan.h"
 #include "MovableMan.h"
@@ -913,6 +914,13 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		writer.NewPropertyWithValue("NetworkStunServers", "");
 	});
 	check("relay preference read", settings.GetNetworkHostRelayMode() == NetworkHostRelayMode::Off && settings.GetNetworkConnectionMode() == NetworkConnectionMode::RelayOnly && settings.GetNetworkStunServers().empty() && settings.GetNetworkPlayerTurnServers() == "personal.example:3478" && settings.GetNetworkPlayerTurnUser() == "personal-user" && settings.GetNetworkPlayerTurnPass() == "personal-password");
+	{
+		GnsTransport wire;
+		std::string error;
+		check("relay-only IP refusal", !wire.Connect("127.0.0.1", 48109, &error) && error == "Relay only refuses direct IP; choose Automatic or Direct only");
+		check("relay-only IP listener refusal", !wire.StartHost(48109, &error) && error == "Relay only refuses direct IP; choose Automatic or Direct only");
+	}
+	settings.SetNetworkConnectionMode(NetworkConnectionMode::Automatic);
 
 	if (failures != 0) {
 		return 1;
