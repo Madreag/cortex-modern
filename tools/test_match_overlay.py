@@ -359,6 +359,11 @@ def probe_script(who, size, arm, mode):
                     {"op": "wait", "elapsed_ms": 3100},
                     label_assert(TOAST, RESUME_REQUESTED),
                 ]
+            else:
+                # The tail reads a live match at every size; the pause this arm injected has no
+                # other resume, so the same edge pause_on uses fires here at a sim tick.
+                steps += [{"op": "key_down", "key": "P", "sim_at": 480},
+                          {"op": "key_up", "key": "P", "sim_at": 481}]
             steps += [
                 {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                 {"op": "wait", "panel_open": False},
