@@ -37,6 +37,7 @@ namespace RTE {
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
 		          : "Automatic (" + snapshot.inputDelayText + ")"));
+		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
 		         : "Autosaves: off");

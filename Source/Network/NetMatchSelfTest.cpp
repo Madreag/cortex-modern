@@ -18,6 +18,7 @@
 #include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
+#include "NetHostOptionsText.h"
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
@@ -3322,6 +3323,11 @@ namespace RTE {
 			if (!NetMatchService::BuildMatchConfig(request, fresh.sessionId, built, error)) return false;
 			if (built.frameRedundancyTicks != 6) {
 				*error = "the hosted request lost the seeded redundancy: " + std::to_string(built.frameRedundancyTicks);
+				return false;
+			}
+			const std::string summary = NetHostOptionsSummary(built, {});
+			if (summary.find("Frame redundancy: 6 ticks") == std::string::npos) {
+				*error = "the adopted summary lost the redundancy: " + summary;
 				return false;
 			}
 			return true;

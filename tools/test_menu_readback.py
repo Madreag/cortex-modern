@@ -284,6 +284,8 @@ def pause_probe(who, root):
         *row_checks("ButtonMatchOptionsClose", "MatchOptionsBox"),
         {"op": "assert_control", "scope": "menu", "control": "LabelMatchOptions",
          "equals": {}, "text_contains": "When every human brain is lost"},
+        {"op": "assert_control", "scope": "menu", "control": "LabelMatchOptions",
+         "equals": {}, "text_contains": "Frame redundancy: 4 ticks"},
         menu_step("dump_host_options"),
         menu_step("activate ButtonMatchOptionsClose"), {"op": "wait", "screen": "Pause"},
         menu_step(f"assert_enabled ButtonEndMatch {1 if who == 'host' else 0}"),
