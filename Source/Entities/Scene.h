@@ -725,7 +725,7 @@ namespace RTE {
 			Box box;
 			uint64_t originTick = 0;
 			int finderIndex = 0;
-			HorizonTerrainPatch patch;
+			HorizonPatchRef patch;
 			std::vector<HorizonNodeSnapshot> nodes;
 		};
 

@@ -708,6 +708,12 @@ namespace RTE {
 		/// @param team Which team to do this for, NoTeam means all teams.
 		void OverrideMaterialDoors(bool eraseDoorMaterial, int team = Activity::NoTeam) const;
 
+		/// Whether a team's door material is drawn anywhere inside a box, so an override of that team would change the terrain there.
+		/// @param team Which team to look for, NoTeam means all teams.
+		/// @param box The box, in scene coordinates; it is tested across a wrapping seam too.
+		/// @return Whether such a door material footprint touches the box.
+		bool TeamHasDoorMaterialInBox(int team, const Box& box) const;
+
 		/// Registers an AlarmEvent to notify things around that somehting alarming
 		/// like a gunshot or explosion just happened.
 		/// @param newEvent The AlarmEvent to register.

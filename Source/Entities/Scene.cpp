@@ -7,6 +7,7 @@
 #include "LuaMan.h"
 #include "MovableMan.h"
 
+#include <chrono>
 #include <iterator>
 #include <optional>
 #include "TimerMan.h"
@@ -2975,25 +2976,38 @@ void Scene::NoteHorizonTerrainBox(const Box& newArea) {
 		return;
 	}
 	const uint64_t originTick = ScenarioRunner::GetLockstepAppliedFrame();
+	const auto started = std::chrono::steady_clock::now();
+	int captures = 0;
+	// Every pathfinder shares one node dimension, so one capture covers all of them unless a door override moves pixels in this box.
+	HorizonPatchRef sharedPatch;
+	if (PathFinder* shared = m_pPathFinders[0].get()) {
+		HorizonTerrainPatch patch;
+		shared->CaptureHorizonPatch(newArea, patch);
+		sharedPatch = std::make_shared<const HorizonTerrainPatch>(std::move(patch));
+		++captures;
+	}
 	for (int index = 0; index < static_cast<int>(m_pPathFinders.size()); ++index) {
 		PathFinder* pathFinder = m_pPathFinders[index].get();
 		if (!pathFinder) {
 			continue;
 		}
 		pathFinder->PinHorizonFromLive(newArea);
-		HorizonTerrainPatch patch;
-		std::vector<HorizonNodeSnapshot> nodes;
 		const int team = index - 1;
-		if (team >= Activity::Teams::TeamOne) {
+		HorizonPatchRef patch = sharedPatch;
+		if (team >= Activity::Teams::TeamOne && g_MovableMan.TeamHasDoorMaterialInBox(team, newArea)) {
 			g_MovableMan.OverrideMaterialDoors(true, team);
-		}
-		pathFinder->CaptureHorizonPatch(newArea, patch);
-		pathFinder->CaptureHorizonNodeSnapshots(newArea, nodes);
-		if (team >= Activity::Teams::TeamOne) {
+			HorizonTerrainPatch teamPatch;
+			pathFinder->CaptureHorizonPatch(newArea, teamPatch);
 			g_MovableMan.OverrideMaterialDoors(false, team);
+			patch = std::make_shared<const HorizonTerrainPatch>(std::move(teamPatch));
+			++captures;
 		}
-		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, std::move(patch), std::move(nodes)});
+		// The node snapshot reads the grid, not the terrain bitmap, so the door override does not reach it.
+		std::vector<HorizonNodeSnapshot> nodes;
+		pathFinder->CaptureHorizonNodeSnapshots(newArea, nodes);
+		m_HorizonTerrainBoxes.push_back({newArea, originTick, index, patch, std::move(nodes)});
 	}
+	PathFinder::RecordHorizonNote(captures, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count());
 }
 
 void Scene::FlushHorizonTerrainBoxes() {
@@ -3013,7 +3027,7 @@ void Scene::FlushHorizonTerrainBoxes() {
 		}
 	};
 	std::map<GroupKey, std::vector<Box>> boxesByKey;
-	std::map<GroupKey, std::vector<HorizonTerrainPatch>> patchesByKey;
+	std::map<GroupKey, std::vector<HorizonPatchRef>> patchesByKey;
 	std::map<GroupKey, std::vector<HorizonNodeSnapshot>> nodesByKey;
 	std::vector<GroupKey> keys;
 	for (HorizonTerrainBox& item: m_HorizonTerrainBoxes) {
@@ -3022,7 +3036,7 @@ void Scene::FlushHorizonTerrainBoxes() {
 			keys.push_back(key);
 		}
 		boxesByKey[key].push_back(item.box);
-		patchesByKey[key].push_back(std::move(item.patch));
+		patchesByKey[key].push_back(item.patch);
 		nodesByKey[key].insert(nodesByKey[key].end(), std::make_move_iterator(item.nodes.begin()), std::make_move_iterator(item.nodes.end()));
 	}
 	m_HorizonTerrainBoxes.clear();
@@ -3042,6 +3056,7 @@ void Scene::CommitSharedHorizon() {
 	for (std::unique_ptr<PathFinder>& pathFinder: m_pPathFinders) {
 		if (pathFinder) {
 			pathFinder->CommitHorizonThrough(nowTick);
+			pathFinder->CommitPathRequestsThrough(nowTick);
 		}
 	}
 }
@@ -3065,7 +3080,9 @@ std::shared_ptr<volatile PathRequest> Scene::CalculatePathAsync(const Vector& st
 		FlushHorizonTerrainBoxes();
 		CommitSharedHorizon();
 	}
-	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon);
+	// A shared request is published at T+H on every peer, the same tick the terrain it read becomes committed.
+	const uint64_t completeTick = committedHorizon ? ScenarioRunner::GetLockstepAppliedFrame() + SharedPathHorizonTicks() : 0;
+	return GetPathFinder(team).CalculatePathAsync(start, end, jumpHeight, digStrength, callback, committedHorizon, completeTick);
 }
 
 int Scene::GetScenePathSize() const {
