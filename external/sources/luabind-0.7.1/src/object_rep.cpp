@@ -26,6 +26,8 @@
 namespace luabind { namespace detail
 {
 
+	checkpoint_object_write_cb checkpoint_object_write = 0;
+
 	// dest is a function that is called to delete the c++ object this struct holds
 	object_rep::object_rep(void* obj, class_rep* crep, int flags, void(*dest)(void*))
 		: m_object(obj)

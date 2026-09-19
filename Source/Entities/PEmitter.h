@@ -168,29 +168,29 @@ namespace RTE {
 		/*
 		/// Sets the rate at which this PEmitter emits its particles.
 		/// @param rate A float with the rate in #/min.
-		void SetEmitRate(const float rate) { m_PPM = rate; }
+		void SetEmitRate(const float rate) { if (m_PPM != rate) TouchCheckpoint(); m_PPM = rate; }
 
 
 		/// Sets the number of particles that will be emitted in one shot upon
 		/// a triggered burst of this PEmitter.
 		/// @param count The number of emitted particles a burst should have. 0 means burst
 		/// are disabled.
-		void SetBurstCount(const int count) { m_BurstSize = count; }
+		void SetBurstCount(const int count) { if (m_BurstSize != count) TouchCheckpoint(); m_BurstSize = count; }
 		*/
 
 		/// Sets the scale factor that will be applied to the regular spread and
 		/// emission velocity to get the burst particle parameters.
 		/// @param scale The scale factor.
-		void SetBurstScale(const float scale) { m_BurstScale = scale; }
+		void SetBurstScale(const float scale) { if (m_BurstScale != scale) TouchCheckpoint(); m_BurstScale = scale; }
 
 		/// Sets the BurstSpacing for this emitter.
 		/// @param spacing The BurstSpacing in ms.
-		void SetBurstSpacing(const float spacing) { m_BurstSpacing = spacing; }
+		void SetBurstSpacing(const float spacing) { if (m_BurstSpacing != spacing) TouchCheckpoint(); m_BurstSpacing = spacing; }
 
 		/// Sets the display scale factor of the flash effect. This is purely
 		/// visual.
 		/// @param flashScale The scale factor of the flash draw. (default: 1.0f)
-		void SetFlashScale(float flashScale = 1.0f) { m_FlashScale = flashScale; }
+		void SetFlashScale(float flashScale = 1.0f) { if (m_FlashScale != flashScale) TouchCheckpoint(); m_FlashScale = flashScale; }
 
 		/// Gets the display scale factor of the flash effect. This is purely visual.
 		/// @return The scale factor of the flash draw.
@@ -212,19 +212,19 @@ namespace RTE {
 		/// @param spread A float with the spread in r's. PI/2 would mean that MO's fly out to
 		/// one side only, with the m_EmitAngle defining the middle of that half
 		/// circle.
-		void SetEmitSpread(const float spread) { m_Spread = spread; }
+		void SetEmitSpread(const float spread) { if (m_Spread != spread) TouchCheckpoint(); m_Spread = spread; }
 
 
 		/// Sets the min end of the range the velocity of a particle being emitted
 		/// by this PEmitter can have.
 		/// @param minVel A float with the min vel possible for an emitted particle.
-		void SetEmitVelMin(const float minVel) { m_MinVelocity = minVel; }
+		void SetEmitVelMin(const float minVel) { if (m_MinVelocity != minVel) TouchCheckpoint(); m_MinVelocity = minVel; }
 
 
 		/// Sets the max end of the range the velocity of a particle being emitted
 		/// by this PEmitter can have.
 		/// @param maxVel A float with the max vel possible for an emitted particle.
-		void SetEmitVelMax(const float maxVel) { m_MaxVelocity = maxVel; }
+		void SetEmitVelMax(const float maxVel) { if (m_MaxVelocity != maxVel) TouchCheckpoint(); m_MaxVelocity = maxVel; }
 		*/
 
 		/// Triggers a one-shot burst of emissions in the number that has
@@ -251,7 +251,7 @@ namespace RTE {
 
 		/// Sets whether this emitter will play its burst sound when appropriate or not.
 		/// @param playBurstSound Whether this emitter should play its burst sound when appropriate or not.
-		void SetPlayBurstSound(bool playBurstSound) { m_PlayBurstSound = playBurstSound; }
+		void SetPlayBurstSound(bool playBurstSound) { if (m_PlayBurstSound != playBurstSound) TouchCheckpoint(); m_PlayBurstSound = playBurstSound; }
 
 		/// Registers a new AlarmEvent if this emitter has a loudness above zero.
 		/// @param Team Team that will ignore this AlarmEvent.
@@ -286,7 +286,7 @@ namespace RTE {
 
 		/// Sets the number of emissions left before emitter is disabled.
 		/// @param newValue New number of emissions left.
-		void SetEmitCountLimit(long newValue) { m_EmitCountLimit = newValue; }
+		void SetEmitCountLimit(long newValue) { if (m_EmitCountLimit != newValue) TouchCheckpoint(); m_EmitCountLimit = newValue; }
 
 		/// Returns whether this emitter just started emitting this frame.
 		/// @return Whether this emitter just started emitting this frame.

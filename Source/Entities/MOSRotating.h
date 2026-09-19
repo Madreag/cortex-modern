@@ -175,7 +175,7 @@ namespace RTE {
 		/// Sets whether or not this MOSRotating should check for deep penetrations
 		/// the terrain or not.
 		/// @param enable Whether to enable deep penetration checking or not. (default: true)
-		void EnableDeepCheck(const bool enable = true) { m_DeepCheck = enable; }
+		void EnableDeepCheck(const bool enable = true) { if (m_DeepCheck != enable) TouchCheckpoint(); m_DeepCheck = enable; }
 
 		/// Sets to force a deep checking of this' silhouette against the terrain
 		/// and create an outline hole in the terrain, generating particles of the
@@ -392,7 +392,7 @@ namespace RTE {
 
 		/// Sets the gib impulse limit for this MOSRotating, i.e. the amount of impulse force required in a frame to gib this MOSRotating.
 		/// @param newGibImpulseLimit The new gib impulse limit to use.
-		void SetGibImpulseLimit(float newGibImpulseLimit) { m_GibImpulseLimit = newGibImpulseLimit; }
+		void SetGibImpulseLimit(float newGibImpulseLimit) { if (m_GibImpulseLimit != newGibImpulseLimit) TouchCheckpoint(); m_GibImpulseLimit = newGibImpulseLimit; }
 
 		/// Gets the gib wound limit for this MOSRotating, i.e. the total number of wounds required to gib this MOSRotating. Does not include any Attachables.
 		/// @return
@@ -409,7 +409,7 @@ namespace RTE {
 		/// Sets the gib wound limit for this MOSRotating, i.e. the total number of wounds required to gib this MOSRotating.
 		/// This will not directly trigger gibbing, even if the limit is lower than the current number of wounds.
 		/// @param newLimit The new gib wound limit to use.
-		void SetGibWoundLimit(int newGibWoundLimit) { m_GibWoundLimit = newGibWoundLimit; }
+		void SetGibWoundLimit(int newGibWoundLimit) { if (m_GibWoundLimit != newGibWoundLimit) TouchCheckpoint(); m_GibWoundLimit = newGibWoundLimit; }
 
 		/// Gets the rate at which wound count of this MOSRotating will diminish the impulse limit.
 		/// @return The rate at which wound count affects the impulse limit.
@@ -421,7 +421,7 @@ namespace RTE {
 
 		/// Sets whether this MOSRotating should gib at the end of its lifetime instead of just being deleted.
 		/// @param shouldGibAtEndOfLifetime Whether or not this MOSRotating should gib at the end of its lifetime instead of just being deleted.
-		void SetGibAtEndOfLifetime(bool shouldGibAtEndOfLifetime) { m_GibAtEndOfLifetime = shouldGibAtEndOfLifetime; }
+		void SetGibAtEndOfLifetime(bool shouldGibAtEndOfLifetime) { if (m_GibAtEndOfLifetime != shouldGibAtEndOfLifetime) TouchCheckpoint(); m_GibAtEndOfLifetime = shouldGibAtEndOfLifetime; }
 
 		/// Gets the gib blast strength this MOSRotating, i.e. the strength with which Gibs and Attachables will be launched when this MOSRotating is gibbed.
 		/// @return The gib blast strength of this MOSRotating.
@@ -429,7 +429,7 @@ namespace RTE {
 
 		/// Sets the gib blast strength this MOSRotating, i.e. the strength with which Gibs and Attachables will be launched when this MOSRotating is gibbed.
 		/// @param newGibBlastStrength The new gib blast strength to use.
-		void SetGibBlastStrength(float newGibBlastStrength) { m_GibBlastStrength = newGibBlastStrength; }
+		void SetGibBlastStrength(float newGibBlastStrength) { if (m_GibBlastStrength != newGibBlastStrength) TouchCheckpoint(); m_GibBlastStrength = newGibBlastStrength; }
 
 		/// Gets the amount of screenshake this will cause upon gibbing.
 		/// @return The amount of screenshake this will cause when gibbing. If -1, this is calculated automatically.
@@ -507,7 +507,7 @@ namespace RTE {
 
 		/// Sets the velocity orientation scalar of this MOSRotating.
 		/// @param newValue New scalar value.
-		void SetOrientToVel(float newValue) { m_OrientToVel = newValue; }
+		void SetOrientToVel(float newValue) { if (m_OrientToVel != newValue) TouchCheckpoint(); m_OrientToVel = newValue; }
 
 		/// Sets this MOSRotating and all its children to drawn white for a specified amount of time.
 		/// @param durationMS Duration of flash in real time MS.
@@ -522,7 +522,7 @@ namespace RTE {
 
 		/// Sets the amount of impulse force exerted on this during the last frame.
 		/// @param impulse New impulse value
-		void SetTravelImpulse(Vector impulse) { m_TravelImpulse = impulse; }
+		void SetTravelImpulse(Vector impulse) { if (m_TravelImpulse != impulse) TouchCheckpoint(); m_TravelImpulse = impulse; }
 
 		/// Gets this MOSRotating's gib sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this MOSRotating's gib sound.
@@ -530,7 +530,7 @@ namespace RTE {
 
 		/// Sets this MOSRotating's gib sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this MOSRotating's gib sound.
-		void SetGibSound(SoundContainer* newSound) { m_GibSound = newSound; }
+		void SetGibSound(SoundContainer* newSound) { if (m_GibSound != newSound) TouchCheckpoint(); m_GibSound = newSound; }
 
 		/// Ensures all attachables and wounds are positioned and rotated correctly. Must be run when this MOSRotating is added to MovableMan to avoid issues with Attachables spawning in at (0, 0).
 		virtual void CorrectAttachableAndWoundPositionsAndRotations() const;

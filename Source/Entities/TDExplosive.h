@@ -56,7 +56,7 @@ namespace RTE {
 
 		/// Sets whether this TDExplosive is animated manually.
 		/// @param isAnimatedManually Whether or not to animate manually.
-		void SetAnimatedManually(bool isAnimatedManually) { m_IsAnimatedManually = isAnimatedManually; }
+		void SetAnimatedManually(bool isAnimatedManually) { if (m_IsAnimatedManually != isAnimatedManually) TouchCheckpoint(); m_IsAnimatedManually = isAnimatedManually; }
 #pragma endregion
 
 #pragma region Virtual Override Methods

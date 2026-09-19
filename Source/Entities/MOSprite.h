@@ -207,7 +207,7 @@ namespace RTE {
 		/// Sets the offset that the BITMAP has from the position of this
 		/// MOSprite.
 		/// @param newOffset A vector with the new offset.
-		void SetSpriteOffset(const Vector& newOffset) { m_SpriteOffset = newOffset; }
+		void SetSpriteOffset(const Vector& newOffset) { if (m_SpriteOffset != newOffset) TouchCheckpoint(); m_SpriteOffset = newOffset; }
 
 		/// Hard-sets the frame this sprite is supposed to show.
 		/// @param newFrame An unsigned int pecifiying the new frame.
@@ -355,7 +355,7 @@ namespace RTE {
 
 		/// Sets animation duration in ms
 		/// @param newDuration Animation duration in ms
-		void SetSpriteAnimDuration(int newDuration) { m_SpriteAnimDuration = newDuration; }
+		void SetSpriteAnimDuration(int newDuration) { if (m_SpriteAnimDuration != newDuration) TouchCheckpoint(); m_SpriteAnimDuration = newDuration; }
 
 		/// Updates this MovableObject. Supposed to be done every frame.
 		void Update() override;

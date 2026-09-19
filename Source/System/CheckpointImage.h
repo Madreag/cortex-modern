@@ -21,6 +21,9 @@ namespace RTE {
 		size_t tables = 0;       //!< Tables the last walk recorded.
 		size_t dirtyRoots = 0;   //!< Roots holding a table written since that walk.
 		size_t dirtyTables = 0;  //!< Tables written since that walk.
+		size_t values = 0;       //!< Script-owned native values the last walk wrote into a chunk.
+		size_t dirtyValues = 0;  //!< Recorded values mutated since that walk.
+		size_t uncacheableRoots = 0;  //!< Roots the last walk barred from reuse, having reached state no barrier watches.
 		bool unknownTable = false;  //!< A table no walk has seen was written.
 		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
 		size_t rootsReused = 0;     //!< Roots whose chunk the last capture reused byte for byte.
@@ -140,8 +143,13 @@ namespace RTE {
 		void BeginWalk(bool full = true);
 		void BeginRoot(uint64_t root);
 		void NoteTable(const void* table);
+		/// Records a script-owned native whose engine values this root's chunk carries as text.
+		void NoteValue(const void* value);
+		void NoteUncacheableRoots(size_t roots);
 		void EndWalk();
 		void OnTableWritten(const void* table);
+		/// Marks the root whose chunk carries this native's values; a native no walk recorded is not ours.
+		void OnValueWritten(const void* value);
 		void NoteRootReuse(size_t reused, size_t rewritten);
 		/// The roots holding a table written since the walk that recorded them.
 		std::unordered_set<uint64_t> DirtyRoots() const;
@@ -152,11 +160,15 @@ namespace RTE {
 	private:
 		mutable std::mutex m_Mutex;
 		std::unordered_map<const void*, uint64_t> m_TableRoots;
+		std::unordered_map<const void*, uint64_t> m_ValueRoots;
 		std::unordered_set<uint64_t> m_Roots;
 		std::unordered_set<uint64_t> m_DirtyRoots;
 		std::unordered_map<const void*, uint64_t> m_Walking;
+		std::unordered_map<const void*, uint64_t> m_WalkingValues;
 		std::unordered_set<uint64_t> m_WalkingRoots;
 		size_t m_DirtyTables = 0;
+		size_t m_DirtyValues = 0;
+		size_t m_UncacheableRoots = 0;
 		bool m_UnknownTable = false;
 		bool m_Walk = false;
 		bool m_FullWalk = true;
@@ -169,7 +181,13 @@ namespace RTE {
 	};
 
 	void ArmLuaCheckpointBarrier();
+	/// Arms the native-value half of the barrier alone, for a harness that cannot afford the table half.
+	void ArmLuaCheckpointValueBarrier();
 	uint64_t LuaCheckpointWriteGeneration();
+
+	/// Reports a write to a script-owned native whose values a cached chunk carries. The engine calls
+	/// this where it writes such an object behind Lua's back; Lua's own writes come through luabind.
+	void CheckpointValueWritten(const void* value);
 
 	/// How many table writes arrived from a thread the capture's freeze did not hold. The freeze is
 	/// meant to quiesce every Lua thread, so a non-zero count is a defect, not a tolerance.

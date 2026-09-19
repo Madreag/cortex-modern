@@ -52,7 +52,7 @@ namespace RTE {
 
 		/// Sets the rate at which these emissions are made, in particles per minute.
 		/// @param newPPM The emission rate in PPM.
-		void SetRate(float newPPM) { m_PPM = newPPM; }
+		void SetRate(float newPPM) { if (m_PPM != newPPM) TouchCheckpoint(); m_PPM = newPPM; }
 
 		/// Gets the number of extra particles that are bursted at the beginning of
 		/// emission.
@@ -62,7 +62,7 @@ namespace RTE {
 		/// Sets the number of extra particles that are bursted at the beginning of
 		/// emission.
 		/// @param newSize The burst size.
-		void SetBurstSize(int newSize) { m_BurstSize = newSize; }
+		void SetBurstSize(int newSize) { if (m_BurstSize != newSize) TouchCheckpoint(); m_BurstSize = newSize; }
 
 		/// Gets the angle spread of velocity of the emitted MO's to each side of
 		/// the m_EmitAngle angle. in radians. PI/2 would mean that MO's fly out to
@@ -74,7 +74,7 @@ namespace RTE {
 		/// the m_EmitAngle angle. in radians. PI/2 would mean that MO's fly out to
 		/// one side only, with the m_Rotation defining the middle of that half circle.
 		/// @param newSpread The emission spread in radians.
-		void SetSpread(float newSpread) { m_Spread = newSpread; }
+		void SetSpread(float newSpread) { if (m_Spread != newSpread) TouchCheckpoint(); m_Spread = newSpread; }
 
 		/// Gets the specified minimum velocity an emitted MO can have when emitted.
 		/// @return The min emission velocity in m/s.
@@ -82,7 +82,7 @@ namespace RTE {
 
 		/// Sets the specified minimum velocity an emitted MO can have when emitted.
 		/// @param newVel The min emission velocity in m/s.
-		void SetMinVelocity(float newVel) { m_MinVelocity = newVel; }
+		void SetMinVelocity(float newVel) { if (m_MinVelocity != newVel) TouchCheckpoint(); m_MinVelocity = newVel; }
 
 		/// Gets the specified maximum velocity an emitted MO can have when emitted.
 		/// @return The max emission velocity in m/s.
@@ -90,7 +90,7 @@ namespace RTE {
 
 		/// Gets the specified maximum velocity an emitted MO can have when emitted.
 		/// @param newVel The max emission velocity in m/s.
-		void SetMaxVelocity(float newVel) { m_MaxVelocity = newVel; }
+		void SetMaxVelocity(float newVel) { if (m_MaxVelocity != newVel) TouchCheckpoint(); m_MaxVelocity = newVel; }
 
 		/// Gets the specified variation in lifetime of the emitted particles.
 		/// @return The life variation rationally expressed.. 0.1 = up to 10% varitaion.
@@ -98,7 +98,7 @@ namespace RTE {
 
 		/// Sets the specified variation in lifetime of the emitted particles.
 		/// @param newVariation The life variation rationally expressed.. 0.1 = up to 10% varitaion.
-		void SetLifeVariation(float newVariation) { m_LifeVariation = newVariation; }
+		void SetLifeVariation(float newVariation) { if (m_LifeVariation != newVariation) TouchCheckpoint(); m_LifeVariation = newVariation; }
 
 		/// Indicates whether this emission is supposed to push its emitter back
 		/// because of recoil.
@@ -108,7 +108,7 @@ namespace RTE {
 		/// Sets whether this emission is supposed to push its emitter back
 		/// because of recoil.
 		/// @param newValue Whether recoil pushing is enabled or not for this emitter.
-		void SetPushesEmitter(bool newValue) { m_PushesEmitter = newValue; }
+		void SetPushesEmitter(bool newValue) { if (m_PushesEmitter != newValue) TouchCheckpoint(); m_PushesEmitter = newValue; }
 
 		/// Shows whether this should be emitting now or not, based on what its
 		/// start and end timers are set to.
@@ -158,11 +158,11 @@ namespace RTE {
 
 		/// Sets how much of the root parent's velocity this emission inherits
 		/// @param The proportion of the velocity inherited. 0.1 = 10% inheritance.
-		void SetInheritsVelocity(float newValue) { m_InheritsVel = newValue; }
+		void SetInheritsVelocity(float newValue) { if (m_InheritsVel != newValue) TouchCheckpoint(); m_InheritsVel = newValue; }
 
 		/// Sets how much of the root parent's angular velocity this emission inherits
 		/// @param The proportion of the angular velocity inherited. 0.1 = 10% inheritance.
-		void SetInheritsAngularVelocity(float newValue) { m_InheritsAngularVel = newValue; }
+		void SetInheritsAngularVelocity(float newValue) { if (m_InheritsAngularVel != newValue) TouchCheckpoint(); m_InheritsAngularVel = newValue; }
 
 		/// Gets offset of the emission point from Emitter's sprite center, which gets rotated with owner Emitter
 		/// @return Returns emission offset.
@@ -170,7 +170,7 @@ namespace RTE {
 
 		/// Sets offset of the emission point from Emitter's sprite center, which gets rotated with owner Emitter
 		/// @param offset New offset value.
-		void SetOffset(Vector offset) { m_Offset = offset; }
+		void SetOffset(Vector offset) { if (m_Offset != offset) TouchCheckpoint(); m_Offset = offset; }
 
 		/// Returns number of particles emitted per emission.
 		/// @return Number of particles emitted per emission.
@@ -178,7 +178,7 @@ namespace RTE {
 
 		/// Sets number of particles emitted per emission.
 		/// @param newParticleCount The new number of particles emitted per emission.
-		void SetParticleCount(int newParticleCount) { m_ParticleCount = newParticleCount; }
+		void SetParticleCount(int newParticleCount) { if (m_ParticleCount != newParticleCount) TouchCheckpoint(); m_ParticleCount = newParticleCount; }
 
 		/// Protected member variable and method declarations
 	protected:

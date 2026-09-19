@@ -141,13 +141,17 @@ namespace RTE {
 		/// @param newOwner A pointer to the new owner. Ownership is NOT transferred!
 		void SetOwner(MovableObject* newOwner) { m_OwnerMO = newOwner; }
 
+		/// Moves the owner's checkpoint stamp. An Atom is archived as part of its owner and is not an
+		/// Entity itself, so a write here has to reach the stamp the owner's shadow is keyed on.
+		void TouchCheckpoint();
+
 		/// Gets the group ID of this Atom.
 		/// @return The group ID of this Atom.
 		long GetSubID() const { return m_SubgroupID; }
 
 		/// Sets the subgroup ID of this Atom.
 		/// @param newID The new subgroup ID of this Atom.
-		void SetSubID(long newID = 0) { m_SubgroupID = newID; }
+		void SetSubID(long newID = 0) { if (m_SubgroupID != newID) TouchCheckpoint(); m_SubgroupID = newID; }
 
 		/// Gets the material of this Atom.
 		/// @return The material of this Atom.
@@ -155,7 +159,7 @@ namespace RTE {
 
 		/// Sets the material of this Atom.
 		/// @param newMat The new material of this Atom.
-		void SetMaterial(const Material* newMat) { m_Material = newMat; }
+		void SetMaterial(const Material* newMat) { if (m_Material != newMat) TouchCheckpoint(); m_Material = newMat; }
 
 		/// Gets the Color of this Atom's trail.
 		/// @return A Color object describing the trail color.
@@ -163,7 +167,7 @@ namespace RTE {
 
 		/// Sets the color value of this Atom's trail.
 		/// @param newTrailColor A Color object specifying the new trail color.
-		void SetTrailColor(Color newTrailColor) { m_TrailColor = newTrailColor; }
+		void SetTrailColor(Color newTrailColor) { TouchCheckpoint(); m_TrailColor = newTrailColor; }
 
 		/// Gets the longest a trail can be drawn, in pixels.
 		/// @return The new max length, in pixels. If 0, no trail is drawn.
@@ -171,7 +175,7 @@ namespace RTE {
 
 		/// Sets the longest a trail can be drawn, in pixels.
 		/// @param trailLength The new max length, in pixels. If 0, no trail is drawn.
-		void SetTrailLength(const int trailLength) { m_TrailLength = trailLength; }
+		void SetTrailLength(const int trailLength) { if (m_TrailLength != trailLength) TouchCheckpoint(); m_TrailLength = trailLength; }
 
 		/// Gets the length variation of this Atom's trail.
 		/// @return The length variation of this Atom's trail.
@@ -179,7 +183,7 @@ namespace RTE {
 
 		/// Sets the length variation scalar of a trail.
 		/// @param trailLengthVariation The new length variation scalar, 0 meaning no variation and 1 meaning full variation.
-		void SetTrailLengthVariation(float trailLengthVariation) { m_TrailLengthVariation = trailLengthVariation; }
+		void SetTrailLengthVariation(float trailLengthVariation) { if (m_TrailLengthVariation != trailLengthVariation) TouchCheckpoint(); m_TrailLengthVariation = trailLengthVariation; }
 
 		/// Gets the offset vector that was first set for this Atom. The GetOffset may have additional offsets baked into it if this is part of an group.
 		/// @return The original offset Vector.
@@ -191,7 +195,7 @@ namespace RTE {
 
 		/// Sets a new offset vector for the collision calculations.
 		/// @param newOffset A const reference to a Vector that will be used as offset.
-		void SetOffset(const Vector& newOffset) { m_Offset = newOffset; }
+		void SetOffset(const Vector& newOffset) { if (m_Offset != newOffset) TouchCheckpoint(); m_Offset = newOffset; }
 
 		/// Gets the surface normal of this vector, if it has been successfully calculated. If not, it'll be a 0 vector.
 		/// @return The current normalized surface normal Vector of this.
@@ -211,6 +215,7 @@ namespace RTE {
 		/// Folds the current trail points into the last-update set so a sim-bound draw renders the
 		/// full trail instead of the frame-timed partial one.
 		void CommitTrailPointsForSimDraw() {
+			if (!m_TrailPoints.empty()) TouchCheckpoint();
 			m_LastTrailPoints.insert(m_LastTrailPoints.end(), m_TrailPoints.begin(), m_TrailPoints.end());
 			m_TrailPoints.clear();
 		}
@@ -223,7 +228,7 @@ namespace RTE {
 
 		/// Sets the HitData struct this Atom uses to represent the last hit it experienced.
 		/// @param newHitData A reference to a HitData struct that will be copied to the Atom's.
-		void SetHitData(const HitData& newHitData) { m_LastHit = newHitData; }
+		void SetHitData(const HitData& newHitData) { TouchCheckpoint(); m_LastHit = newHitData; }
 
 		/// Checks whether this Atom is set to ignore collisions with the terrain.
 		/// @return Whether or not this is ignoring hits the with terrain.
@@ -240,7 +245,7 @@ namespace RTE {
 
 		/// Adds a MOID that this Atom should ignore collisions with during its next travel sequence.
 		/// @param ignore The MOID to add to the ignore list.
-		void AddMOIDToIgnore(MOID ignore) { m_IgnoreMOIDs.push_back(ignore); }
+		void AddMOIDToIgnore(MOID ignore) { TouchCheckpoint(); m_IgnoreMOIDs.push_back(ignore); }
 
 		/// AtomGroup may set this shared list of ignored MOIDs to avoid setting and removing ignored MOIDs for every atom one by one. The list is maintained only by AtomGroup, Atom never owns it.
 		/// @param ignoreMOIDsByGroup New MOIDs list to ignore.
@@ -248,7 +253,7 @@ namespace RTE {
 
 		/// Clear the list of MOIDs that this Atom is set to ignore collisions with during its next travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
-		void ClearMOIDIgnoreList() { m_IgnoreMOIDs.clear(); }
+		void ClearMOIDIgnoreList() { if (!m_IgnoreMOIDs.empty()) TouchCheckpoint(); m_IgnoreMOIDs.clear(); }
 
 		/// Gets the number of consecutive penetrations of Terrain that this Atom has successfully made, ending with wherever it is now.
 		/// @return The number of consecutive penetrations. Resets to 0 as soon as penetration streak ends.
@@ -320,7 +325,7 @@ namespace RTE {
 
 		/// Sets the ratio of how many steps are actually taken to how many calls to TakeStep are made.
 		/// @param newStepRatio A float specifying the new step ratio.
-		void SetStepRatio(float newStepRatio) { m_StepRatio = newStepRatio; }
+		void SetStepRatio(float newStepRatio) { if (m_StepRatio != newStepRatio) TouchCheckpoint(); m_StepRatio = newStepRatio; }
 
 		/// Indicates how many more steps remain to be taken to traverse the entire trajectory segment.
 		/// @return The number of steps that remain to be taken on the set trajectory segment.
@@ -331,9 +336,9 @@ namespace RTE {
 
 		/// The carried travel residue (previous move's fractional error + direction validity), for full-game saves.
 		int GetPrevError() const { return m_PrevError; }
-		void SetPrevError(int prevError) { m_PrevError = prevError; }
+		void SetPrevError(int prevError) { if (m_PrevError != prevError) TouchCheckpoint(); m_PrevError = prevError; }
 		bool GetChangedDir() const { return m_ChangedDir; }
-		void SetChangedDir(bool changedDir) { m_ChangedDir = changedDir; }
+		void SetChangedDir(bool changedDir) { if (m_ChangedDir != changedDir) TouchCheckpoint(); m_ChangedDir = changedDir; }
 
 		/// Packs the carried travel residue (fractional error, direction validity, terrain phase-out, penetration streak) into one saveable value.
 		long long PackTravelResidue() const {

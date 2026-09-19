@@ -6,6 +6,7 @@
 #include "SLTerrain.h"
 #include "ThreadMan.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "FaultInjection.h"
 #include "System.h"
 #include "Controller.h"
@@ -637,6 +638,8 @@ std::shared_ptr<volatile PathRequest> PathFinder::CalculatePathAsync(Vector star
 			    // Have to set to complete after the callback, so anything that blocks on it knows that the callback will have been called by now
 			    // This has the awkward side-effect that the complete flag is actually false during the callback - but that's fine, if it's called we know it's complete anyways
 			    request.complete = true;
+			    // A script holding this request has its fields in a cached graph chunk; nothing else reports this write.
+			    CheckpointValueWritten(&request);
 		    },
 		    pathRequest);
 	} catch (...) {
@@ -711,6 +714,7 @@ void PathFinder::PublishDeferredPathRequest(DeferredPathRequest& deferred) {
 	}
 	// Same order as the immediate path: the callback runs first, so anything blocking on complete knows it has run.
 	request.complete = true;
+	CheckpointValueWritten(&request);
 }
 
 void PathFinder::CommitPathRequestsThrough(uint64_t nowTick) {

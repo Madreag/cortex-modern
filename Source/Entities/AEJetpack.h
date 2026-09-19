@@ -66,7 +66,7 @@ namespace RTE {
 
 		/// Sets the amount of time this' jetpack can fire when filled, in ms.
 		/// @param newValue The amount of time this jetpack can fire when it's at max.
-		void SetJetTimeTotal(float newValue) { m_JetTimeTotal = newValue; }
+		void SetJetTimeTotal(float newValue) { if (m_JetTimeTotal != newValue) TouchCheckpoint(); m_JetTimeTotal = newValue; }
 
 		/// Gets the amount of time this jetpack can still fire until out, in ms.
 		/// @return The amount of time this jetpack can still fire before running out.
@@ -86,7 +86,7 @@ namespace RTE {
 
 		/// Sets the rate at which this AHuman's jetpack is replenished during downtime.
 		/// @param newValue The rate at which the jetpack is replenished.
-		void SetJetReplenishRate(float newValue) { m_JetReplenishRate = newValue; }
+		void SetJetReplenishRate(float newValue) { if (m_JetReplenishRate != newValue) TouchCheckpoint(); m_JetReplenishRate = newValue; }
 
 		/// Gets the rate at which this AHuman's jetpack is replenished during downtime.
 		/// @return The rate at which the jetpack is replenished.
@@ -94,7 +94,7 @@ namespace RTE {
 
 		/// Sets the rate at which this AHuman's jetpack is replenished during downtime.
 		/// @param newValue The rate at which the jetpack is replenished.
-		void SetMinimumFuelRatio(float newValue) { m_MinimumFuelRatio = newValue; }
+		void SetMinimumFuelRatio(float newValue) { if (m_MinimumFuelRatio != newValue) TouchCheckpoint(); m_MinimumFuelRatio = newValue; }
 
 		/// Gets the scalar ratio at which this jetpack's thrust angle follows the aim angle of the user.
 		/// @return The ratio at which this jetpack follows the aim angle of the user.
@@ -102,7 +102,7 @@ namespace RTE {
 
 		/// Sets the scalar ratio at which this jetpack's thrust angle follows the aim angle of the user.
 		/// @param newValue The ratio at which this jetpack follows the aim angle of the user.
-		void SetJetAngleRange(float newValue) { m_JetAngleRange = newValue; }
+		void SetJetAngleRange(float newValue) { if (m_JetAngleRange != newValue) TouchCheckpoint(); m_JetAngleRange = newValue; }
 
 		/// Gets the type of this jetpack.
 		/// @return The type of this jetpack.
@@ -110,7 +110,7 @@ namespace RTE {
 
 		/// Sets the type of this jetpack.
 		/// @param newType The new type of this jetpack.
-		void SetJetpackType(JetpackType newType) { m_JetpackType = newType; }
+		void SetJetpackType(JetpackType newType) { if (m_JetpackType != newType) TouchCheckpoint(); m_JetpackType = newType; }
 
 		/// Returns whether the angle of this jetpack can adjust while firing, or if it can only be aimed while off.
 		/// @return Whether the angle of this jetpack can adjust while firing.
@@ -118,7 +118,7 @@ namespace RTE {
 
 		/// Sets whether the angle of this can adjust while firing, or if it can only be aimed while off.
 		/// @param newValue The new value for whether the angle of this jetpack can adjust while firing.
-		void SetCanAdjustAngleWhileFiring(bool newValue) { m_CanAdjustAngleWhileFiring = newValue; }
+		void SetCanAdjustAngleWhileFiring(bool newValue) { if (m_CanAdjustAngleWhileFiring != newValue) TouchCheckpoint(); m_CanAdjustAngleWhileFiring = newValue; }
 
 		/// Returns whether this jetpack adjusts it's throttle to balance for extra weight.
 		/// @return Whether this jetpack adjusts it's throttle to balance for extra weight.
@@ -126,7 +126,7 @@ namespace RTE {
 
 		/// Sets whether this jetpack adjusts it's throttle to balance for extra weight.
 		/// @param newValue The new value for whether this jetpack adjusts it's throttle to balance for extra weight.
-		void SetAdjustsThrottleForWeight(bool newValue) { m_AdjustsThrottleForWeight = newValue; }
+		void SetAdjustsThrottleForWeight(bool newValue) { if (m_AdjustsThrottleForWeight != newValue) TouchCheckpoint(); m_AdjustsThrottleForWeight = newValue; }
 
 	protected:
 		static Entity::ClassInfo m_sClass;

@@ -111,7 +111,7 @@ namespace RTE {
 
 		/// Sets the color value of this MOPixel.
 		/// @param newColor A Color object specifying the new color index value.
-		void SetColor(Color newColor) { m_Color = newColor; }
+		void SetColor(Color newColor) { TouchCheckpoint(); m_Color = newColor; }
 
 		/// Sets the color value of this MOPixel via index.
 		/// @param newColor An int specifying the new color index value.
@@ -139,7 +139,7 @@ namespace RTE {
 
 		/// Sets this MOPixel's staininess, which defines how likely a pixel is to stain a surface when it collides with it.
 		/// @param staininess The new staininess value.
-		void SetStaininess(float staininess) { m_Staininess = staininess; }
+		void SetStaininess(float staininess) { if (m_Staininess != staininess) TouchCheckpoint(); m_Staininess = staininess; }
 
 		/// Whether a set of X, Y coordinates overlap us (in world space).
 		/// @param pixelX The given X coordinate, in world space.

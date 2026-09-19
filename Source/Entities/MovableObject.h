@@ -263,7 +263,7 @@ namespace RTE {
 		/// Sets How this is affected by global effects, from +1.0 to -1.0.
 		/// Something with a negative value will 'float' upward.
 		/// @param newValue The global acceleration scalar.
-		void SetGlobalAccScalar(float newValue) { m_GlobalAccScalar = newValue; }
+		void SetGlobalAccScalar(float newValue) { if (m_GlobalAccScalar != newValue) TouchCheckpoint(); m_GlobalAccScalar = newValue; }
 
 		/// How much this is affected by air resistance when traveling over a
 		/// second, 0 to 1.0, with 0 as default
@@ -273,7 +273,7 @@ namespace RTE {
 		/// Sets how much this is affected by air resistance when traveling over a
 		/// second, 0 to 1.0, with 0 as default
 		/// @param newValue The air resistance coefficient.
-		void SetAirResistance(float newValue) { m_AirResistance = newValue; }
+		void SetAirResistance(float newValue) { if (m_AirResistance != newValue) TouchCheckpoint(); m_AirResistance = newValue; }
 
 		/// At which threshold of velocity, in m/s, the effect of AirResistance
 		/// kicks in.
@@ -283,7 +283,7 @@ namespace RTE {
 		/// Sets at which threshold of velocity, in m/s, the effect of AirResistance
 		/// kicks in.
 		/// @param newValue The air threshold speed.
-		void SetAirThreshold(float newValue) { m_AirThreshold = newValue; }
+		void SetAirThreshold(float newValue) { if (m_AirThreshold != newValue) TouchCheckpoint(); m_AirThreshold = newValue; }
 
 		/// Gets real time age of this MovableObject.
 		/// @return A unsigned long describing the current age in ms.
@@ -369,7 +369,7 @@ namespace RTE {
 
 		/// Sets whether this will collide with any other MO of the same team.
 		/// @param ignoreTeam Whether this can hit or get hit by other MOs of the same team. (default: true)
-		void SetIgnoresTeamHits(bool ignoreTeam = true) { m_IgnoresTeamHits = ignoreTeam; }
+		void SetIgnoresTeamHits(bool ignoreTeam = true) { if (m_IgnoresTeamHits != ignoreTeam) TouchCheckpoint(); m_IgnoresTeamHits = ignoreTeam; }
 
 		/// Tells whether this will collide with any other MO of the same team.
 		/// @return Whether this can hit or get hit by other MOs of the same team.
@@ -401,7 +401,7 @@ namespace RTE {
 
 		/// Sets whether this will collide with any Terrain
 		/// @param ignores Whether this can hit terrain.
-		void SetIgnoreTerrain(bool ignores) { m_IgnoreTerrain = ignores; }
+		void SetIgnoreTerrain(bool ignores) { if (m_IgnoreTerrain != ignores) TouchCheckpoint(); m_IgnoreTerrain = ignores; }
 
 		/// Gets whether this MO ignores collisions with actors.
 		/// @return Whether this MO ignores collisions with actors.
@@ -409,7 +409,7 @@ namespace RTE {
 
 		/// Sets whether this MO ignores collisions with actors.
 		/// @param value Whether this MO will ignore collisions with actors.
-		void SetIgnoresActorHits(bool value) { m_IgnoresActorHits = value; }
+		void SetIgnoresActorHits(bool value) { if (m_IgnoresActorHits != value) TouchCheckpoint(); m_IgnoresActorHits = value; }
 
 		/// Gets the main material of this MovableObject.
 		/// @return The the material of this MovableObject.
@@ -435,11 +435,11 @@ namespace RTE {
 
 		/// Sets the mass of this MovableObject.
 		/// @param newMass A float specifying the new mass value in Kilograms (kg).
-		virtual void SetMass(const float newMass) { m_Mass = newMass; }
+		virtual void SetMass(const float newMass) { if (m_Mass != newMass) TouchCheckpoint(); m_Mass = newMass; }
 
 		/// Sets the position at the start of the sim update.
 		/// @param newPrevPos A Vector specifying the new 'prev' pos.
-		void SetPrevPos(const Vector& newPrevPos) { m_PrevPos = newPrevPos; }
+		void SetPrevPos(const Vector& newPrevPos) { if (m_PrevPos != newPrevPos) TouchCheckpoint(); m_PrevPos = newPrevPos; }
 
 		/// Teleports this MovableObject to a new absolute position. m_PrevPos is snapped so the render lerp does not fly the sprite from its old location to the new one.
 		/// Travel-driven motion bypasses this by writing m_Pos directly so PreTravel can still snapshot a meaningful prev.
@@ -460,7 +460,7 @@ namespace RTE {
 
 		/// Sets the current absolute angle of rotation of this MovableObject's effect.
 		/// @param newAngle The new absolute angle in radians.
-		void SetEffectRotAngle(float newAngle) { m_EffectRotAngle = newAngle; }
+		void SetEffectRotAngle(float newAngle) { if (m_EffectRotAngle != newAngle) TouchCheckpoint(); m_EffectRotAngle = newAngle; }
 
 		/// Gets the file path of this MovableObject's current screen effect.
 		/// @return A string containing the file path of the screen effect.
@@ -512,7 +512,7 @@ namespace RTE {
 
 		/// Sets whether or not to draw this MovableObject's effect every frame.
 		/// @param newValue Boolean indicating whether or not to draw the effect.
-		void SetPostEffectEnabled(bool newValue) { m_PostEffectEnabled = newValue; }
+		void SetPostEffectEnabled(bool newValue) { if (m_PostEffectEnabled != newValue) TouchCheckpoint(); m_PostEffectEnabled = newValue; }
 
 		/// Gets whether or not this MovableObject's effect can be obscured.
 		/// @return Boolean indicating whether or not the effect can be obscured.
@@ -520,7 +520,7 @@ namespace RTE {
 
 		/// Sets whether or not this MovableObject's effect can be obscured.
 		/// @param newValue Boolean indicating whether or not the effect can be obscured.
-		void SetEffectAlwaysShows(bool newValue) { m_EffectAlwaysShows = newValue; }
+		void SetEffectAlwaysShows(bool newValue) { if (m_EffectAlwaysShows != newValue) TouchCheckpoint(); m_EffectAlwaysShows = newValue; }
 
 		/// Sets the current angular velocity of this MovableObject. Positive is
 		/// a counter clockwise rotation.
@@ -529,11 +529,11 @@ namespace RTE {
 
 		/// Sets the current scale of this MOSRotating. This is mostly for fun.
 		/// @param newScale The new normalized scale.
-		void SetScale(float newScale) { m_Scale = newScale; }
+		void SetScale(float newScale) { if (m_Scale != newScale) TouchCheckpoint(); m_Scale = newScale; }
 
 		/// Sets the amount of time this MovableObject will exist.
 		/// @param newLifetime A unsigned long specifying amount of time in ms. 0 means unlimited life. (default: 0)
-		void SetLifetime(const int newLifetime = 0) { m_Lifetime = newLifetime; }
+		void SetLifetime(const int newLifetime = 0) { if (m_Lifetime != newLifetime) TouchCheckpoint(); m_Lifetime = newLifetime; }
 
 		/// Sets this' age timer to a specific value, in ms.
 		/// @param newAge The new age of this, in MS. (default: 0) { m_AgeTimer.SetElapsedSimTimeMS(newAge)
@@ -557,17 +557,17 @@ namespace RTE {
 		/// Sets the sharpness factor of this MO.
 		/// @param sharpness The sharpness factor of this MO. 1.0 means normal sharpness, no alter-
 		/// ation to any of the impulses.
-		void SetSharpness(const float sharpness) { m_Sharpness = sharpness; }
+		void SetSharpness(const float sharpness) { if (m_Sharpness != sharpness) TouchCheckpoint(); m_Sharpness = sharpness; }
 
 		/// Sets this MovableObject to collide with other MovableObjects during
 		/// travel.
 		/// @param hitMOs Whether to hit other MO's during travel, or not. (default: true)
-		void SetToHitMOs(bool hitMOs = true) { m_HitsMOs = hitMOs; }
+		void SetToHitMOs(bool hitMOs = true) { if (m_HitsMOs != hitMOs) TouchCheckpoint(); m_HitsMOs = hitMOs; }
 
 		/// Sets this MovableObject to be able to be collided with by other
 		/// MovableObjects during their travel.
 		/// @param getHitByMOs Whether this should get hit by other MO's during travel, or not. (default: true)
-		void SetToGetHitByMOs(bool getHitByMOs = true) { m_GetsHitByMOs = getHitByMOs; }
+		void SetToGetHitByMOs(bool getHitByMOs = true) { if (m_GetsHitByMOs != getHitByMOs) TouchCheckpoint(); m_GetsHitByMOs = getHitByMOs; }
 
 		/// Gets the MO this MO is set not to hit even when MO hitting is enabled on this MO.
 		/// @return The MO this MO is set not to hit.
@@ -592,17 +592,17 @@ namespace RTE {
 
 		/// Enables or disables double drawing of this across wrapping seams.
 		/// @param wrapDraw Wheter to enable or not. (default: true)
-		void SetWrapDoubleDrawing(bool wrapDraw = true) { m_WrapDoubleDraw = wrapDraw; }
+		void SetWrapDoubleDrawing(bool wrapDraw = true) { if (m_WrapDoubleDraw != wrapDraw) TouchCheckpoint(); m_WrapDoubleDraw = wrapDraw; }
 
 		/// Marks this MovableObject for settling onto the terrain at the end of
 		/// the MovableMan update.
 		/// @param toSettle Whether to mark this MO for settling or not. (default: true)
-		void SetToSettle(bool toSettle = true) { m_ToSettle = toSettle; }
+		void SetToSettle(bool toSettle = true) { if (m_ToSettle != toSettle) TouchCheckpoint(); m_ToSettle = toSettle; }
 
 		/// Marks this MovableObject for deletion at the end of the MovableMan
 		/// update.
 		/// @param toDelete Whether to mark this MO for deletion or not. (default: true)
-		void SetToDelete(bool toDelete = true) { m_ToDelete = toDelete; }
+		void SetToDelete(bool toDelete = true) { if (m_ToDelete != toDelete) TouchCheckpoint(); m_ToDelete = toDelete; }
 
 		/// Tells if this MovableObject is marked for deletion at the end of the
 		/// update.
@@ -617,7 +617,7 @@ namespace RTE {
 		/// Sets whether this is mission critical and should therefore NEVER be
 		/// settled or otherwise destroyed during teh course of a mission.
 		/// @param missionCritical Whether this should be immune to settling and destruction.
-		void SetMissionCritical(bool missionCritical) { m_MissionCritical = missionCritical; }
+		void SetMissionCritical(bool missionCritical) { if (m_MissionCritical != missionCritical) TouchCheckpoint(); m_MissionCritical = missionCritical; }
 
 		/// Shows whether this can be squished by getting pushed into the ground.
 		/// @return Whetehr this should be immune to squishing or not.
@@ -625,7 +625,7 @@ namespace RTE {
 
 		/// Tells whether this Actor's HUD is drawn or not.
 		/// @return Whether this' HUD gets drawn or not.
-		void SetHUDVisible(bool visible) { m_HUDVisible = visible; }
+		void SetHUDVisible(bool visible) { if (m_HUDVisible != visible) TouchCheckpoint(); m_HUDVisible = visible; }
 
 		/// Tells whether this Actor's HUD is drawn or not.
 		/// @return Whether this' HUD gets drawn or not.
@@ -1128,7 +1128,7 @@ namespace RTE {
 
 		/// Sets current rest threshold for this MO
 		/// @param newRestThreshold New rest threshold value
-		void SetRestThreshold(int newRestThreshold) { m_RestThreshold = newRestThreshold; }
+		void SetRestThreshold(int newRestThreshold) { if (m_RestThreshold != newRestThreshold) TouchCheckpoint(); m_RestThreshold = newRestThreshold; }
 
 		/// Returns the next unique id for MO's and increments unique ID counter
 		/// @return Returns the next unique id.
@@ -1206,7 +1206,7 @@ namespace RTE {
 		/// If not zero applyies specified ammount of damage points to actors on
 		/// collision even without penetration.
 		/// @param value Amount of damage to apply.
-		void SetDamageOnCollision(float value) { m_DamageOnCollision = value; }
+		void SetDamageOnCollision(float value) { if (m_DamageOnCollision != value) TouchCheckpoint(); m_DamageOnCollision = value; }
 
 		/// If not zero applies specified ammount of damage points to actors on
 		/// collision if penetration occured.
@@ -1216,7 +1216,7 @@ namespace RTE {
 		/// If not zero applies specified ammount of damage points to actors on
 		/// collision if penetration occured.
 		/// @param value Amount of damage to apply.
-		void SetDamageOnPenetration(float value) { m_DamageOnPenetration = value; }
+		void SetDamageOnPenetration(float value) { if (m_DamageOnPenetration != value) TouchCheckpoint(); m_DamageOnPenetration = value; }
 
 		/// Returns damage multiplier transferred to wound inflicted by this object on penetration
 		/// @return Damage multiplier to apply to wound.
@@ -1224,7 +1224,7 @@ namespace RTE {
 
 		/// Sets damage multiplier transferred to wound inflicted by this object on penetration
 		/// @param value New damage multiplier to apply to wound.
-		void SetWoundDamageMultiplier(float value) { m_WoundDamageMultiplier = value; }
+		void SetWoundDamageMultiplier(float value) { if (m_WoundDamageMultiplier != value) TouchCheckpoint(); m_WoundDamageMultiplier = value; }
 
 		/// Gets whether or not this MovableObject should apply wound damage when it collides with another MovableObject.
 		/// @return Whether or not this MovableObject should apply wound damage when it collides with another MovableObject.
@@ -1232,7 +1232,7 @@ namespace RTE {
 
 		/// Sets whether or not this MovableObject should apply wound damage when it collides with another MovableObject.
 		/// @param applyWoundDamageOnCollision Whether or not this MovableObject should apply wound damage on collision.
-		void SetApplyWoundDamageOnCollision(bool applyWoundDamageOnCollision) { m_ApplyWoundDamageOnCollision = applyWoundDamageOnCollision; }
+		void SetApplyWoundDamageOnCollision(bool applyWoundDamageOnCollision) { if (m_ApplyWoundDamageOnCollision != applyWoundDamageOnCollision) TouchCheckpoint(); m_ApplyWoundDamageOnCollision = applyWoundDamageOnCollision; }
 
 		/// Gets whether or not this MovableObject should apply burst wound damage when it collides with another MovableObject.
 		/// @return Whether or not this MovableObject should apply burst wound damage when it collides with another MovableObject.
@@ -1240,7 +1240,7 @@ namespace RTE {
 
 		/// Sets whether or not this MovableObject should apply burst wound damage when it collides with another MovableObject.
 		/// @param applyWoundDamageOnCollision Whether or not this MovableObject should apply burst wound damage on collision.
-		void SetApplyWoundBurstDamageOnCollision(bool applyWoundBurstDamageOnCollision) { m_ApplyWoundBurstDamageOnCollision = applyWoundBurstDamageOnCollision; }
+		void SetApplyWoundBurstDamageOnCollision(bool applyWoundBurstDamageOnCollision) { if (m_ApplyWoundBurstDamageOnCollision != applyWoundBurstDamageOnCollision) TouchCheckpoint(); m_ApplyWoundBurstDamageOnCollision = applyWoundBurstDamageOnCollision; }
 
 		/// Puts all MOIDs associated with this MO and all it's descendants into MOIDs vector
 		/// @param MOIDs Vector to store MOIDs
@@ -1556,6 +1556,12 @@ namespace RTE {
 	private:
 		std::string SaveMovableObjectRuntime() const;
 		bool LoadMovableObjectRuntime(std::string_view text, bool validateOnly = false);
+
+		/// What the checkpoint writes for the effect's rotation. An angle the render RNG redraws every
+		/// frame is presentation the next Update replaces anyway, and writing it would put a per-machine
+		/// value in the archive and move the object's text every tick; an angle a script or a preset set
+		/// is the object's own state and is written as it stands.
+		float CheckpointEffectRotAngle() const { return m_RandomizeEffectRotAngleEveryFrame ? 0.0F : m_EffectRotAngle; }
 
 		/// Clears all the member variables of this MovableObject, effectively resetting the members of this abstraction level only.
 		void Clear();

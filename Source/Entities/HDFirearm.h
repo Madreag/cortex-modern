@@ -66,7 +66,7 @@ namespace RTE {
 		/// Sets reload end offset, in ms. This is how early the ReloadEnd
 		/// sound is played compared to actual end of reload.
 		/// @param newRate The new reload end offset, in ms.
-		void SetReloadEndOffset(int newRate) { m_ReloadEndOffset = newRate; }
+		void SetReloadEndOffset(int newRate) { if (m_ReloadEndOffset != newRate) TouchCheckpoint(); m_ReloadEndOffset = newRate; }
 
 		/// Gets the rate of fire of this. This applies even if semi-auto. it
 		/// limits how quickly a new round can be fired after the last.
@@ -76,7 +76,7 @@ namespace RTE {
 		/// Sets the rate of fire of this. This applies even if semi-auto. it
 		/// limits how quickly a new round can be fired after the last.
 		/// @param newRate The new rate of fire, in rounds per min.
-		void SetRateOfFire(int newRate) { m_RateOfFire = newRate; }
+		void SetRateOfFire(int newRate) { if (m_RateOfFire != newRate) TouchCheckpoint(); m_RateOfFire = newRate; }
 
 		/// Gets the minimum time in between shots, in MS.
 		/// @return The minimum time in between shots, in MS.
@@ -141,7 +141,7 @@ namespace RTE {
 
 		/// Sets the delay before firing.
 		/// @param delay An int with the activation delay in ms.
-		void SetActivationDelay(int delay) { m_ActivationDelay = delay; };
+		void SetActivationDelay(int delay) { if (m_ActivationDelay != delay) TouchCheckpoint(); m_ActivationDelay = delay; };
 
 		/// Gets the delay between release of activation and another can be started.
 		/// @return An int with the delay in ms.
@@ -149,7 +149,7 @@ namespace RTE {
 
 		/// Sets the delay between release of activation and another can be started.
 		/// @param delay An int with the delay in ms.
-		void SetDeactivationDelay(int delay) { m_DeactivationDelay = delay; };
+		void SetDeactivationDelay(int delay) { if (m_DeactivationDelay != delay) TouchCheckpoint(); m_DeactivationDelay = delay; };
 
 		/// Gets the base time this HDFirearm takes to reload, in milliseconds.
 		/// @return The base time this HeldDevice takes to reload, in milliseconds.
@@ -172,7 +172,7 @@ namespace RTE {
 
 		/// Sets whether or not this HDFirearm allows dual-reloading.
 		/// @param newDualReloadable The new value for whether or not this HDFirearm should allow dual-reloading.
-		void SetDualReloadable(bool newDualReloadable) { m_DualReloadable = newDualReloadable; }
+		void SetDualReloadable(bool newDualReloadable) { if (m_DualReloadable != newDualReloadable) TouchCheckpoint(); m_DualReloadable = newDualReloadable; }
 
 		/// Gets the multiplier to be applied to reload time when this HDFirearm is being reloaded one-handed.
 		/// @return The multiplier to be applied to reload time when this HDFirearm is being reloaded one-handed.
@@ -180,7 +180,7 @@ namespace RTE {
 
 		/// Sets the multiplier to be applied to reload time when this HDFirearm is being reloaded one-handed.
 		/// @param newDualReloadTimeMultiplier The new multiplier to be applied to reload time when this HDFirearm is being reloaded one-handed.
-		void SetOneHandedReloadTimeMultiplier(float newOneHandedReloadTimeMultiplier) { m_OneHandedReloadTimeMultiplier = newOneHandedReloadTimeMultiplier; }
+		void SetOneHandedReloadTimeMultiplier(float newOneHandedReloadTimeMultiplier) { if (m_OneHandedReloadTimeMultiplier != newOneHandedReloadTimeMultiplier) TouchCheckpoint(); m_OneHandedReloadTimeMultiplier = newOneHandedReloadTimeMultiplier; }
 
 		/// Gets the reload angle this HDFirearm will use when support is available.
 		/// @return The reload angle this HDFirearm will use when support is available, in radians.
@@ -188,7 +188,7 @@ namespace RTE {
 
 		/// Sets the reload angle this HDFirearm should use when support is available.
 		/// @param newReloadAngle The new reload angle this HDFirearm should use when support is available.
-		void SetReloadAngle(float newReloadAngle) { m_ReloadAngle = newReloadAngle; }
+		void SetReloadAngle(float newReloadAngle) { if (m_ReloadAngle != newReloadAngle) TouchCheckpoint(); m_ReloadAngle = newReloadAngle; }
 
 		/// Gets the reload angle this HDFirearm will use when support is not available.
 		/// @return The reload angle this HDFirearm will use when support is not available, in radians.
@@ -196,7 +196,7 @@ namespace RTE {
 
 		/// Sets the reload angle this HDFirearm should use when support is not available.
 		/// @param newOneHandedReloadAngle The new reload angle this HDFirearm should use when support is not available.
-		void SetOneHandedReloadAngle(float newOneHandedReloadAngle) { m_OneHandedReloadAngle = newOneHandedReloadAngle; }
+		void SetOneHandedReloadAngle(float newOneHandedReloadAngle) { if (m_OneHandedReloadAngle != newOneHandedReloadAngle) TouchCheckpoint(); m_OneHandedReloadAngle = newOneHandedReloadAngle; }
 
 		/// Gets the reload angle this HDFirearm is currently using, based on whether or not support is available.
 		/// @return The current reload angle of this HDFirearm, in radians.
@@ -208,7 +208,7 @@ namespace RTE {
 
 		/// Sets the range of normal shaking of entire weapon.
 		/// @param range A float with the range in degrees.
-		void SetShakeRange(float range) { m_ShakeRange = range; };
+		void SetShakeRange(float range) { if (m_ShakeRange != range) TouchCheckpoint(); m_ShakeRange = range; };
 
 		/// Gets the range of shaking of entire weapon during sharp aiming.
 		/// @return A float with the range in degrees.
@@ -216,7 +216,7 @@ namespace RTE {
 
 		/// Sets the range of shaking of entire weapon during sharp aiming.
 		/// @param range A float with the range in degrees.
-		void SetSharpShakeRange(float range) { m_SharpShakeRange = range; };
+		void SetSharpShakeRange(float range) { if (m_SharpShakeRange != range) TouchCheckpoint(); m_SharpShakeRange = range; };
 
 		/// Gets the factor for how much more weapon shakes if it isn't supported
 		/// by a second hand.
@@ -226,7 +226,7 @@ namespace RTE {
 		/// Sets the factor for how much more weapon shakes if it isn't supported
 		/// by a second hand.
 		/// @param factor A float with the factor.
-		void SetNoSupportFactor(float factor) { m_NoSupportFactor = factor; };
+		void SetNoSupportFactor(float factor) { if (m_NoSupportFactor != factor) TouchCheckpoint(); m_NoSupportFactor = factor; };
 
 		/// Gets the range of spread angle of fired particles, in one direction.
 		/// @return A float with the range in degrees.
@@ -234,7 +234,7 @@ namespace RTE {
 
 		/// Sets the range of spread angle of fired particles, in one direction.
 		/// @param range A float with the range in degrees.
-		void SetParticleSpreadRange(float range) { m_ParticleSpreadRange = range; };
+		void SetParticleSpreadRange(float range) { if (m_ParticleSpreadRange != range) TouchCheckpoint(); m_ParticleSpreadRange = range; };
 
 		/// Gets the random velocity variation scalar at which this HDFirearm's shell is to be ejected.
 		/// @return A float with the scalar value.
@@ -242,12 +242,12 @@ namespace RTE {
 
 		/// Sets the random velocity variation scalar at which this HDFirearm's shell is to be ejected.
 		/// @param newValue The new velocity variation scalar.
-		void SetShellVelVariation(float newVariation) { m_ShellVelVariation = newVariation; }
+		void SetShellVelVariation(float newVariation) { if (m_ShellVelVariation != newVariation) TouchCheckpoint(); m_ShellVelVariation = newVariation; }
 
 		/// Sets the stiffness scalar of the joint of this HDFirearm. Unlike Attachable::SetJointStiffness, there are no limitations on this value.
 		/// 1.0 means impulse forces on this attachable will be transferred to the parent with 100% strength, 0 means they will not transfer at all, negative values will apply negative force, which may behave oddly.
 		/// @param jointStiffness A float describing the normalized stiffness scalar of this Attachable's joint.
-		void SetJointStiffness(float jointStiffness) override { m_JointStiffness = jointStiffness; }
+		void SetJointStiffness(float jointStiffness) override { if (m_JointStiffness != jointStiffness) TouchCheckpoint(); m_JointStiffness = jointStiffness; }
 
 		/// Gets the velocity the AI use when aiming this weapon.
 		/// @return A float with the velocity in m/s.
@@ -295,7 +295,7 @@ namespace RTE {
 		/// Sets the unrotated relative offset from the position to the muzzle or
 		/// other equivalent point of this.
 		/// @param newOffset New offset value.
-		void SetMuzzleOffset(Vector newOffset) override { m_MuzzleOff = newOffset; }
+		void SetMuzzleOffset(Vector newOffset) override { if (m_MuzzleOff != newOffset) TouchCheckpoint(); m_MuzzleOff = newOffset; }
 
 		/// Gets the absolute position of the Shell ejection point.
 		/// @return A vector describing the absolute world coordinates for the Shell
@@ -309,7 +309,7 @@ namespace RTE {
 
 		/// Sets the unrotated relative offset from the position to the Shell ejection point.
 		/// @param newOffset New offset value.
-		void SetEjectionOffset(Vector newOffset) { m_EjectOff = newOffset; }
+		void SetEjectionOffset(Vector newOffset) { if (m_EjectOff != newOffset) TouchCheckpoint(); m_EjectOff = newOffset; }
 
 		/// Gets this HDFirearm's pre fire sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's pre fire sound.
@@ -317,7 +317,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's pre fire sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's pre fire sound.
-		void SetPreFireSound(SoundContainer* newSound) { m_PreFireSound = newSound; }
+		void SetPreFireSound(SoundContainer* newSound) { if (m_PreFireSound != newSound) TouchCheckpoint(); m_PreFireSound = newSound; }
 
 		/// Gets this HDFirearm's fire sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's fire sound.
@@ -325,7 +325,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's fire sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's fire sound.
-		void SetFireSound(SoundContainer* newSound) { m_FireSound = newSound; }
+		void SetFireSound(SoundContainer* newSound) { if (m_FireSound != newSound) TouchCheckpoint(); m_FireSound = newSound; }
 
 		/// Gets this HDFirearm's fire echo sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's fire echo sound.
@@ -333,7 +333,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's fire echo sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's fire echo sound.
-		void SetFireEchoSound(SoundContainer* newSound) { m_FireEchoSound = newSound; }
+		void SetFireEchoSound(SoundContainer* newSound) { if (m_FireEchoSound != newSound) TouchCheckpoint(); m_FireEchoSound = newSound; }
 
 		/// Gets this HDFirearm's active sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's active sound.
@@ -341,7 +341,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's active sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's active sound.
-		void SetActiveSound(SoundContainer* newSound) { m_ActiveSound = newSound; }
+		void SetActiveSound(SoundContainer* newSound) { if (m_ActiveSound != newSound) TouchCheckpoint(); m_ActiveSound = newSound; }
 
 		/// Gets this HDFirearm's deactivation sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's deactivation sound.
@@ -349,7 +349,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's deactivation sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's deactivation sound.
-		void SetDeactivationSound(SoundContainer* newSound) { m_DeactivationSound = newSound; }
+		void SetDeactivationSound(SoundContainer* newSound) { if (m_DeactivationSound != newSound) TouchCheckpoint(); m_DeactivationSound = newSound; }
 
 		/// Gets this HDFirearm's empty sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's empty sound.
@@ -357,7 +357,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's empty sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's empty sound.
-		void SetEmptySound(SoundContainer* newSound) { m_EmptySound = newSound; }
+		void SetEmptySound(SoundContainer* newSound) { if (m_EmptySound != newSound) TouchCheckpoint(); m_EmptySound = newSound; }
 
 		/// Gets this HDFirearm's reload start sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's reload start sound.
@@ -365,7 +365,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's reload start sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's reload start sound.
-		void SetReloadStartSound(SoundContainer* newSound) { m_ReloadStartSound = newSound; }
+		void SetReloadStartSound(SoundContainer* newSound) { if (m_ReloadStartSound != newSound) TouchCheckpoint(); m_ReloadStartSound = newSound; }
 
 		/// Gets this HDFirearm's reload end sound. Ownership is NOT transferred!
 		/// @return The SoundContainer for this HDFirearm's reload end sound.
@@ -373,7 +373,7 @@ namespace RTE {
 
 		/// Sets this HDFirearm's reload end sound. Ownership IS transferred!
 		/// @param newSound The new SoundContainer for this HDFirearm's reload end sound.
-		void SetReloadEndSound(SoundContainer* newSound) { m_ReloadEndSound = newSound; }
+		void SetReloadEndSound(SoundContainer* newSound) { if (m_ReloadEndSound != newSound) TouchCheckpoint(); m_ReloadEndSound = newSound; }
 
 		/// Resest all the timers used by this. Can be emitters, etc. This is to
 		/// prevent backed up emissions to come out all at once while this has been
@@ -448,7 +448,7 @@ namespace RTE {
 
 		/// Sets whether the device is fully automatic or not.
 		/// @param newValue New value.
-		void SetFullAuto(bool newValue) { m_FullAuto = newValue; }
+		void SetFullAuto(bool newValue) { if (m_FullAuto != newValue) TouchCheckpoint(); m_FullAuto = newValue; }
 
 		/// Updates this MovableObject. Supposed to be done every frame.
 		void Update() override;
@@ -503,7 +503,7 @@ namespace RTE {
 
 		/// Sets Whether this HDFirearm is animated manually.
 		/// @param newValue Manual animation flag value.
-		void SetAnimatedManually(bool newValue) { m_IsAnimatedManually = newValue; }
+		void SetAnimatedManually(bool newValue) { if (m_IsAnimatedManually != newValue) TouchCheckpoint(); m_IsAnimatedManually = newValue; }
 
 	protected:
 		/// Sets this Attachable's parent MOSRotating, and also sets its Team based on its parent and, if the Attachable is set to collide, adds/removes Atoms to its new/old parent.

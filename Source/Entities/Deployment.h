@@ -189,7 +189,7 @@ namespace RTE {
 		/// Sets whether this should be drawn flipped horizontally (around the
 		/// vertical axis).
 		/// @param flipped A bool with the new value.
-		void SetHFlipped(const bool flipped) override { m_HFlipped = flipped; }
+		void SetHFlipped(const bool flipped) override { if (m_HFlipped != flipped) TouchCheckpoint(); m_HFlipped = flipped; }
 
 		/// Protected member variable and method declarations
 	protected:
