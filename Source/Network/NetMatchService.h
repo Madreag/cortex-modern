@@ -195,6 +195,13 @@ namespace RTE {
 		std::string worldId; // Set after the host advances its durable identity; empty off a world.
 		uint64_t worldBoot = 0;
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
+		// Filled by the service from the checkpoint's own restart manifest, never by a caller: the
+		// configuration the peers agreed on, republished as the next revision.
+		std::optional<NetMatchConfig> resumeConfig;
+		// Host only: restart a match that died with its host. The lobby reopens on the checkpoint's own
+		// manifest (the agreed roster, the seats and the admission), so the request's roster is ignored.
+		std::string resumeMatchId;
+		uint64_t resumeTick = 0; // 0 takes the newest resumable checkpoint of that match.
 	};
 
 	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
@@ -350,6 +357,12 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
+		/// configuration alone so every peer builds the same one whether it loads its own copy of the
+		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.
+		static NetResyncState BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId);
+		/// Whether this peer holds the checkpoint a resumed host offers, and records it as the one to load.
+		bool AnswerResumeOffer(const NetLobbyResume& offer);
 		/// The id every peer of this match writes its checkpoints under.
 		std::string GetAutosaveMatchId() const { return m_AutosaveMatchId; }
 		/// Records the checkpoint the host named for a heal: this peer pins it against retention and says
@@ -646,6 +659,20 @@ namespace RTE {
 		/// Refuses a resync with no live match or a lost session; a lost session fails the service. Caller holds the lock.
 		bool CanResyncLocked(std::string* error);
 		bool PrepareReceivedResync(const std::vector<uint8_t>& bytes, const NetLockstepCoordinator& coordinator, std::string& pendingLoad, NetResyncState& state, std::string* error, size_t* archiveBytes = nullptr);
+		/// Host: publishes the match's admission export and the directory row it resumes beside its
+		/// checkpoints, sealed for this install alone. Runs on the host pump, never on the sim thread,
+		/// and only when the admission state, the directory row or a new checkpoint made it stale.
+		void PublishRestartAdmission();
+		/// Host: the resume the request asked for - the manifest's config, the sealed admission and the
+		/// checkpoint to open on. Fills the request's roster and arms the resume, or says why it cannot.
+		bool PrepareResume(NetMatchServiceRequest& request, std::string* error);
+		/// The one purpose label the restart admission key is derived under.
+		static constexpr const char* c_RestartAdmissionKeyLabel = "cccp-restart-admission-v1";
+		/// Stamps the identity every checkpoint carries with the configuration a restart reopens on.
+		/// Caller holds the lock.
+		void SeatRestartConfigLocked(const NetMatchConfig& config);
+		/// This install's key for its own restart admission file; false without an identity key.
+		bool DeriveRestartKey(std::array<uint8_t, 32>& key);
 		/// The session the round is hosted on; the adopted match config carries the seats it offers.
 		NetSessionConfig BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const;
 		void SetState(NetMatchServiceState state, std::string status, std::string error = "");
@@ -788,6 +815,28 @@ namespace RTE {
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;
+		/// The checkpoint the next launch loads out of this peer's own store instead of a received file.
+		struct PendingAutosaveLoad {
+			std::string matchId;
+			uint64_t tick = 0;
+		};
+		std::optional<PendingAutosaveLoad> m_PendingAutosaveLoad;
+		/// Host: the resume this run was started for, and the state it streams to peers that lack it.
+		std::string m_ResumeMatchId;
+		uint64_t m_ResumeTick = 0;
+		std::string m_ResumeArchiveDigest;
+		std::vector<uint8_t> m_ResumeAdmissionState;
+		std::string m_ResumeDirectorySession, m_ResumeDirectoryToken, m_ResumeDirectoryRow;
+		//!< Client: the checkpoint this peer answered the host's resume offer with.
+		std::string m_ResumeHeldMatchId;
+		uint64_t m_ResumeHeldTick = 0;
+		uint64_t m_ResumeHeldRound = 0;
+		uint64_t m_ResumeRoundId = 0;
+		uint32_t m_ResumeIntervalSeconds = 0;
+		std::vector<uint8_t> m_LastRestartAdmissionState;
+		std::string m_PublishedDirectorySession, m_PublishedDirectoryToken;
+		uint64_t m_RestartAdmissionGeneration = 0;
+		std::atomic<bool> m_RestartAdmissionDue{false};
 		bool m_ResyncRetainsLocalState = false;
 		uint64_t m_ResyncSourceRound = 0;
 		//!< The last host snapshot's tick label and the completed tick it was taken at; a gate asserts they match.

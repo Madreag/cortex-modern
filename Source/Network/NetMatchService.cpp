@@ -439,6 +439,12 @@ static std::string ResyncSaveName() {
 		}
 		NetMatchConfig matchConfig;
 		std::string configError;
+		// A resume reopens the lobby the checkpoint was written under, so its own manifest authors the
+		// roster and the request's activity, scene and seats are taken from it.
+		if (request.host && !request.resumeMatchId.empty() && !PrepareResume(request, error)) {
+			SetState(NetMatchServiceState::Failed, "Resume refused", error ? *error : "resume refused");
+			return false;
+		}
 		if (request.host && (request.persistentWorld || request.activityPreset == "Persistent World")) {
 			request.persistentWorld = true;
 			request.dedicated = true;
@@ -456,7 +462,9 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-world] identity " << m_WorldIdentity.worldId << " boot=" << m_WorldIdentity.boot
 			          << " round=" << m_WorldIdentity.round << std::endl;
 		}
-		if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
+		if (request.resumeConfig) {
+			matchConfig = *request.resumeConfig;
+		} else if (!BuildMatchConfig(request, c_UiSessionId, matchConfig, &configError)) {
 			if (error) *error = configError;
 			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
 			return false;
@@ -564,6 +572,20 @@ static std::string ResyncSaveName() {
 					// The previous boot's row token, so this boot resumes the world's own row.
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
 				}
+			}
+			if (request.host && !request.resumeMatchId.empty()) {
+				// The resumed match keeps writing its checkpoints under the id it already has, so one
+				// chain of checkpoints survives however often the host restarts.
+				m_AutosaveMatchId = m_ResumeMatchId;
+				m_AutosaveIdentity.sessionId = matchConfig.sessionId;
+				m_AutosaveIdentity.roundId = m_ResumeRoundId;
+				m_AutosaveIdentity.intervalSeconds = m_ResumeIntervalSeconds;
+				m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+				m_PinnedAutosaveTick->store(m_ResumeTick);
+				m_MatchAutosaveSeconds = MatchAutosaveSeconds(matchConfig);
+				// The stored row token resumes the very session id the peers' tickets name.
+				m_DirectoryRow.resumeSessionId = m_ResumeDirectorySession;
+				m_DirectoryRow.resumeToken = m_ResumeDirectoryToken;
 			}
 			m_DirectoryRetracted = false;
 			m_DirectoryHidden = false;
@@ -1010,7 +1032,33 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::HasPendingResyncLoad() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return !m_PendingResyncLoad.empty();
+		return !m_PendingResyncLoad.empty() || m_PendingAutosaveLoad.has_value();
+	}
+
+	bool NetMatchService::AnswerResumeOffer(const NetLobbyResume& offer) {
+		if (offer.matchId.empty() || offer.savedTick == 0) return false;
+		std::string reason;
+		const auto held = AutosaveStore::Find(offer.matchId, offer.savedTick, &reason);
+		// The archive must be the very one the host named, not merely a checkpoint of the same tick.
+		const bool same = held.has_value() && (offer.digest.empty() || held->worldStructureHash == offer.digest);
+		std::cout << "[autosave] resume offer match=" << offer.matchId << " tick=" << offer.savedTick
+		          << (same ? " held locally" : " not held: " + (held ? "digest differs" : reason)) << std::endl;
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_ResumeHeldMatchId.clear();
+		m_ResumeHeldTick = 0;
+		m_ResumeHeldRound = 0;
+		if (!same) return false;
+		m_ResumeHeldMatchId = held->matchId;
+		m_ResumeHeldTick = held->savedTick;
+		m_ResumeHeldRound = held->roundId;
+		// The resumed match keeps the checkpoint chain it is resuming, on every peer.
+		m_AutosaveMatchId = held->matchId;
+		m_AutosaveIdentity.sessionId = held->sessionId;
+		m_AutosaveIdentity.roundId = held->roundId;
+		m_AutosaveIdentity.intervalSeconds = held->intervalSeconds;
+		m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+		m_PinnedAutosaveTick->store(held->savedTick);
+		return true;
 	}
 
 	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
@@ -1029,8 +1077,14 @@ static std::string ResyncSaveName() {
 			}
 			return true;
 		}
+		std::optional<PendingAutosaveLoad> autosave;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			autosave = m_PendingAutosaveLoad;
+			m_PendingAutosaveLoad.reset();
+		}
 		const std::string pendingLoad = TakePendingResyncLoad();
-		if (pendingLoad.empty() || !m_PendingResyncState) {
+		if ((pendingLoad.empty() && !autosave) || !m_PendingResyncState) {
 			if (error) *error = "no resync snapshot to load";
 			return false;
 		}
@@ -1048,11 +1102,28 @@ static std::string ResyncSaveName() {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
-		if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+		if (autosave) {
+			if (!g_ActivityMan.LoadAutosaveToRestart(autosave->matchId, autosave->tick)) {
+				if (error) *error = "checkpoint load failed: " + AutosaveStore::ArchiveName(autosave->matchId, autosave->tick);
+				return false;
+			}
+		} else if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
 		g_ActivityMan.NoteLockstepRelaunch();
+		if (autosave) {
+			// This peer's own checkpoint of that tick carries its own local player state; a binding
+			// derived from the roster would overwrite it with a seat that has no camera and no actor.
+			std::cout << "[net-match] launching from the held checkpoint: "
+			          << AutosaveStore::ArchiveName(autosave->matchId, autosave->tick) << std::endl;
+			ScenarioRunner::ApplyDeterministicConfig();
+			if (!ScenarioRunner::RestoreNetResyncState(*state)) {
+				if (error) *error = "could not restore the resumed lockstep state";
+				return false;
+			}
+			return true;
+		}
 		const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
 		if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
 			std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;
@@ -1740,6 +1811,8 @@ static std::string ResyncSaveName() {
 			PumpSessionEvents();
 		}
 		DriveReconnectUx(nowMs);
+		// The host's restart admission rides this pump: file IO, never the sim thread.
+		PublishRestartAdmission();
 		// Last: the expiry destroys the service, so nothing in this pump may run after it.
 		UpdateCompletedLobbyExpiry(nowMs);
 	}
@@ -1946,6 +2019,9 @@ static std::string ResyncSaveName() {
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
+		// Every round writes its checkpoints under the configuration it is actually played on, so a
+		// resumed match's own checkpoints can be resumed again.
+		SeatRestartConfigLocked(m_Runner ? m_Runner->GetMatchConfig() : m_MatchConfig);
 		if (!m_PendingResyncState.has_value() || m_CurrentMatchSummary.peers.empty()) {
 			m_LastMatchSummary.reset();
 			m_CurrentMatchSummary = {};
@@ -1979,6 +2055,73 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	namespace {
+		std::string ResumeHex(const std::vector<uint8_t>& bytes) {
+			static constexpr char Digits[] = "0123456789abcdef";
+			std::string hex;
+			hex.reserve(bytes.size() * 2);
+			for (uint8_t byte: bytes) {
+				hex.push_back(Digits[byte >> 4]);
+				hex.push_back(Digits[byte & 0x0F]);
+			}
+			return hex;
+		}
+
+		bool ResumeBytes(const std::string& hex, std::vector<uint8_t>& out) {
+			if (hex.empty() || hex.size() % 2 != 0) return false;
+			out.clear();
+			out.reserve(hex.size() / 2);
+			for (size_t index = 0; index < hex.size(); index += 2) {
+				uint8_t value = 0;
+				for (size_t half = 0; half < 2; ++half) {
+					const char digit = hex[index + half];
+					const int nibble = digit >= '0' && digit <= '9' ? digit - '0' : (digit >= 'a' && digit <= 'f' ? digit - 'a' + 10 : -1);
+					if (nibble < 0) return false;
+					value = static_cast<uint8_t>((value << 4) | static_cast<uint8_t>(nibble));
+				}
+				out.push_back(value);
+			}
+			return true;
+		}
+
+		/// The lobby payload bytes that carried a configuration, kept so a restart republishes the very
+		/// configuration the peers hashed instead of rebuilding one that only looks like it.
+		bool EncodeConfigPayload(const NetMatchConfig& config, std::string& outHex) {
+			std::vector<uint8_t> bytes;
+			if (!NetLobbyProtocol::Encode(NetLobbyMessage{NetLobbyMatchConfig{config}}, bytes)) return false;
+			outHex = ResumeHex(bytes);
+			return true;
+		}
+
+		bool DecodeConfigPayload(const std::string& hex, NetMatchConfig& out) {
+			std::vector<uint8_t> bytes;
+			if (!ResumeBytes(hex, bytes)) return false;
+			const auto decoded = NetLobbyProtocol::Decode(bytes);
+			const auto* message = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+			if (!message) return false;
+			out = message->config;
+			return true;
+		}
+	}
+
+	void NetMatchService::SeatRestartConfigLocked(const NetMatchConfig& config) {
+		// The exact bytes the peers hashed, so a restart republishes that configuration rather than one
+		// rebuilt from today's settings.
+		std::string payload;
+		if (!EncodeConfigPayload(config, payload)) {
+			m_AutosaveIdentity.configPayload.clear();
+			m_AutosaveIdentity.configHash.clear();
+			m_AutosaveIdentity.peerNames.clear();
+			return;
+		}
+		m_AutosaveIdentity.configPayload = std::move(payload);
+		m_AutosaveIdentity.configHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config));
+		m_AutosaveIdentity.peerNames.clear();
+		for (const NetMatchPlayerSlot& slot: config.players) {
+			if (!slot.cpu && !slot.displayName.empty()) m_AutosaveIdentity.peerNames.push_back(slot.displayName);
+		}
+	}
+
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
@@ -2001,6 +2144,8 @@ static std::string ResyncSaveName() {
 		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity)) {
 			return;
 		}
+		// Every checkpoint wants a current admission file beside it; the pump writes it.
+		m_RestartAdmissionDue.store(true);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
@@ -2713,6 +2858,171 @@ static std::string ResyncSaveName() {
 		std::vector<uint8_t> context(configHash.begin(), configHash.end());
 		context.push_back(peerId);
 		return m_SeatAuth.SealForSeat(seat->stableSeat, context, plaintext, sealed);
+	}
+
+	NetResyncState NetMatchService::BuildResumeState(const NetMatchConfig& config, uint64_t savedTick, uint64_t sourceRound, const std::string& matchId) {
+		NetResyncState state;
+		state.sessionId = config.sessionId;
+		state.sourceRound = sourceRound;
+		state.savedTick = savedTick;
+		// A match that restarts has nothing in flight: no pending input, no unacknowledged command and
+		// no control override outliving the process. Every peer derives this same state from the agreed
+		// configuration, so a peer that loads its own copy of the checkpoint and one that is streamed the
+		// host's copy start the round on identical lockstep state.
+		for (const NetMatchPlayerSlot& slot: config.players) {
+			if (slot.cpu || slot.peerId == 0) continue;
+			NetResyncPlayerBindings binding;
+			binding.frame = savedTick;
+			const size_t seat = static_cast<size_t>(slot.peerId - 1);
+			if (seat < binding.bindings.players.size()) {
+				binding.bindings.players[seat].active = true;
+				binding.bindings.players[seat].human = true;
+				binding.bindings.players[seat].team = static_cast<int8_t>(slot.team);
+			}
+			state.playerBindings[slot.peerId] = binding;
+		}
+		state.rewindMatchId = matchId;
+		state.rewindTick = savedTick;
+		return state;
+	}
+
+	bool NetMatchService::DeriveRestartKey(std::array<uint8_t, 32>& key) {
+		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) return false;
+		return m_ParticipantStore.DeriveLocalKey(c_RestartAdmissionKeyLabel, key);
+	}
+
+	void NetMatchService::PublishRestartAdmission() {
+		std::string matchId, directorySession, directoryToken, row;
+		std::vector<uint8_t> state;
+		uint64_t generation = 0, roundId = 0;
+		uint32_t interval = 0;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_AdmissionAttached || m_AutosaveMatchId.empty() || !AutosaveStore::ValidMatchId(m_AutosaveMatchId)) return;
+			state = m_ReconnectHost.ExportMigrationState();
+			matchId = m_AutosaveMatchId;
+			directorySession = m_DirectorySessionId;
+			directoryToken = m_DirectoryToken;
+			// A file is rewritten only when the admission state or the row it resumes actually moved, so
+			// a running match writes nothing per tick.
+			const bool stale = m_RestartAdmissionDue.load() || state != m_LastRestartAdmissionState ||
+			                   directorySession != m_PublishedDirectorySession || directoryToken != m_PublishedDirectoryToken;
+			if (state.empty() || !stale) return;
+			row = NetDirectoryCodec::EncodeRegisterRequest(m_DirectoryRow);
+			roundId = m_AutosaveIdentity.roundId;
+			interval = m_AutosaveIdentity.intervalSeconds;
+			generation = m_RestartAdmissionGeneration + 1;
+		}
+		std::array<uint8_t, 32> key{};
+		if (!DeriveRestartKey(key)) return;
+		const auto plaintext = nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"admission", state}, {"directory_row", row},
+		                                                              {"directory_session", directorySession}, {"directory_token", directoryToken},
+		                                                              {"autosave_match_id", matchId}, {"autosave_round", roundId}, {"autosave_interval", interval},
+		                                                              {"generation", generation}});
+		AutosaveAdmission admission;
+		admission.schema = AutosaveStore::c_AdmissionSchema;
+		admission.matchId = matchId;
+		admission.generation = generation;
+		// The match id is the sealing context, so a file cannot be replayed under another match.
+		const std::vector<uint8_t> context(matchId.begin(), matchId.end());
+		if (!NetAuthSeal(key, context, plaintext, admission.sealed)) return;
+		std::string error;
+		if (!AutosaveStore::PublishAdmission(AutosaveStore::Directory(), admission, &error)) {
+			std::cout << "[autosave] restart admission not written: " << error << std::endl;
+			return;
+		}
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_LastRestartAdmissionState = std::move(state);
+		m_PublishedDirectorySession = directorySession;
+		m_PublishedDirectoryToken = directoryToken;
+		m_RestartAdmissionGeneration = generation;
+		m_RestartAdmissionDue.store(false);
+	}
+
+	bool NetMatchService::PrepareResume(NetMatchServiceRequest& request, std::string* error) {
+		auto refuse = [&](const std::string& reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		const std::string matchId = request.resumeMatchId;
+		if (!AutosaveStore::ValidMatchId(matchId)) return refuse("resume names no match");
+		const std::filesystem::path directory = AutosaveStore::Directory();
+		std::string reason;
+		std::optional<AutosaveDescriptor> checkpoint;
+		if (request.resumeTick != 0) {
+			checkpoint = AutosaveStore::Find(directory, matchId, request.resumeTick, &reason);
+		} else {
+			for (AutosaveDescriptor& held: AutosaveStore::ListRestorable(directory, matchId)) {
+				if (!held.resumable) continue;
+				checkpoint = std::move(held);
+				break;
+			}
+			if (!checkpoint) reason = "this match has no resumable checkpoint";
+		}
+		if (!checkpoint) return refuse("checkpoint refused: " + reason);
+		AutosaveManifest manifest;
+		if (!AutosaveStore::ReadManifest(directory, matchId, checkpoint->savedTick, manifest, &reason)) return refuse("restart manifest refused: " + reason);
+		NetMatchConfig config;
+		if (!DecodeConfigPayload(manifest.configPayload, config)) return refuse("the restart manifest's configuration does not decode");
+		if (NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config)) != manifest.configHash) {
+			return refuse("the restart manifest's configuration does not match the hash the peers agreed");
+		}
+		AutosaveAdmission admission;
+		if (!AutosaveStore::ReadAdmission(directory, matchId, admission, &reason)) return refuse("admission file refused: " + reason);
+		std::array<uint8_t, 32> key{};
+		if (!DeriveRestartKey(key)) return refuse("this install has no identity key to open its own admission file");
+		std::vector<uint8_t> plaintext;
+		const std::vector<uint8_t> context(matchId.begin(), matchId.end());
+		if (!NetAuthOpen(key, context, admission.sealed, plaintext)) return refuse("the admission file was not sealed by this install");
+		std::vector<uint8_t> admissionState;
+		std::string directorySession, directoryToken, directoryRow;
+		uint64_t roundId = checkpoint->roundId;
+		uint32_t interval = checkpoint->intervalSeconds;
+		try {
+			const auto body = nlohmann::json::from_cbor(plaintext);
+			if (body.at("version") != 1 || body.at("autosave_match_id").get<std::string>() != matchId) {
+				std::fill(plaintext.begin(), plaintext.end(), 0);
+				return refuse("the admission file names another match");
+			}
+			admissionState = body.at("admission").get<std::vector<uint8_t>>();
+			directoryRow = body.at("directory_row").get<std::string>();
+			directorySession = body.at("directory_session").get<std::string>();
+			directoryToken = body.at("directory_token").get<std::string>();
+			roundId = body.at("autosave_round").get<uint64_t>();
+			interval = body.at("autosave_interval").get<uint32_t>();
+		} catch (const nlohmann::json::exception& exception) {
+			std::fill(plaintext.begin(), plaintext.end(), 0);
+			return refuse(std::string("the admission file does not decode: ") + exception.what());
+		}
+		std::fill(plaintext.begin(), plaintext.end(), 0);
+		if (admissionState.empty()) return refuse("the admission file carries no admission state");
+		// The resumed lobby republishes the same roster as a new revision, so every peer acks it again.
+		config.configRevision += 1;
+		request.resumeConfig = config;
+		request.resumeTick = checkpoint->savedTick;
+		request.activityPreset = config.activityPreset;
+		request.activityModule = config.activityModule;
+		request.sceneName = config.sceneName;
+		request.sceneModule = config.sceneModule;
+		request.peerCount = config.peerCount;
+		request.dedicated = config.dedicated;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_ResumeMatchId = matchId;
+			m_ResumeTick = checkpoint->savedTick;
+			m_ResumeArchiveDigest = checkpoint->worldStructureHash;
+			m_ResumeAdmissionState = std::move(admissionState);
+			m_ResumeDirectorySession = directorySession;
+			m_ResumeDirectoryToken = directoryToken;
+			m_ResumeRoundId = roundId;
+			m_ResumeIntervalSeconds = interval;
+			m_ResumeDirectoryRow = directoryRow;
+		}
+		std::cout << "[autosave] resuming match=" << matchId << " tick=" << checkpoint->savedTick
+		          << " activity=" << config.activityPreset << " peers=" << static_cast<int>(config.peerCount)
+		          << " directory=" << (directorySession.empty() ? "none" : directorySession) << std::endl;
+		return true;
 	}
 
 	bool NetMatchService::OpenMigrationCapsule(const NetLobbyMigration& capsule) {
@@ -4342,7 +4652,8 @@ static std::string ResyncSaveName() {
 		}
 		std::string error;
 		// The roster is built first: the session it is hosted on takes its seats from it.
-		bool started = BuildMatchConfig(request, c_UiSessionId, runnerConfig.matchConfig, &error);
+		bool started = request.resumeConfig ? (runnerConfig.matchConfig = *request.resumeConfig, true)
+		                                    : BuildMatchConfig(request, c_UiSessionId, runnerConfig.matchConfig, &error);
 		runnerConfig.sessionConfig = BuildSessionConfig(manifest, request, runnerConfig.matchConfig);
 		runnerConfig.autoInputDelay = request.autoInputDelay;
 		runnerConfig.useLobbyProtocol = true;
@@ -4358,6 +4669,13 @@ static std::string ResyncSaveName() {
 		}
 		// First lockstep tick is 1: RestartActivity zeroes the sim count, UpdateSim increments it before MovableMan reads it.
 		runnerConfig.startFrame = 1;
+		// A resumed match starts on the tick after the checkpoint, exactly as a healed round resumes
+		// behind the snapshot it reloaded.
+		if (request.resumeConfig && request.resumeTick != 0) {
+			runnerConfig.startFrame = ScenarioRunner::ResyncResumeStartFrame(request.resumeTick + 1);
+		}
+		// Every peer answers whether it holds the checkpoint; one that does is streamed nothing.
+		runnerConfig.resumeHeld = [this](const NetLobbyResume& offer) { return AnswerResumeOffer(offer); };
 		// The lobby lockstep start takes the activity from the adopted roster.
 		runnerConfig.autoReady = request.host;
 		runnerConfig.autoStart = false;
@@ -4423,6 +4741,39 @@ static std::string ResyncSaveName() {
 			}
 		}
 		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
+		NetResyncState resumeState;
+		if (started && request.resumeConfig && request.resumeTick != 0) {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			// The seats, credentials and bans the match had when it died, admitted again by the very
+			// host that sealed them; the transports are empty because nobody has reconnected yet.
+			if (!m_ReconnectHost.ImportMigrationState(m_ResumeAdmissionState, m_SeatAuth, runnerConfig.matchConfig, m_LocalPeerId, {}, AdmissionNowMs())) {
+				started = false;
+				error = "the stored admission state does not fit this match";
+			} else {
+				m_ReconnectHost.SetLiveMatch(false);
+				resumeState = BuildResumeState(runnerConfig.matchConfig, request.resumeTick, m_ResumeRoundId, m_ResumeMatchId);
+				runnerConfig.resumeMatchId = m_ResumeMatchId;
+				runnerConfig.resumeTick = m_ResumeTick;
+				runnerConfig.resumeDigest = m_ResumeArchiveDigest;
+			}
+		}
+		if (started && request.resumeConfig && request.resumeTick != 0) {
+			// The checkpoint's own bytes are the lobby's state: a peer that lacks the archive receives
+			// exactly the file the host is about to load.
+			const std::filesystem::path archivePath = AutosaveStore::ArchivePath(m_ResumeMatchId, m_ResumeTick);
+			std::ifstream in(archivePath, std::ios::binary);
+			std::vector<uint8_t> archive;
+			if (in) archive.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+			std::vector<uint8_t> envelope;
+			if (archive.empty()) {
+				started = false;
+				error = "the checkpoint archive is unreadable: " + archivePath.string();
+			} else if (!NetResyncCodec::Encode(resumeState, archive, envelope, &error)) {
+				started = false;
+			} else {
+				runner->SetStateToStream(std::move(envelope));
+			}
+		}
 		runnerConfig.enableMigration = s_AdmissionEnabled && !request.dedicated && !runnerConfig.matchConfig.persistentWorld && GetNetAuthCrypto().IsRealCrypto();
 		runnerConfig.migrationListenAddrs = {NetLanDiscovery::GetPrimaryLocalAddress()};
 		if (runnerConfig.migrationListenAddrs.front().empty())
@@ -4464,7 +4815,18 @@ static std::string ResyncSaveName() {
 		// while the others play the snapshot would desync instantly, so a failed write fails the join.
 		std::string pendingLoad;
 		std::optional<NetResyncState> pendingState;
-		if (started) {
+		std::optional<PendingAutosaveLoad> pendingAutosave;
+		if (started && request.resumeConfig && request.resumeTick != 0) {
+			// The host's world comes out of its own store, never off the wire it just streamed.
+			pendingAutosave = PendingAutosaveLoad{m_ResumeMatchId, m_ResumeTick};
+			pendingState = resumeState;
+		} else if (started && !m_ResumeHeldMatchId.empty()) {
+			// A client that answered the host's offer with its own copy loads that copy and derives the
+			// same lockstep state the host put in the envelope it was spared.
+			pendingAutosave = PendingAutosaveLoad{m_ResumeHeldMatchId, m_ResumeHeldTick};
+			pendingState = BuildResumeState(runner->GetMatchConfig(), m_ResumeHeldTick, m_ResumeHeldRound, m_ResumeHeldMatchId);
+		}
+		if (started && !pendingAutosave) {
 			std::vector<uint8_t> receivedState = runner->TakeReceivedState();
 			if (!receivedState.empty()) {
 				if (IsWorldJoinImageBlob(receivedState)) {
@@ -4496,6 +4858,7 @@ static std::string ResyncSaveName() {
 				m_LocalPeerId = localLockstepId;
 				m_LocalTeam = localTeam;
 				m_PendingResyncLoad = pendingLoad;
+				m_PendingAutosaveLoad = pendingAutosave;
 				m_PendingResyncState = std::move(pendingState);
 				m_State = NetMatchServiceState::ReadyToLaunch;
 				m_StatusText = "Ready to launch match";
