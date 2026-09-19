@@ -5,7 +5,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -33,6 +35,22 @@ namespace RTE {
 	};
 
 	enum class NetMatchDelayPolicy : uint8_t { Auto = 1, Fixed = 2 };
+
+	/// Samples the active transport's RTT and delays decreases until the link settles.
+	class NetInputDelayEstimator {
+	public:
+		static constexpr uint64_t c_WindowMs = 5000;
+		static constexpr uint64_t c_SampleMs = 100;
+		void Observe(uint64_t nowMs, uint32_t rttMs);
+		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
+		uint32_t P95Ms() const;
+		uint32_t JitterMs() const;
+		std::optional<uint16_t> Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor = 0);
+	private:
+		uint32_t Percentile(unsigned percent) const;
+		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		std::optional<uint64_t> m_BelowSince;
+	};
 	struct NetMatchMigrationPeer {
 		uint8_t peerId = 0;
 		uint16_t listenPort = 0;

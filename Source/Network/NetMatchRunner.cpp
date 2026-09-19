@@ -2,6 +2,7 @@
 
 #include "NetIdentity.h"
 #include "NetWorldJoin.h"
+#include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
 
@@ -82,17 +83,17 @@ namespace RTE {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
-		// High ping self-pays: each sender's delay covers its OWN round trip to the host (the
-		// receive side settles by running that leg behind), so one slow link no longer delays
-		// every player's input. The manual setting stays the floor for every peer.
+		// Each sender covers its round trip through the active transport.
 		if (config.host && config.autoInputDelay) {
-			const double tickMs = 1000.0 / 30.0;
+			const double tickMs = g_TimerMan.GetDeltaTimeMS();
 			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
 			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
+				NetInputDelayEstimator estimate;
+				estimate.Observe(0, rttMs);
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
-				    static_cast<uint32_t>(std::ceil(rttMs / tickMs)) + 1U, NetMatchConfigUtil::c_MaxInputDelayFrames));
+				    estimate.RequiredFrames(tickMs, floorDelay), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
 				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
 				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
