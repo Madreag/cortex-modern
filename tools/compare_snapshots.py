@@ -394,8 +394,12 @@ def masked_timer_tokens(value):
     return value
 
 
-def compare_graphs(first, second, actor_uids=None, cross_process=False):
-    """Require a bijection, including table keys, closures, upvalue cells and native aliases."""
+def compare_graphs(first, second, actor_uids=None, cross_process=False, lockstep_master=True):
+    """Require a bijection, including table keys, closures, upvalue cells and native aliases.
+
+    lockstep_master says every allocation on this state is lockstep, so the birth numbers must be
+    equal. A threaded script state runs this machine's own AI, so its counter is a local field.
+    """
     if cross_process:
         first, second = masked_timer_tokens(first), masked_timer_tokens(second)
     cuts = [local_ai_boundaries(graph, actor_uids) if actor_uids is not None else {} for graph in (first, second)]
@@ -497,19 +501,34 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False):
             else:
                 raise failure
 
-    a = {key: value for key, value in first.items() if key != "nodes"}
-    b = {key: value for key, value in second.items() if key != "nodes"}
+    # The state counter is the dedicated birth-number check below, not a scalar of the structural walk:
+    # inside the walk it fails as "graph.'serial': X != Y" and the diagnostic here never runs.
+    a = {key: value for key, value in first.items() if key not in ("nodes", "serial")}
+    b = {key: value for key, value in second.items() if key not in ("nodes", "serial")}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
     report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
     if first.get("version") in ("SG5", "SG6") and first.get("version") == second.get("version"):
         report["serial"] = {"a": first["serial"], "b": second["serial"]}
+        report["lockstep_master"] = lockstep_master
         moved = sorted((left, right) for left, right in mapping.items() if left != right)
-        if first["serial"] != second["serial"] or moved:
-            report["first_moved_node_id"] = list(moved[0]) if moved else None
-            detail = f"node {moved[0][0]} on a is node {moved[0][1]} on b" if moved else                 f"state counters {first['serial']} and {second['serial']}"
-            raise GraphMismatch(
-                "table birth numbers differ across peers (a table was created on one peer and not the other): "
-                + detail)
+        report["moved_nodes"] = len(moved)
+        report["first_moved_node_id"] = list(moved[0]) if moved else None
+        if lockstep_master:
+            if first["serial"] != second["serial"] or moved:
+                detail = f"node {moved[0][0]} on a is node {moved[0][1]} on b" if moved else                     f"state counters {first['serial']} and {second['serial']}"
+                raise GraphMismatch(
+                    "table birth numbers differ across peers (a table was created on one peer and not the other): "
+                    + detail)
+        else:
+            # Each machine allocates its own AI objects here, so the surviving ids carry a per-peer
+            # offset. What stays shared is the ORDER they were created in: the map must be monotonic.
+            order = sorted(mapping.items())
+            for (left, right), (next_left, next_right) in zip(order, order[1:]):
+                if right >= next_right:
+                    report["first_reordered_node_id"] = [next_left, next_right]
+                    raise GraphMismatch(
+                        "birth order differs across peers (an object was created in a different order): "
+                        f"nodes {left} and {next_left} on a are {right} and {next_right} on b")
     return report
 
 
@@ -854,8 +873,10 @@ def compare_main() -> int:
                             failures.append("Lua VM indexes differ")
                         for index in sorted(graphs_a.keys() & graphs_b.keys()):
                             try:
+                                # The capture writes the master state first, then the threaded script
+                                # states (MovableMan::CaptureScriptGraphs, MovableMan.cpp:2225-2226).
                                 details["graphs"][str(index)] = compare_graphs(graphs_a[index], graphs_b[index],
-                                    None if args.full else actor_uids, args.cross_process)
+                                    None if args.full else actor_uids, args.cross_process, index == 0)
                             except GraphMismatch as error:
                                 failures.append(f"Lua VM {index}: {error}")
                         continue
