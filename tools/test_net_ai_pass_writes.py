@@ -32,6 +32,10 @@ PORT_RANGE = range(48400, 48420)
 LANE_PORT_RANGE = range(48670, 48680)  # A second lane range, so this arm can run beside another one.
 PRESET = "Determinism AI Pass Writes"
 PROBE = re.compile(r"\[f72b-probe\] simms=(\d+) heard=(-?\d+) vel=([^ ]+) health=([^ ]+) victim=(\d) particles=(\d+)")
+TABLE_SENT = re.compile(r"\[f72b-pass\] table uid=(\d+)")
+TABLE_HEARD = re.compile(r"\[f72b-table-heard\] uid=(\d+) kind=(\w+)")
+# The string the wave tip prints for a context the codec cannot carry; a local call must not produce one.
+MESSAGE_VIOLATION = re.compile(r"\[controller-boundary\] VIOLATION: .*script message.*")
 
 INDEX = (
     "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n"
@@ -139,6 +143,21 @@ def main() -> int:
         # The victim has to be there first and gone after: a target that never existed proves nothing.
         check(checks, f"{peer}_victim_gibbed", bool(gone) and gone[0] == 1 and gone[-1] == 0,
               f"victim={gone[:8]}", evidence)
+    # A table context is a call no wire can name: it delivers on the peer whose pass made it, as it
+    # always did, and that is not a controller boundary violation.
+    for peer in ("host", "client"):
+        evidence = [out / "e2e/ai_pass_writes" / peer / "stdout.log"]
+        sent = TABLE_SENT.findall(logs[peer])
+        heard = TABLE_HEARD.findall(logs[peer])
+        check(checks, f"{peer}_table_context_delivered_where_it_was_sent", len(heard) == len(sent),
+              f"sent={len(sent)} heard={heard[:4]}", evidence)
+        check(checks, f"{peer}_table_context_is_not_a_boundary_violation",
+              not MESSAGE_VIOLATION.search(logs[peer]),
+              f"violations={MESSAGE_VIOLATION.findall(logs[peer])[:3]}", evidence)
+    check(checks, "some_peer_sent_the_table_context",
+          any(TABLE_SENT.findall(logs[peer]) for peer in ("host", "client")),
+          f"host={len(TABLE_SENT.findall(logs['host']))} client={len(TABLE_SENT.findall(logs['client']))}",
+          [out / "e2e/ai_pass_writes"])
     check(checks, "peers_agree", bool(rows["host"]) and rows["host"] == rows["client"],
           f"host rows={len(rows['host'])} client rows={len(rows['client'])} "
           f"first mismatch={next((pair for pair in zip(rows['host'], rows['client']) if pair[0] != pair[1]), None)}",
