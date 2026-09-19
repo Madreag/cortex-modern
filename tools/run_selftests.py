@@ -32,6 +32,7 @@ SELFTESTS = [
     "camera-null-scene",
     "rotate-primitive",
     "cow-checkpoint",
+    "frame-recorder",
     "float-text",
     "combo-key",
     "settings-preferences",
