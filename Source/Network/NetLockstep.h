@@ -701,9 +701,8 @@ namespace RTE {
 		uint64_t ObservationEpoch() const { return m_ObservationEpochs.empty() ? 0 : *m_ObservationEpochs.rbegin(); }
 		/// Every restart still announced, oldest first. Two joiners in flight announce two.
 		const std::set<uint64_t>& ObservationEpochs() const { return m_ObservationEpochs; }
-		/// The announce sets it: from this frame every sender spells its observation keys out again,
-		/// so a member admitted there reads them with the empty table it starts with. A re-announce
-		/// moves it; the live stream restarts again at the new frame.
+		/// Announces one restart: from this frame every sender spells its observation keys out again,
+		/// so a member admitted there reads them with the empty table it starts with.
 		void SetObservationEpoch(uint64_t frame);
 		/// Moves one announced restart to a new frame, for a re-announce of the same activation.
 		void MoveObservationEpoch(uint64_t from, uint64_t to);

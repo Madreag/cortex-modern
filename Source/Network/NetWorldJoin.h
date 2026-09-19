@@ -30,6 +30,17 @@ namespace RTE {
 		bool operator==(const NetWorldIdentity&) const = default;
 	};
 
+	/// Whether the config names a world capacity. All zero is a host that authored none, and every
+	/// capacity rule then keeps the pre-capacity behaviour instead of reading an unset field.
+	inline bool WorldCapacityAuthored(const NetMatchConfig& config) {
+		for (const uint8_t capacity: config.worldTeamCapacity) {
+			if (capacity != 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/// Whether the record names a capacity, so a later boot offers the same world instead of re-deriving one.
 	inline bool WorldIdentityCarriesCapacity(const NetWorldIdentity& identity) {
 		for (const uint8_t capacity: identity.teamCapacity) {

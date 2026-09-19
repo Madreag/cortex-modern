@@ -1061,7 +1061,8 @@ namespace RTE {
 	}
 
 	size_t NetWorldMembership::FreeSlots() const {
-		return static_cast<size_t>(std::count_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return !slot.held; }));
+		// A slot a reclaim hold is keeping is not one a joiner can take, so it is not free either.
+		return static_cast<size_t>(std::count_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return !slot.held && !slot.reclaimHold; }));
 	}
 
 	size_t NetWorldMembership::ReclaimHolds() const {
@@ -1132,6 +1133,10 @@ namespace RTE {
 
 	size_t NetWorldJoinHost::SpectatorBound() const {
 		// The host's configured bound, held under the pool of lobby ids a spectator can be bound on.
+		// A world whose host authored no capacity takes the pool, which is what it offered before.
+		if (!WorldCapacityAuthored(m_Config)) {
+			return c_WorldSpectatorLobbyCap;
+		}
 		return std::min<size_t>(m_Config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
 	}
 
