@@ -1423,11 +1423,23 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 		// The staged draft applies where one exists; the request the Create button would send builds the rest.
 		NetMatchServiceRequest request = HostRequestDraft();
 		std::string error;
-		if (!NetMatchService::BuildMatchConfig(request, 0, m_HostOptionsDraft, &error)) {
-			m_HostOptionsDraft = NetMatchConfigUtil::MakeDefault(0);
+		// A setup draft has no session yet, so it is built under a placeholder id: the real one is
+		// assigned when the lobby opens, and a zero id is not a configuration the validator accepts.
+		constexpr uint64_t setupDraftSessionId = 1;
+		if (!NetMatchService::BuildMatchConfig(request, setupDraftSessionId, m_HostOptionsDraft, &error)) {
+			m_HostOptionsDraft = NetMatchConfigUtil::MakeDefault(setupDraftSessionId);
 			m_HostOptionsStatusLabel->SetText(error);
+		} else if (m_HostSetupOptions) {
+			m_HostOptionsStatusLabel->SetText("Staged options are loaded.");
 		} else {
-			m_HostOptionsStatusLabel->SetText(m_HostSetupOptions ? "Staged options are loaded." : "");
+			// Nothing staged this run: the host's saved defaults are what a new lobby proposes.
+			NetHostDefaultsTemplate saved;
+			std::string templateError;
+			if (NetHostDefaults::Load(saved, &templateError) && NetHostDefaults::ApplyTo(saved, m_HostOptionsDraft, &templateError)) {
+				m_HostOptionsStatusLabel->SetText("Host defaults loaded.");
+			} else {
+				m_HostOptionsStatusLabel->SetText(templateError);
+			}
 		}
 	} else {
 		m_HostOptionsDraft = g_NetMatchService.GetLobbyMatchConfig();
@@ -1863,6 +1875,14 @@ void MainMenuGUI::SaveHostOptionsDefaults() {
 	g_SettingsMan.SetAutosaveSeconds(m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds : 0);
 	g_SettingsMan.SetBrainlessHumansSpectate(m_HostOptionsDraft.brainlessHumansSpectate);
 	g_SettingsMan.UpdateSettingsFile();
+	// The scalars above are this installation's preferences; the whole match intent - activity, site,
+	// rules, capacity and each seat's team - goes to the versioned template a new lobby seeds from.
+	std::string templateError;
+	if (!NetHostDefaults::Save(NetHostDefaults::FromConfig(m_HostOptionsDraft), &templateError)) {
+		m_HostOptionsStatusLabel->SetText(templateError);
+		g_GUISound.BackButtonPressSound()->Play();
+		return;
+	}
 	m_HostOptionsStatusLabel->SetText("Saved as the host defaults.");
 	g_GUISound.ItemChangeSound()->Play();
 }

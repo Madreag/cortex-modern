@@ -170,6 +170,49 @@ namespace RTE {
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
+	/// The host's saved match defaults: the versioned template a new hosted lobby seeds its draft
+	/// from. It holds only what a host chooses - never an occupant, a credential, a session epoch or
+	/// a runtime peer id - so a template can be copied between machines without carrying identity.
+	struct NetHostDefaultsTemplate {
+		/// A seat's intent by position: the team a host wants on it, not who sits there.
+		struct Seat {
+			uint8_t team = 0;
+			bool cpu = false;
+			uint16_t delayFrames = 0;
+		};
+		uint16_t version = 1;
+		NetMatchStandardRules rules; //!< Activity, site, mode, the original rule values and the team rules.
+		uint8_t peerCount = 2;
+		bool dedicated = false;
+		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
+		uint16_t inputDelayFrames = 0;
+		bool autosaveEnabled = false;
+		uint32_t autosaveIntervalSeconds = 0;
+		uint8_t idleWaitMinutes = 10;
+		bool automaticRepair = true;
+		uint8_t frameRedundancyTicks = NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
+		std::vector<Seat> seats;
+	};
+
+	/// Reads and writes the host-defaults template. The format is this class's own, versioned
+	/// separately from the wire: an unknown key is ignored with a printed line, and a template a
+	/// newer build wrote is refused with its version named instead of being half-read.
+	class NetHostDefaults {
+	public:
+		static constexpr uint16_t c_Version = 1;
+
+		/// The template a host's current draft would be saved as.
+		static NetHostDefaultsTemplate FromConfig(const NetMatchConfig& config);
+		/// Seeds a draft with the saved defaults. Refuses without touching the draft when the result
+		/// would not be a valid configuration, so a stale template cannot produce an unlaunchable lobby.
+		static bool ApplyTo(const NetHostDefaultsTemplate& saved, NetMatchConfig& config, std::string* error = nullptr);
+		static std::string Serialize(const NetHostDefaultsTemplate& saved);
+		static bool Parse(const std::string& text, NetHostDefaultsTemplate& out, std::string* error = nullptr);
+		/// Reads the template beside Settings.ini. False with an empty error means there is none yet.
+		static bool Load(NetHostDefaultsTemplate& out, std::string* error = nullptr);
+		static bool Save(const NetHostDefaultsTemplate& saved, std::string* error = nullptr);
+	};
+
 	/// A presentation-only record of the finished round; never restored into the simulation.
 	struct NetMatchSummary {
 		struct Peer {
