@@ -537,6 +537,7 @@ namespace RTE {
 	const char* NetWorldJoinRefusalText(uint64_t code) {
 		switch (static_cast<NetWorldJoinRefusal>(code)) {
 			case NetWorldJoinRefusal::WorldFull: return "the world is full";
+			case NetWorldJoinRefusal::SeatHeld: return "that seat is held for its player";
 			case NetWorldJoinRefusal::None: break;
 		}
 		return "the world refused the join";
@@ -892,7 +893,8 @@ namespace RTE {
 	}
 
 	const NetWorldSlot* NetWorldMembership::FirstFreeSlot() const {
-		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return !slot.held; });
+		// A slot waiting for its dropped holder is not free: a reclaim outranks a fresh allocation.
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return !slot.held && !slot.reclaimHold; });
 		return found == m_Slots.end() ? nullptr : &*found;
 	}
 
@@ -921,6 +923,42 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldMembership::Reclaim(uint8_t peerId, uint16_t stableSeat, const std::string& holderName, std::string* error) {
+		NetWorldSlot* slot = Find(peerId);
+		if (slot == nullptr) {
+			if (error) *error = "peer " + std::to_string(static_cast<int>(peerId)) + " is not a world slot";
+			return false;
+		}
+		if (slot->stableSeat != stableSeat || stableSeat == 0) {
+			if (error) *error = "world slot " + std::to_string(static_cast<int>(peerId)) + " is not that seat's";
+			return false;
+		}
+		if (slot->held && !slot->reclaimHold) {
+			if (error) *error = "world slot " + std::to_string(static_cast<int>(peerId)) + " is already held";
+			return false;
+		}
+		// The same holder returning keeps its generation, so the credentials it carries stay good.
+		slot->held = true;
+		slot->reclaimHold = false;
+		slot->holderName = holderName;
+		++m_Revision;
+		return true;
+	}
+
+	bool NetWorldMembership::SetReclaimHold(uint8_t peerId, bool holding) {
+		NetWorldSlot* slot = Find(peerId);
+		if (slot == nullptr || slot->reclaimHold == holding) {
+			return false;
+		}
+		slot->reclaimHold = holding;
+		return true;
+	}
+
+	bool NetWorldMembership::HoldsForReclaim(uint8_t peerId) const {
+		const auto found = std::find_if(m_Slots.begin(), m_Slots.end(), [&](const NetWorldSlot& slot) { return slot.peerId == peerId; });
+		return found != m_Slots.end() && found->reclaimHold;
+	}
+
 	bool NetWorldMembership::Release(uint8_t peerId, std::string* error) {
 		NetWorldSlot* slot = Find(peerId);
 		if (slot == nullptr) {
@@ -932,6 +970,7 @@ namespace RTE {
 			return false;
 		}
 		slot->held = false;
+		slot->reclaimHold = false;
 		slot->holderName.clear();
 		// The next holder of this slot is a new one: an old ticket cannot pass for this generation.
 		++slot->generation;
@@ -943,6 +982,10 @@ namespace RTE {
 		return static_cast<size_t>(std::count_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return !slot.held; }));
 	}
 
+	size_t NetWorldMembership::ReclaimHolds() const {
+		return static_cast<size_t>(std::count_if(m_Slots.begin(), m_Slots.end(), [](const NetWorldSlot& slot) { return slot.reclaimHold; }));
+	}
+
 	size_t NetWorldMembership::HeldSlots() const {
 		return m_Slots.size() - FreeSlots();
 	}
@@ -952,7 +995,7 @@ namespace RTE {
 		for (const NetWorldSlot& slot: m_Slots) {
 			slots.push_back({{"peer_id", static_cast<int>(slot.peerId)}, {"team", static_cast<int>(slot.team)},
 			                 {"generation", slot.generation}, {"stable_seat", slot.stableSeat},
-			                 {"held", slot.held}, {"holder", slot.holderName}});
+			                 {"held", slot.held}, {"reclaim_hold", slot.reclaimHold}, {"holder", slot.holderName}});
 		}
 		json report = {{"schema", c_NetWorldJoinSchema}, {"revision", m_Revision}, {"slots", std::move(slots)}, {"free", FreeSlots()}};
 		return report.dump(-1, ' ', false, json::error_handler_t::replace);
@@ -1045,7 +1088,7 @@ namespace RTE {
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
 
-	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error) {
+	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder) {
 		if (!IsConfigured()) {
 			if (error) *error = "the world join plane is not configured";
 			return false;
@@ -1061,8 +1104,10 @@ namespace RTE {
 		NetWorldJoinSession session;
 		session.connection = connection;
 		session.stableSeat = stableSeat;
+		session.holderName = holderName;
 		session.openedAtMs = nowMs;
 		session.phase = NetWorldJoinPhase::Authenticating;
+		session.joinOrder = m_NextJoinOrder++;
 		// A bootstrap opened after the image was frozen starts from it: PublishImage only reaches the
 		// bootstraps that were already waiting, so a later one would have no B to finish a transfer on.
 		if (m_Image.IsValid()) {
@@ -1070,10 +1115,21 @@ namespace RTE {
 			session.deliveredThrough = m_Image.tick;
 			session.acknowledgedThrough = m_Image.tick;
 		}
-		// A credentialed holder of an existing seat outranks a fresh allocation for the same slot.
+		// A credentialed holder of an existing seat outranks a fresh allocation for the same slot:
+		// it takes its own slot back even while a reclaim hold is keeping it. Nobody else may.
 		const NetWorldSlot* slot = m_Membership.SlotOfSeat(stableSeat);
-		if (slot != nullptr && slot->held) {
-			slot = nullptr;
+		bool reclaiming = false;
+		if (slot != nullptr) {
+			if (slot->reclaimHold && credentialedHolder) {
+				reclaiming = true;
+			} else if (slot->held) {
+				if (slot->reclaimHold) {
+					// The seat is waiting for its own player; this connection is not it.
+					if (error) *error = NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::SeatHeld));
+					return false;
+				}
+				slot = nullptr;
+			}
 		}
 		if (slot == nullptr) {
 			slot = m_Membership.FirstFreeSlot();
@@ -1098,7 +1154,8 @@ namespace RTE {
 		const uint8_t peerId = slot->peerId;
 		const int8_t team = slot->team;
 		const uint32_t generation = slot->generation;
-		if (!m_Membership.Hold(peerId, stableSeat, holderName, error)) {
+		if (reclaiming ? !m_Membership.Reclaim(peerId, stableSeat, holderName, error)
+		               : !m_Membership.Hold(peerId, stableSeat, holderName, error)) {
 			return false;
 		}
 		session.assignedPeerId = peerId;
@@ -1106,6 +1163,75 @@ namespace RTE {
 		session.holderGeneration = generation;
 		session.phase = NetWorldJoinPhase::SnapshotTransfer;
 		m_Sessions.push_back(std::move(session));
+		return true;
+	}
+
+	void NetWorldJoinHost::NoteReclaimHolds(const std::vector<uint8_t>& peerIds) {
+		for (const NetWorldSlot& slot: m_Membership.Slots()) {
+			const bool holding = std::find(peerIds.begin(), peerIds.end(), slot.peerId) != peerIds.end();
+			(void)m_Membership.SetReclaimHold(slot.peerId, holding);
+		}
+	}
+
+	bool NetWorldJoinHost::NoteSpectatorPreference(NetPeerId connection, bool declinesPromotion) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr || !session->spectator) {
+			return false;
+		}
+		session->declinesPromotion = declinesPromotion;
+		return true;
+	}
+
+	bool NetWorldJoinHost::PromoteWaitingSpectator(uint64_t nowFrame, uint64_t* outActivationTick, NetPeerId* outConnection, std::string* error) {
+		if (outActivationTick) *outActivationTick = 0;
+		const NetWorldSlot* slot = m_Membership.FirstFreeSlot();
+		if (slot == nullptr) {
+			if (error) *error = "the world has no free slot to promote into";
+			return false;
+		}
+		// The oldest watcher that wants the slot, in the order the world opened their bootstraps.
+		NetWorldJoinSession* oldest = nullptr;
+		for (NetWorldJoinSession& session: m_Sessions) {
+			if (!session.spectator || session.declinesPromotion || session.phase != NetWorldJoinPhase::Spectating) {
+				continue;
+			}
+			if (oldest == nullptr || session.joinOrder < oldest->joinOrder) {
+				oldest = &session;
+			}
+		}
+		if (oldest == nullptr) {
+			if (error) *error = "no watcher is waiting for a slot";
+			return false;
+		}
+		const uint64_t activation = ChooseActivationTick(nowFrame);
+		// One promotion per activation frame: a second would put two brains in at the same tick.
+		for (const NetWorldJoinSession& session: m_Sessions) {
+			if (session.connection != oldest->connection && session.activationTick == activation &&
+			    session.phase == NetWorldJoinPhase::CatchingUp) {
+				if (error) *error = "another activation already holds frame " + std::to_string(activation);
+				return false;
+			}
+		}
+		const uint8_t peerId = slot->peerId;
+		const int8_t team = slot->team;
+		const uint32_t generation = slot->generation;
+		if (!m_Membership.Hold(peerId, oldest->stableSeat, oldest->holderName, error)) {
+			return false;
+		}
+		oldest->spectator = false;
+		oldest->promoted = true;
+		oldest->assignedPeerId = peerId;
+		oldest->team = team;
+		oldest->holderGeneration = generation;
+		oldest->activationReannounces = 0;
+		// It takes the same plan a fresh join takes: back to catching up, an announced E, then one
+		// Activate with one brain. Its watcher lobby id goes back to the pool.
+		oldest->spectatorLobbyPeer = 0;
+		oldest->phase = NetWorldJoinPhase::CatchingUp;
+		oldest->activationTick = activation;
+		++m_Promotions;
+		if (outActivationTick) *outActivationTick = activation;
+		if (outConnection) *outConnection = oldest->connection;
 		return true;
 	}
 
@@ -1389,6 +1515,7 @@ namespace RTE {
 			{"boot", m_Identity.boot},
 			{"round", m_Identity.round},
 			{"activations", m_ActivationsCommitted},
+			{"promotions", m_Promotions},
 			{"joins_cancelled", m_JoinsCancelled},
 			{"image", {{"tick", m_Image.tick}, {"bytes", m_Image.bytes}, {"digest", m_Image.digest}, {"capture_ms", m_Image.captureMs}}},
 			{"spectators", {{"live", SpectatorCount()}, {"bound", SpectatorBound()}, {"free", SpectatorsFree()}}},
@@ -1410,6 +1537,8 @@ namespace RTE {
 		m_Metrics.Reset();
 		m_ActivationsCommitted = 0;
 		m_JoinsCancelled = 0;
+		m_Promotions = 0;
+		m_NextJoinOrder = 1;
 	}
 
 #pragma endregion

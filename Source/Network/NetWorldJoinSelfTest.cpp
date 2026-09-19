@@ -2940,6 +2940,260 @@ namespace RTE {
 		return 0;
 	}
 
+	// A world of two seats and two watchers: the helpers both promotion and reclaim rows drive.
+	NetMatchConfig MakeTwoSeatWorld() {
+		NetMatchConfig config = MakeWorldConfig();
+		config.peerCount = 3;
+		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.worldTeamCapacity = {1, 1, 0, 0};
+		config.worldMaxSpectators = 4;
+		return config;
+	}
+
+	// A watcher that has been streaming is the one a freed slot goes to, at its own announced E.
+	int TestFreedSlotPromotesTheOldestSpectator() {
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("promotion-never-happened: the world plane refused its own config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		host.PublishImage(image);
+		// Two seats, then two watchers in join order.
+		if (!host.BeginJoin(41, 41, "seat-a", 1000, &error) || !host.BeginJoin(42, 42, "seat-b", 1000, &error) ||
+		    !host.BeginJoin(43, 43, "watcher-one", 1010, &error) || !host.BeginJoin(44, 44, "watcher-two", 1020, &error)) {
+			return Fail("promotion-never-happened: the fixture could not fill the world (" + error + ")");
+		}
+		for (const NetPeerId connection: {43, 44}) {
+			(void)host.NoteTransferStarted(connection, 7, 1, 400);
+			uint64_t announced = 0;
+			if (!host.ScheduleSpectatorActivation(connection, 500, &announced, &error) || announced == 0) {
+				return Fail("promotion-never-happened: a watcher was announced no E (" + error + ")");
+			}
+			if (!host.CompleteActivation(connection, announced, &error)) {
+				return Fail("promotion-never-happened: a watcher never reached its stream (" + error + ")");
+			}
+		}
+		const NetWorldJoinSession* watcherOne = host.FindSession(43);
+		const NetWorldJoinSession* watcherTwo = host.FindSession(44);
+		if (watcherOne == nullptr || watcherTwo == nullptr || watcherOne->phase != NetWorldJoinPhase::Spectating ||
+		    watcherTwo->phase != NetWorldJoinPhase::Spectating) {
+			return Fail("promotion-never-happened: the watchers are not streaming before the leave");
+		}
+		// With both seats held there is nothing to promote into.
+		uint64_t at = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		error.clear();
+		if (host.PromoteWaitingSpectator(600, &at, &promoted, &error) || error != "the world has no free slot to promote into") {
+			return Fail("promotion-took-a-held-slot: a full world promoted with reason \"" + error + "\"");
+		}
+		// A clean leave frees the slot under a new generation; the oldest watcher takes it.
+		const uint32_t generationBefore = host.Membership().Slots()[0].generation;
+		if (!host.Membership().Release(2, &error)) {
+			return Fail("promotion-never-happened: the clean leave was refused (" + error + ")");
+		}
+		host.CancelJoin(41, "clean leave");
+		if (host.Membership().Slots()[0].generation != generationBefore + 1) {
+			return Fail("promotion-kept-the-old-generation: the freed slot reads generation " +
+			            std::to_string(host.Membership().Slots()[0].generation));
+		}
+		host.NoteSentInputThrough(640);
+		if (!host.PromoteWaitingSpectator(650, &at, &promoted, &error)) {
+			return Fail("promotion-never-happened: the freed slot promoted nobody (" + error + ")");
+		}
+		if (promoted != 43) {
+			return Fail("promotion-took-the-wrong-watcher: connection " + std::to_string(promoted) +
+			            " was promoted before the older watcher 43");
+		}
+		const NetWorldJoinSession* seated = host.FindSession(43);
+		if (seated == nullptr || seated->spectator || !seated->promoted || seated->assignedPeerId != 2 ||
+		    seated->team != 0 || seated->activationTick != at || seated->phase != NetWorldJoinPhase::CatchingUp) {
+			return Fail("promotion-never-happened: the promoted watcher holds peer " +
+			            std::to_string(seated == nullptr ? 0 : seated->assignedPeerId) + " at E " +
+			            std::to_string(seated == nullptr ? 0 : seated->activationTick) + " against " + std::to_string(at));
+		}
+		if (seated->holderGeneration != generationBefore + 1) {
+			return Fail("promotion-kept-the-old-generation: the promoted watcher holds generation " +
+			            std::to_string(seated->holderGeneration) + ", not " + std::to_string(generationBefore + 1));
+		}
+		if (at <= 640) {
+			return Fail("promotion-announced-behind-the-sent-input: E " + std::to_string(at) + " is not past the input sent through 640");
+		}
+		if (seated->spectatorLobbyPeer != 0) {
+			return Fail("promotion-kept-the-watcher-lobby-id: the promoted watcher still holds id " +
+			            std::to_string(seated->spectatorLobbyPeer));
+		}
+		// The second watcher is untouched and no second promotion happens at the same E.
+		const NetWorldJoinSession* stillWatching = host.FindSession(44);
+		if (stillWatching == nullptr || !stillWatching->spectator || stillWatching->assignedPeerId != 0 ||
+		    stillWatching->phase != NetWorldJoinPhase::Spectating) {
+			return Fail("promotion-moved-the-second-watcher: connection 44 is spectator " +
+			            std::to_string(stillWatching != nullptr && stillWatching->spectator) + " on peer " +
+			            std::to_string(stillWatching == nullptr ? 0 : stillWatching->assignedPeerId));
+		}
+		// Its Activate binds exactly one brain: the seat's own player, no other member's.
+		const NetGameWorldTransition transition = BuildWorldActivateTransition(*seated, MakeTwoSeatWorld(), host.Membership().Revision());
+		if (!WorldTransitionBindsBrain(transition, true) || transition.peerId != 2 || transition.player != 0 ||
+		    transition.activationFrame != at || transition.holderGeneration != seated->holderGeneration) {
+			return Fail("promotion-bound-the-wrong-brain: the Activate names peer " +
+			            std::to_string(static_cast<int>(transition.peerId)) + " player " + std::to_string(transition.player) +
+			            " at frame " + std::to_string(transition.activationFrame));
+		}
+		const NetWorldJoinSession watcherView = *stillWatching;
+		if (WorldTransitionBindsBrain(BuildWorldActivateTransition(watcherView, MakeTwoSeatWorld(), host.Membership().Revision()), true)) {
+			return Fail("promotion-bound-the-wrong-brain: a watcher's Activate still binds a brain");
+		}
+		// The promoted watcher's first produced frame is E: the plan admits it there and nowhere else.
+		const NetWorldActivationPlan plan = PlanWorldActivation(*seated, at - 1, false);
+		if (!plan.admit || !plan.submitTransition || plan.firstRequired != at) {
+			return Fail("promotion-never-happened: the plan admits " + std::to_string(plan.admit) +
+			            " at frame " + std::to_string(plan.firstRequired) + ", not E " + std::to_string(at));
+		}
+		// A watcher that declines is skipped: the next free slot goes past it.
+		if (!host.Membership().Release(3, &error)) {
+			return Fail("promotion-never-happened: the second clean leave was refused (" + error + ")");
+		}
+		host.CancelJoin(42, "clean leave");
+		if (!host.NoteSpectatorPreference(44, true)) {
+			return Fail("promotion-ignored-a-decline: the watcher's own choice was not recorded");
+		}
+		error.clear();
+		if (host.PromoteWaitingSpectator(800, &at, &promoted, &error) || error != "no watcher is waiting for a slot") {
+			return Fail("promotion-ignored-a-decline: a declining watcher was promoted with reason \"" + error + "\"");
+		}
+		if (!host.NoteSpectatorPreference(44, false) || !host.PromoteWaitingSpectator(800, &at, &promoted, &error) || promoted != 44) {
+			return Fail("promotion-ignored-a-decline: the watcher that changed its mind was not promoted (" + error + ")");
+		}
+		return 0;
+	}
+
+	// A dropped seat waits for its own holder; a fresh join watches and never opens a hold.
+	int TestReclaimOutranksAFreshJoin() {
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("fresh-join-stole-a-held-seat: the world plane refused its own config (" + error + ")");
+		}
+		if (!host.BeginJoin(51, 51, "holder", 1000, &error) || !host.BeginJoin(52, 52, "other", 1000, &error)) {
+			return Fail("fresh-join-stole-a-held-seat: the fixture could not seat the world (" + error + ")");
+		}
+		const NetWorldJoinSession* holder = host.FindSession(51);
+		if (holder == nullptr || holder->assignedPeerId != 2) {
+			return Fail("fresh-join-stole-a-held-seat: the holder took peer " +
+			            std::to_string(holder == nullptr ? 0 : holder->assignedPeerId));
+		}
+		// The holder's transport goes: the admission plane holds its seat, and the world follows.
+		host.CancelJoin(51, "connection lost");
+		if (!host.Membership().Release(2, &error)) {
+			return Fail("fresh-join-stole-a-held-seat: the fixture could not free the seat (" + error + ")");
+		}
+		host.NoteReclaimHolds({2});
+		if (!host.Membership().HoldsForReclaim(2) || host.Membership().ReclaimHolds() != 1) {
+			return Fail("fresh-join-stole-a-held-seat: the dropped seat opened no reclaim hold");
+		}
+		if (host.Membership().FirstFreeSlot() != nullptr) {
+			return Fail("fresh-join-stole-a-held-seat: a held seat is still offered as the first free slot");
+		}
+		// A fresh join during the hold watches. It never creates a hold of its own.
+		if (!host.BeginJoin(53, 53, "fresh", 1100, &error)) {
+			return Fail("fresh-join-stole-a-held-seat: the fresh joiner was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* fresh = host.FindSession(53);
+		if (fresh == nullptr || !fresh->spectator || fresh->assignedPeerId != 0) {
+			return Fail("fresh-join-stole-a-held-seat: the fresh joiner took peer " +
+			            std::to_string(fresh == nullptr ? 0 : fresh->assignedPeerId) + " instead of watching");
+		}
+		if (host.Membership().ReclaimHolds() != 1 || !host.Membership().HoldsForReclaim(2)) {
+			return Fail("fresh-join-opened-a-hold: the world holds " + std::to_string(host.Membership().ReclaimHolds()) +
+			            " seats after a fresh join");
+		}
+		// A substitute presenting the same seat without the admission plane's credential is refused.
+		error.clear();
+		if (host.BeginJoin(54, 51, "substitute", 1110, &error, false)) {
+			return Fail("held-seat-was-substituted: a substitute took the seat its holder is coming back to");
+		}
+		if (error != "that seat is held for its player") {
+			return Fail("held-seat-was-substituted: the refusal reads \"" + error + "\"");
+		}
+		if (host.FindSession(54) != nullptr) {
+			return Fail("held-seat-was-substituted: the refused substitute still holds a bootstrap");
+		}
+		// The credentialed holder takes its own slot back, generation unchanged.
+		const uint32_t generation = host.Membership().Slots()[0].generation;
+		if (!host.BeginJoin(55, 51, "holder", 1120, &error, true)) {
+			return Fail("reclaim-was-refused: the seat's own holder could not return (" + error + ")");
+		}
+		const NetWorldJoinSession* returned = host.FindSession(55);
+		if (returned == nullptr || returned->assignedPeerId != 2 || returned->spectator) {
+			return Fail("reclaim-was-refused: the returning holder took peer " +
+			            std::to_string(returned == nullptr ? 0 : returned->assignedPeerId));
+		}
+		if (host.Membership().Slots()[0].generation != generation) {
+			return Fail("reclaim-was-refused: the reclaim moved the generation from " + std::to_string(generation) +
+			            " to " + std::to_string(host.Membership().Slots()[0].generation));
+		}
+		if (host.Membership().HoldsForReclaim(2) || host.Membership().ReclaimHolds() != 0) {
+			return Fail("reclaim-was-refused: the hold outlived the reclaim");
+		}
+		// The fresh join stays a watcher: a reclaim never hands it the seat it waited beside.
+		const NetWorldJoinSession* stillFresh = host.FindSession(53);
+		if (stillFresh == nullptr || !stillFresh->spectator || stillFresh->assignedPeerId != 0) {
+			return Fail("fresh-join-stole-a-held-seat: the waiting joiner ended on peer " +
+			            std::to_string(stillFresh == nullptr ? 0 : stillFresh->assignedPeerId));
+		}
+		// No double-own: a second connection cannot take a seat a live member holds.
+		error.clear();
+		if (host.BeginJoin(56, 51, "impostor", 1130, &error, true)) {
+			return Fail("held-seat-was-substituted: a second connection took a live member's seat");
+		}
+		// The second row: the hold expires instead, and the waiting watcher is promoted at E.
+		NetWorldJoinHost expiring;
+		if (!expiring.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("expired-hold-never-promoted: the world plane refused its own config (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 100;
+		image.bytes = 32;
+		image.digest = "d";
+		expiring.PublishImage(image);
+		if (!expiring.BeginJoin(61, 61, "holder", 1000, &error) || !expiring.BeginJoin(62, 62, "other", 1000, &error) ||
+		    !expiring.BeginJoin(63, 63, "watcher", 1010, &error)) {
+			return Fail("expired-hold-never-promoted: the fixture could not fill the world (" + error + ")");
+		}
+		(void)expiring.NoteTransferStarted(63, 7, 1, 100);
+		uint64_t announced = 0;
+		if (!expiring.ScheduleSpectatorActivation(63, 200, &announced, &error) || !expiring.CompleteActivation(63, announced, &error)) {
+			return Fail("expired-hold-never-promoted: the watcher never reached its stream (" + error + ")");
+		}
+		expiring.CancelJoin(61, "connection lost");
+		(void)expiring.Membership().Release(2, &error);
+		expiring.NoteReclaimHolds({2});
+		uint64_t promotedAt = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		error.clear();
+		if (expiring.PromoteWaitingSpectator(300, &promotedAt, &promoted, &error) ||
+		    error != "the world has no free slot to promote into") {
+			return Fail("expired-hold-never-promoted: a watcher was promoted into a held seat with reason \"" + error + "\"");
+		}
+		// The hold expires: the seat is a fresh allocation again and the watcher takes it at an announced E.
+		expiring.NoteReclaimHolds({});
+		expiring.NoteSentInputThrough(320);
+		if (!expiring.PromoteWaitingSpectator(330, &promotedAt, &promoted, &error) || promoted != 63 || promotedAt <= 320) {
+			return Fail("expired-hold-never-promoted: the expired hold promoted connection " + std::to_string(promoted) +
+			            " at " + std::to_string(promotedAt) + " (" + error + ")");
+		}
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -3073,6 +3327,14 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "promotion") == 0 || std::strcmp(name, "-net-world-promotion-selftest") == 0) {
+			s_FailTag = "net-world-promotion-selftest";
+			return TestFreedSlotPromotesTheOldestSpectator();
+		}
+		if (std::strcmp(name, "reclaim") == 0 || std::strcmp(name, "-net-world-reclaim-selftest") == 0) {
+			s_FailTag = "net-world-reclaim-selftest";
+			return TestReclaimOutranksAFreshJoin();
+		}
 		if (std::strcmp(name, "concurrent") == 0 || std::strcmp(name, "-net-world-concurrent-selftest") == 0) {
 			s_FailTag = "net-world-concurrent-selftest";
 			return TestConcurrentJoinsKeepTheirOwnActivation();
@@ -3197,6 +3459,12 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestFreedSlotPromotesTheOldestSpectator(); result != 0) {
+			return result;
+		}
+		if (const int result = TestReclaimOutranksAFreshJoin(); result != 0) {
 			return result;
 		}
 		if (const int result = TestConcurrentJoinsKeepTheirOwnActivation(); result != 0) {

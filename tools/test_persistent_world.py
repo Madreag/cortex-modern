@@ -69,6 +69,20 @@ RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
 RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
 RED_OVERFLOW_REFUSAL = "world-full-refusal-missing"
 RED_CONCURRENT_ACTIVATION = "concurrent-joins-shared-an-activation"
+RED_PROMOTION_MISSING = "promotion-never-happened"
+RED_PROMOTION_WRONG_WATCHER = "promotion-took-the-wrong-watcher"
+RED_PROMOTION_HELD_SLOT = "promotion-took-a-held-slot"
+RED_PROMOTION_GENERATION = "promotion-kept-the-old-generation"
+RED_PROMOTION_BRAIN = "promotion-bound-the-wrong-brain"
+RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
+RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
+RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
+RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
+RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
+RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
+RED_RECLAIM_REFUSED = "reclaim-was-refused"
+RED_EXPIRED_HOLD = "expired-hold-never-promoted"
 RED_CONCURRENT_CAPTURE = "concurrent-joins-recaptured-the-world"
 RED_CONCURRENT_RESTART = "concurrent-join-dropped-the-first-restart"
 RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
@@ -306,6 +320,34 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "freed-slot-promotes-the-oldest-spectator",
+        "argv": ["-net-world-promotion-selftest"],
+        "red": RED_PROMOTION_MISSING,
+        "also_red": (
+            RED_PROMOTION_WRONG_WATCHER,
+            RED_PROMOTION_HELD_SLOT,
+            RED_PROMOTION_GENERATION,
+            RED_PROMOTION_BRAIN,
+            RED_PROMOTION_SECOND_WATCHER,
+            RED_PROMOTION_DECLINE,
+            RED_PROMOTION_LOBBY_ID,
+            RED_PROMOTION_BEHIND_INPUT,
+        ),
+        "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "reclaim-outranks-a-fresh-join",
+        "argv": ["-net-world-reclaim-selftest"],
+        "red": RED_FRESH_STOLE_SEAT,
+        "also_red": (
+            RED_FRESH_OPENED_HOLD,
+            RED_SEAT_SUBSTITUTED,
+            RED_RECLAIM_REFUSED,
+            RED_EXPIRED_HOLD,
+        ),
+        "pass_token": "[net-world-reclaim-selftest] PASS",
     },
     {
         "name": "concurrent-joins-keep-their-own-activation",
