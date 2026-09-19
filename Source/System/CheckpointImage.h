@@ -156,6 +156,7 @@ namespace RTE {
 		bool m_UnknownTable = false;
 		bool m_Walk = false;
 		bool m_FullWalk = true;
+		int m_WalkDepth = 0;
 		size_t m_RootsReused = 0;
 		size_t m_RootsRewritten = 0;
 		uint64_t m_Root = 0;

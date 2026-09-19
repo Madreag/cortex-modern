@@ -3192,7 +3192,18 @@ do
 	local cacheRoots = { ["11"] = cacheRootOne, ["12"] = cacheRootTwo }
 	local cacheFirst = _ScriptGraph.serialize(cacheRoots)
 	cacheRootTwo.tag = "moved"
+	-- What the barrier marked before this capture is exactly what the capture must write again.
+	local cacheDirt = _ScriptGraphDirtyRoots()
+	local cacheMarked = 0
+	for _ in pairs(cacheDirt.roots) do cacheMarked = cacheMarked + 1 end
+	local cacheReused, cacheRewritten
+	local noteReuse = _ScriptGraphNoteRootReuse
+	_ScriptGraphNoteRootReuse = function(r, w) cacheReused, cacheRewritten = r, w return noteReuse(r, w) end
 	local cacheSecond = _ScriptGraph.serialize(cacheRoots)
+	_ScriptGraphNoteRootReuse = noteReuse
+	check("root_cache_reuses_every_root_the_barrier_left_alone",
+	      cacheDirt.walked and not cacheDirt.unknown and cacheRewritten == cacheMarked and cacheReused == 2 - cacheMarked,
+	      tostring(cacheDirt.walked) .. " " .. tostring(cacheDirt.unknown) .. " marked=" .. cacheMarked .. " reused=" .. tostring(cacheReused) .. " rewritten=" .. tostring(cacheRewritten))
 	local cacheThird = _ScriptGraph.serialize(cacheRoots)
 	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one")
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
@@ -3492,6 +3503,8 @@ static int ScriptGraphBeginRoot(lua_State* L) {
 static uint64_t s_SerialBeforeCapture = 0;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
+	// The walk the index records is the capture itself, so every caller gets one, nested or not.
+	CheckpointGraphIndex::Get().BeginWalk();
 	s_SerialBeforeCapture = luaJIT_state_serial(L);
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
@@ -3522,6 +3535,7 @@ static int ScriptGraphEndCapture(lua_State* L) {
 	s_SerialBeforeCapture = 0;
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
+	CheckpointGraphIndex::Get().EndWalk();
 	return 0;
 }
 
