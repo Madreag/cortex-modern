@@ -3755,11 +3755,11 @@ bool GameActivity::CaptureNetLocalPlayerState(NetLocalPlayerState& out) const {
 			m_LockstepPlacementSubmitted);
 		for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 			writer(NetActorUID(m_pLastMarkedActor[player]),
-				m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{},
-				m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{},
-				m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{},
-				m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{},
-				m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{},
+				CheckpointWriter::Native([&] { return m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{}; }),
+				CheckpointWriter::Native([&] { return m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{}; }),
+				CheckpointWriter::Native([&] { return m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{}; }),
+				CheckpointWriter::Native([&] { return m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{}; }),
+				CheckpointWriter::Native([&] { return m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{}; }),
 				SaveActivityOwnedEntity(m_StrategicModePieMenu[player].get()), m_PurchaseOverride[player].size());
 			for (const SceneObject* preset: m_PurchaseOverride[player]) writer(preset->GetClassName(), preset->GetPresetName(), preset->GetModuleName());
 		}
