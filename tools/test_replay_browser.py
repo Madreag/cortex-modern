@@ -7,6 +7,9 @@ root; --legacy-fixture overrides that path. Its 602 running ticks must read 00:1
 
 --arm queued-restart repeats the same browse with the fault that presses a rematch on
 the frame the replay's end clears, and reads whether the queued restart survived it.
+The fault restores the pre-injection restart flag and clears the ended replay activity
+again, so the armed run ends where an unarmed run ends and the other checks still mean
+what they mean.
 """
 
 import argparse
