@@ -2497,9 +2497,19 @@ std::string MovableMan::DescribeSpeculativeSpawns() const {
 	return out;
 }
 
-void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
+static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
+	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+}
+
+bool MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) {
 	if (!mo) {
-		return;
+		return false;
+	}
+	// NextKey numbers every emission inside its tick, so one live ghost per key: a second would never be reposed or dropped.
+	for (const PreviewGhost& ghost: m_PreviewGhosts) {
+		if (SameGhostKey(ghost.key, key)) {
+			return false;
+		}
 	}
 	mo->SetAsAddedToMovableMan(false);
 	mo->DestroyScriptState();
@@ -2519,10 +2529,7 @@ void MovableMan::InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger
 	if (m_PreviewGhosts.size() > m_PreviewGhostPeak) {
 		m_PreviewGhostPeak = m_PreviewGhosts.size();
 	}
-}
-
-static bool SameGhostKey(const PreviewEventLedger::Key& a, const PreviewEventLedger::Key& b) {
-	return a.kind == b.kind && a.emitterUID == b.emitterUID && a.presetHash == b.presetHash && a.tick == b.tick && a.seq == b.seq;
+	return true;
 }
 
 void MovableMan::ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick) {
@@ -2752,7 +2759,11 @@ void MovableMan::DisposeSpeculativeSpawns() {
 		}
 		PreviewEventLedger::Insert(key, {});
 		NoteProjectileEvent(key, true);
-		InstallPreviewGhost(mo, key, horizonTick);
+		if (!InstallPreviewGhost(mo, key, horizonTick)) {
+			// The key's ghost is still live from an earlier preview, so this spawn carries it to the new horizon.
+			ReposePreviewGhost(key, *mo, horizonTick);
+			DestroySpeculativeSpawn(mo);
+		}
 	}
 	m_Speculation.spawns.clear();
 	m_Speculation.spawnMeta.clear();

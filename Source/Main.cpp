@@ -3723,6 +3723,27 @@ static void CheckPreviewEventLedgerSelfTest() {
 	}
 	check("expired_ghost_vanishes", MovableMan::IsConstructed() && s_eventLedgerExpireDroppedGhost,
 	      !MovableMan::IsConstructed() ? "MovableMan is not constructed in this host, so no ghost could be planted" : s_eventLedgerExpireDetail);
+	if (MovableMan::IsConstructed()) {
+		// One live ghost per key: a second install would leave a ghost nothing reposes, adopts or drops.
+		PreviewEventLedger::Key twinKey;
+		twinKey.kind = PreviewEventLedger::Projectile;
+		twinKey.emitterUID = 2;
+		twinKey.tick = 3;
+		twinKey.seq = 98;
+		const size_t ghostsBefore = g_MovableMan.GetPreviewGhostStates().size();
+		const bool firstInstalled = MovableMan::InstallPreviewGhostForSelfTest(new MOPixel(), twinKey, twinKey.tick + 4);
+		MOPixel* twin = new MOPixel();
+		const bool secondInstalled = MovableMan::InstallPreviewGhostForSelfTest(twin, twinKey, twinKey.tick + 4);
+		if (!secondInstalled) {
+			delete twin;
+		}
+		const size_t ghostsAfter = g_MovableMan.GetPreviewGhostStates().size();
+		g_MovableMan.DropPreviewGhost(twinKey);
+		const size_t ghostsDropped = g_MovableMan.GetPreviewGhostStates().size();
+		check("one_live_ghost_per_key", firstInstalled && !secondInstalled && ghostsAfter == ghostsBefore + 1 && ghostsDropped == ghostsBefore,
+		      "installs " + std::to_string(firstInstalled ? 1 : 0) + "/" + std::to_string(secondInstalled ? 1 : 0) + ", ghosts " +
+		          std::to_string(ghostsBefore) + " -> " + std::to_string(ghostsAfter) + " -> " + std::to_string(ghostsDropped) + " after the drop");
+	}
 	{
 		// Two held ghosts, the first of them mid-lead: the sampler must still reach the second.
 		const int candidatesBefore = s_eventLedgerHoldSampleCandidates;
