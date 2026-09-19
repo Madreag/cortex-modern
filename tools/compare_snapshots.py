@@ -134,9 +134,13 @@ def graph_references(value):
 def parse_graph(data):
     reader = GraphReader(data)
     version = reader.until()
-    if version not in ("SG1", "SG2", "SG3", "SG4"):
+    if version not in ("SG1", "SG2", "SG3", "SG4", "SG5"):
         raise ValueError(f"unsupported graph version {version!r}")
     graph = {"version": version}
+    serial = None
+    if version == "SG5":
+        reader.expect("S")
+        serial = reader.integer(minimum=1)
     for tag, label in (("r", "roots"), ("G", "globals"), ("L", "loaded")):
         reader.expect(tag)
         entries = {}
@@ -149,7 +153,7 @@ def parse_graph(data):
     if version != "SG1":
         reader.expect("E")
         graph["patches"] = [tuple(reader.token() for _ in range(3)) for _ in range(reader.count())]
-    if version in ("SG3", "SG4"):
+    if version in ("SG3", "SG4", "SG5"):
         reader.expect("R")
         graph["rng"] = reader.token()
     if reader.peek() == "X":
@@ -160,9 +164,17 @@ def parse_graph(data):
         graph["native_links"] = [(reader.token(), reader.string(), reader.token()) for _ in range(reader.count())]
     reader.expect("N")
     nodes = {}
-    for expected in range(1, reader.count() + 1):
+    count = reader.count()
+    # SG5 names a table by its birth number in the state, so the ids have holes; a repeat is still bad.
+    limit = serial + count if serial is not None else count
+    for expected in range(1, count + 1):
         kind, index = reader.char(), reader.integer(minimum=1)
-        if index != expected:
+        if index > limit:
+            raise ValueError("graph node ID out of range")
+        if serial is None:
+            if index != expected:
+                raise ValueError("noncontiguous or duplicate graph node ID")
+        elif index in nodes:
             raise ValueError("noncontiguous or duplicate graph node ID")
         node = {"kind": kind}
         if kind == "T":
@@ -255,6 +267,8 @@ def parse_graph(data):
     if reader.pos != len(data):
         raise ValueError(f"trailing graph data at byte {reader.pos}")
     graph["nodes"] = nodes
+    if serial is not None:
+        graph["serial"] = serial
     if set(graph_references(graph)) - nodes.keys():
         raise ValueError("graph references missing nodes")
     pending = list(graph_references({key: value for key, value in graph.items() if key != "nodes"}))
@@ -476,7 +490,17 @@ def compare_graphs(first, second, actor_uids=None, cross_process=False):
     a = {key: value for key, value in first.items() if key != "nodes"}
     b = {key: value for key, value in second.items() if key != "nodes"}
     mapping, _, _ = solve([(a, b, "graph")], [], {}, {}, set())
-    return {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
+    report = {"matched_nodes": len(mapping), "local_ai_boundaries": len(cuts[0])}
+    if first.get("version") == "SG5" and second.get("version") == "SG5":
+        report["serial"] = {"a": first["serial"], "b": second["serial"]}
+        moved = sorted((left, right) for left, right in mapping.items() if left != right)
+        if first["serial"] != second["serial"] or moved:
+            report["first_moved_node_id"] = list(moved[0]) if moved else None
+            detail = f"node {moved[0][0]} on a is node {moved[0][1]} on b" if moved else                 f"state counters {first['serial']} and {second['serial']}"
+            raise GraphMismatch(
+                "table birth numbers differ across peers (a table was created on one peer and not the other): "
+                + detail)
+    return report
 
 
 def read_graph_blocks(blocks):

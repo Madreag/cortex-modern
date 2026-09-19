@@ -9,6 +9,7 @@ synchronous save of the same tick.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -260,12 +261,51 @@ def score_restore_round_trip(first: Path, second: Path) -> dict:
                 failures.append(f"{name} missing from one archive")
                 continue
             if before.read(name) != after.read(name):
+                detail = ""
+                if name == "Save.ini":
+                    detail = " " + first_graph_difference(before.read(name), after.read(name))
                 failures.append(
                     f"{name} differs between {first.name} and the archive written after loading it "
-                    "(first differing member; restore-and-recapture is not byte identical)"
+                    "(first differing member; restore-and-recapture is not byte identical)" + detail
                 )
                 break
     return {"pass": not failures, "failures": failures}
+
+
+def graph_nodes(text: bytes) -> dict:
+    """The node ids of every LuaStateGraph block, by VM index, with no full parse."""
+    graphs = {}
+    for line in text.decode("utf-8", "replace").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("LuaStateGraph"):
+            continue
+        value = stripped.split("=", 1)[1].strip()
+        index, _, payload = value.partition("|")
+        data = base64.b64decode(payload.replace(".", "="), altchars=b"-_", validate=True)
+        header = re.match(rb"SG5;S(\d+);", data)
+        ids = re.findall(rb"[TUFCHBJ](\d+);", data[data.rfind(b";N"):]) if header else []
+        graphs[index] = (int(header[1]) if header else None, [int(item) for item in ids])
+    return graphs
+
+
+def first_graph_difference(before: bytes, after: bytes) -> str:
+    """Name the first node id that moved, so a birth-number divergence is not read as a byte mismatch."""
+    try:
+        left, right = graph_nodes(before), graph_nodes(after)
+    except Exception as error:  # a malformed block is reported as itself
+        return f"(the Lua graph could not be read: {error})"
+    for index in sorted(left.keys() | right.keys()):
+        if index not in left or index not in right:
+            return f"(Lua VM {index} is in only one archive)"
+        (serial_a, ids_a), (serial_b, ids_b) = left[index], right[index]
+        if serial_a != serial_b:
+            return f"(Lua VM {index} state counter {serial_a} became {serial_b})"
+        for position, (id_a, id_b) in enumerate(zip(ids_a, ids_b)):
+            if id_a != id_b:
+                return f"(Lua VM {index} node {position}: id {id_a} became {id_b})"
+        if len(ids_a) != len(ids_b):
+            return f"(Lua VM {index} has {len(ids_a)} nodes and {len(ids_b)} after the restore)"
+    return "(the Lua graph ids are identical; the difference is elsewhere in Save.ini)"
 
 
 def score_archive_round_trip(sync_path: Path, image_path: Path) -> dict:
