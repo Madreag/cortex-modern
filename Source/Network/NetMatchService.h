@@ -853,6 +853,7 @@ namespace RTE {
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend struct HostOptionsLobbyRow;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
 		friend bool TestResumePreparesTheAgreedLobby(std::string* error);
 		friend bool TestRosterTransitionsRecordHoldThenPresent(std::string* error);

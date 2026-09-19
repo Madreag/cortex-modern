@@ -3047,143 +3047,227 @@ namespace RTE {
 			return true;
 		}
 
-		// A host options edit reaches every peer while the lobby is open: the draft crosses to the
-		// runner's thread through the slot it polls, the round adopts it as the next configuration
-		// revision, every ack and readiness resets, and the hash-checked Start waits for the new one.
+	}
+
+	struct HostOptionsLobbyRow {
+		NetMatchService service, clientService;
+		LoopbackTransport hostTransport, clientTransport;
+		StateTransferTap tap{hostTransport};
+		NetSession hostSession, clientSession;
+		NetLobbySession clientLobby;
+		NetLockstepCoordinator hostCoordinator, clientCoordinator;
+		NetMatchRunner runner;
+		NetMatchRunnerConfig config;
+		std::atomic<bool> start{false}, cancel{false};
+		std::function<void()> observe;
+		std::string failure, peerError;
+		bool withholdClient = false, lobbyActive = false, coordinatorActive = false;
+		uint64_t transportClock = 0, lobbyStartedAt = 0;
+		std::chrono::steady_clock::time_point startedAt = std::chrono::steady_clock::now();
+
+		explicit HostOptionsLobbyRow(uint16_t port, uint64_t revision = 1) {
+			config.host = true;
+			config.matchConfig = MakeConfig();
+			config.matchConfig.configRevision = revision;
+			config.useLobbyProtocol = true;
+			config.autoStart = false;
+			config.lobbyWaitMs = config.sessionWaitMs = 4000;
+			config.lockstepWaitMs = 2000;
+			config.postSessionSettleMs = config.postLobbySettleMs = 0;
+			config.nowMs = [this] { return NowMs(); };
+			config.startRequested = &start;
+			config.cancelRequested = &cancel;
+			config.hostOptions = &service.m_HostOptionsRequest;
+			config.sessionConfig.port = port;
+			config.sessionConfig.sessionId = config.matchConfig.sessionId;
+			config.sessionConfig.displayName = "Host";
+			config.sessionConfig.heartbeatIntervalMs = 25;
+			auto& identity = config.sessionConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "host-options-selftest";
+			identity.platform = "test";
+			service.m_IsHost = true;
+			service.m_State = clientService.m_State = NetMatchServiceState::Starting;
+			service.m_MatchConfig = clientService.m_MatchConfig = config.matchConfig;
+			tap.afterHostStart = [this](uint16_t, std::string* error) {
+				NetSessionConfig clientConfig = config.sessionConfig;
+				clientConfig.displayName = "Client";
+				++clientConfig.localNonce;
+				return clientSession.StartClient(clientTransport, "loopback", clientConfig, error);
+			};
+			tap.beforePoll = [this] { PumpClient(); };
+			tap.afterLobbyStart = tap.beforePoll;
+			config.publishLobby = [this](const NetLobbySnapshot& snapshot) {
+				{
+					std::lock_guard<std::mutex> lock(service.m_Mutex);
+					service.m_LobbySnapshot = snapshot;
+					service.m_AdoptedMatchConfig = runner.GetLobbySession().GetMatchConfig();
+				}
+				if (observe) observe();
+			};
+		}
+
+		uint64_t NowMs() const {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startedAt).count());
+		}
+		void Fail(const std::string& reason) {
+			if (failure.empty()) failure = reason;
+			cancel.store(true);
+		}
+		bool Pending() const { return service.m_HostOptionsRequest.pending.load(); }
+		bool Run(std::string* error) {
+			const bool started = runner.Start(tap, hostSession, hostCoordinator, config, error);
+			if (!failure.empty() || !peerError.empty()) {
+				*error = failure + "; peer=" + peerError;
+				return false;
+			}
+			return started;
+		}
+		void PumpClient() {
+			const uint64_t now = NowMs();
+			hostTransport.AdvanceTimeMs(now - transportClock);
+			clientTransport.AdvanceTimeMs(now - transportClock);
+			transportClock = now;
+			if (!clientSession.IsReady()) clientSession.Tick(now);
+			if (!clientSession.IsReady() || !peerError.empty()) return;
+			if (!lobbyActive) {
+				NetLobbySessionConfig clientConfig;
+				clientConfig.localPeerId = 2;
+				clientConfig.remotePeerId = 1;
+				clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+				clientConfig.matchConfig = config.matchConfig;
+				clientConfig.session = &clientSession;
+				clientConfig.sessionNowMs = config.nowMs;
+				lobbyActive = clientLobby.Start(clientTransport, clientConfig, &peerError);
+				lobbyStartedAt = now;
+			}
+			if (!lobbyActive || withholdClient) return;
+			if (!coordinatorActive) {
+				clientLobby.Tick(now - lobbyStartedAt);
+				if (!clientLobby.IsStarted()) return;
+				NetLockstepConfig lockstep;
+				lockstep.sessionId = clientSession.GetSessionId();
+				lockstep.localPeerId = 2;
+				lockstep.remoteTransportPeerIds = {{1, clientSession.GetRemoteTransportPeerId()}};
+				lockstep.matchConfig = clientLobby.GetMatchConfig();
+				lockstep.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(lockstep.matchConfig, 2);
+				lockstep.frameRedundancyTicks = lockstep.matchConfig.frameRedundancyTicks;
+				lockstep.startFrame = clientLobby.GetStartFrame();
+				lockstep.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(lockstep.matchConfig.ownershipPolicy);
+				lockstep.scenario = lockstep.matchConfig.activityPreset;
+				coordinatorActive = clientCoordinator.Start(clientTransport, lockstep, &peerError);
+			}
+			if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
+		}
+	};
+
+	namespace {
 		bool TestLobbyRepublishesHostOptionsRevision(std::string* error) {
-			LoopbackTransport hostTransport, clientTransport;
-			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
-			if (!StartLoopbackTransports(43137, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
-			NetLobbySession hostLobby, clientLobby;
-			NetLobbySessionConfig hostConfig;
-			hostConfig.host = true;
-			hostConfig.localPeerId = 1;
-			hostConfig.remotePeerId = 2;
-			hostConfig.remoteTransportPeerId = hostRemotePeer;
-			hostConfig.matchConfig = MakeConfig();
-			hostConfig.autoStart = false;
-			hostConfig.displayName = "Host";
-			NetLobbySessionConfig clientConfig = hostConfig;
-			clientConfig.host = false;
-			clientConfig.localPeerId = 2;
-			clientConfig.remotePeerId = 1;
-			clientConfig.remoteTransportPeerId = clientRemotePeer;
-			clientConfig.displayName = "Client";
-			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
-			uint64_t now = 0;
-			auto pump = [&](int ticks, bool clientToo) {
-				for (int tick = 0; tick < ticks; ++tick, now += 10) {
-					hostLobby.Tick(now);
-					if (clientToo) clientLobby.Tick(now);
-					hostTransport.AdvanceTimeMs(10);
-					clientTransport.AdvanceTimeMs(10);
+			HostOptionsLobbyRow row(43137);
+			NetHash32 firstHash{};
+			uint64_t nextRevision = 0;
+			int blockedPublishes = 0;
+			bool submitted = false, sawReset = false;
+			row.observe = [&] {
+				const auto& lobby = row.runner.GetLobbySession();
+				if (!submitted) {
+					if (!lobby.IsConfigAcked(2) || !lobby.IsRemoteReady(2)) return;
+					NetMatchConfig draft = row.service.GetLobbyMatchConfig();
+					firstHash = lobby.GetMatchConfigHash();
+					nextRevision = draft.configRevision + 1;
+					draft.difficulty = 73;
+					draft.idleWaitMinutes = 0;
+					draft.frameRedundancyTicks = 1;
+					std::string refusal;
+					if (!row.service.SubmitHostOptions(draft.configRevision, draft, &refusal)) {
+						row.Fail("SubmitHostOptions refused the live draft: " + refusal);
+						return;
+					}
+					row.withholdClient = submitted = true;
+					return;
+				}
+				if (!sawReset) {
+					if (lobby.GetMatchConfig().configRevision != nextRevision || row.Pending() ||
+					    lobby.GetMatchConfigHash() == firstHash || lobby.IsConfigAcked(2) || lobby.IsRemoteReady(2) ||
+					    lobby.GetStats().configRepublishes != 1) {
+						row.Fail("RunLobby did not publish the submitted revision and reset its gates");
+						return;
+					}
+					sawReset = true;
+					row.start.store(true);
+				}
+				if (row.withholdClient) {
+					if (lobby.IsStarted()) row.Fail("the lobby started without the new revision's peer acknowledgement");
+					if (++blockedPublishes == 5) row.withholdClient = false;
 				}
 			};
-			pump(20, true);
-			if (!hostLobby.IsConfigAcked(2) || !hostLobby.IsRemoteReady(2)) {
-				*error = "the lobby pair did not reach an acknowledged, ready round";
-				return false;
-			}
-			const NetHash32 firstHash = hostLobby.GetMatchConfigHash();
-			// Apply accepted this draft against the published revision; the runner takes it off the slot.
-			NetMatchConfig draft = hostConfig.matchConfig;
-			draft.difficulty = 73;
-			draft.idleWaitMinutes = 0;
-			draft.frameRedundancyTicks = 1;
-			draft.configRevision = hostConfig.matchConfig.configRevision + 1;
-			NetHostOptionsSlot slot;
-			slot.Post(draft);
-			NetMatchConfig taken;
-			if (!slot.Take(taken) || slot.Take(taken)) {
-				*error = "the host options slot did not hand the runner exactly one draft";
-				return false;
-			}
-			if (!hostLobby.RepublishMatchConfig(taken, error)) return false;
-			if (hostLobby.GetMatchConfigHash() == firstHash || hostLobby.IsConfigAcked(2) || hostLobby.IsRemoteReady(2) ||
-			    hostLobby.GetStats().configRepublishes != 1) {
-				*error = "the republished revision did not reset the round's acks and readiness";
-				return false;
-			}
-			// The host alone cannot start on a revision its peer has not acknowledged.
-			hostLobby.RequestStart();
-			pump(5, false);
-			if (hostLobby.IsStarted()) {
-				*error = "the lobby started before the peer acknowledged the new configuration revision";
-				return false;
-			}
-			pump(20, true);
-			if (!hostLobby.IsStarted() || !clientLobby.IsStarted()) {
-				*error = "the lobby did not start once the peer acknowledged the new revision";
-				return false;
-			}
-			const NetMatchConfig& adopted = clientLobby.GetMatchConfig();
-			if (adopted.configRevision != draft.configRevision || adopted.difficulty != 73 || adopted.idleWaitMinutes != 0 ||
-			    adopted.frameRedundancyTicks != 1 || clientLobby.GetMatchConfigHash() != hostLobby.GetMatchConfigHash()) {
-				*error = "the peer did not adopt the host's new configuration revision";
+			if (!row.Run(error)) return false;
+			const auto& adopted = row.clientLobby.GetMatchConfig();
+			if (!sawReset || blockedPublishes != 5 || !row.clientCoordinator.IsRunning() ||
+			    adopted.configRevision != nextRevision || adopted.difficulty != 73 || adopted.idleWaitMinutes != 0 ||
+			    adopted.frameRedundancyTicks != 1 || row.clientLobby.GetMatchConfigHash() != row.runner.GetMatchConfigHash()) {
+				*error = "the service draft did not reach the running peer: revision=" + std::to_string(adopted.configRevision);
 				return false;
 			}
 			return true;
 		}
 
-		// Every draft the round has already moved past is refused, and a refusal leaves the published
-		// revision exactly where it was.
 		bool TestLobbyRefusesStaleOptionsRevision(std::string* error) {
-			LoopbackTransport hostTransport, clientTransport;
-			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
-			if (!StartLoopbackTransports(43139, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
-			NetLobbySession hostLobby, clientLobby;
-			NetLobbySessionConfig hostConfig;
-			hostConfig.host = true;
-			hostConfig.localPeerId = 1;
-			hostConfig.remotePeerId = 2;
-			hostConfig.remoteTransportPeerId = hostRemotePeer;
-			hostConfig.matchConfig = MakeConfig();
-			hostConfig.matchConfig.configRevision = 4;
-			hostConfig.autoStart = false;
-			NetLobbySessionConfig clientConfig = hostConfig;
-			clientConfig.host = false;
-			clientConfig.localPeerId = 2;
-			clientConfig.remotePeerId = 1;
-			clientConfig.remoteTransportPeerId = clientRemotePeer;
-			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) return false;
-			NetMatchConfig draft = hostConfig.matchConfig;
-			draft.difficulty = 61;
-			draft.configRevision = 5;
-			std::string refusal;
-			if (!hostLobby.RepublishMatchConfig(draft, &refusal)) {
-				*error = "the first options revision was refused: " + refusal;
-				return false;
-			}
-			const NetHash32 published = hostLobby.GetMatchConfigHash();
-			// The revision the panel held while the round moved on, and one older still.
-			for (const uint64_t stale: {4ULL, 5ULL}) {
-				NetMatchConfig late = hostConfig.matchConfig;
-				late.difficulty = 12;
-				late.configRevision = stale;
-				if (hostLobby.RepublishMatchConfig(late, &refusal) || refusal != "the draft names a stale configuration revision") {
-					*error = "a stale options revision was published: revision " + std::to_string(stale) + " " + refusal;
-					return false;
+			HostOptionsLobbyRow row(43139, 4);
+			bool submitted = false, checked = false;
+			NetHash32 published{};
+			row.observe = [&] {
+				const auto& lobby = row.runner.GetLobbySession();
+				if (!submitted) {
+					if (!lobby.IsConfigAcked(2) || !lobby.IsRemoteReady(2)) return;
+					NetMatchConfig draft = row.service.GetLobbyMatchConfig();
+					draft.difficulty = 61;
+					std::string refusal;
+					if (!row.service.SubmitHostOptions(4, draft, &refusal)) row.Fail("SubmitHostOptions refused the first revision: " + refusal);
+					submitted = true;
+					return;
 				}
-			}
-			// Seat capacity and session identity are the round's, not a draft's.
-			NetMatchConfig widened = draft;
-			widened.configRevision = 6;
-			widened.peerCount = 3;
-			widened.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client 3"});
-			if (hostLobby.RepublishMatchConfig(widened, &refusal) || refusal != "seat capacity and session identity are fixed for the open lobby") {
-				*error = "an options draft moved the open lobby's capacity: " + refusal;
-				return false;
-			}
-			// A client never authors the round's configuration.
-			NetMatchConfig fromClient = draft;
-			fromClient.configRevision = 6;
-			if (clientLobby.RepublishMatchConfig(fromClient, &refusal) || refusal != "only the host republishes the match config") {
-				*error = "a client published a configuration revision: " + refusal;
-				return false;
-			}
-			if (hostLobby.GetMatchConfigHash() != published || hostLobby.GetMatchConfig().difficulty != 61 ||
-			    hostLobby.GetStats().configRepublishes != 1) {
-				*error = "a refused options draft moved the published revision";
+				if (checked) return;
+				const NetMatchConfig draft = row.service.GetLobbyMatchConfig();
+				if (draft.configRevision != 5 || row.Pending() || lobby.GetStats().configRepublishes != 1) {
+					row.Fail("RunLobby skipped the accepted service draft");
+					return;
+				}
+				published = lobby.GetMatchConfigHash();
+				std::string refusal;
+				for (uint64_t base : {3ULL, 4ULL}) {
+					NetMatchConfig late = draft;
+					late.configRevision = base;
+					late.difficulty = 12;
+					if (row.service.SubmitHostOptions(base, late, &refusal) || refusal != "the draft names a stale configuration revision") {
+						row.Fail("SubmitHostOptions accepted stale base " + std::to_string(base) + ": " + refusal);
+					}
+				}
+				NetMatchConfig widened = draft;
+				widened.peerCount = 3;
+				widened.players.push_back(NetMatchPlayerSlot{3, 2, false, "Client 3"});
+				if (row.service.SubmitHostOptions(5, widened, &refusal) || refusal != "seat capacity and session identity are fixed for the open lobby") {
+					row.Fail("SubmitHostOptions accepted changed capacity: " + refusal);
+				}
+				NetMatchConfig otherSession = draft;
+				++otherSession.sessionId;
+				if (row.service.SubmitHostOptions(5, otherSession, &refusal) || refusal != "seat capacity and session identity are fixed for the open lobby") {
+					row.Fail("SubmitHostOptions accepted another session: " + refusal);
+				}
+				if (row.clientService.SubmitHostOptions(5, draft, &refusal) || refusal != "only the host submits match options") {
+					row.Fail("SubmitHostOptions accepted a client author: " + refusal);
+				}
+				if (row.Pending()) row.Fail("a refused service draft reached the runner slot");
+				checked = true;
+				row.start.store(true);
+			};
+			if (!row.Run(error)) return false;
+			if (!checked || row.runner.GetMatchConfigHash() != published || row.clientLobby.GetMatchConfigHash() != published ||
+			    row.runner.GetMatchConfig().difficulty != 61 || row.runner.GetLobbySession().GetStats().configRepublishes != 1) {
+				*error = "a refused service draft changed the published round";
 				return false;
 			}
 			return true;
