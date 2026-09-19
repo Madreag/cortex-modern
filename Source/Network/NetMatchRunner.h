@@ -48,6 +48,11 @@ namespace RTE {
 				return false;
 			}
 			std::lock_guard<std::mutex> lock(mutex);
+			return TakeLocked(out);
+		}
+		bool TakeLocked(NetMatchConfig& out) {
+			// Clear can win after the runner's cheap poll and before its lock.
+			if (!pending.load(std::memory_order_acquire)) return false;
 			out = config;
 			pending.store(false, std::memory_order_release);
 			return true;
