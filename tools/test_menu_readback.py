@@ -17,13 +17,13 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "world-open-seat", "repair", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
 # The network page's own selector names its sub-pages; a script reaches one as "Network:<page>"
 # once the network page is up - the same reach a player's tab clicks take.
-NETWORK_PAGES = ("Player", "Chat", "Recovery", "Files", "Internet")
+NETWORK_PAGES = ("Player", "Chat", "Recovery", "Files", "Internet", "Connection")
 NETWORK_TABS = tuple("TabNetPage" + page for page in NETWORK_PAGES)
 NETWORK_BOXES = tuple("CollectionBoxNetPage" + page for page in NETWORK_PAGES)
 NETWORK_PAGE_BOX = NETWORK_BOXES[0]
@@ -73,6 +73,11 @@ NAT_KEYS = ("NetworkIceEnable", "NetworkStunServers", "NetworkTurnServers", "Net
 NAT_LABEL = "Internet: NAT traversal (STUN)"
 NAT_STATES = ("Automatic", "Off (LAN or port-forwarded only)")
 NAT_HINT = "Players behind home routers connect directly. Off means they need your port forwarded."
+RELAY_KEYS = (*NAT_KEYS, "NetworkHostRelayMode", "NetworkConnectionMode", "NetworkPlayerTurnServers", "NetworkPlayerTurnUser", "NetworkPlayerTurnPass")
+CONNECTION_ROWS = ("LabelNetworkConnection", "ComboNetworkConnection", "LabelNetworkConnectionHint",
+                   "LabelNetworkStunServers", "TextNetworkStunServers", "LabelNetworkStunHint", "LabelNetworkOwnRelay",
+                   "LabelNetworkRelayAddress", "TextNetworkRelayAddress", "LabelNetworkRelayUser", "TextNetworkRelayUser",
+                   "LabelNetworkRelayPass", "TextNetworkRelayPass", "LabelNetworkRelayHint")
 # One value column across the five network pages: every page's value/second-column control starts at
 # this offset from its page box, and every row rides the Misc page's 20px pitch.
 NETWORK_VALUE_COLUMN = 190
@@ -105,7 +110,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "world-open-seat", "repair", "pause")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -163,7 +168,7 @@ def share_status_row(capture, port, host=None):
     return status
 NETWORK_ACTION_COLUMN = 330
 INTERNET_HINT = "host[:port][/path] - https:// is implied"
-INTERNET_REASON = "NAT traversal: Host Options > Network. No relay is provided."
+INTERNET_REASON = "Connection sets your route. Host Options > Network sets the match's relay."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
@@ -227,6 +232,8 @@ def read_settings(path, names):
 
 
 def seeds(case):
+    if case in ("host-relay", "net-connection"):
+        return {"host": {"SessionDirectoryUrl": ""}}
     if case in ("host-stun", "host-stun-empty"):
         values = {"SessionDirectoryUrl": ""}
         if case == "host-stun-empty":
@@ -472,6 +479,56 @@ def host_stun_readback(port):
     return text
 
 
+def host_relay_readback(port):
+    text = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
+            f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 3\n"
+            "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetRouting\nwait 3\n"
+            "assert_label LabelHostNetRelay Relay (TURN)\nassert_label ComboHostNetRelay Directory\n"
+            "assert_label ComboHostNetIce Automatic\ndump_host_options\n")
+    for state in ("Off", "Fixed", "Directory"):
+        text += f"combo_select ComboHostNetRelay {state}\nwait 3\n"
+        text += checks("LabelHostNetRelay", "CollectionBoxHostNetworkRouting")
+        text += checks("ComboHostNetRelay", "CollectionBoxHostNetworkRouting")
+        text += checks("LabelHostRelayHint", "CollectionBoxHostNetworkRouting")
+        if state == "Fixed":
+            for suffix, value in (("Address", "relay.example:3478"), ("User", "fixed-user"), ("Pass", "fixed-password")):
+                text += f"set_text TextHostRelay{suffix} {value}\nwait 3\n"
+                text += checks("TextHostRelay" + suffix, "CollectionBoxHostNetworkRouting")
+            text += "assert_label TextHostRelayPass **************\n"
+        text += ("activate ButtonHostOptBack\nwait 3\nactivate ButtonHostOptions\nwait 3\n"
+                 "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetRouting\nwait 3\n"
+                 f"assert_label ComboHostNetRelay {state}\ndump_host_options\n")
+    return text + "activate ButtonHostOptBack\nwait 3\nexit\n"
+
+
+def connection_readback():
+    text = OPTIONS + net_page("Connection")
+    text += "assert_label LabelNetworkConnection Connection\nassert_label ComboNetworkConnection Automatic\n"
+    text += "assert_label LabelNetworkStunServers STUN server list\n"
+    text += f"assert_label TextNetworkStunServers {STUN_DEFAULT}\n"
+    for control in CONNECTION_ROWS:
+        text += f"assert_visible {control} 1\nassert_rect_inside {control} CollectionBoxNetPageConnection\nassert_rect_inside {control} viewport\n"
+        if control != "TextNetworkStunServers":
+            text += f"assert_text_fits {control}\n"
+    text += "dump_player_options\n"
+    for state, hint in (("Direct only", "lowest latency"), ("Relay only", "every packet"), ("Automatic", "Direct first")):
+        text += f"combo_select ComboNetworkConnection {state}\nwait 3\n"
+        text += net_page("Player") + net_page("Connection")
+        text += f"assert_label ComboNetworkConnection {state}\nassert_label LabelNetworkConnectionHint {hint}\ndump_player_options\n"
+    text += ("set_text TextNetworkStunServers stun.example:3478\n"
+             "set_text TextNetworkRelayAddress personal.example:3478\n"
+             "set_text TextNetworkRelayUser personal-user\n"
+             "set_text TextNetworkRelayPass personal-password\nwait 3\n"
+             "assert_label TextNetworkRelayPass *****************\n")
+    text += net_page("Player") + net_page("Connection")
+    text += ("assert_label TextNetworkStunServers stun.example:3478\n"
+             "assert_label TextNetworkRelayAddress personal.example:3478\n"
+             "assert_label TextNetworkRelayUser personal-user\n"
+             "assert_label TextNetworkRelayPass *****************\ndump_player_options\n"
+             "post_command ButtonBackToMainMenu\nwait 5\nexit\n")
+    return text
+
+
 def scripts(case, port, root):
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
@@ -481,21 +538,25 @@ def scripts(case, port, root):
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
-    if case in ("host-stun", "host-stun-empty"):
+    if case == "host-relay":
+        text = host_relay_readback(port)
+    elif case == "net-connection":
+        text = connection_readback()
+    elif case in ("host-stun", "host-stun-empty"):
         text = host_stun_readback(port)
     elif case == "world-open-seat":
         text = world_open_seat_readback(port)
     elif case == "host-defaults":
         text = LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
         text += (f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 5\n"
-                 "activate TabHostPageNetwork\nwait 3\n"
+                 "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
                  "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 0\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
-                 "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\n"
+                 "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\ndump_host_options\nexit\n")
     elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
@@ -758,7 +819,7 @@ def scripts(case, port, root):
                 "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
                 # H34 on the two-peer fixture: the adopted config names both seated humans, the
                 # lobby sits LAN only, and the bound port refuses the edit mid-session.
-                "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+                "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
                 "assert_label LabelHostNetMode Host mode: Playing - capacity 2 - humans seated 2\n"
                 "assert_label ComboHostNetVisibility LAN only\n"
                 "set_text TextHostNetPort 40000\nwait 3\n"
@@ -946,7 +1007,7 @@ def scripts(case, port, root):
         text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
         text += "dump_host_options\n"
         # H21-H24 Network.
-        text += "activate TabHostPageNetwork\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
+        text += "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\nassert_visible CollectionBoxHostPageNetwork 1\n"
         text += "assert_label LabelHostOptionsTitle N E T W O R K   O P T I O N S\n"
         text += checks("ComboHostNetPolicy", "CollectionBoxHostPageNetwork")
         text += checks("LabelHostNetRedundancy", "CollectionBoxHostPageNetwork")
@@ -1311,10 +1372,10 @@ def run_case(options, case, root, failing=None):
             if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
                     "Version = 1\nFrameRedundancyTicks = 6\n", encoding="utf-8")
-            if case in ("host-stun", "host-stun-empty"):
+            if case in ("host-stun", "host-stun-empty", "host-relay", "net-connection"):
                 settings_path = runs[who].cwd / "Userdata/Settings.ini"
                 settings = settings_path.read_text(encoding="utf-8-sig")
-                settings = re.sub(r"(?m)^[ \t]*(?:" + "|".join(NAT_KEYS) + r")[ \t]*=[^\r\n]*", "", settings)
+                settings = re.sub(r"(?m)^[ \t]*(?:" + "|".join(RELAY_KEYS) + r")[ \t]*=[^\r\n]*", "", settings)
                 settings_path.write_text(settings, encoding="utf-8")
             if who in seeded:
                 seed_settings(runs[who].cwd / "Userdata/Settings.ini", seeded[who])
@@ -1396,7 +1457,7 @@ def run_case(options, case, root, failing=None):
                 page_rect = page["CollectionBoxHostPageNetwork"]["rect"]
                 assert page_rect[1] + page_rect[3] + 4 <= page["ButtonHostOptBack"]["rect"][1], page
             for page in (pages[0], pages[2]):
-                expected = "STUN list empty: LAN-only candidates." if case == "host-stun-empty" else "No relay is provided;"
+                expected = "STUN list empty: direct candidates are LAN-only." if case == "host-stun-empty" else "STUN finds direct routes."
                 assert expected in page["LabelHostNetIceHint"]["text"], page
                 assert "session directory URL" in page["LabelHostNetIceHint"]["text"], page
             expected_saved = dict.fromkeys(NAT_KEYS, "")
@@ -1405,6 +1466,28 @@ def run_case(options, case, root, failing=None):
             assert result["saved"] == expected_saved, result["saved"]
             result["nat_rows"] = [{name: page[name]["rect"] for name in ("LabelHostNetIce", "ComboHostNetIce", "LabelHostNetIceHint")}
                                   for page in pages]
+        if case == "host-relay":
+            pages = [{row["name"]: row for row in capture["controls"]} for capture in images]
+            assert [page["ComboHostNetRelay"]["text"] for page in pages] == ["Directory", "Off", "Fixed", "Directory"], pages
+            assert all(combo_item_names(page["ComboHostNetRelay"]) == ["Off", "Directory", "Fixed"] for page in pages)
+            assert pages[2]["TextHostRelayPass"]["text"] == "*" * len("fixed-password"), pages[2]
+            assert "fixed-password" not in json.dumps(images), "host password escaped the masked readback"
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(RELAY_KEYS))
+            assert result["saved"]["NetworkHostRelayMode"] == "Directory", result["saved"]
+            assert [result["saved"][key] for key in ("NetworkTurnServers", "NetworkTurnUser", "NetworkTurnPass")] == ["relay.example:3478", "fixed-user", "fixed-password"], result["saved"]
+        if case == "net-connection":
+            pages = [{row["name"]: row for row in capture["controls"]} for capture in images]
+            assert [page["ComboNetworkConnection"]["text"] for page in pages] == ["Automatic", "Direct only", "Relay only", "Automatic", "Automatic"], pages
+            assert all(combo_item_names(page["ComboNetworkConnection"]) == ["Automatic", "Direct only", "Relay only"] for page in pages)
+            assert all(page["LabelNetworkConnection"]["text"] == "Connection" and page["LabelNetworkStunServers"]["text"] == "STUN server list" for page in pages)
+            assert pages[0]["TextNetworkStunServers"]["text"] == STUN_DEFAULT, pages[0]
+            assert pages[-1]["TextNetworkRelayPass"]["text"] == "*" * len("personal-password"), pages[-1]
+            assert "personal-password" not in json.dumps(images), "player password escaped the masked readback"
+            wanted = {"NetworkConnectionMode": "Automatic", "NetworkStunServers": "stun.example:3478",
+                      "NetworkPlayerTurnServers": "personal.example:3478", "NetworkPlayerTurnUser": "personal-user", "NetworkPlayerTurnPass": "personal-password"}
+            result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(wanted))
+            assert result["saved"] == wanted, result["saved"]
+            result["connection_rects"] = {name: pages[-1][name]["rect"] for name in CONNECTION_ROWS}
         if case == "repair":
             snapshots = re.findall(r"\[net-match\] resync snapshot at tick (\d+)", logs["host"])
             assert len(snapshots) == 1 and int(snapshots[0]) >= 150, logs["host"][-6000:]
