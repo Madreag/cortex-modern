@@ -637,9 +637,14 @@ def scripts(case, port, root):
                 "activate ButtonHostSeatDlgKick\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
                 "assert_label LabelHostOptStatus Kick: Ok\n"
+                # The open seat is published as a new config revision, so the panel re-seeds its draft
+                # and the seat's name column reads the unseated name instead of the removed player's.
+                "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
                 "dump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                "dump_lobby\nwait 600\nexit\n")
+                # The kicked seat is open again, so its lobby row carries the unseated name the
+                # Seats page shows for an open seat, never the removed player's.
+                "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"

@@ -137,6 +137,10 @@ namespace RTE {
 		static constexpr size_t c_MaxPresetBytes = 128;
 
 		static NetMatchConfig MakeDefault(uint64_t sessionId = 0);
+		/// The name a human slot carries while nobody sits in it. A seat whose holder leaves or is
+		/// kicked reads this again, so no roster keeps a departed player's name on an open seat. A
+		/// persistent world's seats outlive their holders and read "Open"; a match's read their client id.
+		static std::string UnseatedSlotName(uint8_t peerId, bool persistentWorld);
 		/// The roster a rematch is played on: the peers still here keep their relative seat order and
 		/// close up onto ids 1..N. An intact roster maps to itself, config and hash unchanged.
 		/// @param outSeatMap Optional old lockstep peer id -> new lockstep peer id for every survivor.
