@@ -15,8 +15,13 @@
 #include "GUITab.h"
 #include "GUITextBox.h"
 #include "FrameMan.h"
+#include "GAScripted.h"
+#include "GameActivity.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
+#include "PresetMan.h"
+#include "Scene.h"
+#include "SettingsMan.h"
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
@@ -29,6 +34,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <list>
 #include <sstream>
 #include <string_view>
 #include <tuple>
@@ -187,12 +193,34 @@ namespace RTE::MenuAutomation {
 	bool Handles(const std::string& command) {
 		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
+			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "key_down" || command == "key_up") {
+				std::string key;
+				args >> std::quoted(key);
+				auto* input = dynamic_cast<GUIInputWrapper*>(manager->GetInput());
+				observation = key;
+				return input && !key.empty() && input->QueueAutomationInput("key", key, command == "key_down");
+			}
+			if (command == "focus") {
+				std::string target;
+				args >> std::quoted(target);
+				auto* control = manager->GetControl(target);
+				if (!control || !Enabled(control) || !control->GetPanel()) {
+					observation = target + " missing or disabled";
+					return false;
+				}
+				manager->GetManager()->SetFocus(control->GetPanel());
+				const auto r = Rectangle(control->GetPanel());
+				g_UInputMan.SetAbsoluteMousePosition(Vector(r[0] + r[2] / 2, r[1] + r[3] / 2) * g_WindowMan.GetResMultiplier());
+				observation = target;
+				return true;
+			}
 			if (command == "combo_drop" || command == "combo_select") {
 				std::string comboName;
 				args >> std::quoted(comboName);
@@ -286,9 +314,63 @@ namespace RTE::MenuAutomation {
 				static unsigned int capture = 0;
 				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
+				Json table = Json::array();
+				for (const NetHostActivityChoice& activity : NetMatchService::ListHostActivities()) {
+					Json scenes = Json::array();
+					for (const NetHostSceneChoice& scene : activity.scenes) {
+						scenes.push_back({{"name", scene.name}, {"module", scene.module}});
+					}
+					table.push_back({{"preset", activity.preset}, {"module", activity.module},
+						{"activity_type", activity.activityType}, {"scenes", scenes}});
+				}
+				Json loaded = Json::array();
+				std::list<Entity*> activityPresets;
+				g_PresetMan.GetAllOfType(activityPresets, "Activity");
+				for (Entity* entity : activityPresets) {
+					auto* activity = dynamic_cast<GameActivity*>(entity);
+					if (!activity || activity->IsTestActivity()) {
+						continue;
+					}
+					Json required = Json::array();
+					if (auto* scripted = dynamic_cast<GAScripted*>(activity)) {
+						for (const std::string& area : scripted->GetRequiredAreas()) {
+							required.push_back(area);
+						}
+					}
+					loaded.push_back({{"preset", activity->GetPresetName()},
+						{"module", g_PresetMan.GetDataModuleName(activity->GetModuleID())},
+						{"activity_type", activity->GetClassName()},
+						{"min_teams", activity->GetMinTeamsRequired()},
+						{"required_areas", required}});
+				}
+				Json loadedScenes = Json::array();
+				std::list<Entity*> scenePresets;
+				g_PresetMan.GetAllOfType(scenePresets, "Scene");
+				for (Entity* entity : scenePresets) {
+					auto* scene = dynamic_cast<Scene*>(entity);
+					if (!scene) {
+						continue;
+					}
+					Json areas = Json::array();
+					for (const Scene::Area* area : scene->GetAreas()) {
+						if (area) {
+							areas.push_back(area->GetName());
+						}
+					}
+					loadedScenes.push_back({{"name", scene->GetPresetName()},
+						{"module", g_PresetMan.GetDataModuleName(scene->GetModuleID())},
+						{"areas", areas},
+						{"location_zero", scene->GetLocation().IsZero()},
+						{"metagame_internal", scene->IsMetagameInternal()},
+						{"saved_game_internal", scene->IsSavedGameInternal()},
+						{"metascene_parent", scene->GetMetasceneParent()}});
+				}
 				Json result = {{"schema", 1}, {"screen", screen}, {"settings_page", SettingsPage(manager)}, {"viewport", Rectangle(nullptr)}, {"service", lobby.serviceState},
 					{"phase", "after_draw"}, {"sim_frame", g_TimerMan.GetSimUpdateCount()}, {"host", lobby.isHost}, {"peer_id", lobby.localPeerId},
-					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule}, {"controls", Json::array()}};
+					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
+					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
+					{"activity_table", table}, {"game_activities", loaded}, {"loaded_scenes", loadedScenes},
+					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
 					if (!Visible(item) && !dumpHiddenPreset) continue;
@@ -322,6 +404,7 @@ namespace RTE::MenuAutomation {
 								{"name_room", nameRoom}, {"drawn_width", drawnWidth}, {"raw_width", rawWidth}});
 						}
 						row["items"] = items;
+						row["selected_index"] = combo->GetSelectedIndex();
 						constexpr int namePad = 8;
 						constexpr int scrollThickness = 17;
 						constexpr int panelPad = 12;

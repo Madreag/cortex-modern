@@ -2,6 +2,7 @@
 #include "Timer.h"
 
 #include <cassert>
+#include <iostream>
 
 using namespace RTE;
 
@@ -187,9 +188,9 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 			// Disable it (panel will have to re-enable it if it wants to continue)
 			m_HoverTrack = false;
 
-			if (m_HoverPanel && m_HoverPanel->PointInside(MouseX, MouseY) /*GetPanelID() == CurPanel->GetPanelID()*/) {
-				// call the OnMouseHover event
-				m_HoverPanel->OnMouseHover(MouseX, MouseY, Buttons, Mod);
+			GUIPanel* hover = m_HoverPanel;
+			if (hover && hover->PointInside(MouseX, MouseY) /*GetPanelID() == CurPanel->GetPanelID()*/) {
+				hover->OnMouseHover(MouseX, MouseY, Buttons, Mod);
 			}
 		}
 
@@ -239,28 +240,38 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 		}
 
 		for (i = 1; i < 256; i++) {
+			GUIPanel* focused = m_FocusPanel;
+			if (!focused || !focused->IsEnabled()) {
+				break;
+			}
 			switch (KeyboardBuffer[i]) {
 				// KeyDown & KeyPress
 				case GUIInput::Pushed:
-					m_FocusPanel->OnKeyDown(i, Mod);
-					m_FocusPanel->OnKeyPress(i, Mod);
+					focused->OnKeyDown(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyPress(i, Mod);
+					}
 					break;
 
 					// KeyUp
 				case GUIInput::Released:
-					m_FocusPanel->OnKeyUp(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyUp(i, Mod);
+					}
 					break;
 
 					// KeyPress
 				case GUIInput::Repeat:
-					m_FocusPanel->OnKeyPress(i, Mod);
+					if (m_FocusPanel == focused) {
+						focused->OnKeyPress(i, Mod);
+					}
 					break;
 				default:
 					break;
 			}
 		}
 		std::string_view textInput;
-		if (m_Input->GetTextInput(textInput)) {
+		if (m_FocusPanel && m_FocusPanel->IsEnabled() && m_Input->GetTextInput(textInput)) {
 			m_FocusPanel->OnTextInput(textInput);
 		}
 	}
@@ -366,4 +377,90 @@ void GUIManager::SetFocus(GUIPanel* Pan) {
 	if (m_FocusPanel) {
 		m_FocusPanel->OnGainFocus();
 	}
+}
+
+bool GUIManager::RunComboKeyCommitSelfTest() {
+	// A dropped list drops the focus from its OnKeyDown, the way GUIComboBox::CloseDropped does; a real
+	// list panel needs a skin and a screen, and this runs before either exists.
+	class KeyPanel final : public GUIPanel {
+	public:
+		explicit KeyPanel(GUIManager* manager) : GUIPanel(manager) {}
+		void MoveFocusOnEnter(GUIPanel* to) {
+			m_MoveFocus = true;
+			m_MoveTo = to;
+		}
+		void OnKeyDown(int KeyCode, int Modifier) override {
+			m_Downs++;
+			if (m_MoveFocus && KeyCode == GUIInput::Key_Enter) {
+				m_Manager->SetFocus(m_MoveTo);
+			}
+		}
+		void OnKeyPress(int KeyCode, int Modifier) override { m_Presses++; }
+
+		int m_Downs = 0;
+		int m_Presses = 0;
+
+	private:
+		bool m_MoveFocus = false;
+		GUIPanel* m_MoveTo = nullptr;
+	};
+	class KeyInput final : public GUIInput {
+	public:
+		KeyInput() : GUIInput(-1, false) {}
+		void PushEnter() { m_KeyboardBuffer[Key_Enter] = Pushed; }
+	};
+	// The manager's Timer reads g_TimerMan, and this runs before main() builds the managers.
+	if (!TimerMan::IsConstructed()) {
+		TimerMan::Construct();
+	}
+
+	bool passed = true;
+	const auto check = [&passed](const char* label, bool value) {
+		passed = passed && value;
+		std::cout << "[combo-key-selftest] " << (value ? "PASS " : "FAIL ") << label << std::endl;
+	};
+	{
+		// The key hands the focus to another panel. This row runs first: a manager that follows the
+		// member instead of the panel it called prints its failure here before the next row faults.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel next(&manager);
+		KeyPanel dropped(&manager);
+		dropped.MoveFocusOnEnter(&next);
+		manager.AddPanel(&next);
+		manager.AddPanel(&dropped);
+		dropped.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("moved_focus_spares_the_new_panel", dropped.m_Downs == 1 && dropped.m_Presses == 0 &&
+		                                             next.m_Downs == 0 && next.m_Presses == 0 && manager.GetFocusPanel() == &next);
+	}
+	{
+		// Return on the dropped list leaves no focused panel.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel dropped(&manager);
+		dropped.MoveFocusOnEnter(nullptr);
+		manager.AddPanel(&dropped);
+		dropped.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("cleared_focus_ends_the_key", dropped.m_Downs == 1 && dropped.m_Presses == 0 && !manager.GetFocusPanel());
+	}
+	{
+		// A panel that keeps the focus still gets the key press.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel holder(&manager);
+		manager.AddPanel(&holder);
+		holder.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("kept_focus_still_presses", holder.m_Downs == 1 && holder.m_Presses == 1 && manager.GetFocusPanel() == &holder);
+	}
+	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }
