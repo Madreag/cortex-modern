@@ -67,7 +67,6 @@ namespace RTE {
 	struct HorizonFenceState {
 		struct Cell {
 			std::array<const Material*, 8> materials{};
-			bool navigable = true;
 			uint64_t generation = 0;
 		};
 		std::unordered_map<int, Cell> overlay;
@@ -187,15 +186,16 @@ namespace RTE {
 		void SetHorizonWorkerDelayMs(int milliseconds) { m_HorizonWorkerDelayMs = milliseconds; }
 		void TestSetHorizonWorkerLate(bool late) { m_HorizonWorkerLate = late; }
 		void TestHoldHorizonWorker() { m_HorizonWorkerHold.store(true); }
-		void TestReleaseHorizonWorker() { m_HorizonWorkerHold.store(false); }
+		void TestReleaseHorizonWorker();
 		void TestSetWraps(bool wrapX, bool wrapY);
 		int64_t LastHorizonWaitUs() const { return m_LastHorizonWaitUs; }
 		int64_t LastHorizonReaderWaitUs() const { return m_LastHorizonReaderWaitUs; }
 		uint64_t TestHorizonGeneration() const { return m_HorizonGeneration.load(); }
 		size_t TestHorizonOverlayCount() const;
-		bool TestHorizonWrapRayMatches(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
+		int TestHorizonPatchMaterialId(const Vector& start, const Vector& end, const HorizonTerrainPatch& patch) const;
+		int TestLiveRayMaterialId(const Vector& start, const Vector& end) const;
 		std::array<const Material*, 8> TestViewMaterials(int nodeId, uint64_t generation) const;
-		void TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable) const;
+		void TestComputeHorizon(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials) const;
 
 		static int64_t HorizonWaitCount();
 		static int64_t HorizonWaitP99Us();
@@ -208,7 +208,7 @@ namespace RTE {
 		void TestHoldPathingRequest() { ++m_CurrentPathingRequests; }
 		void TestReleasePathingRequest() { --m_CurrentPathingRequests; }
 		void TestApplyLiveUpdate(int nodeId, const std::array<const Material*, 8>& materials);
-		void QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials, bool navigable = true);
+		void QueueHorizonDelta(uint64_t originTick, uint16_t horizonTicks, int nodeId, const std::array<const Material*, 8>& materials);
 		void TestQueueHorizonCompute(uint64_t originTick, uint16_t horizonTicks, int nodeId);
 		int TestNodeIdAt(int x, int y) const { return ConvertCoordsToNodeId(x, y); }
 
@@ -296,7 +296,6 @@ namespace RTE {
 
 		struct HorizonNode {
 			std::array<const Material*, 8> committedMaterials{};
-			bool committedNavigable = true;
 			uint64_t generation = 0;
 		};
 		struct HorizonJob {
@@ -305,7 +304,6 @@ namespace RTE {
 			std::vector<int> nodeIds;
 			std::vector<HorizonNodeSnapshot> nodes;
 			std::vector<std::array<const Material*, 8>> materials;
-			std::vector<char> navigable;
 			std::vector<HorizonTerrainPatch> patches;
 			int delayMs = 0;
 			bool late = false;
@@ -328,13 +326,10 @@ namespace RTE {
 		int64_t m_LastHorizonReaderWaitUs = 0;
 		int64_t m_LastHorizonExpired = 0;
 
-		struct NodeCostView {
-			std::array<const Material*, 8> materials{};
-			bool navigable = true;
-		};
-		NodeCostView ViewNode(const PathNode* node) const;
+		/// The transition Materials a query sees: the committed overlay under lockstep, this machine's live grid otherwise.
+		std::array<const Material*, PathNode::c_MaxAdjacentNodeCount> ViewNodeMaterials(const PathNode* node) const;
 		static const Material* StrongestMaterialAlongPatch(const Vector& start, const Vector& end, const std::vector<HorizonTerrainPatch>& patches);
-		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials, std::vector<char>& navigable);
+		static void ComputeHorizonMaterialsFromSnapshots(const std::vector<HorizonNodeSnapshot>& nodes, const std::vector<HorizonTerrainPatch>& patches, std::vector<std::array<const Material*, 8>>& materials);
 		HorizonNodeSnapshot SnapshotNode(int nodeId) const;
 		void LaunchHorizonWorker(const std::shared_ptr<HorizonJob>& job);
 		void ApplyHorizonJob(const HorizonJob& job, uint64_t generation);
