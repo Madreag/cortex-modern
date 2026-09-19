@@ -4762,6 +4762,21 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			fixture->m_IsActive[0] = fixture->m_IsHuman[0] = true;
 			fixture->m_Team[0] = 0;
 			fixture->m_PlayerScreen[0] = 0;
+			// The seat carries the UI Start gives it, because Update dereferences all of it around the ActorSelect branch.
+			fixture->m_PlayerController[0].Create(Controller::CIM_PLAYER, 0);
+			fixture->m_InventoryMenuGUI[0] = new InventoryMenuGUI;
+			if (fixture->m_InventoryMenuGUI[0]->Create(&fixture->m_PlayerController[0]) < 0) throw std::runtime_error("highlight fixture inventory menu failed");
+			fixture->m_pBuyGUI[0] = new BuyMenuGUI;
+			if (fixture->m_pBuyGUI[0]->Create(&fixture->m_PlayerController[0]) < 0) throw std::runtime_error("highlight fixture buy menu failed");
+			fixture->m_pBannerRed[0] = new GUIBanner;
+			fixture->m_pBannerYellow[0] = new GUIBanner;
+			if (!fixture->m_pBannerRed[0]->Create("Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png", 8) ||
+			    !fixture->m_pBannerYellow[0]->Create("Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png", 8)) {
+				throw std::runtime_error("highlight fixture banner failed");
+			}
+			// A seat that already holds its brain and body stays in ActorSelect for the Update instead of switching actors.
+			fixture->m_Brain[0] = actor;
+			fixture->m_ControlledActor[0] = actor;
 			fixture->m_ViewState[0] = ViewState::ActorSelect;
 			fixture->m_ActorCursor[0] = actor->GetCPUPos();
 			PieMenu* pie = actor->GetPieMenu();
@@ -4770,6 +4785,8 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			const auto described = pie->DescribeInteractionState();
 			const bool enabledBefore = pie->IsEnabled();
 			const bool visibleBefore = pie->IsVisible();
+			const bool normalModeBefore = pie->IsInNormalAnimationMode();
+			const Vector centerBefore = pie->GetPos();
 			LoopbackTransport transport;
 			NetLockstepConfig liveConfig;
 			liveConfig.sessionId = 1;
@@ -4783,6 +4800,19 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 				ScenarioRunner::SetLockstepCoordinator(&live);
 				g_MovableMan.AbsorbAddedMOs();
 				fixture->Update();
+				const bool marked = fixture->m_pLastMarkedActor[0] == actor;
+				const bool heldView = fixture->m_ViewState[0] == ViewState::ActorSelect;
+				std::cout << "[net-local-highlight] marked=" << marked << " view=" << static_cast<int>(fixture->m_ViewState[0])
+				          << " enabled=" << pie->IsEnabled() << " visible=" << pie->IsVisible() << " normal_mode=" << pie->IsInNormalAnimationMode()
+				          << " highlight=" << pie->HasHighlightDraw() << " radius=" << pie->GetHighlightDrawRadius()
+				          << " center=" << pie->GetPos().m_X << "," << pie->GetPos().m_Y << std::endl;
+				// The rows below only mean something if Update ran the ActorSelect branch over this actor.
+				check("lockstep_update_reaches_actor_select", marked && heldView,
+					std::string(marked ? "marked" : "unmarked") + "/" + std::to_string(static_cast<int>(fixture->m_ViewState[0])),
+					"marked/" + std::to_string(static_cast<int>(ViewState::ActorSelect)));
+				check("lockstep_update_leaves_freeze_unset", pie->IsInNormalAnimationMode() == normalModeBefore && pie->GetHighlightDrawRadius() == 0 && pie->GetPos() == centerBefore,
+					std::string(pie->IsInNormalAnimationMode() ? "1" : "0") + "/" + std::to_string(pie->GetHighlightDrawRadius()) + "/" + std::to_string(pie->GetPos().m_X),
+					std::string(normalModeBefore ? "1" : "0") + "/0/" + std::to_string(centerBefore.m_X));
 				check("lockstep_update_leaves_highlight_undrawn", !pie->HasHighlightDraw(), pie->HasHighlightDraw() ? "1" : "0", "0");
 				check("lockstep_update_dump_unchanged", pie->PackInteractionState() == packed && pie->DescribeInteractionState() == described,
 					pie->PackInteractionState(), packed);
