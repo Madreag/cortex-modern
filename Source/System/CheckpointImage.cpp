@@ -4,6 +4,7 @@
 #include "Scene.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
+#include "Atom.h"
 #include "Actor.h"
 #include "AudioMan.h"
 #include "LuaMan.h"
@@ -580,6 +581,36 @@ bool RTE::RunCheckpointSceneRows() {
 			fail(row, "generation " + std::to_string(after) + " after NotResting wrote three saved fields");
 		} else {
 			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
+		}
+	}
+	// An Atom is archived through its owner and is not an Entity, so a write to one has to reach the
+	// owner's stamp or the owner's whole shadow is served again with the old trail.
+	{
+		Atom borrowed;
+		borrowed.SetOwner(live);
+		const uint64_t before = live->CheckpointWriteGeneration();
+		borrowed.SetTrailLength(borrowed.GetTrailLength() + 1);
+		const uint64_t after = live->CheckpointWriteGeneration();
+		const char* row = "an_atom_write_moves_its_owner_stamp";
+		if (after == before) {
+			fail(row, "generation " + std::to_string(after) + " after the trail length moved");
+		} else {
+			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
+		}
+	}
+	// The scripted-update counter is saved and used to change every tick for every object, which no
+	// shadow survives. A tick that leaves it where it started must leave the stamp alone.
+	{
+		live->UpdateScripts();
+		const uint64_t before = live->CheckpointWriteGeneration();
+		live->UpdateScripts();
+		live->UpdateScripts();
+		const uint64_t after = live->CheckpointWriteGeneration();
+		const char* row = "a_quiet_scripted_update_counter_leaves_the_stamp";
+		if (after != before) {
+			fail(row, "generation moved " + std::to_string(after - before) + " times over two script updates");
+		} else {
+			pass(row, "generation " + std::to_string(after) + " held");
 		}
 	}
 	// A capture assigns sound identities and can draw counters; the rows hand the sim back what they took.
