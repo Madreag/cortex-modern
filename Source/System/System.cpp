@@ -29,6 +29,8 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -161,8 +163,7 @@ namespace {
 		stream.flush();
 	}
 
-	// A fault on this thread while a print is in progress takes the unlocked path; try_to_lock is only
-	// for a fault on another thread.
+	// A fault raised inside a print must not wait on the lock its own thread already holds.
 	void WriteFaultLine(std::ostream& stream, std::FILE* file, const std::string& line) {
 		std::string whole = line;
 		if (whole.empty() || whole.back() != '\n') {
@@ -456,6 +457,62 @@ namespace {
 		bool m_PrintFromInside = false;
 		bool m_Nested = false;
 	};
+
+	// One sink both writers append to, which parks the first one halfway through its own write: a second
+	// writer that reaches the sink meanwhile lands its bytes inside the first line, exactly as a lost
+	// print lock would. Whether it reaches the sink is the lock's answer, not a schedule's.
+	class SplicingBuffer : public std::streambuf {
+	public:
+		explicit SplicingBuffer(std::thread::id parked) : m_ParkedThread(parked) {}
+		std::string Text() {
+			std::scoped_lock lock(m_Mutex);
+			return m_Text;
+		}
+		bool SawSecondWriterInside() {
+			std::scoped_lock lock(m_Mutex);
+			return m_SecondEntered;
+		}
+		void WaitUntilParked() {
+			std::unique_lock<std::mutex> lock(m_Mutex);
+			m_Parked.wait_for(lock, std::chrono::seconds(2), [this] { return m_Inside || m_Done; });
+		}
+	protected:
+		std::streamsize xsputn(const char* data, std::streamsize size) override {
+			const size_t whole = static_cast<size_t>(size);
+			std::unique_lock<std::mutex> lock(m_Mutex);
+			if (std::this_thread::get_id() != m_ParkedThread || m_Done) {
+				if (m_Inside) m_SecondEntered = true;
+				m_Text.append(data, whole);
+				m_Entered.notify_all();
+				return size;
+			}
+			const size_t half = whole > 1 ? whole / 2 : whole;
+			m_Text.append(data, half);
+			m_Inside = true;
+			m_Parked.notify_all();
+			m_Entered.wait_for(lock, std::chrono::milliseconds(250), [this] { return m_SecondEntered; });
+			m_Text.append(data + half, whole - half);
+			m_Inside = false;
+			m_Done = true;
+			m_Parked.notify_all();
+			return size;
+		}
+		int_type overflow(int_type ch) override {
+			if (traits_type::eq_int_type(ch, traits_type::eof())) return traits_type::not_eof(ch);
+			const char value = traits_type::to_char_type(ch);
+			xsputn(&value, 1);
+			return ch;
+		}
+	private:
+		std::mutex m_Mutex;
+		std::condition_variable m_Parked;
+		std::condition_variable m_Entered;
+		std::thread::id m_ParkedThread;
+		std::string m_Text;
+		bool m_Inside = false;
+		bool m_SecondEntered = false;
+		bool m_Done = false;
+	};
 } // namespace
 
 bool System::RunPrintDisciplineSelfTest() {
@@ -470,11 +527,14 @@ bool System::RunPrintDisciplineSelfTest() {
 		// One thread, no waiting: a print raised from inside a print must not block on the lock this
 		// thread already holds, and the outer line must still reach the stream in a single write.
 		RecordingBuffer nesting(true);
+		// The nested line goes to the FILE*, which the recorder never sees: only the depth path says it went there.
+		s_LastFaultDepthPath = -1;
 		std::streambuf* original = std::cout.rdbuf(&nesting);
 		System::PrintDiagnosticLine("[print-discipline-selftest] outer line");
 		std::cout.rdbuf(original);
 		const std::vector<std::string> writes = nesting.Writes();
-		check("nested_print_returns", writes.size() == 1, "writes=" + std::to_string(writes.size()) + " depth_path=" + std::to_string(s_LastFaultDepthPath));
+		check("nested_print_returns", writes.size() == 1 && s_LastFaultDepthPath == 1,
+		      "writes=" + std::to_string(writes.size()) + " depth_path=" + std::to_string(s_LastFaultDepthPath));
 		check("outer_line_is_one_write", writes.size() == 1 && writes.front() == "[print-discipline-selftest] outer line\n",
 		      writes.empty() ? std::string("none") : writes.front().substr(0, writes.front().size() - (writes.front().back() == '\n' ? 1 : 0)));
 	}
@@ -514,8 +574,43 @@ bool System::RunPrintDisciplineSelfTest() {
 				if (firstTorn.empty()) firstTorn = write;
 			}
 		}
-		check("no_torn_line", torn == 0, "torn=" + std::to_string(torn) + (firstTorn.empty() ? "" : " first=" + firstTorn));
+		check("every_write_is_one_whole_line", torn == 0, "torn=" + std::to_string(torn) + (firstTorn.empty() ? "" : " first=" + firstTorn));
 		check("every_line_arrived", ours == static_cast<size_t>(c_Lines) * 2, "lines=" + std::to_string(ours));
+	}
+
+	{
+		// A torn line without a race: the sink parks the first writer in the middle of its own write and
+		// lets the second one in the moment nothing holds it out. Under the print lock the second writer
+		// waits on the lock and both lines land whole; without it its line lands inside the first one.
+		SplicingBuffer splicer(std::this_thread::get_id());
+		const std::string firstLine = "[print-discipline-selftest] parked writer line";
+		const std::string secondLine = "[print-discipline-selftest] other writer line";
+		std::streambuf* original = std::cout.rdbuf(&splicer);
+		std::thread other([&splicer, &secondLine] {
+			splicer.WaitUntilParked();
+			System::PrintDiagnosticLine(secondLine);
+		});
+		System::PrintDiagnosticLine(firstLine);
+		other.join();
+		std::cout.rdbuf(original);
+		const std::string sink = splicer.Text();
+		std::vector<std::string> lines;
+		for (size_t start = 0; start < sink.size();) {
+			const size_t end = sink.find('\n', start);
+			lines.push_back(sink.substr(start, end == std::string::npos ? std::string::npos : end - start));
+			start = end == std::string::npos ? sink.size() : end + 1;
+		}
+		size_t torn = 0;
+		std::string firstTorn;
+		for (const std::string& line: lines) {
+			if (line == firstLine || line == secondLine) continue;
+			++torn;
+			if (firstTorn.empty()) firstTorn = line;
+		}
+		check("no_torn_line", torn == 0 && lines.size() == 2,
+		      "lines=" + std::to_string(lines.size()) + " torn=" + std::to_string(torn) +
+		          " second_writer_inside=" + std::to_string(splicer.SawSecondWriterInside() ? 1 : 0) +
+		          (firstTorn.empty() ? "" : " first=" + firstTorn));
 	}
 
 	for (const auto& [line, detail]: results) {

@@ -14075,13 +14075,29 @@ namespace RTE {
 				       " produced_jump=" + std::to_string(controller->IsState(ControlState::BODY_JUMP) ? 1 : 0) + "}";
 			};
 			const std::string ended = "{producing=0 committed_fire=1 produced_jump=0}";
+			// One check per shape, so a failure names the defect: a pass that never gives the committed frame
+			// back, an End that re-derives ownership instead of ending what Begin began, an actor the world
+			// handed out mid-window, and an End that reached that actor and kept its produced carry.
+			std::string failures;
+			const auto row = [&failures](const char* check, bool ok, const std::string& observed) {
+				std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << check << " " << observed << std::endl;
+				if (!ok) {
+					failures += (failures.empty() ? "" : "; ") + std::string(check) + " " + observed;
+				}
+			};
 			const std::string stayerState = describe(stayer);
 			const std::string moverState = describe(mover);
 			const std::string leaverState = describe(leaver.get());
-			if (stayerState != ended || moverState != ended || leaverState != ended) {
-				return finish(("stayer=" + stayerState + " team_changed=" + moverState + " left_the_world=" + leaverState +
-				               " (expected " + ended + " " + ended + " " + ended + ")")
-				                  .c_str());
+			row("producing_pass_gives_the_committed_frame_back", stayerState == ended, "stayer=" + stayerState);
+			row("producing_pass_ends_an_actor_a_team_write_moved", moverState == ended, "team_changed=" + moverState);
+			row("producing_pass_ends_an_actor_that_left_the_world", leaverState == ended, "left_the_world=" + leaverState);
+			// The world's own drop keeps no carry, so the next pass on that actor starts from no input.
+			leaver->GetController()->BeginLocalProduction();
+			const std::string leaverCarry = describe(leaver.get());
+			row("an_actor_that_left_the_world_carries_no_produced_input",
+			    leaverCarry == "{producing=1 committed_fire=0 produced_jump=0}", "carry=" + leaverCarry);
+			if (!failures.empty()) {
+				return finish(failures.c_str());
 			}
 			return finish(nullptr);
 		}

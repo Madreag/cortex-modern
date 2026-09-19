@@ -795,9 +795,7 @@ void lj_trace_ins(jit_State *J, const BCIns *pc)
     J->state = LJ_TRACE_ERR;
 }
 
-/* The recorder's own pc names the instruction it was left at, which is not where a leftover abort runs.
-** The live position is the frame below the boundary; a boundary with no Lua frame under it has none.
-*/
+/* A leftover abort runs below the boundary, not at the pc the recorder was left at. */
 static void trace_leftover_pos(jit_State *J, lua_State *L)
 {
   cTValue *bot = tvref(L->stack)+LJ_FR2;

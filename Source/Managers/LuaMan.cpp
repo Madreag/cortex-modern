@@ -7947,12 +7947,16 @@ _PrimitiveQueueCapture = nil
 		const uint64_t rolledBack = m_PreviewCallerCopiesRolledBack - rolledBefore;
 		const uint64_t kept = m_PreviewCallerCopiesKept - keptBefore;
 		const uint64_t emptied = m_PreviewCallerCopiesEmptied - emptiedBefore;
-		std::cout << "[preview-caller-copy] primed=" << primed << " fenced=" << fenced << " reloaded=" << reloaded
+		const bool fenceOn = LuaMan::PreviewGlobalFenceEnabled();
+		std::cout << "[preview-caller-copy] fence=" << (fenceOn ? "on" : "off") << " primed=" << primed
+		          << " fenced=" << fenced << " reloaded=" << reloaded
 		          << " resident_names_global=" << residentSame << " window_copy_names_global=" << windowCopySame
 		          << " rolled_back=" << rolledBack << " kept=" << kept << " emptied=" << emptied << std::endl;
-		// The one copy the window handed out is the one that rolls back: nothing else is kept or emptied.
-		previewCallerCopyRollsBack = primed && fenced && reloaded == 0 && residentSame && windowCopySame &&
-		                             rolledBack == 1 && kept == 0 && emptied == 0;
+		// With the fence on, the one copy the window handed out is the one that rolls back and nothing else
+		// is kept or emptied; with the fence off no window reference is taken, so no copy is accounted at all.
+		previewCallerCopyRollsBack = primed && reloaded == 0 && kept == 0 && emptied == 0 &&
+		                             (fenceOn ? (fenced && residentSame && windowCopySame && rolledBack == 1)
+		                                      : (!fenced && rolledBack == 0));
 		for (const auto& [name, function]: residentFunctions) {
 			delete function;
 		}
@@ -7969,7 +7973,8 @@ _PrimitiveQueueCapture = nil
 		lua_pushnil(m_State);
 		lua_setglobal(m_State, reloadPath.c_str());
 	}
-	std::cout << "[script-graph-selftest] " << (previewCallerCopyRollsBack ? "PASS" : "FAIL") << " preview_caller_copy_rolls_back" << std::endl;
+	std::cout << "[script-graph-selftest] " << (previewCallerCopyRollsBack ? "PASS" : "FAIL")
+	          << " preview_caller_copy_rolls_back fence=" << (LuaMan::PreviewGlobalFenceEnabled() ? "on" : "off") << std::endl;
 	checkpointValues = previewCallerCopyRollsBack && checkpointValues;
 	// The upvalue slots a window writes are counted, and the registry form of the rollback is armed by hand and pinned.
 	bool previewSlotMeasureAndRegistryRoot = false;
@@ -8129,6 +8134,7 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = PreviewScriptSelfTest::CheckGlobalWriteBarrier() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckHotcountAfterAbort() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckAbortLeftoverPosition() && checkpointValues;
+	checkpointValues = PreviewScriptSelfTest::CheckPreviewMeasureEnvGate() && checkpointValues;
 	checkpointValues = PreviewScriptSelfTest::CheckAbortPenalizes() && checkpointValues;
 	checkpointValues = ScriptGraphCapturedBytecodeSelfTest(m_State) && checkpointValues;
 	bool ownedGraph = false;
