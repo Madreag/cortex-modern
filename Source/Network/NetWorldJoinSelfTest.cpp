@@ -2841,6 +2841,105 @@ namespace RTE {
 		return 0;
 	}
 
+	// Two bootstraps in flight: one image, one capture, one admission at a time, both restarts kept.
+	int TestConcurrentJoinsKeepTheirOwnActivation() {
+		NetMatchConfig config = MakeWorldConfig();
+		config.peerCount = 3;
+		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.worldTeamCapacity = {1, 1, 0, 0};
+		config.worldMaxSpectators = 2;
+		NetWorldJoinHost host;
+		std::string error;
+		if (!host.Configure(config, MakeIdentity(), &error)) {
+			return Fail("concurrent-joins-shared-an-activation: the world plane refused its own config (" + error + ")");
+		}
+		// The first joiner opens before any image; the second opens after it is published.
+		if (!host.BeginJoin(31, 31, "first", 1000, &error)) {
+			return Fail("concurrent-joins-shared-an-activation: the first bootstrap was refused (" + error + ")");
+		}
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 500;
+		image.bytes = 64;
+		image.digest = "d";
+		host.PublishImage(image);
+		if (!host.BeginJoin(32, 32, "second", 1010, &error)) {
+			return Fail("concurrent-joins-shared-an-activation: the second bootstrap was refused (" + error + ")");
+		}
+		const NetWorldJoinSession* first = host.FindSession(31);
+		const NetWorldJoinSession* second = host.FindSession(32);
+		if (first == nullptr || second == nullptr || first->assignedPeerId != 2 || second->assignedPeerId != 3) {
+			return Fail("concurrent-joins-shared-an-activation: the two joiners took peers " +
+			            std::to_string(first == nullptr ? 0 : first->assignedPeerId) + " and " +
+			            std::to_string(second == nullptr ? 0 : second->assignedPeerId));
+		}
+		if (first->snapshotTick != 500 || second->snapshotTick != 500) {
+			return Fail("concurrent-joins-recaptured-the-world: the two bootstraps hold ticks " +
+			            std::to_string(first->snapshotTick) + " and " + std::to_string(second->snapshotTick) +
+			            " from one published image at 500");
+		}
+		// One image, one capture: publishing it again at the same tick must not count a second stall.
+		const uint64_t captures = host.Metrics().Captures();
+		if (captures != 1) {
+			return Fail("concurrent-joins-recaptured-the-world: two bootstraps at one tick cost " +
+			            std::to_string(captures) + " captures");
+		}
+		// Each joiner is announced its own E, in join order, both ahead of the input already sent.
+		host.NoteSentInputThrough(560);
+		(void)host.NoteTransferComplete(31, 64, &error);
+		(void)host.NoteTransferComplete(32, 64, &error);
+		uint64_t firstE = 0;
+		uint64_t secondE = 0;
+		if (!host.NoteCatchUpProgress(31, 540, 40, 10, 560, &firstE, &error) || firstE == 0) {
+			return Fail("concurrent-joins-shared-an-activation: the first joiner was announced no E (" + error + ")");
+		}
+		host.NoteSentInputThrough(600);
+		if (!host.NoteCatchUpProgress(32, 580, 80, 20, 600, &secondE, &error) || secondE == 0) {
+			return Fail("concurrent-joins-shared-an-activation: the second joiner was announced no E (" + error + ")");
+		}
+		if (firstE == secondE || secondE < firstE) {
+			return Fail("concurrent-joins-shared-an-activation: the joiners were announced E " +
+			            std::to_string(firstE) + " and " + std::to_string(secondE) + " out of join order");
+		}
+		if (firstE <= 560 || secondE <= 600) {
+			return Fail("concurrent-joins-shared-an-activation: an E landed behind the input already sent (" +
+			            std::to_string(firstE) + ", " + std::to_string(secondE) + ")");
+		}
+		// The due activation is the earlier one, so the members activate in join order.
+		const NetWorldJoinSession* due = host.DueActivation(firstE - 1);
+		if (due == nullptr || due->connection != 31) {
+			return Fail("concurrent-joins-shared-an-activation: the activation due at " + std::to_string(firstE) +
+			            " is connection " + std::to_string(due == nullptr ? 0 : due->connection));
+		}
+		if (host.DueActivation(secondE - 1) == nullptr || host.DueActivation(secondE - 1)->connection != 32) {
+			return Fail("concurrent-joins-shared-an-activation: the second activation never came due at " + std::to_string(secondE));
+		}
+		// The round keeps BOTH restarts: a second announcement may not drop the first joiner's.
+		NetLockstepCoordinator round;
+		round.SetObservationEpoch(firstE);
+		round.SetObservationEpoch(secondE);
+		if (round.ObservationEpochs().size() != 2 || round.ObservationEpochs().count(firstE) == 0 ||
+		    round.ObservationEpochs().count(secondE) == 0) {
+			return Fail("concurrent-join-dropped-the-first-restart: the round holds " +
+			            std::to_string(round.ObservationEpochs().size()) + " restarts, not " +
+			            std::to_string(firstE) + " and " + std::to_string(secondE));
+		}
+		if (round.ObservationEpoch() != secondE) {
+			return Fail("concurrent-join-dropped-the-first-restart: the newest restart reads " +
+			            std::to_string(round.ObservationEpoch()) + ", not " + std::to_string(secondE));
+		}
+		// A re-announce moves its own restart and leaves the other joiner's standing.
+		round.MoveObservationEpoch(secondE, secondE + 90);
+		if (round.ObservationEpochs().count(firstE) == 0 || round.ObservationEpochs().count(secondE) != 0 ||
+		    round.ObservationEpochs().count(secondE + 90) == 0) {
+			return Fail("concurrent-join-dropped-the-first-restart: a re-announce left " +
+			            std::to_string(round.ObservationEpochs().size()) + " restarts and lost one of them");
+		}
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -2974,6 +3073,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-selftest";
 			return TestHostBootstrapRefusals();
 		}
+		if (std::strcmp(name, "concurrent") == 0 || std::strcmp(name, "-net-world-concurrent-selftest") == 0) {
+			s_FailTag = "net-world-concurrent-selftest";
+			return TestConcurrentJoinsKeepTheirOwnActivation();
+		}
 		if (std::strcmp(name, "overflow") == 0 || std::strcmp(name, "-net-world-overflow-selftest") == 0) {
 			s_FailTag = "net-world-overflow-selftest";
 			return TestSpectatorOverflowIsBounded();
@@ -3094,6 +3197,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
+			return result;
+		}
+		if (const int result = TestConcurrentJoinsKeepTheirOwnActivation(); result != 0) {
 			return result;
 		}
 		if (const int result = TestSpectatorOverflowIsBounded(); result != 0) {
