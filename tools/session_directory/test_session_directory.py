@@ -117,11 +117,12 @@ class DirectoryTests(unittest.TestCase):
         cert: Optional[Path] = None,
         key: Optional[Path] = None,
         queue_idle_s: Optional[float] = None,
+        port: int = 0,
     ) -> None:
         self.use_tls = cert is not None and key is not None
         kwargs: dict[str, Any] = {
             "bind": "127.0.0.1",
-            "port": 0,
+            "port": port,
             "expiry_s": expiry_s,
             "heartbeat_s": heartbeat_s,
             "insecure_http": not self.use_tls,
@@ -229,6 +230,46 @@ class DirectoryTests(unittest.TestCase):
 
     def assert_keys(self, body: dict[str, Any], keys: set[str]) -> None:
         self.assertEqual(set(body.keys()), keys)
+
+    def test_successor_resumes_row_only_with_its_sealed_token(self) -> None:
+        self.start(port=45799)
+        status, created = self.register()
+        self.assertEqual(status, 200)
+        sid, token = created["session_id"], created["token"]
+        status, _ = self.register(resume_session_id=sid, resume_token=sid)
+        self.assertEqual(status, 403, "public session id resume was not refused")
+        status, _ = self.register(resume_session_id=sid)
+        self.assertEqual(status, 400, "a resume without the row token was accepted")
+        status, moved = self.register(
+            resume_session_id=sid, resume_token=token,
+            listen_addrs=["203.0.113.42"], listen_port=45793,
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(moved["session_id"], sid, "successor created another row instead of resuming the match")
+        status, listed = self.list_sessions()
+        self.assertEqual(status, 200)
+        self.assertEqual(len(listed["sessions"]), 1)
+        row = listed["sessions"][0]
+        self.assertEqual(row["listen_addrs"], ["203.0.113.42"])
+        self.assertEqual(row["listen_port"], 45793)
+        self.assertEqual(row["state"], "running")
+        self.assertNotIn("resume_token", row)
+        self.assertNotIn("token", row)
+
+    def test_successor_token_outlives_the_discovery_lease(self) -> None:
+        directory = session_directory.SessionDirectory(15, 5)
+        created = directory.register(sample_register(), "192.0.2.1", 0)
+        directory.prune(20)
+        resumed = directory.register(sample_register(
+            resume_session_id=created["session_id"], resume_token=created["token"],
+            listen_addrs=["192.0.2.2"], listen_port=45793,
+        ), "192.0.2.2", 21)
+        self.assertEqual(resumed["session_id"], created["session_id"], "lease expiry lost the authenticated migration row")
+        directory.delete(created["session_id"], {"token": created["token"]}, 22)
+        with self.assertRaises(PermissionError, msg="deleted match was resurrected by a retired token"):
+            directory.register(sample_register(
+                resume_session_id=created["session_id"], resume_token=created["token"],
+            ), "192.0.2.2", 23)
 
     def test_register_then_list(self) -> None:
         self.start()

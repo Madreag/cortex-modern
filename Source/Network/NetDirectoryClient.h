@@ -88,6 +88,8 @@ namespace RTE {
 		/// selects discovery visibility; a false intent needs the service's supports_unlisted
 		/// capability, otherwise the row is deleted once and the intent stays Failed.
 		void Advertise(const NetDirectoryRegisterRequest& row, bool running, bool listed = true);
+		bool Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token);
+		void AbandonLease();
 		/// Host: take the row down. Once a session exists the delete rides the request pump; a row
 		/// still mid-register is answered first so the delete can target the issued session id.
 		void Retract();
