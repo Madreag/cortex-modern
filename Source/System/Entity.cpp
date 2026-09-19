@@ -1,5 +1,6 @@
 #include "Entity.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "RTETools.h"
 #include "PresetMan.h"
 #include "DataModule.h"
@@ -12,6 +13,12 @@
 namespace RTE {
 	thread_local unsigned int Entity::s_CheckpointCloneDepth = 0;
 	bool Entity::IsCheckpointClone() { return s_CheckpointCloneDepth != 0 || MovableObject::IsFaithfulClone(); }
+
+	void Entity::ReportCheckpointValueWrite() {
+		m_CheckpointValueTrap = false;
+		CheckpointValueWritten(this);
+	}
+
 	std::string Entity::SaveCheckpoint() const {
 		CheckpointWriter archive("Entity1");
 		archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
