@@ -2887,6 +2887,7 @@ namespace RTE {
 		m_MigrationWireRound = m_RoundId;
 		m_MigrationPhase = NetHostMigrationPhase::Contacting;
 		m_MigrationSinceMs = nowMs;
+		m_MigrationStartedMs = nowMs;
 		m_MigrationLastSendMs = 0;
 		m_MigrationBoundary = 0;
 		m_MigrationCandidateIndex = 0;
@@ -2941,7 +2942,8 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
 		const auto& order = m_Config.matchConfig.successorOrder;
-		while (m_MigrationCandidateIndex < order.size() && (order[m_MigrationCandidateIndex] == GetHostPeerId() || IsPeerGoneAtFrame(order[m_MigrationCandidateIndex], GetResumeFrame())))
+		while (m_MigrationCandidateIndex < order.size() && (order[m_MigrationCandidateIndex] == GetHostPeerId() || IsPeerGoneAtFrame(order[m_MigrationCandidateIndex], GetResumeFrame()) ||
+		                                                   IsLostMigrationSuccessor(order[m_MigrationCandidateIndex])))
 			++m_MigrationCandidateIndex;
 		if (m_MigrationCandidateIndex == order.size()) {
 			FailHostMigration("no surviving successor");
@@ -2975,6 +2977,10 @@ namespace RTE {
 		std::string error;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		m_MigrationTransport = hosting ? std::move(m_MigrationListener) : m_Config.migrationTransportFactory();
+		if (!m_MigrationTransport) {
+			FailHostMigration("the handover transport could not be created");
+			return false;
+		}
 		if (m_MigrationNextAddress == endpoint->listenAddrs.size()) {
 			m_MigrationNextAddress = 0;
 		}
@@ -3006,6 +3012,35 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::IsLostMigrationSuccessor(uint8_t peerId) const {
+		return std::find(m_MigrationLostSuccessors.begin(), m_MigrationLostSuccessors.end(), peerId) != m_MigrationLostSuccessors.end();
+	}
+
+	// An open handover link is the candidate answering for itself: a stalled exchange must not elect a
+	// second host past a peer that is plainly alive, so the candidate is kept until the whole election expires.
+	bool NetLockstepCoordinator::HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const {
+		return m_MigrationHostTransport != c_InvalidNetPeerId && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs < 3 * budget;
+	}
+
+	// A peer the successor left out of its roster waits for the commit; when the successor dies first the
+	// successor is this peer's dead host, so the next generation is elected exactly as an ordinary host loss.
+	bool NetLockstepCoordinator::RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs) {
+		const uint8_t lost = m_MigrationSuccessor;
+		if (lost == 0 || lost == m_Config.localPeerId)
+			return false;
+		if (!IsLostMigrationSuccessor(lost))
+			m_MigrationLostSuccessors.push_back(lost);
+		const auto& order = m_Config.matchConfig.successorOrder;
+		if (std::none_of(order.begin(), order.end(), [&](uint8_t peer) { return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, GetResumeFrame()) && !IsLostMigrationSuccessor(peer); }))
+			return false;
+		m_MigrationPhase = NetHostMigrationPhase::None;
+		std::cout << "[net-match] handover successor " << static_cast<int>(lost) << " was lost before the commit; electing again" << std::endl;
+		if (BeginHostMigration(nowMs))
+			return true;
+		m_MigrationPhase = NetHostMigrationPhase::WaitingForReady;
+		return false;
+	}
+
 	void NetLockstepCoordinator::TickMigrationRollCallLinks(uint64_t nowMs) {
 		const auto authenticated = [&](const NetTransportEvent& event, NetHostMigrationMessage& message) {
 			return event.type == NetTransportEventType::PacketReceived && event.lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
@@ -3017,8 +3052,13 @@ namespace RTE {
 				NetHostMigrationMessage request;
 				if (!authenticated(event, request) || request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId)
 					continue;
-				if (!IsMigrating() && request.generation == m_MigrationGeneration + 1)
-					(void)BeginHostMigration(nowMs);
+				// A peer that elected again is a generation or more ahead; a peer left behind joins the one it is shown.
+				if (!IsMigrating() && request.generation > m_MigrationGeneration) {
+					const uint64_t previous = m_MigrationGeneration;
+					m_MigrationGeneration = request.generation - 1;
+					if (!BeginHostMigration(nowMs))
+						m_MigrationGeneration = previous;
+				}
 				if (m_MigrationSuccessor == 0 && IsMigrating())
 					(void)ContactMigrationSuccessor(nowMs);
 				if (request.generation != m_MigrationGeneration || m_MigrationSuccessor == 0)
@@ -3077,7 +3117,7 @@ namespace RTE {
 			m_MigrationGeneration = redirectMessage.generation;
 			m_MigrationHostTransport = redirect.peerId;
 			HandleMigrationEvent(redirect, nowMs);
-		} else if (earlier != 0) {
+		} else if (earlier != 0 && !m_MigrationAuthoritySeen) {
 			const auto& order = m_Config.matchConfig.successorOrder;
 			m_MigrationCandidateIndex = static_cast<size_t>(std::find(order.begin(), order.end(), earlier) - order.begin());
 			m_MigrationTransport.reset();
@@ -3183,6 +3223,9 @@ namespace RTE {
 			return;
 		}
 		if (event.type != NetTransportEventType::PacketReceived) {
+			// A closed handover link stops answering for the candidate, so the election may leave it again.
+			if (!hosting && event.peerId == m_MigrationHostTransport && (event.type == NetTransportEventType::PeerDisconnected || event.type == NetTransportEventType::ConnectionFailed))
+				m_MigrationHostTransport = c_InvalidNetPeerId;
 			if (m_MigrationPhase == NetHostMigrationPhase::Complete && m_SessionEventSink)
 				m_SessionEventSink(event);
 			return;
@@ -3398,7 +3441,7 @@ namespace RTE {
 				if (m_MigrationAnswers.size() == m_MigrationExpected.size()) {
 					PublishMigrationPlan(nowMs);
 				}
-			} else if (expired && !m_MigrationAuthoritySeen) {
+			} else if (expired && !m_MigrationAuthoritySeen && !HoldsLiveMigrationCandidate(nowMs, budget)) {
 				const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
 				if (endpoint == m_Config.matchConfig.migrationPeers.end() || m_MigrationNextAddress >= endpoint->listenAddrs.size()) {
 					++m_MigrationCandidateIndex;
@@ -3459,9 +3502,13 @@ namespace RTE {
 		} else if (hosting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 2 * budget && m_MigrationReady.size() != m_MigrationAnswers.size()) {
 			FailHostMigration("a surviving peer did not finish boundary recovery");
 		}
-		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget &&
-		    std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), m_Config.localPeerId) != m_MigrationResult.members.end())
-			FailHostMigration("handover publication timed out");
+		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget) {
+			if (std::find(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), m_Config.localPeerId) != m_MigrationResult.members.end())
+				FailHostMigration("handover publication timed out");
+			// An excluded peer is owed the commit's rejoin and nothing else answers for it.
+			else if (m_MigrationPhase == NetHostMigrationPhase::WaitingForReady && !RestartHostMigrationAfterSuccessorLoss(nowMs))
+				FailHostMigration("the successor was lost before the handover commit");
+		}
 	}
 
 	void NetLockstepCoordinator::ApplyMigrationMembership(uint64_t nowMs) {
@@ -3534,6 +3581,7 @@ namespace RTE {
 		m_MigrationPhase = NetHostMigrationPhase::Complete;
 		m_MigrationNotice = true;
 		m_MigrationProbes.clear();
+		m_MigrationLostSuccessors.clear();
 		const auto earlyInputs = std::exchange(m_MigrationEarlyInputs, {});
 		for (const auto& event: earlyInputs)
 			HandleEvent(event, nowMs);
