@@ -158,7 +158,8 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error) {
-		if (m_ActiveHostPeerId != 0) m_MatchConfig.hostPeerId = m_ActiveHostPeerId;
+		if (m_ActiveHostPeerId != 0)
+			m_MatchConfig.hostPeerId = m_ActiveHostPeerId;
 		auto refuse = [&](const std::string& reason) {
 			SetFailed(reason);
 			if (error) *error = m_SetupError;
@@ -254,7 +255,8 @@ namespace RTE {
 
 	void NetMatchRunner::AdoptHostMigration(const NetHostMigrationResult& result, uint8_t localPeerId) {
 		m_Config.host = result.hostPeerId == localPeerId;
-		m_ActiveHostPeerId = result.hostPeerId; m_ActivePeerIds = result.members;
+		m_ActiveHostPeerId = result.hostPeerId;
+		m_ActivePeerIds = result.members;
 		m_Config.startFrame = result.boundary + 1;
 		m_SnapshotProviderPeerId = result.snapshotProviderPeerId;
 		m_State = NetMatchRuntimeState::Running;
@@ -531,7 +533,8 @@ namespace RTE {
 		lobbyConfig.sealMigration = m_Config.sealMigration;
 		lobbyConfig.openMigration = m_Config.openMigration;
 		lobbyConfig.snapshotProviderPeerId = m_SnapshotProviderPeerId;
-		if (!m_ActivePeerIds.empty()) lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
+		if (!m_ActivePeerIds.empty())
+			lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately. This is the
 		// technical message-hearing deadline; the host's seating policy is the budget below.
@@ -669,7 +672,8 @@ namespace RTE {
 		lockstepConfig.matchConfig = m_MatchConfig;
 		lockstepConfig.authorityPeerId = m_ActiveHostPeerId;
 		lockstepConfig.activePeerIds = m_ActivePeerIds;
-		if (m_Config.configureMigration) m_Config.configureMigration(lockstepConfig);
+		if (m_Config.configureMigration)
+			m_Config.configureMigration(lockstepConfig);
 		// The host tags each round so a late packet from the previous round cannot join this one.
 		if (config.host) {
 			std::random_device entropy;

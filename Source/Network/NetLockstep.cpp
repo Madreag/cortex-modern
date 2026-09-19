@@ -2650,29 +2650,44 @@ namespace RTE {
 		if (type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::Abort) || message.sessionId == 0 || message.roundId == 0 || message.generation == 0 ||
 		    message.senderPeerId == 0 || message.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || message.successorPeerId == 0 || message.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount ||
 		    message.members.size() > NetMatchConfigUtil::c_MaxPeerCount || message.bytes.size() > c_ChunkBytes || message.totalBytes > c_MaxFrameBytes ||
-		    std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; })) return false;
+		    std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
+			return false;
 		bytes.clear();
-		AppendU32LE(bytes, c_Magic); AppendU16LE(bytes, c_Version); AppendU16LE(bytes, type);
-		AppendU64LE(bytes, message.sessionId); AppendU64LE(bytes, message.roundId); AppendU64LE(bytes, message.generation);
-		AppendU8(bytes, message.senderPeerId); AppendU8(bytes, message.successorPeerId);
+		AppendU32LE(bytes, c_Magic);
+		AppendU16LE(bytes, c_Version);
+		AppendU16LE(bytes, type);
+		AppendU64LE(bytes, message.sessionId);
+		AppendU64LE(bytes, message.roundId);
+		AppendU64LE(bytes, message.generation);
+		AppendU8(bytes, message.senderPeerId);
+		AppendU8(bytes, message.successorPeerId);
 		bytes.insert(bytes.end(), message.configHash.begin(), message.configHash.end());
-		AppendU64LE(bytes, message.appliedFrame); AppendU64LE(bytes, message.completeFrom); AppendU64LE(bytes, message.boundary); AppendU64LE(bytes, message.frame);
-		AppendU32LE(bytes, message.totalBytes); AppendU32LE(bytes, message.offset);
+		AppendU64LE(bytes, message.appliedFrame);
+		AppendU64LE(bytes, message.completeFrom);
+		AppendU64LE(bytes, message.boundary);
+		AppendU64LE(bytes, message.frame);
+		AppendU32LE(bytes, message.totalBytes);
+		AppendU32LE(bytes, message.offset);
 		AppendU8(bytes, static_cast<uint8_t>(message.members.size()));
 		bytes.insert(bytes.end(), message.members.begin(), message.members.end());
 		AppendU32LE(bytes, static_cast<uint32_t>(message.bytes.size()));
 		bytes.insert(bytes.end(), message.bytes.begin(), message.bytes.end());
 		uint8_t mac[32]{};
-		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size(), mac)) { bytes.clear(); return false; }
+		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size(), mac)) {
+			bytes.clear();
+			return false;
+		}
 		bytes.insert(bytes.end(), std::begin(mac), std::end(mac));
 		return true;
 	}
 
 	bool NetHostMigrationCodec::Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message) {
-		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + 192 || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; })) return false;
+		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + 192 || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
+			return false;
 		uint8_t mac[32]{};
 		const size_t bodySize = bytes.size() - sizeof(mac);
-		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bodySize, mac) || !NetAuthConstantTimeEquals(mac, bytes.data() + bodySize, sizeof(mac))) return false;
+		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bodySize, mac) || !NetAuthConstantTimeEquals(mac, bytes.data() + bodySize, sizeof(mac)))
+			return false;
 		ByteReader reader(bytes.data(), bodySize);
 		NetHostMigrationMessage decoded;
 		uint32_t magic = 0, count = 0;
@@ -2681,15 +2696,20 @@ namespace RTE {
 		const uint8_t* data = nullptr;
 		if (!reader.ReadU32LE(magic) || magic != c_Magic || !reader.ReadU16LE(version) || version != c_Version || !reader.ReadU16LE(type) ||
 		    type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::Abort) || !reader.ReadU64LE(decoded.sessionId) || !reader.ReadU64LE(decoded.roundId) || !reader.ReadU64LE(decoded.generation) ||
-		    !reader.ReadU8(decoded.senderPeerId) || !reader.ReadU8(decoded.successorPeerId) || !reader.ReadBytes(data, decoded.configHash.size())) return false;
+		    !reader.ReadU8(decoded.senderPeerId) || !reader.ReadU8(decoded.successorPeerId) || !reader.ReadBytes(data, decoded.configHash.size()))
+			return false;
 		std::copy_n(data, decoded.configHash.size(), decoded.configHash.begin());
 		if (!reader.ReadU64LE(decoded.appliedFrame) || !reader.ReadU64LE(decoded.completeFrom) || !reader.ReadU64LE(decoded.boundary) || !reader.ReadU64LE(decoded.frame) ||
-		    !reader.ReadU32LE(decoded.totalBytes) || decoded.totalBytes > c_MaxFrameBytes || !reader.ReadU32LE(decoded.offset) || !reader.ReadU8(members) || members > NetMatchConfigUtil::c_MaxPeerCount || !reader.ReadBytes(data, members)) return false;
+		    !reader.ReadU32LE(decoded.totalBytes) || decoded.totalBytes > c_MaxFrameBytes || !reader.ReadU32LE(decoded.offset) || !reader.ReadU8(members) || members > NetMatchConfigUtil::c_MaxPeerCount || !reader.ReadBytes(data, members))
+			return false;
 		decoded.members.assign(data, data + members);
 		std::set<uint8_t> unique;
-		for (uint8_t peer : decoded.members) if (peer == 0 || peer > NetMatchConfigUtil::c_MaxPeerCount || !unique.insert(peer).second) return false;
+		for (uint8_t peer: decoded.members)
+			if (peer == 0 || peer > NetMatchConfigUtil::c_MaxPeerCount || !unique.insert(peer).second)
+				return false;
 		if (!reader.ReadU32LE(count) || count > c_ChunkBytes || !reader.ReadBytes(data, count) || !reader.AtEnd() || decoded.sessionId == 0 || decoded.roundId == 0 || decoded.generation == 0 ||
-		    decoded.senderPeerId == 0 || decoded.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || decoded.successorPeerId == 0 || decoded.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount) return false;
+		    decoded.senderPeerId == 0 || decoded.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || decoded.successorPeerId == 0 || decoded.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount)
+			return false;
 		decoded.bytes.assign(data, data + count);
 		decoded.type = static_cast<NetHostMigrationMessageType>(type);
 		message = std::move(decoded);
@@ -2700,30 +2720,45 @@ namespace RTE {
 		bytes.clear();
 		AppendU8(bytes, static_cast<uint8_t>(ready.departedPeerIds.size()));
 		bytes.insert(bytes.end(), ready.departedPeerIds.begin(), ready.departedPeerIds.end());
-		for (const auto* facts : {&ready.committedPeerLeaves, &ready.committedFrameWaivers}) {
+		for (const auto* facts: {&ready.committedPeerLeaves, &ready.committedFrameWaivers}) {
 			AppendU8(bytes, static_cast<uint8_t>(facts->size()));
-			for (const auto& [peer, boundary] : *facts) { AppendU8(bytes, peer); AppendU64LE(bytes, boundary); }
+			for (const auto& [peer, boundary]: *facts) {
+				AppendU8(bytes, peer);
+				AppendU64LE(bytes, boundary);
+			}
 		}
 		AppendU8(bytes, m_Config.peerCount);
 		size_t remoteOffset = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			NetLockstepFrame input;
-			input.senderPeerId = peer; input.targetFrame = ready.frame; input.roundId = m_Config.matchConfig.roundId;
+			input.senderPeerId = peer;
+			input.targetFrame = ready.frame;
+			input.roundId = m_Config.matchConfig.roundId;
 			const bool local = peer == m_Config.localPeerId;
 			const bool present = local ? ready.hasLocalInput : ready.remoteFrameCounts.contains(peer);
-			if (local) input.frames = ready.localFrames;
+			if (local)
+				input.frames = ready.localFrames;
 			else if (present) {
 				const size_t count = ready.remoteFrameCounts.at(peer);
-				if (remoteOffset > ready.remoteFrames.size() || count > ready.remoteFrames.size() - remoteOffset) return false;
+				if (remoteOffset > ready.remoteFrames.size() || count > ready.remoteFrames.size() - remoteOffset)
+					return false;
 				input.frames.assign(ready.remoteFrames.begin() + remoteOffset, ready.remoteFrames.begin() + remoteOffset + count);
 				remoteOffset += count;
 			}
-			for (const auto& command : (local ? ready.localCommands : ready.remoteCommands)) if (command.senderPeerId == peer) input.commands.push_back(command);
-			for (const auto& observation : (local ? ready.localObservations : ready.remoteObservations)) if (observation.senderPeerId == peer) input.observations.push_back(observation);
-			for (const auto& observation : (local ? ready.localValueObservations : ready.remoteValueObservations)) if (observation.senderPeerId == peer) input.valueObservations.push_back(observation);
+			for (const auto& command: (local ? ready.localCommands : ready.remoteCommands))
+				if (command.senderPeerId == peer)
+					input.commands.push_back(command);
+			for (const auto& observation: (local ? ready.localObservations : ready.remoteObservations))
+				if (observation.senderPeerId == peer)
+					input.observations.push_back(observation);
+			for (const auto& observation: (local ? ready.localValueObservations : ready.remoteValueObservations))
+				if (observation.senderPeerId == peer)
+					input.valueObservations.push_back(observation);
 			std::vector<uint8_t> encoded;
-			if (!NetLockstepCodec::EncodeRecoveryInput(input, encoded)) return false;
-			AppendU8(bytes, present ? 1 : 0); AppendU32LE(bytes, static_cast<uint32_t>(encoded.size()));
+			if (!NetLockstepCodec::EncodeRecoveryInput(input, encoded))
+				return false;
+			AppendU8(bytes, present ? 1 : 0);
+			AppendU32LE(bytes, static_cast<uint32_t>(encoded.size()));
 			bytes.insert(bytes.end(), encoded.begin(), encoded.end());
 		}
 		return bytes.size() <= NetHostMigrationCodec::c_MaxFrameBytes && remoteOffset == ready.remoteFrames.size();
@@ -2735,45 +2770,61 @@ namespace RTE {
 		const uint8_t* data = nullptr;
 		NetLockstepReadyFrame decoded;
 		decoded.frame = frame;
-		if (!reader.ReadU8(departures) || departures > m_Config.peerCount || !reader.ReadBytes(data, departures)) return false;
+		if (!reader.ReadU8(departures) || departures > m_Config.peerCount || !reader.ReadBytes(data, departures))
+			return false;
 		decoded.departedPeerIds.assign(data, data + departures);
-		if (!std::is_sorted(decoded.departedPeerIds.begin(), decoded.departedPeerIds.end()) || std::adjacent_find(decoded.departedPeerIds.begin(), decoded.departedPeerIds.end()) != decoded.departedPeerIds.end()) return false;
-		for (uint8_t peer : decoded.departedPeerIds) if (peer == 0 || peer > m_Config.peerCount) return false;
-		for (auto* facts : {&decoded.committedPeerLeaves, &decoded.committedFrameWaivers}) {
+		if (!std::is_sorted(decoded.departedPeerIds.begin(), decoded.departedPeerIds.end()) || std::adjacent_find(decoded.departedPeerIds.begin(), decoded.departedPeerIds.end()) != decoded.departedPeerIds.end())
+			return false;
+		for (uint8_t peer: decoded.departedPeerIds)
+			if (peer == 0 || peer > m_Config.peerCount)
+				return false;
+		for (auto* facts: {&decoded.committedPeerLeaves, &decoded.committedFrameWaivers}) {
 			uint8_t count = 0;
-			if (!reader.ReadU8(count) || count > m_Config.peerCount) return false;
+			if (!reader.ReadU8(count) || count > m_Config.peerCount)
+				return false;
 			for (uint8_t index = 0; index < count; ++index) {
 				uint8_t peer = 0;
 				uint64_t boundary = 0;
-				if (!reader.ReadU8(peer) || peer == 0 || peer > m_Config.peerCount || !reader.ReadU64LE(boundary) || !facts->emplace(peer, boundary).second) return false;
+				if (!reader.ReadU8(peer) || peer == 0 || peer > m_Config.peerCount || !reader.ReadU64LE(boundary) || !facts->emplace(peer, boundary).second)
+					return false;
 			}
 		}
-		if (!reader.ReadU8(peers) || peers != m_Config.peerCount) return false;
+		if (!reader.ReadU8(peers) || peers != m_Config.peerCount)
+			return false;
 		for (uint8_t peer = 1; peer <= peers; ++peer) {
 			uint8_t present = 0;
 			uint32_t size = 0;
-			if (!reader.ReadU8(present) || present > 1 || !reader.ReadU32LE(size) || size > NetLockstepCodec::c_MaxRecoveryInputBytes || !reader.ReadBytes(data, size)) return false;
+			if (!reader.ReadU8(present) || present > 1 || !reader.ReadU32LE(size) || size > NetLockstepCodec::c_MaxRecoveryInputBytes || !reader.ReadBytes(data, size))
+				return false;
 			NetLockstepFrame input;
-			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(data, data + size), input) || input.senderPeerId != peer || input.targetFrame != frame || input.roundId != m_Config.matchConfig.roundId) return false;
-			if (!present && (!input.frames.empty() || !input.commands.empty() || !input.observations.empty() || !input.valueObservations.empty())) return false;
+			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(data, data + size), input) || input.senderPeerId != peer || input.targetFrame != frame || input.roundId != m_Config.matchConfig.roundId)
+				return false;
+			if (!present && (!input.frames.empty() || !input.commands.empty() || !input.observations.empty() || !input.valueObservations.empty()))
+				return false;
 			if (peer == m_Config.localPeerId) {
-				decoded.hasLocalInput = present != 0; decoded.localFrames = std::move(input.frames); decoded.localCommands = std::move(input.commands);
-				decoded.localObservations = std::move(input.observations); decoded.localValueObservations = std::move(input.valueObservations);
+				decoded.hasLocalInput = present != 0;
+				decoded.localFrames = std::move(input.frames);
+				decoded.localCommands = std::move(input.commands);
+				decoded.localObservations = std::move(input.observations);
+				decoded.localValueObservations = std::move(input.valueObservations);
 			} else {
-				if (present) decoded.remoteFrameCounts[peer] = input.frames.size();
+				if (present)
+					decoded.remoteFrameCounts[peer] = input.frames.size();
 				decoded.remoteFrames.insert(decoded.remoteFrames.end(), input.frames.begin(), input.frames.end());
 				decoded.remoteCommands.insert(decoded.remoteCommands.end(), input.commands.begin(), input.commands.end());
 				decoded.remoteObservations.insert(decoded.remoteObservations.end(), input.observations.begin(), input.observations.end());
 				decoded.remoteValueObservations.insert(decoded.remoteValueObservations.end(), input.valueObservations.begin(), input.valueObservations.end());
 			}
 		}
-		if (!reader.AtEnd()) return false;
+		if (!reader.AtEnd())
+			return false;
 		ready = std::move(decoded);
 		return true;
 	}
 
 	void NetLockstepCoordinator::RetainMigrationFrame(const NetLockstepReadyFrame& ready) {
-		if (m_Config.matchConfig.successorOrder.empty()) return;
+		if (m_Config.matchConfig.successorOrder.empty())
+			return;
 		std::vector<uint8_t> bytes;
 		if (EncodeMigrationFrame(ready, bytes)) {
 			StoreMigrationFrame(ready.frame, std::move(bytes));
@@ -2794,45 +2845,71 @@ namespace RTE {
 
 	NetHostMigrationMessage NetLockstepCoordinator::MigrationMessage(NetHostMigrationMessageType type) const {
 		NetHostMigrationMessage message;
-		message.type = type; message.sessionId = m_Config.sessionId; message.roundId = m_Config.matchConfig.roundId; message.generation = m_MigrationGeneration;
+		message.type = type;
+		message.sessionId = m_Config.sessionId;
+		message.roundId = m_Config.matchConfig.roundId;
+		message.generation = m_MigrationGeneration;
 		message.frame = type == NetHostMigrationMessageType::Plan || type == NetHostMigrationMessageType::Commit || type == NetHostMigrationMessageType::Rejoin ? m_MigrationWireRound : m_RoundId;
-		message.senderPeerId = m_Config.localPeerId; message.successorPeerId = m_MigrationSuccessor;
+		message.senderPeerId = m_Config.localPeerId;
+		message.successorPeerId = m_MigrationSuccessor;
 		message.configHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
 		message.appliedFrame = GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0;
 		message.completeFrom = message.appliedFrame + 1;
-		while (message.completeFrom > 0 && m_MigrationHistory.contains(message.completeFrom - 1)) --message.completeFrom;
-		if (m_MigrationNeedsResync) message.completeFrom = UINT64_MAX;
-		message.boundary = m_MigrationBoundary; message.members = m_MigrationResult.members;
+		while (message.completeFrom > 0 && m_MigrationHistory.contains(message.completeFrom - 1))
+			--message.completeFrom;
+		if (m_MigrationNeedsResync)
+			message.completeFrom = UINT64_MAX;
+		message.boundary = m_MigrationBoundary;
+		message.members = m_MigrationResult.members;
 		return message;
 	}
 
 	bool NetLockstepCoordinator::SendMigration(NetPeerId peer, NetHostMigrationMessage message) {
-		if (peer == c_InvalidNetPeerId) return false;
+		if (peer == c_InvalidNetPeerId)
+			return false;
 		std::vector<uint8_t> bytes;
-		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
+		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes))
+			return false;
 		auto& pending = m_MigrationOutbox[peer];
 		INetTransport* wire = m_MigrationTransport ? m_MigrationTransport.get() : m_Transport;
-		if (pending.empty() && wire->Send(peer, NetTransportLane::ControlReliable, bytes)) return true;
-		if (pending.size() >= 128) return false;
+		if (pending.empty() && wire->Send(peer, NetTransportLane::ControlReliable, bytes))
+			return true;
+		if (pending.size() >= 128)
+			return false;
 		pending.push_back(std::move(bytes));
 		return true;
 	}
 
 	bool NetLockstepCoordinator::BeginHostMigration(uint64_t nowMs) {
-		if (IsMigrating()) return true;
+		if (IsMigrating())
+			return true;
 		if (!IsRunning() || m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld || m_Config.matchConfig.successorOrder.empty() || !m_Config.migrationTransportFactory ||
-		    m_Config.localPeerId == GetHostPeerId() || m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX || std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; })) return false;
+		    m_Config.localPeerId == GetHostPeerId() || m_RoundId == 0 || m_MigrationGeneration == UINT64_MAX || std::all_of(m_Config.migrationKey.begin(), m_Config.migrationKey.end(), [](uint8_t value) { return value == 0; }))
+			return false;
 		++m_MigrationGeneration;
 		m_MigrationWireRound = m_RoundId;
 		m_MigrationPhase = NetHostMigrationPhase::Contacting;
-		m_MigrationSinceMs = nowMs; m_MigrationLastSendMs = 0; m_MigrationBoundary = 0;
-		m_MigrationCandidateIndex = 0; m_MigrationSuccessor = 0; m_MigrationDonor = 0;
+		m_MigrationSinceMs = nowMs;
+		m_MigrationLastSendMs = 0;
+		m_MigrationBoundary = 0;
+		m_MigrationCandidateIndex = 0;
+		m_MigrationSuccessor = 0;
+		m_MigrationDonor = 0;
 		m_MigrationHostTransport = c_InvalidNetPeerId;
-		m_MigrationAnswers.clear(); m_MigrationPeers.clear(); m_MigrationReady.clear(); m_MigrationIncoming.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
-		m_MigrationResult = {}; m_MigrationNeedsResync = false;
-		m_MigrationCommitQueued = false; m_MigrationEarlyInputs.clear(); m_MigrationAdmissionEvents.clear();
+		m_MigrationAnswers.clear();
+		m_MigrationPeers.clear();
+		m_MigrationReady.clear();
+		m_MigrationIncoming.clear();
+		m_MigrationOutbox.clear();
+		m_MigrationFrameQueue.clear();
+		m_MigrationResult = {};
+		m_MigrationNeedsResync = false;
+		m_MigrationCommitQueued = false;
+		m_MigrationEarlyInputs.clear();
+		m_MigrationAdmissionEvents.clear();
 		m_ReadyFrames.clear();
-		m_PendingRecoveryStop.reset(); m_PendingCompleteStop.reset();
+		m_PendingRecoveryStop.reset();
+		m_PendingCompleteStop.reset();
 		m_Stats.nextFrame = GetResumeFrame();
 		m_Stats.timeoutReason.clear();
 		std::cout << "[net-match] host lost; collecting surviving peers at applied frame " << (GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0) << std::endl;
@@ -2842,38 +2919,62 @@ namespace RTE {
 	bool NetLockstepCoordinator::BeginHostMigrationAfterHeal(uint64_t nowMs) {
 		const auto previous = m_State;
 		m_State = NetLockstepState::Running;
-		if (!BeginHostMigration(nowMs)) { m_State = previous; return false; }
+		if (!BeginHostMigration(nowMs)) {
+			m_State = previous;
+			return false;
+		}
 		m_MigrationNeedsResync = true;
 		return true;
 	}
 
 	bool NetLockstepCoordinator::ContactMigrationSuccessor(uint64_t nowMs) {
 		const auto& order = m_Config.matchConfig.successorOrder;
-		while (m_MigrationCandidateIndex < order.size() && (order[m_MigrationCandidateIndex] == GetHostPeerId() || IsPeerGoneAtFrame(order[m_MigrationCandidateIndex], GetResumeFrame()))) ++m_MigrationCandidateIndex;
-		if (m_MigrationCandidateIndex == order.size()) { FailHostMigration("no surviving successor"); return false; }
+		while (m_MigrationCandidateIndex < order.size() && (order[m_MigrationCandidateIndex] == GetHostPeerId() || IsPeerGoneAtFrame(order[m_MigrationCandidateIndex], GetResumeFrame())))
+			++m_MigrationCandidateIndex;
+		if (m_MigrationCandidateIndex == order.size()) {
+			FailHostMigration("no surviving successor");
+			return false;
+		}
 		m_MigrationSuccessor = order[m_MigrationCandidateIndex];
 		const auto endpoint = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_MigrationSuccessor; });
-		if (endpoint == m_Config.matchConfig.migrationPeers.end()) { FailHostMigration("successor has no agreed listen endpoint"); return false; }
+		if (endpoint == m_Config.matchConfig.migrationPeers.end()) {
+			FailHostMigration("successor has no agreed listen endpoint");
+			return false;
+		}
 		if (!m_MigrationListener) {
 			const auto local = std::find_if(m_Config.matchConfig.migrationPeers.begin(), m_Config.matchConfig.migrationPeers.end(), [&](const auto& peer) { return peer.peerId == m_Config.localPeerId; });
 			m_MigrationListener = m_Config.migrationTransportFactory();
-			if (local == m_Config.matchConfig.migrationPeers.end() || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) { FailHostMigration("the local handover listener could not open"); return false; }
+			if (local == m_Config.matchConfig.migrationPeers.end() || !m_MigrationListener || !m_MigrationListener->StartHost(local->listenPort)) {
+				FailHostMigration("the local handover listener could not open");
+				return false;
+			}
 		}
-		m_MigrationSinceMs = nowMs; m_MigrationLastSendMs = nowMs;
-		m_MigrationPeers.clear(); m_MigrationAnswers.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
+		m_MigrationSinceMs = nowMs;
+		m_MigrationLastSendMs = nowMs;
+		m_MigrationPeers.clear();
+		m_MigrationAnswers.clear();
+		m_MigrationOutbox.clear();
+		m_MigrationFrameQueue.clear();
 		m_MigrationHostTransport = c_InvalidNetPeerId;
 		std::string error;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		m_MigrationTransport = hosting ? std::move(m_MigrationListener) : m_Config.migrationTransportFactory();
 		const bool opened = m_MigrationTransport && (hosting || m_MigrationTransport->Connect(endpoint->listenAddrs.front(), endpoint->listenPort, &error));
-		if (!opened && hosting) { FailHostMigration("successor listen failed: " + error); return false; }
-		m_MigrationProbes.clear();
-		if (hosting) for (const auto& peer : m_Config.matchConfig.migrationPeers) {
-			if (peer.peerId == m_Config.localPeerId || peer.peerId == GetHostPeerId() || IsPeerGoneAtFrame(peer.peerId, GetResumeFrame())) continue;
-			auto probe = m_Config.migrationTransportFactory();
-			if (probe && probe->Connect(peer.listenAddrs.front(), peer.listenPort)) m_MigrationProbes[peer.peerId] = std::move(probe);
+		if (!opened && hosting) {
+			FailHostMigration("successor listen failed: " + error);
+			return false;
 		}
-		if (hosting) m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
+		m_MigrationProbes.clear();
+		if (hosting)
+			for (const auto& peer: m_Config.matchConfig.migrationPeers) {
+				if (peer.peerId == m_Config.localPeerId || peer.peerId == GetHostPeerId() || IsPeerGoneAtFrame(peer.peerId, GetResumeFrame()))
+					continue;
+				auto probe = m_Config.migrationTransportFactory();
+				if (probe && probe->Connect(peer.listenAddrs.front(), peer.listenPort))
+					m_MigrationProbes[peer.peerId] = std::move(probe);
+			}
+		if (hosting)
+			m_MigrationAnswers[m_Config.localPeerId] = MigrationMessage(NetHostMigrationMessageType::Answer);
 		return true;
 	}
 
@@ -2884,40 +2985,57 @@ namespace RTE {
 		};
 		if (m_MigrationListener) {
 			INetTransport* listener = m_MigrationListener.get();
-			for (const auto& event : listener->PollEvents()) {
+			for (const auto& event: listener->PollEvents()) {
 				NetHostMigrationMessage request;
-				if (!authenticated(event, request) || request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId) continue;
-				if (!IsMigrating() && request.generation == m_MigrationGeneration + 1) (void)BeginHostMigration(nowMs);
-				if (m_MigrationSuccessor == 0 && IsMigrating()) (void)ContactMigrationSuccessor(nowMs);
-				if (request.generation != m_MigrationGeneration || m_MigrationSuccessor == 0) continue;
+				if (!authenticated(event, request) || request.type != NetHostMigrationMessageType::RollCall || request.senderPeerId != request.successorPeerId)
+					continue;
+				if (!IsMigrating() && request.generation == m_MigrationGeneration + 1)
+					(void)BeginHostMigration(nowMs);
+				if (m_MigrationSuccessor == 0 && IsMigrating())
+					(void)ContactMigrationSuccessor(nowMs);
+				if (request.generation != m_MigrationGeneration || m_MigrationSuccessor == 0)
+					continue;
 				std::vector<uint8_t> bytes;
-				if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::Answer), m_Config.migrationKey, bytes)) (void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
+				if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::Answer), m_Config.migrationKey, bytes))
+					(void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
 			}
 		}
 		uint8_t earlier = 0;
 		NetTransportEvent redirect;
 		uint8_t redirectPeer = 0;
 		NetHostMigrationMessage redirectMessage;
-		for (auto& [peer, probe] : m_MigrationProbes) {
-			if (!probe) continue;
-			for (const auto& event : probe->PollEvents()) {
+		for (auto& [peer, probe]: m_MigrationProbes) {
+			if (!probe)
+				continue;
+			for (const auto& event: probe->PollEvents()) {
 				if (event.type == NetTransportEventType::PeerConnected) {
 					std::vector<uint8_t> bytes;
-					if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::RollCall), m_Config.migrationKey, bytes)) (void)probe->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
+					if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::RollCall), m_Config.migrationKey, bytes))
+						(void)probe->Send(event.peerId, NetTransportLane::ControlReliable, bytes);
 				}
 				NetHostMigrationMessage answer;
-				if (!authenticated(event, answer) || answer.senderPeerId != peer) continue;
-				if (answer.type == NetHostMigrationMessageType::Rejoin && answer.successorPeerId == peer && answer.generation >= m_MigrationGeneration) { redirectPeer = peer; redirect = event; redirectMessage = answer; }
+				if (!authenticated(event, answer) || answer.senderPeerId != peer)
+					continue;
+				if (answer.type == NetHostMigrationMessageType::Rejoin && answer.successorPeerId == peer && answer.generation >= m_MigrationGeneration) {
+					redirectPeer = peer;
+					redirect = event;
+					redirectMessage = answer;
+				}
 				if (m_MigrationPhase == NetHostMigrationPhase::Contacting && answer.type == NetHostMigrationMessageType::Answer && answer.successorPeerId == peer && answer.generation == m_MigrationGeneration) {
 					const auto& order = m_Config.matchConfig.successorOrder;
-					if (std::find(order.begin(), order.end(), peer) < std::find(order.begin(), order.end(), m_MigrationSuccessor)) earlier = peer;
+					if (std::find(order.begin(), order.end(), peer) < std::find(order.begin(), order.end(), m_MigrationSuccessor))
+						earlier = peer;
 				}
 			}
 		}
 		if (redirectPeer != 0) {
 			m_MigrationTransport = std::move(m_MigrationProbes.at(redirectPeer));
-			m_MigrationProbes.clear(); m_MigrationOutbox.clear(); m_MigrationFrameQueue.clear();
-			m_MigrationSuccessor = redirectPeer; m_MigrationGeneration = redirectMessage.generation; m_MigrationHostTransport = redirect.peerId;
+			m_MigrationProbes.clear();
+			m_MigrationOutbox.clear();
+			m_MigrationFrameQueue.clear();
+			m_MigrationSuccessor = redirectPeer;
+			m_MigrationGeneration = redirectMessage.generation;
+			m_MigrationHostTransport = redirect.peerId;
 			HandleMigrationEvent(redirect, nowMs);
 		} else if (earlier != 0) {
 			const auto& order = m_Config.matchConfig.successorOrder;
@@ -2929,7 +3047,8 @@ namespace RTE {
 
 	void NetLockstepCoordinator::FailHostMigration(const std::string& reason) {
 		if (m_MigrationSuccessor == m_Config.localPeerId) {
-			for (const auto& [peer, transport] : m_MigrationPeers) (void)SendMigration(transport, MigrationMessage(NetHostMigrationMessageType::Abort));
+			for (const auto& [peer, transport]: m_MigrationPeers)
+				(void)SendMigration(transport, MigrationMessage(NetHostMigrationMessageType::Abort));
 		}
 		m_MigrationPhase = NetHostMigrationPhase::Failed;
 		m_State = NetLockstepState::Stopped;
@@ -2938,42 +3057,60 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::SendMigrationFrame(NetPeerId peer, uint64_t frame) {
-		if (std::none_of(m_MigrationFrameQueue.begin(), m_MigrationFrameQueue.end(), [&](const auto& queued) { return std::get<0>(queued) == peer && std::get<1>(queued) == frame; })) m_MigrationFrameQueue.emplace_back(peer, frame, 0);
+		if (std::none_of(m_MigrationFrameQueue.begin(), m_MigrationFrameQueue.end(), [&](const auto& queued) { return std::get<0>(queued) == peer && std::get<1>(queued) == frame; }))
+			m_MigrationFrameQueue.emplace_back(peer, frame, 0);
 	}
 
 	void NetLockstepCoordinator::PublishMigrationPlan(uint64_t nowMs) {
 		m_MigrationBoundary = 0;
 		m_MigrationFirstNeeded = UINT64_MAX;
-		m_MigrationResult = {}; m_MigrationResult.generation = m_MigrationGeneration; m_MigrationResult.hostPeerId = m_MigrationSuccessor;
-		for (const auto& [peer, answer] : m_MigrationAnswers) {
+		m_MigrationResult = {};
+		m_MigrationResult.generation = m_MigrationGeneration;
+		m_MigrationResult.hostPeerId = m_MigrationSuccessor;
+		for (const auto& [peer, answer]: m_MigrationAnswers) {
 			m_MigrationResult.members.push_back(peer);
 			m_MigrationBoundary = std::max(m_MigrationBoundary, answer.appliedFrame);
 		}
-		for (const auto& [peer, answer] : m_MigrationAnswers) {
-			if (answer.completeFrom == UINT64_MAX) m_MigrationResult.resyncPeers.push_back(peer);
-			else if (answer.appliedFrame == m_MigrationBoundary && (m_MigrationDonor == 0 || answer.completeFrom < m_MigrationAnswers.at(m_MigrationDonor).completeFrom)) { m_MigrationDonor = peer; m_MigrationWireRound = answer.frame; }
+		for (const auto& [peer, answer]: m_MigrationAnswers) {
+			if (answer.completeFrom == UINT64_MAX)
+				m_MigrationResult.resyncPeers.push_back(peer);
+			else if (answer.appliedFrame == m_MigrationBoundary && (m_MigrationDonor == 0 || answer.completeFrom < m_MigrationAnswers.at(m_MigrationDonor).completeFrom)) {
+				m_MigrationDonor = peer;
+				m_MigrationWireRound = answer.frame;
+			}
 		}
-		if (m_MigrationDonor == 0 || m_MigrationBoundary == UINT64_MAX || m_MigrationBoundary + 1 < m_Config.startFrame) { FailHostMigration("no recoverable committed boundary"); return; }
+		if (m_MigrationDonor == 0 || m_MigrationBoundary == UINT64_MAX || m_MigrationBoundary + 1 < m_Config.startFrame) {
+			FailHostMigration("no recoverable committed boundary");
+			return;
+		}
 		const uint64_t availableFrom = m_MigrationAnswers.at(m_MigrationDonor).completeFrom;
-		for (const auto& [peer, answer] : m_MigrationAnswers) {
+		for (const auto& [peer, answer]: m_MigrationAnswers) {
 			if (answer.completeFrom == UINT64_MAX || (answer.appliedFrame < m_MigrationBoundary && answer.appliedFrame + 1 < availableFrom)) {
-				if (std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), peer) == m_MigrationResult.resyncPeers.end()) m_MigrationResult.resyncPeers.push_back(peer);
-				if (peer == m_Config.localPeerId) m_MigrationNeedsResync = true;
-			} else m_MigrationFirstNeeded = std::min(m_MigrationFirstNeeded, answer.appliedFrame + 1);
+				if (std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), peer) == m_MigrationResult.resyncPeers.end())
+					m_MigrationResult.resyncPeers.push_back(peer);
+				if (peer == m_Config.localPeerId)
+					m_MigrationNeedsResync = true;
+			} else
+				m_MigrationFirstNeeded = std::min(m_MigrationFirstNeeded, answer.appliedFrame + 1);
 		}
 		m_MigrationResult.boundary = m_MigrationBoundary;
-		if (m_MigrationNeedsResync) m_MigrationResult.snapshotProviderPeerId = m_MigrationDonor;
+		if (m_MigrationNeedsResync)
+			m_MigrationResult.snapshotProviderPeerId = m_MigrationDonor;
 		m_MigrationResult.transports = m_MigrationPeers;
 		m_MigrationPhase = NetHostMigrationPhase::Recovering;
 		m_MigrationSinceMs = nowMs;
 		auto plan = MigrationMessage(NetHostMigrationMessageType::Plan);
 		plan.bytes = m_MigrationResult.resyncPeers;
-		for (const auto& [peer, transport] : m_MigrationPeers) if (m_MigrationAnswers.contains(peer)) (void)SendMigration(transport, plan);
+		for (const auto& [peer, transport]: m_MigrationPeers)
+			if (m_MigrationAnswers.contains(peer))
+				(void)SendMigration(transport, plan);
 		if (m_MigrationFirstNeeded <= m_MigrationBoundary) {
 			if (m_MigrationDonor == m_Config.localPeerId) {
-				for (const auto& [peer, answer] : m_MigrationAnswers) {
-					if (peer == m_Config.localPeerId || std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), peer) != m_MigrationResult.resyncPeers.end()) continue;
-					for (uint64_t frame = answer.appliedFrame + 1; frame <= m_MigrationBoundary; ++frame) SendMigrationFrame(m_MigrationPeers.at(peer), frame);
+				for (const auto& [peer, answer]: m_MigrationAnswers) {
+					if (peer == m_Config.localPeerId || std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), peer) != m_MigrationResult.resyncPeers.end())
+						continue;
+					for (uint64_t frame = answer.appliedFrame + 1; frame <= m_MigrationBoundary; ++frame)
+						SendMigrationFrame(m_MigrationPeers.at(peer), frame);
 				}
 			} else {
 				auto request = MigrationMessage(NetHostMigrationMessageType::RequestInput);
@@ -2986,46 +3123,58 @@ namespace RTE {
 	void NetLockstepCoordinator::HandleMigrationEvent(const NetTransportEvent& event, uint64_t nowMs) {
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		if (event.type == NetTransportEventType::PeerConnected) {
-			if (hosting && m_MigrationAdmissionEvents.size() < 128) m_MigrationAdmissionEvents.push_back(event);
+			if (hosting && m_MigrationAdmissionEvents.size() < 128)
+				m_MigrationAdmissionEvents.push_back(event);
 			if (!hosting) {
 				m_MigrationHostTransport = event.peerId;
 				(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Hello));
 			} else if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
 				(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::RollCall));
-			} else if (m_SessionEventSink) m_SessionEventSink(event);
+			} else if (m_SessionEventSink)
+				m_SessionEventSink(event);
 			return;
 		}
 		if (event.type != NetTransportEventType::PacketReceived) {
-			if (m_MigrationPhase == NetHostMigrationPhase::Complete && m_SessionEventSink) m_SessionEventSink(event);
+			if (m_MigrationPhase == NetHostMigrationPhase::Complete && m_SessionEventSink)
+				m_SessionEventSink(event);
 			return;
 		}
 		NetHostMigrationMessage message;
 		if (NetLockstepCodec::LooksLikePacket(event.bytes) && event.bytes.size() <= NetLockstepCodec::c_MaxRecoveryInputBytes) {
 			const bool survivor = hosting ? std::any_of(m_MigrationPeers.begin(), m_MigrationPeers.end(), [&](const auto& peer) { return peer.second == event.peerId; }) : event.peerId == m_MigrationHostTransport;
-			if (survivor && m_MigrationEarlyInputs.size() < 128) m_MigrationEarlyInputs.push_back(event);
+			if (survivor && m_MigrationEarlyInputs.size() < 128)
+				m_MigrationEarlyInputs.push_back(event);
 			return;
 		}
 		if (hosting && !NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
-			if (event.bytes.size() <= NetProtocol::c_MaxControlPayloadBytes && m_MigrationAdmissionEvents.size() < 128) m_MigrationAdmissionEvents.push_back(event);
+			if (event.bytes.size() <= NetProtocol::c_MaxControlPayloadBytes && m_MigrationAdmissionEvents.size() < 128)
+				m_MigrationAdmissionEvents.push_back(event);
 			return;
 		}
 		if (m_MigrationPhase == NetHostMigrationPhase::Complete && hosting && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
 		    message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == NetMatchConfigUtil::HashConfig(m_Config.matchConfig) &&
 		    (message.type == NetHostMigrationMessageType::RollCall || message.type == NetHostMigrationMessageType::Hello) && message.generation <= m_MigrationGeneration) {
-			(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Rejoin)); return;
+			(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Rejoin));
+			return;
 		}
 		if (event.lane != NetTransportLane::ControlReliable || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) || message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId ||
 		    message.generation != m_MigrationGeneration || message.successorPeerId != m_MigrationSuccessor || message.configHash != NetMatchConfigUtil::HashConfig(m_Config.matchConfig) ||
-		    message.senderPeerId > m_Config.peerCount || message.senderPeerId == m_Config.localPeerId || message.senderPeerId == GetHostPeerId()) return;
-		if (!hosting && (message.senderPeerId != m_MigrationSuccessor || event.peerId != m_MigrationHostTransport)) return;
-		if (hosting && m_MigrationPeers.contains(message.senderPeerId) && m_MigrationPeers.at(message.senderPeerId) != event.peerId) return;
+		    message.senderPeerId > m_Config.peerCount || message.senderPeerId == m_Config.localPeerId || message.senderPeerId == GetHostPeerId())
+			return;
+		if (!hosting && (message.senderPeerId != m_MigrationSuccessor || event.peerId != m_MigrationHostTransport))
+			return;
+		if (hosting && m_MigrationPeers.contains(message.senderPeerId) && m_MigrationPeers.at(message.senderPeerId) != event.peerId)
+			return;
 		switch (message.type) {
 			case NetHostMigrationMessageType::Hello:
-				if (hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting) (void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::RollCall));
-				else if (hosting) (void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Rejoin));
+				if (hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting)
+					(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::RollCall));
+				else if (hosting)
+					(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Rejoin));
 				break;
 			case NetHostMigrationMessageType::RollCall:
-				if (!hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting) (void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Answer));
+				if (!hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting)
+					(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Answer));
 				break;
 			case NetHostMigrationMessageType::Answer:
 				if (hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs <= m_Config.timeoutMs && message.appliedFrame != UINT64_MAX) {
@@ -3036,39 +3185,54 @@ namespace RTE {
 			case NetHostMigrationMessageType::Plan:
 				if (!hosting && m_MigrationPhase == NetHostMigrationPhase::Contacting && message.boundary >= GetResumeFrame() - 1 && message.boundary != UINT64_MAX &&
 				    std::find(message.members.begin(), message.members.end(), m_Config.localPeerId) != message.members.end() && std::find(message.members.begin(), message.members.end(), m_MigrationSuccessor) != message.members.end()) {
-					m_MigrationBoundary = message.boundary; m_MigrationSinceMs = nowMs;
+					m_MigrationBoundary = message.boundary;
+					m_MigrationSinceMs = nowMs;
 					m_MigrationWireRound = message.frame;
-					if (std::find(message.bytes.begin(), message.bytes.end(), m_Config.localPeerId) != message.bytes.end()) m_MigrationNeedsResync = true;
+					if (std::find(message.bytes.begin(), message.bytes.end(), m_Config.localPeerId) != message.bytes.end())
+						m_MigrationNeedsResync = true;
 					m_MigrationResult = {m_MigrationGeneration, message.boundary, m_MigrationSuccessor, message.members, {}, {{m_MigrationSuccessor, event.peerId}}};
 					m_MigrationPhase = NetHostMigrationPhase::Recovering;
 				}
 				break;
 			case NetHostMigrationMessageType::RequestInput:
 				if (!hosting && IsMigrating() && message.boundary == m_MigrationBoundary && message.frame <= message.boundary && message.boundary - message.frame < NetHostMigrationCodec::c_HistoryFrames) {
-					for (uint64_t frame = message.frame; frame <= message.boundary; ++frame) SendMigrationFrame(event.peerId, frame);
+					for (uint64_t frame = message.frame; frame <= message.boundary; ++frame)
+						SendMigrationFrame(event.peerId, frame);
 				}
 				break;
 			case NetHostMigrationMessageType::Input: {
 				if (!IsMigrating() || message.boundary != m_MigrationBoundary || message.frame > m_MigrationBoundary || message.totalBytes == 0 ||
-				    message.offset > message.totalBytes || message.bytes.size() > message.totalBytes - message.offset || (hosting && message.senderPeerId != m_MigrationDonor)) break;
-				if (m_MigrationHistory.contains(message.frame)) break;
-				if (message.frame + NetHostMigrationCodec::c_HistoryFrames <= m_MigrationBoundary || m_MigrationIncoming.size() >= NetHostMigrationCodec::c_HistoryFrames) break;
+				    message.offset > message.totalBytes || message.bytes.size() > message.totalBytes - message.offset || (hosting && message.senderPeerId != m_MigrationDonor))
+					break;
+				if (m_MigrationHistory.contains(message.frame))
+					break;
+				if (message.frame + NetHostMigrationCodec::c_HistoryFrames <= m_MigrationBoundary || m_MigrationIncoming.size() >= NetHostMigrationCodec::c_HistoryFrames)
+					break;
 				auto& incoming = m_MigrationIncoming[message.frame];
-				if (incoming.size() != message.offset) break;
+				if (incoming.size() != message.offset)
+					break;
 				incoming.insert(incoming.end(), message.bytes.begin(), message.bytes.end());
-				if (incoming.size() != message.totalBytes) break;
+				if (incoming.size() != message.totalBytes)
+					break;
 				NetLockstepReadyFrame ready;
-				if (!DecodeMigrationFrame(incoming, message.frame, ready)) { m_MigrationNeedsResync = true; m_MigrationIncoming.erase(message.frame); break; }
+				if (!DecodeMigrationFrame(incoming, message.frame, ready)) {
+					m_MigrationNeedsResync = true;
+					m_MigrationIncoming.erase(message.frame);
+					break;
+				}
 				StoreMigrationFrame(message.frame, std::move(incoming));
 				m_MigrationIncoming.erase(message.frame);
 				if (hosting) {
-					for (const auto& [peer, answer] : m_MigrationAnswers) if (peer != m_Config.localPeerId && peer != m_MigrationDonor && answer.appliedFrame < message.frame) SendMigrationFrame(m_MigrationPeers.at(peer), message.frame);
+					for (const auto& [peer, answer]: m_MigrationAnswers)
+						if (peer != m_Config.localPeerId && peer != m_MigrationDonor && answer.appliedFrame < message.frame)
+							SendMigrationFrame(m_MigrationPeers.at(peer), message.frame);
 				}
 				break;
 			}
 			case NetHostMigrationMessageType::Ready:
 				if (hosting && IsMigrating() && m_MigrationAnswers.contains(message.senderPeerId) && message.boundary == m_MigrationBoundary) {
-					if ((message.completeFrom == UINT64_MAX || message.appliedFrame != m_MigrationBoundary) && std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), message.senderPeerId) == m_MigrationResult.resyncPeers.end()) m_MigrationResult.resyncPeers.push_back(message.senderPeerId);
+					if ((message.completeFrom == UINT64_MAX || message.appliedFrame != m_MigrationBoundary) && std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), message.senderPeerId) == m_MigrationResult.resyncPeers.end())
+						m_MigrationResult.resyncPeers.push_back(message.senderPeerId);
 					m_MigrationReady.insert(message.senderPeerId);
 				}
 				break;
@@ -3078,7 +3242,8 @@ namespace RTE {
 				    std::find(message.members.begin(), message.members.end(), m_Config.localPeerId) != message.members.end() && GetResumeFrame() == m_MigrationBoundary + 1) {
 					m_MigrationResult.members = message.members;
 					if (!message.bytes.empty()) {
-						if (message.bytes.size() != 1 || std::find(message.members.begin(), message.members.end(), message.bytes.front()) == message.members.end() || message.bytes.front() == m_MigrationSuccessor) break;
+						if (message.bytes.size() != 1 || std::find(message.members.begin(), message.members.end(), message.bytes.front()) == message.members.end() || message.bytes.front() == m_MigrationSuccessor)
+							break;
 						m_MigrationResult.snapshotProviderPeerId = message.bytes.front();
 					}
 					CompleteHostMigration(nowMs);
@@ -3087,53 +3252,78 @@ namespace RTE {
 			case NetHostMigrationMessageType::Rejoin:
 				if (!hosting && IsMigrating()) {
 					m_MigrationNeedsResync = true;
-					m_MigrationBoundary = message.boundary; m_MigrationWireRound = message.frame; m_RoundId = message.frame;
-					m_Config.authorityPeerId = m_MigrationSuccessor; m_Config.migrationGeneration = m_MigrationGeneration;
-					m_RemoteTransports = {{m_MigrationSuccessor, event.peerId}}; m_Config.remoteTransportPeerIds = m_RemoteTransports;
+					m_MigrationBoundary = message.boundary;
+					m_MigrationWireRound = message.frame;
+					m_RoundId = message.frame;
+					m_Config.authorityPeerId = m_MigrationSuccessor;
+					m_Config.migrationGeneration = m_MigrationGeneration;
+					m_RemoteTransports = {{m_MigrationSuccessor, event.peerId}};
+					m_Config.remoteTransportPeerIds = m_RemoteTransports;
 					m_Transport = m_MigrationTransport.get();
 					m_MigrationResult = {m_MigrationGeneration, message.boundary, m_MigrationSuccessor, message.members, {m_Config.localPeerId}, {{m_MigrationSuccessor, event.peerId}}};
-					m_MigrationPhase = NetHostMigrationPhase::ResyncAdmission; m_MigrationNotice = true;
+					m_MigrationPhase = NetHostMigrationPhase::ResyncAdmission;
+					m_MigrationNotice = true;
 				}
 				break;
 			case NetHostMigrationMessageType::Abort:
-				if (!hosting) FailHostMigration("successor found no recoverable boundary");
+				if (!hosting)
+					FailHostMigration("successor found no recoverable boundary");
 				break;
 		}
 	}
 
 	void NetLockstepCoordinator::TickHostMigration(uint64_t nowMs) {
-		if (m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission) return;
-		if (m_MigrationSuccessor == 0 && !ContactMigrationSuccessor(nowMs)) return;
-		for (const auto& event : m_MigrationTransport->PollEvents()) HandleMigrationEvent(event, nowMs);
-		for (auto& [peer, pending] : m_MigrationOutbox) {
-			while (!pending.empty() && m_MigrationTransport->Send(peer, NetTransportLane::ControlReliable, pending.front())) pending.pop_front();
+		if (m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission)
+			return;
+		if (m_MigrationSuccessor == 0 && !ContactMigrationSuccessor(nowMs))
+			return;
+		for (const auto& event: m_MigrationTransport->PollEvents())
+			HandleMigrationEvent(event, nowMs);
+		for (auto& [peer, pending]: m_MigrationOutbox) {
+			while (!pending.empty() && m_MigrationTransport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
+				pending.pop_front();
 		}
 		for (size_t sent = 0; sent < 8 && !m_MigrationFrameQueue.empty(); ++sent) {
 			auto& [peer, frame, offset] = m_MigrationFrameQueue.front();
 			const auto input = m_MigrationHistory.find(frame);
 			if (input == m_MigrationHistory.end()) {
-				auto missing = MigrationMessage(NetHostMigrationMessageType::Ready); missing.appliedFrame = UINT64_MAX;
-				(void)SendMigration(peer, std::move(missing)); m_MigrationFrameQueue.pop_front(); continue;
+				auto missing = MigrationMessage(NetHostMigrationMessageType::Ready);
+				missing.appliedFrame = UINT64_MAX;
+				(void)SendMigration(peer, std::move(missing));
+				m_MigrationFrameQueue.pop_front();
+				continue;
 			}
 			auto chunk = MigrationMessage(NetHostMigrationMessageType::Input);
-			chunk.frame = frame; chunk.totalBytes = static_cast<uint32_t>(input->second.size()); chunk.offset = static_cast<uint32_t>(offset);
+			chunk.frame = frame;
+			chunk.totalBytes = static_cast<uint32_t>(input->second.size());
+			chunk.offset = static_cast<uint32_t>(offset);
 			const size_t count = std::min(NetHostMigrationCodec::c_ChunkBytes, input->second.size() - offset);
 			chunk.bytes.assign(input->second.begin() + offset, input->second.begin() + offset + count);
-			if (m_MigrationOutbox[peer].size() >= 8 || !SendMigration(peer, std::move(chunk))) break;
+			if (m_MigrationOutbox[peer].size() >= 8 || !SendMigration(peer, std::move(chunk)))
+				break;
 			offset += count;
-			if (offset == input->second.size()) m_MigrationFrameQueue.pop_front();
+			if (offset == input->second.size())
+				m_MigrationFrameQueue.pop_front();
 		}
-		if (!IsMigrating()) return;
+		if (!IsMigrating())
+			return;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		const uint64_t budget = std::max<uint32_t>(1, m_Config.timeoutMs);
 		const bool expired = nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= budget;
 		if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
 			size_t expected = 0;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, GetResumeFrame())) ++expected;
-			if (hosting && (expired || m_MigrationAnswers.size() == expected)) PublishMigrationPlan(nowMs);
-			else if (!hosting && expired) { ++m_MigrationCandidateIndex; m_MigrationTransport.reset(); (void)ContactMigrationSuccessor(nowMs); }
-			else if (!hosting && nowMs >= m_MigrationLastSendMs + 250 && m_MigrationHostTransport != c_InvalidNetPeerId) {
-				(void)SendMigration(m_MigrationHostTransport, MigrationMessage(NetHostMigrationMessageType::Hello)); m_MigrationLastSendMs = nowMs;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				if (peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, GetResumeFrame()))
+					++expected;
+			if (hosting && (expired || m_MigrationAnswers.size() == expected))
+				PublishMigrationPlan(nowMs);
+			else if (!hosting && expired) {
+				++m_MigrationCandidateIndex;
+				m_MigrationTransport.reset();
+				(void)ContactMigrationSuccessor(nowMs);
+			} else if (!hosting && nowMs >= m_MigrationLastSendMs + 250 && m_MigrationHostTransport != c_InvalidNetPeerId) {
+				(void)SendMigration(m_MigrationHostTransport, MigrationMessage(NetHostMigrationMessageType::Hello));
+				m_MigrationLastSendMs = nowMs;
 			} else if (!hosting && m_MigrationHostTransport == c_InvalidNetPeerId && nowMs >= m_MigrationLastSendMs + 250) {
 				const uint64_t started = m_MigrationSinceMs;
 				(void)ContactMigrationSuccessor(nowMs);
@@ -3145,11 +3335,16 @@ namespace RTE {
 			const auto found = m_MigrationHistory.find(GetResumeFrame());
 			if (found != m_MigrationHistory.end()) {
 				NetLockstepReadyFrame ready;
-				if (!DecodeMigrationFrame(found->second, GetResumeFrame(), ready)) m_MigrationNeedsResync = true;
-				else { m_Stats.nextFrame = ready.frame + 1; m_ReadyFrames.push_back(std::move(ready)); }
+				if (!DecodeMigrationFrame(found->second, GetResumeFrame(), ready))
+					m_MigrationNeedsResync = true;
+				else {
+					m_Stats.nextFrame = ready.frame + 1;
+					m_ReadyFrames.push_back(std::move(ready));
+				}
 			}
 		}
-		if (expired && GetResumeFrame() <= m_MigrationBoundary) m_MigrationNeedsResync = true;
+		if (expired && GetResumeFrame() <= m_MigrationBoundary)
+			m_MigrationNeedsResync = true;
 		if (GetResumeFrame() == m_MigrationBoundary + 1 || m_MigrationNeedsResync) {
 			if (hosting) {
 				m_MigrationReady.insert(m_Config.localPeerId);
@@ -3160,25 +3355,35 @@ namespace RTE {
 		}
 		if (hosting && m_MigrationReady.size() == m_MigrationAnswers.size() && m_MigrationFrameQueue.empty()) {
 			if (!m_MigrationCommitQueued) {
-				for (uint8_t peer : m_MigrationResult.resyncPeers) if (peer != m_MigrationSuccessor) std::erase(m_MigrationResult.members, peer);
+				for (uint8_t peer: m_MigrationResult.resyncPeers)
+					if (peer != m_MigrationSuccessor)
+						std::erase(m_MigrationResult.members, peer);
 				auto commit = MigrationMessage(NetHostMigrationMessageType::Commit);
-				if (m_MigrationResult.snapshotProviderPeerId != 0) commit.bytes = {m_MigrationResult.snapshotProviderPeerId};
-				for (const auto& [peer, transport] : m_MigrationPeers) {
+				if (m_MigrationResult.snapshotProviderPeerId != 0)
+					commit.bytes = {m_MigrationResult.snapshotProviderPeerId};
+				for (const auto& [peer, transport]: m_MigrationPeers) {
 					const bool resync = std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), peer) != m_MigrationResult.resyncPeers.end();
-					if (!SendMigration(transport, resync ? MigrationMessage(NetHostMigrationMessageType::Rejoin) : commit)) { FailHostMigration("handover publication could not be queued"); return; }
+					if (!SendMigration(transport, resync ? MigrationMessage(NetHostMigrationMessageType::Rejoin) : commit)) {
+						FailHostMigration("handover publication could not be queued");
+						return;
+					}
 				}
 				m_MigrationCommitQueued = true;
 			}
-			if (std::all_of(m_MigrationOutbox.begin(), m_MigrationOutbox.end(), [](const auto& peer) { return peer.second.empty(); })) CompleteHostMigration(nowMs);
+			if (std::all_of(m_MigrationOutbox.begin(), m_MigrationOutbox.end(), [](const auto& peer) { return peer.second.empty(); }))
+				CompleteHostMigration(nowMs);
 		} else if (hosting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 2 * budget && m_MigrationReady.size() != m_MigrationAnswers.size()) {
 			FailHostMigration("a surviving peer did not finish boundary recovery");
 		}
-		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget) FailHostMigration("handover publication timed out");
+		if (IsMigrating() && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= 3 * budget)
+			FailHostMigration("handover publication timed out");
 	}
 
 	void NetLockstepCoordinator::CompleteHostMigration(uint64_t nowMs) {
 		auto pending = m_LocalInputHistory;
-		for (const auto& outgoing : m_RecoveryOutgoing) if (outgoing.frame.senderPeerId == m_Config.localPeerId) pending[outgoing.frame.targetFrame] = outgoing.frame;
+		for (const auto& outgoing: m_RecoveryOutgoing)
+			if (outgoing.frame.senderPeerId == m_Config.localPeerId)
+				pending[outgoing.frame.targetFrame] = outgoing.frame;
 		auto carried = std::move(m_PendingObservations);
 		auto carriedValues = std::move(m_PendingValueObservations);
 		auto dropped = std::move(m_DroppedObservations);
@@ -3190,52 +3395,81 @@ namespace RTE {
 		m_Config.migrationGeneration = m_MigrationGeneration;
 		m_RoundId = m_MigrationWireRound;
 		m_Config.activePeerIds = m_MigrationResult.members;
-		for (uint8_t peer : m_MigrationResult.resyncPeers) if (peer != m_MigrationSuccessor) std::erase(m_Config.activePeerIds, peer);
+		for (uint8_t peer: m_MigrationResult.resyncPeers)
+			if (peer != m_MigrationSuccessor)
+				std::erase(m_Config.activePeerIds, peer);
 		m_Config.startFrame = m_MigrationBoundary + 1;
 		m_Config.resumeFromSnapshot = false;
 		m_Config.remoteTransportPeerIds = m_MigrationResult.transports;
-		for (uint8_t peer : m_MigrationResult.resyncPeers) m_Config.remoteTransportPeerIds.erase(peer);
+		for (uint8_t peer: m_MigrationResult.resyncPeers)
+			m_Config.remoteTransportPeerIds.erase(peer);
 		m_Config.relayToOtherPeers = m_Config.localPeerId == m_MigrationSuccessor;
 		m_RemoteTransports = m_Config.remoteTransportPeerIds;
 		m_RemotePeerIds.clear();
-		for (uint8_t peer : m_Config.activePeerIds) if (peer != m_Config.localPeerId) m_RemotePeerIds.push_back(peer);
+		for (uint8_t peer: m_Config.activePeerIds)
+			if (peer != m_Config.localPeerId)
+				m_RemotePeerIds.push_back(peer);
 		m_RelayHost = m_Config.relayToOtherPeers;
 		m_Transport = m_MigrationTransport.get();
 		ResetRoundState();
 		m_LastCompletedSimulationTick = completed;
 		m_PeerLeaveFrames = leaves;
-		for (uint8_t peer : m_Config.activePeerIds) m_PeerLeaveFrames.erase(peer);
+		for (uint8_t peer: m_Config.activePeerIds)
+			m_PeerLeaveFrames.erase(peer);
 		m_AuthoritativeCommandAcks = commandAcks;
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) == m_Config.activePeerIds.end()) m_PeerLeaveFrames.try_emplace(peer, m_Config.startFrame);
-		m_LocalFrames.clear(); m_LocalCommands.clear(); m_LocalObservations.clear(); m_LocalValueObservations.clear(); m_LocalInputHistory.clear();
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) == m_Config.activePeerIds.end())
+				m_PeerLeaveFrames.try_emplace(peer, m_Config.startFrame);
+		m_LocalFrames.clear();
+		m_LocalCommands.clear();
+		m_LocalObservations.clear();
+		m_LocalValueObservations.clear();
+		m_LocalInputHistory.clear();
 		m_ObservationEncodeTables.Reset();
-		m_ObservationDecodeTables.Reset(); m_ObservationDecodeTables.roundId = m_RoundId;
+		m_ObservationDecodeTables.Reset();
+		m_ObservationDecodeTables.roundId = m_RoundId;
 		m_LastQueuedTargetFrame = UINT64_MAX;
-		m_Stats.nextFrame = m_Config.startFrame; m_Stats.configuredStartFrame = m_Config.startFrame; m_Stats.effectiveStartFrame = m_Config.startFrame;
+		m_Stats.nextFrame = m_Config.startFrame;
+		m_Stats.configuredStartFrame = m_Config.startFrame;
+		m_Stats.effectiveStartFrame = m_Config.startFrame;
 		m_PeerEffectiveStart.clear();
-		for (uint8_t peer : m_Config.activePeerIds) { m_PeerEffectiveStart[peer] = m_Config.startFrame; m_PeerLastHeardMs[peer] = nowMs; }
+		for (uint8_t peer: m_Config.activePeerIds) {
+			m_PeerEffectiveStart[peer] = m_Config.startFrame;
+			m_PeerLastHeardMs[peer] = nowMs;
+		}
 		m_RemoteStartsReceived.insert(m_RemotePeerIds.begin(), m_RemotePeerIds.end());
-		m_State = NetLockstepState::Running; m_ResyncPrimed = true;
-		m_MigrationPhase = NetHostMigrationPhase::Complete; m_MigrationNotice = true;
+		m_State = NetLockstepState::Running;
+		m_ResyncPrimed = true;
+		m_MigrationPhase = NetHostMigrationPhase::Complete;
+		m_MigrationNotice = true;
 		m_MigrationProbes.clear();
 		const auto earlyInputs = std::exchange(m_MigrationEarlyInputs, {});
-		for (const auto& event : earlyInputs) HandleEvent(event, nowMs);
-		m_WaitingFrame = m_Config.startFrame; m_WaitStartMs = nowMs;
+		for (const auto& event: earlyInputs)
+			HandleEvent(event, nowMs);
+		m_WaitingFrame = m_Config.startFrame;
+		m_WaitStartMs = nowMs;
 		m_AuthorityLastHeardMs = nowMs;
 		if (NeedsMigrationSnapshot()) {
 			std::string error;
-			if (!QueueInputAtTarget(m_Config.startFrame, {}, {}, &error, {})) Fail(NetLockstepStopReason::InternalError, m_Config.startFrame, error);
+			if (!QueueInputAtTarget(m_Config.startFrame, {}, {}, &error, {}))
+				Fail(NetLockstepStopReason::InternalError, m_Config.startFrame, error);
 			return;
 		}
 		uint64_t lastPending = m_Config.startFrame + m_Config.inputDelayFrames;
-		if (!pending.empty()) lastPending = std::max(lastPending, pending.rbegin()->first + 1);
+		if (!pending.empty())
+			lastPending = std::max(lastPending, pending.rbegin()->first + 1);
 		for (uint64_t frame = m_Config.startFrame; frame < lastPending; ++frame) {
 			const auto previous = pending.find(frame);
-			if (previous == pending.end() && frame >= m_Config.startFrame + m_Config.inputDelayFrames) continue;
+			if (previous == pending.end() && frame >= m_Config.startFrame + m_Config.inputDelayFrames)
+				continue;
 			NetLockstepFrame input;
-			if (previous != pending.end()) input = previous->second;
+			if (previous != pending.end())
+				input = previous->second;
 			std::string error;
-			if (!QueueInputAtTarget(frame, input.frames, input.commands, &error, input.observations, input.valueObservations)) { Fail(NetLockstepStopReason::InternalError, frame, "handover input priming failed: " + error); break; }
+			if (!QueueInputAtTarget(frame, input.frames, input.commands, &error, input.observations, input.valueObservations)) {
+				Fail(NetLockstepStopReason::InternalError, frame, "handover input priming failed: " + error);
+				break;
+			}
 		}
 		m_PendingObservations.insert(m_PendingObservations.end(), carried.begin(), carried.end());
 		m_PendingValueObservations.insert(m_PendingValueObservations.end(), carriedValues.begin(), carriedValues.end());
@@ -3256,8 +3490,17 @@ namespace RTE {
 		const uint8_t authority = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
 		if (!config.activePeerIds.empty()) {
 			std::set<uint8_t> active;
-			for (uint8_t peer : config.activePeerIds) if (peer == 0 || peer > config.peerCount || !active.insert(peer).second) { if (error) *error = "invalid active migration roster"; return false; }
-			if (!active.contains(config.localPeerId) || !active.contains(authority)) { if (error) *error = "active migration roster omits the local peer or host"; return false; }
+			for (uint8_t peer: config.activePeerIds)
+				if (peer == 0 || peer > config.peerCount || !active.insert(peer).second) {
+					if (error)
+						*error = "invalid active migration roster";
+					return false;
+				}
+			if (!active.contains(config.localPeerId) || !active.contains(authority)) {
+				if (error)
+					*error = "active migration roster omits the local peer or host";
+				return false;
+			}
 		}
 
 		// The RECEIVE set is every peer except local — peerIds are 1..peerCount per the match config.
@@ -3359,10 +3602,12 @@ namespace RTE {
 		m_MigrationHistory.clear();
 		m_MigrationHistoryBytes = 0;
 		m_MigrationTransport.reset();
-		m_MigrationListener.reset(); m_MigrationProbes.clear();
+		m_MigrationListener.reset();
+		m_MigrationProbes.clear();
 		m_MigrationGeneration = config.migrationGeneration;
 		m_MigrationNotice = false;
-		m_MigrationResult = {}; m_MigrationNeedsResync = false;
+		m_MigrationResult = {};
+		m_MigrationNeedsResync = false;
 		m_RemotePeerIds = std::move(remotePeerIds);
 		m_RemoteTransports = std::move(remoteTransports);
 		m_RelayHost = config.relayToOtherPeers;
@@ -3372,7 +3617,9 @@ namespace RTE {
 		ResetRoundState();
 		// A round of our own produces its own input; a round we FOLLOW keeps what we already queued.
 		if (!config.activePeerIds.empty()) {
-			for (uint8_t peer = 1; peer <= config.peerCount; ++peer) if (std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) == config.activePeerIds.end()) m_PeerLeaveFrames[peer] = config.startFrame;
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)
+				if (std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) == config.activePeerIds.end())
+					m_PeerLeaveFrames[peer] = config.startFrame;
 		}
 		m_LocalFrames.clear();
 		m_LocalInputHistory.clear();
@@ -3782,9 +4029,12 @@ namespace RTE {
 		if (IsMigrating()) {
 			if (producedFrame > m_MigrationBoundary && producedFrame <= UINT64_MAX - m_Config.inputDelayFrames) {
 				NetLockstepFrame input{m_Config.localPeerId, producedFrame + m_Config.inputDelayFrames, frames, commands, m_RoundId, observations, valueObservations};
-				for (auto& command : input.commands) command.senderPeerId = m_Config.localPeerId;
-				for (auto& observation : input.observations) observation.senderPeerId = m_Config.localPeerId;
-				for (auto& observation : input.valueObservations) observation.senderPeerId = m_Config.localPeerId;
+				for (auto& command: input.commands)
+					command.senderPeerId = m_Config.localPeerId;
+				for (auto& observation: input.observations)
+					observation.senderPeerId = m_Config.localPeerId;
+				for (auto& observation: input.valueObservations)
+					observation.senderPeerId = m_Config.localPeerId;
 				m_LocalInputHistory.try_emplace(input.targetFrame, std::move(input));
 			}
 			return true;
@@ -4594,14 +4844,23 @@ namespace RTE {
 			return;
 		}
 		TickMigrationRollCallLinks(nowMs);
-		if (IsMigrating()) { TickHostMigration(nowMs); return; }
+		if (IsMigrating()) {
+			TickHostMigration(nowMs);
+			return;
+		}
 		RefreshLeftSeatHolds();
 		for (const NetTransportEvent& event : m_Transport->PollEvents()) {
 			HandleEvent(event, nowMs);
-			if (IsMigrating()) break;
+			if (IsMigrating())
+				break;
 		}
-		if (IsMigrating()) { TickHostMigration(nowMs); return; }
-		for (auto& [peer, pending] : m_MigrationOutbox) while (!pending.empty() && m_Transport->Send(peer, NetTransportLane::ControlReliable, pending.front())) pending.pop_front();
+		if (IsMigrating()) {
+			TickHostMigration(nowMs);
+			return;
+		}
+		for (auto& [peer, pending]: m_MigrationOutbox)
+			while (!pending.empty() && m_Transport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
+				pending.pop_front();
 		// A start sent while a peer was between rounds is gone; repeat it until every start is in.
 		if (m_State == NetLockstepState::WaitingForStart) {
 			if (m_LastStartSentMs == UINT64_MAX) {
@@ -4780,23 +5039,30 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PopReadyFrame(NetLockstepReadyFrame& outFrame) {
-		if (NeedsMigrationSnapshot()) return false;
+		if (NeedsMigrationSnapshot())
+			return false;
 		if (m_ReadyFrames.empty()) {
 			return false;
 		}
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		if (IsMigrationCatchUp()) {
-			if (outFrame.committedPeerLeaves.contains(m_Config.localPeerId) && outFrame.committedPeerLeaves.at(m_Config.localPeerId) <= outFrame.frame) { m_MigrationNeedsResync = true; return false; }
+			if (outFrame.committedPeerLeaves.contains(m_Config.localPeerId) && outFrame.committedPeerLeaves.at(m_Config.localPeerId) <= outFrame.frame) {
+				m_MigrationNeedsResync = true;
+				return false;
+			}
 			m_PeerLeaveFrames = outFrame.committedPeerLeaves;
 			m_PeerFrameWaivers = outFrame.committedFrameWaivers;
-			m_DroppedSeats.clear(); m_LeftSeatsHeld.clear(); m_DroppedSeatResolutions.clear();
+			m_DroppedSeats.clear();
+			m_LeftSeatsHeld.clear();
+			m_DroppedSeatResolutions.clear();
 		} else {
 			outFrame.committedPeerLeaves = m_PeerLeaveFrames;
 			outFrame.committedFrameWaivers = m_PeerFrameWaivers;
 		}
 		for (const auto& [peerId, leaveFrame]: m_PeerLeaveFrames) {
-			if (leaveFrame <= outFrame.frame && std::find(outFrame.departedPeerIds.begin(), outFrame.departedPeerIds.end(), peerId) == outFrame.departedPeerIds.end()) outFrame.departedPeerIds.push_back(peerId);
+			if (leaveFrame <= outFrame.frame && std::find(outFrame.departedPeerIds.begin(), outFrame.departedPeerIds.end(), peerId) == outFrame.departedPeerIds.end())
+				outFrame.departedPeerIds.push_back(peerId);
 		}
 		std::sort(outFrame.departedPeerIds.begin(), outFrame.departedPeerIds.end());
 		RetainMigrationFrame(outFrame);
@@ -4888,7 +5154,8 @@ namespace RTE {
 		if (team < 0) {
 			return 0;
 		}
-		if (m_Config.matchConfig.successorOrder.empty()) return NetActorOwnership::ResolveTeamCommandAuthority(m_Config.matchConfig, static_cast<uint8_t>(team));
+		if (m_Config.matchConfig.successorOrder.empty())
+			return NetActorOwnership::ResolveTeamCommandAuthority(m_Config.matchConfig, static_cast<uint8_t>(team));
 		const uint8_t human = FirstAliveHumanPeerForTeam(static_cast<uint8_t>(team), GetResumeFrame());
 		return human != 0 ? human : GetHostPeerId();
 	}
@@ -5538,7 +5805,10 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleEvent(const NetTransportEvent& event, uint64_t nowMs) {
-		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) { HandleMigrationEvent(event, nowMs); return; }
+		if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {
+			HandleMigrationEvent(event, nowMs);
+			return;
+		}
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped) {
 			return;
 		}
@@ -5558,7 +5828,8 @@ namespace RTE {
 						break;
 					}
 				}
-				if (lockstepPeer == GetHostPeerId() && BeginHostMigration(nowMs)) break;
+				if (lockstepPeer == GetHostPeerId() && BeginHostMigration(nowMs))
+					break;
 				// The session tracks the same lifecycles for the eventual rematch/rejoin bookkeeping.
 				if (m_SessionEventSink) {
 					m_SessionEventSink(event);
@@ -5688,7 +5959,8 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
-		if (!m_RelayHost && LockstepPeerOfTransport(fromTransport) == GetHostPeerId()) m_AuthorityLastHeardMs = nowMs;
+		if (!m_RelayHost && LockstepPeerOfTransport(fromTransport) == GetHostPeerId())
+			m_AuthorityLastHeardMs = nowMs;
 		// Any traffic proves the sender is alive, whatever the packet turns out to say; the host's
 		// drop adjudication runs off this and nothing else.
 		const uint8_t sender = std::visit(Overloaded{
@@ -5905,9 +6177,11 @@ namespace RTE {
 	void NetLockstepCoordinator::HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport) {
 		if (NeedsMigrationSnapshot() && stop.senderPeerId == m_MigrationResult.snapshotProviderPeerId && SenderOwnsTransport(stop.senderPeerId, fromTransport) &&
 		    stop.reason == NetLockstepStopReason::ResyncRequested && stop.frame == m_MigrationResult.boundary + 2) {
-			Fail(stop.reason, stop.frame, "successor receives the boundary snapshot"); return;
+			Fail(stop.reason, stop.frame, "successor receives the boundary snapshot");
+			return;
 		}
-		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft && BeginHostMigration(nowMs)) return;
+		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft && BeginHostMigration(nowMs))
+			return;
 		if (IsHoldResolutionReason(stop.reason)) {
 			if (m_RelayHost) {
 				return;
@@ -5977,7 +6251,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PublishSeatSnapshot(std::vector<NetSeatPresenceEntry> seats, uint64_t observedAtMs) {
-		if (!m_RelayHost || m_Config.localPeerId != GetHostPeerId() || !IsRunning()) return false;
+		if (!m_RelayHost || m_Config.localPeerId != GetHostPeerId() || !IsRunning())
+			return false;
 		if (m_SeatSnapshot && observedAtMs < m_SeatSnapshot->observedAtMs) return false;
 		const bool unchanged = m_SeatSnapshot && m_SeatSnapshot->seats == seats;
 		const bool countingHold = std::any_of(seats.begin(), seats.end(), [](const auto& seat) { return seat.holdActive; });
@@ -6514,7 +6789,8 @@ namespace RTE {
 		}
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
-			if (nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= m_Config.timeoutMs && BeginHostMigration(nowMs)) return;
+			if (nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= m_Config.timeoutMs && BeginHostMigration(nowMs))
+				return;
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);
 		}

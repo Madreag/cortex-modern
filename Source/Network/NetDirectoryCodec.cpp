@@ -341,7 +341,8 @@ namespace RTE {
 	bool NetDirectoryCodec::DecodeRegisterRequest(const std::string& body, NetDirectoryRegisterRequest& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
-		if (!ReadRegisterFields(obj, out, reason)) return false;
+		if (!ReadRegisterFields(obj, out, reason))
+			return false;
 		const bool firstWorld = out.persistentWorld && out.worldId == out.resumeSessionId && out.resumeToken.empty();
 		return firstWorld || obj.contains("resume_session_id") == obj.contains("resume_token");
 	}

@@ -338,13 +338,16 @@ namespace RTE {
 			if (!config.successorOrder.empty()) {
 				AppendU16LE(out, NetMatchConfigUtil::c_MigrationVersion);
 				AppendU8(out, static_cast<uint8_t>(config.successorOrder.size()));
-				for (uint8_t peer : config.successorOrder) AppendU8(out, peer);
+				for (uint8_t peer: config.successorOrder)
+					AppendU8(out, peer);
 				AppendU8(out, static_cast<uint8_t>(config.migrationPeers.size()));
-				for (const auto& peer : config.migrationPeers) {
+				for (const auto& peer: config.migrationPeers) {
 					AppendU8(out, peer.peerId);
 					AppendU16LE(out, peer.listenPort);
 					AppendU8(out, static_cast<uint8_t>(peer.listenAddrs.size()));
-					for (const auto& address : peer.listenAddrs) if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+					for (const auto& address: peer.listenAddrs)
+						if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error))
+							return false;
 				}
 			}
 			return true;
@@ -467,20 +470,25 @@ namespace RTE {
 			if (reserved & NetMatchConfigUtil::c_MigrationConfigFlag) {
 				uint16_t version = 0;
 				uint8_t count = 0;
-				if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetMatchConfigUtil::c_MigrationVersion && reader.ReadU8(count) && count > 0 && count < NetMatchConfigUtil::c_MaxPeerCount, reader, error, "successor order")) return false;
+				if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetMatchConfigUtil::c_MigrationVersion && reader.ReadU8(count) && count > 0 && count < NetMatchConfigUtil::c_MaxPeerCount, reader, error, "successor order"))
+					return false;
 				for (uint8_t i = 0; i < count; ++i) {
 					uint8_t peer = 0;
-					if (!ReadOrTruncated(reader.ReadU8(peer), reader, error, "successor peer")) return false;
+					if (!ReadOrTruncated(reader.ReadU8(peer), reader, error, "successor peer"))
+						return false;
 					out.successorOrder.push_back(peer);
 				}
-				if (!ReadOrTruncated(reader.ReadU8(count) && count <= NetMatchConfigUtil::c_MaxPeerCount, reader, error, "migration endpoints")) return false;
+				if (!ReadOrTruncated(reader.ReadU8(count) && count <= NetMatchConfigUtil::c_MaxPeerCount, reader, error, "migration endpoints"))
+					return false;
 				for (uint8_t i = 0; i < count; ++i) {
 					NetMatchMigrationPeer peer;
 					uint8_t addresses = 0;
-					if (!ReadOrTruncated(reader.ReadU8(peer.peerId) && reader.ReadU16LE(peer.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses, reader, error, "migration endpoint")) return false;
+					if (!ReadOrTruncated(reader.ReadU8(peer.peerId) && reader.ReadU16LE(peer.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses, reader, error, "migration endpoint"))
+						return false;
 					for (uint8_t a = 0; a < addresses; ++a) {
 						std::string address;
-						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error))
+							return false;
 						peer.listenAddrs.push_back(std::move(address));
 					}
 					out.migrationPeers.push_back(std::move(peer));
@@ -590,10 +598,16 @@ namespace RTE {
 		}
 
 		bool EncodePayload(const NetLobbyMigration& payload, std::vector<uint8_t>& out, NetLobbyError* error) {
-			if (payload.kind < 1 || payload.kind > 2 || payload.peerId == 0 || payload.peerId > NetMatchConfigUtil::c_MaxPeerCount || payload.listenAddrs.size() > NetMatchConfigUtil::c_MaxMigrationAddresses || payload.sealedState.size() > 48 * 1024 + 28) return false;
-			AppendU16LE(out, NetMatchConfigUtil::c_MigrationVersion); AppendU8(out, payload.kind); AppendU8(out, payload.peerId); AppendU16LE(out, payload.listenPort);
+			if (payload.kind < 1 || payload.kind > 2 || payload.peerId == 0 || payload.peerId > NetMatchConfigUtil::c_MaxPeerCount || payload.listenAddrs.size() > NetMatchConfigUtil::c_MaxMigrationAddresses || payload.sealedState.size() > 48 * 1024 + 28)
+				return false;
+			AppendU16LE(out, NetMatchConfigUtil::c_MigrationVersion);
+			AppendU8(out, payload.kind);
+			AppendU8(out, payload.peerId);
+			AppendU16LE(out, payload.listenPort);
 			AppendU8(out, static_cast<uint8_t>(payload.listenAddrs.size()));
-			for (const auto& address : payload.listenAddrs) if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration listen address", error)) return false;
+			for (const auto& address: payload.listenAddrs)
+				if (!AppendString(out, address, NetLobbyProtocol::c_MaxShortTextBytes, "migration listen address", error))
+					return false;
 			out.insert(out.end(), payload.configHash.begin(), payload.configHash.end());
 			AppendU32LE(out, static_cast<uint32_t>(payload.sealedState.size()));
 			out.insert(out.end(), payload.sealedState.begin(), payload.sealedState.end());
@@ -612,16 +626,23 @@ namespace RTE {
 			switch (type) {
 				case NetLobbyMessageType::Migration: {
 					NetLobbyMigration payload;
-					uint16_t version = 0; uint8_t addresses = 0; uint32_t bytes = 0;
+					uint16_t version = 0;
+					uint8_t addresses = 0;
+					uint32_t bytes = 0;
 					if (!ReadOrTruncated(reader.ReadU16LE(version) && version == NetMatchConfigUtil::c_MigrationVersion && reader.ReadU8(payload.kind) && payload.kind >= 1 && payload.kind <= 2 &&
-					    reader.ReadU8(payload.peerId) && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount && reader.ReadU16LE(payload.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses, reader, error, "migration header")) return false;
+					                         reader.ReadU8(payload.peerId) && payload.peerId != 0 && payload.peerId <= NetMatchConfigUtil::c_MaxPeerCount && reader.ReadU16LE(payload.listenPort) && reader.ReadU8(addresses) && addresses <= NetMatchConfigUtil::c_MaxMigrationAddresses,
+					                     reader, error, "migration header"))
+						return false;
 					for (uint8_t i = 0; i < addresses; ++i) {
 						std::string address;
-						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error)) return false;
+						if (!reader.ReadString(address, NetLobbyProtocol::c_MaxShortTextBytes, "migration address", error))
+							return false;
 						payload.listenAddrs.push_back(std::move(address));
 					}
-					if (!ReadOrTruncated(reader.ReadHash(payload.configHash) && reader.ReadU32LE(bytes) && bytes <= 48 * 1024 + 28 && reader.ReadBytes(payload.sealedState, bytes), reader, error, "migration capsule")) return false;
-					out = std::move(payload); return true;
+					if (!ReadOrTruncated(reader.ReadHash(payload.configHash) && reader.ReadU32LE(bytes) && bytes <= 48 * 1024 + 28 && reader.ReadBytes(payload.sealedState, bytes), reader, error, "migration capsule"))
+						return false;
+					out = std::move(payload);
+					return true;
 				}
 				case NetLobbyMessageType::Hello: {
 					NetLobbyHello payload;
@@ -810,7 +831,8 @@ namespace RTE {
 			case NetLobbyMessageType::Abort: return "Abort";
 			case NetLobbyMessageType::StateChunk: return "StateChunk";
 			case NetLobbyMessageType::SeatAssign: return "SeatAssign";
-			case NetLobbyMessageType::Migration: return "Migration";
+			case NetLobbyMessageType::Migration:
+				return "Migration";
 		}
 		return "Unknown";
 	}

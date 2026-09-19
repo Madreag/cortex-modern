@@ -191,7 +191,10 @@ namespace RTE {
 		bool RenumberReadySeats(const std::map<uint8_t, uint8_t>& assignedIdBySeatedId, std::string* error = nullptr);
 		/// Client: takes the session-assigned id the rematch roster gives this peer.
 		bool AdoptRematchPeerId(uint8_t assignedPeerId, std::string* error = nullptr);
-		void AdoptLobbyHostPeerId(uint8_t peerId) { if (m_Role == NetSessionRole::Client && peerId != 0 && peerId <= NetMatchConfigUtil::c_MaxPeerCount) m_HostAssignedPeerId = peerId - 1; }
+		void AdoptLobbyHostPeerId(uint8_t peerId) {
+			if (m_Role == NetSessionRole::Client && peerId != 0 && peerId <= NetMatchConfigUtil::c_MaxPeerCount)
+				m_HostAssignedPeerId = peerId - 1;
+		}
 		bool AdoptHostMigration(INetTransport& transport, uint8_t localPeerId, uint8_t hostPeerId, const NetMatchConfig& config, const std::map<uint8_t, NetPeerId>& peers, uint64_t nowMs);
 
 		NetSessionRole GetRole() const { return m_Role; }
