@@ -3048,7 +3048,7 @@ static std::string ResyncSaveName() {
 		const std::vector<uint8_t> context(matchId.begin(), matchId.end());
 		if (!NetAuthOpen(key, context, admission.sealed, plaintext)) return refuse("the admission file was not sealed by this install");
 		std::vector<uint8_t> admissionState;
-		std::string directorySession, directoryToken, directoryRow;
+		std::string directorySession, directoryToken;
 		uint64_t roundId = checkpoint->roundId;
 		uint32_t interval = checkpoint->intervalSeconds;
 		try {
@@ -3058,7 +3058,9 @@ static std::string ResyncSaveName() {
 				return refuse("the admission file names another match");
 			}
 			admissionState = body.at("admission").get<std::vector<uint8_t>>();
-			directoryRow = body.at("directory_row").get<std::string>();
+			// directory_row rides the file for the persistent-world slice that reads it; this lane
+			// re-advertises the live row instead, so it is not taken here.
+			(void)body.at("directory_row");
 			directorySession = body.at("directory_session").get<std::string>();
 			directoryToken = body.at("directory_token").get<std::string>();
 			roundId = body.at("autosave_round").get<uint64_t>();
@@ -3079,17 +3081,20 @@ static std::string ResyncSaveName() {
 		request.sceneModule = config.sceneModule;
 		request.peerCount = config.peerCount;
 		request.dedicated = config.dedicated;
+		// The delay policy the peers agreed to play on, not this machine's current setting.
+		request.inputDelayFrames = config.inputDelayFrames;
+		request.autoInputDelay = config.delayPolicy == NetMatchDelayPolicy::Auto;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_ResumeMatchId = matchId;
 			m_ResumeTick = checkpoint->savedTick;
 			m_ResumeArchiveDigest = checkpoint->worldStructureHash;
+			m_ResumeSideState = manifest.sideState;
 			m_ResumeAdmissionState = std::move(admissionState);
 			m_ResumeDirectorySession = directorySession;
 			m_ResumeDirectoryToken = directoryToken;
 			m_ResumeRoundId = roundId;
 			m_ResumeIntervalSeconds = interval;
-			m_ResumeDirectoryRow = directoryRow;
 		}
 		std::cout << "[autosave] resuming match=" << matchId << " tick=" << checkpoint->savedTick
 		          << " activity=" << config.activityPreset << " peers=" << static_cast<int>(config.peerCount)
