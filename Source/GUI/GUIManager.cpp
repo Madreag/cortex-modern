@@ -1,9 +1,7 @@
 #include "GUI.h"
-#include "GUIComboBox.h"
 #include "Timer.h"
 
 #include <cassert>
-#include <cstring>
 #include <iostream>
 
 using namespace RTE;
@@ -383,35 +381,86 @@ void GUIManager::SetFocus(GUIPanel* Pan) {
 }
 
 bool GUIManager::RunComboKeyCommitSelfTest() {
-	class KeyInput : public GUIInput {
+	// A dropped list drops the focus from its OnKeyDown, the way GUIComboBox::CloseDropped does; a real
+	// list panel needs a skin and a screen, and this runs before either exists.
+	class KeyPanel final : public GUIPanel {
+	public:
+		explicit KeyPanel(GUIManager* manager) : GUIPanel(manager) {}
+		void MoveFocusOnEnter(GUIPanel* to) {
+			m_MoveFocus = true;
+			m_MoveTo = to;
+		}
+		void OnKeyDown(int KeyCode, int Modifier) override {
+			m_Downs++;
+			if (m_MoveFocus && KeyCode == GUIInput::Key_Enter) {
+				m_Manager->SetFocus(m_MoveTo);
+			}
+		}
+		void OnKeyPress(int KeyCode, int Modifier) override { m_Presses++; }
+
+		int m_Downs = 0;
+		int m_Presses = 0;
+
+	private:
+		bool m_MoveFocus = false;
+		GUIPanel* m_MoveTo = nullptr;
+	};
+	class KeyInput final : public GUIInput {
 	public:
 		KeyInput() : GUIInput(-1, false) {}
 		void PushEnter() { m_KeyboardBuffer[Key_Enter] = Pushed; }
 	};
-	KeyInput input;
-	GUIManager manager(&input);
-	GUIControlManager controls;
-	GUIComboBox combo(&manager, &controls);
-	combo.Create("ComboHostActivity", 0, 0, 200, 20);
-	combo.AddItem("P4 Alpha Duel - Base.rte");
-	combo.AddItem("Brain vs Brain - Base.rte");
-	manager.AddPanel(combo.GetPanel());
-	GUIListPanel* list = combo.GetListPanel();
-	manager.AddPanel(list);
-	list->SetSignalTarget(&combo);
-	list->_SetVisible(true);
-	list->SetFocus();
-	if (!combo.IsDropped() || manager.GetFocusPanel() != list) {
-		std::cerr << "[combo-key-selftest] FAIL drop did not focus the list" << std::endl;
-		return false;
+	// The manager's Timer reads g_TimerMan, and this runs before main() builds the managers.
+	if (!TimerMan::IsConstructed()) {
+		TimerMan::Construct();
 	}
-	input.PushEnter();
-	manager.Update();
-	if (combo.IsDropped() || manager.GetFocusPanel()) {
-		std::cerr << "[combo-key-selftest] FAIL after Return dropped=" << combo.IsDropped()
-		          << " focus=" << (manager.GetFocusPanel() ? 1 : 0) << std::endl;
-		return false;
+
+	bool passed = true;
+	const auto check = [&passed](const char* label, bool value) {
+		passed = passed && value;
+		std::cout << "[combo-key-selftest] " << (value ? "PASS " : "FAIL ") << label << std::endl;
+	};
+	{
+		// Return on the dropped list leaves no focused panel.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel dropped(&manager);
+		dropped.MoveFocusOnEnter(nullptr);
+		manager.AddPanel(&dropped);
+		dropped.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("cleared_focus_ends_the_key", dropped.m_Downs == 1 && dropped.m_Presses == 0 && !manager.GetFocusPanel());
 	}
-	std::cout << "[combo-key-selftest] PASS" << std::endl;
-	return true;
+	{
+		// The same key hands the focus to another panel.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel next(&manager);
+		KeyPanel dropped(&manager);
+		dropped.MoveFocusOnEnter(&next);
+		manager.AddPanel(&next);
+		manager.AddPanel(&dropped);
+		dropped.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("moved_focus_spares_the_new_panel", dropped.m_Downs == 1 && dropped.m_Presses == 0 &&
+		                                             next.m_Downs == 0 && next.m_Presses == 0 && manager.GetFocusPanel() == &next);
+	}
+	{
+		// A panel that keeps the focus still gets the key press.
+		KeyInput input;
+		GUIManager manager(&input);
+		manager.EnableMouse(false);
+		KeyPanel holder(&manager);
+		manager.AddPanel(&holder);
+		holder.SetFocus();
+		input.PushEnter();
+		manager.Update();
+		check("kept_focus_still_presses", holder.m_Downs == 1 && holder.m_Presses == 1 && manager.GetFocusPanel() == &holder);
+	}
+	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }

@@ -60,7 +60,7 @@ namespace RTE {
 		/// The panel that currently has keyboard focus; null when none does.
 		GUIPanel* GetFocusPanel() const { return m_FocusPanel; }
 
-		/// Drops a combo, presses Return, and checks the manager survives with focus cleared.
+		/// Presses Return on a panel that drops the focus and checks the key loop stops there.
 		static bool RunComboKeyCommitSelfTest();
 
 	private:
