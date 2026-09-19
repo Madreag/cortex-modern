@@ -2507,7 +2507,9 @@ std::string BuyMenuGUI::SaveCheckpoint() const {
 	writer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(m_pSelectedCraft); }));
 	std::vector<bool> expanded;
 	for (size_t i = 0; i < m_aExpandedModules.size(); ++i) expanded.push_back(m_aExpandedModules[i]);
-	writer(!m_aExpandedModules.empty(), GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
+	// The menu holds its flag store for its whole life, which is what this byte has always said: it is
+	// true at every module count, including none, and the load side rebuilds the flags themselves.
+	writer(true, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
 	for (const auto& loadout: m_Loadouts) {
 		std::vector<CheckpointText> cargo;
 		for (const auto* item: loadout.m_CargoItems) cargo.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveEntityReference(item); }));
