@@ -247,9 +247,24 @@ namespace RTE {
 		std::vector<NetValueObservation> valueObservations;
 		/// Older ticks riding this packet, oldest first. Empty on the classic reserved=0 path.
 		std::vector<NetLockstepFrame> priorWindow;
+		/// Decode state, never a wire field: this copy's observations stood behind the reader's table, so
+		/// they were read past and the tick is already in this peer's stream.
+		bool observationsReadPast = false;
 
 		bool operator==(const NetLockstepFrame& rhs) const;
 	};
+
+	/// The observation bytes one tick went out with. A window repeat sends these again exactly, so the
+	/// slots and the binding count a repaired tick carries are the ones its first send wrote.
+	struct NetLockstepObservationBlock {
+		std::vector<uint8_t> soundBytes;
+		std::vector<uint8_t> valueBytes; //!< Empty when the tick encoded no value observation.
+		size_t observationsEncoded = 0;
+		size_t valueObservationsEncoded = 0;
+	};
+
+	/// Per sender, the blocks of the ticks still inside the redundancy window, by target frame.
+	using NetLockstepObservationBlocks = std::map<uint64_t, NetLockstepObservationBlock>;
 
 	struct NetLockstepAck {
 		uint8_t senderPeerId = 0;
@@ -523,8 +538,10 @@ namespace RTE {
 		/// Without a dictionary every observation spells out its key, so the packet stands alone; that is
 		/// what a replay record and a one-shot round trip want. With one, only what fits the observation
 		/// byte budget is encoded and outObservationsEncoded says how many, so the caller can carry the
-		/// rest; the dictionary is touched only once the packet is certain to encode.
-		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, size_t* outValueObservationsEncoded = nullptr);
+		/// rest; the dictionary is touched only once the packet is certain to encode. With a block store the
+		/// observations of a tick are encoded once and kept, and a window packet repeats those bytes rather
+		/// than re-encoding them against a dictionary that has moved on.
+		static bool Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr);
 		static bool EncodeRecoveryInput(const NetLockstepFrame& frame, std::vector<uint8_t>& outBytes, NetLockstepError* error = nullptr);
 		static bool DecodeRecoveryInput(const std::vector<uint8_t>& bytes, NetLockstepFrame& outFrame, NetLockstepError* error = nullptr);
 		/// The frame version selects the ControllerFrame layout and semantics; a recording carries its own.
@@ -676,7 +693,7 @@ namespace RTE {
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});
 		/// Sends to every remote, or to one when onlyPeerId names it.
-		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0, size_t* outValueObservationsEncoded = nullptr);
+		bool SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error = nullptr, NetSoundObservationDictionary* dictionary = nullptr, size_t* outObservationsEncoded = nullptr, uint8_t onlyPeerId = 0, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr);
 		void HandleEvent(const NetTransportEvent& event, uint64_t nowMs);
 		void HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport);
 		void HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport);
@@ -692,6 +709,8 @@ namespace RTE {
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
 		void AttachFrameWindow(NetLockstepFrame& packet) const;
+		/// The block store of one sender, trimmed to the ticks a window can still repeat.
+		NetLockstepObservationBlocks& ObservationBlocksOf(uint8_t senderPeerId, uint64_t newestTargetFrame);
 		void AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy);
 		uint8_t LockstepPeerOfTransport(NetPeerId transportPeerId) const;
 		bool SendStart(std::string* error, uint8_t onlyPeerId = 0);
@@ -857,6 +876,8 @@ namespace RTE {
 		// sender encoded, so a forward is the same size as the packet it came from and its receivers see
 		// every binding the sender made.
 		NetSoundObservationTables m_ObservationEncodeTables;
+		/// Per sender, the observation bytes of the ticks a window may still repeat. Reset with the tables.
+		std::map<uint8_t, NetLockstepObservationBlocks> m_ObservationBlocks;
 		std::vector<NetSoundObservation> m_PendingObservations; //!< What the last frame could not hold; rides the next one.
 		std::vector<NetSoundObservation> m_DroppedObservations; //!< Readings the wire never carried, for their sampler to take back.
 		std::vector<NetValueObservation> m_PendingValueObservations;

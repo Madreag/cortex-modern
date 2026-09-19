@@ -882,67 +882,104 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr) {
+		// A tick's observations are encoded against the sender's dictionary once, the first time the tick
+		// goes out, and kept. Every later copy of that tick writes those bytes again, so the slots and the
+		// binding count a window copy carries are the ones the tick's own packet wrote and a peer that
+		// repairs the tick from the window binds exactly what the peer that saw the first packet bound.
+		bool AppendTickObservations(const NetLockstepFrame& tick, std::vector<uint8_t>& out, NetSoundObservationDictionary* dictionary, NetLockstepObservationBlocks* blocks, bool writeEmptyValues, size_t* outObservationsEncoded, size_t* outValueObservationsEncoded, NetLockstepError* error) {
+			if (blocks) {
+				if (const auto kept = blocks->find(tick.targetFrame); kept != blocks->end()) {
+					out.insert(out.end(), kept->second.soundBytes.begin(), kept->second.soundBytes.end());
+					if (!kept->second.valueBytes.empty()) {
+						out.insert(out.end(), kept->second.valueBytes.begin(), kept->second.valueBytes.end());
+					} else if (writeEmptyValues) {
+						AppendU16LE(out, 0);
+					}
+					if (outObservationsEncoded) *outObservationsEncoded = kept->second.observationsEncoded;
+					if (outValueObservationsEncoded) *outValueObservationsEncoded = kept->second.valueObservationsEncoded;
+					return true;
+				}
+			}
+			const size_t soundStart = out.size();
+			size_t encoded = 0;
+			if (!AppendObservations(tick.observations, out, dictionary, &encoded, error)) {
+				return false;
+			}
+			const size_t valueStart = out.size();
+			size_t valueEncoded = 0;
+			if (!AppendValueObservations(tick.valueObservations, out, &valueEncoded, error, false, writeEmptyValues)) {
+				return false;
+			}
+			if (outObservationsEncoded) *outObservationsEncoded = encoded;
+			if (outValueObservationsEncoded) *outValueObservationsEncoded = valueEncoded;
+			if (blocks) {
+				NetLockstepObservationBlock block;
+				block.soundBytes.assign(out.begin() + static_cast<std::ptrdiff_t>(soundStart), out.begin() + static_cast<std::ptrdiff_t>(valueStart));
+				if (valueEncoded > 0) {
+					block.valueBytes.assign(out.begin() + static_cast<std::ptrdiff_t>(valueStart), out.end());
+				}
+				block.observationsEncoded = encoded;
+				block.valueObservationsEncoded = valueEncoded;
+				(*blocks)[tick.targetFrame] = std::move(block);
+			}
+			return true;
+		}
+
+		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr) {
 			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id") || !ValidateSortedFrames(payload.frames, error)) {
 				return false;
 			}
 			if (!ValidateCommandCounts(payload.commands, error)) return false;
-			const bool window = !recovery && !payload.priorWindow.empty();
+			// Only ticks whose own block is still kept can ride the window; an older one is left off rather
+			// than re-encoded against a dictionary that has moved past it. Without a dictionary every key is
+			// spelled out, so a copy made there stands alone and needs no kept block.
+			size_t oldest = payload.priorWindow.size();
+			if (!recovery && blocks) {
+				for (size_t index = payload.priorWindow.size(); index-- > 0;) {
+					if (!blocks->contains(payload.priorWindow[index].targetFrame)) {
+						break;
+					}
+					oldest = index;
+				}
+			} else if (!recovery && !dictionary) {
+				oldest = 0;
+			}
+			const bool window = !recovery && oldest < payload.priorWindow.size();
 			if (window) {
-				const size_t ticks = payload.priorWindow.size() + 1;
+				const size_t ticks = payload.priorWindow.size() - oldest + 1;
 				if (ticks < 2 || ticks > NetLockstepCodec::c_MaxWindowTicks) {
 					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "frame window tick count is out of range");
 					return false;
 				}
-				for (const NetLockstepFrame& older : payload.priorWindow) {
+				for (size_t index = oldest; index < payload.priorWindow.size(); ++index) {
+					const NetLockstepFrame& older = payload.priorWindow[index];
 					if (older.senderPeerId != payload.senderPeerId || !ValidateSortedFrames(older.frames, error) || !ValidateCommandCounts(older.commands, error)) {
 						return false;
 					}
 				}
 			}
 			AppendU8(out, payload.senderPeerId);
-			AppendU8(out, window ? static_cast<uint8_t>(payload.priorWindow.size() + 1) : 0);
+			AppendU8(out, window ? static_cast<uint8_t>(payload.priorWindow.size() - oldest + 1) : 0);
 			if (window) {
 				AppendU64LE(out, payload.roundId);
 				const std::vector<ControllerFrame>* previousTick = nullptr;
 				std::vector<ControllerFrame> previousFrames;
-				auto encodeTick = [&](const NetLockstepFrame& tick, bool requireAllObservations) {
+				auto encodeTick = [&](const NetLockstepFrame& tick) {
 					if (!EncodeTickFrames(tick.targetFrame, tick.frames, previousTick, out, error) ||
-					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery)) {
+					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery) ||
+					    !AppendTickObservations(tick, out, dictionary, blocks, true, outObservationsEncoded, outValueObservationsEncoded, error)) {
 						return false;
-					}
-					size_t encoded = 0;
-					if (!AppendObservations(tick.observations, out, dictionary, &encoded, error)) {
-						return false;
-					}
-					if (requireAllObservations && encoded != tick.observations.size()) {
-						SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "window tick dropped sound observations");
-						return false;
-					}
-					if (outObservationsEncoded) {
-						*outObservationsEncoded = encoded;
-					}
-					size_t valueEncoded = 0;
-					if (!AppendValueObservations(tick.valueObservations, out, &valueEncoded, error, false, true)) {
-						return false;
-					}
-					if (requireAllObservations && valueEncoded != tick.valueObservations.size()) {
-						SetError(error, NetLockstepErrorCode::PayloadTooLarge, out.size(), "window tick dropped value observations");
-						return false;
-					}
-					if (outValueObservationsEncoded) {
-						*outValueObservationsEncoded = valueEncoded;
 					}
 					previousFrames = tick.frames;
 					previousTick = &previousFrames;
 					return true;
 				};
-				for (const NetLockstepFrame& older : payload.priorWindow) {
-					if (!encodeTick(older, true)) {
+				for (size_t index = oldest; index < payload.priorWindow.size(); ++index) {
+					if (!encodeTick(payload.priorWindow[index])) {
 						return false;
 					}
 				}
-				return encodeTick(payload, false);
+				return encodeTick(payload);
 			}
 			if (!EncodeTickFrames(payload.targetFrame, payload.frames, nullptr, out, error) ||
 			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery)) {
@@ -950,10 +987,7 @@ namespace RTE {
 			}
 			AppendU64LE(out, payload.roundId);
 			if (!recovery) {
-				if (!AppendObservations(payload.observations, out, dictionary, outObservationsEncoded, error)) {
-					return false;
-				}
-				return AppendValueObservations(payload.valueObservations, out, outValueObservationsEncoded, error, false);
+				return AppendTickObservations(payload, out, dictionary, blocks, false, outObservationsEncoded, outValueObservationsEncoded, error);
 			}
 			if (payload.observations.size() > NetLockstepCodec::c_MaxObservationsPerPacket ||
 			    out.size() + 2 + payload.observations.size() * 45 > NetLockstepCodec::c_MaxRecoveryInputBytes) {
@@ -1222,22 +1256,35 @@ namespace RTE {
 		// nothing is resolved and no observation comes out, so a frame this round is going to drop cannot
 		// disturb its sender's live slots. Bindings are staged and applied once the whole block has read, so a
 		// refusal part way through leaves the table exactly as it was.
-		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version, bool discard) {
+		bool ReadObservations(ByteReader& reader, NetLockstepFrame& payload, NetSoundObservationDictionary* dictionary, NetLockstepError* error, uint16_t version, bool discard, bool windowCopy = false, bool* outReadPast = nullptr) {
 			bool restart = false;
+			if (outReadPast) {
+				*outReadPast = false;
+			}
 			if (version >= NetLockstepCodec::c_ObservationBindingSequenceVersion) {
 				uint64_t bindingsBefore = 0;
 				if (!ReadVarOrFail(reader, bindingsBefore, error, "observation_bindings_before")) {
 					return false;
 				}
 				if (dictionary && bindingsBefore != dictionary->BindingCount()) {
-					// A sender that starts over has spelled nothing out yet, which is a new round and not a
-					// hole; anything else means this peer is missing a binding it can never be told again.
-					if (bindingsBefore != 0) {
+					// A window copy of a tick that stands behind the table's place in this sender's stream is
+					// one this peer already read: it is read past, the table stays where it is, and the copy
+					// is not offered again.
+					if (windowCopy && bindingsBefore < dictionary->BindingCount()) {
+						dictionary = nullptr;
+						discard = true;
+						if (outReadPast) {
+							*outReadPast = true;
+						}
+					} else if (bindingsBefore != 0) {
+						// A sender that starts over has spelled nothing out yet, which is a new round and not a
+						// hole; anything else means this peer is missing a binding it can never be told again.
 						SetError(error, NetLockstepErrorCode::ObservationBindingGap, reader.Offset(),
 						         "sound observation bindings jump from " + std::to_string(dictionary->BindingCount()) + " to " + std::to_string(bindingsBefore));
 						return false;
+					} else {
+						restart = true;
 					}
-					restart = true;
 				}
 			}
 			// What this block binds, in the order it binds it, and what each of its slots means as it reads.
@@ -1988,25 +2035,30 @@ namespace RTE {
 					NetLockstepFrame tick;
 					tick.senderPeerId = payload.senderPeerId;
 					tick.roundId = payload.roundId;
+					const bool windowCopy = i + 1 < reserved;
+					bool readPast = false;
 					if (!DecodeTickFrames(reader, tick, controllerFrameVersion, previousTick, error) ||
 					    !DecodeCommandList(reader, tick.commands, tick.senderPeerId, version, error)) {
 						return false;
 					}
 					if (version >= NetLockstepCodec::c_RoundVersion) {
-						if (!ReadObservations(reader, tick, dictionary, error, version, otherRound)) {
+						if (!ReadObservations(reader, tick, dictionary, error, version, otherRound, windowCopy, &readPast)) {
 							return false;
 						}
 						if (version >= NetLockstepCodec::c_ValueObservationVersion &&
-						    !ReadValueObservations(reader, tick, error, otherRound)) {
+						    !ReadValueObservations(reader, tick, error, otherRound || readPast)) {
 							return false;
 						}
 					}
+					// A copy whose observations stood behind the table was read past: its tick is already in
+					// this peer's stream, so it is not committed again, and a relay still forwards it.
+					tick.observationsReadPast = readPast;
 					ticks.push_back(std::move(tick));
 					previousFrames = ticks.back().frames;
 					previousTick = &previousFrames;
 				}
 				payload = std::move(ticks.back());
-				payload.priorWindow.assign(ticks.begin(), ticks.end() - 1);
+				payload.priorWindow.assign(std::make_move_iterator(ticks.begin()), std::make_move_iterator(ticks.end() - 1));
 				out = std::move(payload);
 				return true;
 			}
@@ -2290,11 +2342,11 @@ namespace RTE {
 		m_Bindings = 0;
 	}
 
-	bool NetLockstepCodec::Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, size_t* outValueObservationsEncoded) {
+	bool NetLockstepCodec::Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, size_t* outValueObservationsEncoded, NetLockstepObservationBlocks* blocks) {
 		std::vector<uint8_t> payloadBytes;
 		const bool payloadOk = std::visit(Overloaded{
 			[&](const NetLockstepStart& payload) { return EncodePayload(payload, payloadBytes, error); },
-			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded); },
+			[&](const NetLockstepFrame& payload) { return EncodePayload(payload, payloadBytes, error, dictionary, outObservationsEncoded, false, outValueObservationsEncoded, blocks); },
 			[&](const NetLockstepAck& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepStop& payload) { return EncodePayload(payload, payloadBytes, error); },
 			[&](const NetLockstepChecksum& payload) { return EncodePayload(payload, payloadBytes, error); },
@@ -2739,6 +2791,7 @@ namespace RTE {
 		m_RemoteValueObservations.clear();
 		m_ObservationDecodeTables.Reset();
 		m_ObservationEncodeTables.Reset();
+		m_ObservationBlocks.clear();
 		m_ReadyFrames.clear();
 		m_PreStartFrames.clear();
 		m_PreStartChecksums.clear();
@@ -3111,14 +3164,14 @@ namespace RTE {
 		}
 		if (recovery) {
 			if (!QueueRecoveredInput(packet, error)) return false;
-		} else if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded)) {
+		} else if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
 			if (packet.priorWindow.empty()) {
 				return false;
 			}
 			packet.priorWindow.clear();
 			observationsEncoded = packet.observations.size();
 			valueObservationsEncoded = packet.valueObservations.size();
-			if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded)) {
+			if (!SendPacket({packet}, m_Config.frameLane, error, &m_ObservationEncodeTables.Exactly(m_Config.localPeerId), &observationsEncoded, 0, &valueObservationsEncoded, &ObservationBlocksOf(m_Config.localPeerId, targetFrame))) {
 				return false;
 			}
 		}
@@ -3249,7 +3302,10 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::RememberLocalInput(const NetLockstepFrame& frame) {
-		m_LocalInputHistory[frame.targetFrame] = frame;
+		NetLockstepFrame& kept = m_LocalInputHistory[frame.targetFrame];
+		kept = frame;
+		// The history holds the tick itself; the copies it rode out with belong to the packet, not to it.
+		kept.priorWindow.clear();
 		const uint64_t last = m_LocalInputHistory.rbegin()->first;
 		while (!m_LocalInputHistory.empty() && last - m_LocalInputHistory.begin()->first > NetLockstepCodec::c_MaxFutureFrameSkew) {
 			m_LocalInputHistory.erase(m_LocalInputHistory.begin());
@@ -3345,6 +3401,14 @@ namespace RTE {
 		}
 		std::reverse(older.begin(), older.end());
 		packet.priorWindow = std::move(older);
+	}
+
+	NetLockstepObservationBlocks& NetLockstepCoordinator::ObservationBlocksOf(uint8_t senderPeerId, uint64_t newestTargetFrame) {
+		NetLockstepObservationBlocks& blocks = m_ObservationBlocks[senderPeerId];
+		// Only the ticks a window can still name are worth keeping.
+		const uint64_t keepFrom = newestTargetFrame > NetLockstepCodec::c_MaxWindowTicks ? newestTargetFrame - NetLockstepCodec::c_MaxWindowTicks : 0;
+		blocks.erase(blocks.begin(), blocks.lower_bound(keepFrom));
+		return blocks;
 	}
 
 	void NetLockstepCoordinator::AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy) {
@@ -4220,28 +4284,31 @@ namespace RTE {
 		return "Unknown";
 	}
 
-	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, uint8_t onlyPeerId, size_t* outValueObservationsEncoded) {
+	bool NetLockstepCoordinator::SendPacket(const NetLockstepPacket& packet, NetTransportLane lane, std::string* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, uint8_t onlyPeerId, size_t* outValueObservationsEncoded, NetLockstepObservationBlocks* blocks) {
 		std::vector<uint8_t> windowBytes;
 		std::vector<uint8_t> classicBytes;
 		NetLockstepError encodeError;
-		if (!NetLockstepCodec::Encode(packet, windowBytes, &encodeError, dictionary, outObservationsEncoded, outValueObservationsEncoded)) {
+		const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload);
+		const bool windowed = frame && !frame->priorWindow.empty() && blocks;
+		NetLockstepFrame classic;
+		if (windowed) {
+			classic = *frame;
+			classic.priorWindow.clear();
+		}
+		// The classic packet is encoded first and is the only one that spends the dictionary; the window
+		// packet repeats the blocks that encode kept. Both carry the same observation bytes, so a peer
+		// without the capability commits what the advertised peers commit and sees the frame it would
+		// have seen without the window at all.
+		if (!NetLockstepCodec::Encode(windowed ? NetLockstepPacket{classic} : packet, classicBytes, &encodeError, dictionary, outObservationsEncoded, outValueObservationsEncoded, blocks)) {
 			if (error) *error = encodeError.message;
 			return false;
 		}
-		if (const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload); frame && !frame->priorWindow.empty()) {
-			NetLockstepFrame stripped = *frame;
-			stripped.priorWindow.clear();
-			size_t ignoredObs = 0;
-			size_t ignoredValues = 0;
-			if (!NetLockstepCodec::Encode({stripped}, classicBytes, &encodeError, nullptr, &ignoredObs, &ignoredValues)) {
-				if (error) *error = encodeError.message;
-				return false;
-			}
-		} else {
-			classicBytes = windowBytes;
+		if (windowed && !NetLockstepCodec::Encode(packet, windowBytes, &encodeError, nullptr, nullptr, nullptr, blocks)) {
+			if (error) *error = encodeError.message;
+			return false;
 		}
 		auto bytesFor = [&](uint8_t peerId) -> const std::vector<uint8_t>& {
-			return FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
+			return windowed && FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
 		};
 		// Send to every remote peer's transport (a set of one in the 2-peer case), or to just the one asked for.
 		for (const auto& [peerId, transportId]: m_RemoteTransports) {
@@ -4315,19 +4382,21 @@ namespace RTE {
 		std::vector<uint8_t> classicBytes;
 		size_t observationsEncoded = 0;
 		size_t valueObservationsEncoded = 0;
-		if (!NetLockstepCodec::Encode(packet, windowBytes, nullptr, &m_ObservationEncodeTables.Exactly(fromPeerId), &observationsEncoded, &valueObservationsEncoded)) {
+		const NetLockstepFrame* relayed = std::get_if<NetLockstepFrame>(&packet.payload);
+		NetLockstepObservationBlocks* blocks = relayed ? &ObservationBlocksOf(fromPeerId, relayed->targetFrame) : nullptr;
+		const bool windowed = relayed && !relayed->priorWindow.empty() && blocks;
+		NetLockstepFrame classic;
+		if (windowed) {
+			classic = *relayed;
+			classic.priorWindow.clear();
+		}
+		// The forward spends the table once, on the tick that just arrived; the copies of the older ticks
+		// are the blocks this host already forwarded for them.
+		if (!NetLockstepCodec::Encode(windowed ? NetLockstepPacket{classic} : packet, classicBytes, nullptr, &m_ObservationEncodeTables.Exactly(fromPeerId), &observationsEncoded, &valueObservationsEncoded, blocks)) {
 			return;
 		}
-		if (const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload); frame && !frame->priorWindow.empty()) {
-			NetLockstepFrame stripped = *frame;
-			stripped.priorWindow.clear();
-			size_t ignoredObs = 0;
-			size_t ignoredValues = 0;
-			if (!NetLockstepCodec::Encode({stripped}, classicBytes, nullptr, nullptr, &ignoredObs, &ignoredValues)) {
-				return;
-			}
-		} else {
-			classicBytes = windowBytes;
+		if (windowed && !NetLockstepCodec::Encode(packet, windowBytes, nullptr, nullptr, nullptr, nullptr, blocks)) {
+			return;
 		}
 		// The table this re-encodes from is the one that just decoded the packet, so every key is already
 		// a slot and the forward is never longer than what arrived. If it ever were, the peers behind the
@@ -4343,7 +4412,7 @@ namespace RTE {
 			if (peerId == fromPeerId) {
 				continue;
 			}
-			const std::vector<uint8_t>& bytes = FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
+			const std::vector<uint8_t>& bytes = windowed && FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
 			if (bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
@@ -4849,6 +4918,13 @@ namespace RTE {
 		}
 		// A sender's frames never target its own delay window; one that does is a broken build.
 		for (const NetLockstepFrame& older : frame.priorWindow) {
+			// A copy read past this peer's table is a tick it already holds; committing its frames without
+			// the observations that rode the original would leave the peers with different readings.
+			if (older.observationsReadPast) {
+				++m_Stats.windowCopiesSkipped;
+				++peerStats.windowCopiesSkipped;
+				continue;
+			}
 			NetLockstepFrame copy = older;
 			copy.priorWindow.clear();
 			copy.roundId = frame.roundId;
