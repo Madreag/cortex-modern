@@ -242,12 +242,57 @@ namespace RTE {
 				const auto decoded = NetLobbyProtocol::Decode(bytes);
 				const auto* proposal = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
 				if (!proposal || proposal->config != config) { *error = "successor order or listen roster changed on the config wire"; return false; }
+				config.frameRedundancyTicks = 2;
+				config.pathHorizonTicks = 17;
+				Config withoutMigration = config;
+				withoutMigration.successorOrder.clear();
+				withoutMigration.migrationPeers.clear();
+				std::vector<uint8_t> windowBytes;
+				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{withoutMigration}}, windowBytes) || !NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) {
+					*error = "combined redundancy and migration config did not encode";
+					return false;
+				}
+				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
+				const size_t migrationOffset = windowBytes.size();
+				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
+				    windowBytes[migrationOffset - 2] != 2 || windowBytes.back() != 0 ||
+				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end(), bytes.begin() + reservedOffset + 2) ||
+				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
+					*error = "migration payload does not follow the redundancy U16 after the path horizon";
+					return false;
+				}
+				const auto combined = NetLobbyProtocol::Decode(bytes);
+				const auto* roundTrip = combined.ok ? std::get_if<NetLobbyMatchConfig>(&combined.message.payload) : nullptr;
+				if (!roundTrip || roundTrip->config != config) {
+					*error = "combined redundancy and migration config did not round-trip";
+					return false;
+				}
+				auto invalid = windowBytes;
+				invalid[reservedOffset] |= 16;
+				if (NetLobbyProtocol::Decode(invalid).ok) {
+					*error = "reserved bit 16 was accepted without a migration payload";
+					return false;
+				}
+				invalid = bytes;
+				invalid[migrationOffset] = 0;
+				if (NetLobbyProtocol::Decode(invalid).ok) {
+					*error = "reserved bit 16 was accepted with an invalid migration version";
+					return false;
+				}
+				invalid = bytes;
+				invalid[reservedOffset] = 32;
+				const auto unknown = NetLobbyProtocol::Decode(invalid);
+				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
+					*error = "a reserved word of 32 was not refused";
+					return false;
+				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
 				config.successorOrder = {2, 3};
 				if (NetMatchConfigUtil::HashConfig(config) == hash) { *error = "config agreement did not bind successor order"; return false; }
 				config.successorOrder = {3, 3};
 				if (NetMatchConfigUtil::ValidateLocalAlpha(config)) { *error = "duplicate successor passed config validation"; return false; }
 				std::cout << "[net-match-selftest] PASS: successor order and addresses are config-bound" << std::endl;
+				std::cout << "[net-match-selftest] PASS: migration trails redundancy and rejects absent or invalid payloads" << std::endl;
 				return true;
 			} else {
 				*error = "the agreed config carries no successor order or listen roster";
