@@ -2364,7 +2364,7 @@ void Actor::Update() {
 
 	// The wound, travel and death paths write health and status straight, so the stamp is taken around them.
 	const float checkpointHealth = m_Health;
-	const Status checkpointStatus = m_Status;
+	const int checkpointStatus = m_Status;
 
 	/////////////////////////////////
 	// Hit Body update and handling
