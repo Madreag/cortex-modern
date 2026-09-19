@@ -314,11 +314,13 @@ namespace RTE {
 		}
 		if (NetHostBanRecord* existing = FindRecord(m_Records, identity)) {
 			if (scope == NetHostBanScope::UntilRemoved && existing->scope != NetHostBanScope::UntilRemoved) {
+				// One write: a failed upgrade puts back the whole record it found, not only its scope.
+				const NetHostBanRecord previous = *existing;
 				existing->scope = NetHostBanScope::UntilRemoved;
 				existing->displayAlias = alias;
 				existing->reason = reason;
 				if (!Persist(error)) {
-					existing->scope = NetHostBanScope::Session;
+					*existing = previous;
 					return false;
 				}
 			}

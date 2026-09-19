@@ -7170,6 +7170,22 @@ namespace RTE {
 			if (store.Ban(bob, NetHostBanScope::UntilRemoved, "bob", "fail", sid, 3000) || store.IsBanned(bob, sid)) {
 				return Fail("persistence failure still claimed Until Removed");
 			}
+			// An upgrade that cannot be written leaves the record it found exactly as it was: the alias
+			// and the reason belong to the same write the scope does.
+			const NetAuthBytes32 carol = Ramp<32>(0xC3);
+			if (!store.Ban(carol, NetHostBanScope::Session, "carol", "session", sid, 3100)) {
+				return Fail("the session ban the upgrade arm needs was refused");
+			}
+			if (store.Ban(carol, NetHostBanScope::UntilRemoved, "carol-upgraded", "permanent", sid, 3200)) {
+				return Fail("persistence failure still claimed the Until Removed upgrade");
+			}
+			for (const NetHostBanRecord& record: store.List()) {
+				if (!(record.identity == carol)) continue;
+				if (record.scope != NetHostBanScope::Session || record.displayAlias != "carol" || record.reason != "session") {
+					return Fail("the failed upgrade left scope=" + std::to_string(static_cast<int>(record.scope)) +
+					            " alias='" + record.displayAlias + "' reason='" + record.reason + "'");
+				}
+			}
 			store.ForcePersistFailureForTest(false);
 			{
 				std::ofstream corrupt(store.GetPath(), std::ios::binary | std::ios::trunc);
