@@ -4353,15 +4353,24 @@ void MovableMan::OverrideMaterialDoors(bool eraseDoorMaterial, int team) const {
 bool MovableMan::TeamHasDoorMaterialInBox(int team, const Box& box) const {
 	const float sceneWidth = static_cast<float>(g_SceneMan.GetSceneWidth());
 	const float sceneHeight = static_cast<float>(g_SceneMan.GetSceneHeight());
-	std::array<Vector, 5> shifts{Vector()};
+	std::array<Vector, 9> shifts{Vector()};
 	int shiftCount = 1;
-	if (g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F) {
+	const bool wrapsX = g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F;
+	const bool wrapsY = g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F;
+	if (wrapsX) {
 		shifts[shiftCount++] = Vector(sceneWidth, 0.0F);
 		shifts[shiftCount++] = Vector(-sceneWidth, 0.0F);
 	}
-	if (g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F) {
+	if (wrapsY) {
 		shifts[shiftCount++] = Vector(0.0F, sceneHeight);
 		shifts[shiftCount++] = Vector(0.0F, -sceneHeight);
+	}
+	if (wrapsX && wrapsY) {
+		// A corner door meets the box only after both seams are crossed.
+		shifts[shiftCount++] = Vector(sceneWidth, sceneHeight);
+		shifts[shiftCount++] = Vector(sceneWidth, -sceneHeight);
+		shifts[shiftCount++] = Vector(-sceneWidth, sceneHeight);
+		shifts[shiftCount++] = Vector(-sceneWidth, -sceneHeight);
 	}
 	for (const std::deque<Actor*>* actorDeque: {&m_Actors, &m_AddedActors}) {
 		for (const Actor* actor: *actorDeque) {
