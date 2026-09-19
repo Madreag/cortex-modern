@@ -207,6 +207,19 @@ namespace RTE {
 			}
 			Put(result, static_cast<uint64_t>(state.e2eFirstTransferUid), 8);
 			checkAuxiliary();
+			// The rewind anchor rides at the end, so an envelope without one is byte-identical to a pre-anchor one.
+			if (!state.rewindMatchId.empty()) {
+				Require(state.rewindMatchId.size() <= c_MaxRewindMatchIdBytes && state.rewindTick > 0 && state.rewindTick <= state.savedTick,
+				        "rewind anchor is not a committed tick of this match");
+				Require(state.rewindMatchId.find_first_not_of("0123456789abcdef-") == std::string::npos, "rewind anchor match id is not a match id");
+				Put(result, state.rewindMatchId.size(), 1);
+				Require(state.rewindMatchId.size() <= NetResyncCodec::c_MaxMetadataBytes - result.size(), "rewind anchor overflows the metadata");
+				result.insert(result.end(), state.rewindMatchId.begin(), state.rewindMatchId.end());
+				Put(result, state.rewindTick, 8);
+				checkAuxiliary();
+			} else {
+				Require(state.rewindTick == 0, "rewind anchor tick without a match id");
+			}
 			Require(archive.size() <= c_MaxTotalBytes - result.size(), "archive overflows the envelope");
 			const auto metadataSize = static_cast<uint32_t>(result.size());
 			for (size_t i = 0; i < 4; ++i) result[8 + i] = static_cast<uint8_t>(metadataSize >> (i * 8));
@@ -299,6 +312,15 @@ namespace RTE {
 			}
 			checkAuxiliary();
 			result.e2eFirstTransferUid = static_cast<int64_t>(reader.Get(8));
+			if (reader.cursor < reader.end) {
+				const auto length = reader.Get(1);
+				Require(length > 0 && length <= c_MaxRewindMatchIdBytes && length <= reader.end - reader.cursor, "rewind anchor match id is out of range");
+				result.rewindMatchId.assign(reinterpret_cast<const char*>(bytes.data() + reader.cursor), static_cast<size_t>(length));
+				reader.cursor += static_cast<size_t>(length);
+				result.rewindTick = reader.Get(8);
+				Require(result.rewindMatchId.find_first_not_of("0123456789abcdef-") == std::string::npos, "rewind anchor match id is not a match id");
+				Require(result.rewindTick > 0 && result.rewindTick <= result.savedTick, "rewind anchor is not a committed tick of this match");
+			}
 			Require(reader.cursor == reader.end, "metadata has trailing bytes");
 			std::vector<uint8_t> decodedArchive(bytes.begin() + static_cast<std::ptrdiff_t>(metadataSize), bytes.end());
 			state = std::move(result); archive = std::move(decodedArchive);
