@@ -1312,7 +1312,7 @@ namespace RTE {
 		virtual void OnSave() { RunScriptedFunctionInAppropriateScripts("OnSave"); }
 
 		/// Requests a synced update for the MO this frame.
-		virtual void RequestSyncedUpdate() { m_RequestedSyncedUpdate = true; }
+		virtual void RequestSyncedUpdate() { if (!m_RequestedSyncedUpdate) TouchCheckpoint(); m_RequestedSyncedUpdate = true; }
 
 		/// Resets the requested update flag.
 		virtual void ResetRequestedSyncedUpdateFlag() { if (m_RequestedSyncedUpdate) TouchCheckpoint(); m_RequestedSyncedUpdate = false; }
