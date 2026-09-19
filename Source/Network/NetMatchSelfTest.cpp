@@ -10902,7 +10902,7 @@ namespace RTE {
 			return false;
 		}
 		target.joinMode = "either";
-		for (int arm = 0; arm < 6; ++arm) {
+		for (int arm = 0; arm < 7; ++arm) {
 			std::vector<std::string> log;
 			TransportTap *muxIp = nullptr, *p2p = nullptr;
 			auto mux = MakeTappedMux(&log, &muxIp, &p2p);
@@ -10918,6 +10918,10 @@ namespace RTE {
 			config.joinAddress = "session:fallback";
 			config.cancelRequested = &service.m_CancelRequested;
 			config.sessionWaitMs = 50;
+			if (arm == 6) {
+				config.nowMs = [] { return 20000; };
+				config.sessionWaitMs = 1;
+			}
 			config.sessionConfig.p2pJoin.identity = target.identity;
 			int iceDials = 0;
 			config.sessionConfig.p2pJoin.connect = [&](INetTransport&, std::string* why) {
@@ -10938,12 +10942,12 @@ namespace RTE {
 					return false;
 				}
 				p2p->Queue({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
-			} else {
+			} else if (arm != 6) {
 				p2p->Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "ICE all candidates failed"});
 			}
 			ip.Queue({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "IP refused"});
 			NetIceJoinTarget dial = target;
-			if (arm == 3) { dial.address.clear(); dial.port = 0; }
+			if (arm == 3 || arm == 6) { dial.address.clear(); dial.port = 0; }
 			bool noDirectRoute = false;
 			std::string why = arm == 2 ? "ICE signaling failed: channel refused" : "";
 			if (service.StartLobbyConnection(mux, ip, session, coordinator, runner, config, dial, arm != 2, noDirectRoute, &why)) {
@@ -10952,7 +10956,7 @@ namespace RTE {
 			}
 			const bool retry = arm < 3;
 			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
-			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4)) {
+			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6)) {
 				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
 				         ", IP dials=" + std::to_string(ipDials) + ", NAT failure=" + std::to_string(noDirectRoute);
 				return false;
@@ -10964,6 +10968,10 @@ namespace RTE {
 			}
 			if (arm == 3 && config.sessionConfig.timeoutMs != 15000) {
 				*error = "ice gathering retained the shorter heartbeat timeout";
+				return false;
+			}
+			if (arm == 6 && session.GetStats().timeouts != 0) {
+				*error = "ice connection timed out on its first tick after a slow directory lookup";
 				return false;
 			}
 			if (noDirectRoute && NetMatchService::SetupFailureStatus(&session, noDirectRoute) !=
@@ -10979,6 +10987,7 @@ namespace RTE {
 		std::cout << "[net-match-selftest] PASS ice failure message: failed ICE and IP stages name the port-forward or LAN action" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice IP retry: runtime, immediate and signaling refusals dial the advertised IP once" << std::endl;
 		std::cout << "[net-match-selftest] PASS ice refusal policy: no invented address, no retry of a ban or cancellation" << std::endl;
+		std::cout << "[net-match-selftest] PASS ice deadline: directory lookup time does not consume the connection budget" << std::endl;
 		return true;
 	}
 
