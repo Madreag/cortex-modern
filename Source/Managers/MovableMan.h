@@ -27,6 +27,7 @@
 #include <map>
 #include <set>
 #include <future>
+#include <deque>
 #include <ostream>
 #include <unordered_set>
 #include <unordered_map>
@@ -183,7 +184,7 @@ namespace RTE {
 			std::vector<MovableObject*> addedParticles;
 			std::string structure;
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
-			std::vector<std::string> luaGraphs; //!< Each Lua state's script graph at the capture, by state index.
+			std::vector<CheckpointText> luaGraphs; //!< Owned graph values; text is formatted only for a restore.
 			long uniqueIDCounter = 0;
 			int luaStateCursor = 0;
 			WorldSnapshot() = default;
@@ -199,6 +200,27 @@ namespace RTE {
 		/// Replaces the resident MOs with registered faithful clones of a snapshot. Only valid between ticks.
 		/// A world that was not set aside first is purged.
 		bool RestoreWorld(const WorldSnapshot& in);
+
+		/// Retains the committed horizon and the preceding rollback window.
+		class WorldSnapshotRing {
+		public:
+			void Reset(uint16_t windowTicks);
+			bool CaptureCommitted(uint64_t tick);
+			bool StoreCommitted(uint64_t tick, std::unique_ptr<WorldSnapshot> snapshot);
+			const WorldSnapshot* Find(uint64_t tick) const;
+			void DiscardAfter(uint64_t tick);
+			size_t Size() const { return m_Entries.size(); }
+			size_t Capacity() const { return m_Capacity; }
+			int64_t LastCaptureUs() const { return m_LastCaptureUs; }
+		private:
+			struct Entry {
+				uint64_t tick;
+				std::unique_ptr<WorldSnapshot> snapshot;
+			};
+			std::deque<Entry> m_Entries;
+			size_t m_Capacity = 0;
+			int64_t m_LastCaptureUs = 0;
+		};
 		/// Ordered resident/pending membership, alarm values, rosters and collision indices.
 		std::string SaveWorldStructure() const;
 		bool LoadWorldStructure(std::string_view text, bool validateOnly = false);
@@ -1007,7 +1029,7 @@ namespace RTE {
 		WorldSetAside* m_WorldSetAside = nullptr; //!< The record holding the world aside, if any; the hold is its to reinstate or discard.
 		/// Withdraws the copies a held world would swap back, so no later destruction writes into them.
 		void ForgetHeldWorld(WorldSetAside& in);
-		bool RestoreWorldCandidate(const WorldSnapshot& in);
+		bool RestoreWorldCandidate(const WorldSnapshot& in, const std::vector<std::string>& luaGraphs);
 		struct Speculation {
 			struct Shadow {
 				MovableObject* object = nullptr;

@@ -1838,13 +1838,27 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.sceneRuntime = scene->SaveRuntimeCheckpoint();
 	}
 	std::vector<std::string> luaProblems;
-	if (!SerializeScriptGraphs(out.luaGraphs, luaProblems)) {
+	auto& cow = CheckpointCow::Get();
+	cow.BeginImage();
+	CheckpointWriter::CacheScope cache(&cow.Cache());
+	struct GraphWalk {
+		GraphWalk() { CheckpointGraphIndex::Get().BeginWalk(); }
+		~GraphWalk() { CheckpointGraphIndex::Get().EndWalk(); }
+	};
+	bool graphsCaptured = false;
+	{
+		GraphWalk walk;
+		graphsCaptured = CaptureScriptGraphs(out.luaGraphs, luaProblems);
+	}
+	if (!graphsCaptured) {
 		for (const std::string& problem: luaProblems) {
 			std::cout << "[scriptgraph] capture refused: " << problem << std::endl;
 		}
 		out.luaGraphs.clear();
 		return false;
 	}
+	cow.RememberLua(out.luaGraphs, LuaCheckpointWriteGeneration());
+	g_LuaMan.ArmCheckpointWriteTrap();
 	const long counter = MovableObject::GetUniqueIDCounter();
 	{
 		MovableObject::FaithfulCloneScope scope(false);
@@ -1853,8 +1867,10 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.actors.reserve(m_Actors.size());
 		out.items.reserve(m_Items.size());
 		out.particles.reserve(m_Particles.size());
+		const bool profileCapture = std::getenv("CC_CAPTURE_PROFILE") != nullptr;
 		std::map<std::string, std::pair<int, double>> profile;
-		const auto timed = [&profile](const MovableObject* mo, auto&& fn) {
+		const auto timed = [&profile, profileCapture](const MovableObject* mo, auto&& fn) {
+			if (!profileCapture) { fn(); return; }
 			const auto start = std::chrono::steady_clock::now();
 			fn();
 			auto& slot = profile[mo->GetClassName() + " " + mo->GetPresetName()];
@@ -1873,7 +1889,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		for (const Actor* actor: m_AddedActors) out.addedActors.push_back(dynamic_cast<Actor*>(actor->Clone()));
 		for (const MovableObject* item: m_AddedItems) out.addedItems.push_back(dynamic_cast<MovableObject*>(item->Clone()));
 		for (const MovableObject* particle: m_AddedParticles) out.addedParticles.push_back(dynamic_cast<MovableObject*>(particle->Clone()));
-		if (std::getenv("CC_CAPTURE_PROFILE")) {
+		if (profileCapture) {
 			std::vector<std::pair<std::string, std::pair<int, double>>> rows(profile.begin(), profile.end());
 			std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
 			for (size_t i = 0; i < rows.size() && i < 12; ++i) {
@@ -1894,7 +1910,41 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 	}
 }
 
-bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
+void MovableMan::WorldSnapshotRing::Reset(uint16_t windowTicks) {
+	m_Entries.clear();
+	m_Capacity = windowTicks == 0 ? 0 : static_cast<size_t>(windowTicks) + 1;
+	m_LastCaptureUs = 0;
+}
+
+bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
+	if (m_Capacity == 0 || (!m_Entries.empty() && tick <= m_Entries.back().tick) ||
+	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != tick) return false;
+	auto snapshot = std::make_unique<WorldSnapshot>();
+	const auto start = std::chrono::steady_clock::now();
+	const bool captured = g_MovableMan.CaptureWorld(*snapshot);
+	m_LastCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	return captured && StoreCommitted(tick, std::move(snapshot));
+}
+
+bool MovableMan::WorldSnapshotRing::StoreCommitted(uint64_t tick, std::unique_ptr<WorldSnapshot> snapshot) {
+	if (!snapshot || m_Capacity == 0 || (!m_Entries.empty() &&
+	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1))) return false;
+	m_Entries.push_back({tick, std::move(snapshot)});
+	while (m_Entries.size() > m_Capacity) m_Entries.pop_front();
+	return true;
+}
+
+const MovableMan::WorldSnapshot* MovableMan::WorldSnapshotRing::Find(uint64_t tick) const {
+	const auto found = std::lower_bound(m_Entries.begin(), m_Entries.end(), tick,
+	                                  [](const Entry& entry, uint64_t value) { return entry.tick < value; });
+	return found != m_Entries.end() && found->tick == tick ? found->snapshot.get() : nullptr;
+}
+
+void MovableMan::WorldSnapshotRing::DiscardAfter(uint64_t tick) {
+	while (!m_Entries.empty() && m_Entries.back().tick > tick) m_Entries.pop_back();
+}
+
+bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vector<std::string>& luaGraphs) {
 	if (!LoadWorldStructure(in.structure, true) || !in.terrain.CanRestore() || !g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals, true)) return false;
 	struct RestoreFlag {
 		bool previous = g_MovableMan.IsRestoringSnapshot();
@@ -1956,7 +2006,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->PrepareCheckpointUI()) return false;
 	if (!g_ActivityMan.PrepareCheckpointPrimitives(in.runtimeGlobals)) return false;
 	std::string luaError;
-	if (!RestoreScriptGraphs(in.luaGraphs, &luaError)) {
+	if (!RestoreScriptGraphs(luaGraphs, &luaError)) {
 		std::cout << "[scriptgraph] restore failed: " << luaError << std::endl;
 		return false;
 	}
@@ -6235,17 +6285,25 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 
 bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	std::string error;
-	if (!LoadWorldStructure(in.structure, true) || !ValidateScriptGraphs(in.luaGraphs, &error)) {
+	std::vector<std::string> luaGraphs;
+	luaGraphs.reserve(in.luaGraphs.size());
+	try {
+		for (const CheckpointText& graph: in.luaGraphs) luaGraphs.push_back(graph.Text());
+	} catch (const std::exception& exception) {
+		std::cout << "[scriptgraph] restore graph refused: " << exception.what() << std::endl;
+		return false;
+	}
+	if (!LoadWorldStructure(in.structure, true) || !ValidateScriptGraphs(luaGraphs, &error)) {
 		std::cout << "[scriptgraph] restore refused before replacement: " << error << std::endl;
 		return false;
 	}
 	// A caller running a speculative world already owns the originals and its rollback.
-	if (m_WorldSetAside) return RestoreWorldCandidate(in);
+	if (m_WorldSetAside) return RestoreWorldCandidate(in, luaGraphs);
 	const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
 	WorldSetAside original;
 	if (!SetAsideWorld(original)) return false;
 	bool restored = false;
-	try { restored = RestoreWorldCandidate(in); }
+	try { restored = RestoreWorldCandidate(in, luaGraphs); }
 	catch (const std::exception& exception) { std::cout << "[scriptgraph] candidate failed: " << exception.what() << std::endl; }
 	if (restored) {
 		DiscardWorld(original);
