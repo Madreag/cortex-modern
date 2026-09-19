@@ -1114,25 +1114,21 @@ static std::string ResyncSaveName() {
 			return false;
 		}
 		g_ActivityMan.NoteLockstepRelaunch();
-		if (autosave) {
-			// This peer's own checkpoint of that tick carries its own local player state; a binding
-			// derived from the roster would overwrite it with a seat that has no camera and no actor.
+		// This peer's own checkpoint of that tick already carries its own local player state, so the
+		// staging keeps the world's own bindings instead of applying one derived from the roster.
+		const bool ownCheckpoint = autosave.has_value();
+		if (ownCheckpoint) {
 			std::cout << "[net-match] launching from the held checkpoint: "
 			          << AutosaveStore::ArchiveName(autosave->matchId, autosave->tick) << std::endl;
-			ScenarioRunner::ApplyDeterministicConfig();
-			if (!ScenarioRunner::RestoreNetResyncState(*state)) {
-				if (error) *error = "could not restore the resumed lockstep state";
-				return false;
-			}
-			return true;
-		}
-		const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
-		if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
-			std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;
 		} else {
-			g_ActivityMan.RemoveSavedGame(pendingLoad);
+			const char* keepResyncSaves = std::getenv("CC_KEEP_RESYNC_SAVES");
+			if (keepResyncSaves && keepResyncSaves[0] && keepResyncSaves[0] != '0') {
+				std::cout << "[net-match] keeping resync save: " << pendingLoad << std::endl;
+			} else {
+				g_ActivityMan.RemoveSavedGame(pendingLoad);
+			}
+			std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		}
-		std::cout << "[net-match] launching from the received snapshot: " << pendingLoad << std::endl;
 		struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; };
 		const auto local = std::make_shared<LocalState>();
 		const bool keepLocalPlayer = retainLocal && !dedicated;
@@ -1141,11 +1137,20 @@ static std::string ResyncSaveName() {
 			local->gui = GUIInput::SaveSharedCheckpoint();
 			local->frame = g_FrameMan.SaveNetLocalState();
 			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
-		}, [local, state, keepLocalPlayer, dedicated, newestBinding](Activity& activity) {
+		}, [local, state, keepLocalPlayer, dedicated, newestBinding, ownCheckpoint](Activity& activity) {
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
 			const NetGamePlayerBindings seatless{};
-			if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) return false;
+			if (ownCheckpoint) {
+				// The world this peer just restored is its own state at that tick, so its bindings are
+				// read back out of it and re-applied: the seats keep their cameras, brains and
+				// controlled actors, and the net-local screens are rebuilt from them.
+				NetGamePlayerBindings own;
+				activity.CaptureNetPlayerBindings(own);
+				if (!activity.ApplyNetPlayerBindings(own)) return false;
+			} else if (!(keepLocalPlayer ? activity.RestoreNetLocalPlayerState(local->activity) : activity.ApplyNetPlayerBindings(dedicated ? seatless : newestBinding->bindings))) {
+				return false;
+			}
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
 			return ScenarioRunner::RestoreNetResyncState(*state);
 		})) { if (error) *error = "could not stage resync local state restoration"; return false; }
