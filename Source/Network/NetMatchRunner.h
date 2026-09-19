@@ -110,6 +110,16 @@ namespace RTE {
 			return {roundMs, hasSessionClock ? sessionClockMs : roundMs, roundMs};
 		}
 
+		/// Whether a setup round has waited out its seating time. The host's Never (a seating wait of
+		/// 0) never does, however long the lobby stays open; a round with no seating policy of its own
+		/// budgets by its message deadline, which is what every round did before the two were split.
+		static bool SeatingWaitExpired(const std::optional<uint32_t>& seatingWaitMs, uint32_t messageDeadlineMs, uint64_t sinceProgressMs) {
+			if (seatingWaitMs && *seatingWaitMs == 0) {
+				return false;
+			}
+			return sinceProgressMs > seatingWaitMs.value_or(messageDeadlineMs);
+		}
+
 		bool Start(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error = nullptr);
 
 		/// Runs the next match over an already-established session: re-runs the lobby round and starts a
