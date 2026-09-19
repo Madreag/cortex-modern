@@ -25,6 +25,7 @@ RED_STALL_MS = 870
 DIRTY_BOUND_US = RED_STALL_MS * 1000
 ACTORS = 240
 TICKS = 180
+RESTORE_NAME = "CheckpointRestoreProbe"
 FREEZE = re.compile(
     r"^\[autosave\] tick=(\d+) freeze_us=(\d+) worker_us=(\d+) image_bytes=(\d+) "
     r"dirty_ratio=([0-9.]+) p99_freeze_us=(\d+)\s*$",
@@ -238,6 +239,35 @@ def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: 
     return {"pass": not failures, "failures": failures}
 
 
+def newest_autosave(runtime: Path, match: str = "c0de-a1") -> Path | None:
+    saves = sorted((runtime / "Autosaves").glob(f"{match}-*.ccsave"), key=lambda item: int(item.stem.split("-")[-1]))
+    return saves[-1] if saves else None
+
+
+def score_restore_round_trip(first: Path, second: Path) -> dict:
+    """The archive of a loaded save must carry the same members as the archive it was loaded from."""
+    failures = []
+    if not first or not first.is_file():
+        return {"pass": False, "failures": ["actual no autosave from the 240-actor run required one .ccsave"]}
+    if not second or not second.is_file():
+        return {"pass": False, "failures": [f"actual no autosave from the run that loaded {first.name} required one .ccsave"]}
+    with zipfile.ZipFile(first) as before, zipfile.ZipFile(second) as after:
+        before_names, after_names = set(before.namelist()), set(after.namelist())
+        if before_names != after_names:
+            failures.append(f"actual members {sorted(after_names)} required {sorted(before_names)}")
+        for name in sorted(before_names | after_names):
+            if name not in before_names or name not in after_names:
+                failures.append(f"{name} missing from one archive")
+                continue
+            if before.read(name) != after.read(name):
+                failures.append(
+                    f"{name} differs between {first.name} and the archive written after loading it "
+                    "(first differing member; restore-and-recapture is not byte identical)"
+                )
+                break
+    return {"pass": not failures, "failures": failures}
+
+
 def score_archive_round_trip(sync_path: Path, image_path: Path) -> dict:
     failures = []
     if not sync_path.is_file() or not image_path.is_file():
@@ -379,6 +409,28 @@ def main() -> int:
     result["metrics"] = metrics
     if not metrics["pass"]:
         failures.extend(f"metrics: {item}" for item in metrics["failures"])
+
+    # Restore and recapture: the save a second process loads must write the same archive back.
+    saved = newest_autosave(skip["cwd"])
+    restored = {"pass": False, "failures": ["actual the 240-actor run wrote no autosave required one to load"]}
+    if saved:
+        def stage_save(cwd: Path) -> None:
+            install_fixture(cwd, dirty_all=False)
+            module = cwd / "Userdata/UserSavedGames.rte"
+            module.mkdir(parents=True, exist_ok=True)
+            (module / f"{RESTORE_NAME}.ccsave").write_bytes(saved.read_bytes())
+
+        reload_run = launch(
+            repo, root / "restore",
+            ["-load-game", RESTORE_NAME, "-cow-checkpoint-autosave", "-max-ticks", "2"],
+            args.timeout,
+            prepare=stage_save,
+        )
+        result["restore_stdout_tail"] = reload_run["stdout"][-2000:]
+        restored = score_restore_round_trip(saved, newest_autosave(reload_run["cwd"]))
+    result["restore"] = restored
+    if not restored["pass"]:
+        failures.extend(f"restore: {item}" for item in restored["failures"])
 
     hashes = score_hash_identity(root / "hash_off.json", root / "hash_on.json", TICKS, on["stdout"])
     result["hashes"] = hashes
