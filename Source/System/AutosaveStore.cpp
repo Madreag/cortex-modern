@@ -47,18 +47,6 @@ namespace RTE {
 		return std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves";
 	}
 
-	std::string AutosaveStore::PlatformName() {
-#if defined(_WIN32)
-		return "windows";
-#elif defined(__APPLE__)
-		return "macos";
-#elif defined(__linux__)
-		return "linux";
-#else
-		return "unknown";
-#endif
-	}
-
 	std::string AutosaveStore::ArchiveName(const std::string& matchId, uint64_t tick) {
 		return matchId + "-" + std::to_string(tick) + c_ArchiveExtension;
 	}
@@ -96,7 +84,6 @@ namespace RTE {
 		Line(out, "SimTimeTicks", std::to_string(descriptor.simTimeTicks));
 		Line(out, "IntervalSeconds", std::to_string(descriptor.intervalSeconds));
 		Line(out, "GameVersion", descriptor.gameVersion);
-		Line(out, "Platform", descriptor.platform);
 		Line(out, "BuildId", descriptor.buildId);
 		Line(out, "DeterministicConfigHash", descriptor.deterministicConfigHash);
 		Line(out, "ModuleManifestHash", descriptor.moduleManifestHash);
@@ -139,8 +126,6 @@ namespace RTE {
 				parsed.intervalSeconds = static_cast<uint32_t>(number);
 			} else if (key == "GameVersion") {
 				parsed.gameVersion = value;
-			} else if (key == "Platform") {
-				parsed.platform = value;
 			} else if (key == "BuildId") {
 				parsed.buildId = value;
 			} else if (key == "DeterministicConfigHash") {

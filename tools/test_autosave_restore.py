@@ -92,11 +92,12 @@ def descriptor(path: Path) -> dict:
             if "=" in line:
                 key, value = line.split("=", 1)
                 fields[key.strip()] = value.strip()
+        raw = archive.read("Restore.ini")
         state = archive.read("Save.ini").decode("utf-8")
     world = re.search(r"(?m)^\s*SimUpdateCount = (\d+)\s*$", state)
     assert world, f"checkpoint carries no SimUpdateCount: {path}"
     fields["_world_tick"] = world[1]
-    fields["_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    fields["_descriptor_sha256"] = hashlib.sha256(raw).hexdigest()
     return fields
 
 
@@ -166,10 +167,15 @@ def arm_retention(repo: Path, root: Path, port: int) -> dict:
         ticks_held = sorted(int(fields["SavedTick"]) for fields in held.values())
         assert ticks_held == sorted(captures)[-RETAINED_AUTOSAVES:], (ticks_held, captures)
         assert "[autosave] failed" not in log, f"{who} refused a capture or a publish"
-        details[who] = {"captures": captures, "held": sorted(held), "retained_lines": len(retained)}
+        details[who] = {"captures": captures, "held": sorted(held), "retained_lines": len(retained),
+                        "descriptors": {name: fields["_descriptor_sha256"] for name, fields in held.items()}}
     assert details["host"]["held"] == details["client"]["held"], (
         "the peers do not hold the same checkpoint names: "
         f"{details['host']['held']} vs {details['client']['held']}")
+    # Every field of the descriptor is agreed by the match, so the two peers' copies are the same bytes.
+    assert details["host"]["descriptors"] == details["client"]["descriptors"], (
+        "the peers' restore descriptors differ: "
+        f"{details['host']['descriptors']} vs {details['client']['descriptors']}")
     passed, comparison = strict_compare(root / "host_trace.json", root / "client_trace.json", ticks)
     assert passed, comparison
     details["peer_comparison"] = comparison

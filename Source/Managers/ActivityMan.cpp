@@ -504,7 +504,6 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		descriptor.savedTick = tick;
 		descriptor.simTimeTicks = g_TimerMan.GetSimTimeTicks();
 		descriptor.gameVersion = c_VersionString;
-		descriptor.platform = AutosaveStore::PlatformName();
 		descriptor.activityPreset = activity->GetPresetName();
 		descriptor.scenePreset = scene->GetPresetName();
 		if (identity) {

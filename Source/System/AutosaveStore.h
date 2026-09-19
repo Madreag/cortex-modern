@@ -9,7 +9,9 @@
 namespace RTE {
 
 	/// What a restore needs from an autosave before its world is read: who made it, which committed tick it
-	/// stands on, and the content the peers agreed on when they made it.
+	/// stands on, and the content the peers agreed on when they made it. Every field is agreed by the
+	/// whole match, so the descriptor of a given tick is identical on every peer: nothing per-machine
+	/// belongs here, where the snapshot comparer reads it beside the world.
 	struct AutosaveDescriptor {
 		int schema = 0;
 		std::string matchId;
@@ -19,7 +21,6 @@ namespace RTE {
 		long long simTimeTicks = 0;
 		uint32_t intervalSeconds = 0;
 		std::string gameVersion;
-		std::string platform;
 		std::string buildId;
 		std::string deterministicConfigHash;
 		std::string moduleManifestHash;
@@ -55,9 +56,6 @@ namespace RTE {
 		static constexpr const char* c_ArchiveExtension = ".ccsave";
 
 		static std::filesystem::path Directory();
-		/// The platform a checkpoint was written on. Recorded for the reader, never an agreement key:
-		/// the simulation is bit-identical across platforms, so an archive is not bound to one.
-		static std::string PlatformName();
 		static std::string ArchiveName(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::string& matchId, uint64_t tick);
 		static std::filesystem::path ArchivePath(const std::filesystem::path& directory, const std::string& matchId, uint64_t tick);
