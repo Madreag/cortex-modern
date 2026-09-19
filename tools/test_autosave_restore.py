@@ -3,17 +3,22 @@ rejoin can use, and that both peers name the same rewind point.
 
 Three rows, each with the statement that is red without the engine change:
 
-  restore   - the newest checkpoint of the match is restored through the Autosaves load path and the
-              restored world is the one the checkpoint recorded.
+  restore   - a checkpoint the caller names - the OLDEST the match still retains, not the one the store
+              would pick by itself - is restored through the Autosaves load path, and the restored world
+              is the one that checkpoint recorded.
               RED before the change: no load path reaches Autosaves/ and the archive carries no tick
               identity, so `[autosave] restore_check` cannot be produced at all.
   retention - a match that writes more checkpoints than the policy keeps ends up holding exactly the
               newest restorable ones, under the same file names on both peers.
               RED before the change: the peers name their checkpoints with their own process id and
               wall clock, so the two retained sets share no file name.
-  anchor    - a heal makes the host name one checkpoint and the client record that same one; the named
-              checkpoint survives later rotation on both peers.
+  anchor    - a heal that lands after several checkpoints makes the host name one of them and the client
+              record that same one; the named checkpoint survives the rotation of the ones that follow.
               RED before the change: no rewind point is named, carried or pinned anywhere.
+
+Ports: this driver owns 48700-48709 and takes three consecutive ports from that block, so it never
+overlaps tools/test_autosave.py (48211-48219, 48500-48519), tools/test_post_match_report.py or
+tools/test_post_match_combined.py (48215) and can run beside them.
 
 Nothing here widens a comparison: the restored-world statement is the engine's own world-structure
 digest against the digest the checkpoint recorded, and the retained set is compared exactly.
@@ -38,7 +43,7 @@ RESTORE = re.compile(r"^\[autosave\] restore_check (PASS|FAIL) match=(\S+) tick=
 POLICY = re.compile(r"^\[autosave-store-selftest\] (PASS|FAIL) (.*)$", re.MULTILINE)
 ANCHOR = re.compile(r"^\[autosave\] anchor (named|received) match=(\S+) tick=(\d+) local=(.*)$", re.MULTILINE)
 FAMILY_LOCK = Path("D:/mx/LEAD_FAMILY.lock")
-RETAINED_AUTOSAVES = 3  # AutosaveStore::c_RetainedAutosaves; read back from the engine's own line below.
+RETAINED_AUTOSAVES = 3  # AutosaveStore::c_RetainedAutosaves; the engine's own keep= value is held to it below.
 
 
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict) -> dict:
@@ -119,28 +124,42 @@ def checkpoints(root: Path, who: str) -> dict:
 
 
 def arm_restore(repo: Path, root: Path, port: int) -> dict:
-    """A restore of the newest checkpoint reproduces the world that checkpoint recorded, and both peers
-    restore the same one. The two peers' world digests are NOT compared against each other: a checkpoint
-    carries per-peer locals, so each peer is only held to the world its own checkpoint recorded."""
-    ticks, restore_at = 400, 330
-    extra = {who: ["-net-autosave-restore", str(restore_at)] for who in ("host", "client")}
-    run_pair(repo, root, port, ticks, 2, extra)
+    """A restore of the checkpoint the caller names reproduces the world that checkpoint recorded, and
+    both peers restore the same one. The named checkpoint is the OLDEST of the retained set, so a restore
+    that ignored the name and took the store's own pick would be red here. The two peers' world digests
+    are NOT compared against each other: a checkpoint carries per-peer locals, so each peer is only held
+    to the world its own checkpoint recorded."""
+    # Two checkpoints are the bare minimum the policy self-test accepts, so the restore runs well past the
+    # retention limit: at a 2 s cadence (120 ticks) tick 700 is the fifth checkpoint or later.
+    ticks, restore_at = 800, 700
+    extra = {who: ["-net-autosave-restore", "oldest", "-net-autosave-restore-at", str(restore_at)]
+             for who in ("host", "client")}
+    records = run_pair(repo, root, port, ticks, 2, extra)
     details = {}
     for who in ("host", "client"):
+        assert records[who].get("exit_code") == 0 and not records[who].get("timed_out"), records[who]
         log = peer_log(root, who)
         line = RESTORE.search(log)
         assert line, f"{who} never reported a restore check: {root / who / 'stdout.log'}"
         policy = POLICY.search(log)
         assert policy and policy[1] == "PASS", f"{who} failed the checkpoint policy self-test: {policy[2] if policy else 'missing'}"
         verdict, match_id, tick, restored_tick, world_hash, expected, policy_flag = line.groups()
+        captures = [int(captured) for captured, _, _ in CAPTURE.findall(log)]
+        before = [captured for captured in captures if captured <= int(tick)]
+        assert len(captures) > RETAINED_AUTOSAVES, f"{who} restored before the retention limit was exceeded: {captures}"
+        assert len(before) >= 1, f"{who} restored a checkpoint it never captured: {tick} of {captures}"
         held = checkpoints(root, who)
         name = f"{match_id}-{tick}.ccsave"
         assert name in held, (name, sorted(held))
+        ticks_held = sorted(int(fields["SavedTick"]) for fields in held.values())
+        assert len(ticks_held) == RETAINED_AUTOSAVES, (ticks_held, captures)
+        assert int(tick) == ticks_held[0], f"{who} did not restore the checkpoint it was told to: {tick} of {ticks_held}"
+        assert int(tick) != ticks_held[-1], f"{who} restored the newest checkpoint, so the name decided nothing: {ticks_held}"
         assert held[name]["WorldStructureHash"] == expected, (held[name], expected)
         assert restored_tick == tick, f"{who} restored a world standing on tick {restored_tick}, not {tick}"
         assert world_hash == expected, f"{who} did not restore the checkpoint's world: {world_hash} vs {expected}"
         assert policy_flag == "1" and verdict == "PASS", line.group(0)
-        details[who] = {"match_id": match_id, "tick": int(tick), "world_hash": world_hash,
+        details[who] = {"match_id": match_id, "tick": int(tick), "world_hash": world_hash, "captures": captures,
                         "line": line.group(0), "policy": policy.group(0), "held": sorted(held)}
     assert details["host"]["match_id"] == details["client"]["match_id"], (
         f"the peers name different matches: {details['host']['match_id']} vs {details['client']['match_id']}")
@@ -183,14 +202,22 @@ def arm_retention(repo: Path, root: Path, port: int) -> dict:
 
 
 def arm_anchor(repo: Path, root: Path, port: int) -> dict:
-    """A heal names one rewind point for the whole match, and it survives later rotation."""
-    ticks = 700
+    """A heal names one rewind point for the whole match, and it survives later rotation.
+
+    The perturbation is timed late on purpose: at the stock tick 50 the heal lands before the first
+    checkpoint (one 2 s interval = 120 ticks after the match starts), so the host would have nothing to
+    name and the row would be red for a reason that is not the anchor mechanism. Tick 700 puts at least
+    four checkpoints before the heal, and the 1400-tick cap leaves room for more than the retention limit
+    afterwards, so the named one can only survive by being pinned."""
+    ticks, perturb_at = 1400, 700
     records = run_pair(repo, root, port, ticks, 2,
-                       {"host": ["-determinism-selftest-perturb", "-net-match-e2e-resync"],
+                       {"host": ["-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
+                                 "-net-match-e2e-resync"],
                         "client": ["-net-match-e2e-resync"]})
-    anchors = {}
+    anchors, captures = {}, {}
     for who in ("host", "client"):
         log = peer_log(root, who)
+        captures[who] = [int(captured) for captured, _, _ in CAPTURE.findall(log)]
         found = ANCHOR.findall(log)
         assert found, f"{who} recorded no rewind anchor: {root / who / 'stdout.log'}"
         anchors[who] = found
@@ -205,6 +232,11 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
     assert received[-1][3] == "ok", f"the client does not hold the named checkpoint: {received[-1][3]}"
     held = {}
     for who in ("host", "client"):
+        before = [captured for captured in captures[who] if captured <= tick]
+        after = [captured for captured in captures[who] if captured > tick]
+        assert len(before) >= 4, f"{who} healed with only {len(before)} checkpoints behind it: {captures[who]}"
+        assert len(after) >= RETAINED_AUTOSAVES, (
+            f"{who} wrote only {len(after)} checkpoints after the anchor, so nothing would have rotated it away: {captures[who]}")
         held[who] = checkpoints(root, who)
         assert f"{match_id}-{tick}.ccsave" in held[who], (
             f"{who} rotated away the agreed rewind point {match_id}-{tick}: {sorted(held[who])}")
@@ -212,18 +244,18 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
         pinned = {int(row[2]) for row in RETAINED.findall(log)}
         assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
     return {"match_id": match_id, "tick": tick, "host": sorted(held["host"]), "client": sorted(held["client"]),
-            "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
+            "captures": captures, "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=48214)
+    parser.add_argument("--port", type=int, default=48700)
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor"), default="all")
     args = parser.parse_args()
-    if not 48211 <= args.port <= 48217:
-        parser.error("three consecutive ports must fit 48211..48219")
+    if not 48700 <= args.port <= 48707:
+        parser.error("this detector owns 48700-48709; three consecutive ports must fit inside it")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
