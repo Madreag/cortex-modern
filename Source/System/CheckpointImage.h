@@ -15,6 +15,16 @@
 
 namespace RTE {
 
+	/// What a script graph walk saw and what has been written since it.
+	struct GraphDirt {
+		size_t roots = 0;        //!< Roots the last walk recorded.
+		size_t tables = 0;       //!< Tables the last walk recorded.
+		size_t dirtyRoots = 0;   //!< Roots holding a table written since that walk.
+		size_t dirtyTables = 0;  //!< Tables written since that walk.
+		bool unknownTable = false;  //!< A table no walk has seen was written.
+		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
+	};
+
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
 	struct CheckpointImage {
 		uint64_t tick = 0;
@@ -105,15 +115,6 @@ namespace RTE {
 	CheckpointText AssembleCheckpointSave(const CheckpointImage& image);
 	CheckpointText AssembleCheckpointIndex(const CheckpointImage& image);
 
-	/// What a script graph walk saw and what has been written since it.
-	struct GraphDirt {
-		size_t roots = 0;        //!< Roots the last walk recorded.
-		size_t tables = 0;       //!< Tables the last walk recorded.
-		size_t dirtyRoots = 0;   //!< Roots holding a table written since that walk.
-		size_t dirtyTables = 0;  //!< Tables written since that walk.
-		bool unknownTable = false;  //!< A table no walk has seen was written.
-		int64_t noteUs = 0;      //!< Sim-thread microseconds the walk spent recording tables.
-	};
 
 	/// The table-to-root index a script graph walk fills and the write barrier marks.
 	class CheckpointGraphIndex {
