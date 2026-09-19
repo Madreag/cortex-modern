@@ -41,6 +41,27 @@ namespace RTE {
 		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
+	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
+		if (bytes.empty() || bytes.size() > 32 * 1024)
+			return -1;
+		try {
+			const auto object = nlohmann::json::from_cbor(bytes);
+			if (object.at("version") != 1 || !object.at("seats").is_array())
+				return -1;
+			int64_t open = 0;
+			for (const auto& row: object.at("seats")) {
+				const auto& slot = row.at("slot");
+				if (slot.at(3).get<bool>())
+					continue;
+				if (NetH4SeatIsOpen(slot.at(1).get<uint8_t>(), localPeerId, row.at("committed").get<bool>(), row.at("closed").get<bool>()))
+					++open;
+			}
+			return open;
+		} catch (const nlohmann::json::exception&) {
+			return -1;
+		}
+	}
+
 	bool NetReconnectHost::ImportMigrationState(const std::vector<uint8_t>& bytes, NetSeatAuthRegistry& registry, const NetMatchConfig& config, uint8_t localPeerId, const std::map<uint8_t, NetPeerId>& transports, uint64_t nowMs) {
 		if (bytes.empty() || bytes.size() > 32 * 1024)
 			return false;

@@ -4,6 +4,7 @@
 #include "NetLockstep.h"
 #include "NetMatchConfig.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -308,6 +309,15 @@ namespace RTE {
 	// Above every lockstep peer id a member can take, so it is never a seat's id either.
 	static_assert(c_WorldRefusalLobbyPeer > NetLockstepCodec::c_MaxPeerCount);
 	static_assert(c_WorldRefusalLobbyPeer != 0);
+
+	/// How many watchers a world admits past its seats. The one rule: a host that authored no capacity
+	/// keeps the lobby-id pool it offered before, and an authored bound is held under that pool.
+	inline size_t WorldSpectatorBound(const NetMatchConfig& config) {
+		if (!WorldCapacityAuthored(config)) {
+			return c_WorldSpectatorLobbyCap;
+		}
+		return std::min<size_t>(config.worldMaxSpectators, c_WorldSpectatorLobbyCap);
+	}
 
 	inline uint8_t WorldJoinLobbyPeer(const NetWorldJoinSession& session) {
 		if (session.assignedPeerId != 0) {
