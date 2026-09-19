@@ -5340,6 +5340,13 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	// A capture is taken at a committed tick boundary with no preview window armed. Inside one, the
+	// window's rollback would undo writes the graph already recorded, so the archive would name a
+	// state the live one never reaches. Refuse by name rather than record it.
+	if (luaJIT_preview_active(m_State)) {
+		problems.emplace_back("a checkpoint capture cannot run inside an armed preview window");
+		return false;
+	}
 	ScriptGraphCaptureScope captureScope(captured != nullptr);
 	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
