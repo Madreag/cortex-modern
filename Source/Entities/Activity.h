@@ -495,8 +495,7 @@ namespace RTE {
 		void ClearPreviewedPurchase(int player, int team, float cost);
 		void ClearAllPresentationViews();
 		void ExpirePresentationViews(uint64_t committedTick);
-		/// Fills the local seat's presentation view from the buy orders in flight at the canonical tick; the preview
-		/// calls this after restore, so the tick it passes is the committed one, never its own advanced clock.
+		/// Fills the local seat's presentation view from the orders in flight at the canonical tick, never a preview's clock.
 		void FillPresentationFromPreview(uint64_t canonicalTick, uint64_t horizonTick);
 
 		/// Gets the amount of funds a specific player originally added to his team's collective stash.
