@@ -1838,9 +1838,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.sceneRuntime = scene->SaveRuntimeCheckpoint();
 	}
 	std::vector<std::string> luaProblems;
-	auto& cow = CheckpointCow::Get();
-	cow.BeginImage();
-	CheckpointWriter::CacheScope cache(&cow.Cache());
+	ArmLuaCheckpointBarrier();
 	struct GraphWalk {
 		GraphWalk() { CheckpointGraphIndex::Get().BeginWalk(); }
 		~GraphWalk() { CheckpointGraphIndex::Get().EndWalk(); }
@@ -1857,7 +1855,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.luaGraphs.clear();
 		return false;
 	}
-	cow.RememberLua(out.luaGraphs, LuaCheckpointWriteGeneration());
+	CheckpointCow::Get().RememberLua(out.luaGraphs, LuaCheckpointWriteGeneration());
 	g_LuaMan.ArmCheckpointWriteTrap();
 	const long counter = MovableObject::GetUniqueIDCounter();
 	{
@@ -1912,18 +1910,27 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 
 void MovableMan::WorldSnapshotRing::Reset(uint16_t windowTicks) {
 	m_Entries.clear();
+	m_Cache = {};
 	m_Capacity = windowTicks == 0 ? 0 : static_cast<size_t>(windowTicks) + 1;
 	m_LastCaptureUs = 0;
 }
 
 bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
-	if (m_Capacity == 0 || (!m_Entries.empty() && tick <= m_Entries.back().tick) ||
+	if (m_Capacity == 0 || (!m_Entries.empty() &&
+	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1)) ||
 	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != tick) return false;
 	auto snapshot = std::make_unique<WorldSnapshot>();
 	const auto start = std::chrono::steady_clock::now();
-	const bool captured = g_MovableMan.CaptureWorld(*snapshot);
+	m_Cache.Begin();
+	bool captured = false;
+	{
+		CheckpointWriter::CacheScope cache(&m_Cache);
+		captured = g_MovableMan.CaptureWorld(*snapshot);
+	}
+	m_Cache.RetireUnused();
+	const bool stored = captured && StoreCommitted(tick, std::move(snapshot));
 	m_LastCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
-	return captured && StoreCommitted(tick, std::move(snapshot));
+	return stored;
 }
 
 bool MovableMan::WorldSnapshotRing::StoreCommitted(uint64_t tick, std::unique_ptr<WorldSnapshot> snapshot) {
