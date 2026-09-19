@@ -1931,9 +1931,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostOptionsSetupDraft, m_HostOptionsReadOnly, g_NetMatchService.GetIceRoute()));
 	}
-	HostOptSelectComboIndex(m_HostRelayCombo, static_cast<int>(g_SettingsMan.GetNetworkHostRelayMode()));
+	HostOptSelectComboIndex(m_HostRelayCombo, static_cast<int>(g_SettingsMan.GetNetworkHostRelayModeSetting()));
 	HostOptSetEditable(m_HostRelayCombo, editable && m_HostOptionsSetupDraft);
-	const bool fixedRelay = g_SettingsMan.GetNetworkHostRelayMode() == SettingsMan::NetworkHostRelayMode::Fixed;
+	const bool fixedRelay = g_SettingsMan.GetNetworkHostRelayModeSetting() == SettingsMan::NetworkHostRelayMode::Fixed;
 	const std::string relayValues[] = {g_SettingsMan.GetNetworkTurnServersSetting(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass()};
 	for (size_t i = 0; i < m_HostRelayBoxes.size(); ++i) {
 		if (auto* box = m_HostRelayBoxes[i]) {

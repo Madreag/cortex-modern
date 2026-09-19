@@ -5173,7 +5173,9 @@ static std::string ResyncSaveName() {
 		config.connectionMode = static_cast<int>(settings.GetNetworkConnectionMode());
 		const uint64_t now = UnixNowMs(nullptr) / 1000;
 		NetRelayConfig selected = relay;
-		if (!settings.GetNetworkPlayerTurnServers().empty()) {
+		if (settings.HasNetworkTurnServersOverride()) {
+			selected = NetRelayConfig::Fixed(settings.GetNetworkTurnServers(), settings.GetNetworkTurnUser(), settings.GetNetworkTurnPass(), "override", now + 3600);
+		} else if (!settings.GetNetworkPlayerTurnServers().empty()) {
 			selected = NetRelayConfig::Fixed(settings.GetNetworkPlayerTurnServers(), settings.GetNetworkPlayerTurnUser(), settings.GetNetworkPlayerTurnPass(), "personal", now + 3600);
 		}
 		if (config.connectionMode != 1 && selected.Usable(now)) selected.UdpLists(config.turnServerList, config.turnUserList, config.turnPassList);
@@ -5314,7 +5316,7 @@ static std::string ResyncSaveName() {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_RelayAttempted = !ice.turnServerList.empty();
-				m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && m_HostRelayMode == 1 ? relay.expiresAt : 0;
+				m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() && m_HostRelayMode == 1 ? relay.expiresAt : 0;
 				m_IceBoundSessionId = sessionId;
 				m_IceIdentity = identity;
 				m_IceRoute = "ice";
@@ -5398,7 +5400,7 @@ static std::string ResyncSaveName() {
 		spec.peerIdentity = target.identity;
 		spec.remoteVirtualPort = c_IceVirtualPort;
 		NetRelayConfig relay;
-		if (g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly && g_SettingsMan.GetNetworkPlayerTurnServers().empty()) {
+		if (g_SettingsMan.GetNetworkConnectionMode() != SettingsMan::NetworkConnectionMode::DirectOnly && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride()) {
 			browse.FetchIceServers(request.sessionId);
 			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
 			while (browse.IceRequestPending() && !m_CancelRequested.load() && SteadyNowMs() < relayDeadline) {
@@ -5416,7 +5418,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			SetRelayOfferLocked(relay);
 			m_RelayAttempted = !spec.p2p.turnServerList.empty();
-			m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() ? relay.expiresAt : 0;
+			m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() ? relay.expiresAt : 0;
 		}
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };
@@ -5756,7 +5758,7 @@ static std::string ResyncSaveName() {
 				GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 				mux->SetPump([this, dispatcher, p2p = mux->P2PGns(), previous = NetRelayConfig{},
 				              initial = request.host ? mux->HostP2PConfig() : mux->GetJoinSpec().p2p,
-				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty()]() mutable {
+				              personal = !g_SettingsMan.GetNetworkPlayerTurnServers().empty() || g_SettingsMan.HasNetworkTurnServersOverride()]() mutable {
 					dispatcher->Update(SteadyNowMs());
 					const auto snapshot = m_RelaySnapshot.load();
 					NetRelayConfig offer = snapshot ? *snapshot : NetRelayConfig{};

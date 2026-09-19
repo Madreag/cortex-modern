@@ -161,8 +161,9 @@ namespace RTE {
 		enum class NetworkHostRelayMode { Off, Directory, Fixed };
 		NetworkConnectionMode GetNetworkConnectionMode() const { return m_NetworkConnectionMode; }
 		void SetNetworkConnectionMode(NetworkConnectionMode mode) { m_NetworkConnectionMode = mode; }
-		NetworkHostRelayMode GetNetworkHostRelayMode() const { return m_NetworkHostRelayMode; }
-		void SetNetworkHostRelayMode(NetworkHostRelayMode mode) { m_NetworkHostRelayMode = mode; }
+		NetworkHostRelayMode GetNetworkHostRelayMode() const { return m_NetworkTurnServersOverridden ? (m_NetworkTurnServersOverride.empty() ? NetworkHostRelayMode::Off : NetworkHostRelayMode::Fixed) : m_NetworkHostRelayMode; }
+		NetworkHostRelayMode GetNetworkHostRelayModeSetting() const { return m_NetworkHostRelayMode; }
+		void SetNetworkHostRelayMode(NetworkHostRelayMode mode) { m_NetworkHostRelayMode = mode; m_NetworkHostRelayModeSpecified = true; }
 		const std::string& GetNetworkPlayerTurnServers() const { return m_NetworkPlayerTurnServers; }
 		void SetNetworkPlayerTurnServers(const std::string& value) { m_NetworkPlayerTurnServers = value; }
 		const std::string& GetNetworkPlayerTurnUser() const { return m_NetworkPlayerTurnUser; }
@@ -194,6 +195,7 @@ namespace RTE {
 		/// @return Comma-separated host:port; empty means no relay.
 		const std::string& GetNetworkTurnServers() const { return m_NetworkTurnServersOverridden ? m_NetworkTurnServersOverride : m_NetworkTurnServers; }
 		const std::string& GetNetworkTurnServersSetting() const { return m_NetworkTurnServers; }
+		bool HasNetworkTurnServersOverride() const { return m_NetworkTurnServersOverridden; }
 		void SetNetworkTurnServers(const std::string& servers) { m_NetworkTurnServers = servers; }
 		/// Decides the TURN list for this run only (-net-turn); never saved.
 		void SetNetworkTurnServersOverride(const std::string& servers) {
@@ -622,6 +624,7 @@ namespace RTE {
 		bool m_NetworkIceEnable = true; //!< Whether session-id joins offer or use ICE beside the direct address.
 		NetworkConnectionMode m_NetworkConnectionMode = NetworkConnectionMode::Automatic;
 		NetworkHostRelayMode m_NetworkHostRelayMode = NetworkHostRelayMode::Directory;
+		bool m_NetworkHostRelayModeSpecified = false;
 		std::string m_NetworkPlayerTurnServers;
 		std::string m_NetworkPlayerTurnUser;
 		std::string m_NetworkPlayerTurnPass;

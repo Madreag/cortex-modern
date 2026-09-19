@@ -20,6 +20,7 @@ namespace RTE {
 	}
 
 	inline std::string NetHostRelayHint(const SettingsMan& settings) {
+		if (settings.HasNetworkTurnServersOverride()) return "A command-line TURN override applies to this run. This row saves your hosting preference.\nDirect is lowest latency; a relay adds its round trip.";
 		if (!settings.GetNetworkIceEnableSetting()) return "NAT traversal is Off, so this match offers no relay. Enable Automatic above to offer one.";
 		switch (settings.GetNetworkHostRelayMode()) {
 			case SettingsMan::NetworkHostRelayMode::Off: return "Off: direct connections have the lowest latency. Some routers need port forwarding.";
