@@ -45,7 +45,7 @@ def rules_for(variant):
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
     elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
-                     "brains-shared", "wire-refusal"):
+                     "brains-shared", "wire-refusal", "rendezvous-cap"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -294,6 +294,12 @@ PLACEMENT_NAMES = "Host, Client"
 # The client's placement waits on this signal from the host's probe, so the waiting window never
 # depends on either peer's pacing.
 WAITING_SEEN_SIGNAL = "host_waiting_seen"
+# rendezvous-cap: the host holds to this tick before it places and signals, and the client holds to the
+# second one after the signal. Each hold is under the engine's 120-tick setup-editor watchdog and the two
+# together are past it, so the run passes only when the watchdog counts from the rendezvous.
+RENDEZVOUS_CAP_HOST_TICK = 80
+RENDEZVOUS_CAP_CLIENT_TICK = 170
+EDITOR_CAP_ERROR = "setup editor did not finish within"
 
 
 def wait_banner(resolution):
@@ -310,7 +316,7 @@ def shots(peer, name):
 
 
 def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
-                  host_signal=None, long_names=False, shared_seat=False):
+                  host_signal=None, long_names=False, shared_seat=False, place_after_signal=0):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -397,6 +403,9 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps.append({"op": "wait", "sim_at_least": place_after})
     if peer != "host" and host_signal:
         steps.append({"op": "wait_file", "path": str(host_signal)})
+        if place_after_signal:
+            # The hold the editor watchdog is allowed to count, taken after the rendezvous ends the wait.
+            steps.append({"op": "wait", "sim_at_least": place_after_signal})
     steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
                "class": seat["cls"], "preset": seat["preset"], "module": "Base.rte"},
               # Placing alone commits nothing: the wire only carries the seat's DONE.
@@ -638,7 +647,7 @@ def launch(options):
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
     editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish",
-                                       "brains-longname", "brains-shared", "wire-refusal")
+                                       "brains-longname", "brains-shared", "wire-refusal", "rendezvous-cap")
     shared_seat = options.variant == "brains-shared"
     places_brains = editor_driven or options.variant == "brains-auto"
     # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
@@ -679,6 +688,9 @@ def launch(options):
                 # safety net over the shared place phase, not an extra client hold.
                 if options.variant == "wire-refusal":
                     delay = 0
+                elif options.variant == "rendezvous-cap":
+                    # The host is the slow probe: it holds the editor, then places and signals.
+                    delay = RENDEZVOUS_CAP_HOST_TICK if peer == "host" else 0
                 elif options.variant == "resync-skirmish":
                     delay = 90
                 else:
@@ -687,7 +699,9 @@ def launch(options):
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json"),
                                                            long_names=options.variant == "brains-longname",
-                                                           shared_seat=shared_seat),
+                                                           shared_seat=shared_seat,
+                                                           place_after_signal=(RENDEZVOUS_CAP_CLIENT_TICK
+                                                                              if options.variant == "rendezvous-cap" else 0)),
                                              indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
@@ -781,6 +795,17 @@ def launch(options):
             if not checks["rendezvous_counted"]:
                 for peer, lines in result["rendezvous"].items():
                     print(f"{root / peer / 'stdout.log'}: rendezvous lines {lines}")
+            if options.variant == "rendezvous-cap":
+                # The editor phase is past the 120-tick watchdog end to end, and under it on either side of
+                # the rendezvous: an engine that counts from the editor's first tick fails here.
+                capped = {peer: [line for line in log.splitlines() if EDITOR_CAP_ERROR in line]
+                          for peer, log in logs.items()}
+                result["editor_cap"] = {"host_hold_tick": RENDEZVOUS_CAP_HOST_TICK,
+                                        "client_hold_tick": RENDEZVOUS_CAP_CLIENT_TICK, "lines": capped}
+                checks["editor_cap_counted_from_the_rendezvous"] = not any(capped.values())
+                if not checks["editor_cap_counted_from_the_rendezvous"]:
+                    for peer, lines in capped.items():
+                        print(f"{root / peer / 'stdout.log'}: {lines}")
             def pad_held(probe):
                 named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
                          if step.get("name") == "pad_held"]
