@@ -486,6 +486,10 @@ bool GUIManager::RunComboKeyCommitSelfTest() {
 		check("buy_menu_flags_survive_a_destroy_cycle", afterMenu == created && seated == created + 1 &&
 		                                                   BuyMenuGUI::GetModuleFlagAllocations() == seated &&
 		                                                   flags.size() == 8 && flags[0]);
+		// The archive's flags-present byte is the menu's, not the module count's: a checkpoint taken
+		// before a module loads ends with that byte, an empty flag map, no loadout and no controls.
+		BuyMenuGUI archived;
+		check("buy_menu_zero_module_checkpoint_keeps_its_flag_byte", archived.SaveCheckpoint().ends_with("1 0 0 0 "));
 	}
 	std::cout << "[combo-key-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
