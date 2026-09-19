@@ -562,6 +562,7 @@ static std::string ResyncSaveName() {
 			m_RelayReady = false;
 			m_RelayPublishPending = false;
 			m_RelayAttempted = false;
+			m_ActiveRelayExpiresAt = 0;
 			m_RelayReplies = m_Directory.IceReplies();
 			m_NextRelayRequestMs = 0;
 			m_FreshRelayRequested = true;
@@ -571,7 +572,6 @@ static std::string ResyncSaveName() {
 			                                         "host", UnixNowMs(nullptr) / 1000 + 3600);
 			if (m_HostRelayMode == 2) {
 				SetRelayOfferLocked(m_FixedRelayOffer);
-				m_RelayReady = true;
 				if (m_RelayOffer.Empty()) m_RelayError = "Fixed relay needs an address, username and password";
 			}
 			m_DirectorySessionId.clear();
@@ -5196,7 +5196,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::ReadRelayOffer(NetRelayConfig& offer) const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		offer = m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000) ? m_RelayOffer : NetRelayConfig{};
-		return m_RelayReady;
+		return !m_IsHost || !m_IceEnabled || m_HostRelayMode == 0 || (m_RelayReady && !m_FreshRelayRequested.load());
 	}
 
 	std::string NetMatchService::GetNatModeText() const {
@@ -5208,6 +5208,11 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetRelayError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_RelayError.empty() && m_ActiveRelayExpiresAt != 0) {
+			const uint64_t now = UnixNowMs(nullptr) / 1000;
+			if (now >= m_ActiveRelayExpiresAt) return "The active relay login expired; rejoin to use the refreshed offer.";
+			return "Rejoin before the active relay login expires in " + std::to_string((m_ActiveRelayExpiresAt - now + 59) / 60) + " min.";
+		}
 		return m_RelayError;
 	}
 
@@ -5233,16 +5238,15 @@ static std::string ResyncSaveName() {
 			request = (fresh || m_RelayOffer.expiresAt <= wall + 300) && nowMs >= m_NextRelayRequestMs;
 			if (!request) return;
 			m_FreshRelayRequested = false;
-			if (fresh && m_HostRelayMode == 1) m_RelayReady = false;
+			if (fresh) m_RelayReady = false;
 			m_NextRelayRequestMs = nowMs + 15000;
-			matchId = std::to_string(m_MatchConfig.sessionId) + ":" + std::to_string(m_LastRoundId);
+			matchId = m_Directory.GetSessionId() + ":" + std::to_string(m_LastRoundId);
 			if (m_HostRelayMode == 2) {
 				fixed = m_FixedRelayOffer;
 				if (fixed.Empty()) { m_RelayReady = true; return; }
 				fixed.matchId = matchId;
 				fixed.expiresAt = wall + 3600;
 				SetRelayOfferLocked(fixed);
-				m_RelayReady = true;
 				m_RelayPublishPending = true;
 			}
 		}
@@ -5306,10 +5310,11 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			mux.SetHostP2P(c_IceVirtualPort, ice);
-			m_RelayAttempted = !ice.turnServerList.empty();
 			m_Dispatcher->SetPolling(true, SteadyNowMs());
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_RelayAttempted = !ice.turnServerList.empty();
+				m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && m_HostRelayMode == 1 ? relay.expiresAt : 0;
 				m_IceBoundSessionId = sessionId;
 				m_IceIdentity = identity;
 				m_IceRoute = "ice";
@@ -5411,6 +5416,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			SetRelayOfferLocked(relay);
 			m_RelayAttempted = !spec.p2p.turnServerList.empty();
+			m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() ? relay.expiresAt : 0;
 		}
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };
@@ -5511,7 +5517,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::ConfigureLobbyStart(NetMatchRunnerConfig& config) {
-		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer) && !m_FreshRelayRequested.load(); };
+		config.relayOffer = [this](NetRelayConfig& offer) { return ReadRelayOffer(offer); };
 		config.sessionWaitMs = c_MenuLobbyWaitMs;
 		config.lobbyWaitMs = c_MenuLobbyWaitMs;
 		if (config.host) {
