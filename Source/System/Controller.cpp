@@ -80,6 +80,7 @@ void Controller::Clear() {
 }
 
 void Controller::TouchCheckpoint() {
+	if (m_CheckpointOwner && m_CheckpointOwner != m_ControlledActor) m_CheckpointOwner->TouchCheckpoint();
 	if (m_ControlledActor) m_ControlledActor->TouchCheckpoint();
 	if (m_CheckpointValueTrap) {
 		m_CheckpointValueTrap = false;

@@ -30,6 +30,7 @@ namespace RTE {
 	public:
 		SerializableOverrideMethods;
 		void TouchCheckpoint();
+		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
 		std::vector<std::pair<bool, int>> CheckpointSelections() const;
 		auto CheckpointStampValue() const { return CheckpointFields(SaveStructure(), CheckpointSelections()); }
 
@@ -237,6 +238,7 @@ namespace RTE {
 		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
 
 		bool m_CheckpointInitialized = false;
+		bool m_CheckpointValueTrap = false;
 
 		/// Clears all the member variables of this SoundSet, effectively resetting the members of this abstraction level only.
 		void Clear();

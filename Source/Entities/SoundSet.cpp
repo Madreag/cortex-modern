@@ -34,6 +34,7 @@ SoundSet& SoundSet::operator=(const SoundSet& reference) {
 		m_SoundData.swap(copy.m_SoundData);
 		m_SubSoundSets.swap(copy.m_SubSoundSets);
 		SetOwnerContainer(m_OwnerContainer);
+		copy.SetOwnerContainer(nullptr);
 	}
 	return *this;
 }
@@ -52,7 +53,10 @@ void SoundSet::Clear() {
 
 void SoundSet::TouchCheckpoint() {
 	if (m_OwnerContainer) m_OwnerContainer->TouchCheckpoint();
-	CheckpointValueWritten(this);
+	if (m_CheckpointValueTrap) {
+		m_CheckpointValueTrap = false;
+		CheckpointValueWritten(this);
+	}
 }
 
 std::vector<std::pair<bool, int>> SoundSet::CheckpointSelections() const {
