@@ -15,6 +15,10 @@ namespace RTE {
 	struct GnsP2PConfig {
 		int iceEnable = 2; //!< k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_* bits; 2 = Private: RFC1918 host candidates only.
 		std::string stunServerList; //!< Empty: no STUN server, so no reflexive candidate and no DNS lookup.
+		std::string turnServerList;
+		std::string turnUserList;
+		std::string turnPassList;
+		int connectionMode = 0; //!< Automatic, direct only, relay only.
 		int iceImplementation = 1; //!< 1 = the native ICE client; WebRTC (2) is not compiled into these builds.
 		int rendezvousLogLevel = 0; //!< k_ESteamNetworkingConfig_LogLevel_P2PRendezvous; 0 keeps the GNS default.
 		std::string localIdentity; //!< Non-empty: ResetIdentity to it first, which closes every GNS connection in the process.
@@ -61,6 +65,10 @@ namespace RTE {
 		std::string GetPeerDetailedStatus(NetPeerId peerId) const;
 		/// The GNS identity of this process; every transport in it shares one.
 		std::string GetLocalIdentity() const;
+		/// Updates the credentials used by subsequent ICE connections on this listener.
+		static void ApplyIceServers(const GnsP2PConfig& config);
+		void UpdateListenerIceServers(const GnsP2PConfig& config);
+		static bool ConnectionPolicyAllowsRoute(int mode, bool relayed) { return mode == 1 ? !relayed : mode != 2 || relayed; }
 
 		static bool IsCompiledIn();
 

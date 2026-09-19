@@ -75,6 +75,7 @@ namespace RTE {
 		NetSessionConfig sessionConfig;
 		NetMatchConfig matchConfig;
 		bool autoInputDelay = false; // Host: raise matchConfig.inputDelayFrames to cover the measured RTT.
+		std::function<bool(NetRelayConfig&)> relayOffer;
 		bool useLobbyProtocol = false;
 		uint64_t startFrame = 0;
 		uint32_t sessionWaitMs = 15000;
@@ -188,6 +189,11 @@ namespace RTE {
 		/// How many of the joiner's own updates the start has cost so far.
 		uint32_t GetWorldJoinStartTicks() const { return m_WorldJoinStartTicks; }
 		const NetMatchConfig& GetMatchConfig() const { return m_MatchConfig; }
+		void SetRelayOffer(const NetRelayConfig& offer) {
+			m_MatchConfig.relay = offer;
+			m_Config.matchConfig.relay = offer;
+			m_Lobby.SetRelayOffer(offer);
+		}
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
 		const std::string& GetSetupError() const { return m_SetupError; }

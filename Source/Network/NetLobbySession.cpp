@@ -37,6 +37,10 @@ namespace RTE {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 		}
 
+		uint64_t RelayWallSeconds() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+		}
+
 		const std::string& EmptyName() {
 			static const std::string empty;
 			return empty;
@@ -95,6 +99,8 @@ namespace RTE {
 
 		m_Transport = &transport;
 		m_Config = config;
+		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
+		m_RelaySendPending = false;
 		m_MigrationEndpoints.clear();
 		m_OpenedMigrationHash = {};
 		m_MigrationRequested = false;
@@ -159,6 +165,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::Tick(uint64_t nowMs) {
+		if (!m_Config.matchConfig.relay.Empty() && !m_Config.matchConfig.relay.Usable(RelayWallSeconds())) SetRelayOffer({});
 		if (!m_Transport || m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
 			return;
 		}
@@ -814,6 +821,17 @@ namespace RTE {
 		return true;
 	}
 
+	void NetLobbySession::SetRelayOffer(const NetRelayConfig& offer) {
+		const NetRelayConfig current = offer.Usable(RelayWallSeconds()) ? offer : NetRelayConfig{};
+		if (m_Config.matchConfig.relay != current) {
+			m_Config.matchConfig.relay = current;
+			m_RelaySendPending = true;
+		}
+		if (m_Config.host && m_RelaySendPending && m_State != NetLobbyState::Idle) {
+			m_RelaySendPending = !Send(NetLobbyMatchConfig{m_Config.matchConfig});
+		}
+	}
+
 	bool NetLobbySession::Send(const NetLobbyPayload& payload, std::string* error) {
 		for (uint8_t peerId : m_RemotePeerIds) {
 			if (!SendTo(m_RemoteTransports[peerId], payload, error)) {
@@ -1302,11 +1320,13 @@ namespace RTE {
 		const NetHash32 incomingHash = NetMatchConfigUtil::HashConfig(message.config);
 		if (!message.config.successorOrder.empty() && m_OpenedMigrationHash != incomingHash) {
 			m_Config.matchConfig = message.config;
+			if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
 			m_MatchConfigHash = incomingHash;
 			return;
 		}
 		// The host resends config until every client acks; a repeat of the accepted config just re-acks.
 		if (m_State != NetLobbyState::WaitingForConfig && incomingHash == m_MatchConfigHash) {
+			m_Config.matchConfig.relay = message.config.relay.Usable(RelayWallSeconds()) ? message.config.relay : NetRelayConfig{};
 			Send(NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash, ""});
 			return;
 		}
@@ -1317,6 +1337,7 @@ namespace RTE {
 			return;
 		}
 		m_Config.matchConfig = message.config;
+		if (!m_Config.matchConfig.relay.Usable(RelayWallSeconds())) m_Config.matchConfig.relay = {};
 		m_MatchConfigHash = incomingHash;
 		m_StartFrame = 0;
 		Send(NetLobbyConfigAck{m_Config.localPeerId, true, m_MatchConfigHash, ""});

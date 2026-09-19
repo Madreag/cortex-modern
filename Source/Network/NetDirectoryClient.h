@@ -2,6 +2,7 @@
 
 #include "NetDirectoryCodec.h"
 #include "NetLanDiscovery.h"
+#include "NetIceServers.h"
 
 #include <cstdint>
 #include <deque>
@@ -94,6 +95,13 @@ namespace RTE {
 		const std::string& GetSessionId() const { return m_SessionId; }
 		/// The session token the register reply issued; the host's signaling channel proves it.
 		const std::string& GetToken() const { return m_Token; }
+		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
+		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
+		bool FetchIceServers(const std::string& sessionId);
+		bool IceRequestPending() const { return m_IceRequest != nullptr; }
+		uint64_t IceReplies() const { return m_IceReplies; }
+		const NetRelayConfig& IceServers() const { return m_IceServers; }
+		const std::string& IceError() const { return m_IceError; }
 
 		/// Host: keep the row registered. The first call after Idle registers; the row passed on
 		/// each call carries the live peer_count/seats_free for the next heartbeat. `listed`
@@ -163,6 +171,8 @@ namespace RTE {
 		void IssueHeartbeat(uint64_t nowMs);
 		void IssueDelete(uint64_t nowMs);
 		void IssueList(uint64_t nowMs);
+		bool StartIceRequest(const Request& request);
+		void PollIceRequest();
 
 		State m_State = State::Idle;    //!< Disabled once Configure() sees an empty URL.
 		TransportFactory m_Factory;
@@ -198,6 +208,10 @@ namespace RTE {
 		int64_t m_ListTotal = 0;
 
 		std::unique_ptr<Transport> m_Request;
+		std::unique_ptr<Transport> m_IceRequest;
+		NetRelayConfig m_IceServers;
+		std::string m_IceError;
+		uint64_t m_IceReplies = 0;
 		RequestKind m_RequestKind = RequestKind::None;
 
 		uint64_t m_Registers = 0;
