@@ -55,6 +55,7 @@ RED_ACTIVATE_BOUND_NO_SEAT = "activate-bound-a-seat-the-roster-does-not-name"
 RED_BOOTSTRAP_READ_THE_ARCHIVE = "bootstrap-read-the-archive-it-cannot-send"
 RED_REFUSED_TRANSFER_NOT_RETRIED = "refused-transfer-was-marked-started"
 RED_HOST_KEPT_TAIL_BYTES = "host-kept-a-joiner-tail-chunk"
+RED_CONFIG_RESENT = "bootstrap-resent-the-match-config"
 RED_SPECTATOR_IMAGE_GATE = "spectator-image-never-left-the-host"
 RED_MEMBER_IMAGE_GATE = "member-image-never-left-the-host"
 RED_ADMIT_BEHIND_SENT_INPUT = "world-member-admitted-behind-the-sent-input"
@@ -287,6 +288,7 @@ CASES = (
             RED_HOST_KEPT_TAIL_BYTES,
             RED_SPECTATOR_IMAGE_GATE,
             RED_MEMBER_IMAGE_GATE,
+            RED_CONFIG_RESENT,
         ),
         "pass_token": "[net-world-bootstrap-selftest] PASS",
     },

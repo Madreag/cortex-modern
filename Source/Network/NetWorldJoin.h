@@ -108,6 +108,7 @@ namespace RTE {
 		uint16_t totalChunks = 0;
 		uint32_t activationReannounces = 0; //!< At most one later E; then the slot is freed.
 		bool transferStarted = false;
+		bool matchConfigSent = false;     //!< The seat's config went out once; a retry does not resend it.
 		uint64_t catchUpTicks = 0;        //!< Ticks it reported replaying, for the catch-up rate.
 		uint64_t catchUpMs = 0;
 		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
@@ -345,6 +346,9 @@ namespace RTE {
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
 		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
+		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
+		/// send it again on every pump. Returns whether this call was the first.
+		bool NoteMatchConfigSent(NetPeerId connection);
 		/// Records the tail the joiner has applied and, once it has caught the world, schedules E.
 		/// @param nowFrame The world's committed frame.
 		/// @param outActivationTick The announced activation tick when this call scheduled one.

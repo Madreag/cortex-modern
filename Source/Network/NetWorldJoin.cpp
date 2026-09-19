@@ -1015,6 +1015,15 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldJoinHost::NoteMatchConfigSent(NetPeerId connection) {
+		NetWorldJoinSession* session = Find(connection);
+		if (session == nullptr || session->matchConfigSent) {
+			return false;
+		}
+		session->matchConfigSent = true;
+		return true;
+	}
+
 	bool NetWorldJoinHost::NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {

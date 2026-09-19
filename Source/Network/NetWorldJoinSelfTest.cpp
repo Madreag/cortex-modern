@@ -1135,6 +1135,11 @@ namespace RTE {
 				            ", received bytes " + std::to_string(pair.client.PeekReceivedState().size()) + " after 24 pumps");
 			}
 
+			// A retried transfer does not send the seat's match config again: only the first try does.
+			if (!second.NoteMatchConfigSent(7) || second.NoteMatchConfigSent(7)) {
+				return Fail("bootstrap-resent-the-match-config: the second attempt for connection 7 sent it again");
+			}
+
 			// The host never drains a tail, so a tail chunk aimed at it must not be kept.
 			NetLobbyStateChunk tailChunk;
 			tailChunk.transferId = c_NetWorldTailTransferId;
