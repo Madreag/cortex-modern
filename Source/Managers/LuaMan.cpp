@@ -6731,6 +6731,7 @@ _PrimitiveQueueCapture = nil
 		const std::string reloadFunction = "Update";
 		const uint64_t rolledBefore = m_PreviewCallerCopiesRolledBack;
 		const uint64_t keptBefore = m_PreviewCallerCopiesKept;
+		const uint64_t emptiedBefore = m_PreviewCallerCopiesEmptied;
 		std::unordered_map<std::string, LuabindObjectWrapper*> residentFunctions;
 		std::unordered_map<std::string, LuabindObjectWrapper*> windowFunctions;
 		const bool primed = RunScriptFileAndRetrieveFunctions(reloadPath, {reloadFunction}, residentFunctions, false) == 0 && residentFunctions.count(reloadFunction) > 0;
@@ -6761,11 +6762,15 @@ _PrimitiveQueueCapture = nil
 		};
 		const bool residentSame = namesGlobalFunction(residentFunctions);
 		const bool windowCopySame = namesGlobalFunction(windowFunctions);
+		const uint64_t rolledBack = m_PreviewCallerCopiesRolledBack - rolledBefore;
+		const uint64_t kept = m_PreviewCallerCopiesKept - keptBefore;
+		const uint64_t emptied = m_PreviewCallerCopiesEmptied - emptiedBefore;
 		std::cout << "[preview-caller-copy] primed=" << primed << " fenced=" << fenced << " reloaded=" << reloaded
 		          << " resident_names_global=" << residentSame << " window_copy_names_global=" << windowCopySame
-		          << " rolled_back=" << (m_PreviewCallerCopiesRolledBack - rolledBefore)
-		          << " kept=" << (m_PreviewCallerCopiesKept - keptBefore) << std::endl;
-		previewCallerCopyRollsBack = primed && fenced && reloaded == 0 && residentSame && windowCopySame;
+		          << " rolled_back=" << rolledBack << " kept=" << kept << " emptied=" << emptied << std::endl;
+		// The one copy the window handed out is the one that rolls back: nothing else is kept or emptied.
+		previewCallerCopyRollsBack = primed && fenced && reloaded == 0 && residentSame && windowCopySame &&
+		                             rolledBack == 1 && kept == 0 && emptied == 0;
 		for (const auto& [name, function]: residentFunctions) {
 			delete function;
 		}
@@ -6796,26 +6801,51 @@ _PrimitiveQueueCapture = nil
 		    "return probe end)()",
 		    false);
 		luabind::object beforeWindow(m_State, 100);
+		// luabind keeps its free-list head in the registry at index 1 and its references in the slots it names, so
+		// those two reads are the array part the hash-key probe below cannot see (luabind-0.7.1/src/ref.cpp).
+		const auto readRegistrySlot = [this](int index) {
+			lua_rawgeti(m_State, LUA_REGISTRYINDEX, index);
+			const int value = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
+			lua_pop(m_State, 1);
+			return value;
+		};
+		{
+			// Two references given up here leave a free list the window's first object is bound to take from.
+			luabind::object primeFirst(m_State, 97);
+			luabind::object primeSecond(m_State, 98);
+		}
+		const int freeListBefore = readRegistrySlot(1);
+		const int linkBefore = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_pushinteger(m_State, 1);
 		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 		CapturePreviewGlobalFence(true);
-		const bool rooted = PreviewRegistryRooted();
+		const int rooted = luaJIT_preview_registry_rooted(m_State);
 		int wrote = -99;
 		int insideRegistry = -1;
+		int freeListInside = -1;
+		int slotInside = -1;
 		{
 			// The window's own luabind references end with the window, which is what lets the registry roll back.
 			std::vector<std::unique_ptr<luabind::object>> windowBorn;
 			for (int value = 0; value < 3; ++value) {
 				windowBorn.push_back(std::make_unique<luabind::object>(m_State, 300 + value));
 			}
+			freeListInside = readRegistrySlot(1);
+			slotInside = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 			wrote = RunScriptString("_PreviewSlotProbe.write()", false);
 			lua_pushinteger(m_State, 2);
 			lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 			lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 			insideRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
 			lua_pop(m_State, 1);
+			// Given up oldest first, so the free list cannot come back to where it started on its own.
+			for (std::unique_ptr<luabind::object>& object: windowBorn) {
+				object.reset();
+			}
 		}
 		ReleasePreviewGlobalFence();
+		const int freeListAfter = readRegistrySlot(1);
+		const int slotAfter = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 		const int afterRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
 		lua_pop(m_State, 1);
@@ -6840,10 +6870,17 @@ _PrimitiveQueueCapture = nil
 		std::cout << "[preview-slot-measure] staged=" << staged << " rooted=" << rooted << " wrote=" << wrote
 		          << " upvalue_writes=" << writes << " slots_after=" << slotsAfter
 		          << " registry " << insideRegistry << "->" << afterRegistry
+		          << " free_list " << freeListBefore << "->" << freeListInside << "->" << freeListAfter
+		          << " slot " << linkBefore << "->" << slotInside << "->" << slotAfter
 		          << " references_usable=" << referencesUsable << std::endl;
+		// The window's own object took the free slot and wrote 300 into it; only rolling the registry's array part
+		// back puts the free-list head and that slot's link where the window found them.
+		const bool registryArrayRolledBack = freeListBefore > 0 && linkBefore > 0 && slotInside == 300 &&
+		                                     freeListInside != freeListBefore && freeListAfter == freeListBefore && slotAfter == linkBefore;
 		// Two slots changed and one was written back, the registry key the window set is gone, and every reference still names its own value.
-		previewSlotMeasureAndRegistryRoot = staged == 0 && rooted && wrote == 0 && writes == 2 &&
-		                                    slotsAfter == 231 && insideRegistry == 2 && afterRegistry == 1 && referencesUsable;
+		previewSlotMeasureAndRegistryRoot = staged == 0 && rooted == 1 && wrote == 0 && writes == 2 &&
+		                                    slotsAfter == 231 && insideRegistry == 2 && afterRegistry == 1 &&
+		                                    registryArrayRolledBack && referencesUsable;
 		RunScriptString("_PreviewSlotProbe = nil; _PreviewSlotValue = nil", false);
 		lua_pushnil(m_State);
 		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
