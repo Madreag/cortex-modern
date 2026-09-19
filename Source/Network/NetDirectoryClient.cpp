@@ -163,6 +163,22 @@ namespace RTE {
 		m_Listed = true;
 	}
 
+	void NetDirectoryClient::AbandonLease() {
+		if (m_Request) { m_Request->Abort(); m_Request.reset(); }
+		m_RequestKind = RequestKind::None; m_Listed = false;
+		m_SessionId.clear(); m_Token.clear(); m_ConfirmedListed.reset();
+		if (m_State != State::Disabled) SetState(State::Idle);
+	}
+
+	bool NetDirectoryClient::Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token) {
+		if (m_State == State::Disabled || sessionId.empty() || token.empty() || sessionId == token) return false;
+		AbandonLease();
+		NetDirectoryRegisterRequest resumed = row;
+		resumed.resumeSessionId = sessionId; resumed.resumeToken = token;
+		Advertise(resumed, true);
+		return true;
+	}
+
 	void NetDirectoryClient::Retract() { m_Listed = false; }
 
 	void NetDirectoryClient::PollList(uint64_t nowMs) {

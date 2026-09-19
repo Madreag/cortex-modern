@@ -41,6 +41,8 @@ namespace RTE {
 		int64_t listenPort = 0;
 		std::vector<std::string> listenAddrs;
 		std::string joinMode; //!< "ip" | "ice" | "either"
+		std::string resumeSessionId;
+		std::string resumeToken;
 
 		bool operator==(const NetDirectoryRegisterRequest&) const = default;
 	};

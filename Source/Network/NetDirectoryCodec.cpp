@@ -297,13 +297,15 @@ namespace RTE {
 	std::string NetDirectoryCodec::EncodeRegisterRequest(const NetDirectoryRegisterRequest& request) {
 		json obj;
 		WriteRegisterFields(obj, request);
+		if (!request.resumeSessionId.empty()) { obj["resume_session_id"] = request.resumeSessionId; obj["resume_token"] = request.resumeToken; }
 		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeRegisterRequest(const std::string& body, NetDirectoryRegisterRequest& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
-		return ReadRegisterFields(obj, out, reason);
+		if (!ReadRegisterFields(obj, out, reason)) return false;
+		return !obj.contains("resume_session_id") || (ReadStr(obj, "resume_session_id", out.resumeSessionId, reason) && ReadStr(obj, "resume_token", out.resumeToken, reason));
 	}
 
 	std::string NetDirectoryCodec::EncodeRegisterResponse(const NetDirectoryRegisterResponse& response) {
