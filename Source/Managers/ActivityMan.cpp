@@ -1744,21 +1744,23 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 		g_MovableMan, g_SceneMan, g_CameraMan, g_FrameMan);
 	writer(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
 		m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
-	writer(GUIInput::SaveSharedCheckpoint());
-	writer(g_UInputMan.SaveCheckpoint());
-	writer(g_PostProcessMan.SaveCheckpoint());
-	writer(g_PrimitiveMan.SaveCheckpoint());
-	const std::string gui = g_GUISound.SaveCheckpoint();
-	const std::string music = g_MusicMan.SaveCheckpoint();
+	writer(CheckpointWriter::Native([] { return GUIInput::SaveSharedCheckpoint(); }));
+	writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCheckpoint(); }));
+	writer(CheckpointWriter::Native([] { return g_PostProcessMan.SaveCheckpoint(); }));
+	writer(CheckpointWriter::Native([] { return g_PrimitiveMan.SaveCheckpoint(); }));
+	const CheckpointText gui = CheckpointWriter::Native([] { return g_GUISound.SaveCheckpoint(); });
+	const CheckpointText music = CheckpointWriter::Native([] { return g_MusicMan.SaveCheckpoint(); });
 	writer(gui);
 	writer(music);
 	if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
-		writer(g_AudioMan.SaveCheckpoint());
+		writer(CheckpointWriter::Native([] { return g_AudioMan.SaveCheckpoint(); }));
 	} else {
 		std::unordered_set<uint64_t> managers;
 		g_AudioMan.CollectManagerSoundIdentities(managers);
-		writer(g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
-			return !identity || worldCarried.contains(identity) || managers.contains(identity);
+		writer(CheckpointWriter::Native([&worldCarried, &managers] {
+			return g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
+				return !identity || worldCarried.contains(identity) || managers.contains(identity);
+			});
 		}));
 	}
 	return writer.Text();
