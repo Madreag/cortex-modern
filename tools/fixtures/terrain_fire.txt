@@ -1,0 +1,4 @@
+# Terrain carving (host, player 0): switch to the dummy, aim down at the ground and fire into it.
+30 31 NEXT
+100 140 AIM_DOWN
+150 200 FIRE
