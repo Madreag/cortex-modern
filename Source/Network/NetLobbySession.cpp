@@ -102,6 +102,7 @@ namespace RTE {
 		m_LastReceiveMs = 0;
 		m_SessionClockBaseMs = config.session ? config.session->GetClockMs() : 0;
 		m_PeerStatePending = true;
+		m_ConfigResendDue = false;
 		m_LocalReady = config.host || config.autoReady;
 		m_ReadySent = false;
 		m_StartRequested = config.autoStart;
@@ -329,6 +330,11 @@ namespace RTE {
 		return it != m_RemoteReadyByPeer.end() && it->second;
 	}
 
+	bool NetLobbySession::IsConfigAcked(uint8_t peerId) const {
+		const auto it = m_ConfigAckedByPeer.find(peerId);
+		return it != m_ConfigAckedByPeer.end() && it->second;
+	}
+
 	bool NetLobbySession::HasHeardFrom(uint8_t peerId) const {
 		return m_RemoteNamesByPeer.find(peerId) != m_RemoteNamesByPeer.end();
 	}
@@ -381,6 +387,7 @@ namespace RTE {
 				{"ignored_session_packets", m_Stats.ignoredSessionPackets},
 				{"config_packets_sent", m_Stats.configPacketsSent},
 				{"config_acks_received", m_Stats.configAcksReceived},
+				{"config_republishes", m_Stats.configRepublishes},
 				{"ready_packets_received", m_Stats.readyPacketsReceived},
 				{"start_packets_sent", m_Stats.startPacketsSent},
 				{"start_packets_received", m_Stats.startPacketsReceived},
@@ -411,6 +418,53 @@ namespace RTE {
 			return;
 		}
 		m_StartRequested = true;
+	}
+
+	bool NetLobbySession::RepublishMatchConfig(const NetMatchConfig& config, std::string* error) {
+		auto refuse = [error](const char* reason) {
+			if (error) *error = reason;
+			return false;
+		};
+		if (!m_Config.host) {
+			return refuse("only the host republishes the match config");
+		}
+		if (m_State == NetLobbyState::Idle || IsTerminal(m_State)) {
+			return refuse("the lobby round is no longer open");
+		}
+		// The draft named the revision it was accepted against; anything at or behind the published
+		// one is a transaction the round has already moved past.
+		if (config.configRevision <= m_Config.matchConfig.configRevision) {
+			return refuse("the draft names a stale configuration revision");
+		}
+		if (config.sessionId != m_Config.matchConfig.sessionId || config.hostPeerId != m_Config.matchConfig.hostPeerId ||
+		    config.peerCount != m_Config.matchConfig.peerCount) {
+			return refuse("seat capacity and session identity are fixed for the open lobby");
+		}
+		std::string validateError;
+		if (!NetMatchConfigUtil::ValidateLocalAlpha(config, &validateError)) {
+			if (error) *error = validateError;
+			return false;
+		}
+		m_Config.matchConfig = config;
+		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(config);
+		// Every peer acknowledges this exact revision before it counts again: HandleConfigAck drops an
+		// ack whose hash is the old one, so a delayed ack cannot accept a config its sender never saw.
+		for (auto& [peerId, acked] : m_ConfigAckedByPeer) {
+			acked = false;
+		}
+		for (auto& [peerId, ready] : m_RemoteReadyByPeer) {
+			ready = false;
+		}
+		m_State = NetLobbyState::WaitingForConfigAck;
+		m_ReadySent = false;
+		m_LocalReady = m_Config.host || m_Config.autoReady;
+		// A Start pending on the old revision does not carry over; an auto-starting round re-arms it
+		// exactly as Start() did, so the new config is what the round begins on.
+		m_StartRequested = m_Config.autoStart;
+		m_PeerStatePending = true;
+		m_ConfigResendDue = true;
+		++m_Stats.configRepublishes;
+		return true;
 	}
 
 	const char* NetLobbySession::StateName(NetLobbyState state) {
@@ -582,7 +636,7 @@ namespace RTE {
 		if (!m_Config.host || AllConfigAcked() || m_State != NetLobbyState::WaitingForConfigAck) {
 			return;
 		}
-		if (m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
+		if (!m_ConfigResendDue && m_Stats.configPacketsSent > 0 && nowMs < m_LastConfigSentMs + m_Config.resendIntervalMs) {
 			return;
 		}
 		bool sentAny = false;
@@ -600,6 +654,7 @@ namespace RTE {
 		if (sentAny) {
 			++m_Stats.configPacketsSent;
 			m_LastConfigSentMs = nowMs;
+			m_ConfigResendDue = false;
 		}
 	}
 
