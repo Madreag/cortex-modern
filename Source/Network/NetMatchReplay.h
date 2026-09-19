@@ -22,6 +22,17 @@ namespace RTE {
 		Corrupt,
 	};
 
+	/// The world checkpoint a segment recording stands on. A persistent world's recording is cut at every
+	/// checkpoint, so each segment carries the frames after one archive and names that archive here.
+	struct NetWorldSegmentHeader {
+		std::string worldId;
+		uint64_t tick = 0;  //!< The checkpoint's committed tick; the segment's first frame is tick + 1.
+		uint64_t round = 0;
+		uint64_t boot = 0;
+		std::string worldDigest; //!< The checkpoint archive's world-structure hash, as the descriptor stores it.
+		bool operator==(const NetWorldSegmentHeader&) const = default;
+	};
+
 	/// The whole-file integrity scan (-net-replay-verify): every record decodes, the end marker is present, no tick gaps.
 	struct NetReplayVerifyReport {
 		bool ok = false;
@@ -35,19 +46,27 @@ namespace RTE {
 		bool endMarker = false;
 		bool truncated = false;
 		bool corrupt = false;
+		bool segment = false; //!< Whether the header named a world checkpoint.
+		NetWorldSegmentHeader segmentHeader;
 		std::string ToJson() const;
 	};
 
 	class NetMatchReplayWriter {
 	public:
 		static constexpr uint32_t c_Magic = 0x50524343U; // "CCRP"
-		// Version 5 preserves each committed command's sender beside the checksummed wire frame.
-		static constexpr uint16_t c_Version = 5;
+		// Version 6 carries the world checkpoint a segment stands on; version 5 preserved each committed
+		// command's sender beside the checksummed wire frame.
+		static constexpr uint16_t c_Version = 6;
+		/// The longest world id and digest a segment header may carry; both are bounded strings already.
+		static constexpr size_t c_MaxSegmentFieldBytes = 64;
 		// A length prefix above the record cap; the writer appends it as the last record so playback
 		// tells a clean end from a mid-write crash. Version-1 files have no marker.
 		static constexpr uint32_t c_EndMarker = 0xFFFFFFFFU;
 
 		bool Open(const std::string& path, const NetMatchConfig& config, std::string* error = nullptr);
+		/// A world segment: the header names the checkpoint the records stand on. A null segment writes
+		/// an ordinary recording, which boots the preset instead of a world snapshot.
+		bool Open(const std::string& path, const NetMatchConfig& config, const NetWorldSegmentHeader* segment, std::string* error);
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error = nullptr);
 		/// A committed tick with every peer's sound observations; their senders trail the record like the commands'.
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, std::string* error);
@@ -76,6 +95,9 @@ namespace RTE {
 		/// Reads the next record. Returns false with outEof=true at the clean end of the file.
 		bool ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error = nullptr);
 		NetReplayReadStatus GetLastReadStatus() const { return m_LastStatus; }
+		/// Whether this recording is a world segment; a version-5 or older file never is.
+		bool HasWorldSegment() const { return m_HasSegment; }
+		const NetWorldSegmentHeader& GetWorldSegment() const { return m_Segment; }
 		uint16_t GetVersion() const { return m_Version; }
 		/// The ControllerFrame version the records decode with; pre-version-3 files carry the legacy frame.
 		uint16_t GetControllerFrameVersion() const { return m_ControllerFrameVersion; }
@@ -93,6 +115,8 @@ namespace RTE {
 		uint64_t m_StartFrame = 0;
 		uint16_t m_Version = 0; //!< Version-2 files carry an end marker, so raw EOF without it is a truncation.
 		uint16_t m_ControllerFrameVersion = 0;
+		bool m_HasSegment = false;
+		NetWorldSegmentHeader m_Segment;
 		NetReplayReadStatus m_LastStatus = NetReplayReadStatus::None;
 	};
 
