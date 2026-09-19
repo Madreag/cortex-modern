@@ -40,6 +40,10 @@ namespace RTE {
 		/// @return Lowercase hex digest, or "unavailable" when the executable could not be read.
 		static const std::string& GetThisExeSha256();
 
+		/// SHA-256 of a byte range, in this build alone: no optional dependency decides whether it works.
+		/// @return Lowercase hex digest.
+		static std::string Sha256Hex(const void* bytes, size_t size);
+
 		/// Gets the current working directory.
 		/// @return Absolute path to current working directory.
 		static const std::string& GetWorkingDirectory() { return s_WorkingDirectory; }
@@ -94,6 +98,12 @@ namespace RTE {
 		/// Runs the working tree walk over a directory holding a path past the platform's limit and one this user may not list.
 		/// @return Whether every case passed.
 		static bool RunPathCaseSelfTest();
+
+		/// Runs a print raised from inside another print, and two threads printing together, over the
+		/// diagnostic writers: the first must not wait on the lock its own thread holds, and every line
+		/// either thread wrote must arrive whole.
+		/// @return Whether every case passed.
+		static bool RunPrintDisciplineSelfTest();
 #pragma endregion
 
 #pragma region Command-Line Interface
@@ -119,6 +129,15 @@ namespace RTE {
 		/// The same single-write discipline on standard error, under the same lock as standard output.
 		/// @param line The complete line, without its terminator.
 		static void PrintDiagnosticErrorLine(const std::string& line);
+
+		/// Writes a line from a fault handler: takes the print lock if it is free and writes unlocked if it
+		/// is not, because the thread that faulted may be the thread holding it.
+		/// @param line The complete line, without its terminator.
+		static void PrintFaultLine(const std::string& line);
+
+		/// The console echo of an abort or assert, with the same fault-handler discipline.
+		/// @param stringToPrint The message, printed exactly as PrintToCLI prints it.
+		static void PrintFaultToCLI(const std::string& stringToPrint);
 #pragma endregion
 
 #pragma region Archived DataModule Handling
