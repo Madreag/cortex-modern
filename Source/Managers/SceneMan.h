@@ -1125,6 +1125,31 @@ namespace RTE {
 
 		int m_ScrapCompactingHeight; //!< The maximum height of a column of scrap terrain to collapse, when the bottom pixel is knocked loose.
 
+		int m_CarveBatchDepth; //!< Nonzero while a carving loop merges its pixels into one updated-material box.
+		bool m_CarveBatchHasBox;
+		int m_CarveBatchMinX;
+		int m_CarveBatchMinY;
+		int m_CarveBatchMaxX;
+		int m_CarveBatchMaxY;
+
+		/// Tells the terrain a pixel was carved, so the pathfinding grid and the committed horizon both see it.
+		void NoteCarvedTerrainPixel(int posX, int posY);
+		void BeginCarveBatch();
+		void EndCarveBatch();
+
+		/// Merges every pixel carved inside its scope into one updated-material box.
+		class CarveBatch {
+		public:
+			explicit CarveBatch(SceneMan& sceneMan) :
+			    m_SceneMan(sceneMan) { m_SceneMan.BeginCarveBatch(); }
+			~CarveBatch() { m_SceneMan.EndCarveBatch(); }
+			CarveBatch(const CarveBatch&) = delete;
+			CarveBatch& operator=(const CarveBatch&) = delete;
+
+		private:
+			SceneMan& m_SceneMan;
+		};
+
 		/// Private member variable and method declarations
 	private:
 

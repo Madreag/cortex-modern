@@ -819,14 +819,22 @@ void Activity::ClearPreviewedPurchase(int player, int team, float cost) {
 	if (view.fundsTeam != team) {
 		return;
 	}
+	// Orders commit oldest first, and the peek lists the unstamped ones ahead of the outbox, so take the lowest stamped sequence.
+	auto committing = view.orders.end();
 	for (auto order = view.orders.begin(); order != view.orders.end(); ++order) {
-		if (SameAppliedCost(order->cost, std::abs(cost))) {
-			view.orders.erase(order);
-			if (view.orders.empty()) {
-				view = PresentationView{};
-			}
-			return;
+		if (!SameAppliedCost(order->cost, std::abs(cost))) {
+			continue;
 		}
+		if (committing == view.orders.end() || (order->sequence != 0 && (committing->sequence == 0 || order->sequence < committing->sequence))) {
+			committing = order;
+		}
+	}
+	if (committing == view.orders.end()) {
+		return;
+	}
+	view.orders.erase(committing);
+	if (view.orders.empty()) {
+		view = PresentationView{};
 	}
 }
 
@@ -1923,6 +1931,22 @@ bool Activity::RunPresentationViewSelfTest() {
 	peekedExpire.ExpirePresentationViews(press + delay + 2);
 	check("confirmed_expires_from_commit_tick", peekArmed == 1863.0F && peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
 	      "peek-armed " + std::to_string(peekArmed) + " after expire " + std::to_string(peekedExpire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	GameActivity gated;
+	gated.SetTeamFunds(2000, Teams::TeamOne);
+	gated.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
+	check("buy_gate_follows_the_seat_readout", gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1900.0F) && !gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1800.0F),
+	      "readout " + gated.DescribeFundsReadout(Teams::TeamOne, Players::PlayerOne) + " committed " + std::to_string(gated.GetTeamFunds(Teams::TeamOne)) +
+	          ", 1900 refused " + std::to_string(gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1900.0F) ? 1 : 0) +
+	          ", 1800 allowed " + std::to_string(gated.OrderExceedsSeatFunds(Players::PlayerOne, Teams::TeamOne, 1800.0F) ? 0 : 1));
+	GameActivity ordered;
+	ordered.SetTeamFunds(2000, Teams::TeamOne);
+	// The peek lists the unsent order first; the stamped one behind it is the one that commits first.
+	ordered.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay + 10, 9);
+	ordered.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay, 7);
+	ordered.AdoptPreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137);
+	ordered.ExpirePresentationViews(press + delay + 2);
+	check("adopt_takes_the_oldest_order_of_its_cost", ordered.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
+	      "presentation after the older of two same-cost orders committed " + std::to_string(ordered.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
 	std::cout << "[preview-funds-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;

@@ -211,6 +211,46 @@ void SceneMan::Clear() {
 	m_pOrphanSearchBitmap = create_bitmap_ex(8, MAXORPHANRADIUS, MAXORPHANRADIUS);
 
 	m_ScrapCompactingHeight = 25;
+
+	m_CarveBatchDepth = 0;
+	m_CarveBatchHasBox = false;
+	m_CarveBatchMinX = m_CarveBatchMinY = m_CarveBatchMaxX = m_CarveBatchMaxY = 0;
+}
+
+void SceneMan::NoteCarvedTerrainPixel(int posX, int posY) {
+	if (m_CarveBatchDepth > 0) {
+		if (m_CarveBatchHasBox) {
+			m_CarveBatchMinX = std::min(m_CarveBatchMinX, posX);
+			m_CarveBatchMinY = std::min(m_CarveBatchMinY, posY);
+			m_CarveBatchMaxX = std::max(m_CarveBatchMaxX, posX);
+			m_CarveBatchMaxY = std::max(m_CarveBatchMaxY, posY);
+		} else {
+			m_CarveBatchHasBox = true;
+			m_CarveBatchMinX = m_CarveBatchMaxX = posX;
+			m_CarveBatchMinY = m_CarveBatchMaxY = posY;
+		}
+		return;
+	}
+	if (m_pCurrentScene && m_pCurrentScene->GetTerrain()) {
+		m_pCurrentScene->GetTerrain()->AddUpdatedMaterialArea(Box(Vector(static_cast<float>(posX), static_cast<float>(posY)), 1.0F, 1.0F));
+	}
+}
+
+void SceneMan::BeginCarveBatch() {
+	++m_CarveBatchDepth;
+}
+
+void SceneMan::EndCarveBatch() {
+	if (m_CarveBatchDepth <= 0 || --m_CarveBatchDepth > 0 || !m_CarveBatchHasBox) {
+		return;
+	}
+	m_CarveBatchHasBox = false;
+	if (m_pCurrentScene && m_pCurrentScene->GetTerrain()) {
+		const Box carved(Vector(static_cast<float>(m_CarveBatchMinX), static_cast<float>(m_CarveBatchMinY)),
+		                 static_cast<float>(m_CarveBatchMaxX - m_CarveBatchMinX + 1),
+		                 static_cast<float>(m_CarveBatchMaxY - m_CarveBatchMinY + 1));
+		m_pCurrentScene->GetTerrain()->AddUpdatedMaterialArea(carved);
+	}
 }
 
 void SceneMan::Initialize() const {
@@ -675,6 +715,7 @@ int SceneMan::RemoveOrphans(int posX, int posY, int radius, int maxArea, bool re
 	clear_to_color(m_pOrphanSearchBitmap, g_MaterialAir);
 	int area = RemoveOrphans(posX, posY, posX, posY, 0, radius, maxArea, false);
 	if (remove && area <= maxArea) {
+		CarveBatch carved(*this);
 		clear_to_color(m_pOrphanSearchBitmap, g_MaterialAir);
 		RemoveOrphans(posX, posY, posX, posY, 0, radius, maxArea, true);
 	}
@@ -755,6 +796,7 @@ int SceneMan::RemoveOrphans(int posX, int posY,
 		TraceTerrainEvent("orph", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 		m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 		m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
+		NoteCarvedTerrainPixel(posX, posY);
 	}
 
 	int xoff[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
@@ -793,6 +835,8 @@ bool SceneMan::TryPenetrate(int posX,
 	Material const* sceneMat = GetMaterialFromID(materialID);
 	Material const* spawnMat;
 
+	// One box for the impact pixel, the column it compacts and any orphans it takes with it.
+	CarveBatch carved(*this);
 	float sprayScale = 0.1F;
 	float sqrImpMag = impulse.GetSqrMagnitude();
 	const bool tracePenetration = IsTrackedUID(s_TerrainEventContextUID);
@@ -851,12 +895,14 @@ bool SceneMan::TryPenetrate(int posX,
 			TraceTerrainEvent("dis", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
+			NoteCarvedTerrainPixel(posX, posY);
 		}
 		// TODO: Improve / tweak randomized pushing away of terrain")
 		else if (RandomNum() <= airRatio) {
 			TraceTerrainEvent("disa", posX, posY, materialID, 0, static_cast<int>(s_TerrainEventContextUID));
 			m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, g_MaskColor);
 			m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, g_MaterialAir);
+			NoteCarvedTerrainPixel(posX, posY);
 		}
 
 		// Save the impulse force effects of the penetrating particle.
@@ -909,6 +955,7 @@ bool SceneMan::TryPenetrate(int posX,
 						TraceTerrainEvent("disc", posX, testY, testMaterialID, 0, static_cast<int>(s_TerrainEventContextUID));
 						_putpixel(pFGColor, posX, testY, g_MaskColor);
 						_putpixel(pMaterial, posX, testY, g_MaterialAir);
+						NoteCarvedTerrainPixel(posX, testY);
 					} else {
 						break;
 					}
@@ -958,6 +1005,7 @@ MOPixel* SceneMan::DislodgePixel(int posX, int posY) {
 
 	m_pCurrentScene->GetTerrain()->SetFGColorPixel(posX, posY, ColorKeys::g_MaskColor);
 	m_pCurrentScene->GetTerrain()->SetMaterialPixel(posX, posY, MaterialColorKeys::g_MaterialAir);
+	NoteCarvedTerrainPixel(posX, posY);
 
 	FeedCarveMath(2, posX, posY, Vector(), Vector(), materialID, true, 0.0F);
 	return pixelMO;
@@ -974,6 +1022,7 @@ MOPixel* SceneMan::DislodgePixelBool(int posX, int posY, bool deletePixel) {
 
 std::vector<MOPixel*>* SceneMan::DislodgePixelCircle(const Vector& centre, float radius, bool deletePixels) {
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
+	CarveBatch carved(*this);
 	int limit = static_cast<int>(radius) * 2;
 	for (int x = 0; x <= limit; x++) {
 		for (int y = 0; y <= limit; y++) {
@@ -1007,6 +1056,7 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelRing(const Vector& centre, float i
 	}
 
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
+	CarveBatch carved(*this);
 	int limit = static_cast<int>(outerRadius) * 2;
 	for (int x = 0; x <= limit; x++) {
 		for (int y = 0; y <= limit; y++) {
@@ -1040,6 +1090,7 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelRingNoBool(const Vector& centre, f
 
 std::vector<MOPixel*>* SceneMan::DislodgePixelBox(const Vector& upperLeftCorner, const Vector& lowerRightCorner, bool deletePixels) {
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
+	CarveBatch carved(*this);
 
 	// Make sure it works even if people input corners in the wrong order
 	Vector start = Vector(std::min(upperLeftCorner.m_X, lowerRightCorner.m_X), std::min(upperLeftCorner.m_Y, lowerRightCorner.m_Y));
@@ -1066,6 +1117,7 @@ std::vector<MOPixel*>* SceneMan::DislodgePixelBoxNoBool(const Vector& upperLeftC
 
 std::vector<MOPixel*>* SceneMan::DislodgePixelLine(const Vector& start, const Vector& ray, int skip, bool deletePixels) {
 	std::vector<MOPixel*>* pixelList = new std::vector<MOPixel*>();
+	CarveBatch carved(*this);
 	int error, dom, sub, domSteps, skipped = skip;
 	int intPos[2], delta[2], delta2[2], increment[2];
 

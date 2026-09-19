@@ -301,7 +301,7 @@ namespace RTE {
 		size_t GetPreviewGhostCount() const { return m_PreviewGhosts.size(); }
 		uint64_t GetPreviewGhostPeak() const { return m_PreviewGhostPeak; }
 		/// Plants a ghost for a ledger key so a self-test can observe the drop.
-		static void InstallPreviewGhostForSelfTest(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) { Instance().InstallPreviewGhost(mo, key, poseTick); }
+		static bool InstallPreviewGhostForSelfTest(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick) { return Instance().InstallPreviewGhost(mo, key, poseTick); }
 		struct PreviewGhostState {
 			PreviewEventLedger::Key key;
 			Vector pos;
@@ -1040,7 +1040,7 @@ namespace RTE {
 			MovableObjectReference adoptee; //!< That spawn; the link expires by itself if it dies first.
 		};
 		/// Installs a preview ghost for a ledger projectile at the pose the preview left it, for the tick that pose is of.
-		void InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick);
+		bool InstallPreviewGhost(MovableObject* mo, const PreviewEventLedger::Key& key, uint64_t poseTick);
 		/// Moves an installed ghost to the pose a later preview's re-run of the same event left its spawn at.
 		void ReposePreviewGhost(const PreviewEventLedger::Key& key, const MovableObject& spawn, uint64_t poseTick);
 		/// Puts the canonical spawn behind the ghost that already shows where it is going, until that pose's tick.

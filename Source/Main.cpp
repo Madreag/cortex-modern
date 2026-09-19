@@ -457,6 +457,7 @@ static std::vector<SwapRecord> s_eventLedgerSwaps;
 static uint64_t s_eventLedgerSwapCount = 0;
 static int s_eventLedgerHoldDumpPoints = 0; //!< Ticks whose dump was taken both with and without the adoption hold.
 static int s_eventLedgerHoldDumpDiffs = 0;
+static int s_eventLedgerHoldSampleCandidates = 0; //!< Held ghosts the sampler reached at an adoption or last-led tick.
 static bool s_eventLedgerSwapDumpT0 = false; //!< The three cross-run dump probes: adoption, last led tick, swap.
 static bool s_eventLedgerSwapDumpMid = false;
 static bool s_eventLedgerSwapDumpEnd = false;
@@ -3324,8 +3325,9 @@ static void SampleSeamlessSwap(uint64_t tick, const std::vector<MovableMan::Prev
 		const bool atAdoption = tick == ghost.adoptionTick;
 		const bool atLastLedTick = tick + 1 == ghost.poseTick;
 		if (!atAdoption && !atLastLedTick) {
-			break;
+			continue;
 		}
+		++s_eventLedgerHoldSampleCandidates;
 		if (MovableObject* adoptee = g_MovableMan.FindObjectByUniqueID(ghost.adopteeUID)) {
 			// Presentation only: the same world dumps the same bytes with the hold on and with it off.
 			const std::string held = DumpSimStateToString();
@@ -3721,6 +3723,41 @@ static void CheckPreviewEventLedgerSelfTest() {
 	}
 	check("expired_ghost_vanishes", MovableMan::IsConstructed() && s_eventLedgerExpireDroppedGhost,
 	      !MovableMan::IsConstructed() ? "MovableMan is not constructed in this host, so no ghost could be planted" : s_eventLedgerExpireDetail);
+	if (MovableMan::IsConstructed()) {
+		// One live ghost per key: a second install would leave a ghost nothing reposes, adopts or drops.
+		PreviewEventLedger::Key twinKey;
+		twinKey.kind = PreviewEventLedger::Projectile;
+		twinKey.emitterUID = 2;
+		twinKey.tick = 3;
+		twinKey.seq = 98;
+		const size_t ghostsBefore = g_MovableMan.GetPreviewGhostStates().size();
+		const bool firstInstalled = MovableMan::InstallPreviewGhostForSelfTest(new MOPixel(), twinKey, twinKey.tick + 4);
+		MOPixel* twin = new MOPixel();
+		const bool secondInstalled = MovableMan::InstallPreviewGhostForSelfTest(twin, twinKey, twinKey.tick + 4);
+		if (!secondInstalled) {
+			delete twin;
+		}
+		const size_t ghostsAfter = g_MovableMan.GetPreviewGhostStates().size();
+		g_MovableMan.DropPreviewGhost(twinKey);
+		const size_t ghostsDropped = g_MovableMan.GetPreviewGhostStates().size();
+		check("one_live_ghost_per_key", firstInstalled && !secondInstalled && ghostsAfter == ghostsBefore + 1 && ghostsDropped == ghostsBefore,
+		      "installs " + std::to_string(firstInstalled ? 1 : 0) + "/" + std::to_string(secondInstalled ? 1 : 0) + ", ghosts " +
+		          std::to_string(ghostsBefore) + " -> " + std::to_string(ghostsAfter) + " -> " + std::to_string(ghostsDropped) + " after the drop");
+	}
+	{
+		// Two held ghosts, the first of them mid-lead: the sampler must still reach the second.
+		const int candidatesBefore = s_eventLedgerHoldSampleCandidates;
+		std::vector<MovableMan::PreviewGhostState> twoGhosts(2);
+		twoGhosts[0].adopteeHeld = true;
+		twoGhosts[0].adoptionTick = 1;
+		twoGhosts[0].poseTick = 10;
+		twoGhosts[1].adopteeHeld = true;
+		twoGhosts[1].adoptionTick = 5;
+		twoGhosts[1].poseTick = 20;
+		SampleSeamlessSwap(5, twoGhosts);
+		check("every_held_ghost_is_sampled", s_eventLedgerHoldSampleCandidates == candidatesBefore + 1,
+		      "the sampler reached " + std::to_string(s_eventLedgerHoldSampleCandidates - candidatesBefore) + " of the 1 ghost at its tick behind a ghost that was not");
+	}
 	// A guard, not a detector: the muzzle flash sprite is already drawn on the preview that fires.
 	check("the_flash_sprite_stays_on_the_preview_tick", s_eventLedgerFlashTick > 0 && static_cast<uint64_t>(s_eventLedgerFlashTick) <= press + 1,
 	      "the previewed firearm's flash frame is first set at committed tick " + std::to_string(s_eventLedgerFlashTick) + ", expected <= " + std::to_string(press + 1));
