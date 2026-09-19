@@ -154,21 +154,6 @@ namespace {
 		return distance;
 	}
 
-	void HorizonWrapPosition(int& posX, int& posY, int sceneWidth, int sceneHeight, bool wrapsX, bool wrapsY) {
-		if (wrapsX && sceneWidth > 0) {
-			posX %= sceneWidth;
-			if (posX < 0) {
-				posX += sceneWidth;
-			}
-		}
-		if (wrapsY && sceneHeight > 0) {
-			posY %= sceneHeight;
-			if (posY < 0) {
-				posY += sceneHeight;
-			}
-		}
-	}
-
 	unsigned char SamplePatchUnwrapped(const std::vector<HorizonTerrainPatch>& patches, int x, int y) {
 		for (const HorizonTerrainPatch& patch: patches) {
 			if (patch.ContainsUnwrapped(x, y)) {
@@ -1069,8 +1054,6 @@ const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, con
 	const int dom = delta[0] > delta[1] ? 0 : 1;
 	const int sub = 1 - dom;
 	int error = delta2[sub] - delta[dom];
-	int skipped = 0;
-	const int skip = 0;
 	for (int domSteps = 0; domSteps < delta[dom]; ++domSteps) {
 		intPos[dom] += increment[dom];
 		if (error >= 0) {
@@ -1078,16 +1061,13 @@ const Material* PathFinder::StrongestMaterialAlongPatch(const Vector& start, con
 			error -= delta2[dom];
 		}
 		error += delta2[sub];
-		if (++skipped > skip || domSteps + 1 == delta[dom]) {
-			HorizonWrapPosition(intPos[0], intPos[1], meta.sceneWidth, meta.sceneHeight, meta.wrapsX, meta.wrapsY);
-			const unsigned char materialID = SamplePatchUnwrapped(patches, intPos[0], intPos[1]);
-			if (materialID != MaterialColorKeys::g_MaterialAir) {
-				const Material* found = g_SceneMan.GetMaterialFromID(materialID);
-				if (found && found->GetIntegrity() > strongest->GetIntegrity()) {
-					strongest = found;
-				}
+		// Capture stored the already-wrapped pixel under its unwrapped key, so the walk addresses the patch unwrapped.
+		const unsigned char materialID = SamplePatchUnwrapped(patches, intPos[0], intPos[1]);
+		if (materialID != MaterialColorKeys::g_MaterialAir) {
+			const Material* found = g_SceneMan.GetMaterialFromID(materialID);
+			if (found && found->GetIntegrity() > strongest->GetIntegrity()) {
+				strongest = found;
 			}
-			skipped = 0;
 		}
 	}
 	return strongest;
