@@ -22,6 +22,7 @@
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
+#include "MovableMan.h"
 #include "ScenarioRunner.h"
 
 #ifdef SYSTEM_MINIZIP
@@ -57,6 +58,36 @@
 namespace RTE {
 
 	namespace {
+		bool TestRollbackSnapshotRing(std::string* error) {
+			MovableMan::WorldSnapshotRing ring;
+			int formats = 0;
+			const auto snapshot = [&] {
+				auto value = std::make_unique<MovableMan::WorldSnapshot>();
+				value->luaGraphs.push_back(CheckpointText::Deferred([&] { ++formats; return "retained graph"; }));
+				return value;
+			};
+			const auto fail = [&](const char* message) { *error = message; return false; };
+			if (ring.StoreCommitted(0, snapshot())) return fail("disabled rollback ring retained a snapshot");
+			ring.Reset(2);
+			if (!ring.StoreCommitted(40, snapshot()) || !ring.StoreCommitted(41, snapshot()) || !ring.StoreCommitted(42, snapshot()))
+				return fail("rollback ring refused sequential committed snapshots");
+			const auto* anchor = ring.Find(42);
+			if (ring.Size() != 3 || ring.Capacity() != 3 || !ring.Find(40) || !anchor || formats != 0)
+				return fail("rollback ring lost its window or formatted a retained Lua graph");
+			if (ring.StoreCommitted(42, snapshot()) || ring.StoreCommitted(39, snapshot()) || ring.StoreCommitted(44, snapshot()) || ring.Find(42) != anchor)
+				return fail("rollback ring accepted a duplicate, old tick or gap");
+			if (!ring.StoreCommitted(43, snapshot()) || ring.Find(40) || !ring.Find(41) || ring.Find(42) != anchor)
+				return fail("rollback ring evicted a snapshot inside the retained window");
+			ring.DiscardAfter(41);
+			if (ring.Find(42) || ring.Find(43) || !ring.Find(41) || !ring.StoreCommitted(42, snapshot()))
+				return fail("rollback ring kept a discarded timeline or refused its replacement");
+			if (ring.Find(42)->luaGraphs.front().Text() != "retained graph" || formats != 1)
+				return fail("rollback ring did not retain an owned deferred Lua graph");
+			ring.Reset(0);
+			if (ring.Size() || ring.Capacity() || ring.Find(42)) return fail("rollback ring kept a retired round");
+			return true;
+		}
+
 		template <typename Payload>
 		bool RoundTrip(const Payload& payload, std::string* error) {
 			NetLobbyMessage message;
@@ -11213,6 +11244,7 @@ namespace RTE {
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
 		if (!TestRewindAnchorRecord(&error)) return fail(error);
+		if (!TestRollbackSnapshotRing(&error)) return fail(error);
 		if (!TestOverlongJoinNameSurfaces(&error)) return fail(error);
 		if (!TestServiceReportCarriesActivityPreset(&error)) return fail(error);
 		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);
