@@ -219,6 +219,28 @@ def score_metrics_json(path: Path) -> dict:
     return {"pass": not failures, "failures": failures, "metrics": data}
 
 
+def score_root_reuse(stdout: str) -> dict:
+    """A capture whose roots did not all move must reuse the chunks of the ones that did not."""
+    rows = re.findall(r"\[autosave\] tick=(\d+) graph_walk_us=(\d+) graph_text_us=(\d+) "
+                      r"roots_reused=(\d+) roots_rewritten=(\d+) graph_state_serial=(\d+)", stdout)
+    failures = []
+    if len(rows) < 2:
+        failures.append(f"actual {len(rows)} [autosave] graph rows required at least 2 captures to compare")
+        return {"pass": False, "failures": failures, "rows": rows}
+    serials = {int(row[5]) for row in rows}
+    if 0 in serials:
+        failures.append("actual graph_state_serial=0 required a state counter on every capture")
+    reused_total = sum(int(row[3]) for row in rows[1:])
+    rewritten_all = [int(row[4]) for row in rows[1:]]
+    if reused_total == 0:
+        failures.append(
+            "actual roots_reused=0 on every capture after the first required at least one root "
+            "whose chunk was reused byte for byte (the per-root text cache never fired)")
+    if all(count == 0 for count in rewritten_all):
+        failures.append("actual roots_rewritten=0 everywhere required a moved root to be written again")
+    return {"pass": not failures, "failures": failures, "rows": rows}
+
+
 def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: str = "") -> dict:
     left = json.loads(off_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
     right = json.loads(on_trace.read_text(encoding="utf-8-sig"))["runs"][0].get("tick_hashes", [])
@@ -449,6 +471,12 @@ def main() -> int:
     result["metrics"] = metrics
     if not metrics["pass"]:
         failures.extend(f"metrics: {item}" for item in metrics["failures"])
+
+    # The per-root text cache: a root nothing wrote to is copied, a root that moved is written again.
+    reuse = score_root_reuse(skip["stdout"])
+    result["root_reuse"] = reuse
+    if not reuse["pass"]:
+        failures.extend(f"root_reuse: {item}" for item in reuse["failures"])
 
     # Restore and recapture: the save a second process loads must write the same archive back.
     saved = newest_autosave(skip["cwd"])

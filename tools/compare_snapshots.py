@@ -166,7 +166,7 @@ def parse_graph(data):
     nodes = {}
     count = reader.count()
     # SG5 names a table by its birth number in the state, so the ids have holes; a repeat is still bad.
-    limit = serial + count if serial is not None else count
+    limit = serial if serial is not None else count
     for expected in range(1, count + 1):
         kind, index = reader.char(), reader.integer(minimum=1)
         if index > limit:
