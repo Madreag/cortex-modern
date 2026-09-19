@@ -905,10 +905,7 @@ namespace RTE {
 			return true;
 		}
 
-		// A tick's observations are encoded against the sender's dictionary once, the first time the tick
-		// goes out, and kept. Every later copy of that tick writes those bytes again, so the slots and the
-		// binding count a window copy carries are the ones the tick's own packet wrote and a peer that
-		// repairs the tick from the window binds exactly what the peer that saw the first packet bound.
+		// Every copy of a tick repeats the bytes its first packet spelled, so a repair binds what the peer that saw that packet bound.
 		bool AppendTickObservations(const NetLockstepFrame& tick, std::vector<uint8_t>& out, NetSoundObservationDictionary* dictionary, NetLockstepObservationBlocks* blocks, bool writeEmptyValues, size_t* outObservationsEncoded, size_t* outValueObservationsEncoded, NetLockstepError* error) {
 			if (blocks) {
 				if (const auto kept = blocks->find(tick.targetFrame); kept != blocks->end()) {
@@ -5376,10 +5373,7 @@ namespace RTE {
 			classic = *frame;
 			classic.priorWindow.clear();
 		}
-		// The classic packet is encoded first and is the only one that spends the dictionary; the window
-		// packet repeats the blocks it kept. Both carry the same observation bytes, so a peer without the
-		// capability commits what the advertised peers commit and sees the frame it would have seen
-		// without the window at all.
+		// Only the classic packet spends the dictionary, so a peer without the capability commits what the advertised peers commit.
 		if (!NetLockstepCodec::Encode(windowed ? NetLockstepPacket{classic} : packet, classicBytes, &encodeError, dictionary, outObservationsEncoded, outValueObservationsEncoded, blocks)) {
 			if (error) *error = encodeError.message;
 			return false;
