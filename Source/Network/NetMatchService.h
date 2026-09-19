@@ -362,6 +362,10 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
+		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
+		/// owners and applied sequences and a restart resumes on them.
+		bool SaveStampedAutosave(uint64_t tick);
 		/// The lockstep state a match resumed from a checkpoint starts on, derived from the agreed
 		/// configuration alone so every peer builds the same one whether it loads its own copy of the
 		/// checkpoint or is streamed the host's. A restarted match has nothing in flight.

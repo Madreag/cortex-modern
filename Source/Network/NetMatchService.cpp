@@ -2188,10 +2188,7 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (now < m_NextAutosaveSimTime) return;
 		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
-		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
-		// is read once, here, through the same reader the heal's snapshot capture uses.
-		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
-		if (!g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity)) {
+		if (!SaveStampedAutosave(tick)) {
 			return;
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
@@ -2200,6 +2197,13 @@ static std::string ResyncSaveName() {
 			// The image is published when the writer thread has finished this archive, from the pump.
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
 		}
+	}
+
+	bool NetMatchService::SaveStampedAutosave(uint64_t tick) {
+		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
+		// is read once, here, through the same reader the heal's snapshot capture uses.
+		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
+		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
 
 	NetWorldCheckpointImage NetMatchService::WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
@@ -2497,7 +2501,7 @@ static std::string ResyncSaveName() {
 				// writer has the archive, so the second joiner waits in SnapshotTransfer for that one image
 				// instead of costing the incumbent a second sim-thread capture at the same tick.
 				m_WorldCaptureRequestedTick = tick;
-				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
+				(void)SaveStampedAutosave(tick);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
