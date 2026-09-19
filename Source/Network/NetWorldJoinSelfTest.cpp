@@ -4078,6 +4078,381 @@ namespace RTE {
 		return true;
 	}
 
+	// ---- Slice 4: the world's replayable segments, the heal window and the browser row ----
+
+	// A segment scratch of its own: the recorder's files stand beside the checkpoints, so every one this
+	// row writes is removed again whatever the row's outcome.
+	struct WorldSegmentScratch {
+		std::filesystem::path store;
+		std::vector<std::filesystem::path> written;
+
+		WorldSegmentScratch(): store(AutosaveStore::Directory()) {
+			std::error_code ignored;
+			std::filesystem::create_directories(store, ignored);
+		}
+		void Note(const std::filesystem::path& path) { written.push_back(path); }
+		~WorldSegmentScratch() {
+			std::error_code ignored;
+			for (const std::filesystem::path& path: written) std::filesystem::remove(path, ignored);
+		}
+	};
+
+	NetWorldSegmentHeader MakeSegmentHeader(const std::string& worldId, uint64_t tick, uint64_t round, uint64_t boot, const std::string& digest) {
+		NetWorldSegmentHeader header;
+		header.worldId = worldId;
+		header.tick = tick;
+		header.round = round;
+		header.boot = boot;
+		header.worldDigest = digest;
+		return header;
+	}
+
+	// (a) The version-6 header round trip, and that a version-5 recording still reads as one.
+	bool TestWorldSegmentHeaderRoundTrips(std::string* error) {
+		WorldSegmentScratch scratch;
+		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000a4";
+		const NetMatchConfig config = MakeStoredWorldConfig(worldId);
+		const std::filesystem::path segmentPath = AutosaveStore::SegmentPath(scratch.store, worldId, 900);
+		scratch.Note(segmentPath);
+		const NetWorldSegmentHeader header = MakeSegmentHeader(worldId, 900, 4242, 2, std::string(64, 'd'));
+		NetMatchReplayWriter writer;
+		if (!writer.Open(segmentPath.string(), config, &header, error)) return false;
+		ControllerFrame controller;
+		controller.actorUniqueID = 101;
+		if (!writer.WriteFrame(901, {controller}, {}, error) || !writer.WriteFrame(902, {}, {}, error)) return false;
+		writer.Close();
+
+		NetMatchReplayReader reader;
+		if (!reader.Open(segmentPath.string(), error)) return false;
+		if (reader.GetVersion() != 6) {
+			*error = "world-segment-header-lost: the segment reads version " + std::to_string(reader.GetVersion()) + ", the format is 6";
+			return false;
+		}
+		if (!reader.HasWorldSegment() || reader.GetWorldSegment() != header) {
+			*error = "world-segment-header-lost: the header did not read back as (" + worldId + ", 900, 4242, 2, " + std::string(64, 'd') + ")";
+			return false;
+		}
+		if (reader.GetStartFrame() != 901) {
+			*error = "world-segment-header-lost: the segment starts at frame " + std::to_string(reader.GetStartFrame()) + ", the checkpoint is 900";
+			return false;
+		}
+		reader.Close();
+		NetReplayVerifyReport report;
+		if (!NetMatchReplayReader::Verify(segmentPath.string(), report) || !report.segment || report.segmentHeader != header ||
+		    report.frames != 2 || report.firstFrame != 901) {
+			*error = "world-segment-header-lost: -net-replay-verify did not report the segment header: " + report.ToJson();
+			return false;
+		}
+
+		// A version-5 recording: the same bytes without the trailing flag, under its own version.
+		const std::filesystem::path legacyPath = scratch.store / "legacy-world.ccreplay";
+		scratch.Note(legacyPath);
+		{
+			NetMatchReplayWriter ordinary;
+			if (!ordinary.Open(legacyPath.string(), config, error)) return false;
+			if (!ordinary.WriteFrame(901, {controller}, {}, error)) return false;
+			ordinary.Close();
+		}
+		std::vector<uint8_t> bytes;
+		{
+			std::ifstream in(legacyPath, std::ios::binary);
+			bytes.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+		}
+		if (bytes.size() < 13) {
+			*error = "world-segment-header-lost: the ordinary recording is too short to downgrade";
+			return false;
+		}
+		const size_t configLength = static_cast<size_t>(bytes[8]) | (static_cast<size_t>(bytes[9]) << 8) |
+		                            (static_cast<size_t>(bytes[10]) << 16) | (static_cast<size_t>(bytes[11]) << 24);
+		if (bytes.at(12 + configLength) != 0) {
+			*error = "world-segment-header-lost: an ordinary version-6 recording carried a segment block";
+			return false;
+		}
+		bytes[4] = 5;
+		bytes.erase(bytes.begin() + static_cast<long>(12 + configLength));
+		{
+			std::ofstream out(legacyPath, std::ios::binary | std::ios::trunc);
+			out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		}
+		NetMatchReplayReader legacy;
+		if (!legacy.Open(legacyPath.string(), error)) return false;
+		if (legacy.GetVersion() != 5 || legacy.HasWorldSegment() || legacy.GetStartFrame() != 901) {
+			*error = "world-segment-header-lost: a version-5 recording did not open as one without a segment";
+			return false;
+		}
+		legacy.Close();
+		return true;
+	}
+
+	// (b) The roll: arming the next segment closes the open one with its end marker, the new file is
+	// named for the checkpoint it stands on, and retention drops a segment with its checkpoint.
+	bool TestWorldRecorderRollsAtCheckpoint(std::string* error) {
+		WorldSegmentScratch scratch;
+		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000b4";
+		const NetMatchConfig config = MakeStoredWorldConfig(worldId);
+		const std::filesystem::path armed = scratch.store / "world-armed.ccreplay";
+		const std::filesystem::path first = AutosaveStore::SegmentPath(scratch.store, worldId, 900);
+		const std::filesystem::path second = AutosaveStore::SegmentPath(scratch.store, worldId, 1800);
+		scratch.Note(armed);
+		scratch.Note(first);
+		scratch.Note(second);
+		ScenarioRunner::ArmLockstepReplayRecord(armed.string());
+		if (!ScenarioRunner::BeginLockstepReplayRecord(config, error)) return false;
+
+		ScenarioRunner::ArmLockstepWorldSegment(MakeSegmentHeader(worldId, 900, 4242, 2, std::string(64, 'd')), first.string());
+		if (!ScenarioRunner::HasPendingLockstepWorldSegment() || ScenarioRunner::GetPendingLockstepWorldSegmentTick() != 900) {
+			*error = "world-segment-roll-missed: arming the first segment left no pending segment on tick 900";
+			return false;
+		}
+		if (ScenarioRunner::IsLockstepReplayRecording()) {
+			*error = "world-segment-roll-missed: the armed recording was still open while the segment waited";
+			return false;
+		}
+		if (!ScenarioRunner::SealLockstepWorldSegment(std::string(64, 'd'), error)) return false;
+		if (!ScenarioRunner::IsLockstepReplayRecording() || ScenarioRunner::GetLockstepWorldSegment().tick != 900) {
+			*error = "world-segment-roll-missed: the sealed segment did not open on checkpoint 900";
+			return false;
+		}
+		std::error_code ignored;
+		if (!std::filesystem::is_regular_file(first, ignored)) {
+			*error = "world-segment-roll-missed: no segment file was written at " + first.string();
+			return false;
+		}
+
+		// The second capture rolls: segment one is closed here, segment two is named for tick 1800.
+		ScenarioRunner::ArmLockstepWorldSegment(MakeSegmentHeader(worldId, 1800, 4242, 2, std::string(64, 'e')), second.string());
+		if (!ScenarioRunner::SealLockstepWorldSegment(std::string(64, 'e'), error)) return false;
+		if (ScenarioRunner::GetLockstepWorldSegment().tick != 1800) {
+			*error = "world-segment-roll-missed: the second segment stands on tick " +
+			         std::to_string(ScenarioRunner::GetLockstepWorldSegment().tick) + ", the checkpoint is 1800";
+			return false;
+		}
+		ScenarioRunner::CloseLockstepReplayRecord();
+		NetMatchReplayReader reader;
+		if (!reader.Open(second.string(), error)) return false;
+		if (!reader.HasWorldSegment() || reader.GetWorldSegment().tick != 1800 || reader.GetWorldSegment().worldDigest != std::string(64, 'e')) {
+			*error = "world-segment-roll-missed: the second segment's header does not name checkpoint 1800";
+			return false;
+		}
+		reader.Close();
+
+		// Retention keeps one checkpoint here, so the segment of the dropped one goes with its archive.
+		const size_t previousKept = AutosaveStore::RetainedAutosaves();
+		AutosaveStore::SetRetainedAutosaves(1);
+		std::string writeError;
+		if (!WriteWorldCheckpointArchive(scratch.store, WorldCheckpointDescriptor(worldId, 900, 4242, config), &writeError) ||
+		    !WriteWorldCheckpointArchive(scratch.store, WorldCheckpointDescriptor(worldId, 1800, 4242, config), &writeError)) {
+			AutosaveStore::SetRetainedAutosaves(previousKept);
+			*error = writeError;
+			return false;
+		}
+		scratch.Note(AutosaveStore::ArchivePath(scratch.store, worldId, 900));
+		scratch.Note(AutosaveStore::ArchivePath(scratch.store, worldId, 1800));
+		AutosaveStore::ApplyRetention(scratch.store, worldId, AutosaveStore::c_NoPinnedTick);
+		AutosaveStore::SetRetainedAutosaves(previousKept);
+		if (std::filesystem::is_regular_file(first, ignored)) {
+			*error = "world-segment-outlived-its-checkpoint: " + first.string() + " is still there after its archive was dropped";
+			return false;
+		}
+		if (!std::filesystem::is_regular_file(second, ignored)) {
+			*error = "world-segment-dropped-with-a-kept-checkpoint: " + second.string() + " went with a checkpoint that was kept";
+			return false;
+		}
+		return true;
+	}
+
+	// (c) The playback staging: the checkpoint the segment names, the manifest's own side state, and the
+	// four refusals, each with the words the player is shown.
+	bool TestWorldSegmentPlaybackStandsOnTheCheckpoint(std::string* error) {
+		if (!GetNetAuthCrypto().IsRealCrypto()) {
+			std::cout << "[net-world-segment-playback-selftest] skipped: this build has no real crypto to seal an admission with" << std::endl;
+			return true;
+		}
+		WorldRestartScratch scratch;
+		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000c4";
+		const NetMatchConfig config = MakeStoredWorldConfig(worldId);
+		const std::string digest(64, 'd');
+		const NetWorldSegmentHeader header = MakeSegmentHeader(worldId, 900, 4242, 2, digest);
+
+		// Nothing on disk yet: the segment is refused by name.
+		const NetMatchService::WorldSegmentPlayback missing =
+			NetMatchService::PrepareWorldSegmentPlayback(scratch.store, header, config, 901);
+		if (missing.refusal != "segment refused: checkpoint 900 of world " + worldId + " is not on this machine") {
+			*error = "world-segment-playback-admitted-a-missing-checkpoint: the refusal was \"" + missing.refusal + "\"";
+			return false;
+		}
+
+		NetMatchService writer;
+		std::array<uint8_t, 32> key{};
+		if (!RowRestartKey(writer, scratch.store, key, error)) return false;
+		if (!PublishWorldCheckpoint(scratch.store, worldId, 900, 4242, config, key, 3, error)) return false;
+		scratch.Note(worldId, 900);
+
+		const NetMatchService::WorldSegmentPlayback wrongDigest =
+			NetMatchService::PrepareWorldSegmentPlayback(scratch.store, MakeSegmentHeader(worldId, 900, 4242, 2, std::string(64, 'f')), config, 901);
+		if (wrongDigest.refusal != "segment refused: checkpoint 900 of world " + worldId + " digest differs") {
+			*error = "world-segment-playback-admitted-another-world: the refusal was \"" + wrongDigest.refusal + "\"";
+			return false;
+		}
+		const NetMatchService::WorldSegmentPlayback wrongStart =
+			NetMatchService::PrepareWorldSegmentPlayback(scratch.store, header, config, 950);
+		if (wrongStart.refusal != "segment refused: its first frame 950 is not the tick after checkpoint 900 of world " + worldId) {
+			*error = "world-segment-playback-started-off-the-checkpoint: the refusal was \"" + wrongStart.refusal + "\"";
+			return false;
+		}
+
+		const NetMatchService::WorldSegmentPlayback staged =
+			NetMatchService::PrepareWorldSegmentPlayback(scratch.store, header, config, 901);
+		if (!staged.refusal.empty()) {
+			*error = "world-segment-playback-refused-its-own-checkpoint: " + staged.refusal;
+			return false;
+		}
+		if (staged.startFrame != 901 || staged.checkpoint.savedTick != 900 || staged.manifest.roundId != 4242) {
+			*error = "world-segment-playback-stood-on-the-wrong-tick: start " + std::to_string(staged.startFrame) +
+			         ", checkpoint " + std::to_string(staged.checkpoint.savedTick) + ", round " + std::to_string(staged.manifest.roundId);
+			return false;
+		}
+		const AutosaveSideState expected = WorldSideStateFixture();
+		if (staged.manifest.sideState != expected) {
+			*error = "world-segment-playback-lost-the-side-state: the manifest's owners did not read back";
+			return false;
+		}
+		if (staged.resumeState.savedTick != 900 || staged.resumeState.sourceRound != 4242 || staged.resumeState.rewindMatchId != worldId) {
+			*error = "world-segment-playback-lost-the-side-state: the resume state stands on tick " +
+			         std::to_string(staged.resumeState.savedTick) + " of round " + std::to_string(staged.resumeState.sourceRound);
+			return false;
+		}
+		if (staged.resumeState.controlOwners != std::map<int64_t, uint8_t>{{101, 2}} ||
+		    staged.resumeState.appliedCommands != std::map<uint8_t, uint64_t>{{2, 10}}) {
+			*error = "world-segment-playback-lost-the-side-state: the resume state carries neither owner 101->2 nor applied 2->10";
+			return false;
+		}
+
+		// The manifest is what makes a checkpoint resumable: without it the segment is refused too.
+		std::error_code ignored;
+		std::filesystem::remove(AutosaveStore::ManifestPath(scratch.store, worldId, 900), ignored);
+		const NetMatchService::WorldSegmentPlayback noManifest =
+			NetMatchService::PrepareWorldSegmentPlayback(scratch.store, header, config, 901);
+		if (noManifest.refusal.rfind("segment refused: checkpoint 900 of world " + worldId + " has no restart manifest", 0) != 0) {
+			*error = "world-segment-playback-admitted-a-manifestless-checkpoint: the refusal was \"" + noManifest.refusal + "\"";
+			return false;
+		}
+		return true;
+	}
+
+	// (d) The heal cap as a window: three inside it refuse the fourth, one outside is allowed, and a
+	// round resumed from an older checkpoint starts the window again.
+	bool TestHealCapIsAWindow(std::string* error) {
+		constexpr long long rate = 60;
+		const long long window = NetMatchHealWindow::c_WindowSeconds * rate;
+		if (window != 36000) {
+			*error = "heal-window-changed: the window is " + std::to_string(window) + " ticks, ten minutes at 60 Hz is 36000";
+			return false;
+		}
+		NetMatchHealWindow heals;
+		for (const long long at: {0LL, 100LL, 200LL}) {
+			if (!heals.Allowed(at, rate)) {
+				*error = "heal-window-refused-the-first-three: the heal at tick " + std::to_string(at) + " was refused";
+				return false;
+			}
+			heals.Note(at, rate);
+		}
+		if (heals.Allowed(300, rate) || heals.InWindow() != 3 || heals.Total() != 3) {
+			*error = "heal-window-admitted-a-fourth: three heals inside the window did not cap the fourth";
+			return false;
+		}
+		// An ordinary match never reaches the window's edge, so its behaviour is the old one exactly.
+		if (heals.Allowed(35999, rate)) {
+			*error = "heal-window-admitted-a-fourth: a fourth heal one tick inside the window was allowed";
+			return false;
+		}
+		if (!heals.Allowed(36200, rate) || heals.InWindow() != 0) {
+			*error = "heal-window-refused-a-heal-outside-it: the window still held three heals 36200 ticks on";
+			return false;
+		}
+		heals.Note(36200, rate);
+		// A resumed round stands on an older checkpoint, so its sim time is behind the newest heal.
+		NetMatchHealWindow resumed;
+		for (const long long at: {0LL, 100LL, 200LL}) resumed.Note(at, rate);
+		if (!resumed.Allowed(50, rate) || resumed.InWindow() != 0 || resumed.Total() != 3) {
+			*error = "heal-window-survived-a-resumed-round: a round resumed behind the newest heal kept " +
+			         std::to_string(resumed.InWindow()) + " heals";
+			return false;
+		}
+		return true;
+	}
+
+	// (e) The browser row: a world reads its boot, state, seats and watchers; an ordinary row does not move.
+	bool TestBrowserWorldRowText(std::string* error) {
+		NetDirectoryLocalIdentity local;
+		local.networkProtocolVersion = 11;
+		local.lockstepCodecVersion = 12;
+		local.controllerFrameVersion = 13;
+		local.sessionIdentityHash = std::string(64, '1');
+		local.moduleManifestHash = std::string(64, '2');
+
+		NetDirectorySessionRow world;
+		world.name = "Vault";
+		world.activity = "Persistent World";
+		world.mode = "PvP";
+		world.peerCount = 4;
+		world.seatsFree = 1;
+		world.networkProtocolVersion = local.networkProtocolVersion;
+		world.lockstepCodecVersion = local.lockstepCodecVersion;
+		world.controllerFrameVersion = local.controllerFrameVersion;
+		world.sessionIdentityHash = local.sessionIdentityHash;
+		world.moduleManifestHash = local.moduleManifestHash;
+		world.listenPort = 42124;
+		world.listenAddrs = {"10.0.0.4"};
+		world.joinMode = "ip";
+		world.sessionId = "aaaaaaaa-0000-0000-0000-0000000000e4";
+		world.state = "running";
+		world.persistentWorld = true;
+		world.worldId = world.sessionId;
+		world.worldBoot = 3;
+		world.spectatorFree = 2;
+		world.spectatorMax = 16;
+
+		NetDirectorySessionRow ordinary = world;
+		ordinary.name = "Duel";
+		ordinary.activity = "P4 Alpha Duel";
+		ordinary.persistentWorld = false;
+		ordinary.worldId.clear();
+		ordinary.worldBoot = 0;
+		ordinary.spectatorFree = 0;
+		ordinary.spectatorMax = 0;
+		ordinary.sessionId = "aaaaaaaa-0000-0000-0000-0000000000e5";
+
+		const std::vector<NetDirectoryClient::GameRow> rows = NetDirectoryClient::MergeGameLists({}, {world, ordinary}, local, &local);
+		if (rows.size() != 2) {
+			*error = "browser-world-row-missing: the merge produced " + std::to_string(rows.size()) + " rows, not 2";
+			return false;
+		}
+		const std::string worldText = NetDirectoryClient::DescribeGameRow(rows[0]);
+		const std::string expectedWorld = "[NET] Vault - World - boot 3 - running - seats 3/4 - watchers 2/16 - joinable";
+		if (worldText != expectedWorld) {
+			*error = "browser-world-row-text-changed: the row reads \"" + worldText + "\", it must read \"" + expectedWorld + "\"";
+			return false;
+		}
+		const std::string ordinaryText = NetDirectoryClient::DescribeGameRow(rows[1]);
+		const std::string expectedOrdinary = "[NET] Duel - P4 Alpha Duel (3/4) 10.0.0.4:42124";
+		if (ordinaryText != expectedOrdinary) {
+			*error = "browser-ordinary-row-text-changed: the row reads \"" + ordinaryText + "\", it must read \"" + expectedOrdinary + "\"";
+			return false;
+		}
+		// A refused world keeps the refusal the list has always shown, in place of "joinable".
+		NetDirectorySessionRow refused = world;
+		refused.moduleManifestHash = std::string(64, '3');
+		const std::vector<NetDirectoryClient::GameRow> refusedRows = NetDirectoryClient::MergeGameLists({}, {refused}, local, &local);
+		const std::string refusedText = NetDirectoryClient::DescribeGameRow(refusedRows.front());
+		const std::string expectedRefused = "[NET] Vault - World - boot 3 - running - seats 3/4 - watchers 2/16 [modules]";
+		if (refusedText != expectedRefused) {
+			*error = "browser-world-row-text-changed: a refused world reads \"" + refusedText + "\", it must read \"" + expectedRefused + "\"";
+			return false;
+		}
+		return true;
+	}
+
 	int RunNamed(const char* name) {
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -4264,6 +4639,31 @@ namespace RTE {
 			std::string error;
 			return TestWorldReturnWatchKeysOnWorldId(&error) ? 0 : Fail(error);
 		}
+		if (std::strcmp(name, "segment") == 0 || std::strcmp(name, "-net-world-segment-selftest") == 0) {
+			s_FailTag = "net-world-segment-selftest";
+			std::string error;
+			return TestWorldSegmentHeaderRoundTrips(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "segment-roll") == 0 || std::strcmp(name, "-net-world-segment-roll-selftest") == 0) {
+			s_FailTag = "net-world-segment-roll-selftest";
+			std::string error;
+			return TestWorldRecorderRollsAtCheckpoint(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "segment-playback") == 0 || std::strcmp(name, "-net-world-segment-playback-selftest") == 0) {
+			s_FailTag = "net-world-segment-playback-selftest";
+			std::string error;
+			return TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "heal-window") == 0 || std::strcmp(name, "-net-world-heal-window-selftest") == 0) {
+			s_FailTag = "net-world-heal-window-selftest";
+			std::string error;
+			return TestHealCapIsAWindow(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "browser-row") == 0 || std::strcmp(name, "-net-world-browser-row-selftest") == 0) {
+			s_FailTag = "net-world-browser-row-selftest";
+			std::string error;
+			return TestBrowserWorldRowText(&error) ? 0 : Fail(error);
+		}
 		return Fail(std::string("unknown world-join case ") + name);
 	}
 
@@ -4402,6 +4802,11 @@ namespace RTE {
 			if (!TestWorldFreshFlagOpensNewRound(&error)) return Fail(error);
 			if (!TestWorldCleanStopWritesFinalCheckpoint(&error)) return Fail(error);
 			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
+			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);
+			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
+			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
+			if (!TestHealCapIsAWindow(&error)) return Fail(error);
+			if (!TestBrowserWorldRowText(&error)) return Fail(error);
 		}
 		return Pass();
 	}
