@@ -174,6 +174,8 @@ namespace RTE {
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
 			next.m_DropOwnershipContext = m_DropOwnershipContext;
+			next.m_SeatSimIdentitySource = m_SeatSimIdentitySource;
+			next.m_SeatSimIdentityContext = m_SeatSimIdentityContext;
 			// A whole plane replaces this one, so the revision may not fall back to the import's zero:
 			// it carries on from ours, one step past the state a caller last saw.
 			const uint64_t revision = m_StateRevision + 1;
@@ -374,6 +376,21 @@ namespace RTE {
 	void NetReconnectHost::SetDropOwnershipSource(std::vector<NetH4LedgerActor> (*source)(void*), void* context) {
 		m_DropOwnershipSource = source;
 		m_DropOwnershipContext = context;
+	}
+
+	void NetReconnectHost::SetSeatSimIdentitySource(NetH4SeatSimIdentity (*source)(void*, uint16_t), void* context) {
+		m_SeatSimIdentitySource = source;
+		m_SeatSimIdentityContext = context;
+	}
+
+	NetH4SeatSimIdentity NetReconnectHost::SimIdentityOfSeat(const NetH4Seat& seat) const {
+		if (m_SeatSimIdentitySource != nullptr) {
+			const NetH4SeatSimIdentity world = m_SeatSimIdentitySource(m_SeatSimIdentityContext, seat.stableSeat);
+			if (world.fromWorldSlot) {
+				return world;
+			}
+		}
+		return {seat.lockstepPeerId, seat.team, false};
 	}
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindSeat(uint16_t stableSeat) {
@@ -881,13 +898,14 @@ namespace RTE {
 			m_PendingReclaims.erase(pending);
 		}
 		++m_Stats.reclaimsAccepted;
-		if (NetA7Journal::Enabled()) NetA7Journal::Session("reclaim", nowMs, {{"stable_seat", seat->seat.stableSeat}, {"peer_id", seat->seat.lockstepPeerId},
+		if (NetA7Journal::Enabled()) NetA7Journal::Session("reclaim", nowMs, {{"stable_seat", seat->seat.stableSeat}, {"peer_id", SimIdentityOfSeat(seat->seat).peerId},
 			{"incarnation", seat->incarnation}, {"holder_generation", seat->holderGeneration}}, "NetReconnectHost::nowMs");
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, supersededConnection, true});
 		Send(connection, committed);
 		if (!m_MatchEnded) {
 			IssueReseat(*seat);
-			QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Reclaimed);
+			// The coordinator resolves the hold by the sim id the returner plays, not by its seat's.
+			QueueHoldResolution(SimIdentityOfSeat(seat->seat).peerId, NetHoldResolution::Reclaimed);
 		}
 	}
 
@@ -976,17 +994,19 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::RecordDrop(SeatState& seat, uint64_t frame) {
+		// The ledger names the id this holder played on, which for a promoted world member is its slot.
+		const NetH4SeatSimIdentity sim = SimIdentityOfSeat(seat.seat);
 		std::vector<int64_t> owned;
 		if (m_DropOwnershipSource != nullptr) {
-			owned = NetReconnectLedger::CollectOwnedActorUIDs(m_DropOwnershipSource(m_DropOwnershipContext), seat.seat.lockstepPeerId);
+			owned = NetReconnectLedger::CollectOwnedActorUIDs(m_DropOwnershipSource(m_DropOwnershipContext), sim.peerId);
 		}
-		m_Ledger.RecordDrop(seat.seat.stableSeat, seat.seat.lockstepPeerId, seat.seat.team, frame, std::move(owned));
+		m_Ledger.RecordDrop(seat.seat.stableSeat, sim.peerId, sim.team, frame, std::move(owned));
 		NoteStateChanged();
 		++m_Stats.ledgerDropsRecorded;
 		if (NetA7Journal::Enabled()) {
 			const auto* ledger = m_Ledger.Find(seat.seat.stableSeat);
 			if (!ledger || ledger->droppedAtFrame != frame) NetA7Journal::Gap("drop has no current-frame ledger observation");
-			else NetA7Journal::Session("drop", m_NowMs, {{"stable_seat", seat.seat.stableSeat}, {"peer_id", seat.seat.lockstepPeerId},
+			else NetA7Journal::Session("drop", m_NowMs, {{"stable_seat", seat.seat.stableSeat}, {"peer_id", sim.peerId},
 				{"frame", frame}, {"reason", "connection lost"}, {"ledger_uids", ledger->actorUIDs}}, "NetReconnectHost::m_NowMs");
 		}
 	}
@@ -1193,6 +1213,8 @@ namespace RTE {
 	}
 
 	void NetReconnectHost::IssueReseat(const SeatState& seat) {
+		// The returner is put back on the id it played, not on the one its admission seat names.
+		const NetH4SeatSimIdentity sim = SimIdentityOfSeat(seat.seat);
 		const NetH4SeatOwnership* record = m_Ledger.Find(seat.seat.stableSeat);
 		if (record == nullptr || record->actorUIDs.empty()) {
 			// The drop recorded nothing, so the returner is reseated onto nothing. That is a fault, and
@@ -1226,8 +1248,8 @@ namespace RTE {
 			return;
 		}
 		NetGameReseat reseat;
-		reseat.team = seat.seat.team;
-		reseat.newOwnerPeerId = seat.seat.lockstepPeerId;
+		reseat.team = sim.team;
+		reseat.newOwnerPeerId = sim.peerId;
 		reseat.actorUIDs = std::move(restored);
 		m_PendingReseats.push_back(std::move(reseat));
 		++m_Stats.reseatsIssued;
@@ -1752,7 +1774,7 @@ namespace RTE {
 		// §8: the substitute receives the ledgered ownership from resumed tick 1, through the same
 		// system-authored reseat a returning holder gets.
 		IssueReseat(*seat);
-		QueueHoldResolution(seat->seat.lockstepPeerId, NetHoldResolution::Substituted);
+		QueueHoldResolution(SimIdentityOfSeat(seat->seat).peerId, NetHoldResolution::Substituted);
 		m_Substitutions.erase(m_Substitutions.begin() + static_cast<std::ptrdiff_t>(index));
 		DropApplicantsFor(connection);
 	}
@@ -1965,15 +1987,16 @@ namespace RTE {
 			if (seat.dropped && !seat.holdExpired && nowMs >= seat.droppedAtMs && nowMs - seat.droppedAtMs > c_ProvisionalExpiryMs) {
 				seat.holdExpired = true;
 				++m_Stats.seatHoldsExpired;
-				QueueHoldResolution(seat.seat.lockstepPeerId, NetHoldResolution::Expired);
+				QueueHoldResolution(SimIdentityOfSeat(seat.seat).peerId, NetHoldResolution::Expired);
 			}
 		}
 		m_TxCache.Expire(nowMs);
 	}
 
 	bool NetReconnectHost::IsSeatHeldForReclaim(uint8_t lockstepPeerId) const {
-		return std::any_of(m_Seats.begin(), m_Seats.end(), [lockstepPeerId](const SeatState& seat) {
-			return seat.seat.lockstepPeerId == lockstepPeerId && seat.committed && !seat.closed && !seat.holdExpired;
+		// The coordinator asks by the id it runs the sim on, so the answer is read off the same binding.
+		return std::any_of(m_Seats.begin(), m_Seats.end(), [&](const SeatState& seat) {
+			return SimIdentityOfSeat(seat.seat).peerId == lockstepPeerId && seat.committed && !seat.closed && !seat.holdExpired;
 		});
 	}
 

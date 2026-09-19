@@ -9,6 +9,7 @@
 #include "NetMatchConfig.h"
 #include "NetReconnectAdmission.h"
 #include "NetReconnectSession.h"
+#include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
 #include "NetDirectoryClient.h"
 #include "NetLobbySession.h"
@@ -3388,6 +3389,220 @@ namespace RTE {
 		return 0;
 	}
 
+	// A promoted member owns 501 on the slot it plays; 601 sits on the id its own seat names, and 701
+	// belongs to a member whose seat and slot agree.
+	std::vector<NetH4LedgerActor> PromotedWorldCensus(void*) {
+		return {{501, 0, 2, true}, {601, 0, 4, true}, {701, 1, 3, true}};
+	}
+
+	// A promoted member's drop and reclaim name the slot it plays on, not the id its seat table names.
+	int TestWorldPromotedSeatDropsAndReseatsItsSlot() {
+		ScriptedAuthCrypto crypto;
+		ScopedTestCrypto scope(&crypto);
+		const NetH4Identity identity = MakeH4Identity();
+		// Three joinable seats over a two-slot world, so the third player watches until a slot frees.
+		const std::vector<NetH4Seat> seats = {{0, 0, 0, false, 1, true}, {1, 1, 0, false, 2, false},
+		                                      {2, 2, 1, false, 3, false}, {3, 3, 0, false, 4, false}};
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) {
+			return Fail("promoted-drop-named-the-seats-id: the registry did not arm");
+		}
+		NetReconnectHost admission;
+		admission.Configure(&registry, 0x5749ULL, identity);
+		admission.SetSeatTable(seats, NetMatchMode::PvPSkirmish);
+		admission.SetLiveMatch(true);
+		admission.SetPersistentWorld(true);
+		admission.SetDropOwnershipSource(&PromotedWorldCensus, nullptr);
+		NetH4TicketOffer aliceOffer;
+		NetH4TicketOffer bobOffer;
+		NetH4TicketOffer daveOffer;
+		if (!CommitWorldSeat(admission, identity, 61, "alice", aliceOffer) ||
+		    !CommitWorldSeat(admission, identity, 62, "bob", bobOffer) ||
+		    !CommitWorldSeat(admission, identity, 63, "dave", daveOffer)) {
+			return Fail("promoted-drop-named-the-seats-id: the fixture could not seat three players");
+		}
+		NetWorldJoinHost world;
+		std::string error;
+		if (!world.Configure(MakeTwoSeatWorld(), MakeIdentity(), &error)) {
+			return Fail("promoted-drop-named-the-seats-id: the world plane refused its config (" + error + ")");
+		}
+		// The production wiring: the admission plane reads the world plane's seat-to-slot binding and
+		// has no other way to learn what a member plays on.
+		admission.SetSeatSimIdentitySource([](void* context, uint16_t stableSeat) {
+			return NetMatchService::WorldSimIdentityOfSeat(static_cast<const NetWorldJoinHost*>(context)->Membership(), stableSeat);
+		}, &world);
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 400;
+		image.bytes = 32;
+		image.digest = "d";
+		world.PublishImage(image);
+		if (!world.BeginJoin(61, aliceOffer.stableSeat, "alice", 1000, &error) ||
+		    !world.BeginJoin(62, bobOffer.stableSeat, "bob", 1010, &error) ||
+		    !world.BeginJoin(63, daveOffer.stableSeat, "dave", 1020, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: the world refused a join (" + error + ")");
+		}
+		uint64_t aliceE = 0;
+		if (!world.NoteTransferComplete(61, 32, &error) || !world.NoteTransferStarted(63, 7, 1, 400) ||
+		    !world.NoteCatchUpProgress(61, 400, 1, 1, 440, &aliceE, &error) || aliceE == 0 ||
+		    !world.NoteCatchUpProgress(61, aliceE - 1, 1, 1, aliceE - 1, nullptr, &error) ||
+		    !world.CompleteActivation(61, aliceE - 1, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: alice never reached Active (" + error + ")");
+		}
+		uint64_t daveWatchE = 0;
+		if (!world.ScheduleSpectatorActivation(63, aliceE, &daveWatchE, &error) || daveWatchE == 0 ||
+		    !world.CompleteActivation(63, daveWatchE, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: dave never reached his stream (" + error + ")");
+		}
+		// Alice leaves and dave is promoted onto her slot, keeping his own H4 seat.
+		NetH4LeaveRequest departure;
+		departure.txId.fill(43);
+		departure.epoch = aliceOffer.epoch;
+		departure.stableSeat = aliceOffer.stableSeat;
+		departure.holderGeneration = aliceOffer.holderGeneration;
+		admission.HandleMessage(61, departure, 10);
+		admission.TakeOutbound();
+		NetMatchService::WorldCleanLeave leave;
+		if (!NetMatchService::FindWorldCleanLeave(admission.GetSeatStatuses(), world, leave) ||
+		    !world.Membership().Release(leave.peerId, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: the clean leave did not free a slot (" + error + ")");
+		}
+		world.CancelJoin(leave.connection, "clean leave");
+		world.NoteSentInputThrough(daveWatchE + 40);
+		uint64_t promotedAt = 0;
+		NetPeerId promoted = c_InvalidNetPeerId;
+		if (!world.PromoteWaitingSpectator(daveWatchE + 50, &promotedAt, &promoted, &error) || promoted != 63 ||
+		    !world.NoteCatchUpProgress(63, promotedAt - 1, 1, 1, promotedAt - 1, nullptr, &error) ||
+		    !world.CompleteActivation(63, promotedAt - 1, &error)) {
+			return Fail("promoted-drop-named-the-seats-id: dave was not promoted into the freed slot (" + error + ")");
+		}
+		const NetWorldJoinSession* seated = world.FindSession(63);
+		if (seated == nullptr || seated->assignedPeerId != 2 || seated->stableSeat != daveOffer.stableSeat) {
+			return Fail("promoted-drop-named-the-seats-id: dave does not hold the freed slot");
+		}
+		const uint8_t playedSlot = seated->assignedPeerId;
+		uint8_t daveSeatLockstep = 0;
+		for (const NetH4Seat& seat: seats) {
+			if (seat.stableSeat == daveOffer.stableSeat) {
+				daveSeatLockstep = seat.lockstepPeerId;
+			}
+		}
+		if (daveSeatLockstep == playedSlot) {
+			return Fail("promoted-drop-named-the-seats-id: the fixture did not produce a promotee whose seat names another id");
+		}
+		// The binding answers before anything drops, and it is the world plane that answers.
+		const NetH4SeatSimIdentity bound = NetMatchService::WorldSimIdentityOfSeat(world.Membership(), daveOffer.stableSeat);
+		if (!bound.fromWorldSlot || bound.peerId != playedSlot || bound.team != 0) {
+			return Fail("promoted-drop-named-the-seats-id: the seat-to-slot binding reads peer " +
+			            std::to_string(static_cast<int>(bound.peerId)) + " team " + std::to_string(bound.team) +
+			            " while the member plays slot " + std::to_string(static_cast<int>(playedSlot)));
+		}
+		// His transport dies at the frame he was activated on.
+		admission.NotifyDisconnect(63, promotedAt);
+		const NetH4SeatOwnership* record = admission.GetLedger().Find(daveOffer.stableSeat);
+		if (record == nullptr) {
+			return Fail("promoted-drop-named-the-seats-id: the drop ledgered nothing for the promoted seat");
+		}
+		if (record->peerId != playedSlot) {
+			return Fail("promoted-drop-named-the-seats-id: the drop ledgered peer " +
+			            std::to_string(static_cast<int>(record->peerId)) + " while the member plays slot " +
+			            std::to_string(static_cast<int>(playedSlot)));
+		}
+		if (record->team != 0) {
+			return Fail("promoted-drop-named-the-seats-id: the drop ledgered team " + std::to_string(record->team) +
+			            " while the slot it plays is team 0");
+		}
+		if (record->actorUIDs.size() != 1 || record->actorUIDs.front() != 501) {
+			std::string named;
+			for (const int64_t uid: record->actorUIDs) {
+				named += (named.empty() ? "" : ",") + std::to_string(uid);
+			}
+			return Fail("promoted-drop-took-the-wrong-actors: the drop recorded {" + named + "} instead of the slot's 501");
+		}
+		// The round waits on the id the member plays, and on nothing else.
+		if (!admission.IsSeatHeldForReclaim(playedSlot)) {
+			return Fail("promoted-fence-missed-the-slot: no seat is held for slot " +
+			            std::to_string(static_cast<int>(playedSlot)) + ", which its dropped member plays");
+		}
+		if (admission.IsSeatHeldForReclaim(daveSeatLockstep)) {
+			return Fail("promoted-fence-held-a-stranger: a seat is held for lockstep " +
+			            std::to_string(static_cast<int>(daveSeatLockstep)) + ", which nobody plays");
+		}
+		// A member whose seat and slot agree ledgers exactly what it always did.
+		admission.NotifyDisconnect(62, promotedAt);
+		const NetH4SeatOwnership* plain = admission.GetLedger().Find(bobOffer.stableSeat);
+		if (plain == nullptr || plain->peerId != 3 || plain->team != 1 || plain->actorUIDs.size() != 1 ||
+		    plain->actorUIDs.front() != 701) {
+			return Fail("promoted-drop-moved-a-plain-seat: an unpromoted member's drop no longer ledgers its own id");
+		}
+		// He comes back on a new transport: the reseat hands the slot's actors to the slot's id.
+		admission.TakeOutbound();
+		(void)admission.TakePendingReseats();
+		(void)admission.TakePendingHoldResolutions();
+		NetH4Reclaim reclaim;
+		reclaim.txId.fill(0x71);
+		reclaim.epoch = daveOffer.epoch;
+		reclaim.stableSeat = daveOffer.stableSeat;
+		reclaim.holderGeneration = daveOffer.holderGeneration;
+		reclaim.identity = identity;
+		reclaim.displayName = "dave";
+		admission.HandleMessage(65, reclaim, 1500);
+		NetAuthBytes32 challenge{};
+		bool challenged = false;
+		for (const NetH4Outbound& outbound: admission.TakeOutbound()) {
+			if (const auto* issued = std::get_if<NetH4Challenge>(&outbound.payload)) {
+				challenge = issued->challenge;
+				challenged = true;
+			}
+		}
+		if (!challenged) {
+			return Fail("promoted-reseat-named-the-seats-id: the reclaim was never challenged");
+		}
+		NetH4Transcript transcript;
+		transcript.domain = NetH4ProofDomain::Reclaim;
+		transcript.protocolVersion = NetProtocol::c_Version;
+		transcript.epoch = daveOffer.epoch;
+		transcript.stableSeat = daveOffer.stableSeat;
+		transcript.holderGeneration = daveOffer.holderGeneration;
+		transcript.challenge = challenge;
+		transcript.clientNonce.fill(0x22);
+		NetH4Proof proof;
+		proof.txId = reclaim.txId;
+		proof.epoch = daveOffer.epoch;
+		proof.stableSeat = daveOffer.stableSeat;
+		proof.holderGeneration = daveOffer.holderGeneration;
+		proof.clientNonce = transcript.clientNonce;
+		if (!NetH4ComputeProof(daveOffer.credential, transcript, proof.mac)) {
+			return Fail("promoted-reseat-named-the-seats-id: the fixture could not compute the reclaim proof");
+		}
+		admission.HandleMessage(65, proof, 1510);
+		const std::vector<NetGameReseat> reseats = admission.TakePendingReseats();
+		if (reseats.size() != 1) {
+			return Fail("promoted-reseat-named-the-seats-id: the reclaim issued " + std::to_string(reseats.size()) +
+			            " reseats, not one");
+		}
+		if (reseats.front().newOwnerPeerId != playedSlot) {
+			return Fail("promoted-reseat-named-the-seats-id: the reseat hands the actors to peer " +
+			            std::to_string(static_cast<int>(reseats.front().newOwnerPeerId)) +
+			            " while the member plays slot " + std::to_string(static_cast<int>(playedSlot)));
+		}
+		if (reseats.front().team != 0 || reseats.front().actorUIDs.size() != 1 || reseats.front().actorUIDs.front() != 501) {
+			return Fail("promoted-reseat-took-the-wrong-actors: the reseat carries team " +
+			            std::to_string(reseats.front().team) + " and " + std::to_string(reseats.front().actorUIDs.size()) +
+			            " actors, not the slot's single 501");
+		}
+		const std::vector<NetHoldResolutionNotice> resolutions = admission.TakePendingHoldResolutions();
+		if (resolutions.size() != 1 || resolutions.front().lockstepPeerId != playedSlot ||
+		    resolutions.front().resolution != NetHoldResolution::Reclaimed) {
+			return Fail("promoted-reseat-resolved-the-wrong-hold: the round was told lockstep " +
+			            std::to_string(resolutions.empty() ? -1 : static_cast<int>(resolutions.front().lockstepPeerId)) +
+			            " came back, not slot " + std::to_string(static_cast<int>(playedSlot)));
+		}
+		return 0;
+	}
+
 	// A watcher and a member due at one frame: streaming the watcher leaves the member due, not skipped.
 	int TestDueSpectatorLeavesTheMemberDue() {
 		NetWorldJoinHost host;
@@ -5209,6 +5424,10 @@ namespace RTE {
 			s_FailTag = "net-world-reclaim-hold-selftest";
 			return TestWorldReclaimHoldFollowsTheSeatsSlot();
 		}
+		if (std::strcmp(name, "promoted-seat-id") == 0 || std::strcmp(name, "-net-world-promoted-seat-id-selftest") == 0) {
+			s_FailTag = "net-world-promoted-seat-id-selftest";
+			return TestWorldPromotedSeatDropsAndReseatsItsSlot();
+		}
 		if (std::strcmp(name, "release-control") == 0 || std::strcmp(name, "-net-world-release-control-selftest") == 0) {
 			s_FailTag = "net-world-release-control-selftest";
 			return TestWorldReleaseFreesTheDepartedBrain();
@@ -5416,6 +5635,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestWorldReclaimHoldFollowsTheSeatsSlot(); result != 0) {
+			return result;
+		}
+		if (const int result = TestWorldPromotedSeatDropsAndReseatsItsSlot(); result != 0) {
 			return result;
 		}
 		if (const int result = TestWorldReleaseFreesTheDepartedBrain(); result != 0) {

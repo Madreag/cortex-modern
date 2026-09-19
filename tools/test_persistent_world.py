@@ -108,6 +108,14 @@ RED_RECLAIM_HOLD_SLOT = "reclaim-hold-missed-the-slot"
 RED_RECLAIM_HOLD_WRONG_SLOT = "reclaim-hold-fenced-the-wrong-slot"
 RED_RECLAIM_HOLD_STRANGER = "reclaim-hold-let-a-stranger-in"
 RED_RECLAIM_HOLD_OWN_HOLDER = "reclaim-hold-refused-its-own-holder"
+RED_PROMOTED_DROP_SEAT_ID = "promoted-drop-named-the-seats-id"
+RED_PROMOTED_DROP_ACTORS = "promoted-drop-took-the-wrong-actors"
+RED_PROMOTED_DROP_PLAIN_SEAT = "promoted-drop-moved-a-plain-seat"
+RED_PROMOTED_FENCE_MISSED = "promoted-fence-missed-the-slot"
+RED_PROMOTED_FENCE_STRANGER = "promoted-fence-held-a-stranger"
+RED_PROMOTED_RESEAT_SEAT_ID = "promoted-reseat-named-the-seats-id"
+RED_PROMOTED_RESEAT_ACTORS = "promoted-reseat-took-the-wrong-actors"
+RED_PROMOTED_RESEAT_HOLD = "promoted-reseat-resolved-the-wrong-hold"
 RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
 RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
 RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
@@ -488,6 +496,21 @@ CASES = (
             RED_RECLAIM_HOLD_OWN_HOLDER,
         ),
         "pass_token": "[net-world-reclaim-hold-selftest] PASS",
+    },
+    {
+        "name": "promoted-seat-drops-and-reseats-its-slot",
+        "argv": ["-net-world-promoted-seat-id-selftest"],
+        "red": RED_PROMOTED_DROP_SEAT_ID,
+        "also_red": (
+            RED_PROMOTED_DROP_ACTORS,
+            RED_PROMOTED_DROP_PLAIN_SEAT,
+            RED_PROMOTED_FENCE_MISSED,
+            RED_PROMOTED_FENCE_STRANGER,
+            RED_PROMOTED_RESEAT_SEAT_ID,
+            RED_PROMOTED_RESEAT_ACTORS,
+            RED_PROMOTED_RESEAT_HOLD,
+        ),
+        "pass_token": "[net-world-promoted-seat-id-selftest] PASS",
     },
     {
         "name": "reclaim-outranks-a-fresh-join",
