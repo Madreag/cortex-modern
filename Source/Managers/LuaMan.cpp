@@ -1218,13 +1218,22 @@ local function birthId(ctx, value, what)
 end
 
 local function noteNode(ctx, id, text)
+	-- A node a reused chunk already carries is not written again; the chunk's bytes are the archive's.
+	if ctx.defined[id] then return end
 	if ctx.nodes[id] then
 		problem(ctx, "two objects share the node id " .. tostring(id))
 		return
 	end
 	ctx.nodes[id] = text
+	ctx.defined[id] = true
 	ctx.order[#ctx.order + 1] = id
 	ctx.count = ctx.count + 1
+end
+
+-- Naming a node in a chunk is what makes that chunk depend on the chunk that defines it.
+local function reference(ctx, id)
+	ctx.refs[id] = true
+	return reference(ctx, id)
 end
 
 -- Owned values are nodes, so two fields holding one Vector share it again after the restore.
@@ -1234,12 +1243,12 @@ local function userdataNode(value, ctx, payload)
 	ctx.ids[value] = id
 	local instance = _ScriptGraphInstance(value)
 	noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx))
-	return "#" .. outputNumber(id) .. ";"
+	return reference(ctx, id)
 end
 
 local function visitUserdata(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. outputNumber(id) .. ";" end
+	if id then return reference(ctx, id) end
 	local native = _ScriptGraphNative and { _ScriptGraphNative(value, ctx.paths[value] ~= nil) } or {}
 	local kind = native[1]
 	if kind == "copy" and native[6] then ctx.ownedPointers[native[6]] = value end
@@ -1279,7 +1288,7 @@ local function visitUserdata(value, ctx)
 			end
 		end
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(_ScriptGraphInstance(value), ctx))
-		return "#" .. outputNumber(id) .. ";"
+		return reference(ctx, id)
 	elseif kind == "gib-ref" then
 		local owner, index = _ScriptGraphGibOwner(value)
 		if not owner then problem(ctx, "a Gib whose owner is missing") return "z;" end
@@ -1287,7 +1296,7 @@ local function visitUserdata(value, ctx)
 		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";i" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
-		return "#" .. outputNumber(id) .. ";"
+		return reference(ctx, id)
 	elseif kind == "soundset-ref" then
 		local owner, index = _ScriptGraphSoundSetOwner(value)
 		if not owner then problem(ctx, "a SoundSet whose owner is missing") return "z;" end
@@ -1295,7 +1304,7 @@ local function visitUserdata(value, ctx)
 		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";j" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
-		return "#" .. outputNumber(id) .. ";"
+		return reference(ctx, id)
 	elseif kind == "limb-ref" then
 		local owner, index = _ScriptGraphLimbOwner(value)
 		if not owner then problem(ctx, "a LimbPath whose owning actor is missing") return "z;" end
@@ -1303,7 +1312,7 @@ local function visitUserdata(value, ctx)
 		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";l" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
-		return "#" .. outputNumber(id) .. ";"
+		return reference(ctx, id)
 	elseif kind == "entity" then
 		return userdataNode(value, ctx, "e" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
 	elseif kind == "activity" then
@@ -1320,7 +1329,7 @@ local function visitUserdata(value, ctx)
 		ctx.ids[value] = id
 		local instance = visit(_ScriptGraphInstance(value), ctx)
 		ctx.boxRefs[#ctx.boxRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], instance = instance }
-		return "#" .. outputNumber(id) .. ";"
+		return reference(ctx, id)
 	elseif kind == "preset" then
 		return userdataNode(value, ctx, "p" .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]))
 	elseif kind == "named" then
@@ -1349,7 +1358,7 @@ local function visitUserdata(value, ctx)
 			if not id then return "z;" end
 			ctx.ids[value] = id
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
-			return "#" .. outputNumber(id) .. ";"
+			return reference(ctx, id)
 		end
 		local owner, index, constant = _ScriptGraphLimbVectorOwner(value)
 		if owner then
@@ -1357,7 +1366,7 @@ local function visitUserdata(value, ctx)
 			if not id then return "z;" end
 			ctx.ids[value] = id
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
-			return "#" .. outputNumber(id) .. ";"
+			return reference(ctx, id)
 		end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
 		return "z;"
@@ -1372,7 +1381,7 @@ end
 	    R"lua(
 local function visitFunction(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. outputNumber(id) .. ";" end
+	if id then return reference(ctx, id) end
 	local path = ctx.paths[value]
 	local info = debug.getinfo(value, "Su")
 	if info.what == "C" then
@@ -1391,7 +1400,7 @@ local function visitFunction(value, ctx)
 				for _, argument in ipairs(range.args or {}) do fields[#fields + 1] = visit(argument, ctx) end
 			end
 			noteNode(ctx, id, concatenate(fields))
-			return "#" .. outputNumber(id) .. ";"
+			return reference(ctx, id)
 		end
 		for name, prototype in pairs(nativePrototypes) do
 			if _ScriptGraphSameNativeFunction(value, prototype) then
@@ -1405,7 +1414,7 @@ local function visitFunction(value, ctx)
 					upvalues[#upvalues + 1] = visitAt(upvalue, ctx, (ctx.location or "function") .. ".native_upvalue[" .. i .. "]")
 				end
 				noteNode(ctx, id, "B" .. outputNumber(id) .. ";" .. stringToken(name) .. "u" .. outputNumber(#upvalues) .. ";" .. concatenate(upvalues))
-				return "#" .. outputNumber(id) .. ";"
+				return reference(ctx, id)
 			end
 		end
 		if path then return pathToken(path) end
@@ -1444,16 +1453,17 @@ local function visitFunction(value, ctx)
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]"))
 			end
 		end
+		ctx.refs[cellId] = true
 		cells[#cells + 1] = "c" .. outputNumber(cellId) .. ";"
 	end
 	parts[#parts + 1] = "u" .. outputNumber(#cells) .. ";" .. concatenate(cells)
 	noteNode(ctx, id, "F" .. outputNumber(id) .. ";" .. concatenate(parts))
-	return "#" .. outputNumber(id) .. ";"
+	return reference(ctx, id)
 end
 
 local function visitTable(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. outputNumber(id) .. ";" end
+	if id then return reference(ctx, id) end
 	local path = ctx.paths[value]
 	if path and ctx.engine[value] then return pathToken(path) end
 	-- The table's birth number is its name in the archive, whoever walks it and whenever.
@@ -1473,12 +1483,12 @@ local function visitTable(value, ctx)
 	end
 	parts[#parts + 1] = "k" .. outputNumber(#keys) .. ";" .. concatenate(body)
 	noteNode(ctx, id, "T" .. outputNumber(id) .. ";" .. concatenate(parts))
-	return "#" .. outputNumber(id) .. ";"
+	return reference(ctx, id)
 end
 
 local function visitThread(value, ctx)
 	local id = ctx.ids[value]
-	if id then return "#" .. outputNumber(id) .. ";" end
+	if id then return reference(ctx, id) end
 	local desc, message = nil, "no coroutine codec"
 	if _ScriptGraphThreadCapture then desc, message = _ScriptGraphThreadCapture(value) end
 	if not desc then
@@ -1498,7 +1508,7 @@ local function visitThread(value, ctx)
 		else entries[#entries + 1] = "V" .. visitAt(desc.slots[i], ctx, (ctx.location or "coroutine") .. ".slot[" .. i .. "]") end
 	end
 	noteNode(ctx, id, "H" .. outputNumber(id) .. ";" .. letter .. ";" .. outputNumber(desc.first) .. ";" .. outputNumber(desc.base) .. ";" .. outputNumber(desc.top) .. ";" .. concatenate(entries))
-	return "#" .. outputNumber(id) .. ";"
+	return reference(ctx, id)
 end
 
 visit = function(value, ctx)
@@ -1516,24 +1526,65 @@ visit = function(value, ctx)
 	return "z;"
 end
 
+-- What the last capture wrote, per root, so a root nothing wrote to is copied instead of walked.
+local graphCache = nil
+
 -- roots: { [uidString] = instanceTable }. Returns the text and the list of problems (any problem means the capture is unfaithful).
-local function serializeGraph(roots)
+local serializeGraph
+serializeGraph = function(roots, rebuildEverything)
 	-- The capture opens before it allocates anything of its own, so its scratch never moves the counter.
 	if _ScriptGraphBeginCapture then _ScriptGraphBeginCapture() end
 	-- Every table alive now was born at or below this; nodes without a birth number are named above it.
 	local base = _ScriptGraphStateSerial()
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	local paths, engine = buildPaths(baseline)
-	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, base = base, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local rootIds = {}
 	local uids = {}
 	for uid in pairs(roots) do uids[#uids + 1] = uid end
 	table.sort(uids, function(a, b) return tonumber(a) < tonumber(b) end)
+	-- A root is serialized again only when the write barrier saw one of its tables move.
+	local dirt = (not rebuildEverything) and _ScriptGraphDirtyRoots and _ScriptGraphDirtyRoots() or nil
+	local cache = (dirt and dirt.walked and not dirt.unknown and graphCache and graphCache.base) and graphCache or nil
+	local reused, rewritten = 0, 0
 	for _, uid in ipairs(uids) do
-		if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot(uid) end
-		rootIds[#rootIds + 1] = stringToken(uid) .. visitAt(roots[uid], ctx, "object[" .. uid .. "]")
+		local key = tostring(tonumber(uid) or uid)
+		local kept = cache and not (dirt.roots[uid] or dirt.roots[key]) and cache.chunks[uid] or nil
+		if kept then
+			ctx.chunks[#ctx.chunks + 1] = kept.text
+			for _, id in ipairs(kept.order) do ctx.defined[id] = true end
+			for id, value in pairs(kept.values) do ctx.ids[value] = id end
+			for id in pairs(kept.refs) do ctx.refs[id] = true end
+			ctx.count = ctx.count + #kept.order
+			ctx.cachedChunks = ctx.cachedChunks or {}
+			ctx.cachedChunks[uid] = kept
+			rootIds[#rootIds + 1] = kept.token
+			reused = reused + 1
+		else
+			if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot(uid) end
+			local firstNode = #ctx.order + 1
+			local rootRefs = {}
+			local outerRefs = ctx.refs
+			ctx.refs = rootRefs
+			local token = stringToken(uid) .. visitAt(roots[uid], ctx, "object[" .. uid .. "]")
+			ctx.refs = outerRefs
+			local chunk, order = {}, {}
+			for index = firstNode, #ctx.order do
+				local id = ctx.order[index]
+				order[#order + 1] = id
+				chunk[#chunk + 1] = ctx.nodes[id]
+			end
+			for id in pairs(rootRefs) do ctx.refs[id] = true end
+			ctx.chunks[#ctx.chunks + 1] = concatenate(chunk)
+			ctx.written = ctx.written or {}
+			ctx.written[uid] = { token = token, order = order, refs = rootRefs, text = ctx.chunks[#ctx.chunks],
+			                     values = setmetatable({}, { __mode = "v" }) }
+			rootIds[#rootIds + 1] = token
+			rewritten = rewritten + 1
+		end
 	end
 	if _ScriptGraphBeginRoot then _ScriptGraphBeginRoot("0") end
+	local tailFirst = #ctx.order + 1
 	local globals = {}
 	local names = {}
 	local allNames = {}
@@ -1590,9 +1641,32 @@ local function serializeGraph(roots)
 	for _, link in ipairs(_ScriptGraphGibReferences(ctx.ownedPointers)) do
 		gibReferences[#gibReferences + 1] = "n" .. outputNumber(link.owner) .. ";n" .. outputNumber(link.index) .. ";" .. visit(link.target, ctx)
 	end
+	-- A node named by a chunk but defined by none means the root that defined it stopped reaching it.
+	-- The capture then runs again with every root rewritten, so the first root in uid order that still
+	-- reaches the node defines it. One repeat is enough: a full walk defines everything it names.
+	if not rebuildEverything then
+		for id in pairs(ctx.refs) do
+			if not ctx.defined[id] then
+				if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
+				return serializeGraph(roots, true)
+			end
+		end
+	end
 	local out = { "SG5;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), "E", #enginePatches, ";", concatenate(enginePatches), "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
-	for _, id in ipairs(ctx.order) do out[#out + 1] = ctx.nodes[id] end
-	lastObjects = setmetatable({}, { __mode = "v" })
+	for _, chunk in ipairs(ctx.chunks) do out[#out + 1] = chunk end
+	for index = tailFirst, #ctx.order do out[#out + 1] = ctx.nodes[ctx.order[index]] end
+	-- What this capture wrote is what the next one reuses; a root it skipped keeps the chunk it had.
+	local byId = {}
+	for value, id in pairs(ctx.ids) do byId[id] = value end
+	for _, chunk in pairs(ctx.written or {}) do
+		for _, id in ipairs(chunk.order) do chunk.values[id] = byId[id] end
+	end
+	local chunks = {}
+	for uid, chunk in pairs(ctx.cachedChunks or {}) do chunks[uid] = chunk end
+	for uid, chunk in pairs(ctx.written or {}) do chunks[uid] = chunk end
+	graphCache = { base = base, chunks = chunks }
+	if _ScriptGraphNoteRootReuse then _ScriptGraphNoteRootReuse(reused, rewritten) end
+	-- A number is never handed out twice, so a label an earlier capture left names the same object.
 	for value, id in pairs(ctx.ids) do keyLabels[value], lastObjects[id] = id, value end
 	if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
 	return concatenate(out), ctx.problems
@@ -2403,6 +2477,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	end
 	-- The sequence carries on from where the host stood, so tables born next take the numbers it would give.
 	if graph.serial then _ScriptGraphSetStateSerial(graph.serial) end
+	graphCache = nil
 	return roots, problems
 end
 
@@ -3112,6 +3187,28 @@ do
 	-- Saves written before the birth numbers still load, and they keep the old contiguous rule.
 	check("sg4_archive_still_loads", pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T1;P-;Mz;k0;"))
 	check("sg4_keeps_contiguous_ids", not pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"))
+	-- A root nothing wrote to is copied out of the last capture; a root that moved is written again.
+	local cacheRootOne, cacheRootTwo = { tag = "one" }, { tag = "two" }
+	local cacheRoots = { ["11"] = cacheRootOne, ["12"] = cacheRootTwo }
+	local cacheFirst = _ScriptGraph.serialize(cacheRoots)
+	cacheRootTwo.tag = "moved"
+	local cacheSecond = _ScriptGraph.serialize(cacheRoots)
+	local cacheThird = _ScriptGraph.serialize(cacheRoots)
+	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one;")
+	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
+	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved;", 1, true) ~= nil and string.find(cacheFirst, "s5:moved;", 1, true) == nil)
+	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
+	-- A node one root defines and another names keeps its id when the other root is written again.
+	local sharedLeaf = { shared = true }
+	local shareRootOne, shareRootTwo = { leaf = sharedLeaf }, { leaf = sharedLeaf, tag = "a" }
+	local shareRoots = { ["21"] = shareRootOne, ["22"] = shareRootTwo }
+	local shareFirst = _ScriptGraph.serialize(shareRoots)
+	local sharedId = _ScriptGraphValueSerial(sharedLeaf)
+	shareRootTwo.tag = "b"
+	local shareSecond = _ScriptGraph.serialize(shareRoots)
+	local definesShared = string.find(shareSecond, "T" .. sharedId .. ";P%-;", 1, false) ~= nil
+	local namesShared = select(2, string.gsub(shareSecond, "#" .. sharedId .. ";", "")) >= 1
+	check("shared_node_keeps_its_id_when_the_other_root_is_rewritten", sharedId > 0 and definesShared and namesShared and string.find(shareSecond, "s1:b;", 1, true) ~= nil, tostring(sharedId))
 	-- A restored table answers to the name the archive gave it, so the next capture writes the same bytes.
 	local carriedRoots, carriedProblems = _ScriptGraph.deserialize(birthOne)
 	local carriedText = carriedRoots and select(1, _ScriptGraph.serialize({ ["1"] = carriedRoots["1"] })) or ""
@@ -3352,6 +3449,30 @@ static int ScriptGraphStateSerial(lua_State* L) {
 static int ScriptGraphSetStateSerial(lua_State* L) {
 	const lua_Number serial = luaL_checknumber(L, 1);
 	if (serial > 0) luaJIT_set_state_serial(L, static_cast<uint64_t>(serial));
+	return 0;
+}
+
+// What the write barrier saw since the last walk, so a capture rewrites only the roots that moved.
+static int ScriptGraphDirtyRoots(lua_State* L) {
+	const CheckpointGraphIndex& index = CheckpointGraphIndex::Get();
+	lua_newtable(L);
+	lua_newtable(L);
+	for (uint64_t root: index.DirtyRoots()) {
+		lua_pushstring(L, std::to_string(root).c_str());
+		lua_pushboolean(L, 1);
+		lua_rawset(L, -3);
+	}
+	lua_setfield(L, -2, "roots");
+	lua_pushboolean(L, index.UnknownTableWritten() ? 1 : 0);
+	lua_setfield(L, -2, "unknown");
+	lua_pushboolean(L, index.HasWalked() ? 1 : 0);
+	lua_setfield(L, -2, "walked");
+	return 1;
+}
+
+static int ScriptGraphNoteRootReuse(lua_State* L) {
+	CheckpointGraphIndex::Get().NoteRootReuse(static_cast<size_t>(luaL_checknumber(L, 1)),
+	                                          static_cast<size_t>(luaL_checknumber(L, 2)));
 	return 0;
 }
 
@@ -5067,6 +5188,10 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphNoteTable");
 		lua_pushcfunction(m_State, ScriptGraphBeginRoot);
 		lua_setglobal(m_State, "_ScriptGraphBeginRoot");
+		lua_pushcfunction(m_State, ScriptGraphDirtyRoots);
+		lua_setglobal(m_State, "_ScriptGraphDirtyRoots");
+		lua_pushcfunction(m_State, ScriptGraphNoteRootReuse);
+		lua_setglobal(m_State, "_ScriptGraphNoteRootReuse");
 		lua_pushcfunction(m_State, ScriptGraphValueSerial);
 		lua_setglobal(m_State, "_ScriptGraphValueSerial");
 		lua_pushcfunction(m_State, ScriptGraphSetValueSerial);
@@ -6387,6 +6512,31 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	                         birthsHere.back() >= birthsHere[birthsHere.size() - 2];
 	std::cout << "[script-graph-selftest] " << (birthsAgree ? "PASS" : "FAIL") << " table_birth_numbers_match_across_states" << std::endl;
 	checkpointValues = birthsAgree && checkpointValues;
+	// A table that never leaves a hot loop is sunk under -O3 and never born; a captured state must
+	// allocate it, or two peers whose traces differ would number their objects differently.
+	RunScriptString("_F76SinkProbe = function() local n = 0 for i = 1, 400 do local t = { i } n = n + t[1] end return n end");
+	const auto probeBirths = [this]() -> uint64_t {
+		const uint64_t before = luaJIT_state_serial(m_State);
+		lua_getglobal(m_State, "_F76SinkProbe");
+		if (lua_pcall(m_State, 0, 1, 0) != 0) lua_pop(m_State, 1);
+		else lua_pop(m_State, 1);
+		return luaJIT_state_serial(m_State) - before;
+	};
+	const bool sinkingWas = LuaMan::IsCheckpointAllocationSinking();
+	LuaMan::SetCheckpointAllocationSinking(true);
+	probeBirths();
+	probeBirths();
+	const uint64_t bornWithSinking = probeBirths();
+	LuaMan::SetCheckpointAllocationSinking(false);
+	probeBirths();
+	const uint64_t bornWithoutSinking = probeBirths();
+	LuaMan::SetCheckpointAllocationSinking(sinkingWas);
+	RunScriptString("_F76SinkProbe = nil");
+	const bool sinkingHidesBirths = bornWithoutSinking == 400 && bornWithSinking < bornWithoutSinking;
+	std::cout << "[script-graph-selftest] " << (sinkingHidesBirths ? "PASS" : "FAIL")
+	          << " sinking_off_allocates_every_table born_with=" << bornWithSinking
+	          << " born_without=" << bornWithoutSinking << std::endl;
+	checkpointValues = sinkingHidesBirths && checkpointValues;
 	// A speculative window rolls its tables back, so it gives their numbers back as well.
 	const uint64_t birthsBeforeWindow = luaJIT_state_serial(m_State);
 	uint64_t birthsInsideWindow = birthsBeforeWindow;
