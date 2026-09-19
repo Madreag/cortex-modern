@@ -661,6 +661,7 @@ typedef struct global_State {
   uint8_t hookmask;	/* Hook mask. */
   uint8_t dispatchmode;	/* Dispatch mode. */
   uint8_t vmevmask;	/* VM event mask. */
+  uint8_t checkpoint_armed;  /* Table stores trap to the C path until one is marked. */
   StrInternState str;	/* String interning. */
   volatile int32_t vmstate;  /* VM state or current JIT code trace number. */
   GCRef mainthref;	/* Link to main thread. */

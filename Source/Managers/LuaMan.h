@@ -473,6 +473,9 @@ namespace RTE {
 		/// @return A list of threaded script states.
 		LuaStatesArray& GetThreadedScriptStates();
 
+		/// Makes the next table write in any state mark itself for the checkpoint.
+		void ArmCheckpointWriteTrap();
+
 		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
 		int GetStateIndex(const LuaStateWrapper* state) const;
 

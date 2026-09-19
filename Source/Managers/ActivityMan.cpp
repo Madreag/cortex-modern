@@ -403,6 +403,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->luaReused = false;
 		cow.RememberLua(image->graphs, LuaCheckpointWriteGeneration());
 	}
+	// Compiled table stores only mark while the trap is armed, so every freeze re-arms it.
+	g_LuaMan.ArmCheckpointWriteTrap();
 	image->scene = scene->CaptureSavedScene(fileName);
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();

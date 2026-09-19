@@ -17,7 +17,14 @@ static LJ_AINLINE void checkpoint_mark(GCtab *t)
   if (checkpoint_tab_write) checkpoint_tab_write(t);
 }
 
-LJ_FUNCA void lj_checkpoint_mark(GCtab *t);
+/* The trap only has to fire once per armed window: the mark is the answer. */
+static LJ_AINLINE void checkpoint_mark_state(lua_State *L, GCtab *t)
+{
+  G(L)->checkpoint_armed = 0;
+  checkpoint_mark(t);
+}
+
+LJ_FUNCA void lj_checkpoint_mark(lua_State *L, GCtab *t);
 
 /* Hash constants. Tuned using a brute force search. */
 #define HASH_BIAS	(-0x04c11db7)
@@ -93,7 +100,7 @@ LJ_FUNC TValue *lj_tab_set(lua_State *L, GCtab *t, cTValue *key);
   (inarray((t), (key)) ? arrayslot((t), (key)) : lj_tab_getinth((t), (key)))
 #define lj_tab_setint(L, t, key) \
   (((t)->preview & LJ_PREVIEW_PENDING) ? lj_preview_write((L), (t)) : (void)0, \
-   checkpoint_mark(t), \
+   checkpoint_mark_state((L), (t)), \
    inarray((t), (key)) ? arrayslot((t), (key)) : lj_tab_setinth(L, (t), (key)))
 
 LJ_FUNC uint32_t LJ_FASTCALL lj_tab_keyindex(GCtab *t, cTValue *key);
