@@ -2168,6 +2168,7 @@ static std::string ResyncSaveName() {
 			{"session_identity_hash", NetIdentity::HashHex(manifest.sessionIdentityHash)}};
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentity = identity.dump(2, ' ', false, json::error_handler_t::replace);
+		++m_DiagnosticIdentityGeneration;
 	}
 
 	namespace {
@@ -2196,11 +2197,19 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_DiagnosticIdentityInputs = std::move(inputs);
 		m_DiagnosticIdentityInputsPending = true;
+		m_DiagnosticIdentityInputsGeneration = m_DiagnosticIdentityGeneration;
 		return true;
+	}
+
+	void NetMatchService::DropCapturedDiagnosticIdentityInputs() {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_DiagnosticIdentityInputsPending = false;
+		m_DiagnosticIdentityInputs = NetIdentityManifest{};
 	}
 
 	bool NetMatchService::BuildCapturedDiagnosticIdentity(std::string* error, double* buildMs) {
 		NetIdentityManifest manifest;
+		uint64_t capturedGeneration = 0;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_DiagnosticIdentityInputsPending) {
@@ -2208,12 +2217,26 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			manifest = m_DiagnosticIdentityInputs;
+			capturedGeneration = m_DiagnosticIdentityInputsGeneration;
 			m_DiagnosticIdentityInputsPending = false;
+			m_DiagnosticIdentityInputs = NetIdentityManifest{};
 		}
+		const NetIdentityManifest captured = manifest;
 		const auto started = std::chrono::steady_clock::now();
-		const bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		// The game thread can write a module tree while this walk reads it, so one failed walk is retried
+		// from the captured inputs before it is reported.
+		bool built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		if (!built) {
+			manifest = captured;
+			built = NetIdentity::CompleteManifestFromInputs(manifest, error, DiagnosticIdentityOptions());
+		}
 		if (buildMs) *buildMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 		if (!built) return false;
+		{
+			// A newer identity was cached while this one hashed: that one is the current build, not this.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_DiagnosticIdentityGeneration != capturedGeneration) return true;
+		}
 		CacheDiagnosticIdentity(manifest);
 		return true;
 	}

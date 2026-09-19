@@ -103,7 +103,8 @@ def read_log(root: Path) -> str:
                      for name in ("stdout.log", "stderr.log") if (root / name).exists())
 
 
-def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secrets: dict | None = None) -> dict:
+def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secrets: dict | None = None,
+                   require_identity_build: bool = False) -> dict:
     archives = sorted((runtime / "Telemetry").glob("diag-*.zip"))
     if len(archives) != 1:
         raise AssertionError(f"expected one telemetry zip, found {len(archives)} in {runtime / 'Telemetry'}")
@@ -132,9 +133,14 @@ def inspect_bundle(runtime: Path, exe_sha: str, replay: Path | None = None, secr
     assert IDENTITY_FIELDS == set(identity["deterministic_config"]), "identity inputs incomplete"
     assert re.fullmatch(r"[0-9a-f]{64}", identity["module_manifest_hash"]), "module manifest hash"
     # The identity hashes every module's files, so the game thread must not be the one that did it.
-    identity_build = {key: manifest.get(key) for key in ("identity_build_ms", "main_thread_id", "identity_thread_id")}
+    identity_build = {key: manifest.get(key) for key in
+                      ("identity_build_ms", "main_thread_id", "identity_thread_id", "identity_build_ok")}
     assert identity_build["main_thread_id"], f"manifest names no main thread: {identity_build}"
+    if require_identity_build:
+        # The arm that triggers the first build must actually have triggered it, or the check below is skipped.
+        assert identity_build["identity_build_ms"], f"no identity build in this bundle: {identity_build}"
     if identity_build["identity_build_ms"]:
+        assert identity_build["identity_build_ok"] is not False, f"identity build failed: {identity_build}"
         assert identity_build["identity_thread_id"] and identity_build["identity_thread_id"] != identity_build["main_thread_id"], \
             f"identity built on the game thread: {identity_build}"
     executable = json.loads(contents["Executable.json"])
@@ -176,7 +182,7 @@ def run_menu(repo: Path, root: Path, exe_sha: str) -> dict:
     log = read_log(root / "menu")
     assert record.get("exit_code") == 0 and not record.get("timed_out"), f"menu run failed: {log[-6000:]}"
     assert "ButtonSaveDiagnostics" in log, "diagnostics command was not exercised"
-    return inspect_bundle(run.cwd, exe_sha, secrets=planted)
+    return inspect_bundle(run.cwd, exe_sha, secrets=planted, require_identity_build=True)
 
 
 def run_replay(repo: Path, root: Path, port: int, exe_sha: str) -> dict:

@@ -243,14 +243,17 @@ namespace RTE {
 
 		void WriteBundle(Job job) {
 			std::string identityThread;
+			bool identityBuilt = true;
 			if (job.snapshot.identityPending) {
-				// The module hashing costs about a second: it runs here, never on the frame path.
+				// The module hashing costs about a second: it runs here, never on the frame path. The thread
+				// is named before the attempt, so a failed build cannot read as a build on the game thread.
 				std::string identityError;
+				identityThread = ThreadIdText(std::this_thread::get_id());
 				if (g_NetMatchService.BuildCapturedDiagnosticIdentity(&identityError, &job.snapshot.identityBuildMs)) {
-					identityThread = ThreadIdText(std::this_thread::get_id());
 					job.snapshot.joinIdentity = g_NetMatchService.ExportDiagnosticIdentity();
 					System::PrintDiagnosticLine(std::format("[telemetry] identity built in {:.3f} ms", job.snapshot.identityBuildMs));
 				} else {
+					identityBuilt = false;
 					job.snapshot.joinIdentity = json{{"error", identityError}}.dump(2);
 				}
 			}
@@ -289,7 +292,7 @@ namespace RTE {
 			add("Executable.json", json{{"sha256", System::GetThisExeSha256()}, {"version", c_VersionString}}.dump(2));
 			json manifest{{"schema", 1}, {"members", json::array()}, {"omitted", omissions}, {"replay", replayStatus},
 			              {"identity_build_ms", job.snapshot.identityBuildMs}, {"main_thread_id", s_State.mainThread},
-			              {"identity_thread_id", identityThread}, {"redacted", redacted}};
+			              {"identity_thread_id", identityThread}, {"identity_build_ok", identityBuilt}, {"redacted", redacted}};
 			for (const auto& [name, data]: members) {
 				json entry{{"name", name}, {"size", data.size()}, {"sha256", Digest(data)}};
 				if (name == "Replay.ccrp") entry["truncated"] = job.snapshot.replayTruncated;
@@ -412,7 +415,11 @@ namespace RTE {
 			} else if (snapshot.replayTruncated) {
 				snapshot.replayReason = "no complete replay frame fits the member limit";
 			}
-			return Request(std::move(snapshot));
+			const bool identityPending = snapshot.identityPending;
+			const bool queued = Request(std::move(snapshot));
+			// Nothing will build inputs no bundle carries, so they are not left on the service.
+			if (!queued && identityPending) g_NetMatchService.DropCapturedDiagnosticIdentityInputs();
+			return queued;
 		} catch (const std::exception& error) {
 			g_ConsoleMan.PrintString("ERROR: Could not capture diagnostics: " + std::string(error.what()));
 			std::lock_guard lock(s_State.mutex);
