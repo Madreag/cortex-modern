@@ -444,6 +444,7 @@ namespace RTE::MenuAutomation {
 				// The typed-entry seam for a settings page: the box takes the value and raises the notification a typed entry raises.
 				auto* box = dynamic_cast<GUITextBox*>(control);
 				if (!box || !Enabled(box) || argument.empty()) return false;
+				if (box->HasPasswordMask()) observation = name + " <masked>";
 				box->SetText(argument);
 				// The event queue clears at the top of every Update, so the Enter has to be raised
 				// inside one - the same channel a scripted click takes.

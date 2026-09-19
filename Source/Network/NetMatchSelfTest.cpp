@@ -10986,6 +10986,11 @@ namespace RTE {
 		settings.SetNetworkIceEnable(false);
 		settings.SetNetworkIceEnableOverride(true);
 		settings.SetNetworkStunServersOverride(defaults);
+		settings.SetNetworkTurnServersOverride("override.example:3478");
+		if (settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Fixed || settings.GetNetworkHostRelayModeSetting() != SettingsMan::NetworkHostRelayMode::Directory ||
+		    NetMatchService::BuildIceConfig(settings, "", 41011).turnServerList != "override.example:3478") { *error = "TURN run override was ignored or changed the saved relay choice"; return false; }
+		settings.SetNetworkTurnServersOverride("");
+		if (settings.GetNetworkHostRelayMode() != SettingsMan::NetworkHostRelayMode::Off || !NetMatchService::BuildIceConfig(settings, "", 41011, customRelay).turnServerList.empty()) { *error = "empty TURN run override still offered a relay"; return false; }
 		settings.ClearNetworkIceOverrides();
 		if (settings.GetNetworkIceEnable() || !settings.GetNetworkStunServers().empty()) {
 			*error = "ice settings: run overrides changed the saved Off or empty-list choices";
