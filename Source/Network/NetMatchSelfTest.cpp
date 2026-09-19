@@ -3263,15 +3263,29 @@ namespace RTE {
 			service.WaitForPendingWork();
 			const std::string refusal = service.GetErrorText();
 			const auto retained = service.GetPendingHostOptions();
+			const auto lobby = service.GetLobbySnapshot();
 			if (!Pending() || retained != submitted || service.GetState() != NetMatchServiceState::Completed ||
-			    refusal != "Host options refused: the draft names a stale configuration revision" || service.GetLobbySnapshot().errorText != refusal) {
+			    refusal != "Host options refused: the draft names a stale configuration revision" || lobby.errorText != refusal ||
+			    !lobby.inLobby || lobby.remoteReady || !service.NeedsHostOptionsCorrection()) {
 				*error = "the host lost the refused rematch draft or its status: " + refusal + "; " + service.GetErrorText();
+				return false;
+			}
+			std::string repeated;
+			if (service.ReturnToLobby(&repeated) || repeated != refusal) {
+				*error = "the refused draft restarted before the host corrected it";
 				return false;
 			}
 			NetMatchConfig corrected = service.GetLobbyMatchConfig();
 			corrected.difficulty = 27;
-			if (corrected.configRevision != runner.GetMatchConfig().configRevision ||
-			    !service.SubmitHostOptions(corrected.configRevision, corrected, error) || !service.GetErrorText().empty()) return false;
+			if (corrected.configRevision != runner.GetMatchConfig().configRevision) {
+				*error = "the refused draft left a stale revision in the options panel";
+				return false;
+			}
+			if (!service.SubmitHostOptions(corrected.configRevision, corrected, error)) return false;
+			if (!service.GetErrorText().empty() || service.NeedsHostOptionsCorrection()) {
+				*error = "the corrected draft retained the previous refusal";
+				return false;
+			}
 			observe = [&] {
 				if (runner.GetLobbySession().IsConfigAcked(2) && runner.GetLobbySession().IsRemoteReady(2)) start.store(true);
 			};
