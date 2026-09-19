@@ -22,6 +22,7 @@ KICK_ROWS = (
     "kick: a removed link loses its seat, its transactions and its binding",
     "kick: Starting removals and unbans marshal onto the setup worker in order",
     "kick: a Starting kick drains through the setup worker and removes the seat",
+    "kick: a Starting kick opens the seat for a replacement and refuses the kicked identity",
 )
 
 

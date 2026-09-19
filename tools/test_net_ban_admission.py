@@ -14,6 +14,7 @@ from run_sim_test import make_run
 IDENTITY_ROWS = (
     "identity: replay/forgery/cross-host proof rejected",
     "identity: one identity survives reconnect; unproven connections refused",
+    "identity: a spent proof stays spent for the whole hosted session",
 )
 SCOPE_ROWS = (
     "scopes: session ban ends with the session; persistent ban survives",
