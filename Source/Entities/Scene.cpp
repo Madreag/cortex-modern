@@ -1440,8 +1440,13 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 	if (writer.IsCapturing() && writer.GetCaptureObject() != sceneObjectToSave) {
 		const unsigned channel = 32 + 8 * writer.GetIndent() + 2 * saveFullData + isChildAttachable;
 		const uint64_t stamp = sceneObjectToSave->CheckpointWriteGeneration();
+		// A freed object's address is handed to the next one, and a new object's write generation
+		// starts at zero, so the shadow is only this object's if the unique id matches as well.
+		const auto* movableToSave = dynamic_cast<const MovableObject*>(sceneObjectToSave);
+		const uint64_t identity = movableToSave ? static_cast<uint64_t>(movableToSave->GetUniqueID()) : 0;
 		if (auto* cache = CheckpointWriter::CurrentCache()) {
-			if (const CheckpointText* previous = cache->Peek(sceneObjectToSave, channel); previous && cache->Stamp(sceneObjectToSave, channel) == stamp) {
+			if (const CheckpointText* previous = cache->Peek(sceneObjectToSave, channel); previous &&
+			    cache->Stamp(sceneObjectToSave, channel) == stamp && cache->Identity(sceneObjectToSave, channel) == identity) {
 #ifdef DEBUG_BUILD
 				// A write that forgot its stamp shows up as a shadow that no longer matches the object.
 				const CheckpointText fresh = Writer::Capture([&](Writer& owned) {
@@ -1461,7 +1466,7 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			owned.SetCaptureObject(sceneObjectToSave);
 			SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
 		}, writer.GetIndent());
-		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, channel, std::move(text), stamp);
+		if (auto* cache = CheckpointWriter::CurrentCache()) text = cache->Remember(sceneObjectToSave, channel, std::move(text), stamp, identity);
 		writer.Append(text);
 		return;
 	}

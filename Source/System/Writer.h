@@ -64,9 +64,11 @@ namespace RTE {
 	public:
 		void Begin() { ++m_Generation; m_Touched = 0; m_Reused = 0; }
 		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value);
-		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp);
+		CheckpointText Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity = 0);
 		const CheckpointText* Peek(const void* owner, unsigned channel) const;
 		uint64_t Stamp(const void* owner, unsigned channel) const;
+		/// The identity the shadow was remembered for; an address is recycled, a unique id is not.
+		uint64_t Identity(const void* owner, unsigned channel) const;
 		bool Touch(const void* owner, unsigned channel);
 		CheckpointText CapturePixels(const BITMAP* bitmap);
 		std::vector<CheckpointText> RetireUnused();
@@ -74,7 +76,7 @@ namespace RTE {
 		size_t Touched() const { return m_Touched; }
 		size_t Reused() const { return m_Reused; }
 	private:
-		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; };
+		struct Entry { CheckpointText text; uint64_t generation = 0; uint64_t stamp = 0; uint64_t identity = 0; };
 		std::unordered_map<const void*, std::unordered_map<unsigned, Entry>> m_Entries;
 		std::vector<CheckpointText> m_Retired;
 		uint64_t m_Generation = 0;
