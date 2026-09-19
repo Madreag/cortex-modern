@@ -330,6 +330,7 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportCatchUp = 2;
 	inline constexpr uint8_t c_NetWorldReportActivate = 3;
 	inline constexpr uint8_t c_NetWorldReportRefused = 4;
+	inline constexpr uint8_t c_NetWorldReportDecline = 5; //!< A watcher's own choice: 1 declines a seat.
 
 	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.
 	enum class NetWorldJoinRefusal : uint64_t {

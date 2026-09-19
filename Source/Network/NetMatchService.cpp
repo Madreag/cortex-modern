@@ -1989,6 +1989,9 @@ static std::string ResyncSaveName() {
 			if (total != 0 && received >= total && host.Image().IsValid()) {
 				(void)host.NoteTransferComplete(connection, host.Image().bytes, nullptr);
 			}
+		} else if (report.kind == c_NetWorldReportDecline) {
+			// A watcher that asked to stay one is skipped when a slot frees; it keeps its stream.
+			(void)host.NoteSpectatorPreference(connection, report.value != 0);
 		} else if (report.kind == c_NetWorldReportCatchUp) {
 			uint64_t activation = 0;
 			const NetWorldJoinSession* prior = host.FindSession(connection);
@@ -2353,6 +2356,15 @@ static std::string ResyncSaveName() {
 			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
 		}
+	}
+
+	bool NetMatchService::SetWorldSpectatorDeclinesPromotion(bool declines) {
+		// A watcher's own choice, sent on its world lobby; the host records it against its seat.
+		if (m_IsHost || !m_Runner || !m_WorldCatchUp.active) {
+			return false;
+		}
+		m_WorldSpectatorDeclinesPromotion = declines;
+		return m_Runner->GetLobbySession().SendPayload(MakeWorldJoinReport(c_NetWorldReportDecline, declines ? 1 : 0), nullptr);
 	}
 
 	void NetMatchService::DriveWorldSeatRespawns(uint64_t nowFrame) {

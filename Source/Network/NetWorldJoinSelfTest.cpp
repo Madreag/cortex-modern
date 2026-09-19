@@ -3072,8 +3072,19 @@ namespace RTE {
 			return Fail("promotion-never-happened: the second clean leave was refused (" + error + ")");
 		}
 		host.CancelJoin(42, "clean leave");
-		if (!host.NoteSpectatorPreference(44, true)) {
+		// The choice arrives as the watcher's own report, the same 9-byte shape every world answer takes.
+		uint8_t declineKind = 0;
+		uint64_t declineValue = 0;
+		if (!ParseWorldJoinReport(MakeWorldJoinReport(c_NetWorldReportDecline, 1), declineKind, declineValue) ||
+		    declineKind != c_NetWorldReportDecline || declineValue != 1) {
+			return Fail("promotion-ignored-a-decline: the decline report parsed as kind " +
+			            std::to_string(static_cast<int>(declineKind)) + " value " + std::to_string(declineValue));
+		}
+		if (!host.NoteSpectatorPreference(44, declineValue != 0)) {
 			return Fail("promotion-ignored-a-decline: the watcher's own choice was not recorded");
+		}
+		if (host.NoteSpectatorPreference(43, true)) {
+			return Fail("promotion-ignored-a-decline: a seated member was allowed to decline a promotion");
 		}
 		error.clear();
 		if (host.PromoteWaitingSpectator(800, &at, &promoted, &error) || error != "no watcher is waiting for a slot") {
