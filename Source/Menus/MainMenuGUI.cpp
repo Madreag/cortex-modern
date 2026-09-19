@@ -951,30 +951,10 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	request.activityPreset = "P4 Alpha Duel";
 	if (!host) {
 		bool targetWorld = m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World";
-		if (!targetWorld && m_MultiplayerLanGamesList) {
-			const int selected = m_MultiplayerLanGamesList->GetSelectedIndex();
-			if (selected >= 0 && static_cast<size_t>(selected) < m_GameRows.size()) {
-				const NetDirectoryClient::GameRow& row = m_GameRows[static_cast<size_t>(selected)];
-				targetWorld = row.persistentWorld || row.activity == "Persistent World";
-				if (targetWorld && !row.activity.empty()) {
-					m_JoinTargetActivity = row.activity;
-				}
-			}
-		}
 		if (!targetWorld) {
-			for (const NetDirectoryClient::GameRow& row: m_GameRows) {
-				if (row.address == request.address && row.port == request.port &&
-				    (row.persistentWorld || row.activity == "Persistent World")) {
-					targetWorld = true;
-					if (!row.activity.empty()) {
-						m_JoinTargetActivity = row.activity;
-					}
-					break;
-				}
-			}
-		}
-		if (!targetWorld && m_LastWorldJoinPort != 0 && request.address == m_LastWorldJoinAddress && request.port == m_LastWorldJoinPort) {
-			targetWorld = true;
+			const int selected = m_MultiplayerLanGamesList ? m_MultiplayerLanGamesList->GetSelectedIndex() : -1;
+			targetWorld = NetDirectoryClient::TargetsPersistentWorld(m_GameRows, selected, request.address, request.port,
+			                                                        m_LastWorldJoinAddress, m_LastWorldJoinPort, &m_JoinTargetActivity);
 		}
 		if (targetWorld) {
 			request.persistentWorld = true;

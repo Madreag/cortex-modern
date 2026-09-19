@@ -23,7 +23,10 @@ namespace RTE {
 		constexpr char c_Magic[8] = {'C', 'C', 'C', 'P', 'H', '4', 'T', 'K'};
 		// magic 8 + version 2 + epoch 16 + seat 2 + generation 4 + credential 32 + session 8 +
 		// issuedAt 8 + configHash 32 + address length 2 = 114, then the address, then the 32 B mac.
-		constexpr size_t c_FixedBytes = 114;
+		constexpr size_t c_FixedBytesV1 = 114;
+		// v2 appends one flag byte after the address, so a v1 record reads byte for byte as it always did.
+		constexpr size_t c_FixedBytes = c_FixedBytesV1 + 1;
+		constexpr uint8_t c_PersistentWorldFlag = 1;
 
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
 			out.push_back(static_cast<uint8_t>(value & 0xFFU));
@@ -125,18 +128,20 @@ namespace RTE {
 		out.insert(out.end(), record.matchConfigHash.begin(), record.matchConfigHash.end());
 		AppendU16LE(out, static_cast<uint16_t>(record.hostAddress.size()));
 		out.insert(out.end(), record.hostAddress.begin(), record.hostAddress.end());
+		out.push_back(record.persistentWorld ? c_PersistentWorldFlag : 0);
 		return out.size() == c_FixedBytes + record.hostAddress.size();
 	}
 
 	bool NetReconnectTicketStore::Deserialize(const std::vector<uint8_t>& bytes, NetH4TicketRecord& out) {
-		if (bytes.size() < c_FixedBytes || std::memcmp(bytes.data(), c_Magic, sizeof(c_Magic)) != 0) {
+		if (bytes.size() < c_FixedBytesV1 || std::memcmp(bytes.data(), c_Magic, sizeof(c_Magic)) != 0) {
 			return false;
 		}
 		size_t offset = sizeof(c_Magic);
 		NetH4TicketRecord record;
 		record.recordVersion = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		if (record.recordVersion != c_RecordVersion) {
+		// A record this build wrote before the world flag existed still proves its seat.
+		if (record.recordVersion == 0 || record.recordVersion > c_RecordVersion) {
 			return false;
 		}
 		std::memcpy(record.epoch.data(), bytes.data() + offset, record.epoch.size());
@@ -155,10 +160,19 @@ namespace RTE {
 		offset += record.matchConfigHash.size();
 		const uint16_t addressBytes = ReadU16LE(bytes.data() + offset);
 		offset += 2;
-		if (addressBytes > c_MaxHostAddressBytes || bytes.size() != offset + addressBytes) {
+		const size_t flagBytes = record.recordVersion >= 2 ? 1 : 0;
+		if (addressBytes > c_MaxHostAddressBytes || bytes.size() != offset + addressBytes + flagBytes) {
 			return false;
 		}
 		record.hostAddress.assign(reinterpret_cast<const char*>(bytes.data() + offset), addressBytes);
+		offset += addressBytes;
+		if (flagBytes != 0) {
+			const uint8_t flags = bytes[offset];
+			if ((flags & ~c_PersistentWorldFlag) != 0) {
+				return false;
+			}
+			record.persistentWorld = (flags & c_PersistentWorldFlag) != 0;
+		}
 		// Generation 0 names no holder, so it can prove nothing.
 		if (record.holderGeneration == 0) {
 			return false;

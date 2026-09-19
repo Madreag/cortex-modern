@@ -8,10 +8,13 @@
 
 namespace RTE {
 
+	/// The record's own format version. v2 carries the world-target flag.
+	inline constexpr uint16_t c_NetH4TicketRecordVersion = 2;
+
 	/// The recovery record a client keeps so it can prove it held its seat. Everything a Reclaim and
 	/// its proof need, plus enough context to tell one hosted session's record from another's.
 	struct NetH4TicketRecord {
-		uint16_t recordVersion = 1;
+		uint16_t recordVersion = c_NetH4TicketRecordVersion;
 		NetAuthBytes16 epoch{};
 		uint16_t stableSeat = 0;
 		uint32_t holderGeneration = 0;
@@ -20,6 +23,7 @@ namespace RTE {
 		std::string hostAddress;
 		uint64_t issuedAtUnixMs = 0;
 		NetHash32 matchConfigHash{};
+		bool persistentWorld = false; //!< The host was a persistent world, so a rejoin hellos on the world plane.
 
 		bool operator==(const NetH4TicketRecord&) const = default;
 	};
@@ -37,7 +41,7 @@ namespace RTE {
 	/// Deleted only on a LeaveAck, at a confirmed hosted-session end, or past the outer age bound.
 	class NetReconnectTicketStore {
 	public:
-		static constexpr uint16_t c_RecordVersion = 1;
+		static constexpr uint16_t c_RecordVersion = c_NetH4TicketRecordVersion;
 		// Long enough to outlast any single session, short enough that a next-day launch is not
 		// offered a dead match. The record is worthless once the host's epoch is gone.
 		static constexpr uint64_t c_MaxRecordAgeMs = 24ULL * 60ULL * 60ULL * 1000ULL;

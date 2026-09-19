@@ -208,6 +208,9 @@ namespace RTE {
 		static bool TakeWorldCatchUpReadyFrame(uint64_t simTick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// Ticks of tail a joiner applies in one real frame (faster than real time, still bounded).
 		static constexpr int c_WorldCatchUpTicksPerRealFrame = 16;
+		/// Whether the catch-up may take one more sim tick: the ceiling has to be left AND the tail has
+		/// to hold that very frame, so the sim clock never runs past what the world committed.
+		static bool WorldCatchUpMayGrant(uint64_t nextSimTick, int ticksLeftThisFrame);
 
 		/// Whether a team has a human player in the synced match config. Local player bindings are
 		/// per-peer in a lockstep match, so sim decisions must resolve team humanity from here.

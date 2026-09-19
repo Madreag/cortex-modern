@@ -275,6 +275,20 @@ namespace RTE {
 		void NoteJoinTargetPersistentWorld(bool world) { m_LastJoinTargetPersistentWorld = world; }
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
+		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
+		/// against a world host still hellos on the world plane.
+		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
+
+		/// The joiner's catch-up step over one lobby pump: applies the tail that arrived, adopts the
+		/// announced E and reports what the sim has applied. The value it sends is the report the host
+		/// schedules activation from.
+		static void StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp);
+		/// Sends one bounded run of committed tail frames to a bootstrap and stamps what left.
+		static void SendWorldJoinTailTo(NetLobbySession& lobby, NetWorldJoinHost& host, const NetWorldJoinSession& session);
+		/// The bootstrap a lobby report belongs to: a bootstrap's own lobby id first, then a ready peer.
+		static NetPeerId ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer);
+		/// Applies one world-join report to the host's plane and sends the E it earns.
+		static void ApplyWorldJoinReport(NetLobbySession& lobby, NetWorldJoinHost& host, const NetLobbySession::WorldJoinReport& report, NetPeerId connection, uint64_t nowFrame, uint64_t nowMs);
 		/// §11: reads the recovery record so the landing screen can offer a rejoin after a relaunch, or
 		/// say exactly why it cannot. Read-only and safe to call repeatedly.
 		void ScanStoredTicket();
@@ -371,7 +385,6 @@ namespace RTE {
 		void PublishWorldJoinImage(uint64_t tick);
 		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error);
 		void PumpWorldJoinLobby(uint64_t nowMs);
-		void SendWorldJoinTail(const NetWorldJoinSession& session);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, std::string& pendingLoad, std::string* error);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
@@ -629,15 +642,7 @@ namespace RTE {
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
 		bool m_LastJoinTargetPersistentWorld = false;
-		struct WorldCatchUp {
-			bool active = false;
-			uint64_t snapshotTick = 0;
-			uint64_t appliedThrough = 0;
-			uint64_t activationTick = 0;
-			std::string digest;
-			std::vector<NetLockstepFrame> tail;
-		};
-		WorldCatchUp m_WorldCatchUp;
+		NetWorldCatchUpClient m_WorldCatchUp;
 	};
 
 } // namespace RTE

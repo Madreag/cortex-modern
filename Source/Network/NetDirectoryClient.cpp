@@ -551,6 +551,29 @@ namespace RTE {
 		(void)nowMs;
 	}
 
+	bool NetDirectoryClient::TargetsPersistentWorld(const std::vector<GameRow>& rows, int selectedIndex, const std::string& address, uint16_t port,
+	                                                const std::string& lastWorldAddress, uint16_t lastWorldPort, std::string* outActivity) {
+		const auto isWorldRow = [](const GameRow& row) { return row.persistentWorld || row.activity == "Persistent World"; };
+		if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < rows.size()) {
+			const GameRow& row = rows[static_cast<size_t>(selectedIndex)];
+			if (row.address == address && row.port == port && isWorldRow(row)) {
+				if (outActivity && !row.activity.empty()) {
+					*outActivity = row.activity;
+				}
+				return true;
+			}
+		}
+		for (const GameRow& row: rows) {
+			if (row.address == address && row.port == port && isWorldRow(row)) {
+				if (outActivity && !row.activity.empty()) {
+					*outActivity = row.activity;
+				}
+				return true;
+			}
+		}
+		return lastWorldPort != 0 && address == lastWorldAddress && port == lastWorldPort;
+	}
+
 	std::vector<NetDirectoryClient::GameRow> NetDirectoryClient::MergeGameLists(const std::vector<NetLanHostInfo>& lan,
 	                                                                          const std::vector<NetDirectorySessionRow>& directory,
 	                                                                          const NetDirectoryLocalIdentity& local,

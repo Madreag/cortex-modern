@@ -505,6 +505,16 @@ namespace RTE {
 		return true;
 	}
 
+	NetWorldActivationPlan PlanWorldActivation(const NetWorldJoinSession& session, uint64_t nextFrame, bool late) {
+		NetWorldActivationPlan plan;
+		plan.firstRequired = late ? std::max(session.activationTick, nextFrame + 1) : session.activationTick;
+		// An overflow spectator holds no slot and produces no Controller, so it is never admitted and
+		// the world commits no transition for it.
+		plan.admit = !session.spectator && session.assignedPeerId != 0;
+		plan.submitTransition = plan.admit;
+		return plan;
+	}
+
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision) {
 		NetGameWorldTransition transition;
 		transition.schema = c_NetWorldJoinSchema;
@@ -651,7 +661,6 @@ namespace RTE {
 	}
 
 	void NetWorldMetrics::NotePurity(uint64_t tick, uint64_t withCapture, uint64_t withoutCapture) {
-		// Unhooked: the capture path does not invent a with/without pair.
 		++m_PurityProbes;
 		if (withCapture != withoutCapture) {
 			++m_PurityMismatches;
