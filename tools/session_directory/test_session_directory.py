@@ -1677,6 +1677,66 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(status, 503)
             self.assertEqual(err, {"error": "full"})
 
+    def test_world_row_advertises_its_free_spectator_slots(self) -> None:
+        self.start()
+        world_id = str(uuid.uuid4())
+        world = {
+            "persistent_world": True,
+            "world_id": world_id,
+            "world_boot": 1,
+            "resume_session_id": world_id,
+            "seats_free": 0,
+            "spectator_free": 3,
+        }
+        status, first = self.register(**world)
+        self.assertEqual(status, 200, first)
+        status, listed = self.list_sessions()
+        row = listed["sessions"][0]
+        self.assertEqual((row.get("seats_free"), row.get("spectator_free")), (0, 3), row)
+        # A beat keeps the count current without re-registering the whole row.
+        status, ok = self.beat(world_id, first["token"], seats_free=0, spectator_free=1)
+        self.assertEqual(status, 200, ok)
+        status, listed = self.list_sessions()
+        row = listed["sessions"][0]
+        self.assertEqual((row.get("seats_free"), row.get("spectator_free")), (0, 1), row)
+        # A beat that names none leaves the row's count alone.
+        status, ok = self.beat(world_id, first["token"], seats_free=0)
+        self.assertEqual(status, 200, ok)
+        status, listed = self.list_sessions()
+        self.assertEqual(listed["sessions"][0].get("spectator_free"), 1, listed)
+        # An ordinary row carries no spectator field at all.
+        status, plain = self.register(name="plain")
+        self.assertEqual(status, 200, plain)
+        status, listed = self.list_sessions()
+        rows = {row["session_id"]: row for row in listed["sessions"]}
+        self.assertNotIn("spectator_free", rows[plain["session_id"]])
+
+    def test_world_row_refuses_a_negative_spectator_count(self) -> None:
+        self.start()
+        world_id = str(uuid.uuid4())
+        status, err = self.register(
+            persistent_world=True,
+            world_id=world_id,
+            world_boot=1,
+            resume_session_id=world_id,
+            spectator_free=-1,
+        )
+        self.assertEqual(
+            (status, err), (400, {"error": "invalid_field", "field": "spectator_free"}), err
+        )
+        status, created = self.register(
+            persistent_world=True,
+            world_id=world_id,
+            world_boot=1,
+            resume_session_id=world_id,
+            spectator_free=0,
+        )
+        self.assertEqual(status, 200, created)
+        status, err = self.beat(world_id, created["token"], spectator_free="many")
+        self.assertEqual(
+            (status, err), (400, {"error": "invalid_field", "field": "spectator_free"}), err
+        )
+
     def test_world_resume_keeps_its_fields_and_rotates_the_token(self) -> None:
         self.start()
         world_id = str(uuid.uuid4())

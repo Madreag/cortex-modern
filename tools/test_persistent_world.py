@@ -66,6 +66,49 @@ RED_EXISTING_MEMBER_DICTIONARY = "existing-member-lost-the-dictionary-across-an-
 RED_REPLAY_TABLE_DIVERGED = "replayed-member-table-diverged-from-the-live-table"
 RED_IMAGE_BEFORE_WRITE = "world-image-published-before-the-archive-was-written"
 RED_IMAGE_SIM_READ = "world-image-publish-read-the-sim-thread"
+RED_CAPACITY_WIRE = "world-capacity-did-not-ride-the-v5-config"
+RED_OVERFLOW_REFUSAL = "world-full-refusal-missing"
+RED_CONCURRENT_ACTIVATION = "concurrent-joins-shared-an-activation"
+RED_PROMOTION_MISSING = "promotion-never-happened"
+RED_RESPAWN_MISSING = "seat-respawn-never-scheduled"
+RED_RESPAWN_EARLY = "seat-respawn-came-early"
+RED_RESPAWN_TWICE = "seat-respawn-fired-twice"
+RED_RESPAWN_FREED_SEAT = "seat-respawn-freed-the-seat"
+RED_RESPAWN_TRANSITION = "seat-respawn-transition-is-wrong"
+RED_RESPAWN_GENERATION = "seat-respawn-moved-the-generation"
+RED_RESPAWN_NO_BRAIN = "seat-respawn-binds-no-brain"
+RED_RESPAWN_WIRE = "seat-respawn-left-the-wire"
+RED_RESPAWN_UNKNOWN_KIND = "seat-respawn-accepted-an-unknown-kind"
+RED_RESPAWN_DELAY = "seat-respawn-delay-is-wrong"
+RED_RESPAWN_LIVING_BRAIN = "seat-respawn-took-a-living-brain"
+RED_PROMOTION_WRONG_WATCHER = "promotion-took-the-wrong-watcher"
+RED_PROMOTION_HELD_SLOT = "promotion-took-a-held-slot"
+RED_PROMOTION_GENERATION = "promotion-kept-the-old-generation"
+RED_PROMOTION_BRAIN = "promotion-bound-the-wrong-brain"
+RED_PROMOTION_SECOND_WATCHER = "promotion-moved-the-second-watcher"
+RED_PROMOTION_DECLINE = "promotion-ignored-a-decline"
+RED_PROMOTION_LOBBY_ID = "promotion-kept-the-watcher-lobby-id"
+RED_PROMOTION_BEHIND_INPUT = "promotion-announced-behind-the-sent-input"
+RED_FRESH_STOLE_SEAT = "fresh-join-stole-a-held-seat"
+RED_FRESH_OPENED_HOLD = "fresh-join-opened-a-hold"
+RED_SEAT_SUBSTITUTED = "held-seat-was-substituted"
+RED_RECLAIM_REFUSED = "reclaim-was-refused"
+RED_EXPIRED_HOLD = "expired-hold-never-promoted"
+RED_RECLAIM_DOUBLED = "reclaim-doubled-the-bootstrap"
+RED_CONCURRENT_CAPTURE = "concurrent-joins-recaptured-the-world"
+RED_CONCURRENT_RESTART = "concurrent-join-dropped-the-first-restart"
+RED_OVERFLOW_BOUND = "world-spectator-bound-ignored"
+RED_OVERFLOW_ADMITTED = "world-admitted-past-its-bound"
+RED_OVERFLOW_SEATS = "world-seats-refused-below-capacity"
+RED_OVERFLOW_ROW = "world-row-lost-its-spectator-count"
+RED_REFUSAL_LIVE_BINDING = "world-refusal-took-a-live-binding"
+RED_REFUSAL_UNDELIVERED = "world-refusal-never-reached-the-joiner"
+RED_CAPACITY_MOVED_ORDINARY = "world-capacity-moved-an-ordinary-config"
+RED_CAPACITY_HASH = "world-capacity-left-the-v5-hash"
+RED_CAPACITY_UNBOUNDED = "world-capacity-decoded-past-its-bound"
+RED_CAPACITY_VALIDATED = "world-capacity-passed-validation"
+RED_CAPACITY_SLOTS = "world-capacity-left-the-slot-table"
+RED_CAPACITY_RECORD = "world-capacity-left-the-identity-record"
 
 CASES = (
     {
@@ -291,6 +334,88 @@ CASES = (
         "red": RED_IMAGE_BEFORE_WRITE,
         "also_red": RED_IMAGE_SIM_READ,
         "pass_token": "[net-world-image-publish-selftest] PASS",
+    },
+    {
+        "name": "seat-respawn-keeps-the-world-running",
+        "argv": ["-net-world-respawn-selftest"],
+        "red": RED_RESPAWN_MISSING,
+        "also_red": (
+            RED_RESPAWN_EARLY,
+            RED_RESPAWN_TWICE,
+            RED_RESPAWN_FREED_SEAT,
+            RED_RESPAWN_TRANSITION,
+            RED_RESPAWN_GENERATION,
+            RED_RESPAWN_NO_BRAIN,
+            RED_RESPAWN_WIRE,
+            RED_RESPAWN_UNKNOWN_KIND,
+            RED_RESPAWN_DELAY,
+            RED_RESPAWN_LIVING_BRAIN,
+        ),
+        "pass_token": "[net-world-respawn-selftest] PASS",
+    },
+    {
+        "name": "freed-slot-promotes-the-oldest-spectator",
+        "argv": ["-net-world-promotion-selftest"],
+        "red": RED_PROMOTION_MISSING,
+        "also_red": (
+            RED_PROMOTION_WRONG_WATCHER,
+            RED_PROMOTION_HELD_SLOT,
+            RED_PROMOTION_GENERATION,
+            RED_PROMOTION_BRAIN,
+            RED_PROMOTION_SECOND_WATCHER,
+            RED_PROMOTION_DECLINE,
+            RED_PROMOTION_LOBBY_ID,
+            RED_PROMOTION_BEHIND_INPUT,
+        ),
+        "pass_token": "[net-world-promotion-selftest] PASS",
+    },
+    {
+        "name": "reclaim-outranks-a-fresh-join",
+        "argv": ["-net-world-reclaim-selftest"],
+        "red": RED_FRESH_STOLE_SEAT,
+        "also_red": (
+            RED_FRESH_OPENED_HOLD,
+            RED_SEAT_SUBSTITUTED,
+            RED_RECLAIM_REFUSED,
+            RED_EXPIRED_HOLD,
+            RED_RECLAIM_DOUBLED,
+        ),
+        "pass_token": "[net-world-reclaim-selftest] PASS",
+    },
+    {
+        "name": "concurrent-joins-keep-their-own-activation",
+        "argv": ["-net-world-concurrent-selftest"],
+        "red": RED_CONCURRENT_ACTIVATION,
+        "also_red": (RED_CONCURRENT_CAPTURE, RED_CONCURRENT_RESTART),
+        "pass_token": "[net-world-concurrent-selftest] PASS",
+    },
+    {
+        "name": "spectator-overflow-is-bounded",
+        "argv": ["-net-world-overflow-selftest"],
+        "red": RED_OVERFLOW_REFUSAL,
+        "also_red": (
+            RED_OVERFLOW_BOUND,
+            RED_OVERFLOW_ADMITTED,
+            RED_OVERFLOW_SEATS,
+            RED_OVERFLOW_ROW,
+            RED_REFUSAL_LIVE_BINDING,
+            RED_REFUSAL_UNDELIVERED,
+        ),
+        "pass_token": "[net-world-overflow-selftest] PASS",
+    },
+    {
+        "name": "world-capacity-rides-the-v5-config",
+        "argv": ["-net-world-capacity-selftest"],
+        "red": RED_CAPACITY_WIRE,
+        "also_red": (
+            RED_CAPACITY_MOVED_ORDINARY,
+            RED_CAPACITY_HASH,
+            RED_CAPACITY_UNBOUNDED,
+            RED_CAPACITY_VALIDATED,
+            RED_CAPACITY_SLOTS,
+            RED_CAPACITY_RECORD,
+        ),
+        "pass_token": "[net-world-capacity-selftest] PASS",
     },
     {
         "name": "host-bootstrap-refusals-and-retries",

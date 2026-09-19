@@ -450,6 +450,12 @@ static std::string ResyncSaveName() {
 			}
 			request.worldId = m_WorldIdentity.worldId;
 			request.worldBoot = m_WorldIdentity.boot;
+			// A world keeps the capacity its first boot authored; a later boot only names one when the record has none.
+			if (!request.worldTeamCapacity.has_value() && WorldIdentityCarriesCapacity(m_WorldIdentity)) {
+				request.worldTeamCapacity = m_WorldIdentity.teamCapacity;
+				request.worldMaxSpectators = m_WorldIdentity.maxSpectators;
+				request.worldRespawnDelaySeconds = m_WorldIdentity.respawnDelaySeconds;
+			}
 			m_WorldJoin.SetIdentityPath(NetWorldIdentityFile::DefaultPath());
 			// The writer thread hashes what it wrote; a multi-megabyte digest is not sim-thread work.
 			g_ActivityMan.SetAutosaveDigest([](const std::vector<uint8_t>& bytes) { return DigestWorldJoinBytes(bytes); });
@@ -460,6 +466,15 @@ static std::string ResyncSaveName() {
 			if (error) *error = configError;
 			SetState(NetMatchServiceState::Failed, "Match roster refused", configError);
 			return false;
+		}
+		if (matchConfig.persistentWorld && !WorldIdentityCarriesCapacity(m_WorldIdentity)) {
+			// The first boot's capacity becomes the world's own, so every later boot offers the same seats.
+			m_WorldIdentity.teamCapacity = matchConfig.worldTeamCapacity;
+			m_WorldIdentity.maxSpectators = matchConfig.worldMaxSpectators;
+			m_WorldIdentity.respawnDelaySeconds = matchConfig.worldRespawnDelaySeconds;
+			if (std::string writeError; !NetWorldIdentityFile::Write(NetWorldIdentityFile::DefaultPath(), m_WorldIdentity, &writeError)) {
+				std::cout << "[net-world] identity capacity not stored: " << writeError << std::endl;
+			}
 		}
 
 		g_TimerMan.SetDeltaTimeSecs(c_DefaultDeltaTimeS);
@@ -563,6 +578,7 @@ static std::string ResyncSaveName() {
 					m_DirectoryRow.resumeSessionId = matchConfig.worldId;
 					// The previous boot's row token, so this boot resumes the world's own row.
 					m_DirectoryRow.resumeToken = m_WorldIdentity.directoryToken;
+				m_DirectoryRow.spectatorFree = matchConfig.worldMaxSpectators;
 				}
 			}
 			m_DirectoryRetracted = false;
@@ -1707,6 +1723,7 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_DirectoryRow.peerCount = m_BeaconMaxPlayers;
 				m_DirectoryRow.seatsFree = directorySeatsFree;
+				m_DirectoryRow.spectatorFree = m_WorldSpectatorsFree;
 				m_DirectoryRow.joinMode = NetIceRowJoinMode(m_IceEnabled, !m_DirectoryRow.listenAddrs.empty(), m_IceBoundSessionId, m_Directory.GetSessionId());
 				advertised = m_DirectoryRow;
 				// A register receives a new id; only the existing bound row can advertise ICE.
@@ -2045,6 +2062,10 @@ static std::string ResyncSaveName() {
 		m_WorldJoinImageDigest = image.digest;
 		m_WorldJoinImageArchive = entry->archive;
 		m_WorldJoin.PublishImage(image);
+		if (m_WorldCaptureRequestedTick != 0 && m_WorldCaptureRequestedTick <= image.tick) {
+			// The capture this mark stood for has landed, so the next bootstrap may ask for its own.
+			m_WorldCaptureRequestedTick = 0;
+		}
 		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
 	}
 
@@ -2073,6 +2094,9 @@ static std::string ResyncSaveName() {
 			if (total != 0 && received >= total && host.Image().IsValid()) {
 				(void)host.NoteTransferComplete(connection, host.Image().bytes, nullptr);
 			}
+		} else if (report.kind == c_NetWorldReportDecline) {
+			// A watcher that asked to stay one is skipped when a slot frees; it keeps its stream.
+			(void)host.NoteSpectatorPreference(connection, report.value != 0);
 		} else if (report.kind == c_NetWorldReportCatchUp) {
 			uint64_t activation = 0;
 			const NetWorldJoinSession* prior = host.FindSession(connection);
@@ -2241,6 +2265,17 @@ static std::string ResyncSaveName() {
 			liveConnections.push_back(peer.transportPeerId);
 		}
 		m_WorldJoin.ReleaseLostConnections(liveConnections);
+		// A dropped or reclaiming seat keeps its slot: only that holder may take it back, and a
+		// fresh join that arrives meanwhile watches instead of allocating it.
+		std::vector<uint8_t> reclaimHolds;
+		for (const NetH4SeatStatus& status: m_ReconnectHost.GetSeatStatuses()) {
+			if (status.lockstepPeerId != 0 && (status.dropped || status.reclaiming)) {
+				reclaimHolds.push_back(status.lockstepPeerId);
+			}
+		}
+		m_WorldJoin.NoteReclaimHolds(reclaimHolds);
+		m_WorldSpectatorsFree = static_cast<int64_t>(m_WorldJoin.SpectatorsFree());
+		bool answeredRefusal = false;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 				continue;
@@ -2252,13 +2287,38 @@ static std::string ResyncSaveName() {
 			if (stableSeat == 0) {
 				continue;
 			}
-			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, nullptr)) {
+			if (m_WorldJoin.RefusalOf(peer.transportPeerId) != NetWorldJoinRefusal::None) {
+				continue;
+			}
+			std::string joinError;
+			NetPeerId holderConnection = c_InvalidNetPeerId;
+			uint32_t holderGeneration = 0;
+			uint32_t holderIncarnation = 0;
+			const bool credentialedHolder = m_ReconnectHost.GetSeatHolder(stableSeat, holderConnection, holderGeneration, holderIncarnation) &&
+			                                holderConnection == peer.transportPeerId;
+			if (!m_WorldJoin.BeginJoin(peer.transportPeerId, stableSeat, peer.displayName, nowMs, &joinError, credentialedHolder)) {
+				// A world with no seat and no watcher slot answers the connection once, before it has
+				// read a byte of image, with the reason the joiner shows.
+				const NetWorldJoinRefusal refusal =
+				    joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::WorldFull)) ? NetWorldJoinRefusal::WorldFull
+				    : joinError == NetWorldJoinRefusalText(static_cast<uint64_t>(NetWorldJoinRefusal::SeatHeld)) ? NetWorldJoinRefusal::SeatHeld
+				                                                                                                 : NetWorldJoinRefusal::None;
+				// One refusal per pump: the reserved id carries one answer at a time, and a connection
+				// left unanswered is asked again next pump, where a freed seat may admit it instead.
+				if (refusal != NetWorldJoinRefusal::None && !answeredRefusal && m_Runner &&
+				    AnswerWorldJoinRefusal(m_Runner->GetLobbySession(), peer.transportPeerId, refusal)) {
+					(void)m_WorldJoin.NoteRefusal(peer.transportPeerId, refusal);
+					answeredRefusal = true;
+					std::cout << "[net-world] refuse connection=" << peer.transportPeerId << " " << joinError << std::endl;
+				}
 				continue;
 			}
 			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
-			if (tick != 0 && m_WorldJoin.Image().tick != tick) {
-				// The capture is taken here; the image is published once the writer has the archive, so the
-				// bootstrap waits in SnapshotTransfer for a pump or two instead of reading a half-written file.
+			if (tick != 0 && m_WorldJoin.Image().tick != tick && m_WorldCaptureRequestedTick != tick) {
+				// One capture serves every bootstrap opened at this tick: the image is published once the
+				// writer has the archive, so the second joiner waits in SnapshotTransfer for that one image
+				// instead of costing the incumbent a second sim-thread capture at the same tick.
+				m_WorldCaptureRequestedTick = tick;
 				g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 			}
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
@@ -2309,10 +2369,11 @@ static std::string ResyncSaveName() {
 		}
 		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
 			uint64_t later = 0;
+			const uint64_t previous = slow->activationTick;
 			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
 			    m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
-				// A re-announce moves the epoch; the live stream restarts again at the new frame.
-				m_Coordinator->SetObservationEpoch(later);
+				// A re-announce moves this activation's restart; every other joiner's stays announced.
+				m_Coordinator->MoveObservationEpoch(previous, later);
 				if (m_Runner) {
 					(void)m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(*slow), MakeWorldJoinReport(c_NetWorldReportActivate, later), nullptr);
 				}
@@ -2359,7 +2420,25 @@ static std::string ResyncSaveName() {
 			(void)ScenarioRunner::SubmitWorldTransition(release);
 			m_WorldJoin.CancelJoin(connection, "clean leave");
 			std::cout << "[net-world] release peer=" << static_cast<int>(status.lockstepPeerId) << std::endl;
+			uint64_t promotedAt = 0;
+			NetPeerId promoted = c_InvalidNetPeerId;
+			if (m_WorldJoin.PromoteWaitingSpectator(nowFrame, &promotedAt, &promoted, nullptr) && promotedAt != 0) {
+				// The promoted watcher takes the plan a fresh join takes: its own announced E, then one
+				// Activate with one brain. Its member lobby id replaces the watcher id it gave back.
+				m_Coordinator->SetObservationEpoch(promotedAt);
+				if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(promoted); session != nullptr && m_Runner) {
+					NetLobbySession& lobby = m_Runner->GetLobbySession();
+					// A promoted watcher is a world bootstrap again until its Activate commits, so its id is
+					// bound on the world plane: a session-roster rebuild would drop a plain late binding and
+					// stall the tail it still needs to reach E.
+					(void)lobby.BindWorldTransferRemote(session->assignedPeerId, promoted, nullptr);
+					lobby.SendMatchConfigTo(session->assignedPeerId);
+					(void)lobby.SendPayloadTo(session->assignedPeerId, MakeWorldJoinReport(c_NetWorldReportActivate, promotedAt), nullptr);
+				}
+				std::cout << "[net-world] promote connection=" << promoted << " at=" << promotedAt << std::endl;
+			}
 		}
+		DriveWorldSeatRespawns(nowFrame);
 		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
 		const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
 		bool late = false;
@@ -2386,6 +2465,59 @@ static std::string ResyncSaveName() {
 			}
 			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
 			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
+		}
+	}
+
+	bool NetMatchService::SetWorldSpectatorDeclinesPromotion(bool declines) {
+		// A watcher's own choice, sent on its world lobby; the host records it against its seat.
+		if (m_IsHost || !m_Runner || !m_WorldCatchUp.active) {
+			return false;
+		}
+		m_WorldSpectatorDeclinesPromotion = declines;
+		return m_Runner->GetLobbySession().SendPayload(MakeWorldJoinReport(c_NetWorldReportDecline, declines ? 1 : 0), nullptr);
+	}
+
+	bool NetMatchService::AnswerWorldJoinRefusal(NetLobbySession& lobby, NetPeerId connection, NetWorldJoinRefusal refusal) {
+		if (connection == c_InvalidNetPeerId || refusal == NetWorldJoinRefusal::None) {
+			return false;
+		}
+		// The reserved id is scratch: nothing streams to it, and the answer goes out on this call,
+		// before any later refusal can point it somewhere else.
+		if (!lobby.BindLateRemote(c_WorldRefusalLobbyPeer, connection, nullptr)) {
+			return false;
+		}
+		return lobby.SendPayloadTo(c_WorldRefusalLobbyPeer, MakeWorldJoinReport(c_NetWorldReportRefused, static_cast<uint64_t>(refusal)), nullptr);
+	}
+
+	void NetMatchService::DriveWorldSeatRespawns(uint64_t nowFrame) {
+		const Activity* activity = g_ActivityMan.GetActivity();
+		if (activity == nullptr || nowFrame == 0) {
+			return;
+		}
+		const NetMatchConfig& config = m_Runner ? m_Runner->GetMatchConfig() : m_MatchConfig;
+		// A seat with no living brain keeps its seat and watches; the host authors one respawn for it
+		// after the world's configured delay, and every peer spawns it at the transition's frame.
+		for (const NetWorldSlot& slot: m_WorldJoin.Membership().Slots()) {
+			if (!slot.held) {
+				continue;
+			}
+			const int32_t player = WorldActivityPlayerOf(config, slot.peerId);
+			if (player < 0) {
+				continue;
+			}
+			const Actor* brain = activity->GetPlayerBrain(player);
+			(void)m_WorldJoin.Membership().NoteSeatBrain(slot.peerId, brain != nullptr && !brain->IsDead(), nowFrame);
+		}
+		const uint64_t delayFrames = WorldRespawnDelayFrames(config);
+		const NetWorldSlot* dueRespawn = m_WorldJoin.Membership().DueSeatRespawn(nowFrame, delayFrames);
+		if (dueRespawn == nullptr) {
+			return;
+		}
+		const uint8_t peerId = dueRespawn->peerId;
+		const NetGameWorldTransition respawn = BuildWorldSeatRespawnTransition(*dueRespawn, config, m_WorldJoin.Membership().Revision(), nowFrame);
+		if (ScenarioRunner::SubmitWorldTransition(respawn)) {
+			(void)m_WorldJoin.Membership().NoteSeatRespawn(peerId, nowFrame);
+			std::cout << "[net-world] seat respawn peer=" << static_cast<int>(peerId) << " at=" << nowFrame << std::endl;
 		}
 	}
 
@@ -2425,7 +2557,8 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
-	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp) {
+	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal) {
+		if (outRefusal) *outRefusal = 0;
 		std::vector<uint8_t> packed = lobby.TakePendingTailBytes();
 		std::vector<NetLockstepFrame> later;
 		size_t offset = 0;
@@ -2449,6 +2582,11 @@ static std::string ResyncSaveName() {
 			ScenarioRunner::AppendWorldCatchUp(std::move(later));
 		}
 		const NetLobbySession::WorldJoinReport report = lobby.TakeWorldJoinReport();
+		if (report.pending && report.kind == c_NetWorldReportRefused) {
+			// The world turned this joiner away before any transfer; the caller ends the join.
+			if (outRefusal) *outRefusal = report.value;
+			return;
+		}
 		if (report.pending && report.kind == c_NetWorldReportActivate) {
 			catchUp.activationTick = report.value;
 			ScenarioRunner::SetWorldCatchUpActivation(report.value);
@@ -2517,7 +2655,14 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp);
+		uint64_t refusal = 0;
+		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
+		if (refusal != 0) {
+			const std::string reason = NetWorldJoinRefusalText(refusal);
+			SetState(NetMatchServiceState::Failed, "World join refused", reason);
+			std::cout << "[net-world] refused " << reason << std::endl;
+			return;
+		}
 		// The joiner's lockstep starts here, after the E-1 frame has been applied, never from inside Take.
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {
@@ -4995,6 +5140,19 @@ static std::string ResyncSaveName() {
 			config.version = NetMatchConfigUtil::c_PersistentWorldVersion;
 			config.worldId = request.worldId;
 			config.worldBoot = request.worldBoot;
+			// The host authors the world's capacity; the preset's default spreads the seated humans the
+			// way the mode does, so a host that names nothing still publishes an explicit contract.
+			if (request.worldTeamCapacity.has_value()) {
+				config.worldTeamCapacity = *request.worldTeamCapacity;
+			} else {
+				config.worldTeamCapacity = {};
+				for (uint32_t seat = 0; seat < seatedHumans; ++seat) {
+					const size_t team = mode == NetMatchMode::CoopPvE ? 0 : (seat % NetMatchConfigUtil::c_WorldTeamCount);
+					++config.worldTeamCapacity[team];
+				}
+			}
+			config.worldMaxSpectators = request.worldMaxSpectators.value_or(NetMatchConfigUtil::c_MaxWorldSpectators);
+			config.worldRespawnDelaySeconds = request.worldRespawnDelaySeconds.value_or(NetMatchConfigUtil::c_DefaultWorldRespawnDelaySeconds);
 			config.activityPreset = request.activityPreset.empty() ? "Persistent World" : request.activityPreset;
 			config.peerCount = request.peerCount;
 		} else {
@@ -5020,6 +5178,18 @@ static std::string ResyncSaveName() {
 			NetMatchPlayerSlot slot;
 			slot.peerId = peerId;
 			slot.team = mode == NetMatchMode::CoopPvE ? 0 : static_cast<uint8_t>(peerId - firstHumanPeer);
+			if (world) {
+				// The world's slot table is spent in team order, so the roster names the same team for the
+				// same lockstep id and an Activate binds the player slot the capacity gave it.
+				uint32_t offset = peerId - firstHumanPeer;
+				for (size_t team = 0; team < config.worldTeamCapacity.size(); ++team) {
+					if (offset < config.worldTeamCapacity[team]) {
+						slot.team = static_cast<uint8_t>(team);
+						break;
+					}
+					offset -= config.worldTeamCapacity[team];
+				}
+			}
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
 			                                               : ("Client " + std::to_string(peerId));
