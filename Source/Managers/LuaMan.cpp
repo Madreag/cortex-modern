@@ -5475,6 +5475,9 @@ void LuaStateWrapper::Initialize() {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
 
+	// A state made between two captures still owes the next capture its first table write.
+	luaJIT_arm_tab_write_trap(m_State);
+
 	// Replace os.time / os.clock with sim-tick stubs so sim Lua can't read the wall clock.
 	RegisterDeterministicOsStubs(m_State);
 

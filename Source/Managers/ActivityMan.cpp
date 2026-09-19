@@ -393,7 +393,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	});
 	image->activity = activityText;
 	std::vector<std::string> problems;
-	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration())) {
+	const size_t luaStateCount = 1 + g_LuaMan.GetThreadedScriptStates().size();
+	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration(), luaStateCount)) {
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems)) {
