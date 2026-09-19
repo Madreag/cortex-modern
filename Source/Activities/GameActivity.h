@@ -100,13 +100,21 @@ namespace RTE {
 		bool PlaceAndSubmitLockstepBrain(int player, const std::string& className, const std::string& preset, const std::string& module);
 
 		/// Test-only seam: queues one scripted setup-editor gesture for a seat. "place_brain" holds the named
-		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE. The
-		/// gesture runs through the seat's own SceneEditorGUI, so the commit takes the path a player's does.
+		/// brain over the ground at a fraction of the scene's width and presses; "done" presses DONE;
+		/// "place_object" places a non-brain through the same editor; "actor_select" switches onto a craft
+		/// passenger after the match starts. The gesture runs through the seat's own paths.
 		/// @return Whether the gesture was queued.
 		static bool QueueSetupEditorGesture(int player, const std::string& kind, float sceneXFraction, const std::string& className, const std::string& preset, const std::string& module);
 
 		/// 0 = nothing queued for the seat, 1 = a gesture is still running, 2 = the seat could not carry it out.
 		static int SetupEditorGestureStatus(int player);
+
+		/// Whether this peer may write sim state for the seat (roster owner). True when lockstep is off.
+		bool MayWriteLockstepSeat(int player) const;
+
+		/// The in-game editor refused a write on this seat because the peer does not own it.
+		static void NoteEditorWriteRefused(int player);
+		static bool EditorWriteWasRefused(int player);
 
 		/// Whether a seat has flagged itself ready to start.
 		bool IsReadyToStart(int player) const { return player >= Players::PlayerOne && player < Players::MaxPlayerCount && m_ReadyToStart[player]; }
@@ -447,6 +455,7 @@ namespace RTE {
 		/// @param pTargetBitmap A pointer to a screen-sized BITMAP to draw on.
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene. (default: Vector())
 		/// @param which Which screen's GUI to draw onto the bitmap. (default: 0)
+		void PrepareDrawGUI(int whichScreen = 0) override;
 		void DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos = Vector(), int which = 0) override;
 
 		/// Draws this ActivityMan's current graphical representation to a
@@ -663,6 +672,7 @@ namespace RTE {
 
 		// The observation sceneman scroll targets, for when the game is over or a player is in observation mode
 		Vector m_ObservationTarget[Players::MaxPlayerCount];
+		bool m_ObserveFreezeHeld[Players::MaxPlayerCount]{}; //!< Per-seat game-over observe freeze; zeroed in Clear.
 		// The player death sceneman scroll targets, for when a player-controlled actor dies and the view should go to his last position
 		Vector m_DeathViewTarget[Players::MaxPlayerCount];
 		// The actor a spectating player's view follows; local presentation, so it stays out of checkpoints
@@ -789,6 +799,15 @@ namespace RTE {
 		void RefuseBrainPlacement(int player, const std::string& reason, bool banner);
 		/// Runs the seat's queued scripted editor gesture, if it has one, the way that seat's own input would.
 		void DriveScriptedSetupEditor(int player);
+		/// Runs a queued actor-select onto a craft passenger for a presented seat after the match starts.
+		void DriveScriptedActorSelect(int player);
+		/// Observe look-around after OVER: freeze until GameOverTimer is past 1000 sim ms, then apply cursor input.
+		bool ApplyObserveLookAround(int player);
+		/// Draw-only ActorSelect/Go-To pie highlight for a local seat.
+		void ApplyCursorHighlightDraw(int player);
+		/// Clears the draw-only highlight when the cursor leaves an actor or those views.
+		void ClearCursorHighlightDraw(int player);
+		Actor* m_pLastHighlightDrawActor[Players::MaxPlayerCount]; //!< Draw-only last ring target; never dumped.
 		/// Builds every seat's committed brain, in seat order, from a unique-id counter pinned to the same
 		/// value on every peer. A local editor's own preview objects take ids off that counter on one peer
 		/// alone, so the shared brains are made only after it is put back in step.

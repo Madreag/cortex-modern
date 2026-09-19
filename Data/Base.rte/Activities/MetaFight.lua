@@ -80,14 +80,14 @@ function MetaFight:BrainCheck()
 
 					if not setTeam[team] then
 						-- Add objective points
-						self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHUDPos, team, GameActivity.ARROWDOWN);
+						self:AddObjectivePoint("Protect!", self:GetPlayerBrain(player).AboveHeadPos, team, GameActivity.ARROWDOWN);
 						for otherPlayer = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
 							if otherPlayer ~= player and self:PlayerActive(otherPlayer) and MovableMan:IsActor(self:GetPlayerBrain(otherPlayer)) then
 								local otherTeam = self:GetTeamOfPlayer(otherPlayer);
 								if otherTeam ~= team then
-									self:AddObjectivePoint("Destroy!", self:GetPlayerBrain(otherPlayer).AboveHUDPos, team, GameActivity.ARROWDOWN);
+									self:AddObjectivePoint("Destroy!", self:GetPlayerBrain(otherPlayer).AboveHeadPos, team, GameActivity.ARROWDOWN);
 								else
-									self:AddObjectivePoint("Protect!", self:GetPlayerBrain(otherPlayer).AboveHUDPos, team, GameActivity.ARROWDOWN);
+									self:AddObjectivePoint("Protect!", self:GetPlayerBrain(otherPlayer).AboveHeadPos, team, GameActivity.ARROWDOWN);
 								end
 							end
 						end

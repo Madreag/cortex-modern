@@ -41,11 +41,17 @@ def rules_for(variant):
     elif variant == "site":
         rules["scene_name"] = "Fredeleig Plains"
     elif variant == "stock":
-        # The site this activity ships with. Its seats still meet the setup editor, so the arm drives it.
         rules["activity_preset"] = "Skirmish Defense"
         rules["scene_name"] = "Ketanot Hills"
+    elif variant == "stock-scene":
+        # No standardRules: the request names the site, so a missing scene write stays Grasslands.
+        rules["activity_preset"] = "Skirmish Defense"
+        rules["scene_name"] = "Ketanot Hills"
+        rules.update(difficulty=50, starting_gold=0, fog_of_war=False, require_clear_path_to_orbit=False,
+                     deploy_units=False)
+        rules["teams"][1] = dict(technology_intent="-All-", technology_module="", ai_skill=50)
     elif variant in ("brains", "brains-auto", "hold-desync", "hold-resync", "resync-skirmish", "brains-longname",
-                     "brains-shared", "wire-refusal"):
+                     "brains-shared", "wire-refusal", "rendezvous-cap"):
         # Skirmish Defense on a site with no brain on it: every human seat has to place its own brain in
         # the setup editor, which is the start a lockstep match has to synchronize.
         rules["activity_preset"] = "Skirmish Defense"
@@ -85,7 +91,11 @@ def encode_config(rules, wire, dedicated=False, default=False):
               for peer in range(2 if dedicated else 1, 3)]
     if not default:
         roster.append((0, 1, True, "CPU"))
-    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, int(dedicated))
+    horizon = int(rules.get("path_horizon_ticks") or 0)
+    reserved = int(dedicated)
+    if horizon:
+        reserved |= 2
+    payload = struct.pack("<HQBBHBBH", wire.config_version.value, 1, 1, 2, 3, mode, 2, reserved)
     for value in (rules["activity_type"], rules["activity_preset"], rules["scene_name"], "PvP" if default else "CoopPvE"):
         payload += string(value)
     payload += struct.pack("<B", len(roster))
@@ -99,6 +109,8 @@ def encode_config(rules, wire, dedicated=False, default=False):
     for team in rules["teams"]:
         payload += string(team["technology_intent"]) + string(team["technology_module"]) + struct.pack("<B", team["ai_skill"])
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
+    if horizon:
+        payload += struct.pack("<H", horizon)
     return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
                        wire.match_config_type.value, 0, len(payload)) + payload
 
@@ -123,20 +135,113 @@ def observations(log):
             for line in log.splitlines() if line.startswith("[e2e] rules ")]
 
 
-def expected_observation(rules, default=False):
+def seed_observations(log):
+    return [dict(token.split("=", 1) for token in shlex.split(line.removeprefix("[e2e] seed ")))
+            for line in log.splitlines() if line.startswith("[e2e] seed ")]
+
+
+ACTIVITY_DEFAULT_FUNDS = 2000
+
+
+def iostream_float_token(value):
+    """The token Main.cpp's [e2e] rules line writes for a float (defaultfloat, precision 6)."""
+    return format(float(value), ".6g")
+
+
+def roster_seeded_teams(default=False, dedicated=False):
+    """Teams encode_config seats. NetActivitySetup seeds only those teams with the agreed gold."""
+    teams = {peer - 1 if default else 0 for peer in range(2 if dedicated else 1, 3)}
+    if not default:
+        teams.add(1)
+    return teams
+
+
+def expected_seed(rules, default=False, dedicated=False):
+    """Expected [e2e] seed tokens: the NetActivitySetup lobby seed before StartActivity.
+
+    Roster-seeded teams carry the agreed starting gold; unseeded teams keep the cloned
+    activity default 2000. Form is iostream defaultfloat, same as the seed line.
+    """
+    seeded = roster_seeded_teams(default, dedicated)
+    expected = {}
+    for index in range(4):
+        funds = rules["starting_gold"] if index in seeded else ACTIVITY_DEFAULT_FUNDS
+        expected[f"team{index}.funds"] = iostream_float_token(funds)
+    return expected
+
+
+def post_start_funds(rules, default=False, dedicated=False):
+    """GetTeamFunds after StartActivity — the token [e2e] rules prints at sim tick 1."""
+    preset = rules["activity_preset"]
+    gold = rules["starting_gold"]
+    difficulty = rules["difficulty"]
+    seeded = roster_seeded_teams(default, dedicated)
+    funds = {}
+    if preset == "P4 Alpha Duel":
+        # P4AlphaDuel.lua:51-52 zeros TEAM_1/TEAM_2; teams 2-3 stay the cloned 2000.
+        for index in range(4):
+            funds[index] = 0 if index in (0, 1) else ACTIVITY_DEFAULT_FUNDS
+    elif preset == "Skirmish Defense":
+        # SkirmishDefense.lua:106-107 sets every team to GetStartingGold, then :142-146
+        # each CPU team to 100000 when gold>100000 else 80*Difficulty+2000.
+        cpu_teams = set() if default else {1}
+        for index in range(4):
+            funds[index] = (100000 if gold > 100000 else 80 * difficulty + 2000) if index in cpu_teams else gold
+    else:
+        # SimBaseline.lua has no SetTeamFunds; the seed stands (census).
+        for index in range(4):
+            funds[index] = gold if index in seeded else ACTIVITY_DEFAULT_FUNDS
+    return funds
+
+
+def expected_observation(rules, default=False, dedicated=False):
+    """Expected [e2e] rules tokens.
+
+    gold is the integer GetStartingGold print. teamN.funds is GetTeamFunds after
+    StartActivity, in iostream defaultfloat form, per activity script:
+
+    P4 Alpha Duel (default, infinite, site, resync-duel): teams 0-1 are 0
+    (P4AlphaDuel.lua:51-52); teams 2-3 stay 2000.
+    Skirmish Defense (stock, brains*): every team starting_gold, then each CPU
+    team 100000 if gold>100000 else 80*difficulty+2000 (SkirmishDefense.lua:106-107,
+    :142-146).
+    Determinism SimBaseline (census): no SetTeamFunds; the seed stands.
+
+    The lobby seed itself is scored from the [e2e] seed line, not this printer.
+    """
     expected = dict(tick="1", difficulty=str(rules["difficulty"]), gold=str(rules["starting_gold"]),
                     fog=str(int(rules["fog_of_war"])), orbit=str(int(rules["require_clear_path_to_orbit"])),
                     deploy=str(int(rules["deploy_units"])), cpu_team="-1" if default else "1",
                     activity=rules["activity_module"] + "/" + rules["activity_preset"],
                     scene=rules["scene_module"] + "/" + rules["scene_name"])
+    funds = post_start_funds(rules, default, dedicated)
     for index, team in enumerate(rules["teams"]):
         expected[f"team{index}.tech"] = team["technology_module"] or "-All-"
         expected[f"team{index}.ai"] = str(team["ai_skill"])
+        expected[f"team{index}.funds"] = iostream_float_token(funds[index])
     return expected
 
 
-def score_rules(log, rules, default=False):
-    rows, expected = observations(log), expected_observation(rules, default)
+LOSS_TEXT = "Your brain has been destroyed!"
+
+
+def score_p4_loss_text(log):
+    """The game-over screen still shows the loss line after 6 s (duration -1, not the 5 s transient)."""
+    ended = 'Activity "P4 Alpha Duel" was ended' in log or "[p4-duel] loss-duration=-1" in log
+    pinned = "[p4-duel] loss-duration=-1" in log
+    still = f"[p4-duel] game-over-loss-still={LOSS_TEXT}" in log
+    return {"ended": ended, "pinned": pinned, "still": still, "pass": (not ended) or (pinned and still)}
+
+
+def score_rules(log, rules, default=False, dedicated=False):
+    rows, expected = observations(log), expected_observation(rules, default, dedicated)
+    actual = rows[0] if len(rows) == 1 else {}
+    differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
+    return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
+
+
+def score_seed(log, rules, default=False, dedicated=False):
+    rows, expected = seed_observations(log), expected_seed(rules, default, dedicated)
     actual = rows[0] if len(rows) == 1 else {}
     differences = {key: {"expected": value, "actual": actual.get(key)} for key, value in expected.items() if actual.get(key) != value}
     return {"pass": len(rows) == 1 and not differences, "observations": rows, "differences": differences}
@@ -201,6 +306,12 @@ PLACEMENT_NAMES = "Host, Client"
 # The client's placement waits on this signal from the host's probe, so the waiting window never
 # depends on either peer's pacing.
 WAITING_SEEN_SIGNAL = "host_waiting_seen"
+# rendezvous-cap: the host holds to this tick before it places and signals, and the client holds to the
+# second one after the signal. Each hold is under the engine's 120-tick setup-editor watchdog and the two
+# together are past it, so the run passes only when the watchdog counts from the rendezvous.
+RENDEZVOUS_CAP_HOST_TICK = 80
+RENDEZVOUS_CAP_CLIENT_TICK = 170
+EDITOR_CAP_ERROR = "setup editor did not finish within"
 
 
 def wait_banner(resolution):
@@ -217,7 +328,7 @@ def shots(peer, name):
 
 
 def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusal=False, resolution=None,
-                  host_signal=None, long_names=False, shared_seat=False):
+                  host_signal=None, long_names=False, shared_seat=False, place_after_signal=0):
     """The UI probe script that drives this peer's own seat through the setup editor, the way a player does."""
     seat = EDITOR_SEATS[peer]
     player = seat["player"]
@@ -232,10 +343,17 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         other = 1 - player
         steps += [{"op": "wait", "player": other, "picker_open": True}, {"op": "wait", "renders": 4},
                   {"op": "assert_net_ui_clear", "player": other, "picker_open": True, "screen_text": True},
+                  # A presented seat writing a non-brain object is refused on the roster owner.
+                  {"op": "editor_place", "player": other, "x_fraction": 0.50,
+                   "class": "HDFirearm", "preset": "Pistol", "module": "Base.rte", "name": "presented_place"},
+                  {"op": "assert_editor", "player": other, "name": "presented_place_refusal",
+                   "equals": {"placement_refused": True},
+                   "screen_text_contains": "can't place"},
                   # The seats panel while the editor holds the world: the strip lifts off its rows.
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 4},
                   {"op": "assert_net_ui_clear", "player": player, "picker_open": True, "screen_text": True},
+                  {"op": "assert_net_ui_clear", "player": other, "picker_open": True, "screen_text": True},
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False}]
     if compact(resolution):
@@ -297,6 +415,9 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps.append({"op": "wait", "sim_at_least": place_after})
     if peer != "host" and host_signal:
         steps.append({"op": "wait_file", "path": str(host_signal)})
+        if place_after_signal:
+            # The hold the editor watchdog is allowed to count, taken after the rendezvous ends the wait.
+            steps.append({"op": "wait", "sim_at_least": place_after_signal})
     steps += [{"op": "editor_place_brain", "player": player, "x_fraction": seat["x_fraction"],
                "class": seat["cls"], "preset": seat["preset"], "module": "Base.rte"},
               # Placing alone commits nothing: the wire only carries the seat's DONE.
@@ -336,6 +457,13 @@ def editor_script(peer, capture, place_after, finish_at_ready=False, wire_refusa
         steps.append({"op": "wait", "sim_at_least": 200})
         if capture:
             steps += shots(peer, "match_started")
+        if shared_seat:
+            # A presented seat's ActorSelect onto a craft passenger is presentation only.
+            steps += [{"op": "actor_select", "player": 1 - player}, {"op": "wait", "renders": 4}]
+        # Sample the bound seat's START while the scripted pad holds it, then release.
+        steps += [{"op": "pad_down", "button": "start"}, {"op": "wait", "renders": 2},
+                  {"op": "assert", "name": "pad_held", "equals": {"editing": False}},
+                  {"op": "pad_up", "button": "start"}]
     steps.append({"op": "finish"})
     return {"schema": 1, "timeout_ms": 180000, "steps": steps}
 
@@ -430,6 +558,12 @@ def seated_actors(lines):
 
 def compare_census_lines(left, right):
     """The contract's compare: the launch census line by line, each line's seat-binding columns aside."""
+    if not left:
+        return {"pass": False, "reason": "offline census tick-1 lines missing", "offline_lines": 0,
+                "match_lines": len(right), "seat_binding_differences": [], "first_difference": None}
+    if not right:
+        return {"pass": False, "reason": "match census tick-1 lines missing", "offline_lines": len(left),
+                "match_lines": 0, "seat_binding_differences": [], "first_difference": None}
     normalized = [[normalize_seat_binding(line) for line in lines] for lines in (left, right)]
     lines = [[line for line, _ in side] for side in normalized]
     first = next((index for index, (a, b) in enumerate(zip(*lines)) if a != b), None)
@@ -524,8 +658,8 @@ def launch(options):
         if actual != exe_hash:
             raise RuntimeError("executable changed during launch case")
     # The setup editor is driven through the UI probe's own seam, so the arm commits the way a player does.
-    editor_driven = options.variant in ("brains", "stock", "hold-desync", "hold-resync", "resync-skirmish",
-                                       "brains-longname", "brains-shared", "wire-refusal")
+    editor_driven = options.variant in ("brains", "stock", "stock-scene", "hold-desync", "hold-resync", "resync-skirmish",
+                                       "brains-longname", "brains-shared", "wire-refusal", "rendezvous-cap")
     shared_seat = options.variant == "brains-shared"
     places_brains = editor_driven or options.variant == "brains-auto"
     # resync-duel is the control: the same perturbation and heal on an activity that never opens the editor.
@@ -544,9 +678,22 @@ def launch(options):
         # The seatless path: every peer stands in for its own players' DONE at the deterministic spot.
         common.append("-net-match-e2e-brain-placement")
     runs, records = {}, {}
+    host_flags = []
     try:
         for peer in ("host", "client"):
-            flags = ["-net-dedicated" if options.dedicated else "-net-host", "-net-match-service-config", str(config)] if peer == "host" else ["-net-join", "127.0.0.1"]
+            if peer == "host":
+                flags = ["-net-dedicated"] if options.dedicated else ["-net-host"]
+                if options.variant == "stock-scene":
+                    flags += ["-net-match-service-preset", rules["activity_preset"],
+                              "-net-match-service-module", rules["activity_module"],
+                              "-net-match-service-scene", rules["scene_name"],
+                              "-net-match-service-scene-module", rules["scene_module"]]
+                else:
+                    flags += ["-net-match-service-config", str(config)]
+            else:
+                flags = ["-net-join", "127.0.0.1"]
+            if peer == "host":
+                host_flags = list(flags)
             if options.variant == "brains-longname":
                 # Each peer announces its own seat name; the flagless service default stays Host/Client.
                 flags += ["-net-player-name", LONG_HOST_NAME if peer == "host" else LONG_SEAT_NAME]
@@ -562,12 +709,24 @@ def launch(options):
                 script.parent.mkdir(parents=True, exist_ok=False)
                 # resync-skirmish seats both place past the injected desync (tick 50, resync ~tick 60):
                 # the resync has to land while the seats are still placing, so the hold outlasts it.
-                delay = 90 if options.variant == "resync-skirmish" else ((90 if hold_desync else 45) if peer == "client" else 0)
+                # wire-refusal places at the rendezvous: the 120-tick editor cap is a harness
+                # safety net over the shared place phase, not an extra client hold.
+                if options.variant == "wire-refusal":
+                    delay = 0
+                elif options.variant == "rendezvous-cap":
+                    # The host is the slow probe: it holds the editor, then places and signals.
+                    delay = RENDEZVOUS_CAP_HOST_TICK if peer == "host" else 0
+                elif options.variant == "resync-skirmish":
+                    delay = 90
+                else:
+                    delay = (90 if hold_desync else 45) if peer == "client" else 0
                 script.write_text(json.dumps(editor_script(peer, captures, delay, hold_desync and not hold_resync,
                                                            options.variant == "wire-refusal", resolution,
                                                            host_signal=root / "host-ui" / (WAITING_SEEN_SIGNAL + ".json"),
                                                            long_names=options.variant == "brains-longname",
-                                                           shared_seat=shared_seat),
+                                                           shared_seat=shared_seat,
+                                                           place_after_signal=(RENDEZVOUS_CAP_CLIENT_TICK
+                                                                              if options.variant == "rendezvous-cap" else 0)),
                                              indent=2), encoding="utf-8")
                 env["CC_TEST_NET_UI_SCRIPT"] = str(script)
             if hold_desync and peer == "host":
@@ -591,11 +750,18 @@ def launch(options):
             run.close()
     logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
     checks, result = {}, {"records": records, "wire": wire.as_json()}
+    if options.variant == "stock-scene":
+        result["stock_scene_request"] = {"standard_rules": False, "flags": host_flags,
+                                         "scene_name": rules["scene_name"], "scene_module": rules["scene_module"],
+                                         "activity_preset": rules["activity_preset"]}
+        checks["stock_scene_request_has_no_standard_rules"] = "-net-match-service-config" not in host_flags
+        checks["stock_scene_request_names_scene"] = ("-net-match-service-scene" in host_flags
+                                                    and rules["scene_name"] in host_flags)
     # A config the engine turned down leaves the other peer with a bare timeout, so the refusal leads every failure.
     result["config_refusal"] = None if refusal else config_refusal(logs, wire, exe_hash)
     for peer, log in logs.items():
         for number, line in enumerate(log.splitlines(), 1):
-            if line.startswith("[e2e] rules ") or "setup failed:" in line:
+            if line.startswith("[e2e] rules ") or line.startswith("[e2e] seed ") or "setup failed:" in line:
                 print(f"{root / peer / 'stdout.log'}:{number}: {line}")
     if refusal:
         reasons = {peer: re.findall(r"\[net-match-service-e2e\] setup failed: (.+)", log) for peer, log in logs.items()}
@@ -636,10 +802,15 @@ def launch(options):
             (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
             report_checks(checks, result["config_refusal"])
             return 0 if result["passed"] else 1
-        result["rules"] = {peer: score_rules(log, rules, default) for peer, log in logs.items()}
+        result["rules"] = {peer: score_rules(log, rules, default, options.dedicated) for peer, log in logs.items()}
+        result["seed"] = {peer: score_seed(log, rules, default, options.dedicated) for peer, log in logs.items()}
         for peer in runs:
             checks[peer + "_process"] = records[peer].get("exit_code") == 0 and not records[peer].get("timed_out") and records[peer].get("evidence_complete", False)
             checks[peer + "_rules"] = result["rules"][peer]["pass"]
+            checks[peer + "_seed"] = result["seed"][peer]["pass"]
+        if options.variant in ("default", "resync-duel"):
+            result["loss_text"] = {peer: score_p4_loss_text(log) for peer, log in logs.items()}
+            checks["loss_text_after_6s"] = all(row["pass"] for row in result["loss_text"].values())
         if editor_driven:
             # Every commit came off the seat's own editor, not the deterministic-spot helper.
             result["commits"] = {peer: committed(log) for peer, log in logs.items()}
@@ -647,6 +818,47 @@ def launch(options):
                                               for rows in result["commits"].values())
             result["probes"] = {peer: probe_result(root, peer) for peer in runs}
             checks["ui_probe_pass"] = all(result["probes"][peer].get("pass") and result["probes"][peer].get("complete") for peer in runs)
+            # The host signals and the client waits on it: each peer passes exactly one rendezvous, and the
+            # engine's editor watchdog counts its ticks from that line, not from the start of the hold.
+            result["rendezvous"] = {peer: [line for line in log.splitlines() if line.startswith("[net-ui-probe] rendezvous ")]
+                                    for peer, log in logs.items()}
+            checks["rendezvous_counted"] = all(len(lines) == 1 and WAITING_SEEN_SIGNAL in lines[0]
+                                               for lines in result["rendezvous"].values())
+            if not checks["rendezvous_counted"]:
+                for peer, lines in result["rendezvous"].items():
+                    print(f"{root / peer / 'stdout.log'}: rendezvous lines {lines}")
+            if options.variant == "rendezvous-cap":
+                # The editor phase is past the 120-tick watchdog end to end, and under it on either side of
+                # the rendezvous: an engine that counts from the editor's first tick fails here.
+                capped = {peer: [line for line in log.splitlines() if EDITOR_CAP_ERROR in line]
+                          for peer, log in logs.items()}
+                result["editor_cap"] = {"host_hold_tick": RENDEZVOUS_CAP_HOST_TICK,
+                                        "client_hold_tick": RENDEZVOUS_CAP_CLIENT_TICK, "lines": capped}
+                checks["editor_cap_counted_from_the_rendezvous"] = not any(capped.values())
+                if not checks["editor_cap_counted_from_the_rendezvous"]:
+                    for peer, lines in capped.items():
+                        print(f"{root / peer / 'stdout.log'}: {lines}")
+            def pad_held(probe):
+                named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                         if step.get("name") == "pad_held"]
+                return next((step.get("observed", {}) for step in probe.get("steps", [])
+                             if step.get("index") in named), {})
+            def pad_bound_row(observed):
+                seat = observed.get("bound_seat") or 0
+                rows = observed.get("controllers") or []
+                if seat:
+                    return next((row for row in rows if row.get("seat") == seat), None), seat
+                started = next((row for row in rows if row.get("start")), None)
+                return started, (started.get("seat") if started else 0)
+            if not (hold_desync and not hold_resync):
+                result["pad_held"] = {peer: pad_held(result["probes"][peer]) for peer in runs}
+                leaks = []
+                for observed in result["pad_held"].values():
+                    row, seat = pad_bound_row(observed)
+                    if row and (row.get("start") or row.get("moved")):
+                        leaks.append(seat)
+                named = leaks[0] if leaks else "N"
+                checks[f"a scripted pad start moved seat {named}'s controller"] = not leaks
             # The refusal the production path shows a player who presses DONE with no brain placed: the seat
             # stays unready and uncommitted, and the stock editor asks for the brain again.
             # The DONE-refusal assertion names itself, so the arm reads that step and no other. A peer
@@ -662,6 +874,18 @@ def launch(options):
                 rows and all(not row["ready"] and not row["submitted"] and not row["resident"] and
                              any(text in row["screen_text"] for text in PLACE_REFUSED) for row in rows)
                 for rows in result["refusals"].values())
+            if shared_seat:
+                def presented_refusal(probe, peer):
+                    named = [index for index, step in enumerate(probe.get("script", {}).get("steps", []))
+                             if step.get("name") == "presented_place_refusal"]
+                    rows = next((step["observed"]["editor_seats"] for step in probe.get("steps", [])
+                                 if step["index"] in named), [])
+                    return [row for row in rows if row.get("player") == 1 - EDITOR_SEATS[peer]["player"]]
+                result["presented_refusals"] = {peer: presented_refusal(result["probes"][peer], peer) for peer in runs}
+                checks["presented_place_refused"] = all(
+                    rows and all(row.get("placement_refused") is True and "can't place" in row.get("screen_text", "")
+                                 for row in rows)
+                    for rows in result["presented_refusals"].values())
             reports = {peer: json.loads((root / peer / "report.json").read_text(errors="replace")) for peer in runs}
             result["toasts"] = {peer: reports[peer].get("ui", {}).get("toasts", []) for peer in runs}
             checks["placement_toasts"] = all(sum(1 for toast in result["toasts"][peer] if toast.get("kind") == "brain_placed") == 2 for peer in runs)
@@ -716,8 +940,11 @@ def launch(options):
         # No raw-dump gate against the replay: a single-peer playback binds the other seat's actors to its own
         # controller, and the dump carries that mode. replay_exact compares the on-wire subsystems, which is
         # the comparison that means anything here.
-        result["replay_rules"] = score_rules((root / "replay/stdout.log").read_text(errors="replace"), rules, default)
+        replay_log = (root / "replay/stdout.log").read_text(errors="replace")
+        result["replay_rules"] = score_rules(replay_log, rules, default, options.dedicated)
+        result["replay_seed"] = score_seed(replay_log, rules, default, options.dedicated)
         checks["replay_rules"] = result["replay_rules"]["pass"]
+        checks["replay_seed"] = result["replay_seed"]["pass"]
         if options.variant == "census":
             # The offline arm: the same preset launched through the stock command line scenario path, whose
             # setup the match must match. A retained reference build is passed as --offline-repo.

@@ -878,6 +878,7 @@
     <ClInclude Include="Source\Menus\ScenarioActivityConfigGUI.h" />
     <ClInclude Include="Source\Menus\SettingsAudioGUI.h" />
     <ClInclude Include="Source\Menus\SettingsGameplayGUI.h" />
+    <ClInclude Include="Source\Menus\MenuAutomation.h" />
     <ClInclude Include="Source\Menus\SettingsGUI.h" />
     <ClInclude Include="Source\Menus\SettingsInputGUI.h" />
     <ClInclude Include="Source\Menus\SettingsInputMappingGUI.h" />
@@ -924,6 +925,8 @@
     <ClInclude Include="Source\Network\NetActorOwnership.h" />
     <ClInclude Include="Source\Network\NetAdmissionSelfTest.h" />
     <ClInclude Include="Source\Network\NetAuthCrypto.h" />
+    <ClInclude Include="Source\Network\NetHostBanStore.h" />
+    <ClInclude Include="Source\Network\NetParticipantCrypto.h" />
     <ClInclude Include="Source\Network\NetAuthSelfTest.h" />
     <ClInclude Include="Source\Network\NetDirectoryClient.h" />
     <ClInclude Include="Source\Network\NetDirectoryCodec.h" />
@@ -1210,6 +1213,7 @@
     <ClCompile Include="Source\Menus\ScenarioActivityConfigGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsAudioGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsGameplayGUI.cpp" />
+    <ClCompile Include="Source\Menus\MenuAutomation.cpp" />
     <ClCompile Include="Source\Menus\SettingsGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsInputGUI.cpp" />
     <ClCompile Include="Source\Menus\SettingsInputMappingGUI.cpp" />
@@ -1549,6 +1553,8 @@
     <ClCompile Include="Source\Network\NetActorOwnership.cpp" />
     <ClCompile Include="Source\Network\NetAdmissionSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp" />
+    <ClCompile Include="Source\Network\NetHostBanStore.cpp" />
+    <ClCompile Include="Source\Network\NetParticipantCrypto.cpp" />
     <ClCompile Include="Source\Network\NetAuthSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryClient.cpp" />
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp" />

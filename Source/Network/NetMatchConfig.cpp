@@ -95,6 +95,7 @@ namespace RTE {
 			        {"teams", std::move(teams)},
 			        {"autosave_enabled", config.autosaveEnabled}, {"autosave_interval_seconds", config.autosaveIntervalSeconds},
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
+			        {"path_horizon_ticks", config.pathHorizonTicks},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)}};
 		}
 
@@ -117,6 +118,9 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
+			if (config.pathHorizonTicks != 0) {
+				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
+			}
 			for (size_t i = 0; i < config.teamRules.size(); ++i) {
 				const std::string prefix = "team." + std::to_string(i) + ".";
 				fields.emplace_back(prefix + "technology_intent", config.teamRules[i].technologyIntent);
@@ -150,6 +154,7 @@ namespace RTE {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
+		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
 	}
 
 	bool NetMatchConfigUtil::DeriveRematchConfig(const NetMatchConfig& previous, const std::vector<uint8_t>& survivingPeerIds, NetMatchConfig& outConfig, std::map<uint8_t, uint8_t>* outSeatMap, std::string* error) {
@@ -250,6 +255,8 @@ namespace RTE {
 		} else if (!config.worldId.empty() || config.worldBoot != 0) {
 			return refuse("an ordinary match cannot carry a world identity");
 		}
+		if (config.version < 3 && config.pathHorizonTicks != 0) return refuse("legacy config cannot carry a path horizon");
+		if (config.pathHorizonTicks > c_MaxPathHorizonTicks) return refuse("path_horizon_ticks is out of range");
 		if (config.roundId == 0 || config.configRevision == 0) return refuse("round_id and config_revision must be nonzero");
 		if (config.difficulty > 100) return refuse("difficulty is out of range");
 		if (config.startingGold > c_MaxFiniteStartingGold && config.startingGold != c_InfiniteGold) return refuse("starting_gold is out of range");

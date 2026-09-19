@@ -973,6 +973,10 @@ uint64_t RTE::LockstepPlayedFrame() {
 	return applied > s_LockstepPausedFrames ? applied - s_LockstepPausedFrames : 0;
 }
 
+void RTE::ResetLockstepPausedFrames() {
+	s_LockstepPausedFrames = 0;
+}
+
 void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
 	// A round that restarts its frame numbering restarts the count with it.
 	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {
@@ -3698,6 +3702,9 @@ Actor* MovableMan::RemoveActor(MovableObject* pActorToRem) {
 		}
 		RemoveActorFromTeamRoster(dynamic_cast<Actor*>(pActorToRem));
 		pActorToRem->SetAsAddedToMovableMan(false);
+		if (Actor* actor = dynamic_cast<Actor*>(pActorToRem)) {
+			actor->GetController()->DropLocalProduction();
+		}
 	}
 	return removed;
 }
@@ -4172,6 +4179,40 @@ void MovableMan::OverrideMaterialDoors(bool eraseDoorMaterial, int team) const {
 			}
 		}
 	}
+}
+
+bool MovableMan::TeamHasDoorMaterialInBox(int team, const Box& box) const {
+	const float sceneWidth = static_cast<float>(g_SceneMan.GetSceneWidth());
+	const float sceneHeight = static_cast<float>(g_SceneMan.GetSceneHeight());
+	std::array<Vector, 5> shifts{Vector()};
+	int shiftCount = 1;
+	if (g_SceneMan.SceneWrapsX() && sceneWidth > 0.0F) {
+		shifts[shiftCount++] = Vector(sceneWidth, 0.0F);
+		shifts[shiftCount++] = Vector(-sceneWidth, 0.0F);
+	}
+	if (g_SceneMan.SceneWrapsY() && sceneHeight > 0.0F) {
+		shifts[shiftCount++] = Vector(0.0F, sceneHeight);
+		shifts[shiftCount++] = Vector(0.0F, -sceneHeight);
+	}
+	for (const std::deque<Actor*>* actorDeque: {&m_Actors, &m_AddedActors}) {
+		for (const Actor* actor: *actorDeque) {
+			const ADoor* actorAsDoor = dynamic_cast<const ADoor*>(actor);
+			// An override only moves pixels for a door whose material is currently drawn.
+			if (!actorAsDoor || !actorAsDoor->GetDoorMaterialDrawn() || !actorAsDoor->GetDoor()) {
+				continue;
+			}
+			if (team != Activity::NoTeam && actorAsDoor->GetTeam() != team) {
+				continue;
+			}
+			const Box doorBox = actorAsDoor->GetDoor()->GetBoundingBox();
+			for (int shift = 0; shift < shiftCount; ++shift) {
+				if (doorBox.IntersectsBox(Box(box.GetCorner() + shifts[shift], box.GetWidth(), box.GetHeight()))) {
+					return true;
+				}
+			}
+		}
+	}
+	return false;
 }
 
 void MovableMan::RegisterAlarmEvent(const AlarmEvent& newEvent) {
@@ -4667,6 +4708,7 @@ void MovableMan::Update() {
 
 				// Delete
 				m_ContiguousActorIDs.erase(*aIt);
+				(*aIt)->GetController()->DropLocalProduction();
 				(*aIt)->DestroyScriptState();
 				delete (*aIt);
 				m_ValidActors.erase(*aIt);

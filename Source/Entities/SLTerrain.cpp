@@ -8,6 +8,11 @@
 #include "Atom.h"
 #include "DataModule.h"
 #include "PresetMan.h"
+#include "Scene.h"
+#include "SceneMan.h"
+#include "MovableMan.h"
+#include "Constants.h"
+#include "allegro.h"
 
 #include <array>
 #include <execution>
@@ -37,6 +42,53 @@ void SLTerrain::Clear() {
 	m_TerrainObjects.clear();
 	m_UpdatedMaterialAreas.clear();
 	m_OrbitDirection = Directions::Up;
+}
+
+void SLTerrain::AddUpdatedMaterialArea(const Box& newArea) {
+	m_UpdatedMaterialAreas.emplace_back(newArea);
+	if (g_MovableMan.IsSpeculative()) {
+		return;
+	}
+	if (Scene* scene = g_SceneMan.GetScene(); scene && scene->GetTerrain() == this) {
+		scene->NoteHorizonTerrainBox(newArea);
+	}
+}
+
+int SLTerrain::TestInstallMaterialBitmap(int width, int height, bool wrapX, bool wrapY) {
+	if (width <= 0 || height <= 0) {
+		return -1;
+	}
+	BITMAP* bitmap = create_bitmap_ex(8, width, height);
+	if (!bitmap) {
+		return -1;
+	}
+	clear_to_color(bitmap, MaterialColorKeys::g_MaterialAir);
+	if (m_MainBitmap && m_MainBitmapOwned) {
+		destroy_bitmap(m_MainBitmap);
+	}
+	m_MainBitmap = bitmap;
+	m_MainBitmapOwned = true;
+	m_Width = width;
+	m_Height = height;
+	m_WrapX = wrapX;
+	m_WrapY = wrapY;
+	m_ScaledDimensions.SetXY(static_cast<float>(width), static_cast<float>(height));
+	auto adoptLayer = [&](std::unique_ptr<SceneLayer>& layer) {
+		if (!layer) {
+			layer = std::make_unique<SceneLayer>();
+		}
+		BITMAP* color = create_bitmap_ex(8, width, height);
+		if (!color) {
+			return false;
+		}
+		clear_to_color(color, 0);
+		layer->TestAdoptBitmap(color, wrapX, wrapY);
+		return true;
+	};
+	if (!adoptLayer(m_FGColorLayer) || !adoptLayer(m_BGColorLayer)) {
+		return -1;
+	}
+	return 0;
 }
 
 int SLTerrain::Create() {
@@ -490,7 +542,7 @@ std::deque<MOPixel*> SLTerrain::EraseSilhouette(BITMAP* sprite, const Vector& po
 		}
 	}
 	// TODO: improve fit/tightness of box here.
-	m_UpdatedMaterialAreas.emplace_back(Box(pos - pivot, static_cast<float>(maxWidth), static_cast<float>(maxHeight)));
+	AddUpdatedMaterialArea(Box(pos - pivot, static_cast<float>(maxWidth), static_cast<float>(maxHeight)));
 
 	return dislodgedMOPixels;
 }

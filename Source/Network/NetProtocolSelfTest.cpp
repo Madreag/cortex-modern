@@ -1,10 +1,13 @@
 #include "NetProtocolSelfTest.h"
 
 #include "LoopbackTransport.h"
+#include "NetAuthCrypto.h"
+#include "NetParticipantCrypto.h"
 #include "NetProtocol.h"
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <utility>
@@ -153,7 +156,7 @@ namespace RTE {
 			if (!RoundTrip({12, 0, emptyDiagnostics}, error)) {
 				return false;
 			}
-			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::SeatReassigned); ++raw) {
+			for (uint16_t raw = 1; raw <= static_cast<uint16_t>(NetRejectReason::IdentityUnproven); ++raw) {
 				const NetRejectReason reason = static_cast<NetRejectReason>(raw);
 				if (std::string(NetProtocol::RejectReasonName(reason)) == "Unknown") {
 					*error = "reject reason " + std::to_string(raw) + " has no name";
@@ -165,7 +168,7 @@ namespace RTE {
 				}
 			}
 			std::vector<uint8_t> beyond;
-			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::SeatReassigned) + 1U), "refused", "key", "", ""}}, beyond, error)) {
+			if (!EncodeMessage({14, 0, NetJoinRejected{static_cast<NetRejectReason>(static_cast<uint16_t>(NetRejectReason::IdentityUnproven) + 1U), "refused", "key", "", ""}}, beyond, error)) {
 				return false;
 			}
 			if (!ExpectDecodeError(beyond, NetProtocolErrorCode::InvalidValue, error)) {
@@ -185,7 +188,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x02, 0x00,
+				0x03, 0x00,
 				0x18, 0x00,
 				0x07, 0x00,
 				0x00, 0x00,
@@ -306,7 +309,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expected = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x02, 0x00,
+				0x03, 0x00,
 				0x18, 0x00,
 				0x10, 0x00,
 				0x00, 0x00,
@@ -332,7 +335,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedAck = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x02, 0x00,
+				0x03, 0x00,
 				0x18, 0x00,
 				0x13, 0x00,
 				0x00, 0x00,
@@ -355,7 +358,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedSubstitution = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x02, 0x00,
+				0x03, 0x00,
 				0x18, 0x00,
 				0x17, 0x00,
 				0x00, 0x00,
@@ -396,7 +399,8 @@ namespace RTE {
 			// An oversized admission message is refused on the header, before any field is parsed.
 			mutated.assign(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxH4PayloadBytes + 1U, 0);
 			mutated[0] = 0x43; mutated[1] = 0x43; mutated[2] = 0x4E; mutated[3] = 0x32;
-			mutated[4] = 0x02;
+			mutated[4] = 0x03;
+			mutated[5] = 0x00;
 			mutated[6] = 0x18;
 			mutated[8] = static_cast<uint8_t>(NetMessageType::Reclaim);
 			mutated[16] = static_cast<uint8_t>((NetProtocol::c_MaxH4PayloadBytes + 1U) & 0xFFU);
@@ -870,8 +874,8 @@ namespace RTE {
 		}
 
 		bool TestOldWireEncoding(std::string* error) {
-			// A v1 peer's build has no decoder for the v2 types, so it is told why it was refused in
-			// its own envelope and never handed a payload it would read as garbage.
+			// A v1 peer's build has no decoder for types this version added, so it is told why it was
+			// refused in its own envelope and never handed a payload it would read as garbage.
 			if (!NetProtocol::CanEncodeAtVersion(1) || !NetProtocol::CanEncodeAtVersion(NetProtocol::c_Version)) {
 				*error = "the build cannot stamp a rejection at v1 and at its own version";
 				return false;
@@ -880,7 +884,8 @@ namespace RTE {
 				*error = "a version this build cannot write was accepted";
 				return false;
 			}
-			const NetMessage rejection{7, 0, NetJoinRejected{NetRejectReason::ProtocolMismatch, "protocol version 1 does not match this build's 2", "protocol_version", "2", "1"}};
+			const std::string currentVersion = std::to_string(NetProtocol::c_Version);
+			const NetMessage rejection{7, 0, NetJoinRejected{NetRejectReason::ProtocolMismatch, "protocol version 1 does not match this build's " + currentVersion, "protocol_version", currentVersion, "1"}};
 			std::vector<uint8_t> v1;
 			NetProtocolError encodeError;
 			if (!NetProtocol::EncodeAtVersion(rejection, 1, v1, &encodeError)) {
@@ -899,12 +904,12 @@ namespace RTE {
 			}
 			// The payload schema did not change across the bump, so only the two version bytes differ.
 			if (v1.size() != current.size()) {
-				*error = "the v1 and v2 rejections differ in size";
+				*error = "the v1 and current rejections differ in size";
 				return false;
 			}
 			for (size_t i = 0; i < v1.size(); ++i) {
 				if (i != 4 && i != 5 && v1[i] != current[i]) {
-					*error = "the v1 rejection differs from the v2 one outside the version field, at byte " + std::to_string(i);
+					*error = "the v1 rejection differs from the current one outside the version field, at byte " + std::to_string(i);
 					return false;
 				}
 			}
@@ -918,24 +923,237 @@ namespace RTE {
 			std::vector<uint8_t> refused;
 			if (NetProtocol::EncodeAtVersion({8, 0, request}, 1, refused, &encodeError) ||
 			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
-				*error = "a v2-only message type was stamped at v1";
+				*error = "a current-only message type was stamped at v1";
 				return false;
 			}
 			NetChat chat;
 			chat.text = "hello";
 			if (NetProtocol::EncodeAtVersion({9, 0, chat}, 1, refused, &encodeError) ||
 			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
-				*error = "a v2-only chat message was stamped at v1";
+				*error = "a current-only chat message was stamped at v1";
 				return false;
 			}
 			if (!NetProtocol::IsMessageTypeInVersion(NetMessageType::JoinRejected, 1) ||
 			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, 1) ||
-			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, NetProtocol::c_Version)) {
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, 2) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::Chat, 2) ||
+			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, 1) ||
+			    NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, 2) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ModuleDigests, NetProtocol::c_Version) ||
+			    !NetProtocol::IsMessageTypeInVersion(NetMessageType::ParticipantRemoval, NetProtocol::c_Version)) {
 				*error = "the per-version message type table is wrong";
 				return false;
 			}
+			if (!NetProtocol::CanEncodeAtVersion(2)) {
+				*error = "the build cannot stamp a rejection at v2";
+				return false;
+			}
 			std::cout << "[net-protocol-selftest] PASS old wire: v" << NetProtocol::c_Version
-			          << " build stamps a JoinRejected at v1, refuses v2-only types there" << std::endl;
+			          << " build stamps a JoinRejected at v1, refuses newer types there" << std::endl;
+			return true;
+		}
+
+		NetParticipantRemoval MakeRemoval() {
+			NetParticipantRemoval removal;
+			removal.sessionId = 0xAABBCCDDEEFF0011ULL;
+			removal.round = 3;
+			removal.txId = MakeBytes<16>(0x10);
+			removal.epoch = MakeBytes<16>(0x20);
+			removal.stableSeat = 1;
+			removal.holderGeneration = 2;
+			removal.incarnation = 4;
+			removal.boundaryFrame = 1200;
+			removal.reason = NetParticipantRemovalReason::HostKick;
+			removal.action = NetParticipantRemovalAction::Kick;
+			return removal;
+		}
+
+		bool TestRemovalCodec(std::string* error) {
+			const NetParticipantRemoval removal = MakeRemoval();
+			if (!RoundTrip({70, 0, removal}, error)) {
+				return false;
+			}
+			NetParticipantRemoval banned = removal;
+			banned.reason = NetParticipantRemovalReason::HostBan;
+			banned.action = NetParticipantRemovalAction::BanUntilRemoved;
+			if (!RoundTrip({71, 0, banned}, error)) {
+				return false;
+			}
+			NetParticipantRemoval badVersion = removal;
+			badVersion.version = 0;
+			std::vector<uint8_t> refused;
+			NetProtocolError encodeError;
+			if (NetProtocol::Encode({72, 0, badVersion}, refused, &encodeError) || encodeError.code != NetProtocolErrorCode::InvalidValue) {
+				*error = "a zero removal version was encoded";
+				return false;
+			}
+			NetParticipantRemoval noHolder = removal;
+			noHolder.holderGeneration = 0;
+			if (NetProtocol::Encode({73, 0, noHolder}, refused, &encodeError) || encodeError.code != NetProtocolErrorCode::InvalidValue) {
+				*error = "holder generation 0 was encoded";
+				return false;
+			}
+			if (NetProtocol::EncodeAtVersion({74, 0, removal}, 1, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a removal was stamped at v1";
+				return false;
+			}
+			if (NetProtocol::EncodeAtVersion({75, 0, removal}, 2, refused, &encodeError) ||
+			    encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "a removal was stamped at v2";
+				return false;
+			}
+			std::vector<uint8_t> bytes;
+			if (!EncodeMessage({76, 0, removal}, bytes, error)) {
+				return false;
+			}
+			const NetDecodeResult decoded = NetProtocol::Decode(bytes);
+			const auto* payload = decoded.ok ? std::get_if<NetParticipantRemoval>(&decoded.message.payload) : nullptr;
+			if (!payload || payload->reason != NetParticipantRemovalReason::HostKick || payload->action != NetParticipantRemovalAction::Kick ||
+			    payload->boundaryFrame != 1200 || payload->stableSeat != 1) {
+				*error = "the host removal did not decode identically";
+				return false;
+			}
+			std::cout << "[net-protocol-selftest] PASS removal-codec: host removal roundtrips; forged old-wire stamps refused" << std::endl;
+			return true;
+		}
+
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) return false;
+				for (size_t i = 0; i < count; ++i) buffer[i] = static_cast<uint8_t>(++m_Counter);
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) return false;
+				uint8_t fold = 1;
+				for (size_t i = 0; i < 32; ++i) {
+					fold = static_cast<uint8_t>(fold * 37U + (i < keyCount ? key[i] : 0) + (i < messageCount ? message[i] : 0));
+					mac[i] = fold;
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 3;
+		};
+
+		class ScriptedParticipantCrypto : public NetParticipantCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool GenerateKey(uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) {
+					priv[i] = static_cast<uint8_t>(++m_Counter);
+					pub[i] = static_cast<uint8_t>(~priv[i]);
+				}
+				return true;
+			}
+			bool PublicFromPrivate(const uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				for (int i = 0; i < 32; ++i) pub[i] = static_cast<uint8_t>(~priv[i]);
+				return true;
+			}
+			bool Sign(const uint8_t (&priv)[32], const uint8_t* message, size_t messageCount, uint8_t (&signature)[64]) override {
+				for (int i = 0; i < 64; ++i) {
+					signature[i] = static_cast<uint8_t>(priv[i % 32] ^ (message != nullptr && static_cast<size_t>(i) < messageCount ? message[i] : static_cast<uint8_t>(i)));
+				}
+				return true;
+			}
+			bool Verify(const uint8_t (&pub)[32], const uint8_t* message, size_t messageCount, const uint8_t (&signature)[64]) override {
+				uint8_t priv[32];
+				uint8_t expected[64];
+				for (int i = 0; i < 32; ++i) priv[i] = static_cast<uint8_t>(~pub[i]);
+				return Sign(priv, message, messageCount, expected) && std::memcmp(expected, signature, 64) == 0;
+			}
+		private:
+			uint8_t m_Counter = 9;
+		};
+
+		bool TestIdentityCodec(std::string* error) {
+			ScriptedAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			NetParticipantChallenge challenge;
+			challenge.hostBinding = MakeBytes<32>(0x10);
+			challenge.sessionId = 0x55;
+			challenge.connectionBinding = MakeBytes<16>(0x20);
+			challenge.challenge = MakeBytes<16>(0x30);
+			if (!RoundTrip({80, 0, challenge}, error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			uint8_t priv[32];
+			uint8_t pub[32];
+			if (!participant.GenerateKey(priv, pub)) {
+				*error = "scripted participant key was not created";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantProofTranscript transcript;
+			transcript.hostBinding = challenge.hostBinding;
+			transcript.sessionId = challenge.sessionId;
+			transcript.connectionBinding = challenge.connectionBinding;
+			transcript.challenge = challenge.challenge;
+			std::vector<uint8_t> message;
+			NetParticipantProof proof;
+			std::memcpy(proof.publicId.data(), pub, 32);
+			proof.connectionBinding = challenge.connectionBinding;
+			proof.challenge = challenge.challenge;
+			uint8_t raw[64];
+			if (!NetParticipantProofBytes(transcript, message) || !participant.Sign(priv, message.data(), message.size(), raw)) {
+				*error = "the identity proof could not be signed";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			std::memcpy(proof.signature.data(), raw, 64);
+			if (!RoundTrip({81, 0, proof}, error)) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (NetAcceptParticipantProof(challenge, proof, challenge.hostBinding, challenge.sessionId, false) != NetParticipantProofVerdict::Accept) {
+				*error = "a valid connection proof was refused";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			if (NetAcceptParticipantProof(challenge, proof, challenge.hostBinding, challenge.sessionId, true) != NetParticipantProofVerdict::RejectReplay) {
+				*error = "a replayed proof was accepted";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetParticipantProof forged = proof;
+			forged.signature[0] ^= 1;
+			if (NetAcceptParticipantProof(challenge, forged, challenge.hostBinding, challenge.sessionId, false) != NetParticipantProofVerdict::RejectForgery) {
+				*error = "a forged proof was accepted";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			NetAuthBytes32 otherHost = challenge.hostBinding;
+			otherHost[0] ^= 1;
+			if (NetAcceptParticipantProof(challenge, proof, otherHost, challenge.sessionId, false) != NetParticipantProofVerdict::RejectCrossHost) {
+				*error = "a cross-host proof was accepted";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			std::vector<uint8_t> refused;
+			NetProtocolError encodeError;
+			if (NetProtocol::EncodeAtVersion({82, 0, challenge}, 2, refused, &encodeError) || encodeError.code != NetProtocolErrorCode::UnsupportedVersion) {
+				*error = "an identity challenge was stamped at v2";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
+			SetNetAuthCryptoForTest(nullptr);
+			SetNetParticipantCryptoForTest(nullptr);
+			std::cout << "[net-protocol-selftest] PASS identity: replay/forgery/cross-host proof rejected" << std::endl;
 			return true;
 		}
 
@@ -1176,6 +1394,12 @@ namespace RTE {
 			return fail(error);
 		}
 		if (!TestOldWireEncoding(&error)) {
+			return fail(error);
+		}
+		if (!TestRemovalCodec(&error)) {
+			return fail(error);
+		}
+		if (!TestIdentityCodec(&error)) {
 			return fail(error);
 		}
 		if (!TestLoopback(&error)) {

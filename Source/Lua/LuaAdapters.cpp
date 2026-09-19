@@ -290,6 +290,7 @@ std::vector<Vector>* LuaAdaptersActor::GetSceneWaypoints(Actor* luaSelfObject) {
 }
 
 int LuaAdaptersScene::CalculatePath(Scene* luaSelfObject, const Vector& start, const Vector& end, float jumpHeight, float digStrength, Activity::Teams team) {
+	// A shared lockstep query at tick T sees terrain as of T - H.
 	std::list<Vector>& threadScenePath = luaSelfObject->GetScenePath();
 	team = std::clamp(team, Activity::Teams::NoTeam, Activity::Teams::TeamFour);
 	luaSelfObject->CalculatePath(start, end, threadScenePath, jumpHeight, digStrength, team);

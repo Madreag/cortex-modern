@@ -354,6 +354,9 @@ namespace RTE {
 	/// sim never advances on, and those must not spend a capped match's tick budget.
 	uint64_t LockstepPlayedFrame();
 
+	/// Clears the paused-frame discount a coordinator handoff or resync relaunch starts from zero.
+	void ResetLockstepPausedFrames();
+
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
 	struct NetLockstepPeerStats {
@@ -590,6 +593,8 @@ namespace RTE {
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
 		/// The committed ready-frame for that tick, if it is still held or was just advanced.
 		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
+		/// The in-flight commands this coordinator still holds for one seat at a frame.
+		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -654,6 +659,8 @@ namespace RTE {
 		bool AdmitWorldMember(uint8_t peerId, NetPeerId transportPeerId, uint64_t firstRequiredFrame, std::string* error = nullptr);
 		/// Whether the peer is a member the round waits on right now.
 		bool IsWorldMember(uint8_t peerId) const { return IsKnownRemotePeer(peerId); }
+		/// Host: remove one remote as a clean leave. A held seat expires; a live seat never opens a hold.
+		void EvictRemovedPeer(uint8_t peerId, const std::string& message, uint64_t nowMs);
 		uint64_t HoldPauseRemainingMs(uint64_t nowMs) const;
 		std::string DescribeHeldPause(uint32_t& secondsLeft, uint64_t nowMs) const;
 		/// Publishes one complete current view. Refused sends retry the latest view without growing a queue.
@@ -676,6 +683,7 @@ namespace RTE {
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
+		friend bool TestServiceKick(std::string* error);
 
 	private:
 		bool QueueInputAtTarget(uint64_t targetFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations = {});

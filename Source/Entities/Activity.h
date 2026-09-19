@@ -236,6 +236,9 @@ namespace RTE {
 		/// Updates the render/realtime state of this Activity. Supposed to be done every frame before drawing.
 		virtual void RenderUpdate();
 
+		/// Arms per-screen draw-only presentation before the HUD so a later HUD/GUI blit can see it.
+		virtual void PrepareDrawGUI(int whichScreen = 0) {}
+
 		/// Draws the currently active GUI of a screen to a BITMAP of choice.
 		/// @param targetBitmap A pointer to a screen-sized BITMAP to draw on.
 		/// @param targetPos The absolute position of the target bitmap's upper left corner in the scene.

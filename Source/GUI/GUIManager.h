@@ -57,6 +57,12 @@ namespace RTE {
 		/// @param Pan Panel.
 		void SetFocus(GUIPanel* Pan);
 
+		/// The panel that currently has keyboard focus; null when none does.
+		GUIPanel* GetFocusPanel() const { return m_FocusPanel; }
+
+		/// Presses Return on a panel that drops the focus and checks the key loop stops there.
+		static bool RunComboKeyCommitSelfTest();
+
 	private:
 		std::vector<GUIPanel*> m_PanelList;
 		GUIPanel* m_CapturedPanel;

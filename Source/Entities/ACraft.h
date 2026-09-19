@@ -205,6 +205,10 @@ namespace RTE {
 		/// @return Whetehr the object in the group was found carried by this.
 		bool HasObjectInGroup(std::string groupName) const override;
 
+		/// Hands a landing passenger to the controlling seat the same way an exit does.
+		/// A presented-but-foreign seat is presentation only, so the extra Update does not run.
+		void HandoffExitingPassenger(Actor* passenger);
+
 		/// Gets the current state of the hatch.
 		/// @return An int encoding the hatch state. See the HatchState enum.
 		unsigned int GetHatchState() const { return m_HatchState; }

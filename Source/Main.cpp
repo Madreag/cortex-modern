@@ -245,6 +245,8 @@ static bool s_netMatchServicePresetExplicit = false;
 static bool s_netMatchTicksExplicit = false;
 static std::string s_netMatchServiceE2EPreset = "P4 Alpha Duel";
 static std::string s_netMatchServiceE2EModule;
+static std::string s_netMatchServiceE2EScene;
+static std::string s_netMatchServiceE2ESceneModule;
 static std::string s_netMatchServiceConfigPath;
 static std::string s_netPlayerName;
 
@@ -309,7 +311,8 @@ static std::string s_netMatchMode = "pvp";
 static std::string s_netMatchOwnershipPolicy = "team-owner";
 static bool s_netMatchServiceE2EEnteredEditor = false;
 static bool s_netMatchE2EBrainPlacement = false; //!< -net-match-e2e-brain-placement: this peer places its own seats' brains in the synchronized setup editor.
-static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor, so a match that never leaves it fails instead of idling.
+static uint64_t s_netMatchE2EEditorTicks = 0; //!< Ticks the activity has spent in the setup editor since the last rendezvous, so a match that never leaves it fails instead of idling.
+static uint64_t s_netMatchE2ERendezvousSeen = 0; //!< Rendezvous points the UI probe has passed, so a deliberate wait on another peer does not spend the cap.
 static NetMatchE2ETickClock s_netMatchE2ETicks;
 static long s_netMatchE2EActorCensus = -1;
 static long s_netMatchE2EActorCensusPeak = -1; //!< The max actor count seen, so a transient heal double-spawn that later sheds back to normal is still visible.
@@ -406,6 +409,12 @@ static std::unordered_set<uint64_t> s_eventLedgerGlowUIDs;
 static std::string s_netReplayOutPath;
 static int s_netReplayExitCode = 0;
 static uint64_t s_netReplayTicks = 0;
+static bool s_netReplayFromMenu = false;
+static bool s_netReplayReturnPending = false;
+static std::string s_netReplayReturnStatus;
+static float s_netReplayPreviousDeltaTime = 0.0F;
+static bool s_netReplayPreviousFreeRun = false;
+static void CloseNetReplayPlayback();
 bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std::string* error);
 bool StageResyncedMatchActivity(std::string* error);
 
@@ -898,6 +907,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_netMatchServiceConfigPath = argValue[++i];
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-match-service-scene") {
+			s_netMatchServiceE2EScene = argValue[++i];
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-match-service-scene-module") {
+			s_netMatchServiceE2ESceneModule = argValue[++i];
+			continue;
+		}
 		// The seat name this peer announces; without it the e2e path still defaults to Host/Client.
 		if (!lastArg && currentArg == "-net-player-name") {
 			const std::string name = argValue[++i];
@@ -1117,6 +1134,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-fake-lag") {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-feel-render-settings") {
+			if (!FrameMan::SetFeelRenderSettings(argValue[++i])) {
+				std::cerr << "[feel] invalid render settings: expected RenderCapHz = 0 or 60" << std::endl;
+				return false;
+			}
+			continue;
+		}
+		if (!lastArg && currentArg == "-feel-measure") {
+			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
+				std::cerr << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory" << std::endl;
+				return false;
+			}
 			continue;
 		}
 
@@ -1471,10 +1502,15 @@ static void ConfigureMenuScriptInput(int argc, char** argv) {
 	GUIInputWrapper::SetAutomationDriving(driving);
 }
 
+// One write per diagnostic line: a worker thread's own line can never land inside a menu-script line.
+static void MenuScriptPrint(const std::string& line) {
+	System::PrintDiagnosticLine("[menu-script] " + line);
+}
+
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	GUIInputWrapper::SetAutomationDriving(false);
-	std::cerr << "[menu-script] FAILED: " << reason << std::endl;
+	System::PrintDiagnosticErrorLine("[menu-script] FAILED: " + reason);
 	s_menuScriptFailed = true;
 	System::SetQuit(true);
 }
@@ -1524,7 +1560,7 @@ void ProcessMenuScript() {
 			steps.push_back(line);
 		}
 		loaded = true;
-		std::cout << "[menu-script] loaded " << steps.size() << " steps" << std::endl;
+		MenuScriptPrint("loaded " + std::to_string(steps.size()) + " steps");
 		if (steps.empty()) {
 			return MenuScriptFail("menu-script has no steps: " + s_menuScriptPath);
 		}
@@ -1584,7 +1620,7 @@ void ProcessMenuScript() {
 		// keeps the frame budget it has always had.
 		const bool expired = waitCondDeadlineMs != 0 ? MenuScriptNowMs() >= waitCondDeadlineMs : --waitCondTimeout <= 0;
 		if (met || expired) {
-			std::cout << std::format("[menu-script] {} -> {} (members={} state={})\n", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState) << std::flush;
+			MenuScriptPrint(std::format("{} -> {} (members={} state={})", waitCond, met ? "OK" : "TIMEOUT", snapshot.members.size(), snapshot.serviceState));
 			if (!met) { return MenuScriptFail("condition wait timed out: " + waitCond); }
 			waitCond.clear();
 			waitCondDeadlineMs = 0;
@@ -1592,7 +1628,7 @@ void ProcessMenuScript() {
 		return;
 	}
 	if (stepIndex >= steps.size()) {
-		std::cout << "[menu-script] complete" << std::endl;
+		MenuScriptPrint("complete");
 		CompleteMenuScript();
 		return;
 	}
@@ -1604,7 +1640,7 @@ void ProcessMenuScript() {
 		std::string observation;
 		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager(),
 			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
-		std::cout << "[menu-script] " << cmd << " " << observation << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint(cmd + " " + observation + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) return MenuScriptFail(cmd + " " + observation);
 	} else if (cmd == "wait") {
 		iss >> waitFrames;
@@ -1672,24 +1708,24 @@ void ProcessMenuScript() {
 		iss >> name;
 		// SaveScreenToPNG prepends System::GetScreenshotDirectory() ("ScreenShots/"); use a plain name.
 		g_FrameMan.SaveScreenToPNG(name.c_str());
-		std::cout << "[menu-script] screenshot ScreenShots/" << name << " screen=" << (pauseMenu ? "Pause" : menu->AutomationActiveScreenName()) << std::endl;
+		MenuScriptPrint("screenshot ScreenShots/" + name + " screen=" + (pauseMenu ? std::string("Pause") : menu->AutomationActiveScreenName()));
 	} else if (cmd == "activate") {
 		std::string control;
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
-		std::cout << "[menu-script] activate " << control << " ok=" << ok << std::endl;
+		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
 		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
-		std::cout << "[menu-script] post_command " << control << " ok=" << ok << std::endl;
+		MenuScriptPrint("post_command " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
 		std::string control;
 		iss >> control;
 		const bool exists = pauseMenu ? pauseMenu->AutomationControlExists(control) : menu->AutomationControlExists(control);
-		std::cout << "[menu-script] assert_control " << control << " " << (exists ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_control " + control + " " + (exists ? "PASS" : "FAIL"));
 		if (!exists) { return MenuScriptFail("assert_control names no control in the skin: " + control); }
 	} else if (cmd == "moderate") {
 		// The same panel action a host clicks, driven from a menu script.
@@ -1700,7 +1736,7 @@ void ProcessMenuScript() {
 			seat = -1;
 		}
 		const bool ok = menu->AutomationModerate(action, seat);
-		std::cout << "[menu-script] moderate " << action << " seat=" << seat << " ok=" << ok << std::endl;
+		MenuScriptPrint("moderate " + action + " seat=" + std::to_string(seat) + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("moderate found no seat to act on: " + action); }
 	} else if (cmd == "settext") {
 		std::string control;
@@ -1714,7 +1750,7 @@ void ProcessMenuScript() {
 		int checked = 0;
 		iss >> control >> checked;
 		if (!menu->AutomationSetCheck(control, checked != 0)) { return MenuScriptFail("setcheck failed (checkbox missing or hidden): " + control); }
-		std::cout << "[menu-script] setcheck " << control << " " << checked << std::endl;
+		MenuScriptPrint("setcheck " + control + " " + std::to_string(checked));
 	} else if (cmd == "assert_label") {
 		std::string control;
 		std::string sub;
@@ -1724,14 +1760,14 @@ void ProcessMenuScript() {
 		std::string text;
 		const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, text) : menu->AutomationLabelText(control, text);
 		const bool pass = found && text.find(sub) != std::string::npos;
-		std::cout << "[menu-script] assert_label " << control << " \"" << sub << "\" text=\"" << text << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_label " + control + " \"" + sub + "\" text=\"" + text + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_screen expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_screen expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
 	} else if (cmd == "assert_status" || cmd == "assert_error") {
 		std::string sub;
@@ -1739,14 +1775,14 @@ void ProcessMenuScript() {
 		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
 		const std::string status = cmd == "assert_error" ? menu->AutomationMultiplayerError() : menu->AutomationMultiplayerStatus();
 		const bool pass = status.find(sub) != std::string::npos;
-		std::cout << "[menu-script] " << cmd << " \"" << sub << "\" status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint(cmd + " \"" + sub + "\" status=\"" + status + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail(cmd + " missing substring: " + sub); }
 	} else if (cmd == "assert_substate") {
 		std::string expected;
 		iss >> expected;
 		const std::string actual = menu->AutomationMultiplayerSubScreen();
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_substate expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_substate expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_substate expected " + expected + " got " + actual); }
 	} else if (cmd == "chat") {
 		// The same send the lobby's input line does, driven headless so a capture has content.
@@ -1757,42 +1793,43 @@ void ProcessMenuScript() {
 		if (!text.empty() && text[0] == ' ') { text.erase(0, 1); }
 		const uint8_t scopeValue = scope == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
 		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
-		std::cout << "[menu-script] chat scope=" << scope << " ok=" << ok << " text=\"" << text << "\"" << std::endl;
+		MenuScriptPrint("chat scope=" + scope + " ok=" + std::to_string(static_cast<int>(ok)) + " text=\"" + text + "\"");
 		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
-		std::cout << "[menu-script] dump_lobby state=" << snapshot.serviceState << " members=" << snapshot.members.size()
-				  << " activity=\"" << snapshot.activityPreset << "\" module=\"" << snapshot.activityModule << "\""
-				  << " error=\"" << snapshot.errorText << "\" status=\"" << snapshot.statusText << "\""
-				  << " input_delay=\"" << snapshot.inputDelayText << "\""
-				  << " port_map=\"" << snapshot.portMap << "\"";
+		std::string line = "dump_lobby state=" + snapshot.serviceState + " members=" + std::to_string(snapshot.members.size()) +
+		                   " activity=\"" + snapshot.activityPreset + "\" module=\"" + snapshot.activityModule + "\"" +
+		                   " scene=\"" + snapshot.sceneName + "\" scene_module=\"" + snapshot.sceneModule + "\"" +
+		                   " error=\"" + snapshot.errorText + "\" status=\"" + snapshot.statusText + "\"" +
+		                   " input_delay=\"" + snapshot.inputDelayText + "\"" +
+		                   " port_map=\"" + snapshot.portMap + "\"";
 		for (const NetLobbyMember& member: snapshot.members) {
-			std::cout << " | " << member.displayName << "(team" << static_cast<int>(member.team)
-					  << (member.isLocal ? ",local" : ",remote") << ",ping" << member.pingMs << ")";
+			line += " | " + member.displayName + "(team" + std::to_string(static_cast<int>(member.team)) +
+			        (member.isLocal ? ",local" : ",remote") + ",ping" + std::to_string(member.pingMs) + ")";
 		}
-		std::cout << std::endl;
+		MenuScriptPrint(line);
 	} else if (cmd == "goto_main") {
 		menu->AutomationGoToMainScreen();
-		std::cout << "[menu-script] goto_main screen=" << menu->AutomationActiveScreenName() << std::endl;
+		MenuScriptPrint("goto_main screen=" + menu->AutomationActiveScreenName());
 	} else if (cmd == "dump_reconnect") {
 		const NetReconnectUx& reconnect = g_NetMatchService.GetReconnectUx();
-		std::cout << "[menu-script] dump_reconnect screen=" << menu->AutomationActiveScreenName()
-				  << " state=" << NetReconnectUx::StateName(reconnect.GetState())
-				  << " attempts=" << reconnect.GetAttempts()
-				  << " service=" << g_NetMatchService.GetLobbySnapshot().serviceState
-				  << " status=\"" << reconnect.GetStatusText() << "\""
-				  << " offer=\"" << reconnect.GetOfferText() << "\"" << std::endl;
+		MenuScriptPrint("dump_reconnect screen=" + menu->AutomationActiveScreenName() +
+		                " state=" + std::string(NetReconnectUx::StateName(reconnect.GetState())) +
+		                " attempts=" + std::to_string(reconnect.GetAttempts()) +
+		                " service=" + g_NetMatchService.GetLobbySnapshot().serviceState +
+		                " status=\"" + reconnect.GetStatusText() + "\"" +
+		                " offer=\"" + reconnect.GetOfferText() + "\"");
 	} else if (cmd == "assert_console") {
 		int expected = 0;
 		iss >> expected;
 		const int actual = g_ConsoleMan.IsEnabled() ? 1 : 0;
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_console expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_console expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_console expected " + std::to_string(expected)); }
 	} else if (cmd == "assert_landing_empty") {
 		const std::string status = menu->AutomationMultiplayerError();
 		const bool pass = status.empty();
-		std::cout << "[menu-script] assert_landing_empty status=\"" << status << "\" " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_landing_empty status=\"" + status + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_landing_empty found: " + status); }
 	} else if (cmd == "assert_enabled") {
 		std::string control;
@@ -1800,7 +1837,7 @@ void ProcessMenuScript() {
 		iss >> control >> expected;
 		const int actual = (pauseMenu ? pauseMenu->AutomationControlEnabled(control) : menu->AutomationControlEnabled(control)) ? 1 : 0;
 		const bool pass = actual == expected;
-		std::cout << "[menu-script] assert_enabled " << control << " expected=" << expected << " actual=" << actual << " " << (pass ? "PASS" : "FAIL") << std::endl;
+		MenuScriptPrint("assert_enabled " + control + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual) + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_enabled " + control + " expected " + std::to_string(expected)); }
 	} else if (cmd == "exit") {
 		CompleteMenuScript();
@@ -1838,6 +1875,11 @@ void RunMenuLoop() {
 			g_UInputMan.EndFrame();
 			break;
 		}
+		if (s_netReplayReturnPending && g_MenuMan.IsMainMenuInteractive()) {
+			// Apply the playback destination after the menu-entry offers, before drawing.
+			s_netReplayReturnPending = false;
+			g_MenuMan.GetMainMenu()->ReturnToReplayBrowser(s_netReplayReturnStatus);
+		}
 
 		g_ConsoleMan.Update();
 
@@ -1871,6 +1913,14 @@ static std::string BuildNetMatchResultText() {
 		return "Match over";
 	}
 	return winnerTeam == g_NetMatchService.GetLocalTeam() ? "Victory!" : "Defeat";
+}
+
+static std::string NetMatchEndReason(const Activity* activity) {
+	const std::string stopReason = ScenarioRunner::GetLockstepStopReason();
+	if (stopReason.starts_with("Complete:") && stopReason.size() > 9) {
+		return stopReason.substr(9);
+	}
+	return (activity && activity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
 }
 
 /// <summary>
@@ -2220,13 +2270,16 @@ static void DrawFrameWithPreviews() {
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
+	FrameMan::FeelBeginDraw();
 	g_FrameMan.Draw();
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
 	g_WindowMan.DrawPostProcessBuffer();
 	g_MenuMan.DrawLocalPauseMenu();
+	FrameMan::FeelBeforePresent();
 	g_WindowMan.UploadFrame();
+	g_FrameMan.FeelAfterPresent();
 	if (NetMatchScreenshotDue()) {
 		const uint64_t tick = ScenarioRunner::GetLockstepCompletedFrame();
 		const std::string name = "net_match_tick_" + std::to_string(tick) + "_round_" + std::to_string(ScenarioRunner::GetLockstepRoundId());
@@ -3301,7 +3354,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 	if (ScenarioRunner::IsActive()) {
 		std::cerr << "[scenario] controller replay failed: " << error << std::endl;
 		System::SetQuit(true);
-	} else if (!s_netReplayInPath.empty()) {
+	} else if (ScenarioRunner::IsLockstepReplayPlayback()) {
 		// Playback ends when the recording's marker does; every other stop is a distinct, named failure.
 		s_netReplayTicks = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		using Outcome = ScenarioRunner::LockstepReplayOutcome;
@@ -3316,7 +3369,20 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		}
 		g_ActivityMan.EndActivity();
 		ScenarioRunner::ClearControllerReplayError();
-		System::SetQuit(true);
+		if (s_netReplayFromMenu) {
+			std::cout << "[net-replay] playback " << (outcome == Outcome::Completed ? "finished" : "FAILED")
+			          << ", ticks=" << s_netReplayTicks << " outcome=" << ScenarioRunner::ReplayOutcomeName(outcome)
+			          << " frames=" << ScenarioRunner::GetLockstepReplayFramesConsumed()
+			          << " end_marker=" << (ScenarioRunner::LockstepReplaySawEndMarker() ? 1 : 0) << std::endl;
+			s_netReplayReturnStatus = outcome == Outcome::Completed ? "Playback finished: " + std::to_string(ScenarioRunner::GetLockstepReplayFramesConsumed()) + " ticks"
+			                                                      : "Playback failed: " + error;
+			CloseNetReplayPlayback();
+			g_ActivityMan.SetInActivity(false);
+			s_netReplayReturnPending = true;
+			returnToMenuAfterNetworkEnd = true;
+		} else {
+			System::SetQuit(true);
+		}
 	} else {
 		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
@@ -3339,8 +3405,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
-			const Activity* leftActivity = g_ActivityMan.GetActivity();
-			const std::string result = (leftActivity && leftActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
 			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
 			g_NetMatchService.FinishMatch(result);
 			g_ActivityMan.EndActivity();
@@ -3352,10 +3417,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if (!s_netMatchServiceE2E && error.find("Complete:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
-			// The peer finished cleanly a beat ahead of us; mirror the clean end, not an error.
-			// If our activity is not over, they left mid-match rather than finishing it.
-			const Activity* skewActivity = g_ActivityMan.GetActivity();
-			const std::string result = (skewActivity && skewActivity->IsOver()) ? BuildNetMatchResultText() : "The other player left the match";
+			// The peer's clean stop ends this match before the local activity catches up.
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
 			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
 			g_NetMatchService.FinishMatch(result);
 			g_ActivityMan.EndActivity();
@@ -3484,13 +3547,21 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 /// @return Whether the game loop may still be entered.
 static bool HandleFailedActivityLaunch() {
 	const std::string reason = "could not launch the activity";
-	std::cerr << "[net-match] " << reason << std::endl;
+	const bool menuReplayFailed = s_netReplayFromMenu;
+	std::cerr << (menuReplayFailed ? "[net-replay] " : "[net-match] ") << reason << std::endl;
 	g_ConsoleMan.PrintString("ERROR: " + reason);
-	if (g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
+	if (!menuReplayFailed && g_NetMatchService.GetState() != NetMatchServiceState::Idle) {
 		g_NetMatchService.ReportRuntimeError(reason);
 	}
 	g_ActivityMan.EndActivity();
 	g_ActivityMan.SetInActivity(false);
+	if (menuReplayFailed) {
+		ScenarioRunner::SetLockstepReplayOutcome(ScenarioRunner::LockstepReplayOutcome::SimFailure);
+		CloseNetReplayPlayback();
+		g_ActivityMan.ClearEndedReplayActivity();
+		s_netReplayReturnStatus = "Playback failed: " + reason;
+		s_netReplayReturnPending = true;
+	}
 	if (s_netMatchServiceE2E) {
 		if (s_netMatchServiceE2EExitCode == 0) {
 			s_netMatchServiceE2EError = reason;
@@ -3603,6 +3674,7 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
 		PollSDLEvents();
@@ -4483,6 +4555,13 @@ void RunGameLoop() {
 					// A lockstep match's setup editor is synchronized: seats commit their placements over the
 					// wire and every peer starts on the same frame. Only an unsynchronized one is an error.
 					std::string editorError;
+					// The cap is a watchdog on a stuck editor, not a limit on the phase: a script that waits
+					// on another peer's probe signal ends its wait at a rendezvous, and the count starts there.
+					const uint64_t rendezvous = NetModerationGUIProbe::RendezvousCount();
+					if (rendezvous != s_netMatchE2ERendezvousSeen) {
+						s_netMatchE2ERendezvousSeen = rendezvous;
+						s_netMatchE2EEditorTicks = 0;
+					}
 					// A resync takes the coordinator down and rebuilds it around the host's snapshot, and the
 					// editor holds while that happens. An editor nobody synchronizes never gets one back.
 					if (!ScenarioRunner::IsLockstepControllerSyncActive() && !NetMatchResyncRebuilding()) {
@@ -4694,9 +4773,35 @@ void RunGameLoop() {
 
 		if (returnToMenuAfterNetworkEnd && !System::IsSetToQuit()) {
 			g_TimerMan.PauseSim(true);
+			if (s_netReplayReturnPending) {
+				// CC_FAULT_INJECT=queued_restart_at_replay_end presses the rematch on the frame the replay's
+				// end clears: the guard has to keep the queue, and the run goes on the way it would have.
+				const bool injectedRestart = FaultInjected("queued_restart_at_replay_end");
+				const bool restartBeforeInjection = g_ActivityMan.ActivitySetToRestart();
+				if (injectedRestart) g_ActivityMan.SetRestartActivity(true);
+				g_ActivityMan.ClearEndedReplayActivity();
+				if (injectedRestart) {
+					System::PrintDiagnosticLine(std::string("[replay-end] injected queued restart kept=") + (g_ActivityMan.ActivitySetToRestart() ? "1" : "0"));
+					// The guard held, so the clear did nothing: put the queue back and clear for real, or the
+					// armed run would carry the ended replay activity into the menu loop.
+					g_ActivityMan.SetRestartActivity(restartBeforeInjection);
+					g_ActivityMan.ClearEndedReplayActivity();
+				}
+			}
 			if (!g_ActivityMan.ActivitySetToRestart()) {
 				g_MenuMan.HandleTransitionIntoMenuLoop();
 				RunMenuLoop();
+			}
+			if (!System::IsSetToQuit()) {
+				g_TimerMan.PauseSim(false);
+				s_pacePrevActive = false;
+				if (g_ActivityMan.ActivitySetToRestart()) {
+					s_netReplayReturnPending = false;
+					s_netReplayReturnStatus.clear();
+					g_LoadingScreen.DrawLoadingSplash();
+					g_WindowMan.UploadFrame();
+					if (!g_ActivityMan.RestartActivity() && !HandleFailedActivityLaunch()) return;
+				}
 			}
 			continue;
 		}
@@ -4708,6 +4813,7 @@ void RunGameLoop() {
 		// Frame rendering must not advance the sim RNG stream or feed the MOID grid — its cadence is
 		// host frame-rate dependent, so redirect cosmetic draws to the render RNG and suspend
 		// MOID-grid registration for the frame.
+		FrameMan::FeelBeforePreview();
 		LocalPrediction::RunPreview();
 
 		{
@@ -4736,7 +4842,9 @@ void RunGameLoop() {
 			s_paceUpdateUs += updateTotalTime;
 			s_paceDrawUs += drawTotalTime;
 		}
+		FrameMan::FeelEndIteration(s_paceSimTicks, s_paceSimUs, s_paceUpdateUs, s_paceDrawUs);
 	}
+	FrameMan::FeelFinish();
 }
 
 /// <summary>
@@ -5064,8 +5172,12 @@ std::string BuildControllerBoundaryJson() {
 std::string BuildDesyncCheckJson() {
 	const ScenarioRunner::LockstepChecksumCounters counters = ScenarioRunner::GetLockstepChecksumCounters();
 	std::ostringstream out;
+	const uint64_t ticks = ScenarioRunner::GetLockstepAppliedFrame();
+	const int64_t compareFloor = static_cast<int64_t>(ticks / 30) - 1;
+	const int64_t compareMargin = static_cast<int64_t>(counters.compares) - compareFloor;
 	out << "{\"submissions\":" << counters.submissions << ",\"sends\":" << counters.sends
-	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches << "}";
+	    << ",\"compares\":" << counters.compares << ",\"mismatches\":" << counters.mismatches
+	    << ",\"compare_floor\":" << compareFloor << ",\"compare_margin\":" << compareMargin << "}";
 	return out.str();
 }
 
@@ -5206,24 +5318,31 @@ bool ConfigureNetMatchServiceE2EActivity(const std::string& activityPreset, std:
 		if (error) *error = "the launching match carries no agreed config";
 		return false;
 	}
-	if (!activityPreset.empty() && activityPreset != config->activityPreset) {
-		if (error) *error = "the service's launch activity \"" + activityPreset + "\" differs from the agreed \"" + config->activityPreset + "\"";
-		return false;
-	}
+	(void)activityPreset; // The roster already carries the preset ConsumeReadyToLaunch handed up.
 	return ConfigureNetMatchActivity(*config, g_NetMatchService.GetLocalTeam(), error);
 }
 
 // Drives a recorded match through the standard lockstep apply path: a no-remote coordinator over
 // a dead-end transport, fed tick records by the replay reader. The deterministic sim reproduces
 // the match, so a -tick-hashes trace must equal the recording peer's.
-int RunNetReplayPlayback() {
+bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error) {
 	std::string setupError;
-	if (!ScenarioRunner::SetLockstepReplaySource(s_netReplayInPath, &setupError)) {
-		std::cerr << "[net-replay] " << setupError << std::endl;
-		return 1;
+	if (ScenarioRunner::HasLockstepCoordinator()) {
+		if (error) *error = "Leave the current match before playing a replay.";
+		return false;
 	}
+	if (!ScenarioRunner::SetLockstepReplaySource(path, &setupError)) {
+		if (error) *error = setupError;
+		return false;
+	}
+	s_netReplayExitCode = 0;
+	s_netReplayTicks = 0;
+	s_netReplayFromMenu = fromMenu;
+	s_netReplayPreviousDeltaTime = g_TimerMan.GetDeltaTimeSecs();
+	s_netReplayPreviousFreeRun = g_TimerMan.IsFreeRunSim();
+	ScenarioRunner::ClearControllerReplayError();
 	const NetMatchConfig& replayConfig = ScenarioRunner::GetLockstepReplayConfig();
-	std::cout << "[net-replay] playing back " << s_netReplayInPath << ": " << replayConfig.activityPreset
+	std::cout << "[net-replay] playing back " << path << ": " << replayConfig.activityPreset
 	          << ", " << static_cast<int>(replayConfig.peerCount) << " peers" << std::endl;
 
 	static NullNetTransport s_nullTransport;
@@ -5238,8 +5357,9 @@ int RunNetReplayPlayback() {
 	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
 	lockstepConfig.matchConfig = replayConfig;
 	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {
-		std::cerr << "[net-replay] " << setupError << std::endl;
-		return 1;
+		if (error) *error = setupError;
+		CloseNetReplayPlayback();
+		return false;
 	}
 	ScenarioRunner::SetLockstepCoordinator(&s_replayCoordinator);
 
@@ -5252,8 +5372,26 @@ int RunNetReplayPlayback() {
 		}
 	}
 	if (!ConfigureNetMatchActivity(replayConfig, localTeam, &setupError)) {
-		std::cerr << "[net-replay] setup failed: " << setupError << std::endl;
-		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (error) *error = (fromMenu ? "" : "setup failed: ") + setupError;
+		CloseNetReplayPlayback();
+		return false;
+	}
+	return true;
+}
+
+static void CloseNetReplayPlayback() {
+	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	ScenarioRunner::CloseLockstepReplayPlayback();
+	ScenarioRunner::ClearControllerReplayError();
+	g_TimerMan.SetDeltaTimeSecs(s_netReplayPreviousDeltaTime);
+	g_TimerMan.SetFreeRunSim(s_netReplayPreviousFreeRun);
+	s_netReplayFromMenu = false;
+}
+
+int RunNetReplayPlayback() {
+	std::string setupError;
+	if (!StartNetReplayPlayback(s_netReplayInPath, false, &setupError)) {
+		std::cerr << "[net-replay] " << setupError << std::endl;
 		return 1;
 	}
 
@@ -5298,7 +5436,7 @@ int RunNetReplayPlayback() {
 	if (const std::string stats = LocalPrediction::DescribeStats(); !stats.empty()) {
 		std::cout << "[localpred] " << stats << std::endl;
 	}
-	ScenarioRunner::SetLockstepCoordinator(nullptr);
+	CloseNetReplayPlayback();
 	return s_netReplayExitCode;
 }
 
@@ -5413,7 +5551,14 @@ int RunNetMatchServiceE2E() {
 			} else {
 				request.standardRules = payload->config;
 				request.activityPreset = payload->config.activityPreset;
+				request.activityModule = payload->config.activityModule;
+				request.sceneName = payload->config.sceneName;
+				request.sceneModule = payload->config.sceneModule;
 			}
+		}
+		if (!s_netMatchServiceE2EScene.empty()) {
+			request.sceneName = s_netMatchServiceE2EScene;
+			request.sceneModule = s_netMatchServiceE2ESceneModule;
 		}
 		// The e2e honours -net-match-ownership-policy; team-owner is the default so the flagless path is unchanged.
 		NetActorOwnershipPolicy e2ePolicy;
@@ -5977,6 +6122,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-float-text-selftest") {
 			return FloatTextSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
+			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
 			return SettingsMan::RunNetworkPreferencesSelfTest();
 		}
@@ -6309,6 +6457,9 @@ int main(int argc, char** argv) {
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
+		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
 	}
 	if (!s_netReplayInPath.empty()) {
 		const int exitCode = RunNetReplayPlayback();

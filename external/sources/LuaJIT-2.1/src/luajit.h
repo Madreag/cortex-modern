@@ -69,7 +69,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
 LUA_API size_t luaJIT_preview_end(lua_State *L);
 typedef struct luaJIT_PreviewStats {
   size_t windows, tables, saves, bytes;
-  double capture_ms, write_ms, restore_ms, max_ms;
+  double capture_ms, write_ms, restore_ms, max_ms, p99_ms;
 } luaJIT_PreviewStats;
 LUA_API int luaJIT_preview_stats(lua_State *L, luaJIT_PreviewStats *stats);
 LUA_API int luaJIT_preview_faultcheck(lua_State *L);

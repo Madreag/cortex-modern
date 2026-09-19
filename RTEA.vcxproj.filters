@@ -496,6 +496,12 @@
     <ClInclude Include="Source\Network\NetAuthCrypto.h">
       <Filter>Network</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Network\NetHostBanStore.h">
+      <Filter>Network</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Network\NetParticipantCrypto.h">
+      <Filter>Network</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Network\NetSeatAuth.h">
       <Filter>Network</Filter>
     </ClInclude>
@@ -674,6 +680,9 @@
       <Filter>Menus</Filter>
     </ClInclude>
     <ClInclude Include="Source\Menus\ModManagerGUI.h">
+      <Filter>Menus</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Menus\MenuAutomation.h">
       <Filter>Menus</Filter>
     </ClInclude>
     <ClInclude Include="Source\Menus\SettingsGUI.h">
@@ -902,6 +911,12 @@
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetAuthCrypto.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetHostBanStore.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Network\NetParticipantCrypto.cpp">
       <Filter>Network</Filter>
     </ClCompile>
     <ClCompile Include="Source\Network\NetSeatAuth.cpp">
@@ -1434,6 +1449,9 @@
       <Filter>Menus</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\ModManagerGUI.cpp">
+      <Filter>Menus</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Menus\MenuAutomation.cpp">
       <Filter>Menus</Filter>
     </ClCompile>
     <ClCompile Include="Source\Menus\SettingsGUI.cpp">

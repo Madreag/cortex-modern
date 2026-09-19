@@ -11,7 +11,8 @@ class CostChecks(unittest.TestCase):
     def setUp(self):
         self.red = dict(transport_ok=True, interference=[], previews=16, preview_ms=5.0, exit_code=5)
         self.green = dict(transport_ok=True, interference=[], previews=16, preview_ms=5.1, exit_code=0,
-                          native=[dict(windows=16, capture_ms=1, write_ms=1, restore_ms=1, max_ms=0.2)])
+                          native=[dict(windows=16, capture_ms=1, write_ms=1, restore_ms=1, max_ms=0.2, p99_ms=0.1,
+                                       tables=64, saves=8)])
 
     def score(self):
         return driver.assess_cost(self.red, self.green, '240', 240, 240)['pass_check']
@@ -22,6 +23,52 @@ class CostChecks(unittest.TestCase):
 
     def test_exact_limit_is_not_under_budget(self):
         self.green['native'][0]['max_ms'] = 0.5
+        self.assertFalse(self.score())
+
+    def test_p99_over_limit_is_rejected(self):
+        self.green['native'][0]['p99_ms'] = 0.5
+        self.assertFalse(self.score())
+
+    def test_cost_row_carries_journal_and_restore_fields(self):
+        cost = driver.assess_cost(self.red, self.green, '240', 240, 240)
+        self.assertEqual(cost['journal_entries'], 8)
+        self.assertEqual(cost['tables_touched'], 64)
+        self.assertEqual(cost['restore_us_per_window'], 1000.0/16)
+        self.assertEqual(cost['native_p99_ms_sum'], 0.1)
+
+    def test_fail_line_with_trailing_error_is_scored(self):
+        text = '[script-graph-selftest] FAIL preview_depth_writes_undone depth 1 write leaked\n'
+        failures = driver.FAIL.findall(text)
+        self.assertEqual(failures, ['preview_depth_writes_undone'])
+        self.assertTrue(driver.graph_failed(failures, 'preview_depth_writes_undone'))
+        self.assertTrue(driver.graph_failed(['preview_depth_writes_undone depth 1 write leaked'],
+                                            'preview_depth_writes_undone'))
+        self.assertFalse(driver.graph_failed(failures, 'preview_window_modcompat'))
+
+    def test_zero_journal_is_rejected(self):
+        self.green['native'][0]['saves'] = 0
+        self.assertFalse(self.score())
+        self.green['native'][0]['saves'] = 8
+        self.green['native'][0]['tables'] = 0
+        self.assertFalse(self.score())
+
+    def test_missing_or_nonfinite_restore_ms_is_rejected(self):
+        good = copy.deepcopy(self.green)
+        del self.green['native'][0]['restore_ms']
+        cost = driver.assess_cost(self.red, self.green, '240', 240, 240)
+        self.assertGreater(cost['green_windows'], 0)
+        self.assertIsNone(cost['restore_us_per_window'])
+        self.assertFalse(cost['pass_check'])
+        self.green = copy.deepcopy(good)
+        self.green['native'][0]['restore_ms'] = float('nan')
+        self.assertFalse(self.score())
+
+    def test_omitted_or_nan_p99_ms_is_rejected(self):
+        good = copy.deepcopy(self.green)
+        del self.green['native'][0]['p99_ms']
+        self.assertFalse(self.score())
+        self.green = copy.deepcopy(good)
+        self.green['native'][0]['p99_ms'] = float('nan')
         self.assertFalse(self.score())
 
     def test_states_are_summed(self):

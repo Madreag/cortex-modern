@@ -55,7 +55,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <future>
 #include <map>
 #include <memory>
@@ -5024,6 +5026,9 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 	row << "[preview-write-barrier] windows=" << stats.windows << " tables=" << stats.tables
 	    << " saves=" << stats.saves << " bytes=" << stats.bytes << " capture_ms=" << stats.capture_ms
 	    << " write_ms=" << stats.write_ms << " restore_ms=" << stats.restore_ms << " max_ms=" << stats.max_ms;
+	if (std::isfinite(stats.p99_ms)) {
+		row << " p99_ms=" << stats.p99_ms;
+	}
 	std::cout << row.str() << std::endl;
 }
 
@@ -5657,6 +5662,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	checkpointValues = g_GUISound.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = g_UInputMan.RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = System::RunPathCaseSelfTest() && checkpointValues;
+	checkpointValues = System::RunPrintDisciplineSelfTest() && checkpointValues;
 	checkpointValues = ContentFile::RunImageLoadSelfTest() && checkpointValues;
 	checkpointValues = Reader::RunUnknownPropertySelfTest() && checkpointValues;
 	checkpointValues = g_PostProcessMan.RunCheckpointSelfTest() && checkpointValues;
@@ -6523,6 +6529,76 @@ _PrimitiveQueueCapture = nil
 	checkpointValues = previewLeavesGlobalsAsFound && checkpointValues;
 	std::cout << "[script-graph-selftest] " << (previewDeepGlobalWritesUndone ? "PASS" : "FAIL") << " preview_deep_global_writes_undone" << std::endl;
 	checkpointValues = previewDeepGlobalWritesUndone && checkpointValues;
+	// Deep global writes must undo at every depth the walk reached.
+	bool previewDepthWritesUndone = false;
+	bool previewWindowModCompat = false;
+	std::string previewDepthError;
+	std::string previewModcompatError;
+	{
+		const auto runKeep = [this](const std::string& script, std::string& error) {
+			const int status = RunScriptString(script, false);
+			if (status != 0 && error.empty()) {
+				error = GetLastError();
+			}
+			return status;
+		};
+		const int depthSetup = runKeep("_PreviewDepth = { d1 = { v = 1 }, d3 = { a = { b = { v = 1, gone = 1 } } }, d8 = { a = { b = { c = { d = { e = { f = { g = { v = 1, gone = 1 } } } } } } } } }", previewDepthError);
+		// Seven forces an array part of eight over a border of five, so the C library writes land in slack slots.
+		const int slackSetup = runKeep("_PreviewSlack = {}; for i = 1, 5 do _PreviewSlack[i] = i end; _PreviewSlack[7] = 7; _PreviewSlack[7] = nil", previewDepthError);
+		// What a script may observe cannot change with a window open, so the same probe runs inside and out.
+		const std::string observableSemantics = [] {
+			const std::string relative = "tools/fixtures/preview_window_modcompat.lua";
+			const std::string paths[] = {System::GetWorkingDirectory() + relative, relative, "../" + relative};
+			for (const std::string& path: paths) {
+				std::ifstream in(path, std::ios::binary);
+				if (!in) {
+					continue;
+				}
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				if (!text.empty()) {
+					return text;
+				}
+			}
+			return std::string();
+		}();
+		if (observableSemantics.empty() && previewModcompatError.empty()) {
+			previewModcompatError = "preview_window_modcompat.lua missing from the runtime";
+		}
+		const int modCompatSnap = observableSemantics.empty() ? -1 : runKeep(observableSemantics, previewModcompatError);
+		LuaMan::CapturePreviewSelfCopies({}, false);
+		int modCompatInside = -1;
+		int depthWrite = -1;
+		int slackWrite = -1;
+		int depthLanded = -1;
+		int slackLanded = -1;
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			modCompatInside = runKeep(observableSemantics, previewModcompatError);
+			depthWrite = runKeep("_PreviewDepth.d1.v = 2; _PreviewDepth.d3.a.b.v = 2; _PreviewDepth.d3.a.b.gone = nil; _PreviewDepth.d8.a.b.c.d.e.f.g.v = 2; _PreviewDepth.d8.a.b.c.d.e.f.g.gone = nil; _PreviewDepth.born = { x = { y = { z = 2 } } }", previewDepthError);
+			// Array slack writes must undo the same as interpreter stores.
+			slackWrite = runKeep("table.insert(_PreviewSlack, 6); table.insert(_PreviewSlack, 1, 0); table.sort(_PreviewSlack, function(a, b) return a > b end)", previewDepthError);
+			depthLanded = runKeep("assert(_PreviewDepth.d1.v == 2, 'depth 1 write did not land'); assert(_PreviewDepth.d3.a.b.v == 2 and _PreviewDepth.d3.a.b.gone == nil, 'depth 3 write did not land'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 2 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == nil, 'depth 8 write did not land'); assert(_PreviewDepth.born ~= nil and _PreviewDepth.born.x.y.z == 2, 'window-born deep chain did not land')", previewDepthError);
+			slackLanded = runKeep("assert(#_PreviewSlack == 7, 'slack insert did not land'); for i = 1, 7 do assert(_PreviewSlack[i] == 7 - i, 'slack insert or sort did not land') end", previewDepthError);
+		}
+		LuaMan::EndPreviewScripts();
+		const int depthCheck = runKeep("assert(_PreviewDepth.d1.v == 1, 'depth 1 write leaked'); assert(_PreviewDepth.d3.a.b.v == 1 and _PreviewDepth.d3.a.b.gone == 1, 'depth 3 write or removal leaked'); assert(_PreviewDepth.d8.a.b.c.d.e.f.g.v == 1 and _PreviewDepth.d8.a.b.c.d.e.f.g.gone == 1, 'depth 8 write or removal leaked'); assert(_PreviewDepth.born == nil, 'window-born deep chain leaked'); assert(#_PreviewSlack == 5 and _PreviewSlack[6] == nil, 'table.insert leaked'); for i = 1, 5 do assert(_PreviewSlack[i] == i, 'table.sort leaked') end", previewDepthError);
+		const int modCompatAfter = runKeep(observableSemantics, previewModcompatError);
+		previewDepthWritesUndone = depthSetup == 0 && slackSetup == 0 && depthWrite == 0 && slackWrite == 0 && depthLanded == 0 && slackLanded == 0 && depthCheck == 0;
+		previewWindowModCompat = depthSetup == 0 && slackSetup == 0 && modCompatSnap == 0 && modCompatInside == 0 && modCompatAfter == 0;
+		RunScriptString("_PreviewDepth = nil; _PreviewSlack = nil; _PreviewModCompatSnap = nil; Create = nil", false);
+	}
+	std::cout << "[script-graph-selftest] " << (previewDepthWritesUndone ? "PASS" : "FAIL") << " preview_depth_writes_undone";
+	if (!previewDepthWritesUndone) {
+		std::cout << " " << previewDepthError;
+	}
+	std::cout << std::endl;
+	checkpointValues = previewDepthWritesUndone && checkpointValues;
+	std::cout << "[script-graph-selftest] " << (previewWindowModCompat ? "PASS" : "FAIL") << " preview_window_modcompat";
+	if (!previewWindowModCompat) {
+		std::cout << " " << previewModcompatError;
+	}
+	std::cout << std::endl;
+	checkpointValues = previewWindowModCompat && checkpointValues;
 	// A preview hook may load a script the supported way. The state that load takes, the chunk it compiles and the
 	// cursor that handed the state out are the predicting peer's alone, so the boundary must leave all three as found.
 	bool previewLateScriptLoadLeavesStatesAsFound = false;

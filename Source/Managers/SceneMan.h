@@ -170,6 +170,13 @@ namespace RTE {
 		/// Gets the currently loaded scene, if any.
 		/// @return The scene, ownership IS NOT TRANSFERRED!
 		Scene* GetScene() const { return m_pCurrentScene; }
+		void TestBindCurrentScene(Scene* scene) { m_pCurrentScene = scene; }
+		/// Installs a palette entry for a detecting test and hands back the one it replaced. Ownership is NOT transferred.
+		Material* TestInstallMaterial(unsigned char index, Material* material) {
+			Material* previous = m_apMatPalette[index];
+			m_apMatPalette[index] = material;
+			return previous;
+		}
 		struct SceneSetAside {
 			Scene* scene = nullptr;
 			SceneLayerTracked* color = nullptr;
@@ -279,6 +286,8 @@ namespace RTE {
 		/// @return This Scene's MOID SpatialPartitionGrid.
 		const SpatialPartitionGrid& GetMOIDGrid() const { return m_MOIDsGrid; }
 		void SwapMOIDGrid(SpatialPartitionGrid& grid) { m_MOIDsGrid.Swap(grid); m_MOIDsGrid.EnsureDimensions(grid); }
+		/// Sizes the MOID grid when no scene has created one.
+		void EnsureMOIDGrid(int width = 2048, int height = 2048, int cellSize = 20);
 
 		/// Gets the global acceleration (in m/s^2) that is applied to all movable
 		/// objects' velocities during every frame. Typically models gravity.

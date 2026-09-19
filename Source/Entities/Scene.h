@@ -12,7 +12,9 @@
 #include "SceneLayer.h"
 
 #include <array>
+#include <cstdint>
 #include <map>
+#include <vector>
 
 namespace RTE {
 
@@ -22,6 +24,7 @@ namespace RTE {
 	class SLBackground;
 	class SLTerrain;
 	class SceneLayer;
+	class Material;
 	class BunkerAssembly;
 	class SceneObject;
 	class Deployment;
@@ -717,6 +720,26 @@ namespace RTE {
 		/// @return A shared pointer to the volatile PathRequest to be used to track whehter the asynchrnous path calculation has been completed, and check its results.
 		std::shared_ptr<volatile PathRequest> CalculatePathAsync(const Vector& start, const Vector& end, float jumpHeight = FLT_MAX, float digStrength = c_PathFindingDefaultDigStrength, Activity::Teams team = Activity::Teams::NoTeam, PathCompleteCallback callback = nullptr);
 
+		/// Records a terrain material change for the committed-horizon path grid.
+		struct HorizonTerrainBox {
+			Box box;
+			uint64_t originTick = 0;
+			int finderIndex = 0;
+			HorizonPatchRef patch;
+			std::vector<HorizonNodeSnapshot> nodes;
+		};
+
+		void NoteHorizonTerrainBox(const Box& newArea);
+		size_t TestHorizonBoxCount() const { return m_HorizonTerrainBoxes.size(); }
+		void TestSetTerrain(SLTerrain* terrain) { m_pTerrain = terrain; }
+		void TestInstallHorizonPathFinders(int width, int height, int nodeDimension, const Material* fill);
+
+		/// Queues every noted terrain box onto the pathfinders.
+		void FlushHorizonTerrainBoxes();
+
+		/// Applies due committed-horizon jobs on every pathfinder.
+		void CommitSharedHorizon();
+
 		/// Gets how many waypoints there are in the ScenePath currently
 		/// @return The number of waypoints in the ScenePath.
 		int GetScenePathSize() const;
@@ -798,6 +821,7 @@ namespace RTE {
 		bool m_PathfindingUpdated;
 		// Timer for when to do an update of the pathfinding data
 		Timer m_PartialPathUpdateTimer;
+		std::vector<HorizonTerrainBox> m_HorizonTerrainBoxes;
 
 		// SceneObject:s to be placed in the scene, divided up by different sets - OWNED HERE
 		std::list<SceneObject*> m_PlacedObjects[PLACEDSETSCOUNT];

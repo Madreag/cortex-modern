@@ -1,0 +1,5 @@
+# Observe look-around after OVER. GameOverObserve ends at ~500 sim ms; freeze holds 1000 more.
+player=0 0 20000 MOUSE=20,0
+player=1 0 20000 MOUSE=20,0
+player=0 0 20000 L_RIGHT
+player=1 0 20000 L_RIGHT
