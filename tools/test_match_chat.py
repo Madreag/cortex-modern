@@ -2,9 +2,10 @@
 
 Writes the network-UI probe scripts the completion pass runs. Does not launch unless --launch
 is set. Viewports 640x360, 960x540 and 1280x720. The host send_chat step is the line; the guest
-waits for LabelMatchChatNewest within 120 renders; both open the seats panel so the layout
-assertion has an occupier to clear, then open the entry with the chat key and assert the band
-still yields a history row and overlaps nothing.
+waits for LabelMatchChatNewest within 120 renders; both put a seat message on screen and open the
+seats panel, so the layout assertion names two occupiers that are really there, then open the entry
+with the chat key and assert what the carved area holds at that size: a history row above the entry
+at 960 and 1280, the entry alone at 640x360 (see history_row_fits).
 """
 
 from __future__ import annotations
@@ -19,57 +20,76 @@ from pathlib import Path
 
 SIZES = ((640, 360), (960, 540), (1280, 720))
 CHAT_LINE = "hello from host"
+SEAT_MESSAGE = "chat layout occupier"
 TICKS = 900
-PORT_BASE = 48480
+# This detector owns 48700-48705 (two peers per size). The launch driver owns 48320-48539 and
+# 48630-48649, the menu readback 48270-48279/48380-48399/48530-48559/48840-48859/49180-49199.
+PORT_BASE = 48700
 
 
-def open_panel_steps():
-    """The seats panel is the occupier the band has to keep clear of in a running match."""
+def occupier_steps():
+    """The occupiers the band must clear: the seats panel and the seat's own message band."""
     return [
+        {"op": "screen_message", "text": SEAT_MESSAGE, "screen": 0, "duration_ms": 60000},
         {"op": "key_down", "key": "F6"},
         {"op": "key_up", "key": "F6"},
         {"op": "wait", "panel_open": True},
+        {"op": "wait", "renders": 4, "seat_text_contains": SEAT_MESSAGE, "player": 0},
     ]
 
 
-def open_entry_steps():
-    """The chat key opens the entry; the band then owes a history row under the carved bottom."""
+def history_row_fits(height):
+    """One history row rides above the entry only where the carved area holds both.
+
+    With the seats panel open the band lives above it: available = PanelTop(h) - 8, and a row plus the
+    entry need lineH + inputH = 2F + 14 for a font height F (12 for the small font). At 640x360
+    PanelTop is F + 32, so available is F + 24 and only the entry fits; at 960x540 and 1280x720 the
+    panel is centred and the space above it holds rows.
+    """
+    return height > 360
+
+
+def open_entry_steps(size):
+    """The chat key opens the entry; the band keeps what fits above it and nothing else."""
+    width, height = size
+    rows = [{"op": "assert_control", "control": "LabelMatchChat0", "equals": {"visible": history_row_fits(height)}}]
     return [
         {"op": "key_down", "key": "CHAT"},
         {"op": "key_up", "key": "CHAT"},
         {"op": "wait", "renders": 4, "chat_entry_open": True},
         {"op": "assert_control", "control": "TextMatchChatInput", "equals": {"visible": True}},
-        {"op": "assert_control", "control": "LabelMatchChat0", "equals": {"visible": True}},
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": True, "occupiers_at_least": 1, "status": False},
+        *rows,
+        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": True,
+         "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
         {"op": "key_down", "key": "Escape"},
         {"op": "key_up", "key": "Escape"},
         {"op": "wait", "renders": 4, "chat_entry_open": False},
+        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False,
+         "occupiers": ["seats_panel", "text_band"], "player": 0, "status": False},
     ]
 
 
-def host_steps():
+def host_steps(size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
         {"op": "send_chat", "text": CHAT_LINE, "scope": "all"},
         {"op": "wait", "renders": 8, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
-        *open_panel_steps(),
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False, "occupiers_at_least": 1, "status": False},
-        *open_entry_steps(),
+        *occupier_steps(),
+        *open_entry_steps(size),
         {"op": "finish"},
     ]
 
 
-def guest_steps():
+def guest_steps(size):
     return [
         {"op": "wait", "service": "Running"},
         {"op": "wait", "sim_at_least": 60},
         {"op": "wait", "renders": 120, "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
         {"op": "assert_control", "control": "LabelMatchChatNewest", "text_contains": CHAT_LINE},
-        *open_panel_steps(),
-        {"op": "assert_net_ui_clear", "chat_layout": True, "entry_open": False, "occupiers_at_least": 1, "status": False},
-        *open_entry_steps(),
+        *occupier_steps(),
+        *open_entry_steps(size),
         {"op": "finish"},
     ]
 
@@ -81,7 +101,7 @@ def script(steps):
 def write_scripts(root: Path) -> dict[str, str]:
     written = {}
     for width, height in SIZES:
-        for who, steps in (("host", host_steps()), ("guest", guest_steps())):
+        for who, steps in (("host", host_steps((width, height))), ("guest", guest_steps((width, height)))):
             path = root / f"match-chat-{width}x{height}-{who}.json"
             path.write_text(json.dumps(script(steps), indent=2) + "\n", encoding="utf-8")
             written[f"{width}x{height}-{who}"] = str(path)
@@ -119,7 +139,7 @@ def launch_size(make_run, repo, root, size, port, timeout):
     case.mkdir(parents=True, exist_ok=False)
     records, runs = {}, {}
     try:
-        for who, steps in (("host", host_steps()), ("guest", guest_steps())):
+        for who, steps in (("host", host_steps(size)), ("guest", guest_steps(size))):
             inputs = case / f"{who}_inputs"
             inputs.mkdir()
             probe = inputs / "probe.json"
