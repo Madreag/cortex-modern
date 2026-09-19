@@ -46,34 +46,70 @@ LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx)
   if (o < L->top && tvistab(o)) checkpoint_arm_table(tabV(o));
 }
 
-static GCtab *serial_table(lua_State *L, int idx)
+static GCobj *serial_object(lua_State *L, int idx)
 {
   cTValue *o = L->base + (idx - 1);
   if (idx < 0) o = L->top + idx;
-  return (o < L->top && tvistab(o)) ? tabV(o) : NULL;
+  if (o >= L->top || !tvisgcv(o)) return NULL;
+  return gcV(o);
 }
 
-LUA_API uint64_t luaJIT_tab_serial(lua_State *L, int idx)
+/* Every kind of object the archive names carries its birth number in its own header. */
+static uint64_t *serial_slot(GCobj *o)
 {
-  GCtab *t = serial_table(L, idx);
-  return t ? t->serial : 0;
+  if (!o) return NULL;
+  switch (o->gch.gct) {
+  case ~LJ_TTAB: return &gco2tab(o)->serial;
+  case ~LJ_TUDATA: return &gco2ud(o)->serial;
+  case ~LJ_TFUNC: return &gco2func(o)->c.serial;
+  case ~LJ_TTHREAD: return &gco2th(o)->serial;
+  default: return NULL;
+  }
 }
 
-/* A restored table keeps the identity the archive gave it, so a recapture numbers it the same. */
-LUA_API void luaJIT_set_tab_serial(lua_State *L, int idx, uint64_t serial)
+static GCupval *serial_upvalue(lua_State *L, int idx, int n)
 {
-  GCtab *t = serial_table(L, idx);
-  if (t) t->serial = serial;
+  GCobj *o = serial_object(L, idx);
+  GCfunc *fn;
+  if (!o || o->gch.gct != ~LJ_TFUNC) return NULL;
+  fn = gco2func(o);
+  if (!isluafunc(fn) || n < 1 || n > fn->l.nupvalues) return NULL;
+  return &gcref(fn->l.uvptr[n-1])->uv;
 }
 
-LUA_API uint64_t luaJIT_state_tab_serial(lua_State *L)
+LUA_API uint64_t luaJIT_value_serial(lua_State *L, int idx)
 {
-  return G(L)->tabserial;
+  uint64_t *slot = serial_slot(serial_object(L, idx));
+  return slot ? *slot : 0;
 }
 
-LUA_API void luaJIT_set_state_tab_serial(lua_State *L, uint64_t serial)
+/* A restored object keeps the identity the archive gave it, so a recapture numbers it the same. */
+LUA_API void luaJIT_set_value_serial(lua_State *L, int idx, uint64_t serial)
 {
-  G(L)->tabserial = serial;
+  uint64_t *slot = serial_slot(serial_object(L, idx));
+  if (slot) *slot = serial;
+}
+
+LUA_API uint64_t luaJIT_upvalue_serial(lua_State *L, int idx, int n)
+{
+  GCupval *uv = serial_upvalue(L, idx, n);
+  return uv ? uv->serial : 0;
+}
+
+LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t serial)
+{
+  GCupval *uv = serial_upvalue(L, idx, n);
+  if (uv) uv->serial = serial;
+}
+
+LUA_API uint64_t luaJIT_state_serial(lua_State *L)
+{
+  return G(L)->objserial;
+}
+
+LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial)
+{
+  G(L)->objserial = serial;
 }
 
 /* -- Object hashing ------------------------------------------------------ */
@@ -187,7 +223,7 @@ static GCtab *newtab(lua_State *L, uint32_t asize, uint32_t hbits)
     }
   }
   /* Birth order is the table's identity: every peer running the same script numbers alike. */
-  t->serial = ++G(L)->tabserial;
+  t->serial = ++G(L)->objserial;
   if (hbits)
     newhpart(L, t, hbits);
   return t;

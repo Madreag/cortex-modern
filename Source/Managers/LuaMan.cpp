@@ -1206,11 +1206,15 @@ local function visitAt(value, ctx, location)
 	return token
 end
 
--- A node the state does not number (userdata, closures, upvalue cells, coroutines) is named above
--- the state's counter, so it cannot meet a table's birth number and every id in one archive is unique.
-local function newId(ctx)
-	ctx.spare = ctx.spare + 1
-	return ctx.base + ctx.spare
+-- Every node is named by the birth number of the object it stands for, so one archive's ids are
+-- unique, stable across captures and the same on every peer that ran the same script.
+local function birthId(ctx, value, what)
+	local id = _ScriptGraphValueSerial(value)
+	if id < 1 or id > ctx.base then
+		problem(ctx, "a " .. what .. " with no birth number")
+		return nil
+	end
+	return id
 end
 
 local function noteNode(ctx, id, text)
@@ -1225,7 +1229,8 @@ end
 
 -- Owned values are nodes, so two fields holding one Vector share it again after the restore.
 local function userdataNode(value, ctx, payload)
-	local id = newId(ctx)
+	local id = birthId(ctx, value, "value")
+	if not id then return "z;" end
 	ctx.ids[value] = id
 	local instance = _ScriptGraphInstance(value)
 	noteNode(ctx, id, "U" .. outputNumber(id) .. ";" .. payload .. "I" .. visit(instance, ctx))
@@ -1260,7 +1265,8 @@ local function visitUserdata(value, ctx)
 	elseif kind == "controller-ref" then
 		return userdataNode(value, ctx, "q" .. numberText(native[2]) .. ";")
 	elseif kind == "controller-value" or kind == "owner-ref" then
-		local id = newId(ctx)
+		local id = birthId(ctx, value, "value")
+		if not id then return "z;" end
 		ctx.ids[value] = id
 		local payload
 		if kind == "controller-value" then payload = "Q" .. stringToken(native[2]) .. visit(native[3], ctx)
@@ -1277,21 +1283,24 @@ local function visitUserdata(value, ctx)
 	elseif kind == "gib-ref" then
 		local owner, index = _ScriptGraphGibOwner(value)
 		if not owner then problem(ctx, "a Gib whose owner is missing") return "z;" end
-		local id = newId(ctx)
+		local id = birthId(ctx, value, "Gib reference")
+		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";i" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "soundset-ref" then
 		local owner, index = _ScriptGraphSoundSetOwner(value)
 		if not owner then problem(ctx, "a SoundSet whose owner is missing") return "z;" end
-		local id = newId(ctx)
+		local id = birthId(ctx, value, "SoundSet reference")
+		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";j" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
 	elseif kind == "limb-ref" then
 		local owner, index = _ScriptGraphLimbOwner(value)
 		if not owner then problem(ctx, "a LimbPath whose owning actor is missing") return "z;" end
-		local id = newId(ctx)
+		local id = birthId(ctx, value, "LimbPath reference")
+		if not id then return "z;" end
 		ctx.ids[value] = id
 		noteNode(ctx, id, "U" .. outputNumber(id) .. ";l" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";I" .. visit(_ScriptGraphInstance(value), ctx))
 		return "#" .. outputNumber(id) .. ";"
@@ -1306,7 +1315,8 @@ local function visitUserdata(value, ctx)
 	elseif kind == "area-ref" then
 		return userdataNode(value, ctx, "a" .. stringToken(native[2]))
 	elseif kind == "box-ref" then
-		local id = newId(ctx)
+		local id = birthId(ctx, value, "Box reference")
+		if not id then return "z;" end
 		ctx.ids[value] = id
 		local instance = visit(_ScriptGraphInstance(value), ctx)
 		ctx.boxRefs[#ctx.boxRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], instance = instance }
@@ -1335,14 +1345,16 @@ local function visitUserdata(value, ctx)
 	elseif kind == "vector-ref-unresolved" or kind == "timer-ref" then
 		local propertyOwner, property, isConst = _ScriptGraphPropertyOwner(value)
 		if propertyOwner then
-			local id = newId(ctx)
+			local id = birthId(ctx, value, "property reference")
+			if not id then return "z;" end
 			ctx.ids[value] = id
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";h" .. visit(propertyOwner, ctx) .. stringToken(property) .. (isConst and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return "#" .. outputNumber(id) .. ";"
 		end
 		local owner, index, constant = _ScriptGraphLimbVectorOwner(value)
 		if owner then
-			local id = newId(ctx)
+			local id = birthId(ctx, value, "limb vector")
+			if not id then return "z;" end
 			ctx.ids[value] = id
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return "#" .. outputNumber(id) .. ";"
@@ -1366,7 +1378,8 @@ local function visitFunction(value, ctx)
 	if info.what == "C" then
 		local range = _ScriptGraphIteratorSnapshot(value)
 		if range then
-			id = newId(ctx)
+			id = birthId(ctx, value, "iterator")
+			if not id then return "z;" end
 			ctx.ids[value] = id
 			local fields = { "J" .. outputNumber(id) .. ";" .. (range.owned and "o" or "r"), visit(range.owner, ctx), "n" .. outputNumber(range.first) .. ";" }
 			if range.owned then
@@ -1382,7 +1395,8 @@ local function visitFunction(value, ctx)
 		end
 		for name, prototype in pairs(nativePrototypes) do
 			if _ScriptGraphSameNativeFunction(value, prototype) then
-				id = newId(ctx)
+				id = birthId(ctx, value, "native closure")
+				if not id then return "z;" end
 				ctx.ids[value] = id
 				local upvalues = {}
 				for i = 1, info.nups do
@@ -1403,7 +1417,8 @@ local function visitFunction(value, ctx)
 		problem(ctx, "a function could not be dumped: " .. tostring(code))
 		return "z;"
 	end
-	id = newId(ctx)
+	id = birthId(ctx, value, "closure")
+	if not id then return "z;" end
 	ctx.ids[value] = id
 	local parts = {}
 	if path then
@@ -1419,7 +1434,8 @@ local function visitFunction(value, ctx)
 		local cellKey = debug.upvalueid(value, i)
 		local cellId = ctx.cells[cellKey]
 		if not cellId then
-			cellId = newId(ctx)
+			cellId = _ScriptGraphUpvalueSerial(value, i)
+			if cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
 			local open = ctx.openUpvalues[cellKey]
 			if open then
@@ -1441,11 +1457,8 @@ local function visitTable(value, ctx)
 	local path = ctx.paths[value]
 	if path and ctx.engine[value] then return pathToken(path) end
 	-- The table's birth number is its name in the archive, whoever walks it and whenever.
-	id = _ScriptGraphTableSerial(value)
-	if id < 1 or id > ctx.base then
-		problem(ctx, "a table with no birth number")
-		return "z;"
-	end
+	id = birthId(ctx, value, "table")
+	if not id then return "z;" end
 	ctx.ids[value] = id
 	if _ScriptGraphNoteTable then _ScriptGraphNoteTable(value) end
 	local parts = { path and ("P" .. pathToken(path)) or "P-;" }
@@ -1472,7 +1485,8 @@ local function visitThread(value, ctx)
 		problem(ctx, "a coroutine cannot be carried: " .. tostring(message))
 		return "z;"
 	end
-	id = newId(ctx)
+	id = birthId(ctx, value, "coroutine")
+	if not id then return "z;" end
 	ctx.ids[value] = id
 	local letter = desc.status == "suspended" and "s" or (desc.status == "notstarted" and "n" or "d")
 	local entries = {}
@@ -1510,7 +1524,7 @@ local function serializeGraph(roots)
 	local base = _ScriptGraphStateSerial()
 	local baseline = _ScriptGraphBaseline or { globals = {}, loaded = {} }
 	local paths, engine = buildPaths(baseline)
-	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, base = base, spare = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, base = base, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local rootIds = {}
 	local uids = {}
 	for uid in pairs(roots) do uids[#uids + 1] = uid end
@@ -1762,7 +1776,7 @@ local function parse(text)
 	local count = reader:count()
 	-- SG5 names a table by its birth number, so the ids are explicit and have holes; a repeat is still bad.
 	local explicit = version == "SG5"
-	local idLimit = explicit and (graph.serial + count) or count
+	local idLimit = explicit and graph.serial or count
 	for expected = 1, count do
 		local kind = reader:peek()
 		reader.pos = reader.pos + 1
@@ -2196,8 +2210,6 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			else
 				object = {}
 			end
-			-- The table takes the number the archive named it by, so a recapture names it the same.
-			if graph.serial then _ScriptGraphSetTableSerial(object, id) end
 			objects[id] = object
 		elseif node.kind == "H" then
 			objects[id] = (reuseHeld and objects[id]) or coroutine.create(function() end)
@@ -2380,6 +2392,12 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	local roots = {}
 	for _, root in ipairs(graph.roots) do roots[root.uid] = resolve(root.value) end
 	for id, value in pairs(objects) do keyLabels[value] = id end
+	-- Every restored object answers to the number the archive named it by, so a recapture writes
+	-- the same bytes and a peer that restored is numbered like the peer that saved.
+	if graph.serial then
+		for id, value in pairs(objects) do _ScriptGraphSetValueSerial(value, id) end
+		for cellId, owner in pairs(cellOwners) do _ScriptGraphSetUpvalueSerial(owner[1], owner[2], cellId) end
+	end
 	if graph.rng and (graph.rng.t ~= "str" or not _ScriptGraphRandomState or not _ScriptGraphRandomState(graph.rng.v)) then
 		fail("the Lua state's random generator could not be restored")
 	end
@@ -3303,26 +3321,37 @@ static int ScriptGraphNoteTable(lua_State* L) {
 	return 0;
 }
 
-// A table's number and the state's counter are the archive's identities; scripts never see them.
-static int ScriptGraphTableSerial(lua_State* L) {
-	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_tab_serial(L, 1)));
+// An object's number and the state's counter are the archive's identities; scripts never see them.
+static int ScriptGraphValueSerial(lua_State* L) {
+	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_value_serial(L, 1)));
 	return 1;
 }
 
-static int ScriptGraphSetTableSerial(lua_State* L) {
-	luaJIT_set_tab_serial(L, 1, static_cast<uint64_t>(luaL_checknumber(L, 2)));
+static int ScriptGraphSetValueSerial(lua_State* L) {
+	luaJIT_set_value_serial(L, 1, static_cast<uint64_t>(luaL_checknumber(L, 2)));
+	return 0;
+}
+
+// An upvalue cell is named through the closure that holds it, the way the debug library names it.
+static int ScriptGraphUpvalueSerial(lua_State* L) {
+	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_upvalue_serial(L, 1, static_cast<int>(luaL_checknumber(L, 2)))));
+	return 1;
+}
+
+static int ScriptGraphSetUpvalueSerial(lua_State* L) {
+	luaJIT_set_upvalue_serial(L, 1, static_cast<int>(luaL_checknumber(L, 2)), static_cast<uint64_t>(luaL_checknumber(L, 3)));
 	return 0;
 }
 
 static int ScriptGraphStateSerial(lua_State* L) {
-	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_state_tab_serial(L)));
+	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_state_serial(L)));
 	return 1;
 }
 
 // The archive is the authority on where the sequence stands, so a restored peer counts on from the host.
 static int ScriptGraphSetStateSerial(lua_State* L) {
 	const lua_Number serial = luaL_checknumber(L, 1);
-	if (serial > 0) luaJIT_set_state_tab_serial(L, static_cast<uint64_t>(serial));
+	if (serial > 0) luaJIT_set_state_serial(L, static_cast<uint64_t>(serial));
 	return 0;
 }
 
@@ -3335,7 +3364,7 @@ static int ScriptGraphBeginRoot(lua_State* L) {
 static uint64_t s_SerialBeforeCapture = 0;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
-	s_SerialBeforeCapture = luaJIT_state_tab_serial(L);
+	s_SerialBeforeCapture = luaJIT_state_serial(L);
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
@@ -3361,7 +3390,7 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 }
 
 static int ScriptGraphEndCapture(lua_State* L) {
-	if (s_SerialBeforeCapture > 0) luaJIT_set_state_tab_serial(L, s_SerialBeforeCapture);
+	if (s_SerialBeforeCapture > 0) luaJIT_set_state_serial(L, s_SerialBeforeCapture);
 	s_SerialBeforeCapture = 0;
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
@@ -5038,10 +5067,14 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphNoteTable");
 		lua_pushcfunction(m_State, ScriptGraphBeginRoot);
 		lua_setglobal(m_State, "_ScriptGraphBeginRoot");
-		lua_pushcfunction(m_State, ScriptGraphTableSerial);
-		lua_setglobal(m_State, "_ScriptGraphTableSerial");
-		lua_pushcfunction(m_State, ScriptGraphSetTableSerial);
-		lua_setglobal(m_State, "_ScriptGraphSetTableSerial");
+		lua_pushcfunction(m_State, ScriptGraphValueSerial);
+		lua_setglobal(m_State, "_ScriptGraphValueSerial");
+		lua_pushcfunction(m_State, ScriptGraphSetValueSerial);
+		lua_setglobal(m_State, "_ScriptGraphSetValueSerial");
+		lua_pushcfunction(m_State, ScriptGraphUpvalueSerial);
+		lua_setglobal(m_State, "_ScriptGraphUpvalueSerial");
+		lua_pushcfunction(m_State, ScriptGraphSetUpvalueSerial);
+		lua_setglobal(m_State, "_ScriptGraphSetUpvalueSerial");
 		lua_pushcfunction(m_State, ScriptGraphStateSerial);
 		lua_setglobal(m_State, "_ScriptGraphStateSerial");
 		lua_pushcfunction(m_State, ScriptGraphSetStateSerial);
@@ -5913,10 +5946,26 @@ void LuaMan::Clear() {
 }
 
 static std::atomic<bool> s_DeterministicCollection{false};
+// Sinking is LuaJIT's default; a captured state gives it up while a coordinator is attached.
+static std::atomic<bool> s_AllocationSinking{true};
 static std::atomic<bool> s_CollectorModeAnnounced{false};
 
 static void PrintCollectorMode(bool deterministic) {
 	std::cout << "[lua] collector: " << (deterministic ? "full collection" : "incremental step") << " at every tick end" << std::endl;
+}
+
+void LuaMan::SetCheckpointAllocationSinking(bool sinking) {
+	if (s_AllocationSinking.exchange(sinking) == sinking) return;
+	const auto apply = [sinking](LuaStateWrapper& state) {
+		if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
+	};
+	apply(g_LuaMan.m_MasterScriptState);
+	for (LuaStateWrapper& state: g_LuaMan.m_ScriptStates) apply(state);
+	std::cout << "[lua] allocation sinking: " << (sinking ? "on" : "off (a captured state allocates every table)") << std::endl;
+}
+
+bool LuaMan::IsCheckpointAllocationSinking() {
+	return s_AllocationSinking;
 }
 
 void LuaMan::SetDeterministicCollection(bool deterministic) {
@@ -5945,6 +5994,14 @@ void LuaMan::Initialize() {
 	m_ScriptStates = std::vector<LuaStateWrapper>(luaStateCount);
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
 		luaState.Initialize();
+	}
+	// A state made while a match is up starts where the others stand.
+	if (!s_AllocationSinking) {
+		const auto clear = [](LuaStateWrapper& state) {
+			if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, 0);
+		};
+		clear(m_MasterScriptState);
+		for (LuaStateWrapper& luaState: m_ScriptStates) clear(luaState);
 	}
 	if (!s_CollectorModeAnnounced.exchange(true)) {
 		PrintCollectorMode(s_DeterministicCollection);
@@ -5981,7 +6038,7 @@ void LuaMan::ArmCheckpointWriteTrap() {
 
 uint64_t LuaMan::GetTableBirthCount() const {
 	lua_State* luaState = const_cast<LuaStateWrapper&>(m_MasterScriptState).GetLuaState();
-	return luaState ? luaJIT_state_tab_serial(luaState) : 0;
+	return luaState ? luaJIT_state_serial(luaState) : 0;
 }
 
 int LuaMan::GetStateIndex(const LuaStateWrapper* state) const {
@@ -6316,10 +6373,10 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		luaL_openlibs(fresh);
 		for (int table = 0; table < 8; ++table) {
 			lua_newtable(fresh);
-			numbers.push_back(luaJIT_tab_serial(fresh, -1));
+			numbers.push_back(luaJIT_value_serial(fresh, -1));
 			lua_pop(fresh, 1);
 		}
-		numbers.push_back(luaJIT_state_tab_serial(fresh));
+		numbers.push_back(luaJIT_state_serial(fresh));
 		lua_close(fresh);
 		return true;
 	};
@@ -6331,17 +6388,17 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (birthsAgree ? "PASS" : "FAIL") << " table_birth_numbers_match_across_states" << std::endl;
 	checkpointValues = birthsAgree && checkpointValues;
 	// A speculative window rolls its tables back, so it gives their numbers back as well.
-	const uint64_t birthsBeforeWindow = luaJIT_state_tab_serial(m_State);
+	const uint64_t birthsBeforeWindow = luaJIT_state_serial(m_State);
 	uint64_t birthsInsideWindow = birthsBeforeWindow;
 	const bool windowOpened = luaJIT_preview_begin(m_State, nullptr, 0, 0) != 0;
 	if (windowOpened) {
 		lua_newtable(m_State);
-		birthsInsideWindow = luaJIT_state_tab_serial(m_State);
+		birthsInsideWindow = luaJIT_state_serial(m_State);
 		lua_pop(m_State, 1);
 		luaJIT_preview_end(m_State);
 	}
 	const bool windowGivesNumbersBack = windowOpened && birthsInsideWindow > birthsBeforeWindow &&
-	                                    luaJIT_state_tab_serial(m_State) == birthsBeforeWindow;
+	                                    luaJIT_state_serial(m_State) == birthsBeforeWindow;
 	std::cout << "[script-graph-selftest] " << (windowGivesNumbersBack ? "PASS" : "FAIL") << " preview_window_returns_table_numbers" << std::endl;
 	checkpointValues = windowGivesNumbersBack && checkpointValues;
 	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;

@@ -297,7 +297,7 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   }
   if (p->active) return 0;
   /* Tables born in a speculative window die with it, so their numbers are handed back. */
-  p->savedserial = g->tabserial;
+  p->savedserial = g->objserial;
   p->savedbytes = 0;
   p->nskipped = 0;
   p->nupvalues = 0;
@@ -506,7 +506,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     lj_gc_anybarriert(L, t);
     e->captured = 0;
   }
-  g->tabserial = p->savedserial;
+  g->objserial = p->savedserial;
   preview_disarm(p);
   if (p->timed) {
     double elapsed = preview_clock()-started;

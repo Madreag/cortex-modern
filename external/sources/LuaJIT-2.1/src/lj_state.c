@@ -359,6 +359,7 @@ lua_State *lj_state_new(lua_State *L)
 {
   lua_State *L1 = lj_mem_newobj(L, lua_State);
   L1->gct = ~LJ_TTHREAD;
+  L1->serial = ++G(L)->objserial;
   L1->dummy_ffid = FF_C;
   L1->status = LUA_OK;
   L1->stacksize = 0;
