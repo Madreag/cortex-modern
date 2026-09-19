@@ -1,8 +1,60 @@
 #include "NetSeatAuth.h"
 
 #include "NetAuthCrypto.h"
+#include "nlohmann/json.hpp"
+#include <set>
+#include <map>
+#include <algorithm>
 
 namespace RTE {
+	std::vector<uint8_t> NetSeatAuthRegistry::ExportMigrationState() const {
+		if (!m_Active)
+			return {};
+		nlohmann::json seats = nlohmann::json::array();
+		std::map<uint16_t, SeatEntry> ordered(m_Seats.begin(), m_Seats.end());
+		for (const auto& [seat, entry]: ordered)
+			seats.push_back({seat, entry.lastGeneration, entry.active, entry.credential, entry.retiredGeneration, entry.hasRetired, entry.retiredCredential});
+		return nlohmann::json::to_cbor(nlohmann::json{{"version", 1}, {"epoch", m_Epoch}, {"seats", seats}});
+	}
+
+	bool NetSeatAuthRegistry::ImportMigrationState(const std::vector<uint8_t>& bytes) {
+		if (bytes.empty() || bytes.size() > 8192)
+			return false;
+		try {
+			const auto object = nlohmann::json::from_cbor(bytes);
+			NetSeatAuthRegistry next;
+			if (object.at("version") != 1 || !object.at("seats").is_array() || object.at("seats").size() > 7)
+				return false;
+			next.m_Epoch = object.at("epoch").get<NetAuthEpoch>();
+			if (std::all_of(next.m_Epoch.begin(), next.m_Epoch.end(), [](uint8_t value) { return value == 0; }))
+				return false;
+			for (const auto& row: object.at("seats")) {
+				const uint16_t seat = row.at(0).get<uint16_t>();
+				if (seat >= 7 || next.m_Seats.contains(seat))
+					return false;
+				SeatEntry entry;
+				entry.lastGeneration = row.at(1).get<uint32_t>();
+				entry.active = row.at(2).get<bool>();
+				entry.credential = row.at(3).get<NetSeatCredential>();
+				entry.retiredGeneration = row.at(4).get<uint32_t>();
+				entry.hasRetired = row.at(5).get<bool>();
+				entry.retiredCredential = row.at(6).get<NetSeatCredential>();
+				if ((entry.active && entry.lastGeneration == 0) || (entry.hasRetired && entry.retiredGeneration >= entry.lastGeneration))
+					return false;
+				next.m_Seats.emplace(seat, entry);
+			}
+			next.m_Active = true;
+			*this = std::move(next);
+			return true;
+		} catch (const nlohmann::json::exception&) {
+			return false;
+		}
+	}
+
+	bool NetSeatAuthRegistry::SealForSeat(uint16_t seat, const std::vector<uint8_t>& context, const std::vector<uint8_t>& plaintext, std::vector<uint8_t>& sealed) const {
+		const auto found = m_Seats.find(seat);
+		return m_Active && found != m_Seats.end() && found->second.active && NetAuthSeal(found->second.credential, context, plaintext, sealed);
+	}
 
 	bool NetSeatAuthRegistry::BeginHostedSession() {
 		EndSession();

@@ -228,6 +228,123 @@ namespace RTE {
 			return true;
 		}
 
+		template <typename Config>
+		bool TestMigrationConfigOrder(std::string* error) {
+			Config config = NetMatchConfigUtil::MakeDefault(45791);
+			if constexpr (requires {
+				config.successorOrder;
+				config.migrationPeers;
+			}) {
+				using Peer = typename decltype(config.migrationPeers)::value_type;
+				config.peerCount = 3;
+				config.players.push_back({3, 2, false, "Third"});
+				config.successorOrder = {3, 2};
+				config.migrationPeers = {Peer{1, 45791, {"127.0.0.1"}}, Peer{2, 45792, {"127.0.0.1"}}, Peer{3, 45793, {"127.0.0.1"}}};
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) {
+					*error = "migration config did not encode";
+					return false;
+				}
+				const auto decoded = NetLobbyProtocol::Decode(bytes);
+				const auto* proposal = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+				if (!proposal || proposal->config != config) {
+					*error = "successor order or listen roster changed on the config wire";
+					return false;
+				}
+				config.frameRedundancyTicks = 2;
+				config.pathHorizonTicks = 17;
+				Config withoutMigration = config;
+				withoutMigration.successorOrder.clear();
+				withoutMigration.migrationPeers.clear();
+				std::vector<uint8_t> windowBytes;
+				if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{withoutMigration}}, windowBytes) || !NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, bytes)) {
+					*error = "combined redundancy and migration config did not encode";
+					return false;
+				}
+				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
+				const size_t migrationOffset = windowBytes.size();
+				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
+				    windowBytes[migrationOffset - 2] != 2 || windowBytes.back() != 0 ||
+				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end(), bytes.begin() + reservedOffset + 2) ||
+				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
+					*error = "migration payload does not follow the redundancy U16 after the path horizon";
+					return false;
+				}
+				const auto combined = NetLobbyProtocol::Decode(bytes);
+				const auto* roundTrip = combined.ok ? std::get_if<NetLobbyMatchConfig>(&combined.message.payload) : nullptr;
+				if (!roundTrip || roundTrip->config != config) {
+					*error = "combined redundancy and migration config did not round-trip";
+					return false;
+				}
+				auto invalid = windowBytes;
+				invalid[reservedOffset] |= 16;
+				if (NetLobbyProtocol::Decode(invalid).ok) {
+					*error = "reserved bit 16 was accepted without a migration payload";
+					return false;
+				}
+				invalid = bytes;
+				invalid[migrationOffset] = 0;
+				if (NetLobbyProtocol::Decode(invalid).ok) {
+					*error = "reserved bit 16 was accepted with an invalid migration version";
+					return false;
+				}
+				invalid = bytes;
+				invalid[reservedOffset] = 32;
+				const auto unknown = NetLobbyProtocol::Decode(invalid);
+				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
+					*error = "a reserved word of 32 was not refused";
+					return false;
+				}
+				const auto hash = NetMatchConfigUtil::HashConfig(config);
+				config.successorOrder = {2, 3};
+				if (NetMatchConfigUtil::HashConfig(config) == hash) {
+					*error = "config agreement did not bind successor order";
+					return false;
+				}
+				config.successorOrder = {3, 3};
+				if (NetMatchConfigUtil::ValidateLocalAlpha(config)) {
+					*error = "duplicate successor passed config validation";
+					return false;
+				}
+				std::cout << "[net-match-selftest] PASS: successor order and addresses are config-bound" << std::endl;
+				std::cout << "[net-match-selftest] PASS: migration trails redundancy and rejects absent or invalid payloads" << std::endl;
+				return true;
+			} else {
+				*error = "the agreed config carries no successor order or listen roster";
+				return false;
+			}
+		}
+
+		bool TestMigrationEndpointTimeout(std::string* error) {
+			LoopbackTransport hostWire;
+			LoopbackTransport clientWire;
+			if (!hostWire.StartHost(45809, error) || !clientWire.Connect("loopback", 45809, error)) {
+				return false;
+			}
+			hostWire.PollEvents();
+			clientWire.PollEvents();
+			NetLobbySessionConfig setup;
+			setup.host = true;
+			setup.localPeerId = 1;
+			setup.remoteTransportPeerIds = {{2, 1}};
+			setup.matchConfig = NetMatchConfigUtil::MakeDefault(45809);
+			setup.matchConfig.players[1].displayName = "Missing peer";
+			setup.enableMigration = true;
+			setup.migrationListenPort = 45809;
+			setup.migrationListenAddrs = {"loopback"};
+			NetLobbySession lobby;
+			if (!lobby.Start(hostWire, setup, error)) {
+				return false;
+			}
+			lobby.Tick(1);
+			lobby.TimeoutWaitingForStart();
+			if (!lobby.IsFailed() || lobby.GetFailureReason() != "waiting for Missing peer's handover endpoint") {
+				*error = "the lobby timeout does not identify the missing handover endpoint";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestMatchConfigHashAndValidation(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) {
@@ -1250,11 +1367,11 @@ namespace RTE {
 				return false;
 			}
 			const size_t plainSize = bytes.size();
-			// The first bit no reader knows: 1 dedicated, 2 path horizon, 4 the persistent world, 8 the window.
-			bytes[reservedOffset] = 16;
+			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy and 16 migration.
+			bytes[reservedOffset] = 32;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 16 was not refused";
+				*error = "a reserved word of 32 was not refused";
 				return false;
 			}
 			// The redundancy window rides reserved bit 0x8 and a word after the body. A host that
@@ -9176,6 +9293,10 @@ namespace RTE {
 
 		std::string error;
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
+		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
+			return fail(error);
+		if (!TestMigrationEndpointTimeout(&error))
+			return fail(error);
 		if (!TestDisplayNameUtf8(&error)) return fail(error);
 		if (!TestMatchConfigDedicated(&error)) return fail(error);
 		if (!TestActivityModuleResolution(&error)) return fail(error);

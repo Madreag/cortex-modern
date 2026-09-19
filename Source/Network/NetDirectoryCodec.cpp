@@ -257,13 +257,6 @@ namespace RTE {
 				obj["persistent_world"] = true;
 				obj["world_id"] = in.worldId;
 				obj["world_boot"] = in.worldBoot;
-				if (!in.resumeSessionId.empty()) {
-					obj["resume_session_id"] = in.resumeSessionId;
-					// A resume takes the row over only with its current token; a first register has none.
-					if (!in.resumeToken.empty()) {
-						obj["resume_token"] = in.resumeToken;
-					}
-				}
 			}
 		}
 
@@ -336,13 +329,22 @@ namespace RTE {
 	std::string NetDirectoryCodec::EncodeRegisterRequest(const NetDirectoryRegisterRequest& request) {
 		json obj;
 		WriteRegisterFields(obj, request);
+		if (!request.resumeSessionId.empty()) {
+			obj["resume_session_id"] = request.resumeSessionId;
+			if (!request.resumeToken.empty()) {
+				obj["resume_token"] = request.resumeToken;
+			}
+		}
 		return obj.dump();
 	}
 
 	bool NetDirectoryCodec::DecodeRegisterRequest(const std::string& body, NetDirectoryRegisterRequest& out, std::string& reason) {
 		json obj;
 		if (!ParseBody(body, obj, reason)) return false;
-		return ReadRegisterFields(obj, out, reason);
+		if (!ReadRegisterFields(obj, out, reason))
+			return false;
+		const bool firstWorld = out.persistentWorld && out.worldId == out.resumeSessionId && out.resumeToken.empty();
+		return firstWorld || obj.contains("resume_session_id") == obj.contains("resume_token");
 	}
 
 	std::string NetDirectoryCodec::EncodeRegisterResponse(const NetDirectoryRegisterResponse& response) {

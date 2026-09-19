@@ -481,7 +481,7 @@ namespace RTE {
 
 			{
 				NetH4TicketRecord v2 = second;
-				v2.recordVersion = NetReconnectTicketStore::c_RecordVersion;
+				v2.recordVersion = NetReconnectTicketStore::c_DirectoryRecordVersion;
 				v2.directorySessionId = "sess-re-resolve-1";
 				if (!store.Store(v2, &error)) {
 					return Fail("the ticket store refused a v2 record: " + error);
@@ -6479,6 +6479,177 @@ namespace RTE {
 			return 0;
 		}
 
+	namespace {
+		template <typename Host, typename Client, typename Registry>
+		int TestMigrationAdmission(bool hold, bool participant = false) {
+			if constexpr (!requires(Host& host) {
+				host.ExportMigrationState();
+				host.SetMigrationHold(true, uint64_t{});
+			}) {
+				return Fail(hold ? "a rejoin has no handover hold before the new host runs" : "old-host tickets have no replicated admission registry on a successor");
+			} else {
+				ScriptedAuthCrypto crypto;
+				ScopedTestCrypto scope(&crypto);
+				uint64_t unixClock = 100000, now = 0;
+				const uint16_t port = participant ? 45807 : hold ? 45803
+				                                                 : 45801;
+				NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x45801001);
+				match.peerCount = 3;
+				match.players.push_back({3, 2, false, "Next host"});
+				Registry oldRegistry, nextRegistry;
+				Host oldHost, nextHost;
+				NetHostBanStore oldBans, successorBans;
+				const auto holderId = Ramp<32>(0xA7);
+				const auto bannedId = Ramp<32>(0xB8);
+				if (!oldRegistry.BeginHostedSession())
+					return Fail("migration ticket fixture could not draw an epoch");
+				oldHost.Configure(&oldRegistry, match.sessionId, MakeIdentity());
+				oldHost.SetSeatTable(NetH4BuildSeatTable(match), match.mode);
+				if (participant) {
+					oldHost.SetBanStore(&oldBans);
+					oldHost.SetParticipantProofRequired(true);
+					oldHost.BindParticipantId(1, holderId);
+					nextHost.SetBanStore(&successorBans);
+					nextHost.SetParticipantProofRequired(true);
+					if (!oldBans.Ban(bannedId, NetHostBanScope::Session, "banned", "old host ban", match.sessionId, unixClock))
+						return Fail("old host did not record the fixture ban");
+				}
+				LoopbackTransport oldWire, oldClientWire, newWire, newClientWire;
+				std::string error;
+				if (!oldWire.StartHost(port, &error) || !oldClientWire.Connect("loopback", port, &error))
+					return Fail(error);
+				NetReconnectTicketStore store;
+				store.SetPath(StorePath(participant ? "migration-participant" : hold ? "migration-held"
+				                                                                     : "migration-ticket"));
+				Client client;
+				client.Configure(&store, MakeIdentity(), "Returner");
+				client.SetUnixClock(&FixedUnixClock, &unixClock);
+				client.SetHostContext("old-host", NetMatchConfigUtil::HashConfig(match));
+				uint32_t sequence = 0;
+				auto pump = [&](Host& host, Client& peer, LoopbackTransport& server, LoopbackTransport& wire) {
+					for (int turn = 0; turn < 20; ++turn) {
+						host.Tick(now);
+						peer.Tick(now);
+						for (const auto& outbound: peer.TakeOutbound()) {
+							std::vector<uint8_t> bytes;
+							if (!NetProtocol::Encode({++sequence, 0, outbound.payload}, bytes) || !wire.Send(1, NetTransportLane::ControlReliable, bytes, &error))
+								return false;
+						}
+						for (const auto& event: server.PollEvents())
+							if (event.type == NetTransportEventType::PacketReceived) {
+								const auto decoded = NetProtocol::Decode(event.bytes);
+								if (!decoded.ok)
+									return false;
+								host.HandleMessage(event.peerId, decoded.message.payload, now);
+							}
+						for (const auto& outbound: host.TakeOutbound()) {
+							std::vector<uint8_t> bytes;
+							if (!NetProtocol::Encode({++sequence, 0, outbound.payload}, bytes) || !server.Send(outbound.connection, NetTransportLane::ControlReliable, bytes, &error))
+								return false;
+						}
+						for (const auto& event: wire.PollEvents())
+							if (event.type == NetTransportEventType::PacketReceived) {
+								const auto decoded = NetProtocol::Decode(event.bytes);
+								if (!decoded.ok)
+									return false;
+								peer.HandleMessage(decoded.message.payload, now);
+							}
+						now += 5;
+					}
+					return true;
+				};
+				if (!client.BeginNewJoin(now, &error) || !pump(oldHost, client, oldWire, oldClientWire) || !client.IsAdmitted())
+					return Fail("old host did not issue and commit the fixture ticket: " + error);
+				if (!client.MigrateHostContext("old-host", "migration-match", NetMatchConfigUtil::HashConfig(match)))
+					return Fail("ticket did not retain the directory match binding");
+				const auto issued = client.GetRecord();
+				std::vector<uint8_t> sealed, opened;
+				const std::vector<uint8_t> context{2, 7, 11}, plaintext{'r', 'o', 'w', '-', 't', 'o', 'k', 'e', 'n'};
+				if (!oldRegistry.SealForSeat(issued.stableSeat, context, plaintext, sealed) || !client.OpenSuccessorCapsule(context, sealed, opened) || opened != plaintext)
+					return Fail("successor could not open its row credential");
+				Client stranger;
+				NetReconnectTicketStore strangerStore;
+				strangerStore.SetPath(StorePath("migration-stranger"));
+				stranger.Configure(&strangerStore, MakeIdentity(), "Wrong holder");
+				stranger.SetUnixClock(&FixedUnixClock, &unixClock);
+				auto forged = issued;
+				forged.credential[0] ^= 1;
+				stranger.BeginReclaim(forged, now, &error);
+				if (stranger.OpenSuccessorCapsule(context, sealed, opened))
+					return Fail("another holder opened the sealed row token");
+				oldHost.SetLiveMatch(true);
+				if (!participant)
+					oldHost.NotifyDisconnect(1, 5);
+				const auto admission = oldHost.ExportMigrationState();
+				oldWire.Stop();
+				const auto survivors = participant ? std::map<uint8_t, NetPeerId>{{2, 1}} : std::map<uint8_t, NetPeerId>{};
+				if (!nextHost.ImportMigrationState(admission, nextRegistry, match, 3, survivors, now))
+					return Fail("successor did not import the match ticket registry");
+				if (!newWire.StartHost(port + 1, &error) || !newClientWire.Connect("loopback", port + 1, &error))
+					return Fail(error);
+				Client returning;
+				returning.Configure(&store, MakeIdentity(), "Returner");
+				returning.SetUnixClock(&FixedUnixClock, &unixClock);
+				returning.SetHostContext("new-host", NetMatchConfigUtil::HashConfig(match));
+				returning.SetDirectorySessionId("migration-match");
+				nextHost.SetMigrationHold(hold, now);
+				if (!returning.BeginAdmission(now, &error) || !pump(nextHost, returning, newWire, newClientWire))
+					return Fail(error);
+				if (hold) {
+					if (returning.IsAdmitted() || nextHost.HeldMigrationMessages() != 1 || nextHost.GetStats().reclaimsAccepted != 0)
+						return Fail("rejoin escaped the handover hold before Running");
+					nextHost.SetMigrationHold(false, now);
+					if (!pump(nextHost, returning, newWire, newClientWire))
+						return Fail(error);
+				}
+				if (!returning.IsAdmitted() || nextHost.GetStats().reclaimsAccepted != 1 || nextRegistry.GetEpoch() != issued.epoch || returning.GetRecord().credential != issued.credential || returning.GetRecord().stableSeat != issued.stableSeat)
+					return Fail("successor refused or replaced the old host's valid match ticket");
+				if (participant) {
+					const auto seats = nextHost.GetModerationView();
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& item) { return item.stableSeat == issued.stableSeat; });
+					NetParticipantRemovalIssue removal;
+					if (seat == seats.end() || nextHost.RemoveParticipant(NetSelectModerationSeat(*seat), NetParticipantRemovalAction::BanSession, now, unixClock, match.sessionId, 1, 6, removal) != NetKickBanResult::Ok ||
+					    !removal.hasParticipantId || removal.participantId != holderId || !successorBans.IsBanned(holderId, match.sessionId))
+						return Fail("imported seat lost its participant identity or ban-store pointer");
+					nextHost.TakeOutbound();
+					nextHost.BindParticipantId(1, bannedId);
+					NetH4NewJoin request;
+					request.txId = Ramp<16>(0x63);
+					request.identity = MakeIdentity();
+					request.displayName = "banned returner";
+					std::vector<uint8_t> bytes;
+					if (!NetProtocol::Encode({++sequence, 0, request}, bytes) || !newClientWire.Send(1, NetTransportLane::ControlReliable, bytes, &error))
+						return Fail(error);
+					for (const auto& event: newWire.PollEvents())
+						if (event.type == NetTransportEventType::PacketReceived) {
+							const auto decoded = NetProtocol::Decode(event.bytes);
+							if (!decoded.ok)
+								return Fail("ban probe did not decode");
+							nextHost.HandleMessage(event.peerId, decoded.message.payload, now);
+						}
+					const auto refusals = nextHost.TakeOutbound();
+					if (std::none_of(refusals.begin(), refusals.end(), [](const auto& message) {
+						const auto* refusal = std::get_if<NetJoinRejected>(&message.payload);
+						return refusal && refusal->rejectReason == NetRejectReason::ParticipantBanned;
+					}))
+						return Fail("old-host ban did not refuse the same identity on the successor");
+					NetH4NewJoin unbound = request;
+					unbound.txId = Ramp<16>(0x74);
+					nextHost.HandleMessage(77, unbound, now);
+					const auto unproven = nextHost.TakeOutbound();
+					if (std::none_of(unproven.begin(), unproven.end(), [](const auto& message) {
+						const auto* refusal = std::get_if<NetJoinRejected>(&message.payload);
+						return refusal && refusal->rejectReason == NetRejectReason::IdentityUnproven;
+					}))
+						return Fail("host import lost the participant proof requirement");
+					std::cout << "[host-migration-selftest] PASS: imported participant identity and old-host ban remain authoritative" << std::endl;
+					return 0;
+				}
+				std::cout << "[host-migration-selftest] PASS: " << (hold ? "rejoin is held during handover and admitted after Running" : "old-host ticket is honored by the successor without reissue") << std::endl;
+				return 0;
+			}
+		}
+	} // namespace
 		int TestRemovalAcceptModel() {
 			NetParticipantRemoval notice;
 			notice.sessionId = 11;
@@ -7312,6 +7483,11 @@ namespace RTE {
 		if (const int result = TestTicketArtifactCanary(); result != 0) {
 			return result;
 		}
+		const int migratedTicket = TestMigrationAdmission<NetReconnectHost, NetReconnectClient, NetSeatAuthRegistry>(false);
+		const int heldRejoin = TestMigrationAdmission<NetReconnectHost, NetReconnectClient, NetSeatAuthRegistry>(true);
+		const int migratedParticipant = TestMigrationAdmission<NetReconnectHost, NetReconnectClient, NetSeatAuthRegistry>(false, true);
+		if (migratedTicket != 0 || heldRejoin != 0 || migratedParticipant != 0)
+			return 1;
 		if (const int result = TestFirstJoinTransaction(); result != 0) {
 			return result;
 		}

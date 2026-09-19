@@ -33,6 +33,12 @@ namespace RTE {
 	};
 
 	enum class NetMatchDelayPolicy : uint8_t { Auto = 1, Fixed = 2 };
+	struct NetMatchMigrationPeer {
+		uint8_t peerId = 0;
+		uint16_t listenPort = 0;
+		std::vector<std::string> listenAddrs;
+		bool operator==(const NetMatchMigrationPeer&) const = default;
+	};
 
 	struct NetMatchTeamRules {
 		std::string technologyIntent = "-All-";
@@ -85,25 +91,28 @@ namespace RTE {
 		NetActorOwnershipPolicy ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
+		std::vector<uint8_t> successorOrder;
+		std::vector<NetMatchMigrationPeer> migrationPeers;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
 
 	class NetMatchConfigUtil {
 	public:
+		static constexpr uint16_t c_MigrationVersion = 1;
+		static constexpr uint16_t c_MigrationConfigFlag = 16;
+		static constexpr size_t c_MaxMigrationAddresses = 8;
 		static constexpr uint16_t c_Version = 4; // Ordinary live layout. A persistent world speaks c_PersistentWorldVersion.
 		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
 		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
 		static constexpr uint16_t c_LiveMinVersion = 4;
 		static constexpr uint16_t c_PersistentWorldVersion = 5;
-		// The lobby config's reserved word, by bit value. Bits 0 and 1 are the dedicated flag and the
-		// path horizon, bit 8 the frame-redundancy window; the persistent world takes bit value 4 and is known
-		// only from c_PersistentWorldVersion up, so an ordinary reader still refuses the whole word.
+		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
 		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
 		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
-		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit;
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag;
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;
 		static constexpr uint16_t c_MaxPathHorizonTicks = 120;
 		static constexpr size_t c_WorldIdBytes = 36; // A canonical UUID, the directory's registration id.

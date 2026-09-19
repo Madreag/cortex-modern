@@ -409,6 +409,12 @@ namespace RTE {
 		std::vector<NetH4SeatStatus> GetSeatStatuses() const;
 		/// The seat table as the plane holds it now, in table order.
 		std::vector<NetH4Seat> GetSeatTable() const;
+		std::vector<uint8_t> ExportMigrationState() const;
+		bool ImportMigrationState(const std::vector<uint8_t>& bytes, NetSeatAuthRegistry& registry, const NetMatchConfig& config, uint8_t localPeerId, const std::map<uint8_t, NetPeerId>& transports, uint64_t nowMs);
+		void SetMigrationHold(bool held, uint64_t nowMs);
+		void RecordMigrationDepartures(uint64_t frame);
+		bool EnsureLocalTicket(NetH4TicketRecord& record);
+		size_t HeldMigrationMessages() const { return m_MigrationHeldMessages.size(); }
 
 	private:
 		struct SeatState {
@@ -593,6 +599,8 @@ namespace RTE {
 		std::vector<NetHoldResolutionNotice> m_PendingHoldResolutions;
 		std::vector<NetH4Commit> m_Commits;
 		NetReconnectHostStats m_Stats;
+		bool m_MigrationHold = false;
+		std::vector<std::pair<NetPeerId, NetPayload>> m_MigrationHeldMessages;
 		NetAuthBytes16 m_LastRemovalTx{};
 		bool m_HasRemovalTx = false;
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
@@ -653,6 +661,8 @@ namespace RTE {
 		/// Names the host this client is joining, so a stored record can be told from another host's and
 		/// the record it writes says where it came from.
 		void SetHostContext(std::string hostAddress, const NetHash32& matchConfigHash);
+		bool MigrateHostContext(const std::string& address, const std::string& directorySessionId, const NetHash32& matchConfigHash);
+		bool OpenSuccessorCapsule(const std::vector<uint8_t>& context, const std::vector<uint8_t>& sealed, std::vector<uint8_t>& plaintext) const;
 		/// The host is a persistent world, so the record says so and a relaunch's rejoin hellos on the
 		/// world plane instead of the ordinary one.
 		void SetWorldTarget(bool world) { m_WorldTarget = world; }

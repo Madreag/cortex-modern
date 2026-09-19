@@ -30,6 +30,7 @@ namespace RTE {
 		bool running = false;
 		bool failed = false;
 		uint8_t localPeerId = 0;
+		uint8_t hostPeerId = 1;
 		int localTeam = -1;
 		std::string serviceState;
 		std::string statusText;

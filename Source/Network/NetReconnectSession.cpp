@@ -7,12 +7,196 @@
 #include "NetHostBanStore.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <set>
 #include <iostream>
 #include <utility>
 
 namespace RTE {
+	std::vector<uint8_t> NetReconnectHost::ExportMigrationState() const {
+		if (!m_Registry || !m_Registry->IsActive())
+			return {};
+		using json = nlohmann::json;
+		json seats = json::array();
+		for (const auto& state: m_Seats) {
+			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
+			if (state.hasParticipantId) {
+				row["participant_id"] = state.participantId;
+			}
+			if (const auto* ledger = m_Ledger.Find(state.seat.stableSeat))
+				row["ledger"] = {ledger->peerId, ledger->team, ledger->droppedAtFrame, ledger->actorUIDs};
+			seats.push_back(std::move(row));
+		}
+		const auto& identity = m_LocalIdentity;
+		json bans = json::array();
+		if (m_BanStore) {
+			for (const auto& ban: m_BanStore->List()) {
+				if (ban.scope == NetHostBanScope::UntilRemoved || ban.sessionId == m_HostSessionId) {
+					bans.push_back({ban.identity, static_cast<uint8_t>(ban.scope), ban.createdUnixMs, ban.displayAlias, ban.reason});
+				}
+			}
+		}
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+	}
+
+	bool NetReconnectHost::ImportMigrationState(const std::vector<uint8_t>& bytes, NetSeatAuthRegistry& registry, const NetMatchConfig& config, uint8_t localPeerId, const std::map<uint8_t, NetPeerId>& transports, uint64_t nowMs) {
+		if (bytes.empty() || bytes.size() > 32 * 1024)
+			return false;
+		try {
+			const auto object = nlohmann::json::from_cbor(bytes);
+			NetSeatAuthRegistry nextRegistry;
+			if (object.at("version") != 1 || object.at("session").get<uint64_t>() != config.sessionId || !object.at("seats").is_array() || object.at("seats").size() != config.players.size() || !nextRegistry.ImportMigrationState(object.at("registry").get<std::vector<uint8_t>>()))
+				return false;
+			NetReconnectHost next;
+			next.m_BanStore = m_BanStore;
+			next.m_ProofRequired = m_ProofRequired;
+			next.m_PersistentWorld = m_PersistentWorld;
+			NetH4Identity identity;
+			const auto& fields = object.at("identity");
+			identity.controllerFrameVersion = fields.at(0).get<uint16_t>();
+			identity.controllerFrameEncodedSize = fields.at(1).get<uint16_t>();
+			identity.gameVersion = fields.at(2).get<std::string>();
+			identity.buildId = fields.at(3).get<std::string>();
+			identity.deterministicConfigHash = fields.at(4).get<NetHash32>();
+			identity.moduleManifestHash = fields.at(5).get<NetHash32>();
+			identity.sessionRulesHash = fields.at(6).get<NetHash32>();
+			identity.sessionIdentityHash = fields.at(7).get<NetHash32>();
+			next.Configure(&nextRegistry, config.sessionId, identity);
+			std::vector<NetH4Seat> table;
+			for (const auto& row: object.at("seats")) {
+				const auto& slot = row.at("slot");
+				NetH4Seat seat;
+				seat.stableSeat = row.at("seat").get<uint16_t>();
+				seat.peerId = slot.at(0).get<uint8_t>();
+				seat.lockstepPeerId = slot.at(1).get<uint8_t>();
+				seat.team = slot.at(2).get<int32_t>();
+				seat.cpu = slot.at(3).get<bool>();
+				seat.local = seat.lockstepPeerId == localPeerId;
+				if (seat.stableSeat >= NetMatchConfigUtil::c_MaxPlayers || (seat.lockstepPeerId != 0 && seat.peerId + 1 != seat.lockstepPeerId) ||
+				    std::none_of(config.players.begin(), config.players.end(), [&](const auto& player) { return player.cpu == seat.cpu && player.peerId == seat.lockstepPeerId && player.team == seat.team; }))
+					return false;
+				table.push_back(seat);
+			}
+			next.SetSeatTable(std::move(table), config.mode);
+			next.SetMatchConfigHash(NetMatchConfigUtil::HashConfig(config));
+			next.m_NowMs = nowMs;
+			next.m_LiveMatch = true;
+			std::set<uint16_t> seen;
+			for (const auto& row: object.at("seats")) {
+				const uint16_t seat = row.at("seat").get<uint16_t>();
+				auto* state = next.FindSeat(seat);
+				if (!state || !seen.insert(seat).second)
+					return false;
+				state->seat.local = state->seat.lockstepPeerId == localPeerId;
+				state->holderGeneration = row.at("holder").get<uint32_t>();
+				state->incarnation = row.at("incarnation").get<uint32_t>();
+				state->committed = row.at("committed").get<bool>();
+				state->closed = row.at("closed").get<bool>();
+				state->dropped = row.at("dropped").get<bool>();
+				state->holdExpired = row.at("expired").get<bool>();
+				state->seatGeneration = row.at("generation").get<uint32_t>();
+				state->substituteName = row.at("name").get<std::string>();
+				state->saturated = row.at("saturated").get<bool>();
+				state->retiredGeneration = row.at("retired_generation").get<uint32_t>();
+				const uint64_t retiredRemaining = row.at("retired_remaining").get<uint64_t>();
+				if (retiredRemaining > c_ProvisionalExpiryMs)
+					return false;
+				state->retiredUntilMs = retiredRemaining != 0 ? nowMs + retiredRemaining : 0;
+				state->identity = identity;
+				if (row.contains("participant_id")) {
+					state->participantId = row.at("participant_id").get<NetAuthBytes32>();
+					state->hasParticipantId = true;
+				}
+				if (state->committed && nextRegistry.GetActiveGeneration(seat) != state->holderGeneration)
+					return false;
+				if (const auto peer = transports.find(state->seat.lockstepPeerId); peer != transports.end()) {
+					if (!state->committed || state->closed)
+						return false;
+					state->activeConnection = peer->second;
+					state->dropped = false;
+					if (state->hasParticipantId)
+						next.BindParticipantId(peer->second, state->participantId);
+				} else if (state->committed && !state->seat.local) {
+					state->dropped = true;
+					state->droppedAtMs = nowMs;
+				}
+				if (row.contains("ledger")) {
+					const auto& ledger = row.at("ledger");
+					next.m_Ledger.RecordDrop(seat, ledger.at(0).get<uint8_t>(), ledger.at(1).get<int32_t>(), ledger.at(2).get<uint64_t>(), ledger.at(3).get<std::vector<int64_t>>());
+				}
+			}
+			std::vector<NetHostBanRecord> bans;
+			if (object.contains("bans")) {
+				for (const auto& row: object.at("bans")) {
+					NetHostBanRecord ban;
+					ban.identity = row.at(0).get<NetAuthBytes32>();
+					const auto scope = row.at(1).get<uint8_t>();
+					if (scope > static_cast<uint8_t>(NetHostBanScope::UntilRemoved))
+						return false;
+					ban.scope = static_cast<NetHostBanScope>(scope);
+					ban.createdUnixMs = row.at(2).get<uint64_t>();
+					ban.displayAlias = row.at(3).get<std::string>();
+					ban.reason = row.at(4).get<std::string>();
+					if (ban.displayAlias.size() > NetProtocol::c_MaxShortTextBytes || ban.reason.size() > NetProtocol::c_MaxShortTextBytes)
+						return false;
+					bans.push_back(std::move(ban));
+				}
+			}
+			for (const auto& ban: bans) {
+				if (!next.m_BanStore || !next.m_BanStore->Ban(ban.identity, ban.scope, ban.displayAlias, ban.reason, config.sessionId, ban.createdUnixMs))
+					return false;
+			}
+			registry = std::move(nextRegistry);
+			next.m_Registry = &registry;
+			next.m_DropOwnershipSource = m_DropOwnershipSource;
+			next.m_DropOwnershipContext = m_DropOwnershipContext;
+			*this = std::move(next);
+			return true;
+		} catch (const nlohmann::json::exception&) {
+			return false;
+		}
+	}
+
+	void NetReconnectHost::SetMigrationHold(bool held, uint64_t nowMs) {
+		m_MigrationHold = held;
+		if (held)
+			return;
+		auto messages = std::move(m_MigrationHeldMessages);
+		m_MigrationHeldMessages.clear();
+		for (const auto& [connection, payload]: messages)
+			(void)HandleMessage(connection, payload, nowMs);
+	}
+
+	void NetReconnectHost::RecordMigrationDepartures(uint64_t frame) {
+		for (auto& seat: m_Seats)
+			if (seat.dropped && !m_Ledger.Find(seat.seat.stableSeat))
+				RecordDrop(seat, frame);
+	}
+
+	bool NetReconnectHost::EnsureLocalTicket(NetH4TicketRecord& record) {
+		if (!m_Registry || !m_Registry->IsActive())
+			return false;
+		for (auto& state: m_Seats) {
+			if (!state.seat.local || state.seat.cpu)
+				continue;
+			if (state.holderGeneration != 0)
+				return record.epoch == m_Registry->GetEpoch() && record.stableSeat == state.seat.stableSeat && m_Registry->MatchesActiveCredential(record.stableSeat, record.holderGeneration, record.credential);
+			record = {};
+			if (!m_Registry->IssueCredential(state.seat.stableSeat, record.holderGeneration, record.credential))
+				return false;
+			record.epoch = m_Registry->GetEpoch();
+			record.stableSeat = state.seat.stableSeat;
+			record.hostSessionId = m_HostSessionId;
+			state.holderGeneration = record.holderGeneration;
+			state.committed = true;
+			state.incarnation = 1;
+			state.identity = m_LocalIdentity;
+			return true;
+		}
+		return false;
+	}
 
 	namespace {
 		// Every denial reads the same on the wire; the reason is diagnostics the host keeps to itself.
@@ -179,7 +363,7 @@ namespace RTE {
 
 	NetReconnectHost::SeatState* NetReconnectHost::FindFreeNeverHeldSeat() {
 		for (SeatState& state : m_Seats) {
-			// The host's own seat is never offered: nobody joins it, and host loss is out of scope.
+			// The current host keeps its own seat out of admission offers.
 			if (state.seat.cpu || state.seat.local || state.committed || state.closed || state.holderGeneration != 0) {
 				continue;
 			}
@@ -339,6 +523,13 @@ namespace RTE {
 
 	bool NetReconnectHost::HandleMessage(NetPeerId connection, const NetPayload& payload, uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
+		if (m_MigrationHold && (std::holds_alternative<NetH4NewJoin>(payload) || std::holds_alternative<NetH4TicketStoredAck>(payload) || std::holds_alternative<NetH4Reclaim>(payload) ||
+		                        std::holds_alternative<NetH4Proof>(payload) || std::holds_alternative<NetH4LeaveRequest>(payload) || std::holds_alternative<NetH4Applicant>(payload) || std::holds_alternative<NetH4SubstitutionAck>(payload))) {
+			const auto repeated = std::find_if(m_MigrationHeldMessages.begin(), m_MigrationHeldMessages.end(), [&](const auto& held) { return held.first == connection && held.second == payload; });
+			if (repeated == m_MigrationHeldMessages.end() && m_MigrationHeldMessages.size() < 32)
+				m_MigrationHeldMessages.emplace_back(connection, payload);
+			return true;
+		}
 		if (const auto* newJoin = std::get_if<NetH4NewJoin>(&payload)) {
 			HandleNewJoin(connection, *newJoin, nowMs);
 			return true;
@@ -1667,6 +1858,8 @@ namespace RTE {
 
 	void NetReconnectHost::Tick(uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
+		if (m_MigrationHold)
+			return;
 		for (auto pending = m_Provisionals.begin(); pending != m_Provisionals.end();) {
 			if (nowMs >= pending->openedAtMs && nowMs - pending->openedAtMs > c_ProvisionalExpiryMs) {
 				if (m_Registry != nullptr) {
@@ -1884,6 +2077,27 @@ namespace RTE {
 		m_Record.matchConfigHash = m_MatchConfigHash;
 	}
 
+	bool NetReconnectClient::MigrateHostContext(const std::string& address, const std::string& directorySessionId, const NetHash32& matchConfigHash) {
+		if (!m_HasRecord || !m_Store)
+			return false;
+		NetH4TicketRecord record = m_Record;
+		record.recordVersion = NetReconnectTicketStore::RecordVersionFor(record.persistentWorld);
+		record.hostAddress = address;
+		record.directorySessionId = directorySessionId;
+		record.matchConfigHash = matchConfigHash;
+		if (record != m_Record && !m_Store->Store(record))
+			return false;
+		m_Record = std::move(record);
+		m_HostAddress = address;
+		m_DirectorySessionId = directorySessionId;
+		m_MatchConfigHash = matchConfigHash;
+		return true;
+	}
+
+	bool NetReconnectClient::OpenSuccessorCapsule(const std::vector<uint8_t>& context, const std::vector<uint8_t>& sealed, std::vector<uint8_t>& plaintext) const {
+		return m_HasRecord && NetAuthOpen(m_Record.credential, context, sealed, plaintext);
+	}
+
 	void NetReconnectClient::SetDirectorySessionId(std::string directorySessionId) {
 		m_DirectorySessionId = std::move(directorySessionId);
 		m_Record.directorySessionId = m_DirectorySessionId;
@@ -1918,8 +2132,8 @@ namespace RTE {
 		m_LastLoad = m_Store->Load(UnixNowMs(), record, nullptr);
 		if (NetA7Journal::Enabled()) NetA7Journal::Session("ticket_loaded", nowMs, {{"load_result", static_cast<int>(m_LastLoad)},
 			{"ticket_sha256", m_Store->GetA7LoadedSha256()}, {"host_matches", m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress}}, "NetReconnectClient::nowMs");
-		// A record for a different host names a different session's seat; only this host's reclaims.
-		if (m_LastLoad == NetH4TicketLoadResult::Loaded && record.hostAddress == m_HostAddress) {
+		// A directory match keeps its ticket binding when its host address changes.
+		if (m_LastLoad == NetH4TicketLoadResult::Loaded && (record.hostAddress == m_HostAddress || (!m_DirectorySessionId.empty() && record.directorySessionId == m_DirectorySessionId))) {
 			m_UsedStoredTicket = true;
 			record.matchConfigHash = m_MatchConfigHash;
 			return BeginReclaim(record, nowMs, error);

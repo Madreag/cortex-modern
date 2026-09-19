@@ -25,6 +25,7 @@ from urllib.parse import parse_qs, urlparse
 LOGGER = logging.getLogger("session_directory")
 
 MAX_ROWS = 4096
+RESUME_GRACE_S = 120.0
 MAX_STR = 64
 MAX_ARR = 8
 MAX_QUEUE = 256
@@ -361,6 +362,7 @@ class SessionDirectory:
         self._lock = threading.RLock()
         self._signals_changed = threading.Condition(self._lock)
         self._sessions: dict[str, Session] = {}
+        self._resume_tokens: dict[str, tuple[str, float]] = {}
         self.limiter = DualRateLimiter()
         self._stop = threading.Event()
         self._pruner = threading.Thread(
@@ -399,7 +401,14 @@ class SessionDirectory:
                 if now - sess.last_beat >= self.expiry_s
             ]
             for sid in dead:
+                sess = self._sessions[sid]
+                self._resume_tokens[sid] = (sess.token, sess.last_beat + self.expiry_s + RESUME_GRACE_S)
                 del self._sessions[sid]
+            for sid, (_, deadline) in list(self._resume_tokens.items()):
+                if now >= deadline:
+                    del self._resume_tokens[sid]
+            while len(self._resume_tokens) > MAX_ROWS:
+                del self._resume_tokens[next(iter(self._resume_tokens))]
             for sess in self._sessions.values():
                 self._prune_idle_queues(sess, now)
 
@@ -436,36 +445,31 @@ class SessionDirectory:
                 fields["world_boot"] = require_int(data, "world_boot", 1, 10**9)
             resume = data.get("resume_session_id")
             if resume is not None:
-                resume = require_str(data, "resume_session_id")
+                session_id = require_str(data, "resume_session_id")
                 try:
-                    uuid.UUID(resume)
+                    uuid.UUID(session_id)
                 except ValueError:
                     raise FieldError("invalid_field", "resume_session_id")
-                if resume in self._sessions:
-                    sess = self._sessions[resume]
-                    # The row's own token is the proof of ownership; the session id is public (it is in
-                    # every /list row), so without this any reader could seize a world's row.
-                    presented = data.get("resume_token")
-                    if not isinstance(presented, str) or not tokens_equal(presented, sess.token):
-                        raise PermissionError("forbidden")
+                presented = data.get("resume_token")
+                previous = self._sessions.get(session_id)
+                retained = self._resume_tokens.get(session_id)
+                token = previous.token if previous else retained[0] if retained else ""
+                world = fields.get("persistent_world") is True and fields.get("world_id") == session_id
+                first_world = world and not token and presented in (None, "")
+                if not first_world and (not token or not isinstance(presented, str) or not tokens_equal(presented, token)):
+                    raise PermissionError("forbidden")
+                if world:
                     token = secrets.token_urlsafe(24)
-                    sess.token = token
-                    sess.fields = fields
-                    sess.observed_ip = observed_ip
-                    sess.last_beat = now
-                    return {
-                        "session_id": resume,
-                        "token": token,
-                        "expires_in_s": as_json_int(self.expiry_s),
-                        "heartbeat_s": as_json_int(self.heartbeat_s),
-                        "observed_ip": observed_ip,
-                        "supports_unlisted": True,
-                    }
-                session_id = resume
             else:
+                if "resume_token" in data:
+                    raise PermissionError("forbidden")
                 session_id = str(uuid.uuid4())
-            token = secrets.token_urlsafe(24)
+                token = secrets.token_urlsafe(24)
             sess = Session(session_id, token, fields, observed_ip, now)
+            if resume is not None:
+                if not first_world:
+                    sess.state = "running"
+                self._resume_tokens.pop(session_id, None)
             self._sessions[session_id] = sess
         return {
             "session_id": session_id,
@@ -527,6 +531,7 @@ class SessionDirectory:
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
             del self._sessions[session_id]
+            self._resume_tokens.pop(session_id, None)
             self._signals_changed.notify_all()
         return {"ok": True}
 

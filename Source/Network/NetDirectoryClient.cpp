@@ -163,6 +163,32 @@ namespace RTE {
 		m_Listed = true;
 	}
 
+	void NetDirectoryClient::AbandonLease() {
+		if (m_Request) {
+			m_Request->Abort();
+			m_Request.reset();
+		}
+		m_RequestKind = RequestKind::None;
+		m_Listed = false;
+		m_SessionId.clear();
+		m_Token.clear();
+		m_ConfirmedListed.reset();
+		if (m_State != State::Disabled)
+			SetState(State::Idle);
+	}
+
+	bool NetDirectoryClient::Resume(const NetDirectoryRegisterRequest& row, const std::string& sessionId, const std::string& token, bool running, bool listed) {
+		const bool firstWorld = row.persistentWorld && row.worldId == sessionId && token.empty();
+		if (m_State == State::Disabled || sessionId.empty() || (!firstWorld && token.empty()) || sessionId == token)
+			return false;
+		AbandonLease();
+		NetDirectoryRegisterRequest resumed = row;
+		resumed.resumeSessionId = sessionId;
+		resumed.resumeToken = token;
+		Advertise(resumed, running, listed);
+		return true;
+	}
+
 	void NetDirectoryClient::NoteListenAddrs(std::vector<std::string> addrs) {
 		if (addrs == m_Row.listenAddrs) {
 			return;
