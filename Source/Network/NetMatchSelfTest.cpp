@@ -1738,6 +1738,71 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestWorldLobbyRequiresPlayersInsteadOfCapacity(std::string* error) {
+			struct Case { bool world; uint8_t peers; bool bound; bool ready; bool ack; bool starts; };
+			const Case cases[] = {
+				{true, 4, true, true, true, true}, {true, 4, true, false, true, false},
+				{true, 4, false, false, false, false}, {true, 4, true, true, false, false},
+				{false, 3, true, true, true, false}, {false, 2, true, false, true, false},
+				{false, 2, true, true, true, true}};
+			uint16_t port = 43393;
+			for (const Case& row : cases) {
+				NetMatchServiceRequest request;
+				request.host = true;
+				request.dedicated = true;
+				request.persistentWorld = row.world;
+				request.activityPreset = row.world ? "Persistent World" : "P4 Alpha Duel";
+				request.peerCount = row.peers;
+				request.humans = row.peers - 1;
+				request.worldId = row.world ? "01234567-89ab-cdef-0123-456789abcdef" : "";
+				request.worldBoot = row.world ? 1 : 0;
+				NetMatchConfig config;
+				if (!NetMatchService::BuildMatchConfig(request, 42, config, error)) return false;
+				LoopbackTransport hostTransport, clientTransport;
+				NetPeerId hostRemote, clientRemote;
+				if (!StartLoopbackTransports(port++, hostTransport, clientTransport, hostRemote, clientRemote, error)) return false;
+				NetLobbySession host, client;
+				NetLobbySessionConfig hostConfig;
+				hostConfig.host = true;
+				hostConfig.localPeerId = 1;
+				hostConfig.matchConfig = config;
+				hostConfig.startFrame = 1;
+				if (row.bound) {
+					hostConfig.remotePeerId = 2;
+					hostConfig.remoteTransportPeerId = hostRemote;
+				}
+				if (!host.Start(hostTransport, hostConfig, error)) return false;
+				if (row.ack) {
+					NetLobbySessionConfig clientConfig = hostConfig;
+					clientConfig.host = false;
+					clientConfig.localPeerId = 2;
+					clientConfig.remotePeerId = 1;
+					clientConfig.remoteTransportPeerId = clientRemote;
+					clientConfig.autoReady = row.ready;
+					if (!client.Start(clientTransport, clientConfig, error)) return false;
+				} else if (row.bound) {
+					std::vector<uint8_t> bytes;
+					if (!NetLobbyProtocol::Encode({NetLobbyReady{2, row.ready}}, bytes) ||
+					    !clientTransport.Send(clientRemote, NetTransportLane::ControlReliable, bytes, error)) return false;
+				}
+				for (uint64_t now = 0; now <= 500; now += 10) {
+					host.Tick(now);
+					if (row.ack) client.Tick(now);
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+				}
+				if (host.IsStarted() != row.starts || host.IsFailed() || host.IsRejected() ||
+				    (row.ack && (!host.IsConfigAcked(2) || host.IsRemoteReady(2) != row.ready))) {
+					*error = "lobby occupancy: world=" + std::to_string(row.world) + " capacity=" + std::to_string(row.peers) +
+					         " bound=" + std::to_string(row.bound) + " ready=" + std::to_string(row.ready) +
+					         " ack=" + std::to_string(row.ack) + " state=" + NetLobbySession::StateName(host.GetState());
+					return false;
+				}
+			}
+			std::cout << "[net-match-selftest] PASS world lobby requires a player and every bound ack/ready, ordinary capacity unchanged" << std::endl;
+			return true;
+		}
+
 		bool TestLobbyStartsWithoutRemoteHumanSeats(std::string* error) {
 			NetMatchServiceRequest aiOnly;
 			aiOnly.host = true;
@@ -10897,6 +10962,7 @@ namespace RTE {
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
+		if (!TestWorldLobbyRequiresPlayersInsteadOfCapacity(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);

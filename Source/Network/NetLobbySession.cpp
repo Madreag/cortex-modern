@@ -765,26 +765,30 @@ namespace RTE {
 		});
 	}
 
-	bool NetLobbySession::AllConfigAcked() const {
+	bool NetLobbySession::HasRequiredOccupancy() const {
+		if (m_Config.matchConfig.persistentWorld) {
+			return !m_RemotePeerIds.empty() || !m_Config.matchConfig.dedicated;
+		}
 		if (m_Config.host && m_RemotePeerIds.size() + 1 != (m_Config.activePeerCount ? m_Config.activePeerCount : m_Config.matchConfig.peerCount)) {
 			return false;
 		}
+		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
+	}
+
+	bool NetLobbySession::AllConfigAcked() const {
+		if (!HasRequiredOccupancy()) return false;
 		for (uint8_t peerId : m_RemotePeerIds) {
 			const auto it = m_ConfigAckedByPeer.find(peerId);
 			if (it == m_ConfigAckedByPeer.end() || !it->second) {
 				return false;
 			}
 		}
-		// A roster with no remote human seat has nobody to accept it; a roster with one still waits.
-		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
+		return true;
 	}
 
 	bool NetLobbySession::AllRemoteReady() const {
 		// An unstarted lobby has no remotes to be ready; the empty default config would otherwise say yes.
-		if (m_State == NetLobbyState::Idle) {
-			return false;
-		}
-		if (m_Config.host && m_RemotePeerIds.size() + 1 != (m_Config.activePeerCount ? m_Config.activePeerCount : m_Config.matchConfig.peerCount)) {
+		if (m_State == NetLobbyState::Idle || !HasRequiredOccupancy()) {
 			return false;
 		}
 		for (uint8_t peerId : m_RemotePeerIds) {
@@ -793,7 +797,7 @@ namespace RTE {
 				return false;
 			}
 		}
-		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
+		return true;
 	}
 
 	bool NetLobbySession::SendTo(NetPeerId transport, const NetLobbyPayload& payload, std::string* error) {
