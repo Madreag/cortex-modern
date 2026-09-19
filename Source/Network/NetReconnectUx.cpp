@@ -126,6 +126,14 @@ namespace RTE {
 	void NetReconnectUx::NoteHostReturn(bool present) {
 		if (m_AwaitingHostReturn) {
 			m_HostReturned = present;
+			m_WatchReason.clear();
+		}
+	}
+
+	void NetReconnectUx::NoteHostUnwatchable(std::string reason) {
+		if (m_AwaitingHostReturn) {
+			m_HostReturned = false;
+			m_WatchReason = reason.empty() ? "there is no directory to watch" : std::move(reason);
 		}
 	}
 
@@ -134,6 +142,7 @@ namespace RTE {
 		m_HostReturned = false;
 		m_AwaitMatchName.clear();
 		m_AwaitSessionId.clear();
+		m_WatchReason.clear();
 	}
 
 	std::string NetReconnectUx::GetHostReturnText() const {
@@ -143,9 +152,11 @@ namespace RTE {
 		if (m_HostReturned) {
 			return m_AwaitMatchName + " is back - rejoin now.";
 		}
-		return m_AwaitSessionId.empty()
-		           ? "Rejoin " + m_AwaitMatchName + " when the host returns. There is no directory to watch, so type the host's address."
-		           : "Rejoin " + m_AwaitMatchName + " when the host returns. Watching for it to come back.";
+		if (!CanWatchHostReturn()) {
+			const std::string why = m_WatchReason.empty() ? "there is no directory to watch" : m_WatchReason;
+			return "Rejoin " + m_AwaitMatchName + " when the host returns - " + why + ", so try it or type the host's address.";
+		}
+		return "Rejoin " + m_AwaitMatchName + " when the host returns. Watching for it to come back.";
 	}
 
 	std::string NetReconnectUx::GetOfferText() const {

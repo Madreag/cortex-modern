@@ -2866,7 +2866,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	// host to come back: enabled once its row is listed again, or at once when there is no directory to
 	// watch and the only route left is the address the player types.
 	const bool awaiting = reconnect.IsAwaitingHostReturn() && !recovering;
-	const bool hostBack = reconnect.HasHostReturned() || reconnect.GetWatchedSessionId().empty();
+	const bool hostBack = reconnect.HasHostReturned() || !reconnect.CanWatchHostReturn();
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetVisible(landing && (offering || applying || awaiting || reconnect.CanRetryManually()));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetEnabled(offering ? (!awaiting || hostBack) : (applying || reconnect.CanRetryManually()));
 	m_MainMenuButtons[MenuButton::MultiplayerReconnectButton]->SetText(offering ? "Rejoin Match" : (applying ? "Apply to Substitute" : "Retry"));

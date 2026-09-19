@@ -5294,7 +5294,7 @@ static std::string ResyncSaveName() {
 		const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
 		if (sessionId.empty() || baseUrl.empty()) {
 			// Without a directory there is nothing to watch: the prompt says so and offers the address.
-			m_ReconnectUx.NoteHostReturn(false);
+			m_ReconnectUx.NoteHostUnwatchable("there is no directory to watch");
 			return;
 		}
 		if (!m_ReturnWatchConfigured) {
@@ -5303,6 +5303,9 @@ static std::string ResyncSaveName() {
 		}
 		m_ReturnWatch.PollList(nowMs);
 		if (m_ReturnWatch.ListReplies() == 0) {
+			// A directory that cannot be reached must not hold the prompt shut: the player keeps the
+			// address route while the listing is unavailable.
+			if (!m_ReturnWatch.ListError().empty()) m_ReconnectUx.NoteHostUnwatchable("the directory is unreachable");
 			return;
 		}
 		// The row must be the same session, listed as a lobby or a running match.
