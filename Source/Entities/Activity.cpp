@@ -1851,6 +1851,16 @@ bool Activity::RunPresentationViewSelfTest() {
 	check("unconfirmed_expires_after_the_commit_window", expireArmed == 1950.0F && expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
 	      "armed " + std::to_string(expireArmed) + " expired " + std::to_string(expire.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
 	ScenarioRunner::DrainLocalGameCommands();
+	// The lockstep caller vets the order and clones the craft before the helper runs; these rows enter it the same way.
+	const auto cloneDeliveryCraft = []() -> ACraft* {
+		const Entity* preset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
+		Entity* clone = preset ? preset->Clone() : nullptr;
+		ACraft* craft = dynamic_cast<ACraft*>(clone);
+		if (!craft) {
+			delete clone;
+		}
+		return craft;
+	};
 	GameActivity reject;
 	reject.SetTeamFunds(10, Teams::TeamOne);
 	reject.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 50, press + delay);
@@ -1862,28 +1872,11 @@ bool Activity::RunPresentationViewSelfTest() {
 	rejectedBuy.craftClassName = "ACDropShip";
 	rejectedBuy.craftPreset = "Dropship MK1";
 	rejectedBuy.craftModule = "Base.rte";
-	const bool rejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(reject, rejectedBuy, 0);
+	ACraft* rejectCraft = cloneDeliveryCraft();
+	const bool rejected = rejectCraft && !g_MovableMan.ApplyQueuedPurchaseDelivery(reject, rejectedBuy, 0, rejectCraft);
 	check("apply_reject_clears_the_view", rejected && reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 10.0F,
-	      "rejected " + std::to_string(rejected ? 1 : 0) + " presentation " + std::to_string(reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
-	GameActivity unknownCraft;
-	unknownCraft.SetTeamFunds(2000, Teams::TeamOne);
-	unknownCraft.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
-	NetGameDeliverCargo unknownBuy = rejectedBuy;
-	unknownBuy.cost = 137;
-	unknownBuy.craftPreset = "No Such Dropship";
-	const bool unknownRejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(unknownCraft, unknownBuy, 0);
-	check("unknown_craft_reject_clears_the_view", unknownRejected && unknownCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
-	      "rejected " + std::to_string(unknownRejected ? 1 : 0) + " presentation " + std::to_string(unknownCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
-	GameActivity nonCraft;
-	nonCraft.SetTeamFunds(2000, Teams::TeamOne);
-	nonCraft.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
-	NetGameDeliverCargo nonCraftBuy = rejectedBuy;
-	nonCraftBuy.cost = 137;
-	nonCraftBuy.craftClassName = "MOPixel";
-	nonCraftBuy.craftPreset = "Spark Yellow 1";
-	const bool nonCraftRejected = !g_MovableMan.ApplyQueuedPurchaseDelivery(nonCraft, nonCraftBuy, 0);
-	check("non_craft_reject_clears_the_view", nonCraftRejected && nonCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 2000.0F,
-	      "rejected " + std::to_string(nonCraftRejected ? 1 : 0) + " presentation " + std::to_string(nonCraft.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	      rejectCraft ? "rejected " + std::to_string(rejected ? 1 : 0) + " presentation " + std::to_string(reject.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne))
+	                  : "Base.rte ACDropShip \"Dropship MK1\" did not clone, so the apply path was never entered");
 	GameActivity queueFail;
 	queueFail.SetTeamFunds(2000, Teams::TeamOne);
 	queueFail.NotePreviewedPurchase(Players::PlayerOne, Teams::TeamOne, 137, press + delay);
@@ -1891,9 +1884,11 @@ bool Activity::RunPresentationViewSelfTest() {
 	// A team QueuePurchaseDelivery refuses, at a cost the funds gate lets through: the apply reaches the queue-fail clear.
 	refusedBuy.cost = 0;
 	refusedBuy.team = Teams::MaxTeamCount;
-	const bool queueRefused = !g_MovableMan.ApplyQueuedPurchaseDelivery(queueFail, refusedBuy, 0);
+	ACraft* refusedCraft = cloneDeliveryCraft();
+	const bool queueRefused = refusedCraft && !g_MovableMan.ApplyQueuedPurchaseDelivery(queueFail, refusedBuy, 0, refusedCraft);
 	check("queue_fail_reject_keeps_the_pending_view", queueRefused && queueFail.GetTeamFunds(Teams::TeamOne) == 2000.0F && queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne) == 1863.0F,
-	      "refused " + std::to_string(queueRefused ? 1 : 0) + " committed " + std::to_string(queueFail.GetTeamFunds(Teams::TeamOne)) + " presentation " + std::to_string(queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne)));
+	      refusedCraft ? "refused " + std::to_string(queueRefused ? 1 : 0) + " committed " + std::to_string(queueFail.GetTeamFunds(Teams::TeamOne)) + " presentation " + std::to_string(queueFail.GetTeamFundsForPresentation(Teams::TeamOne, Players::PlayerOne))
+	                   : "Base.rte ACDropShip \"Dropship MK1\" did not clone, so the queue-fail path was never entered");
 	ScenarioRunner::DrainLocalGameCommands();
 	GameActivity peekedExpire;
 	peekedExpire.SetTeamFunds(2000, Teams::TeamOne);
