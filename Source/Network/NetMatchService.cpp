@@ -1032,8 +1032,8 @@ static std::string ResyncSaveName() {
 		m_SeatPresence.Clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
-		// A kick queued for a setup worker that is gone belongs to no session and is dropped here.
-		m_PendingRemovals.clear();
+		// An action queued for a setup worker that is gone belongs to no session and is dropped here.
+		m_PendingModeration.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -2978,25 +2978,46 @@ static std::string ResyncSaveName() {
 		}
 	}
 
-	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
-		config.pumpHost = [this](NetSession& session) { DrainPendingRemoval(session); };
+	NetKickBanResult NetMatchService::ApplyUnbanLocked(const NetAuthBytes32& identity) {
+		std::string error;
+		m_LastKickBanResult = m_BanStore.Unban(identity, &error) ? NetKickBanResult::Ok : NetKickBanResult::PersistenceFailed;
+		return m_LastKickBanResult;
 	}
 
-	void NetMatchService::DrainPendingRemoval(NetSession& session) {
+	NetKickBanResult NetMatchService::QueueModerationLocked(const PendingModeration& pending) {
+		// A queue no lobby could fill is a flood, and it is refused rather than grown.
+		constexpr size_t c_MaxPendingModeration = 16;
+		if (m_PendingModeration.size() >= c_MaxPendingModeration) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		m_PendingModeration.push_back(pending);
+		m_LastKickBanResult = NetKickBanResult::Queued;
+		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
+		config.pumpHost = [this](NetSession& session) { DrainPendingModeration(session); };
+	}
+
+	void NetMatchService::DrainPendingModeration(NetSession& session) {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_PendingRemovals.empty() || m_State != NetMatchServiceState::Starting) {
+		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting) {
 			return;
 		}
-		std::vector<PendingRemoval> pending;
-		pending.swap(m_PendingRemovals);
+		std::vector<PendingModeration> pending;
+		pending.swap(m_PendingModeration);
 		NetKickBanResult issue = NetKickBanResult::Ok;
-		for (const PendingRemoval& removal : pending) {
-			const NetKickBanResult result = ApplyRemovalLocked(removal.selection, removal.action, session);
+		for (const PendingModeration& action : pending) {
+			// In the order the host asked for them: a ban queued after an unban of the same identity
+			// must still leave that identity banned.
+			const NetKickBanResult result = action.unban ? ApplyUnbanLocked(action.identity)
+			                                             : ApplyRemovalLocked(action.selection, action.action, session);
 			if (issue == NetKickBanResult::Ok) {
 				issue = result;
 			}
 		}
-		// The host is told about the first kick that was refused, not the last one that worked.
+		// The host is told about the first action that was refused, not the last one that worked.
 		m_LastKickBanResult = issue;
 	}
 
@@ -3013,15 +3034,8 @@ static std::string ResyncSaveName() {
 		}
 		if (m_State == NetMatchServiceState::Starting) {
 			// The setup worker owns the session for the whole of Start, so the kick is applied there and
-			// the result is not known yet. A queue no lobby could fill is a flood, and it is refused.
-			constexpr size_t c_MaxPendingRemovals = 16;
-			if (m_PendingRemovals.size() >= c_MaxPendingRemovals) {
-				m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
-				return m_LastKickBanResult;
-			}
-			m_PendingRemovals.push_back(PendingRemoval{selection, action});
-			m_LastKickBanResult = NetKickBanResult::Queued;
-			return m_LastKickBanResult;
+			// the result is not known yet.
+			return QueueModerationLocked(PendingModeration{false, selection, action, {}});
 		}
 		if (!m_Session) {
 			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
@@ -3046,13 +3060,12 @@ static std::string ResyncSaveName() {
 			m_LastKickBanResult = NetKickBanResult::NotHosting;
 			return m_LastKickBanResult;
 		}
-		std::string error;
-		if (!m_BanStore.Unban(identity, &error)) {
-			m_LastKickBanResult = NetKickBanResult::PersistenceFailed;
-			return m_LastKickBanResult;
+		if (m_State == NetMatchServiceState::Starting) {
+			// The setup worker owns admission for the whole of Start, so the store is written there and
+			// never from this thread; the unban keeps its place among the queued kicks.
+			return QueueModerationLocked(PendingModeration{true, {}, NetParticipantRemovalAction::Kick, identity});
 		}
-		m_LastKickBanResult = NetKickBanResult::Ok;
-		return m_LastKickBanResult;
+		return ApplyUnbanLocked(identity);
 	}
 
 	std::vector<NetHostBanRecord> NetMatchService::GetBanRecords() const {

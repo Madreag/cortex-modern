@@ -563,19 +563,25 @@ namespace RTE {
 		std::vector<NetH4ModerationSeat> m_ModerationSeats; //!< Immutable UI copy while a setup/resync worker owns the plane.
 		NetKickBanResult m_LastKickBanResult = NetKickBanResult::NotHosting;
 		NetParticipantRemovalIssue m_LastRemovalIssue;
-		struct PendingRemoval {
+		/// One host moderation action waiting for the setup worker: a removal, or an unban of an identity.
+		struct PendingModeration {
+			bool unban = false;
 			NetModerationSelection selection;
 			NetParticipantRemovalAction action = NetParticipantRemovalAction::Kick;
+			NetAuthBytes32 identity{};
 		};
-		std::vector<PendingRemoval> m_PendingRemovals; //!< Starting-state kicks waiting for the setup worker, in order.
+		std::vector<PendingModeration> m_PendingModeration; //!< Starting-state kicks and unbans, in the order the host asked for them.
 		std::vector<std::string> m_PendingToasts;      //!< Moderation lines a worker produced, for the game thread to show.
 		/// Shows what a worker-side removal produced. Game thread only; never called under the lock.
 		void PushPendingToasts();
 		uint32_t m_LastRoundId = 0;                    //!< The round the peers last played; what a kick between rounds is stamped with.
 		NetKickBanResult ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session);
+		NetKickBanResult ApplyUnbanLocked(const NetAuthBytes32& identity);
+		/// Queues a Starting-state action for the setup worker, or refuses a flood no lobby could produce.
+		NetKickBanResult QueueModerationLocked(const PendingModeration& pending);
 		/// Wires the setup worker's host pump. The runner calls it with the session it ticks.
 		void AttachHostPump(NetMatchRunnerConfig& config);
-		void DrainPendingRemoval(NetSession& session);
+		void DrainPendingModeration(NetSession& session);
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
