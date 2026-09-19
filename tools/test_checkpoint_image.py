@@ -55,6 +55,7 @@ REQUIRED_SCENE_ROWS = (
     "image_membership_matches_the_world_structure",
     "archive_describes_the_hashed_instant",
     "a_saved_field_write_moves_the_stamp",
+    "captured_graphs_parse_in_their_own_state",
 )
 
 

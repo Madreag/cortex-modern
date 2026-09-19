@@ -5335,6 +5335,32 @@ void RunGameLoop() {
 					     << " scene_only=" << (extra.empty() ? 0 : *extra.begin()) << " tag=" << membershipDetail;
 					System::PrintDiagnosticLine(line.str());
 				}
+				// The codec's reader has only ever been held to hand-built fixtures. Parse the graphs
+				// this capture actually wrote, in the states that wrote them, so writer and reader
+				// are held to each other on a live match's own data.
+				if (archived) {
+					const auto image = CheckpointCow::Get().Last();
+					size_t parsed = 0;
+					std::string firstProblem;
+					if (image) {
+						std::vector<LuaStateWrapper*> states{&g_LuaMan.GetMasterScriptState()};
+						for (LuaStateWrapper& threaded: g_LuaMan.GetThreadedScriptStates()) states.push_back(&threaded);
+						for (size_t index = 0; index < image->graphs.size() && index < states.size(); ++index) {
+							const std::string text = image->graphs[index].Text();
+							if (text.empty()) continue;
+							std::vector<std::string> problems;
+							if (!states[index]->ValidateScriptGraph(text, problems) && firstProblem.empty()) {
+								firstProblem = problems.empty() ? "refused without a reason" : problems.front();
+							}
+							++parsed;
+						}
+					}
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (parsed > 0 && firstProblem.empty() ? "PASS" : "FAIL")
+					     << " captured_graphs_parse_in_their_own_state tick=" << simTick
+					     << " graphs=" << parsed << " problem=" << (firstProblem.empty() ? "none" : firstProblem);
+					System::PrintDiagnosticLine(line.str());
+				}
 				// The archive has to describe the instant the tick's hash was taken at: the same tick,
 				// and exactly the objects the census fed. A capture taken anywhere else in the frame
 				// carries a population no peer's hash ever covered.
