@@ -12,6 +12,12 @@ namespace RTE {
 		return state == NetMatchServiceState::Completed ? "Options staged for the next match." : "Apply republishes this lobby.";
 	}
 
+	inline std::string NetHostSeatRemovalRefusal(NetMatchServiceState state, bool published, uint8_t peerId, const std::string& verb) {
+		if (state == NetMatchServiceState::Completed) return verb + ": match completed; return to the lobby first.";
+		if (!published) return verb + ": no moderation row for peer " + std::to_string(peerId) + " (" + NetMatchService::StateName(state) + ").";
+		return {};
+	}
+
 	inline bool NetHostRepairEnabled(const NetMatchService& service) {
 		return service.IsHost() && service.CanResyncMatch();
 	}

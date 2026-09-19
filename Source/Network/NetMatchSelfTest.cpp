@@ -3336,6 +3336,21 @@ namespace RTE {
 				*error = "a refused service draft changed the published round";
 				return false;
 			}
+			const std::string missing = NetHostSeatRemovalRefusal(NetMatchServiceState::Starting, false, 2, "Kick");
+			if (missing != "Kick: no moderation row for peer 2 (Starting).") {
+				*error = "the seat miss has the wrong phase or peer: " + missing;
+				return false;
+			}
+			if (!row.FinishRound(error)) return false;
+			for (const std::string verb : {"Kick", "Ban"}) {
+				for (bool published : {false, true}) {
+					const std::string refusal = NetHostSeatRemovalRefusal(row.service.GetState(), published, 2, verb);
+					if (refusal != verb + ": match completed; return to the lobby first.") {
+						*error = "the completed seat action lost its refusal: " + refusal;
+						return false;
+					}
+				}
+			}
 			return true;
 		}
 
