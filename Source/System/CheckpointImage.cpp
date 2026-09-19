@@ -625,6 +625,21 @@ bool RTE::RunCheckpointSceneRows() {
 		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject");
 		return false;
 	}
+	{
+		const int result = g_LuaMan.GetMasterScriptState().RunScriptString(R"lua(
+local vector = Vector(1000000.25, 0)
+local roots = { ["62"] = { value = vector } }
+local before, problems = _ScriptGraph.serialize(roots)
+assert(#problems == 0, table.concat(problems, " | "))
+SceneMan:WrapPosition(vector)
+assert(vector.X ~= 1000000.25, "the scene did not wrap the argument")
+assert(_ScriptGraphDirtyRoots().roots["62"], "the wrapped argument left root 62 clean")
+local after = _ScriptGraph.serialize(roots)
+assert(before ~= after, "the wrapped value kept its old archive")
+)lua");
+		if (result == 0) pass("vector_out_argument_dirties_its_root", "WrapPosition marked the argument's root");
+		else fail("vector_out_argument_dirties_its_root", "script result " + std::to_string(result));
+	}
 	// A write to a field the archive carries has to move the object's stamp, or its shadow is served
 	// again with the old value. NotResting writes three saved fields and no travel stamps them.
 	{
