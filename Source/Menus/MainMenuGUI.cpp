@@ -3563,6 +3563,9 @@ void MainMenuGUI::StartSelectedResume() {
 	request.playerName = m_MultiplayerNameTextBox->GetText().empty() ? "Host" : m_MultiplayerNameTextBox->GetText();
 	request.port = static_cast<uint16_t>(std::max(1, std::atoi(m_MultiplayerHostPortTextBox->GetText().c_str())));
 	request.resyncOnDesync = true;
+	// The saved policy, the way the ordinary host path reads it; the resumed configuration's own
+	// policy replaces this in PrepareResume, because that is what the peers agreed to play on.
+	request.autoInputDelay = g_SettingsMan.GetNetworkHostDelayPolicy() == SettingsMan::NetworkHostDelayPolicy::Auto;
 	// The manifest authors the roster; the request only names which checkpoint to stand on.
 	request.resumeMatchId = m_ResumeRows[selected].matchId;
 	request.resumeTick = m_ResumeRows[selected].tick;
