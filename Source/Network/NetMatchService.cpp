@@ -1404,8 +1404,8 @@ static std::string ResyncSaveName() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(5));
 		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		std::cout << "[net-reconnect] leave: " << NetReconnectClientStateName(m_ReconnectClient.GetState())
-		          << (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)") << std::endl;
+		System::PrintDiagnosticLine(std::string("[net-reconnect] leave: ") + NetReconnectClientStateName(m_ReconnectClient.GetState()) +
+		                            (m_TicketStore.HasRecord() ? " (ticket kept)" : " (ticket cleared)"));
 	}
 
 	void NetMatchService::LeaveWorkerMain(std::string result) {
@@ -5065,7 +5065,11 @@ static std::string ResyncSaveName() {
 				m_IceIdentity = identity;
 				m_IceRoute = "ice";
 			}
-			std::cout << "[net-ice] host session " << sessionId << " identity " << identity << " listening on virtual port " << c_IceVirtualPort << std::endl;
+			{
+				std::ostringstream line;
+				line << "[net-ice] host session " << sessionId << " identity " << identity << " listening on virtual port " << c_IceVirtualPort;
+				System::PrintDiagnosticLine(line.str());
+			}
 			return true;
 		}
 
@@ -5114,7 +5118,11 @@ static std::string ResyncSaveName() {
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_IceRoute = "ip";
 			}
-			std::cout << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << target.address << ":" << target.port << "; taking the IP half" << std::endl;
+			{
+				std::ostringstream line;
+				line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to " << target.address << ":" << target.port << "; taking the IP half";
+				System::PrintDiagnosticLine(line.str());
+			}
 			return true;
 		}
 
@@ -5142,7 +5150,11 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_IceRoute = "ice";
 		}
-		std::cout << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half" << std::endl;
+		{
+			std::ostringstream line;
+			line << "[net-ice] session " << request.sessionId << " join_mode=" << target.joinMode << " resolved to identity " << target.identity << "; dialling the ICE half";
+			System::PrintDiagnosticLine(line.str());
+		}
 		return true;
 #endif
 	}
@@ -5153,9 +5165,9 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_SeatAuth.BeginHostedSession()) {
 				(void)GetNetAuthCrypto().RandomBytes(m_MigrationKey.data(), m_MigrationKey.size());
-				std::cout << "[net-auth] reconnect-auth epoch armed" << std::endl;
+				System::PrintDiagnosticLine("[net-auth] reconnect-auth epoch armed");
 			} else {
-				std::cout << "[net-auth] crypto unavailable - reconnect auth disabled" << std::endl;
+				System::PrintDiagnosticLine("[net-auth] crypto unavailable - reconnect auth disabled");
 			}
 		}
 		auto transport = std::make_unique<GnsTransport>();

@@ -354,13 +354,13 @@ namespace {
 			if (manifest && !manifest->configPayload.empty()) {
 				std::string manifestError;
 				if (!AutosaveStore::PublishManifest(savePath.parent_path(), *manifest, &manifestError)) {
-					std::cout << "[autosave] restart manifest not written: " << manifestError << std::endl;
+					System::PrintDiagnosticLine("[autosave] restart manifest not written: " + manifestError);
 				}
 			}
 			const uint64_t pinnedTick = pinnedTickSource ? pinnedTickSource->load() : AutosaveStore::c_NoPinnedTick;
 			const size_t removed = AutosaveStore::ApplyRetention(savePath.parent_path(), matchId, pinnedTick);
-			std::cout << std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
-			                         published.savedTick, AutosaveStore::RetainedAutosaves(), pinnedTick, removed) << std::flush;
+			System::PrintDiagnosticLine(std::format("[autosave] retained tick={} keep={} pinned={} removed={}\n",
+			                                        published.savedTick, AutosaveStore::RetainedAutosaves(), pinnedTick, removed));
 		}
 	}
 }
@@ -454,12 +454,12 @@ void ActivityMan::PublishCompletedAutosave(uint64_t tick, const std::string& pat
 	}
 	std::ifstream in(path, std::ios::binary);
 	if (!in) {
-		std::cout << "[autosave] finished archive could not be read back tick=" << tick << std::endl;
+		System::PrintDiagnosticLine("[autosave] finished archive could not be read back tick=" + std::to_string(tick));
 		return;
 	}
 	auto archive = std::make_shared<std::vector<uint8_t>>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 	if (archive->empty()) {
-		std::cout << "[autosave] finished archive is empty tick=" << tick << std::endl;
+		System::PrintDiagnosticLine("[autosave] finished archive is empty tick=" + std::to_string(tick));
 		return;
 	}
 	CompletedAutosave entry;
@@ -717,7 +717,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			return true;
 		} catch (const std::exception& error) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
-			std::cout << "[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n" << std::flush;
+			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n");
 			return false;
 		}
 	});
