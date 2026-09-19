@@ -1131,7 +1131,8 @@ namespace RTE {
 			if (!pair.Open(47117, &error)) {
 				return Fail("queue lobby pair: " + error);
 			}
-			const std::vector<uint8_t> archive(6000, 0x41);
+			// Big enough to span many StateChunks, so the second image is offered mid-stream.
+			const std::vector<uint8_t> archive(512U * 1024U, 0x41);
 			NetWorldCheckpointImage image;
 			image.worldId = c_WorldId;
 			image.boot = 1;
@@ -1153,7 +1154,7 @@ namespace RTE {
 				return Fail("the first joiner's image did not take the pump");
 			}
 			const uint64_t firstTransfer = pair.host.GetOutgoingStateId();
-			pair.Pump(2);
+			pair.Pump(1);
 			if (!pair.host.IsStateTransferOutgoing()) {
 				return Fail("the first joiner's image finished before the second was offered");
 			}
