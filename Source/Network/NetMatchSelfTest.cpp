@@ -1639,6 +1639,53 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestRewindAnchorRecord(std::string* error) {
+			NetMatchService service;
+			if (const auto idle = service.GetRewindAnchor(); !idle.matchId.empty() || idle.tick != 0 || idle.heldLocally) {
+				*error = "a service that has healed nothing already names a rewind point";
+				return false;
+			}
+			const std::string matchId = "00000000deadbeef-000000000000002a";
+			// A received anchor for a checkpoint this peer does not hold: recorded, and reported unheld.
+			service.NoteRewindAnchor(matchId, 240, false);
+			auto anchor = service.GetRewindAnchor();
+			if (anchor.matchId != matchId || anchor.tick != 240 || anchor.heldLocally) {
+				*error = "the received rewind point was not recorded as unheld: " + anchor.matchId + " tick=" + std::to_string(anchor.tick) +
+				         " held=" + std::to_string(anchor.heldLocally);
+				return false;
+			}
+			// An anchor with no match or no tick names nothing, so it may not overwrite the record.
+			service.NoteRewindAnchor("", 480, true);
+			service.NoteRewindAnchor(matchId, 0, true);
+			anchor = service.GetRewindAnchor();
+			if (anchor.matchId != matchId || anchor.tick != 240) {
+				*error = "an anchor with no match or tick replaced the recorded rewind point";
+				return false;
+			}
+			// The host names a checkpoint it already validated, so the record takes it without a second read.
+			AutosaveDescriptor named;
+			named.schema = AutosaveStore::c_DescriptorSchema;
+			named.matchId = matchId;
+			named.savedTick = 480;
+			service.NoteRewindAnchor(matchId, 480, true, &named);
+			anchor = service.GetRewindAnchor();
+			if (anchor.matchId != matchId || anchor.tick != 480 || !anchor.heldLocally) {
+				*error = "the named rewind point was not recorded as held: " + anchor.matchId + " tick=" + std::to_string(anchor.tick) +
+				         " held=" + std::to_string(anchor.heldLocally);
+				return false;
+			}
+			// A descriptor of another tick is not the checkpoint that was named.
+			AutosaveDescriptor other = named;
+			other.savedTick = 120;
+			service.NoteRewindAnchor(matchId, 600, true, &other);
+			anchor = service.GetRewindAnchor();
+			if (anchor.tick != 600 || anchor.heldLocally) {
+				*error = "a descriptor of a different tick was accepted as the named checkpoint";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestSaveCompressionChoice(std::string* error) {
 			if (ActivityMan::ZipLevelFor(ActivityMan::SaveCompression::Fast) != ActivityMan::c_SaveZipLevelFast) {
 				*error = "Fast save compression is not the user-save zip level";
@@ -7520,6 +7567,7 @@ namespace RTE {
 		if (!TestServiceRuntimeErrorSurface(&error)) return fail(error);
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
+		if (!TestRewindAnchorRecord(&error)) return fail(error);
 		if (!TestOverlongJoinNameSurfaces(&error)) return fail(error);
 		if (!TestServiceReportCarriesActivityPreset(&error)) return fail(error);
 		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);
