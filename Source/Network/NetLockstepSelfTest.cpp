@@ -14235,6 +14235,7 @@ namespace RTE {
 			uint64_t now = 0;
 			uint64_t releaseAt = 0;
 			size_t delayedAnswers = 0;
+			size_t releasedAnswers = 0;
 			size_t plans = 0;
 			bool staleAnswer = false;
 			std::set<uint8_t> successors;
@@ -14266,11 +14267,6 @@ namespace RTE {
 						++m_Schedule->plans;
 					}
 					if (message.type == NetHostMigrationMessageType::Answer && message.senderPeerId == 2) {
-						if (m_Schedule->now < m_Schedule->releaseAt) {
-							m_Held.emplace_back(peer, lane, bytes);
-							++m_Schedule->delayedAnswers;
-							return true;
-						}
 						if (m_Schedule->staleAnswer && m_Schedule->plans == 0) {
 							message.appliedFrame = 4;
 							std::vector<uint8_t> stale;
@@ -14281,18 +14277,29 @@ namespace RTE {
 				return LoopbackTransport::Send(peer, lane, bytes, error, congested);
 			}
 			std::vector<NetTransportEvent> PollEvents() override {
+				std::vector<NetTransportEvent> delivered;
 				if (m_Schedule->now >= m_Schedule->releaseAt) {
-					const auto held = std::exchange(m_Held, {});
-					for (const auto& [peer, lane, bytes]: held) {
-						(void)LoopbackTransport::Send(peer, lane, bytes);
+					m_Schedule->releasedAnswers += m_Held.size();
+					delivered = std::exchange(m_Held, {});
+				}
+				NetHash32 key;
+				key.fill(0x39);
+				for (auto& event: LoopbackTransport::PollEvents()) {
+					NetHostMigrationMessage message;
+					if (event.type == NetTransportEventType::PacketReceived && m_Schedule->now < m_Schedule->releaseAt &&
+					    NetHostMigrationCodec::Decode(event.bytes, key, message) && message.type == NetHostMigrationMessageType::Answer && message.senderPeerId == 2) {
+						m_Held.push_back(std::move(event));
+						++m_Schedule->delayedAnswers;
+					} else {
+						delivered.push_back(std::move(event));
 					}
 				}
-				return LoopbackTransport::PollEvents();
+				return delivered;
 			}
 
 		private:
 			std::shared_ptr<MigrationWireSchedule> m_Schedule;
-			std::vector<std::tuple<NetPeerId, NetTransportLane, std::vector<uint8_t>>> m_Held;
+			std::vector<NetTransportEvent> m_Held;
 		};
 
 		struct MigrationRelayTransport : LoopbackTransport {
@@ -14593,7 +14600,7 @@ namespace RTE {
 						collect(a, &worldA, &framesA);
 					if (!skipSuccessor)
 						collect(b, &worldB, &framesB);
-					if (skipSuccessor ? a.GetMigrationResult().generation != 0 && !a.IsMigrating() : b.GetMigrationResult().generation != 0 && !b.IsMigrating() && (midHeal ? a.GetMigrationResult().resyncPeers.size() == 1 : delayedAnswer ? a.GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission : !a.IsMigrating())) {
+					if (skipSuccessor ? a.GetMigrationResult().generation != 0 && !a.IsMigrating() : b.GetMigrationResult().generation != 0 && !b.IsMigrating() && (midHeal ? a.GetMigrationResult().resyncPeers.size() == 1 : delayedAnswer ? a.GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission && schedule->releasedAnswers != 0 : !a.IsMigrating())) {
 						resumed = true;
 						break;
 					}
@@ -14611,10 +14618,10 @@ namespace RTE {
 					}
 				}
 				if (delayedAnswer) {
-					if (schedule->delayedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
+					if (schedule->delayedAnswers == 0 || schedule->releasedAnswers == 0 || schedule->successors != std::set<uint8_t>{3} || a.GetHostPeerId() != 3 || b.GetHostPeerId() != 3 ||
 					    a.GetMigrationResult().boundary != 4 || b.GetMigrationResult().boundary != 4 || !b.GetConfig().relayToOtherPeers || a.GetConfig().relayToOtherPeers ||
 					    !a.IsPeerGoneAtFrame(2, 5) || !b.IsPeerGoneAtFrame(2, 5)) {
-						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
+						*error = "delayed answers=" + std::to_string(schedule->delayedAnswers) + " released=" + std::to_string(schedule->releasedAnswers) + " successors=" + nlohmann::json(schedule->successors).dump() + " A=" + a.BuildReportJson() + " B=" + b.BuildReportJson();
 						return false;
 					}
 					if (worldB.applied < worldA.applied) {
