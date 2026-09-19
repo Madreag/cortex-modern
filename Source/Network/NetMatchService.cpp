@@ -2714,14 +2714,16 @@ static std::string ResyncSaveName() {
 		if (!request.host) {
 			const std::string sessionId = request.sessionId;
 			const std::string address = request.address;
-			runnerConfig.resolveJoinAddress = [this, sessionId, address]() {
+			// The ICE choice is read once under the lock; the retry runs on the worker thread.
+			runnerConfig.resolveJoinAddress = [this, sessionId, address, iceWanted]() {
 				NetH4TicketRecord record;
 				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 				const bool loaded = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded;
 				if (!loaded) {
 					record = {};
 				}
-				std::string resolved;
+				std::vector<NetDirectorySessionRow> rows;
+				const NetDirectoryLocalIdentity local;
 				const std::string id = !record.directorySessionId.empty() ? record.directorySessionId : sessionId;
 				if (!id.empty()) {
 					const std::string baseUrl = g_SettingsMan.GetSessionDirectoryUrl();
@@ -2733,11 +2735,7 @@ static std::string ResyncSaveName() {
 							browse.PollList(SteadyNowMs());
 							browse.Update(SteadyNowMs());
 							if (browse.ListReplies() > 0) {
-								NetIceJoinTarget target;
-								NetDirectoryLocalIdentity local;
-								if (NetIceResolveSessionRow(browse.Rows(), local, id, &target).empty() && !target.address.empty()) {
-									resolved = target.address;
-								}
+								rows = browse.Rows();
 								break;
 							}
 							std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -2745,7 +2743,7 @@ static std::string ResyncSaveName() {
 						browse.StopBrowsing();
 					}
 				}
-				return ResolveTicketJoinAddress(record, sessionId, address, resolved, m_IceEnabled);
+				return ResolveTicketJoinAddressFromRows(record, sessionId, address, rows, local, iceWanted);
 			};
 		}
 		std::string error;
