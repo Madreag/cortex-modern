@@ -224,7 +224,7 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version != 2 && config.version != 3 && config.version != 4 && config.version != c_PersistentWorldVersion) {
+		if (config.version != 2 && config.version != 3 && config.version != c_Version && config.version != c_PersistentWorldVersion) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}

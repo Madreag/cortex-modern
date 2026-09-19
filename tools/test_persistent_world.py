@@ -1,15 +1,7 @@
-"""Detecting driver for the persistent world. Written, not run (no-tests rule).
+"""Detecting cases for the persistent world: one engine flag or helper per RED.
 
-Each named RED has its own engine flag or Python helper so a startup that dies
-first cannot stand in for the others. The completion pass launches these cases
-and scores the exact FAIL lines.
-
-Control-tree reversal (disclosed): the pinned control at bb7704b411 has none of
-these -net-world-*-selftest flags. A control-tree launch of them never prints a
-new PASS token. What that tree still reaches on its existing flags:
-- "the match is already in progress" from live NewJoin (ordinary)
-- "lockstep peer identity is invalid" from NetLockstep::Start
-- H4 HandleLeaveRequest always closes the seat (no persistent-world exemption)
+Each case names the exact FAIL line that scores it, so a startup that dies first
+cannot stand in for another case.
 """
 
 from __future__ import annotations
