@@ -785,26 +785,35 @@ def launch(options):
     return 0 if result["passed"] else 1
 
 
-# Host CreateDelivery at tick 80 (-net-match-e2e-buy-command). D=7 is the lockstep input delay.
+# Host CreateDelivery at tick 80 for team 0 (-net-match-e2e-buy-command). D=7 is the lockstep input delay.
 FUNDS_PRESS = 80
 FUNDS_DELAY = 7
+FUNDS_TEAM = 0
 FUNDS_FAIL_P1 = "the local readout did not show the previewed buy at P+1"
+FUNDS_FAIL_ABSENT = "the base emits no funds readout at P+1: RED by absence (no preview observed)"
 
 
-def _funds_oz(readout):
-    match = re.search(r"([0-9]+(?:\.[0-9]+)?)", readout or "")
+def _funds_oz(text):
+    match = re.search(r"(-?[0-9]+(?:\.[0-9]+)?)", text or "")
     return float(match.group(1)) if match else None
 
 
-def _funds_line(log, tick):
+def _funds_fields(log, tick):
+    """The driver's fields at this committed tick: the seat this peer presents and its tally of the buying team."""
+    prefix = f"[preview-funds-driver] tick={tick} "
     for line in log.splitlines():
-        if line.startswith(f"[preview-funds-driver] tick={tick} readout="):
-            return line.split("readout=", 1)[1]
-    return ""
+        if not line.startswith(prefix):
+            continue
+        head, _, readout = line.partition(" readout=")
+        fields = dict(token.split("=", 1) for token in head.split()[1:] if "=" in token)
+        fields["readout"] = readout
+        return fields
+    return {}
 
 
 def funds_preview(options):
-    """Two-process D=7 funds arm: host buy at P, host P+1 previewed, client P+1 committed, both equal at P+D."""
+    """Two-process D=7 funds arm: each peer reads the buying team from its own seat - the host previewed at P+1,
+    the client still committed, both equal at P+D."""
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         raise RuntimeError("family lock exists; launch is deferred")
     if not any(low <= options.port <= high for low, high in PORT_BLOCKS):
@@ -826,7 +835,7 @@ def funds_preview(options):
     ]
     argv_host = [*common, "-net-host", "-net-match-service-config", str(config), "-net-match-e2e-buy-command"]
     argv_client = [*common, "-net-join", "127.0.0.1"]
-    (root / "argv.json").write_text(json.dumps({"host": argv_host, "client": argv_client, "press": FUNDS_PRESS, "delay": FUNDS_DELAY}, indent=2), encoding="utf-8")
+    (root / "argv.json").write_text(json.dumps({"host": argv_host, "client": argv_client, "press": FUNDS_PRESS, "delay": FUNDS_DELAY, "buy_team": FUNDS_TEAM}, indent=2), encoding="utf-8")
     runs, records = {}, {}
     try:
         for peer, flags in (("host", argv_host), ("client", argv_client)):
@@ -842,22 +851,26 @@ def funds_preview(options):
         for run in runs.values():
             run.close()
     logs = {peer: (root / peer / "stdout.log").read_text(errors="replace") for peer in runs}
-    host_p1 = _funds_line(logs["host"], FUNDS_PRESS + 1)
-    client_p1 = _funds_line(logs["client"], FUNDS_PRESS + 1)
-    host_pd = _funds_line(logs["host"], FUNDS_PRESS + FUNDS_DELAY)
-    client_pd = _funds_line(logs["client"], FUNDS_PRESS + FUNDS_DELAY)
-    host_p1_oz, client_p1_oz = _funds_oz(host_p1), _funds_oz(client_p1)
-    host_pd_oz, client_pd_oz = _funds_oz(host_pd), _funds_oz(client_pd)
+    samples = {f"{peer}_{name}": _funds_fields(logs[peer], tick)
+               for peer in ("host", "client")
+               for name, tick in (("p1", FUNDS_PRESS + 1), ("pd", FUNDS_PRESS + FUNDS_DELAY))}
+    # Each peer's tally of the BUYING team, read from the seat that peer presents.
+    oz = {name: _funds_oz(fields.get("buy_team_oz")) for name, fields in samples.items()}
+    committed = {name: _funds_oz(fields.get("buy_team_committed")) for name, fields in samples.items()}
+    both = oz["host_p1"] is not None and oz["client_p1"] is not None
     checks = {
-        "host_p1_readout_present": bool(host_p1) and host_p1 != "EMPTY",
-        "client_p1_readout_present": bool(client_p1) and client_p1 != "EMPTY",
-        "host_p1_previewed": bool(host_p1_oz is not None and client_p1_oz is not None and host_p1_oz < client_p1_oz),
-        "client_p1_committed": bool(client_p1_oz is not None and host_p1_oz is not None and client_p1_oz > host_p1_oz),
-        "both_equal_at_commit": bool(host_pd and client_pd and host_pd == client_pd and host_pd_oz is not None and host_p1_oz is not None and host_pd_oz == host_p1_oz),
+        "host_p1_readout_present": bool(samples["host_p1"]) and samples["host_p1"]["readout"] != "EMPTY",
+        "client_p1_readout_present": bool(samples["client_p1"]) and samples["client_p1"]["readout"] != "EMPTY",
+        "host_p1_previewed": bool(both and committed["host_p1"] is not None and oz["host_p1"] < committed["host_p1"] and oz["host_p1"] < oz["client_p1"]),
+        "client_p1_committed": bool(committed["client_p1"] is not None and oz["client_p1"] is not None and oz["client_p1"] == committed["client_p1"]),
+        "both_equal_at_commit": bool(oz["host_pd"] is not None and oz["client_pd"] is not None and oz["host_pd"] == oz["client_pd"] and
+                                     committed["host_pd"] is not None and oz["host_pd"] == committed["host_pd"] and oz["client_pd"] == committed["client_pd"]),
     }
-    if not checks["host_p1_readout_present"]:
+    if not samples["host_p1"]:
+        print("FAIL " + FUNDS_FAIL_ABSENT)
+    elif not checks["host_p1_readout_present"]:
         print("FAIL host readout empty at P+1")
-    if not checks["host_p1_previewed"]:
+    if samples["host_p1"] and not checks["host_p1_previewed"]:
         print("FAIL " + FUNDS_FAIL_P1)
     dump_pairs = []
     for suffix in ("funds_p1", "funds_pd"):
@@ -866,7 +879,8 @@ def funds_preview(options):
         same = left.is_file() and right.is_file() and left.read_bytes() == right.read_bytes()
         checks[f"{suffix}_dumps_byte_identical"] = same
         dump_pairs.append({"suffix": suffix, "host": str(left), "client": str(right), "identical": same})
-    result = {"records": records, "readouts": {"host_p1": host_p1, "client_p1": client_p1, "host_pd": host_pd, "client_pd": client_pd},
+    result = {"records": records, "samples": samples, "buy_team": FUNDS_TEAM,
+              "seats": {name: {"seat": fields.get("seat"), "seat_team": fields.get("seat_team")} for name, fields in samples.items()},
               "dumps": dump_pairs, "argv": {"host": argv_host, "client": argv_client},
               "checks": checks, "passed": all(checks.values()), "exe_sha256": exe_hash}
     (root / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
