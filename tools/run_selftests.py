@@ -2,6 +2,10 @@
 
 A suite that exits 0 with no `[<selftest>] PASS` line is FAIL. A FAIL token or a
 missing final PASS is FAIL. Use --score-stdout to score a captured log without a launch.
+
+Windows and POSIX both run it: on POSIX the binary comes from the POSIX runner
+(`CCCP_TEST_BINARY`, else `<repo>/build-gns/CortexCommand`), and the digest below works
+on the Python the Mac ships, which has no `hashlib.file_digest`.
 """
 
 from __future__ import annotations
@@ -44,9 +48,24 @@ SUITE_FAIL = re.compile(r"^\[(?P<tag>[^\]]+)\] FAIL", re.M)
 def engine_executable(repo: Path) -> Path:
     if sys.platform == "win32":
         return Path(repo) / "Cortex Command.exe"
+    tools = str(Path(repo).resolve() / "tools")
+    if tools not in sys.path:
+        sys.path.insert(0, tools)
     from posix_test_runner import resolve_binary  # noqa: PLC0415
 
     return resolve_binary(repo)
+
+
+def sha256_of(path: Path) -> str:
+    """hashlib.file_digest is 3.11; the Mac's own Python is older, so fall back to blocks."""
+    digest = getattr(hashlib, "file_digest", None)
+    with Path(path).open("rb") as stream:
+        if digest is not None:
+            return digest(stream, "sha256").hexdigest()
+        hasher = hashlib.sha256()
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(block)
+        return hasher.hexdigest()
 
 
 def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
@@ -129,8 +148,9 @@ def main():
     out = options.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     exe = engine_executable(options.repo)
-    with exe.open("rb") as stream:
-        exe_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+    if not exe.is_file():
+        parser.error(f"no engine executable at {exe}; build it, or set CCCP_TEST_BINARY on POSIX")
+    exe_hash = sha256_of(exe)
     results = {}
     for name in SELFTESTS:
         case = out / f"{name}-selftest"
