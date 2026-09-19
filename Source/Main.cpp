@@ -178,6 +178,7 @@ static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
 static std::string s_menuMpTraceError;
 static bool s_cowCheckpointAutosave = false;
+static int s_cowCheckpointCaptures = 0;
 static std::string s_loadGameName;
 static bool s_loadGameFailed = false;
 static bool s_bitmapSaveSelfTest = false;
@@ -4695,6 +4696,17 @@ void RunGameLoop() {
 					     << " freeze_240_actors_under_one_tick freeze_us=" << freezeUs
 					     << " saved=" << saved
 					     << " (limit < 16700 us / one sim tick; RED today is the ~870 ms sim-thread stall of Scene::CaptureSavedScene plus Lua graph capture)";
+					System::PrintDiagnosticLine(line.str());
+				}
+				// A capture must leave an archive behind, and a second one must follow it in the
+				// same process: a nested value composed by hand refuses every capture instead.
+				const bool archived = saved && g_ActivityMan.LastAutosaveBytes() > 0 && g_ActivityMan.LastAutosaveTick() == simTick;
+				if (++s_cowCheckpointCaptures <= 2) {
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (archived ? "PASS" : "FAIL")
+					     << (s_cowCheckpointCaptures == 1 ? " autosave_capture_leaves_an_archive" : " autosave_capture_follows_another_in_the_same_process")
+					     << " tick=" << simTick << " saved=" << saved << " bytes=" << g_ActivityMan.LastAutosaveBytes()
+					     << " capture_ms=" << g_ActivityMan.LastAutosaveCaptureMs();
 					System::PrintDiagnosticLine(line.str());
 				}
 			}
