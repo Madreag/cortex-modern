@@ -118,6 +118,37 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetMatchRunner::AdoptStagedHostOptions() {
+		NetMatchConfig staged;
+		if (!m_Config.host || !m_Config.hostOptions || !m_Config.hostOptions->Take(staged)) {
+			return false;
+		}
+		// The draft names the session and revision it was accepted against; one from another session,
+		// or behind the config the last round played, is a transaction this round already passed.
+		if (staged.sessionId != m_MatchConfig.sessionId || staged.configRevision <= m_MatchConfig.configRevision ||
+		    !NetMatchConfigUtil::ValidateLocalAlpha(staged, nullptr)) {
+			return false;
+		}
+		// Only the rules and policy are certain to survive: the roster below is re-derived from the
+		// peers still here, which is what a rematch is played on.
+		m_MatchConfig = staged;
+		m_Config.matchConfig = staged;
+		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
+		SyncSeatingWaitToConfig();
+		return true;
+	}
+
+	void NetMatchRunner::SyncSeatingWaitToConfig() {
+		// A round the host gave no seating policy keeps budgeting by its message deadline; one that
+		// has a policy follows the published value, so an edited idle wait takes effect at once.
+		if (!m_Config.host || !m_Config.lobbySeatingWaitMs) {
+			return;
+		}
+		m_Config.lobbySeatingWaitMs = m_MatchConfig.idleWaitMinutes > 0
+		                                  ? static_cast<uint32_t>(m_MatchConfig.idleWaitMinutes) * 60000
+		                                  : 0u;
+	}
+
 	bool NetMatchRunner::PrepareRematchRoster(NetSession& session, const std::vector<uint8_t>& survivingPeerIds, std::string* error) {
 		auto refuse = [&](const std::string& reason) {
 			SetFailed(reason);
@@ -317,6 +348,11 @@ namespace RTE {
 		// was taken on. The host's resync is the round that carries the state out.
 		std::vector<uint8_t> rematchRoster;
 		rematchRoster.swap(m_RematchRoster);
+		// The rematch is played on the options the host staged while the last round's lobby was up. A
+		// resync keeps the running world's config instead: its snapshot was taken on that one.
+		if (!m_ResyncRound) {
+			AdoptStagedHostOptions();
+		}
 		if (!m_ResyncRound && (m_Config.host || !rematchRoster.empty()) && !PrepareRematchRoster(session, rematchRoster, error)) {
 			return false;
 		}
@@ -457,7 +493,8 @@ namespace RTE {
 		// The host may have reseated a client whose own round missed a drop below its id.
 		lobbyConfig.assignSeats = m_RematchRound;
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
-		// silence is not death here. Transport disconnects still abort it immediately.
+		// silence is not death here. Transport disconnects still abort it immediately. This is the
+		// technical message-hearing deadline; the host's seating policy is the budget below.
 		lobbyConfig.timeoutMs = static_cast<uint32_t>(maxWaitMs);
 		if (!m_Lobby.Start(transport, lobbyConfig, error)) {
 			SetFailed(error ? *error : "lobby start failed");
@@ -470,7 +507,9 @@ namespace RTE {
 		}
 
 		const auto startTime = std::chrono::steady_clock::now();
+		const uint64_t roundStartSessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
 		uint64_t transferProgress = m_Lobby.GetStateTransferProgressSerial(), lastTransferProgressMs = 0;
+		NetMatchConfig stagedOptions;
 		while (true) {
 			if (m_Config.cancelRequested && m_Config.cancelRequested->load()) {
 				SetFailed("match setup canceled");
@@ -483,9 +522,31 @@ namespace RTE {
 			if (m_Config.startRequested && m_Config.startRequested->exchange(false)) {
 				m_Lobby.RequestStart();
 			}
+			// An accepted host-options draft becomes this round's next configuration revision here, on
+			// the thread that owns the lobby: every peer re-acknowledges it before the Start gate opens.
+			if (m_Config.host && m_Config.hostOptions && m_Config.hostOptions->Take(stagedOptions)) {
+				std::string republishError;
+				if (m_Lobby.RepublishMatchConfig(stagedOptions, &republishError)) {
+					m_MatchConfig = stagedOptions;
+					m_Config.matchConfig = stagedOptions;
+					m_MatchConfigHash = m_Lobby.GetMatchConfigHash();
+					SyncSeatingWaitToConfig();
+					std::cout << "[net-match] host options: config revision " << m_MatchConfig.configRevision
+					          << " published to every peer" << std::endl;
+				} else {
+					// A refused draft fails the host's transaction, never the round: the lobby keeps
+					// the revision its peers have already acknowledged.
+					std::cout << "[net-match] host options refused: " << republishError << std::endl;
+				}
+			}
 			const auto now = std::chrono::steady_clock::now();
-			const uint64_t roundMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
-			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), m_Config.nowMs ? m_Config.nowMs() : 0);
+			// The round's elapsed time is the session clock's when the service supplies one, so the
+			// waits here and the admission deadlines measure the same time.
+			const uint64_t sessionMs = m_Config.nowMs ? m_Config.nowMs() : 0;
+			const uint64_t roundMs = m_Config.nowMs
+			                             ? (sessionMs > roundStartSessionMs ? sessionMs - roundStartSessionMs : 0)
+			                             : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(now - startTime).count());
+			const NetMatchRunnerClocks clocks = ResolveRoundClocks(roundMs, static_cast<bool>(m_Config.nowMs), sessionMs);
 			m_Lobby.Tick(clocks.lobbyMs);
 			if (const uint64_t progress = m_Lobby.GetStateTransferProgressSerial(); progress != transferProgress) {
 				transferProgress = progress;
@@ -509,7 +570,12 @@ namespace RTE {
 				if (error) *error = m_SetupError;
 				return false;
 			}
-			if (clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > maxWaitMs) {
+			// The host's seating wait is its own idle policy, re-read every tick because a live edit
+			// republishes it, and Never means only the host (or a disconnect) ends the round. A round
+			// without a policy budgets by the message deadline, as every round did before the split.
+			const bool seatingWaitNeverExpires = m_Config.lobbySeatingWaitMs && *m_Config.lobbySeatingWaitMs == 0;
+			const uint64_t seatingWaitMs = m_Config.lobbySeatingWaitMs.value_or(static_cast<uint32_t>(maxWaitMs));
+			if (!seatingWaitNeverExpires && clocks.budgetMs >= lastTransferProgressMs && clocks.budgetMs - lastTransferProgressMs > seatingWaitMs) {
 				SetFailed("timed out waiting for lobby start");
 				if (error) *error = m_SetupError;
 				return false;

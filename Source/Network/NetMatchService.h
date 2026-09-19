@@ -534,6 +534,9 @@ namespace RTE {
 		NetMatchConfig m_MatchConfig; //!< The roster this peer asked for, until the round adopts the host's.
 		NetMatchConfig m_AdoptedMatchConfig; //!< The lobby round's agreed config, mirrored each publish for the options view.
 		std::optional<NetMatchConfig> m_PendingHostOptions; //!< Host-accepted options draft; the next match's intent.
+		//!< The same draft on its way to the runner thread, which republishes it to every peer live.
+		//!< Never read under m_Mutex by the runner: its own lock is all the slot needs.
+		NetHostOptionsSlot m_HostOptionsRequest;
 		bool m_ResyncOnDesync = false;
 		std::string m_PendingResyncLoad;
 		std::optional<NetResyncState> m_PendingResyncState;
