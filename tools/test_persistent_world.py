@@ -57,6 +57,7 @@ RED_REFUSED_TRANSFER_NOT_RETRIED = "refused-transfer-was-marked-started"
 RED_HOST_KEPT_TAIL_BYTES = "host-kept-a-joiner-tail-chunk"
 RED_SPECTATOR_IMAGE_GATE = "spectator-image-never-left-the-host"
 RED_MEMBER_IMAGE_GATE = "member-image-never-left-the-host"
+RED_ADMIT_BEHIND_SENT_INPUT = "world-member-admitted-behind-the-sent-input"
 
 CASES = (
     {
@@ -158,6 +159,7 @@ CASES = (
         "name": "due-activation-admits",
         "argv": ["-net-world-admit-selftest"],
         "red": RED_ADMIT,
+        "also_red": RED_ADMIT_BEHIND_SENT_INPUT,
         "pass_token": "[net-world-admit-selftest] PASS",
     },
     {
