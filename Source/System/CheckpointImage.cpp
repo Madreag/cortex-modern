@@ -576,6 +576,30 @@ bool RTE::RunCheckpointImageSelfTest() {
 		} else {
 			pass("peek_reuses_the_shadow_when_the_stamp_matches", "stamp 12");
 		}
+
+		// One walk spans every state: a state that rewrote all of its roots must not drop the tables
+		// another state kept by reusing its chunk.
+		int stateOneTable = 0, stateTwoTable = 0;
+		CheckpointGraphIndex& index = CheckpointGraphIndex::Get();
+		index.BeginWalk();
+		index.BeginRoot(11); index.NoteTable(&stateOneTable); index.NoteRootReuse(0, 1);
+		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
+		index.EndWalk();
+		index.BeginWalk();
+		index.NoteRootReuse(1, 0);
+		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
+		index.EndWalk();
+		const GraphDirt spanned = index.Sample();
+		index.OnTableWritten(&stateOneTable);
+		const bool reusedRootKept = !index.UnknownTableWritten() && index.DirtyRoots().count(11) == 1;
+		if (!reusedRootKept || spanned.rootsReused != 1 || spanned.rootsRewritten != 1) {
+			fail("one_walk_keeps_every_state_reused_root",
+			     "unknown=" + std::to_string(index.UnknownTableWritten()) + " dirty11=" + std::to_string(index.DirtyRoots().count(11)) +
+			         " reused=" + std::to_string(spanned.rootsReused) + " rewritten=" + std::to_string(spanned.rootsRewritten),
+			     "the reused root stays known and the counts cover both states");
+		} else {
+			pass("one_walk_keeps_every_state_reused_root", "reused 1 rewritten 1");
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what(), "no exception");
 	}

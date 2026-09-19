@@ -41,6 +41,7 @@ FREEZE_ROW = re.compile(
 REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
+    "one_walk_keeps_every_state_reused_root",
 )
 # Rows that need the live 240-actor scene, printed by the autosave run.
 REQUIRED_SCENE_ROWS = (
