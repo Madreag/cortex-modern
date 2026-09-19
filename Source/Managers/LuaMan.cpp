@@ -1848,14 +1848,13 @@ local function parse(text)
 		reader:expect("E")
 		for _ = 1, reader:count() do
 			local target = reader:typed("path")
-			if version == "SG6" then
-				reader:expect("c")
-				local pairsIn = {}
-				for _ = 1, reader:count() do pairsIn[#pairsIn + 1] = { reader:readToken(), reader:readToken() } end
-				graph.enginePatches[#graph.enginePatches + 1] = { target = target, pairs = pairsIn, meta = reader:readToken() }
-			else
-				graph.enginePatches[#graph.enginePatches + 1] = { target = target, changes = reader:readToken(), meta = reader:readToken() }
-			end
+			-- Only SG6 ever wrote an engine patch that a reader can apply: the older shape named a
+			-- node holding the pairs, and no archive with one exists.
+			if version ~= "SG6" then reader:bad("engine patch before SG6") end
+			reader:expect("c")
+			local pairsIn = {}
+			for _ = 1, reader:count() do pairsIn[#pairsIn + 1] = { reader:readToken(), reader:readToken() } end
+			graph.enginePatches[#graph.enginePatches + 1] = { target = target, pairs = pairsIn, meta = reader:readToken() }
 		end
 	end
 	if version == "SG3" or version == "SG4" or birthNumbered then
@@ -2485,11 +2484,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 	end
 	for _, patch in ipairs(graph.enginePatches) do
 		local object = resolve(patch.target)
-		if patch.pairs then
-			for _, change in ipairs(patch.pairs) do rawset(object, resolve(change[1]), resolve(change[2])) end
-		else
-			for _, change in ipairs(resolve(patch.changes)) do rawset(object, change[1], change[2]) end
-		end
+		for _, change in ipairs(patch.pairs) do rawset(object, resolve(change[1]), resolve(change[2])) end
 		setmetatable(object, resolve(patch.meta))
 	end
 	local roots = {}
@@ -3216,6 +3211,10 @@ do
 	-- Saves written before the birth numbers still load, and they keep the old contiguous rule.
 	check("sg4_archive_still_loads", pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T1;P-;Mz;k0;"))
 	check("sg4_keeps_contiguous_ids", not pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"))
+	-- Only SG6 carries an applicable engine patch; the shape before it is refused by name rather
+	-- than read into a restore arm no archive can reach.
+	local _, prePatch = pcall(_ScriptGraph.validate, "SG5;S100;r0;G0;L0;E1;s6:stringz;Rz;N0;")
+	check("engine_patch_before_sg6_is_refused", string.find(tostring(prePatch), "engine patch before SG6", 1, true) ~= nil, tostring(prePatch))
 	-- A root nothing wrote to is copied out of the last capture; a root that moved is written again.
 	local cacheRootOne, cacheRootTwo = { tag = "one" }, { tag = "two" }
 	local cacheRoots = { ["11"] = cacheRootOne, ["12"] = cacheRootTwo }
@@ -3266,14 +3265,21 @@ do
 	rawset(string, "f107probe", function() return 107 end)
 	rawset(string, 107, "seven")
 	setmetatable(table, { f107 = true })
-	local patchText, patchProblems = _ScriptGraph.serialize({})
-	local patchCount = tonumber(string.match(patchText, "E(%d+);") or "0") or 0
-	local patchRoots, patchRestoreProblems = _ScriptGraph.deserialize(patchText)
-	local patchAgain = patchRoots and select(1, _ScriptGraph.serialize({})) or ""
+	-- Protected: an error between the rawsets and the restore below would leave the standard
+	-- libraries polluted for every row after this one.
+	local patchOk, patchText, patchProblems, patchCount, patchRestoreProblems, patchAgain = pcall(function()
+		local text, problems = _ScriptGraph.serialize({})
+		local count = tonumber(string.match(text, "E(%d+);") or "0") or 0
+		local roots, restoreProblems = _ScriptGraph.deserialize(text)
+		return text, problems, count, restoreProblems, roots and select(1, _ScriptGraph.serialize({})) or ""
+	end)
 	setmetatable(table, patchMetaBefore)
 	rawset(string, "f107probe", nil)
 	rawset(string, 107, nil)
-	check("sg6_engine_patch_round_trips", #patchProblems == 0 and #patchRestoreProblems == 0 and patchCount > 0 and
+	if not patchOk then
+		patchText, patchProblems, patchCount, patchRestoreProblems, patchAgain = "", { tostring(patchText) }, 0, {}, ""
+	end
+	check("sg6_engine_patch_round_trips", patchOk and #patchProblems == 0 and #patchRestoreProblems == 0 and patchCount > 0 and
 	      string.sub(patchText, 1, 4) == "SG6;" and patchAgain == patchText,
 	      "patches=" .. patchCount .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | "))
 	local constructed, message = pcall(function() return MOPixel() end)
