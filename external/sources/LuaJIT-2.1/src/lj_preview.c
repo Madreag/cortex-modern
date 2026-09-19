@@ -354,8 +354,10 @@ void lj_preview_write(lua_State *L, GCtab *t)
     lj_checkpoint_mark(L, t);
     return;
   }
-  if (!p || !p->active || !index || index > p->ntables) {  /* A stale word addresses no entry. */
-    t->preview = 0;
+  if (!p || !p->active || !index || index > p->ntables) {
+    /* A stale word addresses no entry: no window owns the image, but the write still reports itself. */
+    t->preview &= ~LJ_PREVIEW_PENDING;
+    lj_checkpoint_mark(L, t);
     return;
   }
   started = p->timed ? preview_clock() : 0.0;
@@ -588,7 +590,9 @@ LUA_API int luaJIT_preview_faultcheck(lua_State *L)
   t->preview = stale;
   lj_preview_write(L, t);
   lj_preview_forget(g, t);
-  ok = t->preview == stale &&
+  /* The word must come back no longer pending, or every caller that retries the store would loop,
+  ** and the index it addresses must survive; the window's own state must not have moved. */
+  ok = t->preview == (stale & LJ_PREVIEW_INDEX) &&
        (!p || (p->lastwrite == lastwrite && p->savedbytes == savedbytes));
   t->preview = 0;
   lua_pop(L, 1);
