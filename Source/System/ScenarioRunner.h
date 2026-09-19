@@ -369,6 +369,9 @@ namespace RTE {
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();
+		/// Whether the recording being played is a world segment, and the checkpoint it stands on.
+		static bool IsLockstepReplayWorldSegment();
+		static const NetWorldSegmentHeader& GetLockstepReplayWorldSegment();
 		/// The rollback fidelity gate under playback: keep copies of the probe window's records
 		/// during the first pass, then rewind the coordinator and re-feed them for the re-run.
 		static void ArmReplayRewindBuffer(uint64_t fromFrame, uint64_t frameCount);

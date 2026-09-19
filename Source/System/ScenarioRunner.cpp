@@ -197,6 +197,57 @@ namespace RTE {
 			if (error) *error = readError;
 			return false;
 		}
+
+		enum class SegmentChain { None, Opened, Refused };
+
+		// A world's recording is a chain: the next segment stands on the checkpoint the sim has just
+		// reached, so playback continues into it without reloading the world. A segment that is simply
+		// not there is the end of the recording; one that is there but names another state is refused.
+		SegmentChain AdvanceToNextWorldSegment(uint64_t lastTick, std::string* error) {
+			if (!s_ReplayReader.HasWorldSegment() || lastTick == 0) return SegmentChain::None;
+			const NetWorldSegmentHeader current = s_ReplayReader.GetWorldSegment();
+			const std::filesystem::path path = AutosaveStore::SegmentPath(AutosaveStore::Directory(), current.worldId, lastTick);
+			std::error_code ignored;
+			if (!std::filesystem::is_regular_file(path, ignored)) return SegmentChain::None;
+			const std::string named = "segment chain refused at tick " + std::to_string(lastTick) + ": ";
+			NetMatchReplayReader next;
+			std::string openError;
+			if (!next.Open(path.string(), &openError)) {
+				if (error) *error = named + openError;
+				return SegmentChain::Refused;
+			}
+			if (!next.HasWorldSegment() || next.GetWorldSegment().worldId != current.worldId || next.GetWorldSegment().tick != lastTick) {
+				if (error) *error = named + path.string() + " does not stand on this world's checkpoint " + std::to_string(lastTick);
+				return SegmentChain::Refused;
+			}
+			if (next.GetStartFrame() != lastTick + 1) {
+				if (error) *error = named + "its first frame " + std::to_string(next.GetStartFrame()) + " is not " + std::to_string(lastTick + 1);
+				return SegmentChain::Refused;
+			}
+			if (next.GetConfig().sessionId != s_ReplayReader.GetConfig().sessionId) {
+				if (error) *error = named + "it belongs to another lockstep session";
+				return SegmentChain::Refused;
+			}
+			// The state the sim reached IS that checkpoint, so its archive must carry the digest the
+			// header names; a mismatch means these records do not continue this world.
+			std::string refusal;
+			const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(AutosaveStore::Directory(), current.worldId, lastTick, &refusal);
+			if (!checkpoint) {
+				if (error) *error = named + "checkpoint " + std::to_string(lastTick) + " is not on this machine: " + refusal;
+				return SegmentChain::Refused;
+			}
+			if (checkpoint->worldStructureHash != next.GetWorldSegment().worldDigest) {
+				if (error) *error = named + "checkpoint " + std::to_string(lastTick) + " digest differs";
+				return SegmentChain::Refused;
+			}
+			s_ReplayLookahead.clear();
+			s_ReplayLookaheadFailed = false;
+			s_ReplayLookaheadEof = false;
+			s_ReplayLookaheadError.clear();
+			s_ReplayReader = std::move(next);
+			std::cout << "[net-replay] segment chained into " << path.string() << " at tick " << lastTick << std::endl;
+			return SegmentChain::Opened;
+		}
 		bool s_SimSettingsPinned = false;
 		bool s_SavedAutomaticGoldDeposit = true;
 		bool s_SavedCrabBombsEnabled = false;
@@ -1479,7 +1530,22 @@ namespace RTE {
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
 			std::string readError;
-			if (!NextReplayRecord(record, status, &readError)) {
+			bool read = NextReplayRecord(record, status, &readError);
+			if (!read && status == NetReplayReadStatus::CleanEnd) {
+				std::string chainError;
+				switch (AdvanceToNextWorldSegment(s_ReplayLastTick, &chainError)) {
+					case SegmentChain::Opened:
+						read = NextReplayRecord(record, status, &readError);
+						break;
+					case SegmentChain::Refused:
+						s_ReplayOutcome = LockstepReplayOutcome::Corrupt;
+						if (error) *error = chainError;
+						return false;
+					case SegmentChain::None:
+						break;
+				}
+			}
+			if (!read) {
 				if (status == NetReplayReadStatus::CleanEnd) {
 					s_ReplayEndMarkerSeen = s_ReplayReader.GetVersion() >= 2;
 					s_ReplayOutcome = LockstepReplayOutcome::Completed;
@@ -2197,6 +2263,14 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
 		return s_ReplayReader.GetStartFrame();
+	}
+
+	bool ScenarioRunner::IsLockstepReplayWorldSegment() {
+		return s_ReplayReader.HasWorldSegment();
+	}
+
+	const NetWorldSegmentHeader& ScenarioRunner::GetLockstepReplayWorldSegment() {
+		return s_ReplayReader.GetWorldSegment();
 	}
 
 	namespace {

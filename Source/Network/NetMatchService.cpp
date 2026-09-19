@@ -3136,6 +3136,39 @@ static std::string ResyncSaveName() {
 		return state;
 	}
 
+	NetMatchService::WorldSegmentPlayback NetMatchService::PrepareWorldSegmentPlayback(const std::filesystem::path& directory, const NetWorldSegmentHeader& header,
+	                                                                                 const NetMatchConfig& config, uint64_t firstRecordedFrame) {
+		WorldSegmentPlayback staged;
+		const std::string named = "checkpoint " + std::to_string(header.tick) + " of world " + header.worldId;
+		std::string refusal;
+		const std::optional<AutosaveDescriptor> checkpoint = AutosaveStore::Find(directory, header.worldId, header.tick, &refusal);
+		if (!checkpoint) {
+			staged.refusal = "segment refused: " + named + " is not on this machine";
+			return staged;
+		}
+		if (checkpoint->worldStructureHash != header.worldDigest) {
+			staged.refusal = "segment refused: " + named + " digest differs";
+			return staged;
+		}
+		AutosaveManifest manifest;
+		if (!AutosaveStore::ReadManifest(directory, header.worldId, header.tick, manifest, &refusal)) {
+			staged.refusal = "segment refused: " + named + " has no restart manifest: " + refusal;
+			return staged;
+		}
+		if (firstRecordedFrame != header.tick + 1) {
+			staged.refusal = "segment refused: its first frame " + std::to_string(firstRecordedFrame) +
+			                 " is not the tick after " + named;
+			return staged;
+		}
+		staged.checkpoint = *checkpoint;
+		staged.manifest = std::move(manifest);
+		// The very state a resumed host stands up with: the manifest's agreed owners and applied
+		// sequences at that tick, under the round the checkpoint was written in.
+		staged.resumeState = BuildResumeState(config, header.tick, staged.manifest.roundId, header.worldId, staged.manifest.sideState);
+		staged.startFrame = header.tick + 1;
+		return staged;
+	}
+
 	bool NetMatchService::DeriveRestartKey(std::array<uint8_t, 32>& key) {
 		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
 		if (!m_ParticipantStore.HasKey() && !m_ParticipantStore.LoadOrCreate(nullptr)) return false;
