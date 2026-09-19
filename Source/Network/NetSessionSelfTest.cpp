@@ -1648,6 +1648,159 @@ namespace RTE {
 			return true;
 		}
 
+		// A proof is spent for the whole hosted session. The host here draws one challenge for every
+		// connection - the case the spent list exists for - so a stored proof fits any later link, and
+		// only the list refuses it.
+		bool TestSpentProofsOutliveTheJoinCount(std::string* error) {
+			class RepeatingAuthCrypto : public NetAuthCrypto {
+			public:
+				bool IsRealCrypto() const override { return false; }
+				bool RandomBytes(uint8_t* buffer, size_t count) override {
+					if (buffer == nullptr) return false;
+					for (size_t i = 0; i < count; ++i) buffer[i] = 0x5A;
+					return true;
+				}
+				bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+					if (key == nullptr || keyCount == 0) return false;
+					uint8_t fold = 1;
+					for (size_t i = 0; i < 32; ++i) {
+						fold = static_cast<uint8_t>(fold * 37U + (i < keyCount ? key[i] : 0) + (i < messageCount ? message[i] : 0));
+						mac[i] = fold;
+					}
+					return true;
+				}
+			};
+
+			RepeatingAuthCrypto auth;
+			ScriptedParticipantCrypto participant;
+			SetNetAuthCryptoForTest(&auth);
+			SetNetParticipantCryptoForTest(&participant);
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-spent-proofs";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			const auto done = [&lane, &code](bool result) {
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				std::error_code ignored = code;
+				std::filesystem::remove_all(lane, ignored);
+				return result;
+			};
+			const uint16_t port = 42109;
+			ScriptedHostTransport transport;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 7101, "Host");
+			// One slot per scripted joiner: nothing here disconnects, so the links all stay live.
+			hostConfig.maxPeers = 40;
+			if (!host.StartHost(transport, hostConfig, error)) {
+				return done(false);
+			}
+			host.EnableParticipantProof(nullptr);
+			uint64_t clock = 0;
+			const auto prove = [&](NetPeerId connection, uint64_t nonce, NetParticipantIdentityStore& store, NetParticipantProof& used, bool replay) {
+				transport.sentPackets.clear();
+				transport.Push({NetTransportEventType::PeerConnected, connection, NetTransportLane::ControlReliable, {}, ""});
+				NetMessage hello;
+				hello.sequence = 1;
+				hello.payload = MakeClientHello(MakeConfig(port, nonce, "Joiner"));
+				std::vector<uint8_t> helloBytes;
+				if (!NetProtocol::Encode(hello, helloBytes, nullptr)) {
+					*error = "could not encode the scripted hello";
+					return false;
+				}
+				transport.Push({NetTransportEventType::PacketReceived, connection, NetTransportLane::ControlReliable, helloBytes, ""});
+				clock += 10;
+				host.Tick(clock);
+				if (!replay) {
+					NetParticipantChallenge challenge;
+					bool challenged = false;
+					for (const ScriptedHostTransport::SentPacket& packet : transport.sentPackets) {
+						if (packet.peerId != connection) continue;
+						const NetDecodeResult decoded = NetProtocol::Decode(packet.bytes);
+						if (decoded.ok) {
+							if (const auto* issued = std::get_if<NetParticipantChallenge>(&decoded.message.payload)) {
+								challenge = *issued;
+								challenged = true;
+							}
+						}
+					}
+					if (!challenged) {
+						*error = "the host challenged no connection " + std::to_string(connection);
+						return false;
+					}
+					NetParticipantProofTranscript transcript;
+					transcript.hostBinding = challenge.hostBinding;
+					transcript.sessionId = challenge.sessionId;
+					transcript.connectionBinding = challenge.connectionBinding;
+					transcript.challenge = challenge.challenge;
+					std::vector<uint8_t> message;
+					used = NetParticipantProof{};
+					used.publicId = store.PublicId();
+					used.connectionBinding = challenge.connectionBinding;
+					used.challenge = challenge.challenge;
+					if (!NetParticipantProofBytes(transcript, message) || !store.Sign(message, used.signature)) {
+						*error = "the scripted joiner could not sign its proof";
+						return false;
+					}
+				}
+				NetMessage proofMessage;
+				proofMessage.sequence = 2;
+				proofMessage.payload = used;
+				std::vector<uint8_t> proofBytes;
+				if (!NetProtocol::Encode(proofMessage, proofBytes, nullptr)) {
+					*error = "could not encode the scripted proof";
+					return false;
+				}
+				transport.Push({NetTransportEventType::PacketReceived, connection, NetTransportLane::ControlReliable, proofBytes, ""});
+				clock += 10;
+				host.Tick(clock);
+				return true;
+			};
+			NetParticipantIdentityStore first;
+			first.SetPath((lane / "first.key").string());
+			if (!first.LoadOrCreate(error)) {
+				return done(false);
+			}
+			NetParticipantProof firstProof;
+			if (!prove(300, 7201, first, firstProof, false)) {
+				return done(false);
+			}
+			NetParticipantId bound{};
+			if (!host.GetPeerParticipantId(300, bound) || !(bound == first.PublicId())) {
+				*error = "the first scripted proof was not accepted";
+				return done(false);
+			}
+			// Thirty-two later joins: one more than the count the list used to keep.
+			for (int index = 0; index < 32; ++index) {
+				NetParticipantIdentityStore filler;
+				filler.SetPath((lane / ("filler" + std::to_string(index) + ".key")).string());
+				if (!filler.LoadOrCreate(error)) {
+					return done(false);
+				}
+				NetParticipantProof fillerProof;
+				const NetPeerId connection = static_cast<NetPeerId>(301 + index);
+				if (!prove(connection, 7300 + static_cast<uint64_t>(index), filler, fillerProof, false)) {
+					return done(false);
+				}
+				NetParticipantId fillerBound{};
+				if (!host.GetPeerParticipantId(connection, fillerBound) || !(fillerBound == filler.PublicId())) {
+					*error = "scripted join " + std::to_string(index) + " was not accepted";
+					return done(false);
+				}
+			}
+			// The very first proof, sent again on a fresh link.
+			if (!prove(400, 7400, first, firstProof, true)) {
+				return done(false);
+			}
+			NetParticipantId replayed{};
+			if (host.GetPeerParticipantId(400, replayed)) {
+				*error = "a proof spent 33 joins ago was accepted again";
+				return done(false);
+			}
+			std::cout << "[net-session-selftest] PASS identity: a spent proof stays spent for the whole hosted session" << std::endl;
+			return done(true);
+		}
+
 		bool TestBanHandshake(std::string* error) {
 			ScriptedAuthCrypto auth;
 			ScriptedParticipantCrypto participant;
@@ -1751,6 +1904,7 @@ namespace RTE {
 		if (!TestClientHelloTransportFailureKeepsOwnError(&error)) return fail(error);
 		if (!TestLobbyMembership(&error)) return fail(error);
 		if (!TestIdentityProof(&error)) return fail(error);
+		if (!TestSpentProofsOutliveTheJoinCount(&error)) return fail(error);
 		if (!TestBanHandshake(&error)) return fail(error);
 
 		std::cout << "[net-session-selftest] PASS" << std::endl;

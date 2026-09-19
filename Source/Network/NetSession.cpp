@@ -806,10 +806,10 @@ namespace RTE {
 			if (m_ReconnectHost != nullptr) {
 				m_ReconnectHost->BindParticipantId(peerId, proof->publicId);
 			}
+			// Every challenge this session accepted stays spent for as long as the session lasts: a count
+			// that evicts would let the oldest proof be replayed. One entry per accepted proof, which is
+			// one per join, and the list goes with the session.
 			m_SpentIdentityChallenges.push_back({proof->publicId, proof->challenge});
-			if (m_SpentIdentityChallenges.size() > 32) {
-				m_SpentIdentityChallenges.erase(m_SpentIdentityChallenges.begin());
-			}
 			peer->identityChallengeLive = false;
 			peer->participantId = proof->publicId;
 			peer->hasParticipantId = true;
