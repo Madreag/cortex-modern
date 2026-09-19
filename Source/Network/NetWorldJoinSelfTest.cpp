@@ -1414,15 +1414,16 @@ namespace RTE {
 				return Fail("two overflow spectators shared one lobby id: " + std::to_string(static_cast<int>(first)) + " and " +
 				            std::to_string(static_cast<int>(second)));
 			}
-			// Past the cap there is no id to bind, which is a stream refused rather than one stolen.
-			if (!host.BeginJoin(200, 200, "overflow", 1000, &error)) {
-				return Fail("the spectator past the cap was refused a bootstrap: " + error);
-			}
-			if (host.FindSession(200)->spectatorLobbyPeer != 0) {
+			// Past the cap there is no id to bind, so the world turns the connection away here
+			// rather than opening a bootstrap that can never be sent an image.
+			error.clear();
+			if (host.BeginJoin(200, 200, "overflow", 1000, &error)) {
 				return Fail("spectator-lobby-id-leaked: the spectator past the cap took id " +
 				            std::to_string(static_cast<int>(host.FindSession(200)->spectatorLobbyPeer)));
 			}
-			host.CancelJoin(200, "past the cap");
+			if (error != "the world is full" || host.FindSession(200) != nullptr) {
+				return Fail("spectator-lobby-id-leaked: the spectator past the cap was refused with \"" + error + "\"");
+			}
 			// A spectator that leaves returns its id to the pool: the cap is concurrent, not lifetime.
 			host.CancelJoin(spectators[1], "left");
 			if (!host.BeginJoin(300, 300, "later", 1000, &error)) {
@@ -2641,7 +2642,13 @@ namespace RTE {
 		}
 		NetMatchConfig legacy = ordinary;
 		legacy.worldMaxSpectators = 1;
-		if (NetMatchConfigUtil::ValidateLocalAlpha(legacy, &reason) || reason != "an ordinary match cannot carry world capacity") {
+		if (NetMatchConfigUtil::ValidateLocalAlpha(legacy, &reason) || reason != "pre-world config cannot carry world capacity") {
+			return Fail("world-capacity-passed-validation: a pre-world config kept a world capacity with reason \"" + reason + "\"");
+		}
+		NetMatchConfig modernOrdinary = ordinary;
+		modernOrdinary.version = NetMatchConfigUtil::c_PersistentWorldVersion;
+		modernOrdinary.worldTeamCapacity = {1, 0, 0, 0};
+		if (NetMatchConfigUtil::ValidateLocalAlpha(modernOrdinary, &reason) || reason != "an ordinary match cannot carry world capacity") {
 			return Fail("world-capacity-passed-validation: an ordinary match kept a world capacity with reason \"" + reason + "\"");
 		}
 		// The slot table is the capacity, spent in team order, so every peer names the same team for the same id.
