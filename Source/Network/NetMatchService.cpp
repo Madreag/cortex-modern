@@ -5290,6 +5290,8 @@ static std::string ResyncSaveName() {
 			config.sessionConfig.timeoutMs = std::max(directTimeoutMs, c_IceConnectBudgetMs);
 		}
 		INetTransport& wire = mux ? static_cast<INetTransport&>(*mux) : ip;
+		// Directory lookup time is not part of either transport's connection deadline.
+		if (config.nowMs) session.Tick(config.nowMs(), false);
 		if (transportReady && runner.Start(wire, session, coordinator, config, error)) return true;
 		if (config.host || !NetIcePrefersP2P(target, m_IceEnabled) || m_CancelRequested.load()) return false;
 		const auto routeFailed = [&] {
@@ -5330,6 +5332,7 @@ static std::string ResyncSaveName() {
 		}
 		System::PrintDiagnosticLine("[net-ice] " + iceError + "; retrying IP " + target.address + ":" + std::to_string(target.port));
 		if (error) error->clear();
+		if (config.nowMs) session.Tick(config.nowMs(), false);
 		const bool started = runner.Start(ip, session, coordinator, config, error);
 		// The session has released the old wire before its owner is destroyed.
 		mux.reset();
