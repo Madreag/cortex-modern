@@ -1095,6 +1095,9 @@ namespace RTE {
 			if (!ValidatePeerId(timing.senderPeerId, error, "timing sender") || !ValidatePeerId(timing.peerId, error, "timing subject")) return false;
 			if (action < 1 || action > 2 || phase < 1 || phase > 4 || timing.sessionId == 0 || timing.roundId == 0 ||
 			    timing.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || (timing.requiredPeers & 0xF0U) != 0 ||
+			    (timing.heldPeers & 0xF0U) != 0 || (timing.heldPeers & timing.requiredPeers) != 0 ||
+			    (timing.phase != NetTimingPhase::Status && timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) ||
+			    (timing.action == NetTimingAction::Delay && timing.heldPeers != 0) ||
 			    (timing.phase == NetTimingPhase::Status ? timing.revision != 0 || timing.requiredPeers != 0 : timing.revision == 0 || timing.requiredPeers == 0)) {
 				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "invalid timing decision");
 				return false;
@@ -1115,7 +1118,7 @@ namespace RTE {
 			AppendU64LE(out, timing.nextFrame);
 			AppendU16LE(out, timing.delayFrames);
 			AppendU8(out, timing.requiredPeers);
-			AppendU8(out, 0);
+			AppendU8(out, timing.heldPeers);
 			AppendU32LE(out, timing.pingMs);
 			AppendU32LE(out, timing.jitterMs);
 			return true;
@@ -1127,15 +1130,11 @@ namespace RTE {
 				return false;
 			}
 			NetLockstepTiming timing;
-			uint8_t action = 0, phase = 0, reserved = 0;
+			uint8_t action = 0, phase = 0;
 			if (!ReadOrTruncated(reader.ReadU8(timing.senderPeerId) && reader.ReadU8(timing.peerId) && reader.ReadU8(action) && reader.ReadU8(phase) &&
 			    reader.ReadU64LE(timing.sessionId) && reader.ReadU64LE(timing.roundId) && reader.ReadU64LE(timing.revision) &&
 			    reader.ReadU64LE(timing.applyFrame) && reader.ReadU64LE(timing.nextFrame) && reader.ReadU16LE(timing.delayFrames) &&
-			    reader.ReadU8(timing.requiredPeers) && reader.ReadU8(reserved) && reader.ReadU32LE(timing.pingMs) && reader.ReadU32LE(timing.jitterMs), reader, error, "timing decision")) return false;
-			if (reserved != 0) {
-				SetError(error, NetLockstepErrorCode::ReservedFieldNonZero, reader.Offset(), "timing reserved byte must be zero");
-				return false;
-			}
+			    reader.ReadU8(timing.requiredPeers) && reader.ReadU8(timing.heldPeers) && reader.ReadU32LE(timing.pingMs) && reader.ReadU32LE(timing.jitterMs), reader, error, "timing decision")) return false;
 			timing.action = static_cast<NetTimingAction>(action);
 			timing.phase = static_cast<NetTimingPhase>(phase);
 			if (!ValidateTiming(timing, error)) return false;
@@ -4394,6 +4393,7 @@ namespace RTE {
 			auto& queue = m_TimingOutgoing[peer];
 			if (timing.phase == NetTimingPhase::Status)
 				std::erase_if(queue, [&](const auto& pending) { return pending.phase == NetTimingPhase::Status && pending.peerId == timing.peerId; });
+			else std::erase_if(queue, [&](const auto& pending) { return pending.phase == timing.phase && pending.revision == timing.revision; });
 			if (std::find(queue.begin(), queue.end(), timing) == queue.end()) queue.push_back(timing);
 		}
 	}
@@ -4437,21 +4437,23 @@ namespace RTE {
 			std::cout << "[net-match] delay change peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
 		} else if (timing.action == NetTimingAction::Hold) {
-			if (timing.peerId == m_Config.localPeerId) {
+			if ((timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0) {
 				m_LocalSeatHeld = true;
 				m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 				m_State = NetLockstepState::Stopped;
 				return;
 			}
-			m_AiHeldSeats[timing.peerId] = timing.applyFrame;
-			ApplyPeerLeave(timing.peerId, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, true, true);
-			m_DroppedSeatResolutions[timing.peerId] = NetLockstepHoldResolution::Substituted;
-			++m_Stats.peers[timing.peerId].holds;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if ((timing.heldPeers & (1U << (peer - 1))) == 0 || m_AiHeldSeats.contains(peer)) continue;
+				m_AiHeldSeats[peer] = timing.applyFrame;
+				ApplyPeerLeave(peer, timing.applyFrame, "slow player: AI takeover", m_TimingNowMs, false, true, true);
+				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+				++m_Stats.peers[peer].holds;
+				std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << timing.applyFrame << " AI in control" << std::endl;
+			}
 			for (auto& [revision, pending]: m_TimingDecisions)
 				if (!pending.committed && pending.proposal.applyFrame >= timing.applyFrame)
-					pending.acknowledgedPeers |= static_cast<uint8_t>(1U << (timing.peerId - 1));
-			std::cout << "[net-match] hold peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
-			          << " AI in control" << std::endl;
+					pending.acknowledgedPeers |= timing.heldPeers;
 		}
 	}
 
@@ -4463,17 +4465,23 @@ namespace RTE {
 			return false;
 		}
 		for (const auto& [revision, pending]: m_TimingDecisions)
-			if (pending.proposal.action == NetTimingAction::Hold && pending.proposal.peerId == peerId) return true;
+			if (pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & (1U << (peerId - 1))) != 0) return true;
 		NetLockstepTiming timing;
 		timing.senderPeerId = m_Config.localPeerId; timing.peerId = peerId;
 		timing.action = NetTimingAction::Hold;
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId;
 		timing.revision = m_NextTimingRevision++;
 		timing.applyFrame = FirstFrameWithout(peerId);
+		timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
+		for (const auto& [revision, pending]: m_TimingDecisions) {
+			if (pending.committed || pending.proposal.action != NetTimingAction::Hold) continue;
+			timing.heldPeers |= pending.proposal.heldPeers;
+			timing.applyFrame = std::min(timing.applyFrame, pending.proposal.applyFrame);
+		}
 		timing.nextFrame = m_Stats.nextFrame;
 		timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
 		for (uint8_t peer: m_RemotePeerIds)
-			if (peer != peerId && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
+			if ((timing.heldPeers & (1U << (peer - 1))) == 0 && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
 		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false};
 		QueueTiming(timing);
 		CommitTiming(timing.revision);
@@ -4532,6 +4540,11 @@ namespace RTE {
 		decision.committed = true;
 		FlushTimingOutgoing();
 		ApplyTiming(commit);
+		if (commit.action == NetTimingAction::Hold) {
+			std::vector<uint64_t> waiting;
+			for (const auto& [other, pending]: m_TimingDecisions) if (!pending.committed) waiting.push_back(other);
+			for (uint64_t other: waiting) CommitTiming(other);
+		}
 	}
 
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
@@ -4564,7 +4577,7 @@ namespace RTE {
 		}
 		if (!authority) return;
 		if (timing.phase == NetTimingPhase::Propose) {
-			const bool ownHold = timing.action == NetTimingAction::Hold && timing.peerId == m_Config.localPeerId;
+			const bool ownHold = timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0;
 			if ((timing.action == NetTimingAction::Hold && !UsesBoundedWait()) || (!ownHold && timing.applyFrame < m_Stats.nextFrame) ||
 			    (timing.applyFrame > m_Stats.nextFrame && timing.applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) || m_TimingDecisions.size() >= 16) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "timing proposal missed its boundary");
@@ -4635,6 +4648,9 @@ namespace RTE {
 		for (uint64_t revision: pending) CommitTiming(revision);
 		FlushTimingOutgoing();
 		std::erase_if(m_TimingDecisions, [&](const auto& entry) { return entry.second.committed && entry.second.proposal.applyFrame < m_Stats.nextFrame; });
+		const uint64_t oldest = m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ? m_Stats.nextFrame - NetLockstepCodec::c_MaxFutureFrameSkew : 0;
+		for (auto& [peer, changes]: m_DelayChanges)
+			while (changes.size() > 1 && std::next(changes.begin())->first <= oldest) changes.erase(changes.begin());
 	}
 
 	void NetLockstepCoordinator::FlushTimingOutgoing() {
@@ -6489,6 +6505,13 @@ namespace RTE {
 						lockstepPeer = peerId;
 						break;
 					}
+				}
+				if (lockstepPeer == GetHostPeerId() && event.reason.find("slow player:") != std::string::npos) {
+					if (m_SessionEventSink) m_SessionEventSink(event);
+					m_LocalSeatHeld = true;
+					m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
+					m_State = NetLockstepState::Stopped;
+					break;
 				}
 				if (lockstepPeer == GetHostPeerId() && BeginHostMigration(nowMs))
 					break;

@@ -294,6 +294,7 @@ namespace RTE {
 		uint64_t nextFrame = 0;
 		uint16_t delayFrames = 0;
 		uint8_t requiredPeers = 0;
+		uint8_t heldPeers = 0;
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
 		bool operator==(const NetLockstepTiming&) const = default;
