@@ -53,10 +53,14 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 
 void CheckpointGraphIndex::BeginWalk(bool full) {
 	std::lock_guard lock(m_Mutex);
+	// A capture of every state opens the walk once; each state's own capture nests inside it.
+	if (m_WalkDepth++ > 0) return;
 	m_Walking.clear();
 	m_WalkingRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
+	m_RootsReused = 0;
+	m_RootsRewritten = 0;
 	m_Root = 0;
 	m_WalkNoteUs = 0;
 }
@@ -78,6 +82,7 @@ void CheckpointGraphIndex::NoteTable(const void* table) {
 
 void CheckpointGraphIndex::EndWalk() {
 	std::lock_guard lock(m_Mutex);
+	if (!m_Walk || --m_WalkDepth > 0) return;
 	if (m_FullWalk) {
 		m_TableRoots = std::move(m_Walking);
 		m_Roots = std::move(m_WalkingRoots);
@@ -105,10 +110,16 @@ void CheckpointGraphIndex::EndWalk() {
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 	std::lock_guard lock(m_Mutex);
-	m_RootsReused = reused;
-	m_RootsRewritten = rewritten;
+	// One walk covers every state, so the counts are the whole capture's, not the last state's.
+	if (m_Walk) {
+		m_RootsReused += reused;
+		m_RootsRewritten += rewritten;
+	} else {
+		m_RootsReused = reused;
+		m_RootsRewritten = rewritten;
+	}
 	// A capture that reused a chunk did not walk that root, so the map keeps what it recorded before.
-	m_FullWalk = reused == 0;
+	m_FullWalk = m_FullWalk && m_RootsReused == 0;
 }
 
 std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
