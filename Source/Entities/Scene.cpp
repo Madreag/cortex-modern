@@ -1427,6 +1427,15 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		const uint64_t stamp = sceneObjectToSave->CheckpointWriteGeneration();
 		if (auto* cache = CheckpointWriter::CurrentCache()) {
 			if (const CheckpointText* previous = cache->Peek(sceneObjectToSave, channel); previous && cache->Stamp(sceneObjectToSave, channel) == stamp) {
+#ifdef DEBUG_BUILD
+				// A write that forgot its stamp shows up as a shadow that no longer matches the object.
+				const CheckpointText fresh = Writer::Capture([&](Writer& owned) {
+					owned.SetSaveOverrides(writer.GetSaveOverrides());
+					owned.SetCaptureObject(sceneObjectToSave);
+					SaveSceneObject(owned, sceneObjectToSave, isChildAttachable, saveFullData);
+				}, writer.GetIndent());
+				RTEAssert(fresh.SameValues(*previous), "checkpoint shadow reused after an unstamped write to " + sceneObjectToSave->GetPresetName());
+#endif
 				cache->Touch(sceneObjectToSave, channel);
 				writer.Append(*previous);
 				return;

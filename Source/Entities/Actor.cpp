@@ -2362,6 +2362,10 @@ void Actor::ApplyPersistedControllerMode() {
 void Actor::Update() {
 	ZoneScoped;
 
+	// The wound, travel and death paths write health and status straight, so the stamp is taken around them.
+	const float checkpointHealth = m_Health;
+	const Status checkpointStatus = m_Status;
+
 	/////////////////////////////////
 	// Hit Body update and handling
 	MOSRotating::Update();
@@ -2570,6 +2574,8 @@ void Actor::Update() {
 	} else {
 		DeactivateHotkeyAction(AUXILIARYHOTKEY);
 	}
+
+	if (m_Health != checkpointHealth || m_Status != checkpointStatus) TouchCheckpoint();
 }
 
 void RTE::Actor::CastSeeRays() {

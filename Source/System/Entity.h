@@ -95,7 +95,7 @@ namespace RTE {
 		};
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
-		void TouchCheckpoint() { ++m_CheckpointWriteGeneration; }
+		virtual void TouchCheckpoint() { ++m_CheckpointWriteGeneration; }
 		uint64_t CheckpointWriteGeneration() const { return m_CheckpointWriteGeneration; }
 		SerializableOverrideMethods;
 

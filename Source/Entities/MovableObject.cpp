@@ -1468,7 +1468,10 @@ void MovableObject::PostTravel() {
 	// Reset the terrain intersection warning
 	m_CheckTerrIntersection = false;
 
-	m_DistanceTravelled += m_Vel.GetMagnitude() * c_PPM * g_TimerMan.GetDeltaTimeSecs();
+	const float travelled = m_Vel.GetMagnitude() * c_PPM * g_TimerMan.GetDeltaTimeSecs();
+	m_DistanceTravelled += travelled;
+	// The travel writes position and velocity through Atom aliases, so the stamp is taken here.
+	if (travelled != 0.0F || m_Pos != m_PrevPos || m_Vel != m_PrevVel) TouchCheckpoint();
 }
 
 void MovableObject::Update() {

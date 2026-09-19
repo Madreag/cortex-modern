@@ -752,7 +752,7 @@ namespace RTE {
 		/// 'shake loose' this from a 'pinned' state. Pinned MOs don't get moved
 		/// by travel algos. If 0, this isn't pinned.
 		/// @param pinStrength The impulse threshold in kg * (m/s). 0 means no pinning
-		void SetPinStrength(float pinStrength) { m_PinStrength = pinStrength; }
+		void SetPinStrength(float pinStrength) { if (m_PinStrength != pinStrength) TouchCheckpoint(); m_PinStrength = pinStrength; }
 
 		/// Resest all the timers used by this. Can be emitters, etc. This is to
 		/// prevent backed up emissions to come out all at once while this has been

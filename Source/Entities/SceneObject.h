@@ -177,7 +177,7 @@ namespace RTE {
 
 		/// Sets which team this belongs to.
 		/// @param team The assigned team number.
-		virtual void SetTeam(int team) { m_Team = team; }
+		virtual void SetTeam(int team) { if (m_Team != team) TouchCheckpoint(); m_Team = team; }
 
 		/// Gets which team this belongs to.
 		/// @return The currently assigned team number.
