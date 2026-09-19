@@ -519,9 +519,9 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 	}
 	const uint64_t pinnedTick = identity ? identity->pinnedTick : AutosaveStore::c_NoPinnedTick;
 	// The world text is hashed on the archive thread, so the capture never pays for the digest.
-	std::string checkpointWorld = automatic ? worldStructure : std::string();
+	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? worldStructure : std::string());
 	auto saveWriterData = [fileName, savePath, sceneLayerInfos, indexWriter, writer, zipLevel, automatic, matchId,
-	                       descriptor, pinnedTick, checkpointWorld = std::move(checkpointWorld)]() {
+	                       descriptor, pinnedTick, checkpointWorld]() {
 		if (automatic) {
 			std::filesystem::create_directories(savePath.parent_path());
 		}
@@ -563,7 +563,7 @@ bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::stri
 		writeEntry("Index.ini", indexText.data(), indexText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
 		if (automatic) {
 			AutosaveDescriptor stamped = descriptor;
-			stamped.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", checkpointWorld}}));
+			stamped.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", *checkpointWorld}}));
 			const std::string descriptorText = AutosaveStore::WriteDescriptor(stamped);
 			writeEntry(AutosaveStore::c_DescriptorEntry, descriptorText.data(), descriptorText.size(), HACK_MZ_COMPRESS_METHOD_STORE);
 		}
