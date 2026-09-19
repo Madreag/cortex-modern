@@ -48,6 +48,28 @@ function ScreenFacts:StartActivity(startNewGame)
         assert(zero(sound.Pos), "invalid sound target moved the sound");
         assert(not sound:Stop(player) and not sound:Restart(player), "invalid sound control");
     end
+    -- The rows below need a container that can actually play: an empty one, or a machine whose audio
+    -- system did not start, refuses everything and would pass them whether the seat gate is there or not.
+    -- StartActivity runs outside a SoundSimulationScope, so the seat gate applies here (SoundContainer.h:37).
+    local loaded = SoundContainer();
+    for _, name in ipairs({"PainSound", "DeathSound", "BodyHitSound"}) do
+        local brain = self:GetPlayerBrain(Activity.PLAYER_1);
+        local source = brain and brain[name];
+        if source and source:HasAnySounds() then
+            loaded:SetTopLevelSoundSet(source:GetTopLevelSoundSet());
+            break;
+        end
+    end
+    assert(loaded:HasAnySounds(), "the sound gate rows have no sound to play");
+    -- The SFX bus has no seat gate of its own, so this answers whether this machine can play at all.
+    local armed = loaded:Play();
+    loaded:Stop();
+    print("[screen-facts] sound armed=" .. (armed and 1 or 0));
+    loaded.BusRouting = SoundContainer.UI;
+    -- No player is every listener on this machine, and the seat gate must not refuse it.
+    assert(not armed or loaded:Play(), "UI sound refused with no player");
+    loaded:Stop();
+
     for player = Activity.PLAYER_1, Activity.MAXPLAYERCOUNT - 1 do
         if self:PlayerHuman(player) and self:ScreenOfPlayer(player) == -1 then
             remoteCount = remoteCount + 1;
@@ -75,6 +97,11 @@ function ScreenFacts:StartActivity(startNewGame)
             assert(not self:IsBuyGUIVisible(player), "remote buy visibility");
             assert(not self:CreateDelivery(player), "remote delivery input");
             assert(brain ~= nil and self:GetPlayerBrain(player) ~= nil and self:GetPlayerBrain(player).UniqueID == brainID, "shared brain changed");
+            -- A UI-bus sound aimed at a seat this machine does not present is refused, and says so.
+            assert(not armed or (not loaded:Play(player) and not loaded:Play(Vector(0, 0), player)),
+                "UI sound reached a remote seat");
+            assert(not armed or (not loaded:Stop(player) and not loaded:Restart(player)),
+                "UI sound controlled a remote seat");
             sound:Play(player);
             sound:Play(Vector(0, 0), player);
             sound:Stop(player);
