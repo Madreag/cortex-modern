@@ -1,5 +1,7 @@
 #include "NetSession.h"
 #include "NetA7Journal.h"
+#include "NetAuthCrypto.h"
+#include "NetHostBanStore.h"
 
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
@@ -79,6 +81,7 @@ namespace RTE {
 		m_HasRemoteIdentityHash = false;
 		m_Stats = {};
 		m_Peers.clear();
+		m_SpentIdentityChallenges.clear();
 		{
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
@@ -128,6 +131,7 @@ namespace RTE {
 		m_PendingModuleMismatch = {};
 		m_Stats = {};
 		m_Peers.clear();
+		m_SpentIdentityChallenges.clear();
 		{
 			std::lock_guard<std::mutex> chatLock(m_ChatMutex);
 			m_ChatOutbox.clear();
@@ -212,6 +216,38 @@ namespace RTE {
 		peer->state = NetSessionState::Closed;
 		DropPeerTransport(peerId, message);
 		RefreshHostState();
+	}
+
+	void NetSession::EnableParticipantProof(NetParticipantIdentityStore* localStore) {
+		m_ParticipantProofRequired = true;
+		m_ParticipantStore = localStore;
+		m_HasLocalParticipantId = localStore != nullptr && localStore->HasKey();
+		if (m_HasLocalParticipantId) {
+			m_LocalParticipantId = localStore->PublicId();
+		}
+		if (m_ReconnectHost != nullptr) {
+			m_ReconnectHost->SetParticipantProofRequired(true);
+		}
+	}
+
+	bool NetSession::GetPeerParticipantId(NetPeerId peerId, NetParticipantId& out) const {
+		const PeerState* peer = FindPeer(peerId);
+		if (peer == nullptr || !peer->hasParticipantId) {
+			return false;
+		}
+		out = peer->participantId;
+		return true;
+	}
+
+	void NetSession::BroadcastControl(const NetPayload& payload) {
+		if (m_Role != NetSessionRole::Host) {
+			return;
+		}
+		for (const PeerState& peer : m_Peers) {
+			if (IsActive(peer.state)) {
+				Send(peer.transportPeerId, payload);
+			}
+		}
 	}
 
 	void NetSession::InjectEvent(const NetTransportEvent& event, uint64_t nowMs) {
@@ -686,6 +722,53 @@ namespace RTE {
 			m_RemoteIdentityHash = hello->sessionIdentityHash;
 			m_HasRemoteIdentityHash = true;
 			Send(peerId, BuildHostHello(peer->assignedPeerId));
+			if (m_ParticipantProofRequired) {
+				NetParticipantChallenge challenge;
+				challenge.hostBinding = m_Config.localIdentity.sessionIdentityHash;
+				challenge.sessionId = m_SessionId;
+				if (!GetNetAuthCrypto().RandomBytes(challenge.connectionBinding.data(), challenge.connectionBinding.size()) ||
+				    !GetNetAuthCrypto().RandomBytes(challenge.challenge.data(), challenge.challenge.size())) {
+					RejectPeer(*peer, NetRejectReason::IdentityUnproven, "participant_identity", "connection proof", "unavailable", "no crypto provider to challenge this connection");
+					return;
+				}
+				peer->identityChallenge = challenge;
+				peer->identityChallengeLive = true;
+				Send(peerId, challenge);
+				RefreshHostState();
+				return;
+			}
+			Send(peerId, BuildJoinAccepted(peer->assignedPeerId));
+			peer->state = NetSessionState::Accepted;
+			RefreshHostState();
+			return;
+		}
+		if (const auto* proof = std::get_if<NetParticipantProof>(&message.payload)) {
+			if (!m_ParticipantProofRequired || !peer->identityChallengeLive) {
+				RejectPeer(*peer, NetRejectReason::IdentityUnproven, "participant_identity", "challenge", "unexpected proof", "connection proof arrived without a live challenge");
+				return;
+			}
+			const bool spent = std::any_of(m_SpentIdentityChallenges.begin(), m_SpentIdentityChallenges.end(), [&](const auto& entry) {
+				return entry.first == proof->publicId && entry.second == proof->challenge;
+			});
+			const NetParticipantProofVerdict verdict = NetAcceptParticipantProof(peer->identityChallenge, *proof, m_Config.localIdentity.sessionIdentityHash, m_SessionId, spent);
+			if (verdict != NetParticipantProofVerdict::Accept) {
+				RejectPeer(*peer, NetRejectReason::IdentityUnproven, "participant_identity", "connection proof", NetParticipantProofVerdictName(verdict), "connection proof was refused");
+				return;
+			}
+			if (m_HostBanStore != nullptr && m_HostBanStore->IsBanned(proof->publicId, m_SessionId)) {
+				RejectPeer(*peer, NetRejectReason::ParticipantBanned, "participant_identity", "admitted", "banned", "this identity is not admitted");
+				return;
+			}
+			if (m_ReconnectHost != nullptr) {
+				m_ReconnectHost->BindParticipantId(peerId, proof->publicId);
+			}
+			m_SpentIdentityChallenges.push_back({proof->publicId, proof->challenge});
+			if (m_SpentIdentityChallenges.size() > 32) {
+				m_SpentIdentityChallenges.erase(m_SpentIdentityChallenges.begin());
+			}
+			peer->identityChallengeLive = false;
+			peer->participantId = proof->publicId;
+			peer->hasParticipantId = true;
 			Send(peerId, BuildJoinAccepted(peer->assignedPeerId));
 			peer->state = NetSessionState::Accepted;
 			RefreshHostState();
@@ -1103,6 +1186,33 @@ namespace RTE {
 			m_HasRemoteIdentityHash = true;
 			return;
 		}
+		if (const auto* challenge = std::get_if<NetParticipantChallenge>(&message.payload)) {
+			if (!m_ParticipantProofRequired || m_ParticipantStore == nullptr || !m_ParticipantStore->HasKey()) {
+				SetRejected(NetRejectReason::IdentityUnproven, "participant_identity", "local key", "missing", "no participant identity to prove this connection");
+				m_Transport->Disconnect(peerId, "no participant identity");
+				return;
+			}
+			NetParticipantProofTranscript transcript;
+			transcript.protocolVersion = NetProtocol::c_Version;
+			transcript.hostBinding = challenge->hostBinding;
+			transcript.sessionId = challenge->sessionId;
+			transcript.connectionBinding = challenge->connectionBinding;
+			transcript.challenge = challenge->challenge;
+			std::vector<uint8_t> messageBytes;
+			NetParticipantProof proof;
+			proof.publicId = m_ParticipantStore->PublicId();
+			proof.connectionBinding = challenge->connectionBinding;
+			proof.challenge = challenge->challenge;
+			if (!NetParticipantProofBytes(transcript, messageBytes) || !m_ParticipantStore->Sign(messageBytes, proof.signature)) {
+				SetRejected(NetRejectReason::IdentityUnproven, "participant_identity", "signature", "unavailable", "no crypto provider to prove this connection");
+				m_Transport->Disconnect(peerId, "participant identity failed closed");
+				return;
+			}
+			m_LocalParticipantId = proof.publicId;
+			m_HasLocalParticipantId = true;
+			Send(peerId, proof);
+			return;
+		}
 		if (const auto* accepted = std::get_if<NetJoinAccepted>(&message.payload)) {
 			if (accepted->sessionId == 0 || accepted->selectedProtocolVersion != NetProtocol::c_Version || accepted->assignedPeerId == 0) {
 				SetRejected(NetRejectReason::ProtocolMismatch, "join_accepted", "valid JoinAccepted", "invalid", "invalid JoinAccepted");
@@ -1138,6 +1248,10 @@ namespace RTE {
 			if (m_ReconnectClient && disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::SessionEnded)) {
 				// The one signal, other than a LeaveAck, that lets the recovery record be deleted.
 				m_ReconnectClient->NotifyConfirmedSessionEnd();
+			}
+			if (m_ReconnectClient && (disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantRemoved) ||
+			                          disconnect->disconnectReason == static_cast<uint16_t>(NetRejectReason::ParticipantBanned))) {
+				m_ReconnectClient->NotifyParticipantRemoved(static_cast<NetRejectReason>(disconnect->disconnectReason));
 			}
 			if (m_State != NetSessionState::Rejected && m_State != NetSessionState::Failed) {
 				if (!m_HasReject && !disconnect->message.empty()) {

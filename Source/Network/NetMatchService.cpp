@@ -1038,6 +1038,8 @@ static std::string ResyncSaveName() {
 		m_SeatPresence.Clear();
 		ResetRosterTransitionHistory();
 		m_ModerationSeats.clear();
+		// An action queued for a setup worker that is gone belongs to no session and is dropped here.
+		m_PendingModeration.clear();
 		m_AdmissionAttached = false;
 	}
 
@@ -1152,6 +1154,8 @@ static std::string ResyncSaveName() {
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
 			m_ResyncSourceRound = 0;
+			m_LastRoundId = 0;
+			m_PendingToasts.clear();
 			m_LocalName.clear();
 			m_ActivityPreset.clear();
 			m_SceneName.clear();
@@ -1388,6 +1392,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_LastUpdateMs = nowMs;
+		PushPendingToasts();
 		JoinWorkerIfDone();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -1902,6 +1907,7 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::PumpSessionEvents() {
+		PushPendingToasts();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_State == NetMatchServiceState::Completed) {
@@ -1916,6 +1922,8 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_Session && m_Coordinator && m_State == NetMatchServiceState::Running) {
 				m_Session->SetLockstepFrame(m_Coordinator->GetStats().nextFrame);
+				m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+				m_ReconnectClient.SetRound(m_LastRoundId);
 				// The coordinator owns the transport queue mid-match, so this pump is the only
 				// driver that ever drains the session's chat outbox here.
 				m_Session->PumpChatOutbox();
@@ -1940,6 +1948,10 @@ static std::string ResyncSaveName() {
 		const SimCensusScope censusScope;
 		// Chat entries stamp the frame they arrived on, on every peer, not only the host's plane.
 		m_Session->SetLockstepFrame(m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0);
+		if (m_Coordinator) {
+			m_LastRoundId = static_cast<uint32_t>(m_Coordinator->GetRoundId());
+		}
+		m_ReconnectClient.SetRound(m_Coordinator ? m_LastRoundId : 0);
 		if (hostAdmission) {
 			// Phase A: a ticketless join into a running match is refused; a returning holder proves.
 			m_ReconnectHost.SetLiveMatch(true);
@@ -2835,6 +2847,7 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.Start(SteadyNowMs());
 		}
 		runnerConfig.nowMs = [this] { return AdmissionNowMs(); };
+		AttachHostPump(runnerConfig);
 
 		// A refused roster leaves matchConfig unauthored; nothing is armed on it.
 		if (started) AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest);
@@ -3003,6 +3016,144 @@ static std::string ResyncSaveName() {
 		return result;
 	}
 
+	NetKickBanResult NetMatchService::ApplyRemovalLocked(const NetModerationSelection& selection, NetParticipantRemovalAction action, NetSession& session) {
+		const uint64_t nowMs = AdmissionNowMs();
+		const uint64_t sessionId = session.GetSessionId();
+		// Between rounds the coordinator is gone and both peers still hold the round they played, so
+		// that is what the notice is stamped with; a fresh stamp of 0 would read as stale on the client.
+		const uint32_t round = m_Coordinator ? static_cast<uint32_t>(m_Coordinator->GetRoundId()) : m_LastRoundId;
+		const uint64_t boundary = m_Coordinator ? m_Coordinator->GetStats().nextFrame : 0;
+		m_LastKickBanResult = m_ReconnectHost.RemoveParticipant(selection, action, nowMs, UnixNowMs(nullptr), sessionId, round, boundary, m_LastRemovalIssue);
+		if (m_LastKickBanResult != NetKickBanResult::Ok) {
+			return m_LastKickBanResult;
+		}
+		session.BroadcastControl(m_LastRemovalIssue.notice);
+		if (m_Coordinator && m_State == NetMatchServiceState::Running && m_LastRemovalIssue.lockstepPeerId != 0) {
+			const char* why = action == NetParticipantRemovalAction::Kick ? "removed from the session" : "banned from the session";
+			m_Coordinator->EvictRemovedPeer(m_LastRemovalIssue.lockstepPeerId, why, nowMs);
+		}
+		if (m_LastRemovalIssue.connection != c_InvalidNetPeerId) {
+			const NetRejectReason reason = action == NetParticipantRemovalAction::Kick ? NetRejectReason::ParticipantRemoved : NetRejectReason::ParticipantBanned;
+			const char* text = action == NetParticipantRemovalAction::Kick ? "removed from this session" : "banned from this session";
+			session.DisconnectReadyPeer(m_LastRemovalIssue.connection, reason, text);
+		}
+		session.TickAdmissionPlane(nowMs);
+		if (m_State == NetMatchServiceState::Running) {
+			PublishModerationView();
+		}
+		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
+		// A Starting kick runs on the setup worker, and the toast queue is the game thread's, so the
+		// line waits for the next pump instead of being pushed from here.
+		m_PendingToasts.push_back(who + std::string(action == NetParticipantRemovalAction::Kick ? " removed " : " banned ") + "seat " + std::to_string(selection.stableSeat));
+		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::PushPendingToasts() {
+		std::vector<std::string> toasts;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			toasts.swap(m_PendingToasts);
+		}
+		for (const std::string& line : toasts) {
+			ScenarioRunner::PushNetUiToast("moderation", line);
+		}
+	}
+
+	NetKickBanResult NetMatchService::ApplyUnbanLocked(const NetAuthBytes32& identity) {
+		std::string error;
+		m_LastKickBanResult = m_BanStore.Unban(identity, &error) ? NetKickBanResult::Ok : NetKickBanResult::PersistenceFailed;
+		return m_LastKickBanResult;
+	}
+
+	NetKickBanResult NetMatchService::QueueModerationLocked(const PendingModeration& pending) {
+		// A queue no lobby could fill is a flood, and it is refused rather than grown.
+		constexpr size_t c_MaxPendingModeration = 16;
+		if (m_PendingModeration.size() >= c_MaxPendingModeration) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		m_PendingModeration.push_back(pending);
+		m_LastKickBanResult = NetKickBanResult::Queued;
+		return m_LastKickBanResult;
+	}
+
+	void NetMatchService::AttachHostPump(NetMatchRunnerConfig& config) {
+		config.pumpHost = [this](NetSession& session) { DrainPendingModeration(session); };
+	}
+
+	void NetMatchService::DrainPendingModeration(NetSession& session) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting) {
+			return;
+		}
+		std::vector<PendingModeration> pending;
+		pending.swap(m_PendingModeration);
+		NetKickBanResult issue = NetKickBanResult::Ok;
+		for (const PendingModeration& action : pending) {
+			// In the order the host asked for them: a ban queued after an unban of the same identity
+			// must still leave that identity banned.
+			const NetKickBanResult result = action.unban ? ApplyUnbanLocked(action.identity)
+			                                             : ApplyRemovalLocked(action.selection, action.action, session);
+			if (issue == NetKickBanResult::Ok) {
+				issue = result;
+			}
+		}
+		// The host is told about the first action that was refused, not the last one that worked.
+		m_LastKickBanResult = issue;
+	}
+
+	NetKickBanResult NetMatchService::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		m_LastRemovalIssue = {};
+		if (!m_AdmissionAttached || !m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (m_State != NetMatchServiceState::Running && m_State != NetMatchServiceState::Starting) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		if (m_State == NetMatchServiceState::Starting) {
+			// The setup worker owns the session for the whole of Start, so the kick is applied there and
+			// the result is not known yet.
+			return QueueModerationLocked(PendingModeration{false, selection, action, {}});
+		}
+		if (!m_Session) {
+			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
+			return m_LastKickBanResult;
+		}
+		return ApplyRemovalLocked(selection, action, *m_Session);
+	}
+
+	NetKickBanResult NetMatchService::GetLastKickBanResult() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastKickBanResult;
+	}
+
+	NetParticipantRemovalIssue NetMatchService::GetLastRemovalIssue() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_LastRemovalIssue;
+	}
+
+	NetKickBanResult NetMatchService::UnbanParticipant(const NetAuthBytes32& identity) {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_IsHost) {
+			m_LastKickBanResult = NetKickBanResult::NotHosting;
+			return m_LastKickBanResult;
+		}
+		if (m_State == NetMatchServiceState::Starting) {
+			// The setup worker owns admission for the whole of Start, so the store is written there and
+			// never from this thread; the unban keeps its place among the queued kicks.
+			return QueueModerationLocked(PendingModeration{true, {}, NetParticipantRemovalAction::Kick, identity});
+		}
+		return ApplyUnbanLocked(identity);
+	}
+
+	std::vector<NetHostBanRecord> NetMatchService::GetBanRecords() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_BanStore.List();
+	}
+
 	void NetMatchService::RecordModerationAction(uint16_t stableSeat, NetModerationAction action) {
 		const std::string who = m_LocalName.empty() ? "Host" : m_LocalName;
 		const std::string seat = " for seat " + std::to_string(stableSeat);
@@ -3097,10 +3248,19 @@ static std::string ResyncSaveName() {
 			m_ReconnectHost.SetLiveMatch(false);
 			m_ReconnectHost.SetDropOwnershipSource(&NetMatchService::CollectDropOwnership, this);
 			session.SetReconnectHost(&m_ReconnectHost);
+			session.EnableParticipantProof(nullptr);
+			m_BanStore.SetPath(NetHostBanStore::DefaultPath());
+			if (!m_BanStore.Load(nullptr)) {
+				// Last-good persistents stay; Until Removed writes stay closed until a later load.
+			}
+			m_ReconnectHost.SetBanStore(&m_BanStore);
+			session.SetHostBanStore(&m_BanStore);
 			m_AdmissionAttached = true;
 			return;
 		}
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+		m_ParticipantStore.SetPath(NetParticipantIdentityStore::DefaultPath());
+		(void)m_ParticipantStore.LoadOrCreate(nullptr);
 		m_ReconnectClient.Configure(&m_TicketStore, identity, request.playerName.empty() ? "Client" : request.playerName);
 		m_ReconnectClient.SetUnixClock(&UnixNowMs, nullptr);
 		// The record names the host it belongs to; the config hash is context, not a gate - a client
@@ -3109,6 +3269,7 @@ static std::string ResyncSaveName() {
 		m_ReconnectClient.SetApplyForSeat(s_ApplyForSeat || s_ApplyOnce, s_ApplyOnce ? c_NetH4AnySubstitutableSeat : s_ApplySeat);
 		s_ApplyOnce = false;
 		session.SetReconnectClient(&m_ReconnectClient);
+		session.EnableParticipantProof(&m_ParticipantStore);
 		m_AdmissionAttached = true;
 	}
 
