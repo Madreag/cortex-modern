@@ -602,7 +602,11 @@ class SessionDirectory:
             generation = sess.ice_generation
         wall = int(time.time())
         if "iceServers" in data:
-            offer = {"match_id": match_id, "expires_at": wall + ttl, "iceServers": clean_ice_servers(data["iceServers"])}
+            try:
+                servers = clean_ice_servers(data["iceServers"])
+            except TurnError:
+                raise FieldError("invalid_field", "iceServers") from None
+            offer = {"match_id": match_id, "expires_at": wall + ttl, "iceServers": servers}
         else:
             offer = self.turn_provider.mint(match_id, ttl, wall)
         with self._lock:
@@ -623,7 +627,7 @@ class SessionDirectory:
             return sess.ice_offer
 
     def heartbeat(
-        self, session_id: str, data: dict[str, Any], now: float
+        self, session_id: str, data: dict[str, Any], now: float, install_key: str = ""
     ) -> dict[str, Any]:
         token = require_str(data, "token")
         peer_count = require_int(data, "peer_count", 0, 10**9)
@@ -652,6 +656,8 @@ class SessionDirectory:
                 raise KeyError("not_found")
             if not tokens_equal(token, sess.token):
                 raise PermissionError("forbidden")
+            if valid_install_key(install_key):
+                sess.install_key = install_key
             sess.fields["peer_count"] = peer_count
             sess.fields["seats_free"] = seats_free
             if spectator_free is not None:
@@ -917,6 +923,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
             raw = json.dumps(body).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Connection", "close")
             self.end_headers()
@@ -1106,7 +1113,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     LOGGER.info(
                         "heartbeat session_id=%s client=%s", sid, self._observed_ip()
                     )
-                    self._send(200, store.heartbeat(sid, body, now))
+                    self._send(200, store.heartbeat(sid, body, now, self.headers.get("X-Install-Key", "")))
                     return
                 if (
                     len(parts) == 4

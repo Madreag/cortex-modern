@@ -134,6 +134,25 @@ class DirectoryTests(unittest.TestCase):
                 store.mint_ice_servers(row["session_id"], bad, INSTALL_KEY, 12)
         with self.assertRaises(PermissionError):
             store.mint_ice_servers(row["session_id"], data, "fedcba9876543210", 12)
+        store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 2, "seats_free": 1}, 13, "fedcba9876543210")
+        with mock.patch.object(session_directory.time, "time", return_value=1601):
+            replacement = store.mint_ice_servers(row["session_id"], data, "fedcba9876543210", 14)
+        self.assertEqual(replacement["expires_at"], 2201)
+        self.assertNotEqual(replacement["iceServers"][0]["username"], server["username"])
+        with self.assertRaises(PermissionError):
+            store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 14)
+
+    def test_fixed_offer_and_secret_refusal(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        server = {"urls": ["turn:private.example:3478?transport=udp"], "username": "private-user", "credential": "private-password"}
+        body = {"token": row["token"], "match_id": "fixed:1", "ttl": 600, "iceServers": [server]}
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(row["session_id"], body, INSTALL_KEY, 11)
+        self.assertEqual(offer, {"match_id": "fixed:1", "expires_at": 1600, "iceServers": [server]})
+        server["static_auth_secret"] = "never-publish"
+        with self.assertRaises(session_directory.FieldError):
+            store.mint_ice_servers(row["session_id"], body, INSTALL_KEY, 12)
 
     def test_cloudflare_offer_mocks_the_http_boundary(self) -> None:
         provider = session_directory.TurnCredentialProvider({"backend": "cloudflare", "turn_key_id": "key-id", "api_token": "backend-token"})
