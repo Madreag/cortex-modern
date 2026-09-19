@@ -744,13 +744,15 @@ static std::string ResyncSaveName() {
 			std::vector<uint8_t> envelope;
 			if (!ScenarioRunner::CaptureNetResyncState(dropFrame > 0 ? dropFrame - 1 : 0, state, error)) return false;
 			// The host, and only the host, names the checkpoint this match may rewind to: one policy,
-			// one answer, carried to every peer instead of each of them choosing for itself.
-			if (const auto anchor = AutosaveStore::NewestRestorable(m_AutosaveMatchId); anchor && anchor->savedTick <= state.savedTick) {
+			// one answer, carried to every peer instead of each of them choosing for itself. The archive
+			// thread proved it restorable when it published it, so the game thread reads no archive here.
+			const std::optional<AutosaveDescriptor> anchor = AutosaveStore::NewestValidated(m_AutosaveMatchId);
+			if (anchor && anchor->savedTick <= state.savedTick) {
 				state.rewindMatchId = anchor->matchId;
 				state.rewindTick = anchor->savedTick;
 			}
 			if (!NetResyncCodec::Encode(state, stateBytes, envelope, error)) return false;
-			if (!state.rewindMatchId.empty()) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, true);
+			if (!state.rewindMatchId.empty()) NoteRewindAnchor(state.rewindMatchId, state.rewindTick, true, anchor ? &*anchor : nullptr);
 			const uint64_t archiveBytes = stateBytes.size();
 			const uint64_t envelopeBytes = envelope.size();
 			const uint64_t saveMs = static_cast<uint64_t>(std::max(0LL, g_ActivityMan.LastSaveMainMs()));
@@ -1723,7 +1725,9 @@ static std::string ResyncSaveName() {
 			m_AutosaveIdentity.sessionId = m_Runner ? m_Runner->GetMatchConfig().sessionId : 0;
 			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
 			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
-			m_AutosaveIdentity.pinnedTick = 0;
+			m_AutosaveIdentity.pinnedTickSource = m_PinnedAutosaveTick;
+			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
+			m_PinnedAutosaveTick->store(0);
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 		}
@@ -1766,19 +1770,19 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (now < m_NextAutosaveSimTime) return;
 		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
-		AutosaveIdentity identity = m_AutosaveIdentity;
-		identity.pinnedTick = m_PinnedAutosaveTick.load();
-		g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, identity);
+		g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
 	}
 
-	void NetMatchService::NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host) {
+	void NetMatchService::NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host, const AutosaveDescriptor* known) {
 		if (matchId.empty() || tick == 0) return;
 		std::string refusal;
-		const bool held = AutosaveStore::Find(matchId, tick, &refusal).has_value();
-		// Retention keeps the agreed checkpoint whatever its age, so the rejoin still finds it.
-		if (matchId == m_AutosaveMatchId) m_PinnedAutosaveTick.store(tick);
+		// The caller that already validated this checkpoint does not pay for a second read of it.
+		const bool knownCheckpoint = known && known->matchId == matchId && known->savedTick == tick;
+		const bool held = knownCheckpoint || AutosaveStore::Find(matchId, tick, &refusal).has_value();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
+			// Retention keeps the agreed checkpoint whatever its age, so the rejoin still finds it.
+			if (matchId == m_AutosaveMatchId) m_PinnedAutosaveTick->store(tick);
 			m_RewindAnchorMatchId = matchId;
 			m_RewindAnchorTick = tick;
 			m_RewindAnchorHeld = held;

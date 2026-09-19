@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <charconv>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <system_error>
 
@@ -28,6 +29,11 @@ namespace RTE {
 			const auto parsed = std::from_chars(text.data(), text.data() + text.size(), out);
 			return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
 		}
+
+		/// The newest checkpoint this process published and validated, kept so a heal names the rewind point
+		/// without reading the disk on the game thread. The archive thread writes it, the game thread reads it.
+		std::mutex s_ValidatedMutex;
+		AutosaveDescriptor s_Validated;
 
 		/// The tick the saved world itself stands on, read out of the checkpoint's own property.
 		bool WorldTick(const std::string& saveText, uint64_t& out) {
@@ -245,6 +251,22 @@ namespace RTE {
 		return Find(Directory(), matchId, tick, error);
 	}
 
+	std::vector<uint64_t> AutosaveStore::RetainedTicks(const std::vector<AutosaveCandidate>& newestFirst, uint64_t pinnedTick) {
+		std::vector<uint64_t> kept;
+		size_t restorableKept = 0;
+		for (const AutosaveCandidate& candidate: newestFirst) {
+			// The agreed rewind point is kept whatever its age, and even when it no longer reads: a transient
+			// read failure must not destroy the checkpoint both sides are rejoining onto.
+			if (pinnedTick != c_NoPinnedTick && candidate.tick == pinnedTick) {
+				kept.push_back(candidate.tick);
+			} else if (candidate.restorable && restorableKept < c_RetainedAutosaves) {
+				kept.push_back(candidate.tick);
+				++restorableKept;
+			}
+		}
+		return kept;
+	}
+
 	size_t AutosaveStore::ApplyRetention(const std::filesystem::path& directory, const std::string& matchId, uint64_t pinnedTick) {
 		if (!ValidMatchId(matchId)) return 0;
 		std::vector<std::pair<uint64_t, std::filesystem::path>> held;
@@ -255,14 +277,22 @@ namespace RTE {
 			held.emplace_back(tick, entry.path());
 		}
 		std::sort(held.begin(), held.end(), [](const auto& left, const auto& right) { return left.first > right.first; });
-		size_t removed = 0, kept = 0;
+		std::vector<AutosaveCandidate> candidates;
+		std::string pinnedRefusal;
 		for (const auto& [tick, path]: held) {
 			AutosaveDescriptor descriptor;
-			const bool restorable = Validate(path, descriptor);
-			if (restorable && (tick == pinnedTick || kept < c_RetainedAutosaves)) {
-				if (tick != pinnedTick) ++kept;
-				continue;
-			}
+			std::string refusal;
+			const bool restorable = Validate(path, descriptor, &refusal);
+			if (!restorable && tick == pinnedTick) pinnedRefusal = refusal;
+			candidates.push_back({tick, restorable});
+		}
+		const std::vector<uint64_t> kept = RetainedTicks(candidates, pinnedTick);
+		if (!pinnedRefusal.empty()) {
+			std::cout << "[autosave] pinned tick=" << pinnedTick << " kept but not restorable: " << pinnedRefusal << std::endl;
+		}
+		size_t removed = 0;
+		for (const auto& [tick, path]: held) {
+			if (std::find(kept.begin(), kept.end(), tick) != kept.end()) continue;
 			std::error_code ignored;
 			removed += std::filesystem::remove(path, ignored) ? 1 : 0;
 		}
@@ -271,6 +301,22 @@ namespace RTE {
 
 	size_t AutosaveStore::ApplyRetention(const std::string& matchId, uint64_t pinnedTick) {
 		return ApplyRetention(Directory(), matchId, pinnedTick);
+	}
+
+	void AutosaveStore::NoteValidated(const AutosaveDescriptor& descriptor) {
+		if (descriptor.matchId.empty() || descriptor.savedTick == 0) return;
+		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
+		// A healed round can republish a tick it already wrote, so only an older tick of the same match loses.
+		if (s_Validated.matchId == descriptor.matchId && descriptor.savedTick < s_Validated.savedTick) return;
+		s_Validated = descriptor;
+	}
+
+	std::optional<AutosaveDescriptor> AutosaveStore::NewestValidated(const std::string& matchId) {
+		std::lock_guard<std::mutex> lock(s_ValidatedMutex);
+		if (matchId.empty() || s_Validated.matchId != matchId) return std::nullopt;
+		std::error_code status;
+		if (!std::filesystem::is_regular_file(s_Validated.path, status)) return std::nullopt;
+		return s_Validated;
 	}
 
 	bool AutosaveStore::RunSelfTest(const std::string& matchId) {
@@ -306,11 +352,22 @@ namespace RTE {
 		const bool pinnedKept = std::any_of(kept.begin(), kept.end(), [&](const auto& entry) { return entry.savedTick == pinned; });
 		std::filesystem::remove_all(scratch, ignored);
 
-		const bool passed = sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept;
+		// The policy on a set a live directory never holds: the pin sits outside the newest window, so only
+		// the pin can keep it, and a pinned checkpoint that no longer reads is kept where an unpinned one goes.
+		static_assert(c_RetainedAutosaves == 3, "the kept ticks below are named by hand");
+		const std::vector<AutosaveCandidate> synthetic = {{500, true}, {400, true}, {300, true}, {200, true}, {100, true}};
+		const bool retentionWindow = RetainedTicks(synthetic, c_NoPinnedTick) == std::vector<uint64_t>{500, 400, 300};
+		const bool pinOutsideWindow = RetainedTicks(synthetic, 100) == std::vector<uint64_t>{500, 400, 300, 100};
+		const std::vector<AutosaveCandidate> unreadable = {{500, true}, {400, false}, {300, true}, {200, true}, {100, false}};
+		const bool unreadablePinKept = RetainedTicks(unreadable, 100) == std::vector<uint64_t>{500, 300, 200, 100};
+
+		const bool passed = sameSet && tornRefused && skippedTorn && removed >= 1 && tornDropped && pinnedKept &&
+		                    retentionWindow && pinOutsideWindow && unreadablePinKept;
 		std::cout << Tag << (passed ? " PASS" : " FAIL") << " match=" << matchId << " restorable=" << held.size()
 		          << " same_set=" << sameSet << " torn_refused=" << tornRefused << " (" << reason << ")"
 		          << " skipped_torn=" << skippedTorn << " removed=" << removed << " torn_dropped=" << tornDropped
-		          << " pinned_kept=" << pinnedKept << std::endl;
+		          << " pinned_kept=" << pinnedKept << " retention_window=" << retentionWindow
+		          << " pin_outside_window=" << pinOutsideWindow << " unreadable_pin_kept=" << unreadablePinKept << std::endl;
 		return passed;
 	}
 } // namespace RTE

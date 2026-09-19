@@ -229,7 +229,9 @@ namespace RTE {
 		std::string GetAutosaveMatchId() const { return m_AutosaveMatchId; }
 		/// Records the checkpoint the host named for a heal: this peer pins it against retention and says
 		/// whether it holds a restorable copy. The choice is never recomputed locally.
-		void NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host);
+		/// @param known The descriptor of that same checkpoint when the caller already validated it, so the
+		/// host does not read the archive a second time to answer a question it just answered.
+		void NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host, const AutosaveDescriptor* known = nullptr);
 		struct RewindAnchor {
 			std::string matchId;
 			uint64_t tick = 0;
@@ -518,7 +520,9 @@ namespace RTE {
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
-		std::atomic<uint64_t> m_PinnedAutosaveTick{0}; //!< The agreed rewind point; a worker thread names it, the tick path reads it.
+		/// The agreed rewind point; a worker thread names it, and every capture in flight shares it so
+		/// retention reads the live value instead of the one the capture started with.
+		std::shared_ptr<std::atomic<uint64_t>> m_PinnedAutosaveTick = std::make_shared<std::atomic<uint64_t>>(0);
 		std::string m_RewindAnchorMatchId;
 		uint64_t m_RewindAnchorTick = 0;
 		bool m_RewindAnchorHeld = false;
