@@ -419,11 +419,51 @@ class StateBirthNumberTests(unittest.TestCase):
                                            lockstep_master=master)
                 self.assertIn(wanted, str(raised.exception))
 
-    def test_a_threaded_state_refuses_an_equal_valued_replacement_on_one_peer(self):
+    def test_a_threaded_state_accepts_one_uniform_offset_among_moved_nodes(self):
+        for version in ("SG5", "SG6"):
+            def make(ids, serial):
+                return birth_graph(version, (table(1, ()), *(table(index, ((string("k"), f"n{value};"),))
+                                    for value, index in enumerate(ids))),
+                                   globals=(("anchor", "#1;"), *((str(value), f"#{index};")
+                                            for value, index in enumerate(ids))), serial=serial)
+            first, second = make((2, 4, 6), 8), make((8, 10, 12), 14)
+            for left, right, offset in ((first, second, 6), (second, first, -6)):
+                with self.subTest(version=version, offset=offset):
+                    report = checker.compare_graphs(checker.parse_graph(left), checker.parse_graph(right),
+                                                    lockstep_master=False)
+                    self.assertEqual(report["matched_nodes"], 4)
+                    self.assertEqual(report["moved_nodes"], 3)
+                    self.assertEqual(report["identity_offset"], offset)
+                    self.assertEqual(report["identity_offset_evidence"], "uniform")
+
+    def test_a_threaded_state_refuses_a_replacement_with_a_different_offset(self):
+        def make(ids, serial):
+            return birth_graph("SG6", tuple(table(index, ((string("k"), f"n{value};"),))
+                                           for value, index in enumerate(ids)),
+                               globals=tuple((str(value), f"#{index};") for value, index in enumerate(ids)),
+                               serial=serial)
+        first, second = make((2, 4, 6), 8), make((8, 10, 13), 15)
+        for left, right in ((first, second), (second, first)):
+            with self.assertRaises(checker.GraphMismatch) as raised:
+                checker.compare_graphs(checker.parse_graph(left), checker.parse_graph(right), lockstep_master=False)
+            self.assertEqual(str(raised.exception),
+                             "a shared Lua object was replaced on one peer (its birth offset differs from the others)")
+
+    def test_a_threaded_state_reports_single_node_offset_evidence(self):
         first = birth_graph("SG6", (table(2, ((string("k"), "n7;"),)),), globals=(("t", "#2;"),), serial=5)
         second = birth_graph("SG6", (table(6, ((string("k"), "n7;"),)),), globals=(("t", "#6;"),), serial=6)
-        with self.assertRaisesRegex(checker.GraphMismatch, "shared Lua birth identities differ"):
-            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
+        for left, right, offset in ((first, second, 4), (second, first, -4)):
+            report = checker.compare_graphs(checker.parse_graph(left), checker.parse_graph(right), lockstep_master=False)
+            self.assertEqual(report["moved_nodes"], 1)
+            self.assertEqual(report["identity_offset"], offset)
+            self.assertEqual(report["identity_offset_evidence"], "single")
+
+    def test_a_threaded_state_refuses_an_offset_against_the_serial_direction(self):
+        first = birth_graph("SG6", (table(2, ()), table(3, ())), globals=(("a", "#2;"), ("b", "#3;")), serial=10)
+        second = birth_graph("SG6", (table(4, ()), table(5, ())), globals=(("a", "#4;"), ("b", "#5;")), serial=8)
+        for left, right in ((first, second), (second, first)):
+            with self.assertRaisesRegex(checker.GraphMismatch, "shared Lua birth offset opposes the state counters"):
+                checker.compare_graphs(checker.parse_graph(left), checker.parse_graph(right), lockstep_master=False)
 
     def test_a_threaded_state_refuses_an_extra_shared_object_on_one_peer(self):
         first = birth_graph("SG6", (table(2, ()),), globals=(("t", "#2;"),), serial=5)
