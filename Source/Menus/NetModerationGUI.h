@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace RTE {
 	class AllegroScreen;
@@ -60,6 +61,25 @@ namespace RTE {
 		const ChatBand& GetChatBand() const { return m_ChatBand; }
 		/// The SDL scancode the entry opens on, as the settings key name resolves it.
 		static int ChatKeyScancode();
+
+		/// A run of window rows the seats panel must not cross, as [top, bottom).
+		struct PanelBand {
+			int top = 0;
+			int bottom = 0;
+		};
+		/// Where the seats panel sits.
+		struct PanelPlacement {
+			int top = 0;
+			int height = 0;
+		};
+		/// Picks the highest run of rows no band holds: the whole panel when one run fits it, otherwise the
+		/// longest run, which leaves the roster scrolling for the rows the panel gave up.
+		/// @param highestTop The first row the panel may take.
+		/// @param bottomLimit One past the last row the panel may take.
+		/// @param wantedHeight The height the panel would have with no band in the way.
+		/// @param minHeight The height below which the panel loses its close row.
+		/// @param bands Every band, in any order; they may overlap.
+		static PanelPlacement PlaceSeatsPanel(int highestTop, int bottomLimit, int wantedHeight, int minHeight, const std::vector<PanelBand>& bands);
 
 		struct Controls {
 			GUILabel* name = nullptr;

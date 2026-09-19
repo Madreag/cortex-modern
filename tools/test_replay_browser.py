@@ -13,7 +13,7 @@ what they mean.
 """
 
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -27,6 +27,7 @@ from test_post_match_report import LABELS, SIZES, capture_geometry, latest_captu
 
 NAMES = ("01-first.ccreplay", "02-second.ccreplay")
 LEGACY_NAME = "03-pickup_fire.ccreplay"
+ROW_DATE_FORMAT = "%Y-%m-%d %H:%M"
 FIXTURE = Path("D:/Projects/stage2_p4/fixtures/pickup_fire.ccreplay")
 PLAYBACK = re.compile(r"\[net-replay\] playback finished[^\n]*ticks=(\d+)[^\n]*outcome=completed[^\n]*frames=(\d+)[^\n]*end_marker=1")
 # The rematch press the replay's end used to drop, injected on the exact frame that clears the replay.
@@ -151,8 +152,9 @@ def run_size(repo, root, size, fixture, expected, summary=None, legacy_fixture=F
     before = pin(repo, expected)
     fixture_hash = sha256(fixture)
     legacy_hash = sha256(legacy_fixture)
-    date = datetime.fromtimestamp(fixture.stat().st_mtime, timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M MST")
-    legacy_date = datetime.fromtimestamp(legacy_fixture.stat().st_mtime, timezone(timedelta(hours=-7))).strftime("%Y-%m-%d %H:%M MST")
+    # The row shows the file's mtime in this machine's own zone, so the expectation is read the same way.
+    date = datetime.fromtimestamp(fixture.stat().st_mtime).strftime(ROW_DATE_FORMAT)
+    legacy_date = datetime.fromtimestamp(legacy_fixture.stat().st_mtime).strftime(ROW_DATE_FORMAT)
     script = root / "browser.txt"
     expected_duration = duration_agreement("", summary)["summary"] if summary else None
     script.write_text(menu_script(date, legacy_date, expected_duration), encoding="utf-8")

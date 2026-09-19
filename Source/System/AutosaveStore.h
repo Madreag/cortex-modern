@@ -113,6 +113,13 @@ namespace RTE {
 	public:
 		/// A match keeps this many restorable checkpoints, newest first, plus a pinned one.
 		static constexpr size_t c_RetainedAutosaves = 3;
+		/// The bounds of this peer's own "Autosaves kept" option; c_RetainedAutosaves is its default.
+		static constexpr size_t c_MinRetainedAutosaves = 1, c_MaxRetainedAutosaves = 10;
+		/// How many restorable checkpoints this peer keeps. Per-peer by design: a resume offer answers
+		/// not-held for an archive this peer no longer has, and the pinned rewind point is kept on top.
+		static size_t RetainedAutosaves();
+		/// Applies this peer's option. A count outside the bounds is ignored.
+		static void SetRetainedAutosaves(size_t count);
 		static constexpr int c_DescriptorSchema = 1;
 		static constexpr size_t c_MaxMatchIdBytes = 64;
 		static constexpr uint64_t c_NoPinnedTick = 0;
@@ -154,7 +161,7 @@ namespace RTE {
 		static std::optional<AutosaveDescriptor> Find(const std::string& matchId, uint64_t tick, std::string* error = nullptr);
 
 		/// The retention policy itself, decided on the candidates alone: this match keeps its newest
-		/// c_RetainedAutosaves restorable checkpoints plus the pinned one whatever its age, and loses
+		/// RetainedAutosaves() restorable checkpoints plus the pinned one whatever its age, and loses
 		/// everything else it wrote. A pinned checkpoint is kept even when it no longer reads, so one
 		/// transient read failure cannot destroy the checkpoint both sides agreed to rewind to.
 		/// @param newestFirst This match's checkpoints, newest tick first.

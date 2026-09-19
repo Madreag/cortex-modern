@@ -5673,7 +5673,7 @@ static std::string ResyncSaveName() {
 			}
 			slot.cpu = false;
 			slot.displayName = peerId == config.hostPeerId ? PlayerNameOrDefault(request, true)
-			                                               : NetMatchConfigUtil::UnseatedSlotName(peerId, false);
+			                                               : NetMatchConfigUtil::UnseatedSlotName(peerId, world);
 			config.players.push_back(slot);
 		}
 		for (uint32_t cpu = 0; cpu < cpuCount; ++cpu) {

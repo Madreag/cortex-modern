@@ -38,6 +38,7 @@
 using namespace RTE;
 
 BITMAP* BuyMenuGUI::s_pCursor = 0;
+uint64_t BuyMenuGUI::s_ModuleFlagAllocations = 0;
 
 const std::string BuyMenuGUI::c_DefaultBannerImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuBanner.png";
 const std::string BuyMenuGUI::c_DefaultLogoImagePath = "Base.rte/GUIs/BuyMenu/BuyMenuLogo.png";
@@ -84,9 +85,10 @@ void BuyMenuGUI::Clear() {
 	m_NativeTechModule = 0;
 	m_ForeignCostMult = 4.0;
 	int moduleCount = g_PresetMan.GetTotalModuleCount();
-	m_aExpandedModules = new bool[moduleCount];
-	for (int i = 0; i < moduleCount; ++i)
-		m_aExpandedModules[i] = i == 0 ? true : false;
+	const size_t flagStorage = m_aExpandedModules.capacity();
+	m_aExpandedModules.assign(static_cast<size_t>(std::max(moduleCount, 0)), false);
+	if (m_aExpandedModules.capacity() != flagStorage) ++s_ModuleFlagAllocations;
+	if (!m_aExpandedModules.empty()) m_aExpandedModules[0] = true;
 	m_pShopList = 0;
 	m_pCartList = 0;
 	m_pCraftBox = 0;
@@ -272,8 +274,6 @@ void BuyMenuGUI::Destroy() {
 	delete m_pGUIController;
 	delete m_pGUIInput;
 	delete m_pGUIScreen;
-
-	delete[] m_aExpandedModules;
 
 	Clear();
 }
@@ -2502,8 +2502,8 @@ std::string BuyMenuGUI::SaveCheckpoint() const {
 	VisitCheckpoint(writer, *this);
 	writer(GUICheckpoint::SaveEntityReference(m_pSelectedCraft));
 	std::vector<bool> expanded;
-	if (m_aExpandedModules) for (int i = 0; i < g_PresetMan.GetTotalModuleCount(); ++i) expanded.push_back(m_aExpandedModules[i]);
-	writer(m_aExpandedModules != nullptr, GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
+	for (size_t i = 0; i < m_aExpandedModules.size(); ++i) expanded.push_back(m_aExpandedModules[i]);
+	writer(!m_aExpandedModules.empty(), GUICheckpoint::SaveModuleFlags(expanded), m_Loadouts.size());
 	for (const auto& loadout: m_Loadouts) {
 		std::vector<std::string> cargo;
 		for (const auto* item: loadout.m_CargoItems) cargo.push_back(GUICheckpoint::SaveEntityReference(item));
@@ -2609,8 +2609,7 @@ bool BuyMenuGUI::LoadCheckpoint(std::string_view text, bool validateOnly) {
 		}
 		reader.Finish();
 		m_Loadouts = std::move(candidates); m_pSelectedCraft = craft;
-		delete[] m_aExpandedModules; m_aExpandedModules = expanded.empty() ? nullptr : new bool[expanded.size()];
-		for (size_t index = 0; index < expanded.size(); ++index) m_aExpandedModules[index] = expanded[index];
+		m_aExpandedModules = expanded;
 		m_PendingCheckpoint.clear();
 		return true;
 	} catch (const std::exception& exception) { std::cout << "[gui-checkpoint] buy-menu validation=" << validateOnly << " error=" << exception.what() << std::endl; return false; }

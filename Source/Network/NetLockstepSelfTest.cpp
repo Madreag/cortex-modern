@@ -13224,6 +13224,8 @@ namespace RTE {
 		// no longer stands those units down while the round runs. A survivor told the host has left would
 		// therefore play on with actors whose producer is gone - and it could not reach the other survivor
 		// either, since the host is the star's hub. The ruled behaviour is that the round ends for everyone.
+		// This arm pins the RECEIVER side of that contract: it puts the host's own PeerLeft notice on the
+		// wire and reads what the survivors do with it. The host's own send path is another arm's business.
 		bool TestDepartedHostEndsTheRound(std::string* error) {
 			const char* name = "departed_host_ends_the_round";
 			const uint16_t port = 48490;
@@ -13406,9 +13408,9 @@ namespace RTE {
 		};
 
 		// followups-3: m_PeerLeaveFrames is cleared only in ResetRoundState, so a departed peer stays in every
-		// committed frame's departedPeerIds for the rest of the round. The one reseat path that does NOT pass
-		// through ResetRoundState is the mid-round SwitchControl claim - a survivor taking a free actor - and
-		// it must survive the next committed frames instead of being handed straight back to AI.
+		// committed frame's departedPeerIds for the rest of the round. Two reseat paths do NOT pass through
+		// ResetRoundState - the mid-round SwitchControl claim, a survivor taking a free actor, and the host's
+		// NetGameReseat - and both must survive the next committed frames instead of losing the seat again.
 		bool TestReseatWithoutAReadoptionKeepsItsSeat(std::string* error) {
 			const char* name = "reseat_without_a_readoption_keeps_its_seat";
 			EnsureSwitchTestManagers();
@@ -13446,43 +13448,57 @@ namespace RTE {
 			const int64_t uid = static_cast<int64_t>(claimed->GetUniqueID());
 			NetActorOwnership::SeedOwner(claimed->GetUniqueID(), 2, static_cast<uint8_t>(claimed->GetTeam()));
 			bool passed = true;
-			std::array<std::string, 2> states;
 			std::array<NetLockstepCoordinator*, 2> peers{&trio.host, &trio.survivor};
-			for (size_t view = 0; view < peers.size(); ++view) {
-				ScenarioRunner::SetLockstepCoordinator(nullptr); // Each view starts with its own empty override table.
-				ScenarioRunner::SetLockstepCoordinator(peers[view]);
-				Controller& controller = *claimed->GetController();
-				controller.ResetLocalInputState(Controller::CIM_PLAYER, Players::PlayerOne);
-				controller.ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
-				controller.SetDisabled(false);
-				ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame), actors, false);
-				const bool handed = !claimed->IsPlayerControlled();
-				// The reseat: the production claim path, with no ResetRoundState anywhere near it.
-				const bool claimTaken = MovableMan::ApplyLockstepControlClaim(uid, 3, 3, trio.leaveFrame + 1);
-				ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame + 1), actors, false);
-				ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame + 2), actors, false);
-				const size_t stillDeparted = trio.committed[view].at(trio.leaveFrame + 2).departedPeerIds.size();
-				const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, claimed->GetTeam(), !claimed->IsPlayerControlled());
-				const bool kept = claimed->IsPlayerControlled() && !controller.IsDisabled() && owner == 3 && stillDeparted == 1;
-				const bool ok = handed && claimTaken && kept;
-				passed &= ok;
-				states[view] = ControlTuple(*claimed, owner);
-				std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
-				          << " peer=" << static_cast<int>(peers[view]->GetConfig().localPeerId)
-				          << " leave_frame=" << trio.leaveFrame << " handed_to_ai=" << (handed ? 1 : 0)
-				          << " claim_taken=" << (claimTaken ? 1 : 0) << " departed_still_listed=" << stillDeparted
-				          << " " << states[view] << " player_controlled=" << claimed->IsPlayerControlled() << std::endl;
+			// Both mid-round paths that move a seat without a round readoption: the survivor's SwitchControl
+			// claim, and the host's NetGameReseat, which sets the override alone (MovableMan.cpp) and leaves
+			// the seat on the AI it was handed to. Either way the new owner has to survive the next frames.
+			for (size_t path = 0; path < 2; ++path) {
+				const bool byClaim = path == 0;
+				std::array<std::string, 2> states;
+				for (size_t view = 0; view < peers.size(); ++view) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr); // Each view starts with its own empty override table.
+					ScenarioRunner::SetLockstepCoordinator(peers[view]);
+					Controller& controller = *claimed->GetController();
+					controller.ResetLocalInputState(Controller::CIM_PLAYER, Players::PlayerOne);
+					controller.ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerOne);
+					controller.SetDisabled(false);
+					ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame), actors, false);
+					const bool handed = !claimed->IsPlayerControlled();
+					// The reseat: the production paths, with no ResetRoundState anywhere near them.
+					bool claimTaken = true;
+					if (byClaim) {
+						claimTaken = MovableMan::ApplyLockstepControlClaim(uid, 3, 3, trio.leaveFrame + 1);
+					} else {
+						ScenarioRunner::SetLockstepControlOverride(uid, 3);
+					}
+					ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame + 1), actors, false);
+					ApplyLockstepLeaveHandoffs(trio.committed[view].at(trio.leaveFrame + 2), actors, false);
+					const size_t stillDeparted = trio.committed[view].at(trio.leaveFrame + 2).departedPeerIds.size();
+					const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(uid, claimed->GetTeam(), !claimed->IsPlayerControlled());
+					// A claim re-adopts the seat as well as moving it; a reseat moves it and nothing else.
+					const bool kept = claimed->IsPlayerControlled() == byClaim && !controller.IsDisabled() && owner == 3 && stillDeparted == 1;
+					const bool ok = handed && claimTaken && kept;
+					passed &= ok;
+					states[view] = ControlTuple(*claimed, owner);
+					std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
+					          << " path=" << (byClaim ? "claim" : "reseat")
+					          << " peer=" << static_cast<int>(peers[view]->GetConfig().localPeerId)
+					          << " leave_frame=" << trio.leaveFrame << " handed_to_ai=" << (handed ? 1 : 0)
+					          << " claim_taken=" << (claimTaken ? 1 : 0) << " departed_still_listed=" << stillDeparted
+					          << " " << states[view] << " player_controlled=" << claimed->IsPlayerControlled() << std::endl;
+				}
+				passed &= states[0] == states[1];
 			}
-			passed &= states[0] == states[1];
-			return finish(passed ? "" : "a seat re-taken without a round readoption was handed back to AI, or the peers disagree");
+			return finish(passed ? "" : "a seat re-taken without a round readoption lost its new owner, or the peers disagree");
 		}
 
 		// followups-5: the leave handoff calls Controller::ResetLocalInputState, and every field it writes is
 		// a member of Controller::VisitCheckpoint. A save taken ON the leave frame therefore records the
 		// cleared seat - correct only if every peer records the same thing, since the handoff lands at the
-		// same committed frame everywhere. The Timers' START REAL TIME is excluded and printed instead: a
-		// default-constructed Timer stamps the local wall clock (CheckpointArchive.h Value(const Timer&)),
-		// so it differs between two objects in ANY save and is not a sim-facing value.
+		// same committed frame everywhere. The Timers' real-time start and limit are zeroed on both sides
+		// before the compare: a reset Timer stamps the local wall clock (CheckpointArchive.h Value(const
+		// Timer&)), so they differ between two objects in ANY save and are not sim-facing values. Everything
+		// else in the save is held identical.
 		bool TestMidLeaveSaveAgreesAcrossPeers(std::string* error) {
 			const char* name = "mid_leave_save_agrees_across_peers";
 			EnsureSwitchTestManagers();
@@ -13543,6 +13559,10 @@ namespace RTE {
 			const std::string baseline = controller.SaveCheckpoint();
 			bool passed = true;
 			std::array<std::string, 2> saved;
+			// The same saves with every Timer's real-time pair zeroed: a Timer reads its real-time start off
+			// this machine's clock, so the two views take theirs microseconds apart. Everything else in the
+			// save is the match's own and has to be identical byte for byte.
+			std::array<std::string, 2> comparable;
 			std::array<std::string, 2> seats;
 			std::array<NetLockstepCoordinator*, 2> peers{&trio.host, &trio.survivor};
 			for (size_t view = 0; view < peers.size(); ++view) {
@@ -13558,6 +13578,13 @@ namespace RTE {
 				const bool exact = reloaded && restored.SaveCheckpoint() == saved[view];
 				const bool ok = seeded && exact && !left->IsPlayerControlled();
 				passed &= ok;
+				Controller::LocalInputState seat = controller.CaptureLocalInputState();
+				for (Timer* timer: {&seat.releaseTimer, &seat.joyAccelTimer, &seat.keyAccelTimer}) {
+					timer->SetStartRealTimeTicks(0);
+					timer->SetRealTimeLimitTicks(0);
+				}
+				controller.RestoreLocalInputState(seat);
+				comparable[view] = controller.SaveCheckpoint();
 				std::cout << "[net-lockstep-selftest] " << (ok ? "PASS " : "FAIL ") << name
 				          << " peer=" << static_cast<int>(peers[view]->GetConfig().localPeerId)
 				          << " leave_frame=" << trio.leaveFrame << " seeded=" << (seeded ? 1 : 0)
@@ -13565,11 +13592,13 @@ namespace RTE {
 				          << " " << seats[view] << std::endl;
 			}
 			const bool agree = seats[0] == seats[1];
-			passed &= agree;
-			std::cout << "[net-lockstep-selftest] " << (agree ? "PASS " : "FAIL ") << name
-			          << " peers_agree=" << (agree ? 1 : 0) << " whole_save_identical=" << (saved[0] == saved[1] ? 1 : 0)
+			const bool wholeSave = comparable[0] == comparable[1];
+			passed &= agree && wholeSave;
+			std::cout << "[net-lockstep-selftest] " << (agree && wholeSave ? "PASS " : "FAIL ") << name
+			          << " peers_agree=" << (agree ? 1 : 0) << " whole_save_identical=" << (wholeSave ? 1 : 0)
+			          << " raw_save_identical=" << (saved[0] == saved[1] ? 1 : 0)
 			          << " host_seat=" << seats[0] << " survivor_seat=" << seats[1] << std::endl;
-			return finish(passed ? "" : "a save taken on the leave frame differs between peers, or does not restore exactly");
+			return finish(passed ? "" : "a save taken on the leave frame differs between peers outside its real-time timers, or does not restore exactly");
 		}
 
 		bool TestSoundRegistrySurvivesConcurrentRelease(std::string* error) {
