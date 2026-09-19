@@ -713,36 +713,37 @@ namespace RTE {
 			System::PrintDiagnosticLine(line.str());
 		}
 		if (rep.diverged) {
+			// The result and the lines that explain it are one write, so a report is never read apart.
 			{
 				std::ostringstream line;
 				line << "[determinism-check] RESULT: "
 				     << (rep.aiOnlyDivergence ? "MATCHED-SIM (sim identical until the AI deviated; later divergence is downstream of AI input, advisory)" : "DIVERGED") << "\n";
-				System::PrintDiagnosticLine(line.str());
-			}
-			if (rep.simDivergedBeforeAI) {
-				std::cout << "    sim diverged BEFORE any AI deviation: " << rep.blockingSubsystem
-				          << " at tick " << rep.blockingFirstTick << "\n";
-			}
-			std::cout << "    first_divergence_tick: " << rep.firstDivergenceTick << "\n";
-			std::cout << "    total_mismatched_ticks: " << rep.totalMismatchedTicks
-			          << " / " << rep.comparedTicks << "\n";
-			if (rep.lengthMismatch) {
-				std::cout << "    length mismatch — per-run tick counts:";
-				for (uint64_t n: rep.perRunTickCount) std::cout << " " << n;
-				std::cout << "  (a run exited early)\n";
-			}
-			std::cout << "    per-subsystem first divergence:\n";
-			for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
-				std::cout << "        " << name << ": tick " << tick << "\n";
-			}
-			if (matrixMode) {
-				std::cout << "    diverged runs (vs run 0):\n";
-				for (size_t i = 1; i < children.size(); ++i) {
-					if (i < rep.perRunDiverged.size() && rep.perRunDiverged[i]) {
-						std::cout << "        run " << i << " threads=" << children[i].threadCount
-						          << " (run-index " << children[i].runIndex << ")\n";
+				if (rep.simDivergedBeforeAI) {
+					line << "    sim diverged BEFORE any AI deviation: " << rep.blockingSubsystem
+					     << " at tick " << rep.blockingFirstTick << "\n";
+				}
+				line << "    first_divergence_tick: " << rep.firstDivergenceTick << "\n";
+				line << "    total_mismatched_ticks: " << rep.totalMismatchedTicks
+				     << " / " << rep.comparedTicks << "\n";
+				if (rep.lengthMismatch) {
+					line << "    length mismatch — per-run tick counts:";
+					for (uint64_t n: rep.perRunTickCount) line << " " << n;
+					line << "  (a run exited early)\n";
+				}
+				line << "    per-subsystem first divergence:\n";
+				for (const auto& [name, tick]: rep.perSubsystemFirstDivergence) {
+					line << "        " << name << ": tick " << tick << "\n";
+				}
+				if (matrixMode) {
+					line << "    diverged runs (vs run 0):\n";
+					for (size_t i = 1; i < children.size(); ++i) {
+						if (i < rep.perRunDiverged.size() && rep.perRunDiverged[i]) {
+							line << "        run " << i << " threads=" << children[i].threadCount
+							     << " (run-index " << children[i].runIndex << ")\n";
+						}
 					}
 				}
+				System::PrintDiagnosticLine(line.str());
 			}
 		} else {
 			{

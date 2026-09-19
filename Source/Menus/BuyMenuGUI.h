@@ -49,6 +49,10 @@ namespace RTE {
 		/// How many times the module-expansion flags have had to take storage. The flags are owned for the
 		/// menu's life and cleared in place, so a destroy and create cycle must not move this.
 		static uint64_t GetModuleFlagAllocations() { return s_ModuleFlagAllocations; }
+		/// Seats a module-expansion flag store for a module count, reusing the storage it already holds.
+		/// @param flags The store to seat.
+		/// @param moduleCount How many modules the store answers for; a negative count seats nothing.
+		static void SeatModuleFlags(std::vector<bool>& flags, int moduleCount);
 		/// Whether the cached control pointers are the ones the loaded control manager owns.
 		bool HasLiveCachedControls();
 		std::string SaveCheckpoint() const;
