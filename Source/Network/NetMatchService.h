@@ -706,6 +706,11 @@ namespace RTE {
 		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
+		/// The active session's route, separate from the saved preference for the next one.
+		std::string GetIceRoute() const {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			return m_IceRoute;
+		}
 		std::string BuildReportJson() const;
 		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
 		/// already resolved one; a named scene overwrites the default after any launch-config rules.

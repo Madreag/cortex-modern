@@ -13,7 +13,7 @@ namespace RTE {
 		return enabled ? "Automatic" : "Off (LAN or port-forwarded only)";
 	}
 
-	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool setup, bool readOnly) {
+	inline std::string NetHostNatTraversalHint(const SettingsMan& settings, bool setup, bool readOnly, const std::string& route) {
 		std::string text = "Players behind home routers connect directly. Off means they need your port forwarded.\n";
 		if (!settings.GetNetworkIceEnableSetting()) {
 			text += "Off: use LAN or forward the host's UDP port.";
@@ -26,13 +26,18 @@ namespace RTE {
 		}
 		text += "\n";
 		if (readOnly) return text + "This is your saved preference; only the host sets up this session.";
-		if (!setup) return text + "End this session to change NAT traversal.";
 		if (settings.GetNetworkIceEnable() != settings.GetNetworkIceEnableSetting() || settings.GetNetworkStunServers() != settings.GetNetworkStunServersSetting()) {
 			return text + "Command-line ICE/STUN overrides apply to this run; this row saves your preference.";
 		}
+		if (!setup) {
+			if (route == "ip") return text + "Current session uses direct IP: forward the host's UDP port or use LAN.";
+			if (route == "ice") return text + "This session offers NAT traversal. End it to change the setting.";
+			if (!settings.GetNetworkIceEnableSetting()) return text + "NAT traversal is Off for this session. End it to change the setting.";
+		}
 		return text + (settings.GetSessionDirectoryUrl().empty()
-		                   ? "Internet play needs a session directory URL in Network settings."
-		                   : "Applied when you create the lobby; direct address joins use the host's UDP port.");
+		                   ? "Internet NAT traversal needs a session directory URL in Network settings."
+		                   : !setup ? "No ICE listener is active yet; the lobby is still setting up."
+		                            : "Applied when you create the lobby; direct address joins use the host's UDP port.");
 	}
 
 	inline const char* NetHostOptionsApplyText(NetMatchServiceState state) {
