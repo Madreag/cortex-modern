@@ -17,7 +17,7 @@ IDENTITY_ROWS = (
 )
 SCOPE_ROWS = (
     "scopes: session ban ends with the session; persistent ban survives",
-    "scopes: banned identity refused on join, apply and reclaim",
+    "scopes: banned identity refused on join, apply, reclaim and both commit acks",
     "scopes: persistence failure refuses Until Removed; unban grants no seat",
     "scopes: banned identity refused on the session handshake",
     "scopes: removed identity refused on a fresh join and application",
