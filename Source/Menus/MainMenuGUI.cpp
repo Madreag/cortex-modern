@@ -2398,10 +2398,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		}
 	}
 	const bool host = !m_HostOptionsReadOnly && !m_HostOptionsSetupDraft && g_NetMatchService.IsHost();
-	// H09/H10's selection rides the seat's admission row. The UX model only rows seats needing a
-	// decision, so the raw view is scanned too - a healthy holder has a seat there even when it has
-	// no decision row. The view is published while a match runs; a fresh lobby publishes none, so a
-	// press then names that state instead of sending a selection the drain would refuse.
+	// Healthy holders still need the raw admission row that removal validates.
 	m_HostSeatDlgRemovalSeat.reset();
 	if (slot.peerId != 0) {
 		for (const NetH4ModerationSeat& seat : seats) {
@@ -2575,11 +2572,11 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		const NetParticipantRemovalAction action = guiEventControl == m_HostSeatDlgKick
 		                                           ? NetParticipantRemovalAction::Kick : NetParticipantRemovalAction::BanSession;
 		const std::string verb = action == NetParticipantRemovalAction::Kick ? "Kick" : "Ban";
-		if (!m_HostSeatDlgRemovalSeat) {
-			// The selection a removal validates against is the seat's admission row: epoch, holder and
-			// seat generations, incarnation. The lobby publishes no such row (PublishModerationView is
-			// Running-scoped), so the press names the state rather than queueing a doomed selection.
-			m_HostSeatDlgActionHint->SetText(verb + ": the seat's admission row is not published in the lobby.");
+		const uint8_t peerId = m_HostOptionsSeatRow >= 0 && m_HostOptionsSeatRow < static_cast<int>(m_HostOptionsDraft.players.size())
+		                           ? m_HostOptionsDraft.players[m_HostOptionsSeatRow].peerId : 0;
+		const std::string refusal = NetHostSeatRemovalRefusal(g_NetMatchService.GetState(), m_HostSeatDlgRemovalSeat.has_value(), peerId, verb);
+		if (!refusal.empty()) {
+			m_HostSeatDlgActionHint->SetText(refusal);
 			return;
 		}
 		const NetKickBanResult result =
