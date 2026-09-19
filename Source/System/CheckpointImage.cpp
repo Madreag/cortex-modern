@@ -153,6 +153,9 @@ void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 	m_LastRecords = {image->layersUs, image->activityUs, image->graphUs, image->sceneUs,
 	                 image->structureUs, image->sceneRuntimeUs, image->globalsUs};
 	m_LastGraph = image->graph;
+	m_LastGraphSerial = image->graphSerial;
+	m_LastRootsReused = image->graphRootsReused;
+	m_LastRootsRewritten = image->graphRootsRewritten;
 	m_LastReused = image->objectsReused;
 	m_LastCaptured = image->objectsCaptured;
 	m_LastLuaReused = image->luaReused;
@@ -162,6 +165,12 @@ void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 void CheckpointCow::RecordWorker(int64_t workerUs) {
 	std::lock_guard lock(m_Mutex);
 	m_LastWorkerUs = workerUs;
+}
+
+// The graph's formatting runs on the worker, so its cost is reported apart from the freeze's walk.
+void CheckpointCow::RecordGraphText(int64_t graphTextUs) {
+	std::lock_guard lock(m_Mutex);
+	m_LastGraphTextUs = graphTextUs;
 }
 
 void CheckpointCow::PublishLog(uint64_t tick) const {
@@ -176,6 +185,10 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	size_t reused = 0;
 	size_t captured = 0;
 	bool luaReused = false;
+	int64_t graphTextUs = 0;
+	uint64_t graphSerial = 0;
+	size_t rootsReused = 0;
+	size_t rootsRewritten = 0;
 	{
 		std::lock_guard lock(m_Mutex);
 		freezeUs = m_LastFreezeUs;
@@ -188,6 +201,10 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 		reused = m_LastReused;
 		captured = m_LastCaptured;
 		luaReused = m_LastLuaReused;
+		graphTextUs = m_LastGraphTextUs;
+		graphSerial = m_LastGraphSerial;
+		rootsReused = m_LastRootsReused;
+		rootsRewritten = m_LastRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
 	std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n",
@@ -199,7 +216,10 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	                         tick, records[0], records[1], records[2], records[3], records[4], records[5], records[6]);
 	std::cout << std::format("[autosave] tick={} shadows_reused={} shadows_captured={} graph_roots={} graph_tables={} graph_dirty_roots={} graph_dirty_tables={} graph_unknown_table={} graph_note_us={} graph_reused={}\n",
 	                         tick, reused, captured, graph.roots, graph.tables, graph.dirtyRoots, graph.dirtyTables,
-	                         graph.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0) << std::flush;
+	                         graph.unknownTable ? 1 : 0, graph.noteUs, luaReused ? 1 : 0);
+	// The walk is the freeze's share and the text the worker's; the counter is the archive's numbering.
+	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={}\n",
+	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial) << std::flush;
 }
 
 void CheckpointCow::WriteMetricsJson(const std::string& path) const {
@@ -216,6 +236,10 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 	size_t reused = 0;
 	size_t captured = 0;
 	bool luaReused = false;
+	int64_t graphTextUs = 0;
+	uint64_t graphSerial = 0;
+	size_t rootsReused = 0;
+	size_t rootsRewritten = 0;
 	{
 		std::lock_guard lock(m_Mutex);
 		freezeUs = m_LastFreezeUs;
@@ -229,6 +253,10 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 		reused = m_LastReused;
 		captured = m_LastCaptured;
 		luaReused = m_LastLuaReused;
+		graphTextUs = m_LastGraphTextUs;
+		graphSerial = m_LastGraphSerial;
+		rootsReused = m_LastRootsReused;
+		rootsRewritten = m_LastRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
 	std::ofstream out(path, std::ios::trunc);
@@ -255,6 +283,10 @@ void CheckpointCow::WriteMetricsJson(const std::string& path) const {
 	    << "  \"graph_unknown_table\": " << (graph.unknownTable ? 1 : 0) << ",\n"
 	    << "  \"graph_note_us\": " << graph.noteUs << ",\n"
 	    << "  \"graph_reused\": " << (luaReused ? 1 : 0) << ",\n"
+	    << "  \"graph_text_us\": " << graphTextUs << ",\n"
+	    << "  \"roots_reused\": " << rootsReused << ",\n"
+	    << "  \"roots_rewritten\": " << rootsRewritten << ",\n"
+	    << "  \"graph_state_serial\": " << graphSerial << ",\n"
 	    << "  \"samples\": " << sampleCount << "\n"
 	    << "}\n";
 }
@@ -291,11 +323,14 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 			writer.NewProperty("LockstepJoinQuarantine");
 			writer << savedTick << "|" << uid;
 		}
+		const auto graphTextStart = std::chrono::steady_clock::now();
 		for (size_t i = 0; i < image.graphs.size(); ++i) {
 			writer.NewProperty("LuaStateGraph");
 			writer << i << "|";
 			writer << image.graphs[i].Base64();
 		}
+		CheckpointCow::Get().RecordGraphText(std::chrono::duration_cast<std::chrono::microseconds>(
+			std::chrono::steady_clock::now() - graphTextStart).count());
 		writer.NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", image.placeObjects);
 		writer.NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", image.placeUnits);
 		writer.Append(image.scene);

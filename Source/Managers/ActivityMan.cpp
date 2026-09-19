@@ -424,6 +424,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	}
 	image->graphUs = since(graphStart);
 	image->graph = graphIndex.Sample();
+	// The walk is what the freeze paid for the graph; the worker's formatting is timed where it runs.
+	image->graphWalkUs = image->luaReused ? 0 : image->graphUs;
+	image->graphSerial = g_LuaMan.GetTableBirthCount();
+	// Reuse is still whole-graph: a walk rewrites every root, a skip reuses every root.
+	image->graphRootsReused = image->luaReused ? image->graph.roots : 0;
+	image->graphRootsRewritten = image->luaReused ? 0 : image->graph.roots;
 	// Compiled table stores only mark while the trap is armed, so every freeze re-arms it.
 	g_LuaMan.ArmCheckpointWriteTrap();
 	const auto sceneStart = std::chrono::steady_clock::now();

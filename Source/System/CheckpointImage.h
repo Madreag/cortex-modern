@@ -51,6 +51,11 @@ namespace RTE {
 		int64_t freezeUs = 0;
 		int64_t activityUs = 0;
 		int64_t graphUs = 0;
+		int64_t graphWalkUs = 0;
+		int64_t graphTextUs = 0;
+		uint64_t graphSerial = 0;
+		size_t graphRootsReused = 0;
+		size_t graphRootsRewritten = 0;
 		int64_t sceneUs = 0;
 		int64_t structureUs = 0;
 		int64_t sceneRuntimeUs = 0;
@@ -85,6 +90,7 @@ namespace RTE {
 
 		void FinishImage(std::shared_ptr<CheckpointImage> image);
 		void RecordWorker(int64_t workerUs);
+		void RecordGraphText(int64_t graphTextUs);
 		void PublishLog(uint64_t tick) const;
 		void WriteMetricsJson(const std::string& path) const;
 
@@ -108,6 +114,10 @@ namespace RTE {
 		bool m_LastLuaReused = false;
 		int64_t m_LastFreezeUs = 0;
 		int64_t m_LastWorkerUs = 0;
+		int64_t m_LastGraphTextUs = 0;
+		uint64_t m_LastGraphSerial = 0;
+		size_t m_LastRootsReused = 0;
+		size_t m_LastRootsRewritten = 0;
 		size_t m_LastImageBytes = 0;
 		double m_LastDirtyRatio = 0;
 	};
