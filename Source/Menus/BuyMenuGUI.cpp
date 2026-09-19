@@ -2453,8 +2453,9 @@ void BuyMenuGUI::TryPurchase() {
 		m_BlinkTimer.Reset();
 		return;
 	}
-	// Can't afford it :(
-	else if (GetTotalOrderCost() > g_ActivityMan.GetActivity()->GetTeamFunds(m_pController->GetTeam())) {
+	// Can't afford it :( - against the same tally the cost label prints; a buy the committed funds cannot cover is
+	// rejected at apply, and that reject clears the view.
+	else if (GetTotalOrderCost() > g_ActivityMan.GetActivity()->GetTeamFundsForPresentation(m_pController->GetTeam(), m_pController->GetPlayer())) {
 		g_GUISound.UserErrorSound()->Play(player);
 		// Set the notification blinker
 		m_BlinkMode = NOFUNDS;
@@ -2487,7 +2488,7 @@ void BuyMenuGUI::TryPurchase() {
 	}
 
 	// Only allow purchase if there is a delivery craft and enough funds
-	if (m_pSelectedCraft && std::floor(GetTotalOrderCost()) <= std::floor(g_ActivityMan.GetActivity()->GetTeamFunds(m_pController->GetTeam()))) {
+	if (m_pSelectedCraft && std::floor(GetTotalOrderCost()) <= std::floor(g_ActivityMan.GetActivity()->GetTeamFundsForPresentation(m_pController->GetTeam(), m_pController->GetPlayer()))) {
 		m_PurchaseMade = true;
 		m_DeliveryWidth = static_cast<const MOSprite*>(m_pSelectedCraft)->GetSpriteWidth();
 
