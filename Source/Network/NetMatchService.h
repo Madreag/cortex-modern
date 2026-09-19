@@ -187,6 +187,60 @@ namespace RTE {
 		std::string sessionId; // Client only: join the directory session with this id instead of an address.
 	};
 
+	inline NetMatchServiceRequest TicketRejoinRequestFromRecord(const NetH4TicketRecord& record, const std::string& playerName) {
+		NetMatchServiceRequest request;
+		request.host = false;
+		request.address = record.hostAddress;
+		request.sessionId = record.directorySessionId;
+		request.playerName = playerName.empty() ? "Client" : playerName;
+		request.resyncOnDesync = true;
+		return request;
+	}
+
+	inline std::string ResolveTicketJoinAddress(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::string& directoryResolvedAddress, bool iceDial) {
+		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
+		if (!directoryResolvedAddress.empty()) {
+			return directoryResolvedAddress;
+		}
+		if (!sessionId.empty() && iceDial) {
+			return "session:" + sessionId;
+		}
+		if (!record.hostAddress.empty()) {
+			return record.hostAddress;
+		}
+		if (!sessionId.empty()) {
+			return "session:" + sessionId;
+		}
+		return requestAddress;
+	}
+
+	/// Polls a configured directory client until it answers a list or the budget runs out; the rows it
+	/// returns are what a rejoin re-resolves against.
+	std::vector<NetDirectorySessionRow> BrowseSessionRows(NetDirectoryClient& browse, uint64_t budgetMs, const std::function<bool()>& cancelled);
+
+	/// A stored ticket belongs to this join only when it names the host this request dials or the session
+	/// it joins; a record left by another host is not a re-resolve of this one.
+	inline bool TicketMatchesRequest(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress) {
+		if (!record.directorySessionId.empty() && record.directorySessionId == requestSessionId) {
+			return true;
+		}
+		return !record.hostAddress.empty() && record.hostAddress == requestAddress;
+	}
+
+	/// The address a ticket rejoin dials: the row the directory browse found for the stored session, else
+	/// the ticket's own address or session id.
+	inline std::string ResolveTicketJoinAddressFromRows(const NetH4TicketRecord& record, const std::string& requestSessionId, const std::string& requestAddress, const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, bool iceDial) {
+		const std::string sessionId = !record.directorySessionId.empty() ? record.directorySessionId : requestSessionId;
+		std::string resolved;
+		if (!sessionId.empty() && !rows.empty()) {
+			NetIceJoinTarget target;
+			if (NetIceResolveSessionRow(rows, local, sessionId, &target).empty() && !target.address.empty()) {
+				resolved = target.address;
+			}
+		}
+		return ResolveTicketJoinAddress(record, requestSessionId, requestAddress, resolved, iceDial);
+	}
+
 	/// A presentation-only record of the finished round; never restored into the simulation.
 	struct NetMatchSummary {
 		struct Peer {
@@ -360,6 +414,7 @@ namespace RTE {
 		bool SendChat(uint8_t scope, const std::string& text);
 		/// Drains the session's chat queue for the UI. Newest 64 are kept on the session side.
 		std::vector<NetChatEntry> TakeChatEntries();
+		std::vector<NetChatEntry> ChatHistory() const;
 		/// "Input delay: N (auto, Rms ping)" / "(fixed)", from the announced match config. "" pre-lobby.
 		std::string GetInputDelayText() const;
 		/// The live host RTT on a client, or the largest connected peer RTT on the host.

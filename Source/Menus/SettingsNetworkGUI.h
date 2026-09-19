@@ -76,6 +76,7 @@ namespace RTE {
 		GUICheckbox* m_ChatNotifyCheckbox;
 		GUIComboBox* m_ChatScopeCombo;
 		GUIComboBox* m_ChatTextSizeCombo;
+		GUITextBox* m_ChatKeyTextbox;
 
 		// Recovery page.
 		GUICheckbox* m_AutoReconnectCheckbox;

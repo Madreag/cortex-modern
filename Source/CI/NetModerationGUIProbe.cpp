@@ -18,6 +18,7 @@
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
 #include "NetModerationGUI.h"
+#include "NetProtocol.h"
 #include "System.h"
 #include "TimerMan.h"
 #include "UInputMan.h"
@@ -204,8 +205,18 @@ namespace {
 				seats = Rect(x, y, w, h, g_MenuMan.IsNetworkPanelOpen());
 			}
 		}
+		// The heights the band laid itself out with, so a failure names them instead of only the rectangle.
+		const NetModerationGUI::ChatBand chatBand = panel ? panel->GetChatBand() : NetModerationGUI::ChatBand{};
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
-		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)}, {"seats_panel", seats}};
+		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
+		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
+		    {"chat_entry_open", panel && panel->IsChatEntryOpen()},
+		    {"chat_rows", chatBand.rows},
+		    {"chat_row_height", chatBand.rowHeight},
+		    {"chat_entry_height", chatBand.entryHeight},
+		    {"chat_history_visible", chatBand.historyVisible},
+		    {"seat_input_typed_into", g_UInputMan.SeatInputTypedInto()},
+		    {"seats_panel", seats}};
 		observed["controllers"] = Json::array();
 		const int probePad = probe.holdsPad ? static_cast<int>(GUIInputWrapper::ScriptedPadId()) : 0;
 		observed["probe_pad"] = probePad;
@@ -330,7 +341,8 @@ namespace {
 			Require(step.contains("service") || step.contains("sim_at_least") || step.contains("renders") ||
 			    step.contains("elapsed_ms") || step.contains("panel_open") || step.contains("control") || step.contains("screen") ||
 			    step.contains("editing") || step.contains("seat_ready") || step.contains("seat_text_contains") ||
-			    step.contains("picker_open"), "wait has no predicate");
+			    step.contains("picker_open") || step.contains("chat_entry_open"), "wait has no predicate");
+			if (step.contains("chat_entry_open") && observed["net_ui"].at("chat_entry_open") != step["chat_entry_open"]) return false;
 			if (step.contains("screen") && observed["screen"] != step["screen"]) return false;
 			if (step.contains("picker_open")) {
 				const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
@@ -357,13 +369,18 @@ namespace {
 			if (step.contains("panel_open") && observed["panel_open"] != step["panel_open"]) return false;
 			if (step.contains("control")) {
 				observed["control"] = ReadControl(Control(step));
-				for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
-					if (observed["control"].at(it.key()) != it.value()) return false;
+				if (step.contains("equals")) {
+					for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
+						if (observed["control"].at(it.key()) != it.value()) return false;
+					}
+				}
+				if (step.contains("text_contains")) {
+					if (observed["control"].at("text").get<std::string>().find(step["text_contains"].get<std::string>()) == std::string::npos) return false;
 				}
 			}
 		} else if (op == "key_down" || op == "key_up") {
 			const std::string key = step.at("key");
-			Require(key == "F6" || key == "Escape" || key == "P", "unsupported probe key");
+			Require(key == "F6" || key == "Escape" || key == "P" || key == "CHAT", "unsupported probe key");
 			if (SimRateKey(key)) {
 				if (step.contains("sim_at_least")) {
 					if (probe.simTick < step["sim_at_least"].get<uint64_t>()) return false;
@@ -380,8 +397,10 @@ namespace {
 			SDL_Event event{};
 			event.type = op == "key_down" ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
 			event.key.windowID = SDL_GetWindowID(g_WindowMan.GetWindow());
-			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : SDL_SCANCODE_ESCAPE;
-			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : SDLK_ESCAPE;
+			// The chat key is whatever the settings name resolves to, so the script never hardcodes it.
+			const SDL_Scancode chatScancode = static_cast<SDL_Scancode>(NetModerationGUI::ChatKeyScancode());
+			event.key.scancode = key == "F6" ? SDL_SCANCODE_F6 : key == "P" ? SDL_SCANCODE_P : key == "CHAT" ? chatScancode : SDL_SCANCODE_ESCAPE;
+			event.key.key = key == "F6" ? SDLK_F6 : key == "P" ? SDLK_P : key == "CHAT" ? SDL_GetKeyFromScancode(chatScancode, SDL_KMOD_NONE, false) : SDLK_ESCAPE;
 			event.key.down = op == "key_down";
 			Push(event);
 		} else if (op == "pad_down" || op == "pad_up") {
@@ -464,10 +483,16 @@ namespace {
 		} else if (op == "assert_control") {
 			observed["control"] = ReadControl(Control(step));
 			const auto& value = observed["control"];
-			for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
-				Require(value.at(it.key()) == it.value(), "control assertion differs: " + it.key());
+			if (step.contains("equals")) {
+				for (auto it = step.at("equals").begin(); it != step["equals"].end(); ++it) {
+					Require(value.at(it.key()) == it.value(), "control assertion differs: " + it.key());
+				}
 			}
-			if (step.contains("text_contains")) Require(value.at("text").get<std::string>().find(step["text_contains"].get<std::string>()) != std::string::npos, "control text is missing expected content");
+			if (step.contains("text_contains")) {
+				const std::string text = value.at("text").get<std::string>();
+				const std::string needle = step["text_contains"].get<std::string>();
+				Require(text.find(needle) != std::string::npos, "control text '" + text + "' does not contain '" + needle + "'");
+			}
 			if (step.value("fits", false)) {
 				const auto& rect = value["rect"];
 				Require(rect[0].get<int>() >= 0 && rect[1].get<int>() >= 0 && rect[0].get<int>() + rect[2].get<int>() <= g_WindowMan.GetResX() &&
@@ -515,6 +540,14 @@ namespace {
 				Require(seat->at("screen_text").get<std::string>().find(step["screen_text_contains"].get<std::string>()) != std::string::npos,
 				    "the seat's screen does not carry the expected message");
 			}
+		} else if (op == "send_chat") {
+			const std::string text = step.at("text").get<std::string>();
+			const uint8_t scope = step.value("scope", std::string("all")) == "team" ? c_NetChatScopeTeam : c_NetChatScopeAll;
+			Require(g_NetMatchService.SendChat(scope, text), "SendChat refused the probe line");
+		} else if (op == "screen_message") {
+			// A seat's own message band is an occupier the overlay must clear; a running match has none
+			// of its own, so the script puts one on the seat it is about to measure against.
+			g_FrameMan.SetScreenText(step.at("text").get<std::string>(), step.value("screen", 0), 0, step.value("duration_ms", 10000), true);
 		} else if (op == "assert_net_ui_clear") {
 			// The network overlay owes the stock setup editor its own surfaces: the picker and the seat's
 			// message band. In a running match ("match") the open seats panel is the surface it owes instead.
@@ -533,7 +566,7 @@ namespace {
 			}
 			const BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 			// No overlay rectangle ever leaves the window, and a visible one keeps a positive area.
-			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+			for (const std::string& element: {"status", "toasts", "seats_panel", "chat"}) {
 				const Json& r = observed["net_ui"].at(element);
 				if (!r.at("visible").get<bool>()) continue;
 				Require(r["w"].get<int>() > 0 && r["h"].get<int>() > 0,
@@ -544,10 +577,63 @@ namespace {
 				    "the network " + element + " leaves the window");
 			}
 			const Json& seatsPanel = observed["net_ui"].at("seats_panel");
+			if (step.value("chat_layout", false)) {
+				Require(observed["net_ui"]["chat"].at("visible") == true, "the match chat band is not on screen");
+				if (step.contains("entry_open")) {
+					Require(observed["net_ui"].at("chat_entry_open") == step["entry_open"],
+					    std::string("the chat entry is ") + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed") + " and the step wanted the other");
+					// The entry is what consumes the seat's own input, and only for as long as it is open.
+					Require(observed["net_ui"].at("seat_input_typed_into") == step["entry_open"],
+					    std::string("the seats' input is ") + (observed["net_ui"].at("seat_input_typed_into").get<bool>() ? "consumed" : "free") +
+					        " while the entry is " + (observed["net_ui"].at("chat_entry_open").get<bool>() ? "open" : "closed"));
+					if (step["entry_open"].get<bool>()) {
+						// The entry shrinks before the history yields, so one row rides above it at every supported
+						// size - 640x360 included, where the two pixels it gives up are the whole margin.
+						Require(observed["net_ui"].at("chat_history_visible") == true,
+						    "the chat history is switched off, so the band's rows prove nothing about the entry's size");
+						const int bandHeight = observed["net_ui"]["chat"].at("h").get<int>();
+						const int rowHeight = observed["net_ui"].at("chat_row_height").get<int>();
+						const int entryHeight = observed["net_ui"].at("chat_entry_height").get<int>();
+						const int bandRows = observed["net_ui"].at("chat_rows").get<int>();
+						Require(bandRows >= 1 && bandHeight >= rowHeight + entryHeight,
+						    "the chat band drew " + std::to_string(bandRows) + " history rows above the entry: band h=" +
+						        std::to_string(bandHeight) + ", row h=" + std::to_string(rowHeight) + ", entry h=" +
+						        std::to_string(entryHeight) + " at " + std::to_string(backbuffer->w) + "x" + std::to_string(backbuffer->h));
+					}
+				}
+				// A band measured against nothing proves nothing: the step names the occupiers that had to
+				// be on screen for this reading to count.
+				for (const std::string& element: step.value("occupiers", std::vector<std::string>{})) {
+					if (element == "picker" || element == "text_band") {
+						const auto seat = std::find_if(observed["editor_seats"].begin(), observed["editor_seats"].end(),
+						    [&](const Json& row) { return row.at("player") == step.value("player", 0); });
+						Require(seat != observed["editor_seats"].end() && seat->at(element).value("visible", false),
+						    "the seat's " + element + " is not on screen, so the chat layout reading proves nothing about it");
+						continue;
+					}
+					Require(observed["net_ui"].at(element).value("visible", false),
+					    "the network " + element + " is not on screen, so the chat layout reading proves nothing about it");
+				}
+				const std::string occupiers[] = {"status", "toasts", "seats_panel", "chat"};
+				for (size_t i = 0; i < 4; ++i) {
+					for (size_t j = i + 1; j < 4; ++j) {
+						Require(!Overlaps(observed["net_ui"].at(occupiers[i]), observed["net_ui"].at(occupiers[j])),
+						    "the network " + occupiers[i] + " overlaps " + occupiers[j]);
+					}
+				}
+				for (const auto& other: observed["editor_seats"]) {
+					for (const std::string& area: {"picker", "screen_text_rect", "text_band"}) {
+						if (!other.contains(area)) continue;
+						Require(!Overlaps(observed["net_ui"].at("chat"), other.at(area)),
+						    "the match chat band overlaps the editor's " + area);
+					}
+				}
+				return true;
+			}
 			if (match) {
 				Require(seatsPanel.at("visible") == true, "the seats panel is not open");
 				Require(observed["net_ui"]["toasts"].at("visible") == true, "no toast is live for the reserved row");
-				for (const std::string& element: {"status", "toasts"}) {
+				for (const std::string& element: {"status", "toasts", "chat"}) {
 					Require(!Overlaps(observed["net_ui"].at(element), seatsPanel),
 					    "the network " + element + " overlaps the seats panel");
 				}
@@ -555,7 +641,7 @@ namespace {
 					if (!other.contains("text_band") || !other.at("text_band").value("visible", false)) continue;
 					const Json& band = other.at("text_band");
 					Require(!Overlaps(seatsPanel, band), "the seats panel overlaps a seat message band");
-					for (const std::string& element: {"status", "toasts"}) {
+					for (const std::string& element: {"status", "toasts", "chat"}) {
 						Require(!Overlaps(observed["net_ui"].at(element), band),
 						    "the network " + element + " overlaps a seat message band");
 					}
@@ -575,7 +661,7 @@ namespace {
 				    band["y"].get<int>() + band["h"].get<int>() <= offset.GetRoundIntY() + g_FrameMan.GetPlayerScreenHeight(),
 				    "the seat's message is drawn off its own screen");
 			}
-			for (const std::string& element: {"status", "toasts", "seats_panel"}) {
+			for (const std::string& element: {"status", "toasts", "seats_panel", "chat"}) {
 				if (element == "seats_panel" && !seatsPanel.at("visible").get<bool>()) continue;
 				if (element != "seats_panel") {
 					// An open seats panel owns its rows too - the overlay lifts above it rather than draw over it.

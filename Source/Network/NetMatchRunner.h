@@ -28,6 +28,7 @@ namespace RTE {
 	struct NetMatchRunnerConfig {
 		bool host = false;
 		std::string joinAddress;
+		std::function<std::string()> resolveJoinAddress;
 		NetSessionConfig sessionConfig;
 		NetMatchConfig matchConfig;
 		bool autoInputDelay = false; // Host: raise matchConfig.inputDelayFrames to cover the measured RTT.
