@@ -66,7 +66,7 @@ function FeelBaseline:StartActivity(startNewGame)
             ParkTeam(self, team, 400, parkY[team] or 0);
         end
     end
-    self:DisableAIs(true);
+    self:DisableAIs(true, Activity.NOTEAM);
     print("[feel-baseline] parked brains out of reach");
 end
 
