@@ -72,10 +72,10 @@
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
-        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      "events": [
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },
     {
@@ -241,10 +241,10 @@
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
-        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      "events": [
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },
     {
@@ -410,10 +410,10 @@
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
       "assert": "Recorded control readbacks and first-frame screenshots.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
-        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
-        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      "events": [
+        "(?s)^assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "(?s)^assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "^assert_text_fits LabelHostSeatHeader .* PASS"
       ]
     },
     {
