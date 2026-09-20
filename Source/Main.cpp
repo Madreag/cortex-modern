@@ -2911,6 +2911,14 @@ static std::string RecordedScreenName() {
 	return menu ? menu->AutomationActiveScreenName() : "game";
 }
 
+static void PollStallEventsForCapture() {
+	// The preceding stall presentation is complete when its next event poll begins.
+	if (FrameRecorder::Instance().Enabled()) {
+		g_FrameMan.RecordVideoFrame("LockstepWaitOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
+	PollSDLEvents();
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -8256,7 +8264,7 @@ int main(int argc, char** argv) {
 	TelemetryBundle::Initialize("unavailable");
 	ConfigureMenuScriptInput(argc, argv);
 	InitializeManagers();
-	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
+	ScenarioRunner::SetStallEventPoll(&PollStallEventsForCapture);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
 	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');
