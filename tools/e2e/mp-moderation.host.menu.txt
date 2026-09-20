@@ -20,7 +20,7 @@ wait_ms 1200
 video_mark moderation-three-seats
 wait_ms 900
 observe assert_text_fits LabelLobbyPlayer0
-observe assert_label LabelLobbyPlayer0 Host
+observe assert_label LabelLobbyPlayer0 Host (you)
 observe assert_text_fits LabelLobbyPlayer1
 observe assert_label LabelLobbyPlayer1 ClientA
 observe assert_text_fits LabelLobbyPlayer2
