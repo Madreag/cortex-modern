@@ -336,8 +336,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
@@ -370,8 +370,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
@@ -404,8 +404,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
@@ -438,8 +438,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
@@ -472,8 +472,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
@@ -506,8 +506,8 @@
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
       "assert": "Native label readbacks on the status widget.",
       "log_regex": [
-        "\\[menu-script\\] net_panel assert_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] net_panel assert_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
+        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
       ]
     },
     {
