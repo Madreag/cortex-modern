@@ -3,10 +3,13 @@
   "timeout_ms": 145000,
   "steps": [
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
       "op": "wait",
       "service": "Running",
-      "screen": "Gameplay",
-      "sim_at_least": 120
+      "screen": "Gameplay"
     },
     {
       "op": "menu",
@@ -14,7 +17,11 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 450
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play-end"
     },
     {
       "op": "key_down",
@@ -26,7 +33,8 @@
     },
     {
       "op": "wait",
-      "screen": "Pause"
+      "screen": "Pause",
+      "elapsed_ms": 400
     },
     {
       "op": "wait",
@@ -35,6 +43,18 @@
     {
       "op": "menu",
       "command": "activate ButtonEndMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000,
+      "scope": "menu"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Starting"
+      },
+      "scope": "menu"
     },
     {
       "op": "wait",
@@ -54,8 +74,7 @@
     {
       "op": "wait",
       "service": "Running",
-      "screen": "Gameplay",
-      "sim_at_least": 120
+      "screen": "Gameplay"
     },
     {
       "op": "menu",
@@ -63,7 +82,11 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 450
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play-end"
     },
     {
       "op": "key_down",
@@ -75,7 +98,8 @@
     },
     {
       "op": "wait",
-      "screen": "Pause"
+      "screen": "Pause",
+      "elapsed_ms": 400
     },
     {
       "op": "wait",
@@ -84,6 +108,18 @@
     {
       "op": "menu",
       "command": "activate ButtonEndMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000,
+      "scope": "menu"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Starting"
+      },
+      "scope": "menu"
     },
     {
       "op": "wait",
