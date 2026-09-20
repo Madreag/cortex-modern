@@ -107,7 +107,10 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
     },
     {
       "id": "loss-client-landing",
@@ -115,7 +118,10 @@
       "peer": "client",
       "mark": "loss-client-landing",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
     },
     {
       "id": "loss-lan-list",
@@ -123,7 +129,10 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
     },
     {
       "id": "loss-client-landing",
@@ -131,7 +140,10 @@
       "peer": "client",
       "mark": "loss-client-landing",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
     },
     {
       "id": "loss-lan-list",
@@ -139,7 +151,10 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
     },
     {
       "id": "loss-client-landing",
@@ -147,7 +162,10 @@
       "peer": "client",
       "mark": "loss-client-landing",
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
-      "assert": "Native label/geometry readback."
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
     }
   ]
 }
