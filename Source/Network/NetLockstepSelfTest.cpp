@@ -1092,7 +1092,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x18, 0x00,
+				0x1A, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1289,7 +1289,8 @@ namespace RTE {
 
 		bool TestTimingDecisionCodec(std::string* error) {
 			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold}) {
-				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status}) {
+				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status, NetTimingPhase::HoldAtFrame, NetTimingPhase::HoldAppliedAck}) {
+					if (action == NetTimingAction::Delay && phase >= NetTimingPhase::HoldAtFrame) continue;
 					NetLockstepTiming timing;
 					timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
 					timing.sessionId = 88; timing.roundId = 99; timing.applyFrame = 120; timing.nextFrame = 50;
@@ -1297,7 +1298,16 @@ namespace RTE {
 					timing.revision = phase == NetTimingPhase::Status ? 0 : 4;
 					timing.requiredPeers = phase == NetTimingPhase::Status ? 0 : 3;
 					if (action == NetTimingAction::Hold && phase != NetTimingPhase::Status) { timing.heldPeers = 2; timing.requiredPeers = 1; }
+					timing.authorityGeneration = 7;
+					if (phase >= NetTimingPhase::HoldAtFrame) { timing.cutoffFrame = timing.applyFrame; timing.seatIncarnations[1] = 3; }
 					if (!RoundTrip({timing}, error)) return false;
+					if (phase >= NetTimingPhase::HoldAtFrame) {
+						auto invalid = timing;
+						++invalid.cutoffFrame;
+						if (!ExpectEncodeError({invalid}, NetLockstepErrorCode::InvalidValue, error)) return false;
+						invalid = timing; invalid.seatIncarnations[1] = 0;
+						if (!ExpectEncodeError({invalid}, NetLockstepErrorCode::InvalidValue, error)) return false;
+					}
 					std::vector<uint8_t> bytes;
 					if (!EncodePacket({timing}, bytes, error)) return false;
 					bytes[4] = static_cast<uint8_t>(NetLockstepCodec::c_TimingVersion - 1);
@@ -1306,11 +1316,11 @@ namespace RTE {
 			}
 			NetLockstepFrame frame;
 			frame.senderPeerId = 1; frame.targetFrame = 40;
-			frame.commands = {{1, NetGameSeatHold{2}}, {1, NetGameInputDelay{2, 26}}};
+			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}};
 			std::vector<uint8_t> recovery;
 			NetLockstepFrame decoded;
-			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 2 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
-				*error = "recovery v2 lost a committed timing command"; return false;
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 3 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
+				*error = "recovery v3 lost a committed hold identity"; return false;
 			}
 			recovery[4] = 1;
 			if (NetLockstepCodec::DecodeRecoveryInput(recovery, decoded)) { *error = "recovery v1 reinterpreted a new timing command"; return false; }
@@ -1466,6 +1476,8 @@ namespace RTE {
 				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
 				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
 				value.ownershipPolicy = "team-owner";
+				value.migrationGeneration = 7;
+				value.peerIncarnations = {{1, 1}, {2, 3}, {3, 4}};
 				return value;
 			};
 			NetLockstepCoordinator host, slow, survivor;
@@ -1488,13 +1500,17 @@ namespace RTE {
 				}
 				return true;
 			}
-			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(0)) {
-				*error = "a hold committed before the surviving peer acknowledged the decision"; return false;
+			if (!host.PopReadyFrame(hostFrame) || host.TimingDecisionPendingAt(0) || survivor.PopReadyFrame(survivorFrame)) {
+				*error = "the host waited for an application acknowledgement or a survivor guessed the hold"; return false;
+			}
+			const auto held = std::find_if(hostFrame.localCommands.begin(), hostFrame.localCommands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload); });
+			if (held == hostFrame.localCommands.end() || std::get<NetGameSeatHold>(held->payload) != NetGameSeatHold{2, 7, 1, 3, 0}) {
+				*error = "the committed hold lost its authority, event sequence, incarnation or cutoff"; return false;
 			}
 			if (lostAck) {
 				host.Tick(201);
-				if (!host.PopReadyFrame(hostFrame) || hostFrame.aiHeldPeerIds != std::vector<uint8_t>({2, 3})) {
-					*error = "a peer that vanished before its hold acknowledgement blocked the survivor"; return false;
+				if (!host.IsRunning() || hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || host.IsSeatUnderAI(3, 0)) {
+					*error = "a missing application acknowledgement changed another seat or stopped the survivor"; return false;
 				}
 				return true;
 			}
@@ -1502,7 +1518,7 @@ namespace RTE {
 				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
 				host.Tick(now); survivor.Tick(now);
 			}
-			if (!host.PopReadyFrame(hostFrame) || !survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 0 || survivorFrame.frame != 0 ||
+			if (!survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 0 || survivorFrame.frame != 0 ||
 			    hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || survivorFrame.aiHeldPeerIds != hostFrame.aiHeldPeerIds ||
 			    host.ResolveActorOwner(987654321, 1, false) != 1 || survivor.ResolveActorOwner(987654321, 1, false) != 1 ||
 			    hostFrame.localCommands != survivorFrame.remoteCommands) {
@@ -1539,7 +1555,7 @@ namespace RTE {
 		bool TestRecordedHoldReplaysAtItsFrame(std::string* error) {
 			NetLockstepFrame record;
 			record.senderPeerId = 1; record.targetFrame = 40;
-			record.commands = {{1, NetGameSeatHold{2}}, {1, NetGameInputDelay{2, 26}}};
+			record.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}};
 			if (!RoundTrip({record}, error)) return false;
 			LoopbackTransport transport;
 			NetLockstepCoordinator replay;
@@ -5430,7 +5446,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x18, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x1A, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
