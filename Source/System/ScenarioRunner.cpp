@@ -1337,8 +1337,14 @@ namespace RTE {
 			if (s_LockstepCoordinator->IsPeerGoneAtFrame(it->second, frame)) {
 				// Admission can observe the drop after this frame has released its control handoffs.
 				NoteE2eOwnerTransfer(it->first);
-				s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
-				it = s_LockstepControlOverrides.erase(it);
+				const auto claim = s_LockstepDroppedControlOverrides.find(it->first);
+				if (claim != s_LockstepDroppedControlOverrides.end() && s_LockstepCoordinator->HasHeldAISeat(claim->second)) {
+					it->second = s_LockstepCoordinator->GetHostPeerId();
+					++it;
+				} else {
+					s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
+					it = s_LockstepControlOverrides.erase(it);
+				}
 			} else {
 				++it;
 			}

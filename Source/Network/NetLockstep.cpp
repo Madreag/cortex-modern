@@ -31,7 +31,7 @@ namespace RTE {
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 1;
+		constexpr uint16_t c_RecoveryInputVersion = 2;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -2566,16 +2566,18 @@ namespace RTE {
 		reader.ReadU32LE(magic);
 		reader.ReadU16LE(version);
 		reader.ReadU16LE(controllerVersion);
-		if (magic != c_RecoveryInputMagic || version != c_RecoveryInputVersion || controllerVersion != ControllerFrame::c_Version) {
+		if (magic != c_RecoveryInputMagic || version == 0 || version > c_RecoveryInputVersion || controllerVersion != ControllerFrame::c_Version) {
 			SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "unsupported recovery input header");
 			return false;
 		}
 		NetLockstepPayload payload;
-		// Recovery frames may carry WorldTransition; decode them at the world-plane version.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, c_Version, nullptr, true) || !reader.AtEnd()) return false;
+		// Each recovery layout keeps the command vocabulary it recorded.
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : c_Version, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		if (!EncodeRecoveryInput(frame, canonical, error)) return false;
+		canonical[4] = static_cast<uint8_t>(version);
+		canonical[5] = static_cast<uint8_t>(version >> 8);
 		if (canonical != bytes) {
 			SetError(error, NetLockstepErrorCode::InvalidValue, 0, "noncanonical recovery input");
 			return false;
@@ -3628,7 +3630,16 @@ namespace RTE {
 		auto droppedValues = std::move(m_DroppedValueObservations);
 		const auto commandAcks = m_AuthoritativeCommandAcks;
 		const auto leaves = m_PeerLeaveFrames;
+		const auto heldSeats = m_AiHeldSeats;
+		const auto heldResolutions = m_DroppedSeatResolutions;
+		const auto droppedSeats = m_DroppedSeats;
+		const auto droppedAt = m_DroppedAtMs;
 		const auto completed = m_LastCompletedSimulationTick;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			m_Config.peerInputDelayFrames[peer] = InputDelayAt(peer, m_MigrationBoundary);
+		m_Config.inputDelayFrames = m_Config.peerInputDelayFrames.at(m_Config.localPeerId);
+		m_OpeningMatchConfig = m_Config.matchConfig;
+		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(m_OpeningMatchConfig);
 		m_Config.authorityPeerId = m_MigrationSuccessor;
 		m_Config.migrationGeneration = m_MigrationGeneration;
 		m_RoundId = m_MigrationWireRound;
@@ -3651,6 +3662,14 @@ namespace RTE {
 		m_Transport = m_MigrationTransport.get();
 		ResetRoundState();
 		m_LastCompletedSimulationTick = completed;
+		m_LastDeliveredFrame = m_MigrationBoundary;
+		for (const auto& [peer, frame]: heldSeats) {
+			if (frame > m_MigrationBoundary || std::find(m_Config.activePeerIds.begin(), m_Config.activePeerIds.end(), peer) != m_Config.activePeerIds.end()) continue;
+			m_AiHeldSeats[peer] = frame;
+			if (const auto resolution = heldResolutions.find(peer); resolution != heldResolutions.end()) m_DroppedSeatResolutions[peer] = resolution->second;
+			if (droppedSeats.contains(peer)) m_DroppedSeats.insert(peer);
+			if (const auto dropped = droppedAt.find(peer); dropped != droppedAt.end()) m_DroppedAtMs[peer] = dropped->second;
+		}
 		m_PeerLeaveFrames = leaves;
 		for (uint8_t peer: m_Config.activePeerIds)
 			m_PeerLeaveFrames.erase(peer);
@@ -3717,7 +3736,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
 		if ((config.adaptiveInputDelay || config.substituteSlowPeers) &&
-		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
+		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.peerCount > NetMatchConfigUtil::c_MaxPeerCount || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
 			if (error) *error = "invalid simulation tick or slow player bound";
 			return false;
 		}
@@ -4350,7 +4369,7 @@ namespace RTE {
 		if (producedFrame > UINT64_MAX - delay) { if (error) *error = "input target overflow"; return false; }
 		const uint64_t target = producedFrame + delay;
 		if (TimingDecisionPendingAt(producedFrame)) { if (error) *error = "input is waiting for a timing decision"; return false; }
-		if (m_LastQueuedTargetFrame != UINT64_MAX && target <= m_LastQueuedTargetFrame) {
+		if (!m_DelayChanges.empty() && m_LastQueuedTargetFrame != UINT64_MAX && target <= m_LastQueuedTargetFrame) {
 			if (error) *error = "input sample must be deferred while the delay shrinks";
 			return false;
 		}
@@ -4485,6 +4504,7 @@ namespace RTE {
 		} else if (timing.action == NetTimingAction::Hold) {
 			if ((timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0) {
 				m_LocalSeatHeld = true;
+				m_PeerLeaveFrames[m_Config.localPeerId] = timing.applyFrame;
 				m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 				m_State = NetLockstepState::Stopped;
 				return;
@@ -5971,7 +5991,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
-		if (peerId == m_Config.localPeerId && !m_Playback) {
+		if (peerId == m_Config.localPeerId && !m_Playback && !m_LocalSeatHeld) {
 			return false;
 		}
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
@@ -6690,6 +6710,7 @@ namespace RTE {
 				if (lockstepPeer == GetHostPeerId() && event.reason.find("slow player:") != std::string::npos) {
 					if (m_SessionEventSink) m_SessionEventSink(event);
 					m_LocalSeatHeld = true;
+					m_PeerLeaveFrames[m_Config.localPeerId] = m_Stats.nextFrame;
 					m_Stats.timeoutReason = "PeerHeld:Your seat is held by the AI. Rejoin when your connection and machine can keep up.";
 					m_State = NetLockstepState::Stopped;
 					break;
