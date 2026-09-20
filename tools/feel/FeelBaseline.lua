@@ -2,6 +2,8 @@ P4AlphaDuel = FeelBaseline;
 dofile("Data/Base.rte/Activities/P4AlphaDuel.lua");
 local startDuel = FeelBaseline.StartActivity;
 local updateDuel = FeelBaseline.UpdateActivity;
+-- The driver rewrites this line with the run's tick target before it stages the script.
+local WINDOW_TICKS = 1200;
 
 local function CollectTeamActors(team)
     local actors = {};
@@ -13,8 +15,22 @@ local function CollectTeamActors(team)
     repeat
         table.insert(actors, actor);
         actor = MovableMan:GetNextTeamActor(team, actor);
-    until not actor or actor == first;
+    until not actor or actor.UniqueID == first.UniqueID;
     return actors;
+end
+
+local function KeepAlive(actor)
+    actor.MissionCritical = true;
+    actor.Health = actor.MaxHealth;
+    if actor:GetWoundCount(true, true, true) > 0 then
+        actor:RemoveWounds(1000, true, true, true);
+    end
+    local rotating = ToMOSRotating(actor);
+    if rotating then
+        for attachable in rotating.Attachables do
+            attachable.MissionCritical = true;
+        end
+    end
 end
 
 local function ClearTeam(activity, team)
@@ -59,11 +75,10 @@ function FeelBaseline:StartActivity(startNewGame)
             ClearTeam(self, team);
         end
     end
-    -- Grasslands wraps X; park one human brain on the surface and the other on the deep floor.
-    local parkY = { [Activity.TEAM_1] = 0, [Activity.TEAM_2] = SceneMan.SceneHeight - 40 };
+    -- Grasslands wraps X; park each team on the surface a third of the scene apart, out of each other's reach.
     for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
         if self:IsHumanTeam(team) then
-            ParkTeam(self, team, 400, parkY[team] or 0);
+            ParkTeam(self, team, 400 + team * SceneMan.SceneWidth / 3, 0);
         end
     end
     self:DisableAIs(true, Activity.NOTEAM);
@@ -72,8 +87,18 @@ end
 
 function FeelBaseline:UpdateActivity()
     self.feelTicks = self.feelTicks + 1;
+    -- The window measures feel, so the duellists never die: the scene's cast and cost stay fixed.
+    for team = Activity.TEAM_1, Activity.MAXTEAMCOUNT - 1 do
+        if self:IsHumanTeam(team) then
+            for _, actor in ipairs(CollectTeamActors(team)) do
+                KeepAlive(actor);
+            end
+        end
+    end
+    -- The measurement window is the objective here; a lost brain must not decide the duel inside it.
+    self.TeamHadBrain = {};
     updateDuel(self);
-    if self.feelTicks >= 1200 then
+    if self.feelTicks >= WINDOW_TICKS then
         MetricsCollector:Record("final_tick", self.feelTicks);
         MetricsCollector:SetResult(true);
         MetricsCollector:EndRun();
@@ -82,7 +107,7 @@ function FeelBaseline:UpdateActivity()
 end
 
 function FeelBaseline:EndActivity()
-    if self.feelTicks < 1200 then
+    if self.feelTicks < WINDOW_TICKS then
         MetricsCollector:Record("final_tick", self.feelTicks);
         MetricsCollector:SetResult(false);
         MetricsCollector:EndRun();
