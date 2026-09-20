@@ -1035,9 +1035,12 @@ def compare_hash_range(first, second, start, cap, out):
     from compare_sim_traces import load_trace, strict_compare
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    rows, paths = [], []
+    rows, paths, validation_errors = [], [], []
     for index, source in enumerate((Path(first), Path(second))):
-        load_trace(source)
+        try:
+            load_trace(source)
+        except ValueError as error:
+            validation_errors.append({"path": str(source), "error": str(error)})
         data = json.loads(source.read_text(encoding="utf-8-sig"))
         selected = [row for row in data["runs"][0]["tick_hashes"] if start <= row["tick"] <= cap]
         data["runs"][0]["tick_hashes"] = selected
@@ -1051,9 +1054,9 @@ def compare_hash_range(first, second, start, cap, out):
     first_missing = next((tick for tick in range(start, cap + 1) if any(tick not in ticks for ticks in present)), None)
     first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
     exact = coverage and rows[0] == rows[1]
-    return {"status": "PASS" if passed and exact else "FAIL", "first_tick": start, "last_tick": cap,
+    return {"status": "PASS" if passed and exact and not validation_errors else "FAIL", "first_tick": start, "last_tick": cap,
             "first_difference": first_difference, "first_missing_tick": first_missing, "full_rows_equal": exact, "strict": strict,
-            "traces": [file_evidence(first), file_evidence(second)], "exclusions": []}
+            "traces": [file_evidence(first), file_evidence(second)], "exclusions": [], "validation_errors": validation_errors}
 
 
 def migration_probes(config, capture):
