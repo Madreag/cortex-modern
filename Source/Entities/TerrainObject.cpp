@@ -19,6 +19,8 @@ TerrainObject::~TerrainObject() {
 }
 
 void TerrainObject::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FGColorFile, m_BGColorFile, m_MaterialFile, m_BitmapOffset, m_OffsetDefined, m_ChildObjects.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_FGColorFile.Reset();
 	m_FGColorBitmap = nullptr;
 	m_BGColorFile.Reset();
@@ -61,6 +63,7 @@ int TerrainObject::Create(const TerrainObject& reference) {
 
 	for (const SceneObject::SOPlacer& childObject: reference.m_ChildObjects) {
 		m_ChildObjects.emplace_back(childObject);
+		m_ChildObjects.back().SetCheckpointOwner(this);
 	}
 	return 0;
 }
@@ -89,6 +92,7 @@ int TerrainObject::ReadProperty(const std::string_view& propName, Reader& reader
 		reader >> newChildObject;
 		newChildObject.SetTeam(m_Team);
 		m_ChildObjects.emplace_back(newChildObject);
+		m_ChildObjects.back().SetCheckpointOwner(this);
 	});
 	MatchProperty("ClearChildObjects", {
 		bool clearChildObjects;

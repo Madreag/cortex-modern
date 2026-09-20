@@ -41,6 +41,8 @@ namespace RTE {
 		public:
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
+			void SetCheckpointOwner(SceneObject* owner) { m_CheckpointOwner = owner; }
+			void TouchCheckpoint() { if (m_CheckpointOwner) m_CheckpointOwner->TouchCheckpoint(); }
 
 			/// Constructor method used to instantiate a SOPlacer object in system
 			/// memory. Create() should be called before using the object.
@@ -67,7 +69,7 @@ namespace RTE {
 
 			/// Sets the place offset from the parent's position/origin.
 			/// @param newOffset New offset.
-			void SetOffset(Vector newOffset) { m_Offset = newOffset; }
+			void SetOffset(Vector newOffset) { if (m_Offset != newOffset) TouchCheckpoint(); m_Offset = newOffset; }
 
 			/// Gets the rotation angle of the object to be placed, in radians.
 			/// @return The placement rotational angle, in radians.
@@ -83,7 +85,7 @@ namespace RTE {
 
 			/// Sets which team this is to be assigned to when placed.
 			/// @param team The team number this is to be assigned to when placed.
-			void SetTeam(int team) { m_Team = team; }
+			void SetTeam(int team) { if (m_Team != team) TouchCheckpoint(); m_Team = team; }
 
 			/// Makes a copy of the preset instance, and applies the placement
 			/// properties of this to it, finally returning it WITH OWNERSHIP.
@@ -96,6 +98,7 @@ namespace RTE {
 		protected:
 			// The pointer to the preset instance, that copies of which will be placed. Not Owned!
 			const SceneObject* m_pObjectReference;
+			SceneObject* m_CheckpointOwner = nullptr;
 			// Offset placement position from owner/parent's position/origin.
 			Vector m_Offset;
 			// The placement's rotational angle in radians.
@@ -303,6 +306,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this SceneObject, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

@@ -22,6 +22,8 @@ Icon::~Icon() {
 }
 
 void Icon::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_BitmapFile, m_FrameCount, m_BitmapsIndexed.empty(), m_BitmapsTrueColor.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_BitmapFile.Reset();
 	m_FrameCount = 0;
 	m_BitmapsIndexed.clear();

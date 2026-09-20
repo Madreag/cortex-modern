@@ -10,6 +10,13 @@ using namespace RTE;
 ConcreteClassInfo(Emission, Entity, 100);
 
 void Emission::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_Accumulator, m_BurstSize, m_InheritsAngularVel, m_InheritsVel, m_LifeVariation, m_MaxVelocity,
+			m_MinVelocity, m_Offset, m_PPM, m_ParticleCount, m_PushesEmitter, m_Spread,
+			m_StartTimer, m_StopTimer, m_pEmission);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_pEmission = 0;
 	m_PPM = 0;
 	m_BurstSize = 0;

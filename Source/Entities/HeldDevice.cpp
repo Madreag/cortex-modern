@@ -30,6 +30,15 @@ HeldDevice::~HeldDevice() {
 }
 
 void HeldDevice::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_Activated, m_ActivationTimer, m_BlinkTimer, m_CollidesWithTerrainWhileAttached, m_DualWieldable, m_GetsHitByMOsWhenHeld,
+			m_GripStrengthMultiplier, m_HeldDeviceType, m_HotkeyActivated, m_IsExplosiveWeapon, m_IsUnPickupable, m_Loudness,
+			m_MaxSharpLength, m_OneHanded, m_PersistedHeldDeviceRuntime.empty(), m_PickupableByPresetNames.empty(), m_SharpAim, m_SharpStanceOffset,
+			m_StanceOffset, m_SupportAvailable, m_SupportOffset, m_Supportable, m_Supported, m_UseSupportOffsetWhileReloading,
+			m_VisualRecoilMultiplier);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedHeldDeviceRuntime.clear();
 	m_HeldDeviceType = WEAPON;
 	m_Activated = false;
@@ -331,6 +340,7 @@ bool HeldDevice::IsBeingHeld() const {
 }
 
 void HeldDevice::RemovePickupableByPresetName(const std::string& actorPresetName) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PickupableByPresetNames.size()); });
 	std::unordered_set<std::string>::iterator pickupableByPresetNameEntry = m_PickupableByPresetNames.find(actorPresetName);
 	if (pickupableByPresetNameEntry != m_PickupableByPresetNames.end()) {
 		m_PickupableByPresetNames.erase(pickupableByPresetNameEntry);

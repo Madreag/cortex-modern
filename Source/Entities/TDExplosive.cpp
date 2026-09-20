@@ -14,6 +14,11 @@ TDExplosive::~TDExplosive() {
 }
 
 void TDExplosive::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_IsAnimatedManually);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_IsAnimatedManually = false;
 }
 

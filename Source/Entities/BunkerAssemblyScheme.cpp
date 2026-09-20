@@ -19,6 +19,8 @@ BunkerAssemblyScheme::~BunkerAssemblyScheme() {
 }
 
 void BunkerAssemblyScheme::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ChildObjects.empty(), m_BitmapOffset, m_IsOneTypePerScene, m_Limit, m_MaxDeployments, m_SymmetricScheme, m_AssemblyGroup); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_pPresentationBitmap = 0;
 	m_ChildObjects.clear();
 	m_BitmapOffset = Vector(0, 0);

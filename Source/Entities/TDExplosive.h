@@ -77,6 +77,8 @@ namespace RTE {
 		bool m_IsAnimatedManually; //!< If true m_Frame is not changed during an update hence the animation is done by external Lua code.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this TDExplosive, effectively resetting the members of this abstraction level only.
 		void Clear();
 

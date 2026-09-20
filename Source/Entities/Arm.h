@@ -90,6 +90,7 @@ namespace RTE {
 		/// @param newHandOffset The new current offset of this Arm's hand.
 		// TODO maybe don't want this in favor of SetHandPos?
 		void SetHandCurrentOffset(const Vector& newHandOffset) {
+			CheckpointChange changed(*this, [this] { return m_HandCurrentOffset; });
 			m_HandCurrentOffset = newHandOffset;
 			m_HandCurrentOffset.CapMagnitude(m_MaxLength);
 		}
@@ -144,6 +145,7 @@ namespace RTE {
 
 		/// Removes this Arm's next HandTarget, if there is one.
 		void RemoveNextHandTarget() {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_HandTargets.size(), m_HandHasReachedCurrentTarget); });
 			if (!m_HandTargets.empty()) {
 				m_HandTargets.pop();
 				m_HandHasReachedCurrentTarget = false;
@@ -185,7 +187,7 @@ namespace RTE {
 		void DiscardPersistedSnapshotState() override;
 
 		/// Empties the queue of HandTargets. With the queue empty, the hand will move to its appropriate idle offset.
-		void ClearHandTargets() { m_HandTargets = {}; }
+		void ClearHandTargets() { if (!m_HandTargets.empty()) TouchCheckpoint(); m_HandTargets = {}; }
 #pragma endregion
 
 #pragma region HeldDevice Management
@@ -318,6 +320,8 @@ namespace RTE {
 		/// Updates the frame for this Arm. Should only be called from Update.
 		void UpdateArmFrame();
 #pragma endregion
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this Arm, effectively resetting the members of this abstraction level only.
 		void Clear();

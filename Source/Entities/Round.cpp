@@ -15,6 +15,8 @@ Round::~Round() {
 }
 
 void Round::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Particle, m_ParticleCount, m_FireVel, m_InheritsFirerVelocity, m_Separation, m_LifeVariation, m_Shell, m_ShellVel, m_FireSound, m_AILifeTime, m_AIFireVel, m_AIPenetration); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Particle = 0;
 	m_ParticleCount = 0;
 	m_FireVel = 0;

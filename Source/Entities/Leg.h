@@ -144,6 +144,8 @@ namespace RTE {
 		void UpdateFootFrameAndRotation();
 #pragma endregion
 
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Leg, effectively resetting the members of this abstraction level only.
 		void Clear();
 

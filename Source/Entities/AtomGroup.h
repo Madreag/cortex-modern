@@ -19,6 +19,8 @@ namespace RTE {
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void ResolveCheckpointLinks();
+		void TouchCheckpoint() override;
+		void BindCheckpointOwner(Atom* atom);
 
 #pragma region Creation
 		/// Constructor method used to instantiate an AtomGroup object in system memory. Create() should be called before using the object.
@@ -110,6 +112,7 @@ namespace RTE {
 		float GetStoredMomentOfInertia() const { return m_MomentOfInertia; }
 		float GetStoredOwnerMass() const { return m_StoredOwnerMass; }
 		void SetStoredMomentOfInertia(float momentOfInertia, float storedOwnerMass) {
+			if (m_MomentOfInertia != momentOfInertia || m_StoredOwnerMass != storedOwnerMass) TouchCheckpoint();
 			m_MomentOfInertia = momentOfInertia;
 			m_StoredOwnerMass = storedOwnerMass;
 		}
@@ -159,7 +162,7 @@ namespace RTE {
 		/// Sets the current position of this AtomGroup as a limb.
 		/// @param newPos The Vector with the new absolute position.
 		/// @param hFlipped Whether to adjust the new position for horizontal flip or not.
-		void SetLimbPos(const Vector& newPos, bool hFlipped = false) { m_LimbPos = newPos - m_JointOffset.GetXFlipped(hFlipped); }
+		void SetLimbPos(const Vector& newPos, bool hFlipped = false) { const Vector value = newPos - m_JointOffset.GetXFlipped(hFlipped); if (m_LimbPos != value) TouchCheckpoint(); m_LimbPos = value; }
 
 		/// Gets the current mass moment of inertia of this AtomGroup.
 		/// @return A float with the moment of inertia, in Kg * meter^2.
@@ -176,6 +179,8 @@ namespace RTE {
 		/// @param newAtom A pointer to an Atom that will pushed onto the end of the list. Ownership IS transferred!
 		/// @param subgroupID The subgroup ID that the new Atom will have within the group.
 		void AddAtom(Atom* newAtom, long subgroupID = 0) {
+			TouchCheckpoint();
+			BindCheckpointOwner(newAtom);
 			newAtom->SetSubID(subgroupID);
 			m_Atoms.push_back(newAtom);
 			m_MomentOfInertia = 0.0F;
@@ -201,6 +206,8 @@ namespace RTE {
 
 		/// Removes all atoms in this AtomGroup, leaving it empty of Atoms.
 		void RemoveAllAtoms() {
+			if (!m_Atoms.empty() || !m_SubGroups.empty() || m_MomentOfInertia != 0.0F || m_StoredOwnerMass != 0.0F) TouchCheckpoint();
+			for (Atom* atom: m_Atoms) atom->SetCheckpointOwner(nullptr);
 			m_Atoms.clear();
 			m_SubGroups.clear();
 			m_MomentOfInertia = 0.0F;
@@ -284,7 +291,7 @@ namespace RTE {
 #pragma region Collision
 		/// Adds a MOID that this AtomGroup should ignore collisions with during its next Travel sequence.
 		/// @param moidToIgnore The MOID to add to the ignore list.
-		void AddMOIDToIgnore(MOID moidToIgnore) { m_IgnoreMOIDs.push_back(moidToIgnore); }
+		void AddMOIDToIgnore(MOID moidToIgnore) { TouchCheckpoint(); m_IgnoreMOIDs.push_back(moidToIgnore); }
 
 		/// Checks whether this AtomGroup is set to ignore collisions with a MOSR of a specific MOID.
 		/// @param whichMOID The MOID to check if it is ignored.
@@ -293,7 +300,7 @@ namespace RTE {
 
 		/// Clears the list of MOIDs that this AtomGroup is set to ignore collisions with during its next Travel sequence.
 		/// This should be done each frame so that fresh MOIDs can be re-added. (MOIDs are only valid during a frame).
-		void ClearMOIDIgnoreList() { m_IgnoreMOIDs.clear(); }
+		void ClearMOIDIgnoreList() { if (!m_IgnoreMOIDs.empty()) TouchCheckpoint(); m_IgnoreMOIDs.clear(); }
 
 		/// The MOIDs this group ignores, for snapshot forensics.
 		const std::vector<MOID>& GetIgnoreMOIDs() const { return m_IgnoreMOIDs; }
@@ -348,7 +355,7 @@ namespace RTE {
 		std::vector<Atom*> m_Atoms; //!< List of Atoms that constitute the group. Owned by this.
 		std::unordered_map<long, std::vector<Atom*>> m_SubGroups; //!< Sub groupings of Atoms. Points to Atoms owned in m_Atoms. Not owned.
 
-		MOSRotating* m_OwnerMOSR; //!< The owner of this AtomGroup. The owner is obviously not owned by this AtomGroup.
+		MOSRotating* m_OwnerMOSR = nullptr; //!< The owner of this AtomGroup. The owner is obviously not owned by this AtomGroup.
 		float m_StoredOwnerMass; //!< The stored mass for the owner MOSR. Used to figure out when the moment of inertia needs to be recalculated due to significant mass changes.
 		const Material* m_Material; //!< Material of this AtomGroup.
 
@@ -400,6 +407,8 @@ namespace RTE {
 		/// @param calcNormal Whether to set a normal for the Atom. Should be true for surface Atoms.
 		void AddAtomToGroup(MOSRotating* ownerMOSRotating, const Vector& spriteOffset, int x, int y, bool calcNormal);
 #pragma endregion
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this AtomGroup, effectively resetting the members of this abstraction level only.
 		void Clear();

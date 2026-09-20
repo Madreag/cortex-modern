@@ -17,6 +17,12 @@ Magazine::~Magazine() {
 }
 
 void Magazine::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AIAimMaxDistance, m_AIAimPenetration, m_AIAimVel, m_AIBlastRadius, m_CollidesWithTerrainWhileAttached, m_Discardable,
+			m_FullCapacity, m_PersistedMagazineRuntime.empty(), m_RTTRatio, m_RoundCount, m_pRegularRound, m_pTracerRound);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedMagazineRuntime.clear();
 	m_RoundCount = 0;
 	m_FullCapacity = 0;

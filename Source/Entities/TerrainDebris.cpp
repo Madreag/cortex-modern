@@ -14,6 +14,8 @@ TerrainDebris::~TerrainDebris() {
 }
 
 void TerrainDebris::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_DebrisFile, m_Bitmaps.empty(), m_BitmapCount, m_Material, m_TargetMaterial, m_DebrisPlacementMode, m_OnlyBuried, m_MinDepth, m_MaxDepth, m_MinRotation, m_MaxRotation, m_CanHFlip, m_CanVFlip, m_FlipChance, m_Density); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_DebrisFile.Reset();
 	m_Bitmaps.clear();
 	m_BitmapCount = 0;

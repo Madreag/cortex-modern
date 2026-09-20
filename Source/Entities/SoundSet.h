@@ -29,6 +29,11 @@ namespace RTE {
 
 	public:
 		SerializableOverrideMethods;
+		void TouchCheckpoint();
+		void ArmCheckpointValueTrap() { m_CheckpointValueTrap = true; }
+		void SetCheckpointOwner(SoundContainer* owner);
+		std::vector<std::pair<bool, int>> CheckpointSelections() const;
+		auto CheckpointStampValue() const { return CheckpointFields(CheckpointFieldText([this] { return SaveStructure(); }), CheckpointSelections()); }
 
 		/// How the SoundSet should choose the next sound or SoundSet to play when SelectNextSound is called.
 		enum SoundSelectionCycleMode {
@@ -125,7 +130,7 @@ namespace RTE {
 
 		/// Adds a copy of the given SoundData to this SoundSet.
 		/// @param soundDataToAdd The SoundData to copy to this SoundSet.
-		void AddSoundData(const SoundData& soundDataToAdd) { m_SoundData.push_back(soundDataToAdd); }
+		void AddSoundData(const SoundData& soundDataToAdd) { TouchCheckpoint(); m_SoundData.push_back(soundDataToAdd); }
 
 		/// Adds a copy of the passed in SoundSet as a sub SoundSet of this SoundSet. Ownership IS transferred!
 		/// @param soundSetToAdd A reference to the SoundSet to be copied in as a sub SoundSet of this SoundSet. Ownership IS transferred!
@@ -133,6 +138,7 @@ namespace RTE {
 
 		/// Adds the sub SoundSet for real, without deferring an AI hook's call.
 		void AddSoundSetNow(const SoundSet& soundSetToAdd) {
+			TouchCheckpoint();
 			SoundSet* added = new SoundSet(soundSetToAdd);
 			added->SetOwnerContainer(m_OwnerContainer);
 			m_SubSoundSets.push_back(added);
@@ -154,6 +160,7 @@ namespace RTE {
 
 		/// Sets the cycle mode for real, without deferring an AI hook's call.
 		void SetSoundSelectionCycleModeNow(SoundSelectionCycleMode newSoundSelectionCycleMode) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_SoundSelectionCycleMode, m_CurrentSelection, m_SimulationSelection); });
 			m_SoundSelectionCycleMode = newSoundSelectionCycleMode;
 			if (m_SoundSelectionCycleMode == SoundSelectionCycleMode::FORWARDS) {
 				CurrentSelection().second = -1;
@@ -230,6 +237,10 @@ namespace RTE {
 
 		std::vector<SoundData> m_SoundData; //!< The SoundData available for selection in this SoundSet.
 		std::vector<SoundSet*> m_SubSoundSets; //!< The sub SoundSets available for selection in this SoundSet.
+
+		bool m_CheckpointInitialized = false;
+		bool m_CheckpointValueTrap = false;
+		SoundContainer* m_CheckpointOwner = nullptr;
 
 		/// Clears all the member variables of this SoundSet, effectively resetting the members of this abstraction level only.
 		void Clear();

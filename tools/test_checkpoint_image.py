@@ -42,6 +42,10 @@ REQUIRED_ROWS = (
     "generational_shadow_keeps_the_freeze_value",
     "peek_reuses_the_shadow_when_the_stamp_matches",
     "one_walk_keeps_every_state_reused_root",
+    "globals_roots_are_separate_in_each_state",
+    "unwatched_roots_prevent_whole_graph_reuse",
+    "a_native_only_write_prevents_whole_graph_reuse",
+    "removed_roots_release_their_recorded_tables",
     "a_partial_walk_answers_the_unknown_table",
     "barrier_pause_reports_a_foreign_write",
 )
@@ -55,6 +59,16 @@ REQUIRED_SCENE_ROWS = (
     "image_membership_matches_the_world_structure",
     "archive_describes_the_hashed_instant",
     "a_saved_field_write_moves_the_stamp",
+    "vector_out_argument_dirties_its_root",
+    "an_atomgroup_write_moves_its_owner_stamp",
+    "a_gib_write_moves_its_owner_stamp",
+    "gib_members_and_live_offsets_stamp_the_owner",
+    "a_placement_write_moves_its_owner_stamp",
+    "a_sensor_write_moves_its_owner_stamp",
+    "a_controller_write_moves_its_owner_stamp",
+    "an_exit_reset_moves_its_owner_stamp",
+    "a_soundset_write_moves_its_owner_stamp",
+    "an_archived_matrix_cache_write_moves_the_stamp",
     "captured_graphs_parse_in_their_own_state",
 )
 
@@ -244,7 +258,40 @@ def score_root_reuse(stdout: str) -> dict:
             "whose chunk was reused byte for byte (the per-root text cache never fired)")
     if all(count == 0 for count in rewritten_all):
         failures.append("actual roots_rewritten=0 everywhere required a moved root to be written again")
-    return {"pass": not failures, "failures": failures, "rows": rows}
+    objects = re.findall(
+        r"^\[autosave\] tick=(\d+) graph_vm=(\d+) graph_part=object graph_root=(\d+) "
+        r"graph_part_us=(\d+) graph_chunk_reused=([01])", stdout, re.MULTILINE)
+    later = [row for row in objects if int(row[0]) > int(rows[0][0])]
+    if not any(row[4] == "1" for row in later):
+        failures.append("no object chunk was reused after the first capture")
+    if not any(row[4] == "0" for row in later):
+        failures.append("no object chunk was rewritten after the first capture; globals cannot satisfy this row")
+    return {"pass": not failures, "failures": failures, "rows": rows, "objects": objects}
+
+
+def score_walk_attribution(stdout: str) -> dict:
+    """Every walked capture names its root and non-root costs."""
+    parts = re.findall(
+        r"^\[autosave\] tick=(\d+) graph_vm=(\d+) graph_part=(\w+) graph_root=(\d+) "
+        r"graph_part_us=(\d+) graph_chunk_reused=([01]) graph_unwatched=(.*)$", stdout, re.MULTILINE)
+    walked = {int(tick) for tick, elapsed in re.findall(
+        r"\[autosave\] tick=(\d+) graph_walk_us=(\d+)", stdout) if int(elapsed) > 0}
+    failures = []
+    for tick in sorted(walked):
+        rows = [row for row in parts if int(row[0]) == tick]
+        required = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish", "cache"}
+        for vm in sorted({row[1] for row in rows}):
+            names = {row[2] for row in rows if row[1] == vm}
+            missing = required - names
+            if missing:
+                failures.append(f"tick {tick} VM {vm} missing walk parts {sorted(missing)}; actual {sorted(names)}")
+        if not any(row[2] == "object" for row in rows):
+            failures.append(f"tick {tick} has no per-object walk attribution")
+        if not any(row[2] == "index_finish" for row in rows):
+            failures.append(f"tick {tick} has no native index completion cost")
+    if not walked:
+        failures.append("no walked capture")
+    return {"pass": not failures, "failures": failures, "rows": parts}
 
 
 def score_hash_identity(off_trace: Path, on_trace: Path, ticks: int, on_stdout: str = "") -> dict:
@@ -483,6 +530,11 @@ def main() -> int:
     result["root_reuse"] = reuse
     if not reuse["pass"]:
         failures.extend(f"root_reuse: {item}" for item in reuse["failures"])
+
+    attribution = score_walk_attribution(skip["stdout"])
+    result["walk_attribution"] = attribution
+    if not attribution["pass"]:
+        failures.extend(f"walk_attribution: {item}" for item in attribution["failures"])
 
     # Restore and recapture: the save a second process loads must write the same archive back.
     saved = newest_autosave(skip["cwd"])

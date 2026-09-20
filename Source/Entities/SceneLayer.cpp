@@ -208,6 +208,13 @@ SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::~SceneLayerImpl() {
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_BackBitmap, m_BitmapFile, m_DrawMasked, m_Drawings.empty(), m_LastClearColor, m_MainBitmap,
+			m_MainBitmapUpdated, m_Offset, m_OriginOffset, m_ScaleFactor, m_ScaledDimensions, m_ScrollInfo,
+			m_ScrollRatio, m_WrapX, m_WrapY, m_ZOrder);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	ResetBitmapSnapshot();
 	m_BitmapFile.Reset();
 	m_MainBitmap = nullptr;
@@ -557,6 +564,7 @@ void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::MarkBitmapSnapshotDirty(int
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearData() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_BackBitmap, m_MainBitmap, m_LastClearColor); });
 	ResetBitmapSnapshot();
 	if (m_MainBitmap && m_MainBitmapOwned) {
 		destroy_bitmap(m_MainBitmap);
@@ -576,6 +584,7 @@ int SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearData() {
 
 template <bool TRACK_DRAWINGS, bool STATIC_TEXTURE>
 void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::SetScaleFactor(const Vector& newScale) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ScaleFactor, m_ScaledDimensions); });
 	m_ScaleFactor = newScale;
 	if (m_MainBitmap) {
 		m_ScaledDimensions.SetXY(static_cast<float>(m_MainBitmap->w) * newScale.GetX(), static_cast<float>(m_MainBitmap->h) * newScale.GetY());
@@ -622,6 +631,7 @@ void SceneLayerImpl<TRACK_DRAWINGS, STATIC_TEXTURE>::ClearBitmap(ColorKeys clear
 	}
 
 	std::swap(m_MainBitmap, m_BackBitmap);
+	TouchCheckpoint();
 	m_BitmapSnapshotAllDirty = true;
 
 	// Start a new thread to clear the backbuffer bitmap asynchronously.

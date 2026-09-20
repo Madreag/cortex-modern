@@ -17,6 +17,12 @@ PieSlice::~PieSlice() {
 }
 
 void PieSlice::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_CanBeMiddleSlice, m_Direction, m_DrawFlippedToMatchAbsoluteAngle, m_Enabled, m_FunctionName.empty(), m_Icon,
+			m_Type);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Type = PieSliceType::NoType;
 	m_Direction = Directions::Any;
 	m_CanBeMiddleSlice = true;
@@ -168,6 +174,7 @@ PieMenu* PieSlice::GetSubPieMenu() const {
 }
 
 void PieSlice::SetSubPieMenu(PieMenu* newSubPieMenu) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_SubPieMenu); });
 	m_SubPieMenu = std::unique_ptr<PieMenu, PieMenuCustomDeleter>(newSubPieMenu);
 }
 

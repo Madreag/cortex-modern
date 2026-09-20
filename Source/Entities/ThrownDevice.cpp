@@ -17,6 +17,12 @@ ThrownDevice::~ThrownDevice() {
 }
 
 void ThrownDevice::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_ActivatesWhenReleased, m_ActivationSound, m_EndThrowOffset, m_MaxThrowVel, m_MinThrowVel, m_StartThrowOffset,
+			m_StrikerLever, m_TriggerDelay);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_ActivationSound = std::make_shared<SoundContainer>();
 	m_ActivationSound->Reset();
 	m_StartThrowOffset.Reset();
@@ -114,6 +120,7 @@ float ThrownDevice::GetCalculatedMaxThrowVelIncludingArmThrowStrength() {
 }
 
 void ThrownDevice::ResetAllTimers() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ActivationTimer); });
 	double elapsedTime = m_Activated ? m_ActivationTimer.GetElapsedSimTimeMS() : 0;
 	HeldDevice::ResetAllTimers();
 	if (m_Activated) {

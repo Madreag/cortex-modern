@@ -18,6 +18,7 @@ SceneObject::~SceneObject() {
 }
 
 void SceneObject::SOPlacer::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pObjectReference, m_Offset, m_RotAngle, m_HFlipped, m_Team); }, m_CheckpointOwner != nullptr);
 	m_pObjectReference = 0;
 	m_Offset.Reset();
 	m_RotAngle = 0;
@@ -130,6 +131,8 @@ SceneObject* SceneObject::SOPlacer::GetPlacedCopy(const SceneObject* pParent) co
 }
 
 void SceneObject::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Pos.Reset();
 	m_OzValue = 0;
 	m_Buyable = true;

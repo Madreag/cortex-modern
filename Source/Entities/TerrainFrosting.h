@@ -12,6 +12,7 @@ namespace RTE {
 	public:
 		SerializableClassNameGetter
 		SerializableOverrideMethods
+		void TouchCheckpoint();
 
 #pragma region Creation
 		/// Constructor method used to instantiate a TerrainFrosting object in system memory and make it ready for use.
@@ -34,6 +35,8 @@ namespace RTE {
 		int m_MinThickness; //!< The minimum height above the target Material, in pixels.
 		int m_MaxThickness; //!< The maximum height above the target Material, in pixels.
 		bool m_InAirOnly; //!< Whether the frosting only appears where there is air (i.e. does not appear where the terrain background layer is showing).
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this TerrainFrosting, effectively resetting the members of this abstraction level only.
 		void Clear();

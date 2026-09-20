@@ -24,6 +24,16 @@ ADoor::~ADoor() {
 }
 
 void ADoor::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_CanBeSquished, m_ChangedDirectionAfterStop, m_ClosedAngle, m_ClosedByDefault, m_ClosedOffset, m_Door,
+			m_DoorDirectionChangeSound, m_DoorMaterialDrawn, m_DoorMaterialID, m_DoorMaterialRedrawTimer, m_DoorMaterialTempErased, m_DoorMoveEndSound,
+			m_DoorMoveSound, m_DoorMoveStartSound, m_DoorMoveStopTime, m_DoorMoveTime, m_DoorMoveTimer, m_DoorState,
+			m_DoorStateOnStop, m_DrawMaterialLayerWhenClosed, m_DrawMaterialLayerWhenOpen, m_InitialSpriteAnimDuration, m_LastDoorMaterialPos, m_OpenAngle,
+			m_OpenOffset, m_PersistedADoorRuntime.empty(), m_ResetToDefaultStateDelay, m_ResetToDefaultStateTimer, m_ResumeAfterStop, m_SensorInterval,
+			m_SensorTimer, m_Sensors.empty());
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedADoorRuntime.clear();
 	m_InitialSpriteAnimDuration = 0;
 	m_Sensors.clear();
@@ -78,6 +88,7 @@ int ADoor::Create(const ADoor& reference) {
 
 	for (const ADSensor& sensor: reference.m_Sensors) {
 		m_Sensors.push_back(sensor);
+		m_Sensors.back().SetCheckpointOwner(this);
 	}
 
 	m_SensorInterval = reference.m_SensorInterval;
@@ -173,6 +184,7 @@ int ADoor::ReadProperty(const std::string_view& propName, Reader& reader) {
 		ADSensor sensor;
 		reader >> sensor;
 		m_Sensors.push_back(sensor);
+		m_Sensors.back().SetCheckpointOwner(this);
 	});
 	MatchProperty("DrawMaterialLayerWhenOpen", { reader >> m_DrawMaterialLayerWhenOpen; });
 	MatchProperty("DrawMaterialLayerWhenClosed", { reader >> m_DrawMaterialLayerWhenClosed; });
@@ -279,6 +291,7 @@ void ADoor::Destroy(bool notInherited) {
 }
 
 void ADoor::SetDoor(Attachable* newDoor) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Door, m_DoorMaterialID); });
 	if (m_DoorMaterialDrawn) {
 		RTEAssert(m_Door, "Door material drawn without an m_Door! This should've been cleared when the door was!");
 		EraseDoorMaterial();

@@ -34,6 +34,15 @@ MOSprite::~MOSprite() {
 }
 
 void MOSprite::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AngOscillations, m_AngularVel, m_ForcedHFlip, m_Frame, m_FrameCount, m_GraphicalIcon,
+			m_HFlipped, m_IconFile, m_PersistedMOSpriteRuntime.empty(), m_PrevAngVel, m_PrevRotation, m_Rotation,
+			m_SettleMaterialDisabled, m_SpriteAnimDuration, m_SpriteAnimIsReversingFrames, m_SpriteAnimMode, m_SpriteAnimTimer, m_SpriteDiameter,
+			m_SpriteFile, m_SpriteModified, m_SpriteOffset, m_SpriteRadius, m_aSprite.empty(), m_pEntryWound,
+			m_pExitWound);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedMOSpriteRuntime.clear();
 	m_SpriteFile.Reset();
 	m_aSprite.clear();
@@ -289,6 +298,7 @@ void MOSprite::DiscardPersistedSnapshotState() {
 }
 
 void MOSprite::SetEntryWound(const std::string& presetName, std::string moduleName) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pEntryWound); });
 	if (presetName == "")
 		m_pEntryWound = 0;
 	else
@@ -296,6 +306,7 @@ void MOSprite::SetEntryWound(const std::string& presetName, std::string moduleNa
 }
 
 void MOSprite::SetExitWound(const std::string& presetName, std::string moduleName) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pExitWound); });
 	if (presetName == "")
 		m_pExitWound = 0;
 	else
@@ -393,6 +404,7 @@ void MOSprite::SetFrame(unsigned int newFrame) {
 }
 
 bool MOSprite::SetNextFrame() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Frame); });
 	if (++m_Frame >= m_FrameCount) {
 		m_Frame = 0;
 		return true;
@@ -523,6 +535,7 @@ std::vector<Vector>* MOSprite::GetAllSpritePixelPositions(const Vector& origin, 
 bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex, int ignoreIndex, bool invert) {
 	if (m_aSprite.empty()) return false;
 	if (!m_SpriteModified) {
+		TouchCheckpoint();
 		std::vector<BITMAP*> spriteList;
 		std::vector<std::shared_ptr<BITMAP>> owners;
 
@@ -543,6 +556,7 @@ bool MOSprite::SetSpritePixelIndex(int x, int y, int whichFrame, int colorIndex,
 	unsigned int clampedFrame = std::max(std::min(whichFrame, static_cast<int>(m_FrameCount) - 1), 0);
 	BITMAP* targetSprite = m_aSprite[clampedFrame];
 	if (is_inside_bitmap(targetSprite, x, y, 0) && (ignoreIndex < 0 || (_getpixel(targetSprite, x, y) != ignoreIndex) != invert)) {
+		if (_getpixel(targetSprite, x, y) != colorIndex) TouchCheckpoint();
 		_putpixel(targetSprite, x, y, colorIndex);
 		g_GLResourceMan.DestroyBitmapInfo(targetSprite);
 		return true;

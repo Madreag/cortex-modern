@@ -30,6 +30,7 @@
 #include <boost/mpl/apply_wrap.hpp>
 #include <boost/mpl/identity.hpp>
 #include <luabind/dependency_policy.hpp>
+#include <utility>
 
 namespace luabind { namespace detail
 {
@@ -133,6 +134,35 @@ namespace luabind { namespace detail
 		return set_matcher<Param, Policy>::apply;
 	}
 
+	template<class D, class V>
+	auto checkpoint_member_changed(const D& before, const V& after, int) -> decltype(bool(before != after)) { return before != after; }
+	template<class D, class V>
+	bool checkpoint_member_changed(const D&, const V&, long) { return true; }
+
+	template<class T>
+	auto checkpoint_member_stamp(T* owner, int) -> decltype(owner->TouchCheckpoint(), void()) { owner->TouchCheckpoint(); }
+	template<class T>
+	void checkpoint_member_stamp(T*, long) {}
+
+	template<class T>
+	auto checkpoint_member_owner(object_rep* rep, T* owner, int) -> decltype(owner->TouchCheckpoint(), void())
+	{
+		rep->set_checkpoint_owner(owner, [](void* value) { static_cast<T*>(value)->TouchCheckpoint(); });
+	}
+	template<class T>
+	void checkpoint_member_owner(object_rep*, T*, long) {}
+
+	template<class T, class D, class V>
+	void checkpoint_member_assign(object_rep* rep, T* owner, D T::* member, V&& value)
+	{
+		if (checkpoint_member_changed(owner->*member, value, 0))
+		{
+			checkpoint_alias_mutated(rep);
+			checkpoint_member_stamp(owner, 0);
+		}
+		owner->*member = std::forward<V>(value);
+	}
+
 	template<class T, class D, class Policies>
 	struct auto_set : Policies
 	{
@@ -161,7 +191,7 @@ namespace luabind { namespace detail
 
 			typedef typename find_conversion_policy<1,Policies>::type converter_policy;
 			typename mpl::apply_wrap2<converter_policy,D,lua_to_cpp>::type converter;
-			ptr->*member = converter.apply(L, LUABIND_DECORATE_TYPE(D), 3);
+			checkpoint_member_assign(obj, ptr, member, converter.apply(L, LUABIND_DECORATE_TYPE(D), 3));
 
 			int nret = lua_gettop(L) - nargs;
 
@@ -236,6 +266,16 @@ namespace luabind { namespace detail
 			const int indices[] = { 1, nargs + nret };
 
 			policy_list_postcall<policy_list>::apply(L, indices);
+			// The reference converter already keeps its parent alive through the dependency policy.
+			if (converter1_t::is_value_converter::value && nret == 1)
+			{
+				object_rep* child = is_class_object(L, -1);
+				if (child && child != obj)
+				{
+					child->set_checkpoint_parent(obj);
+					checkpoint_member_owner(obj, ptr, 0);
+				}
+			}
 
 			return nret;
 		}
@@ -244,4 +284,3 @@ namespace luabind { namespace detail
 }}
 
 #endif // LUABIND_PROPERTY_HPP_INCLUDED
-

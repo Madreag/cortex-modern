@@ -38,6 +38,14 @@ ACrab::~ACrab() {
 }
 
 void ACrab::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AimRangeLowerLimit, m_AimRangeUpperLimit, m_Aiming, m_BackupLBGFootGroup, m_BackupLFGFootGroup, m_BackupRBGFootGroup,
+			m_BackupRFGFootGroup, m_LockMouseAimInput, m_MovementState, m_PersistedACrabRuntime.empty(), m_StrideFrame, m_StrideSound,
+			m_StrideStart, m_pJetpack, m_pLBGFootGroup, m_pLBGLeg, m_pLFGFootGroup, m_pLFGLeg,
+			m_pRBGFootGroup, m_pRBGLeg, m_pRFGFootGroup, m_pRFGLeg, m_pTurret, m_Paths);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedACrabRuntime.clear();
 	m_pTurret = 0;
 	m_pLFGLeg = 0;
@@ -719,6 +727,7 @@ Vector ACrab::GetEyePos() const {
 }
 
 void ACrab::SetTurret(Turret* newTurret) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pTurret); });
 	if (m_pTurret && m_pTurret->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pTurret);
 	}
@@ -741,6 +750,7 @@ void ACrab::SetTurret(Turret* newTurret) {
 }
 
 void ACrab::SetJetpack(AEJetpack* newJetpack) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pJetpack); });
 	if (m_pJetpack && m_pJetpack->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pJetpack);
 	}
@@ -765,6 +775,7 @@ void ACrab::SetJetpack(AEJetpack* newJetpack) {
 }
 
 void ACrab::SetLeftFGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pLFGLeg); });
 	if (m_pLFGLeg && m_pLFGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLFGLeg);
 	}
@@ -788,6 +799,7 @@ void ACrab::SetLeftFGLeg(Leg* newLeg) {
 }
 
 void ACrab::SetLeftBGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pLBGLeg); });
 	if (m_pLBGLeg && m_pLBGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pLBGLeg);
 	}
@@ -811,6 +823,7 @@ void ACrab::SetLeftBGLeg(Leg* newLeg) {
 }
 
 void ACrab::SetRightFGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pRFGLeg); });
 	if (m_pRFGLeg && m_pRFGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRFGLeg);
 	}
@@ -833,6 +846,7 @@ void ACrab::SetRightFGLeg(Leg* newLeg) {
 }
 
 void ACrab::SetRightBGLeg(Leg* newLeg) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pRBGLeg); });
 	if (m_pRBGLeg && m_pRBGLeg->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pRBGLeg);
 	}
@@ -1761,6 +1775,7 @@ float ACrab::GetLimbPathTravelSpeed(MovementState movementState) {
 }
 
 void ACrab::SetLimbPathTravelSpeed(MovementState movementState, float newSpeed) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[LEFTSIDE][FGROUND][movementState].GetTravelSpeed(), m_Paths[RIGHTSIDE][FGROUND][movementState].GetTravelSpeed(), m_Paths[LEFTSIDE][BGROUND][movementState].GetTravelSpeed(), m_Paths[RIGHTSIDE][BGROUND][movementState].GetTravelSpeed()); });
 	m_Paths[LEFTSIDE][FGROUND][movementState].SetTravelSpeed(newSpeed);
 	m_Paths[RIGHTSIDE][FGROUND][movementState].SetTravelSpeed(newSpeed);
 
@@ -1773,6 +1788,7 @@ float ACrab::GetLimbPathPushForce(MovementState movementState) {
 }
 
 void ACrab::SetLimbPathPushForce(MovementState movementState, float newForce) {
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[LEFTSIDE][FGROUND][movementState].GetPushForce(), m_Paths[RIGHTSIDE][FGROUND][movementState].GetPushForce(), m_Paths[LEFTSIDE][BGROUND][movementState].GetPushForce(), m_Paths[RIGHTSIDE][BGROUND][movementState].GetPushForce()); });
 	m_Paths[LEFTSIDE][FGROUND][movementState].SetPushForce(newForce);
 	m_Paths[RIGHTSIDE][FGROUND][movementState].SetPushForce(newForce);
 

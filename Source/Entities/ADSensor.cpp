@@ -1,4 +1,6 @@
 #include "ADSensor.h"
+#include "ADoor.h"
+#include "CheckpointImage.h"
 #include "Actor.h"
 #include "SceneMan.h"
 
@@ -15,9 +17,16 @@ ADSensor::~ADSensor() {
 }
 
 void ADSensor::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_StartOffset, m_SensorRay, m_Skip); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_StartOffset.Reset();
 	m_SensorRay.Reset();
 	m_Skip = 3;
+}
+
+void ADSensor::TouchCheckpoint() {
+	if (m_CheckpointOwner) m_CheckpointOwner->TouchCheckpoint();
+	CheckpointValueWritten(this);
 }
 
 int ADSensor::Create(const ADSensor& reference) {

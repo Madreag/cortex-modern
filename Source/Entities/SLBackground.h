@@ -59,7 +59,7 @@ namespace RTE {
 
 		/// Sets frame number that this SLBackground will draw.
 		/// @param newFrame The frame number that is supposed to be drawn.
-		void SetFrame(int newFrame) { m_Frame = std::clamp(newFrame, 0, m_FrameCount - 1); }
+		void SetFrame(int newFrame) { const int value = std::clamp(newFrame, 0, m_FrameCount - 1); if (m_Frame != value) TouchCheckpoint(); m_Frame = value; }
 
 		/// Gets the animation mode of this SLBackground.
 		/// @return The currently set animation mode. See SpriteAnimMode enumeration.
@@ -67,7 +67,7 @@ namespace RTE {
 
 		/// Sets the animation mode of this SLBackground.
 		/// @param newAnimMode The new animation mode. See SpirteAnimMode enumeration.
-		void SetSpriteAnimMode(SpriteAnimMode newAnimMode = SpriteAnimMode::NOANIM) { m_SpriteAnimMode = std::clamp(newAnimMode, SpriteAnimMode::NOANIM, SpriteAnimMode::ALWAYSPINGPONG); }
+		void SetSpriteAnimMode(SpriteAnimMode newAnimMode = SpriteAnimMode::NOANIM) { const auto value = std::clamp(newAnimMode, SpriteAnimMode::NOANIM, SpriteAnimMode::ALWAYSPINGPONG); if (m_SpriteAnimMode != value) TouchCheckpoint(); m_SpriteAnimMode = value; }
 
 		/// Gets the time it takes to complete a full animation cycle of this SLBackground.
 		/// @return The animation cycle duration, in milliseconds.
@@ -119,7 +119,7 @@ namespace RTE {
 
 		/// Sets the auto-scroll step (pixels to advance per interval) value on the X axis.
 		/// @param newStepX The new auto-scroll step value on the X axis.
-		void SetAutoScrollStepX(float newStepX) { m_AutoScrollStep.SetX(newStepX); }
+		void SetAutoScrollStepX(float newStepX) { if (m_AutoScrollStep.GetX() != newStepX) TouchCheckpoint(); m_AutoScrollStep.SetX(newStepX); }
 
 		/// Gets the auto-scroll step (pixels to advance per interval) value on the Y axis.
 		/// @return The auto-scroll step value on the Y axis.
@@ -127,7 +127,7 @@ namespace RTE {
 
 		/// Sets the auto-scroll step (pixels to advance per interval) value on the Y axis.
 		/// @param newStepY The new auto-scroll step value on the Y axis.
-		void SetAutoScrollStepY(float newStepY) { m_AutoScrollStep.SetY(newStepY); }
+		void SetAutoScrollStepY(float newStepY) { if (m_AutoScrollStep.GetY() != newStepY) TouchCheckpoint(); m_AutoScrollStep.SetY(newStepY); }
 #pragma endregion
 
 #pragma region Concrete Methods
@@ -182,6 +182,8 @@ namespace RTE {
 		int m_FillColorDown; //!< Palette index to use for filling the gap between the lower edge of the bitmap and the lower edge of the screen/scene box in cases where the bitmap doesn't cover the whole target area.
 
 		bool m_IgnoreAutoScale; //!< Whether auto-scaling settings are ignored and the read-in scale factor is used instead.
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this SLBackground, effectively resetting the members of this abstraction level only.
 		void Clear();
