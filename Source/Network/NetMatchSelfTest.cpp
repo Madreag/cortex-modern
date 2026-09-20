@@ -5386,7 +5386,15 @@ namespace RTE {
 					return fail(peer->name + " did not receive the host's snapshot (" + std::to_string(received.size()) + " of " + std::to_string(snapshot.size()) + " bytes)");
 				}
 			}
-			if (!PlayRematchTicks(fixture, 8)) return fail("the healed round never committed");
+			if (!PlayRematchTicks(fixture, 8)) {
+				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+					step += "; " + peer->name + " delay=" + std::to_string(peer->round->GetConfig().inputDelayFrames) +
+					        " priming=" + std::to_string(peer->round->NeedsResyncPriming()) + " next=" + std::to_string(peer->round->GetStats().nextFrame) +
+					        " produced=" + std::to_string(peer->nextProduce) + " applied=" + std::to_string(peer->lastApplied) +
+					        " stop=" + peer->round->GetStats().timeoutReason;
+				}
+				return fail("the healed round never committed");
+			}
 			const auto sameTicks = [&step](const std::map<uint64_t, std::string>& reference, const std::map<uint64_t, std::string>& other, const std::string& who, size_t& shared) {
 				shared = 0;
 				for (const auto& [frame, text]: reference) {
