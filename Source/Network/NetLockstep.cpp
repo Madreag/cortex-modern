@@ -7300,8 +7300,10 @@ namespace RTE {
 			ReadoptRound(start.roundId, nowMs);
 		}
 		if (m_PeerAdmissions.contains(start.localPeerId) && m_RelayHost) {
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-				if (peer == start.localPeerId || (peer != m_Config.localPeerId && !IsKnownRemotePeer(peer)) || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
+			auto members = m_RemotePeerIds;
+			members.push_back(m_Config.localPeerId);
+			for (uint8_t peer: members) {
+				if (peer == start.localPeerId || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
 				NetLockstepStart member = start; member.localPeerId = peer; member.inputDelayFrames = InputDelayAt(peer, start.startFrame);
 				member.roundId = m_RoundId;
 				SendPacket({member}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
@@ -7409,7 +7411,11 @@ namespace RTE {
 			++peerStats.staleRoundPackets;
 			return;
 		}
-		if (!IsKnownRemotePeer(frame.senderPeerId)) {
+		const auto authority = m_RemoteTransports.find(GetHostPeerId());
+		const bool awaitingWorldRoster = IsPersistentWorldRound() && m_Config.joinsRunningRound && !m_RelayHost &&
+		    m_State == NetLockstepState::WaitingForStart && authority != m_RemoteTransports.end() && authority->second == fromTransport &&
+		    frame.senderPeerId > 0 && frame.senderPeerId <= m_Config.peerCount && frame.senderPeerId != m_Config.localPeerId;
+		if (!IsKnownRemotePeer(frame.senderPeerId) && !awaitingWorldRoster) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
 			return;
 		}
