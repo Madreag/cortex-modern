@@ -3,8 +3,16 @@
   "timeout_ms": 170000,
   "steps": [
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
       "op": "wait",
-      "sim_at_least": 1200
+      "sim_at_least": 180
+    },
+    {
+      "op": "menu",
+      "command": "video_mark sp-feel-baseline"
     },
     {
       "op": "key_down",
@@ -175,7 +183,7 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 1800
+      "sim_at_least": 900
     },
     {
       "op": "signal",
