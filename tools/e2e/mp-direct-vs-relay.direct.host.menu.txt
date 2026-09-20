@@ -42,6 +42,12 @@ assert_visible CollectionBoxHostPageRules 1
 dump_host_options
 video_mark direct-mp-options-network
 activate TabHostPageNetwork
+wait_ms 600
+activate TabHostNetRouting
+wait_ms 600
+combo_select ComboHostNetVisibility Internet: Listed
+wait_ms 900
+assert_label ComboHostNetVisibility Listed
 wait_ms 660
 assert_visible CollectionBoxHostPageNetwork 1
 dump_host_options

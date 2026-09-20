@@ -25,8 +25,12 @@ settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 660
 assert_substate JoinSetup
-settext TextJoinAddress 127.0.0.1
-settext TextJoinPort {PORT}
+wait_file {DIRECTORY_ROOT}/listed.json 30
+wait_ms 4000
+assert_visible ListLanGames 1
+activate GameRow0
+wait_ms 900
+assert_label TextJoinPort {PORT}
 wait_ms 495
 activate ButtonMultiplayerConnect
 video_mark relay-mp-lobby-client
