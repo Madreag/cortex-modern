@@ -1295,6 +1295,26 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestHeldRejoinKeepsItsRoute() {
+			NetH4TicketRecord record;
+			record.hostAddress = "192.168.4.2";
+			record.directorySessionId = c_WorldId;
+			record.persistentWorld = true;
+			NetMatchServiceRequest live;
+			live.address = "127.0.0.1"; live.port = 49478;
+			const auto local = NetMatchService::BuildHeldRejoinRequest(record, "Player", true, live);
+			if (local.address != live.address || local.port != live.port || !local.sessionId.empty() || !local.persistentWorld)
+				return Fail("a held direct-IP client replaced its live route with the world's directory identity");
+			live.address.clear(); live.sessionId = "live-internet-session"; live.port = 42100;
+			const auto internet = NetMatchService::BuildHeldRejoinRequest(record, "Player", true, live);
+			if (internet.address != live.address || internet.sessionId != live.sessionId || internet.port != live.port)
+				return Fail("a held Internet client lost its live session route");
+			const auto restarted = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
+			if (restarted.address != record.hostAddress || restarted.sessionId != record.directorySessionId)
+				return Fail("a restarted client lost its stored ticket route");
+			return 0;
+		}
+
 		int TestTicketRejoinTargetsTheWorld() {
 			NetH4TicketRecord record;
 			record.epoch.fill(7);
@@ -5826,6 +5846,10 @@ namespace RTE {
 			s_FailTag = "net-world-watermark-selftest";
 			return TestImageWatermarkSurvivesAnEmptyCopy();
 		}
+		if (std::strcmp(name, "-net-world-held-route-selftest") == 0) {
+			s_FailTag = "net-world-held-route-selftest";
+			return TestHeldRejoinKeepsItsRoute();
+		}
 		if (std::strcmp(name, "ticket") == 0 || std::strcmp(name, "-net-world-ticket-selftest") == 0) {
 			s_FailTag = "net-world-ticket-selftest";
 			return TestTicketRejoinTargetsTheWorld();
@@ -6077,6 +6101,7 @@ namespace RTE {
 		if (const int result = TestImageWatermarkSurvivesAnEmptyCopy(); result != 0) {
 			return result;
 		}
+		if (const int result = TestHeldRejoinKeepsItsRoute(); result != 0) return result;
 		if (const int result = TestTicketRejoinTargetsTheWorld(); result != 0) {
 			return result;
 		}
