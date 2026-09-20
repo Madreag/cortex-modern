@@ -389,6 +389,16 @@ def check_drop_receipts(results, scratch):
     record["record"]["injected_termination"] = "scenario drop after recorded tick 601"
     _, evidence = driver.item_evidence(record, item)
     ok &= row(results, "drop/receipt-and-runner-termination", evidence["probe"] == "pass")
+    record.update(peer="client", video=str(root / "client.mp4"), menu_script_failures=[])
+    host = {**record, "peer": "host"}
+    scenario = {"name": "drop", "checklist": [{"id": "host-sees-drop", "peer": "host", "screen": "game",
+                 "peer_drop": {"peer": "client", "tick": 601}}]}
+    capture = {"name": "run0", "peers": [host, record]}
+    document = driver.review(scenario, capture, root)
+    ok &= row(results, "drop/survivor-requires-peer-receipt", document["checklist"][0]["peer_drop"]["pass"])
+    record["record"]["injected_termination"] = None
+    document = driver.review(scenario, capture, root)
+    ok &= row(results, "drop/peer-failure-is-not-planned-drop", document["checklist"][0]["probe"] == "fail")
     (root / "runtime").mkdir()
     (root / "runtime/LogConsole.txt").write_text("later process\n")
     (root / "console.log").write_text("original process\n")
