@@ -1405,6 +1405,9 @@ void MainMenuGUI::ApplyMultiplayerHostActivity() {
 			m_MultiplayerHostInfoLabel->SetText(sceneName + " - " + NetMatchConfigUtil::ModeLabel(m_MultiplayerHostMode));
 		}
 	}
+	// Selecting an item puts the whole name back in the closed box, so the line is refitted here.
+	FitClosedComboText(m_MultiplayerHostActivityCombo);
+	FitClosedComboText(m_MultiplayerHostSceneCombo);
 }
 
 // ---- §9.2/9.3 host options: six tabbed pages over the lobby, or the host setup's draft of the

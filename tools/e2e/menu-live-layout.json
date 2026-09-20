@@ -323,9 +323,9 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -334,10 +334,10 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -346,9 +346,9 @@
       "peer": "host",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     },
     {
@@ -357,9 +357,9 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -368,10 +368,10 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -380,9 +380,9 @@
       "peer": "client",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     },
     {
@@ -391,9 +391,9 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -402,10 +402,10 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -414,9 +414,9 @@
       "peer": "host",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     },
     {
@@ -425,9 +425,9 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -436,10 +436,10 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -448,9 +448,9 @@
       "peer": "client",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     },
     {
@@ -459,9 +459,9 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -470,10 +470,10 @@
       "peer": "host",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -482,9 +482,9 @@
       "peer": "host",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     },
     {
@@ -493,9 +493,9 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The toast band lies inside the screen and clear of the open seats panel.",
-      "assert": "Native geometry readback of the band and the panel.",
-      "log_regex": [
-        "\\[menu-script\\] assert_toast_band .*\\\"inside_screen\\\":true.*\\\"clear_of_seats\\\":true.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
       ]
     },
     {
@@ -504,10 +504,10 @@
       "peer": "client",
       "mark": "live-toast-band",
       "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
-      "assert": "Native label readbacks on the status widget.",
-      "log_regex": [
-        "\\[menu-script\\] assert_net_label LabelNetMatchStatus \\\"PACE\\\" .* PASS",
-        "\\[menu-script\\] assert_net_label_absent LabelNetMatchStatus \\\"Your machine cannot keep up\\\" .* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
       ]
     },
     {
@@ -516,9 +516,9 @@
       "peer": "client",
       "mark": "live-pause-menu",
       "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
-      "assert": "Software panel opacity readback over the running match.",
-      "log_regex": [
-        "\\[menu-script\\] assert_opaque_panel .*\\\"uncovered_pixels\\\":0.* PASS"
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
       ]
     }
   ]
