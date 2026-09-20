@@ -6683,6 +6683,15 @@ namespace RTE {
 		// The epoch was set when this activation was announced, ahead of every frame the round has
 		// sent, so the live stream has already restarted at it for the members that were here.
 		// Everything already on the wire for its first required frames went out before it was a peer.
+		NetLockstepStart admitted;
+		admitted.sessionId = m_Config.sessionId; admitted.roundId = m_RoundId;
+		admitted.startFrame = firstRequiredFrame; admitted.inputDelayFrames = delay;
+		admitted.localPeerId = peerId; admitted.peerCount = m_Config.peerCount;
+		admitted.controllerFrameVersion = ControllerFrame::c_Version;
+		admitted.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		admitted.scenario = m_Config.scenario; admitted.ownershipPolicy = m_Config.ownershipPolicy;
+		for (uint8_t survivor: m_RemotePeerIds) if (survivor != peerId && !IsPeerGoneAtFrame(survivor, firstRequiredFrame))
+			SendPacket({admitted}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, survivor);
 		m_LastAdmissionReplayFrames = ReplaySentFramesTo(peerId, firstRequiredFrame);
 		return true;
 	}
