@@ -1656,6 +1656,9 @@ namespace RTE {
 			producing->FinishFrameWait(NetLockstepNowMs());
 		}
 		const auto& config = producing->GetConfig();
+		const bool warned = producing->GetStats().localMachineSlow;
+		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
+		if (!warned && producing->GetStats().localMachineSlow) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
 			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
