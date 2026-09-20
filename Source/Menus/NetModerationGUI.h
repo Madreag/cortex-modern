@@ -49,6 +49,7 @@ namespace RTE {
 		const OverlayRect& GetStatusRect() const { return m_StatusRect; }
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
+		const OverlayRect& GetRosterRect() const { return m_RosterRect; }
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
 
 		/// What the chat band laid out on the last frame, so a check can hold the rows it drew against the heights it used.
@@ -109,6 +110,7 @@ namespace RTE {
 		bool MatchStatusWanted() const;
 		/// Draws the status widget: the box on tall screens, a single-line strip in the top HUD gap on short ones.
 		void DrawMatchStatus(const NetLobbySnapshot& snapshot);
+		void RecordStatusObservation(const NetLobbySnapshot& snapshot, bool hostLost, long long currentWaitMs);
 		void DrawMatchChat(const NetLobbySnapshot& snapshot);
 		void UpdateMatchChat(const NetLobbySnapshot& snapshot);
 		/// Places the seats panel for the current screen height; a compact screen's top band keeps
@@ -124,6 +126,13 @@ namespace RTE {
 		OverlayRect m_StatusRect;
 		OverlayRect m_ToastRect;
 		OverlayRect m_ChatRect;
+		OverlayRect m_RosterRect;
+		long long m_StatusWaitStartedUs = 0;
+		long long m_LastStatusObservationMs = 0;
+		bool m_LastSlowNotice = false;
+		bool m_LastHostLost = false;
+		std::string m_LastHandoverToast;
+		uint64_t m_LastHandoverRound = 0;
 		ChatBand m_ChatBand;
 		std::array<GUILabel*, 8> m_MatchChat{};
 		GUITextBox* m_MatchChatInput = nullptr;
