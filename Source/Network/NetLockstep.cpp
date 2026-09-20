@@ -4882,7 +4882,19 @@ namespace RTE {
 		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
-			for (uint8_t peer: missing) held = ProposePeerHold(peer, nowMs) || held;
+			for (uint8_t peer: missing) {
+				// A sender whose first frame of the round has not arrived is still filling its pipeline:
+				// the round starts skewed by the start message's own trip and each peer's activity
+				// restart, and its delay window is the budget that fill was agreed to take. The bound
+				// measures lateness, so it counts that window once, then judges the peer like any other.
+				if (!m_PeersPlayedThisRound.contains(peer)) {
+					const auto& rampStats = m_Stats.peers[peer];
+					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
+					    rampStats.pingMs + rampStats.jitterMs;
+					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+				}
+				held = ProposePeerHold(peer, nowMs) || held;
+			}
 			return held;
 		}
 		return false;
@@ -5139,8 +5151,11 @@ namespace RTE {
 					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
+					// A peer still filling its pipeline owes its delay window before it counts as silent.
+					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) ? 0 :
+					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs));
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
-					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget) unresponsive.insert(peer);
+					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp) unresponsive.insert(peer);
 				}
 			}
 			for (uint8_t peer: unresponsive) ProposePeerHold(peer, nowMs);
@@ -5596,7 +5611,9 @@ namespace RTE {
 			std::cout << "[lockstep-test] received peer=" << static_cast<int>(frame.senderPeerId)
 			          << " target=" << frame.targetFrame << std::endl;
 		}
-		m_PeersPlayedThisRound.insert(frame.senderPeerId);
+		// A sender's ramp ends with its first frame; the wait it was allowed while filling its pipeline
+		// is not lateness to charge against the next one, so the missing-frame deadline starts again.
+		if (m_PeersPlayedThisRound.insert(frame.senderPeerId).second) m_FirstMissingFrame.reset();
 		if (!frame.commands.empty()) {
 			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
 		}

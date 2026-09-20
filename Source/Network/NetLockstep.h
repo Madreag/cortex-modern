@@ -804,6 +804,7 @@ namespace RTE {
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
+		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		std::vector<uint8_t> ResumePeerIds() const;
@@ -1145,9 +1146,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
+		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_FirstMissingFrame;
 		uint64_t m_FirstMissingMs = 0;
-		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
 		bool m_ConsumerWaitCounted = false;
