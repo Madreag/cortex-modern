@@ -707,6 +707,12 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				ScenarioRunner::ReleaseLockstepControlOverridesOf(transition->peerId);
 			}
 			Actor* seated = nullptr;
+			if (transition->kind == NetGameWorldTransition::Activate && transition->player >= 0 && transition->player < Players::MaxPlayerCount &&
+			    std::find(readyFrame.reclaimedPeerIds.begin(), readyFrame.reclaimedPeerIds.end(), transition->peerId) != readyFrame.reclaimedPeerIds.end()) {
+				Actor* brain = activity->GetPlayerBrain(transition->player);
+				if (g_MovableMan.IsActor(brain) && brain->GetTeam() == transition->team &&
+				    ScenarioRunner::GetLockstepControlOverrideOwner(brain->GetUniqueID()) == transition->peerId) seated = brain;
+			}
 			if (transition->kind == NetGameWorldTransition::Activate) {
 				// The candidates come from lockstep state alone - the committed roster's order and the
 				// synced handoff map - so every peer picks the same actor, and never one a member holds.
@@ -720,7 +726,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 						brains.push_back(NetWorldBrainCandidate{uid, candidate->GetTeam(), ScenarioRunner::GetLockstepControlOverrideOwner(uid)});
 					}
 				}
-				if (const int64_t chosen = ChooseWorldActivateBrain(brains, *transition); chosen != 0) {
+				if (const int64_t chosen = ChooseWorldActivateBrain(brains, *transition); !seated && chosen != 0) {
 					seated = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(chosen)));
 				}
 			}

@@ -36,6 +36,8 @@ namespace RTE {
 		std::string remoteAddress; //!< For ICE, the remote candidate in use; GNS clears it for a relayed route.
 		int flags = 0;
 		uint32_t relayPop = 0;
+		std::string connectedRoute;
+		std::string selectedCandidateType;
 		std::vector<std::string> config; //!< "Name=value" of each config value the P2P path sets, read back from the connection.
 	};
 
@@ -54,6 +56,7 @@ namespace RTE {
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
 		uint32_t GetPeerPingMs(NetPeerId peerId) const override;
+		std::string GetConnectedRoute(NetPeerId peerId) const override { return GetPeerConnectionInfo(peerId).connectedRoute; }
 
 		/// P2P host: listens on a virtual port; connect requests arrive through ReceiveP2PSignal.
 		bool StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error = nullptr);

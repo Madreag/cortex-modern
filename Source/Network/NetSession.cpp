@@ -800,7 +800,7 @@ namespace RTE {
 				return;
 			}
 			if (m_HostBanStore != nullptr && m_HostBanStore->IsBanned(proof->publicId, m_SessionId)) {
-				RejectPeer(*peer, NetRejectReason::ParticipantBanned, "participant_identity", "admitted", "banned", "this identity is not admitted");
+				RejectPeer(*peer, NetRejectReason::ParticipantBanned, "participant_identity", "admitted", "banned", "The host banned you from this session");
 				return;
 			}
 			if (m_ReconnectHost != nullptr) {
@@ -1457,6 +1457,7 @@ namespace RTE {
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
+		if (reason == NetRejectReason::ParticipantBanned) std::cout << "[net-session] admission refused reason=ParticipantBanned" << std::endl;
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
@@ -1481,6 +1482,7 @@ namespace RTE {
 		if (!m_HasReject) {
 			return "";
 		}
+		if (m_RejectReason == NetRejectReason::ParticipantBanned) return m_MismatchKey == "participant_removed" ? "The host removed you from this session" : "The host banned you from this session";
 		// Long values are identity hashes; the leading bytes are enough to tell two apart on screen.
 		auto shortValue = [](const std::string& value) {
 			return value.size() > 12 ? value.substr(0, 8) + ".." : value;

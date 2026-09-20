@@ -696,7 +696,7 @@ namespace RTE {
 		}
 		kind = chunk.bytes[0];
 		if (kind != c_NetWorldReportProgress && kind != c_NetWorldReportCatchUp && kind != c_NetWorldReportActivate &&
-		    kind != c_NetWorldReportRefused && kind != c_NetWorldReportDecline) {
+		    kind != c_NetWorldReportRefused && kind != c_NetWorldReportDecline && kind != c_NetWorldReportActivationAck && kind != c_NetWorldReportActivationCommit) {
 			return false;
 		}
 		value = 0;
@@ -727,7 +727,7 @@ namespace RTE {
 			}
 			// A brain a live member holds is that member's character; only an unowned one (a departed
 			// seat's, or one the AI runs) is free for this activation.
-			if (brain.ownerPeerId == 0 || brain.ownerPeerId == transition.peerId) {
+			if (brain.ownerPeerId == 0) {
 				return brain.actorUID;
 			}
 		}
@@ -736,7 +736,8 @@ namespace RTE {
 
 	NetWorldActivationPlan PlanWorldActivation(const NetWorldJoinSession& session, uint64_t nextFrame, bool late) {
 		NetWorldActivationPlan plan;
-		plan.firstRequired = late ? std::max(session.activationTick, nextFrame + 1) : session.activationTick;
+		plan.firstRequired = session.activationTick;
+		(void)nextFrame; (void)late;
 		// An overflow spectator holds no slot and produces no Controller, so it is never admitted and
 		// the world commits no transition for it.
 		plan.admit = !session.spectator && session.assignedPeerId != 0;
@@ -1317,10 +1318,7 @@ namespace RTE {
 			if (error) *error = "peer " + std::to_string(static_cast<int>(peerId)) + " is not a world slot";
 			return false;
 		}
-		if (!slot->held) {
-			if (error) *error = "world slot " + std::to_string(static_cast<int>(peerId)) + " is not held";
-			return false;
-		}
+		if (!slot->held) return true;
 		slot->held = false;
 		slot->reclaimHold = false;
 		slot->brainMissingSince = 0;
@@ -1785,7 +1783,7 @@ namespace RTE {
 	const NetWorldJoinSession* NetWorldJoinHost::DueActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
 			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 &&
-			       nowFrame + 1 == session.activationTick && session.acknowledgedThrough + 1 >= session.activationTick;
+			       nowFrame + 1 == session.activationTick && (session.spectator || session.acknowledgedThrough + 1 >= session.activationTick);
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}
@@ -1823,7 +1821,7 @@ namespace RTE {
 
 	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
-			return session.phase == NetWorldJoinPhase::CatchingUp && session.activationTick != 0 && nowFrame > session.activationTick &&
+			return session.phase == NetWorldJoinPhase::CatchingUp && !session.activationProposed && session.activationTick != 0 && nowFrame > session.activationTick &&
 			       session.acknowledgedThrough + 1 < session.activationTick;
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
@@ -1840,14 +1838,28 @@ namespace RTE {
 			if (error) *error = "that bootstrap has no activation to move";
 			return false;
 		}
-		if (session->activationReannounces >= c_NetWorldActivationReannounceLimit) {
+		if (session->activationProposed || (session->activationReannounces >= c_NetWorldActivationReannounceLimit && session->acknowledgedThrough <= session->lastReannounceProgress)) {
 			if (error) *error = "the joiner already missed a re-announced activation";
 			return false;
 		}
 		session->activationTick = ChooseActivationTick(nowFrame);
+		session->acknowledgedActivation = 0;
+		session->lastReannounceProgress = session->acknowledgedThrough;
 		++session->activationReannounces;
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
+	}
+
+	void NetWorldJoinHost::AcknowledgeActivation(NetPeerId connection, uint64_t frame) {
+		if (auto* session = Find(connection); session && session->activationTick == frame) session->acknowledgedActivation = frame;
+	}
+
+	void NetWorldJoinHost::MarkActivationProposed(NetPeerId connection) {
+		if (auto* session = Find(connection)) session->activationProposed = true;
+	}
+
+	void NetWorldJoinHost::MarkActivationCommitted(NetPeerId connection) {
+		if (auto* session = Find(connection)) session->activationCommitted = true;
 	}
 
 	bool NetWorldJoinHost::CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error) {

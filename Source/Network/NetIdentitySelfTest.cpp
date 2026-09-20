@@ -397,7 +397,7 @@ namespace RTE {
 			if (!NetIdentity::CaptureManifestInputs(worldInputs, error, worldOptions) ||
 			    !NetIdentity::CaptureManifestInputs(defaultInputs, error, defaultOptions)) return false;
 			if (worldInputs.schema != 2 || defaultInputs.schema != 2 ||
-			    worldInputs.deterministicConfig.lockstepCodecVersion != 27 || defaultInputs.deterministicConfig.lockstepCodecVersion != 26 ||
+			    worldInputs.deterministicConfig.lockstepCodecVersion != 31 || defaultInputs.deterministicConfig.lockstepCodecVersion != 30 ||
 			    worldInputs.deterministicConfig.matchConfigVersion != 7 || defaultInputs.deterministicConfig.matchConfigVersion != 6) {
 				*error = "world and default targets lost their diagnostic layout versions";
 				return false;
@@ -406,7 +406,7 @@ namespace RTE {
 			world.deterministicConfig = worldInputs.deterministicConfig;
 			joiner.deterministicConfig = defaultInputs.deterministicConfig;
 			const auto& supported = world.deterministicConfig;
-			if (supported.supportedLockstepCodecVersion != 26 || supported.supportedWorldLockstepCodecVersion != 27 ||
+			if (supported.supportedLockstepCodecVersion != 30 || supported.supportedWorldLockstepCodecVersion != 31 ||
 			    supported.supportedMatchConfigVersion != 6 || supported.supportedWorldMatchConfigVersion != 7) {
 				*error = "the admission identity lost a supported layout";
 				return false;

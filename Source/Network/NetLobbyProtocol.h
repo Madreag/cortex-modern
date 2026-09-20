@@ -188,7 +188,7 @@ namespace RTE {
 	public:
 		static constexpr uint32_t c_Magic = 0x344C4343U;
 		// 5 widens the player_count range to c_MaxPlayers; older peers refuse a roster past their own.
-		static constexpr uint16_t c_Version = 7;
+		static constexpr uint16_t c_Version = 8;
 		static constexpr uint16_t c_HeaderBytes = 16;
 		static constexpr size_t c_MaxPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxShortTextBytes = 128;

@@ -138,6 +138,8 @@ namespace RTE {
 		std::vector<ScenarioRunner::NetUiToastRecord> s_NetUiToastLog; //!< Report log; survives the queue.
 		uint64_t s_NetUiResyncOverlayFrames = 0;
 		constexpr uint64_t c_NetUiToastMs = 3000;
+		std::optional<uint64_t> s_SlowMachineLastNoticeMs;
+		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -812,16 +814,22 @@ namespace RTE {
 		s_NetUiToasts.clear();
 	}
 
-	bool ScenarioRunner::IsLockstepLocalMachineSlow() {
-		return (s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow) ||
+	bool ScenarioRunner::IsLockstepLocalMachineSlow(uint64_t nowMs) {
+		if (nowMs == UINT64_MAX) nowMs = NetLockstepNowMs();
+		const bool unhealthy = (s_LockstepCoordinator && !s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->GetStats().localMachineSlow) ||
 		    (s_WorldCatchUpActive && WorldCatchUpWorkTicks() >= 120 && s_CatchUpHeadroom.Ratio() <= 1.0);
+		if (!unhealthy) { s_SlowMachineNoticeUntilMs = 0; return false; }
+		if (s_SlowMachineNoticeUntilMs > nowMs) return true;
+		if (!s_SlowMachineLastNoticeMs || nowMs < *s_SlowMachineLastNoticeMs || nowMs - *s_SlowMachineLastNoticeMs >= 30000) {
+			s_SlowMachineLastNoticeMs = nowMs; s_SlowMachineNoticeUntilMs = nowMs + c_NetUiToastMs;
+			return true;
+		}
+		return false;
 	}
 
 	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
 		if (!s_LockstepCoordinator) return;
-		const bool warned = s_LockstepCoordinator->GetStats().localMachineSlow;
 		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
-		if (!warned && IsLockstepLocalMachineSlow()) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
 	}
 
 	void ScenarioRunner::DrawNetUiToasts() {
@@ -1720,6 +1728,7 @@ namespace RTE {
 			}
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
+		if (MenuMan::IsConstructed() && g_MenuMan.IsLocalPauseMenuOpen()) frames.clear();
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
 		if (producing->TimingDecisionPendingAt(tick)) {
 			LockstepWaitTimer waitTimer;
@@ -1733,9 +1742,7 @@ namespace RTE {
 			producing->FinishFrameWait(NetLockstepNowMs());
 		}
 		const auto& config = producing->GetConfig();
-		const bool warned = producing->GetStats().localMachineSlow;
 		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
-		if (!warned && producing->GetStats().localMachineSlow) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
 			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);

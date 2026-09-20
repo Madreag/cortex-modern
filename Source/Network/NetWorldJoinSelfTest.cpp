@@ -2223,7 +2223,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 27},
+			{"lockstep_codec_version", 31},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2334,7 +2334,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 27");
+			return Fail("WorldTransition frame did not stamp lockstep version 31");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2375,8 +2375,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 26) {
-			return Fail("ordinary lockstep frame did not stamp version 26");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 30) {
+			return Fail("ordinary lockstep frame did not stamp version 30");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2385,7 +2385,7 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 26 and match config 6");
+			return Fail("ordinary identity did not stamp lockstep 30 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
@@ -2761,6 +2761,89 @@ namespace RTE {
 		return 0;
 	}
 
+
+	int TestAgreedWorldActivation() {
+		std::string error;
+		NetWorldJoinHost bootstrap;
+		if (!bootstrap.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !bootstrap.BeginJoin(7, 2, "Joiner", 1000, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 1; image.bytes = 4; image.digest = "d"; image.path = "Worlds/image.bin";
+		bootstrap.PublishImage(image);
+		if (!bootstrap.NoteTransferComplete(7, 4, &error)) return Fail(error);
+		uint64_t boundary = 0;
+		if (!bootstrap.NoteCatchUpProgress(7, 1, 1, 1, 4, &boundary, &error)) return Fail(error);
+		for (int move = 0; move < 2; ++move) {
+			const uint64_t old = boundary;
+			if (!bootstrap.NoteCatchUpProgress(7, old - 5, 30, 100, old + 3, nullptr, &error)) return Fail(error);
+			if (bootstrap.SlowActivation(old - 4)) return Fail("activation cancelled against input rather than simulated progress");
+			if (!bootstrap.ReannounceActivation(7, old + 3, &boundary, &error) || boundary <= old) return Fail("progressing activation could not move twice: " + error);
+		}
+		bootstrap.AcknowledgeActivation(7, boundary - 1);
+		if (bootstrap.FindSession(7)->acknowledgedActivation) return Fail("stale activation acknowledgement accepted");
+		bootstrap.AcknowledgeActivation(7, boundary);
+		if (bootstrap.FindSession(7)->acknowledgedActivation != boundary) return Fail("final activation was not acknowledged");
+		LoopbackTransport links[3];
+		if (!links[0].StartHost(47168, &error) || !links[1].Connect("loopback", 47168, &error) || !links[2].Connect("loopback", 47168, &error)) return Fail(error);
+		std::vector<NetPeerId> remotes;
+		for (const auto& event: links[0].PollEvents()) if (event.type == NetTransportEventType::PeerConnected) remotes.push_back(event.peerId);
+		NetPeerId hostOnClient[2]{};
+		for (int client = 1; client < 3; ++client) for (const auto& event: links[client].PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostOnClient[client - 1] = event.peerId;
+		if (remotes.size() != 2) return Fail("activation loopback connections missing");
+		NetMatchConfig match = MakeWorldConfig(); match.peerCount = 3; match.inputDelayFrames = 4;
+		match.players = {{0, 0, true, "World"}, {2, 1, false, "Joiner"}, {3, 2, false, "Resident"}};
+		NetLockstepConfig configs[3];
+		for (int peer = 0; peer < 3; ++peer) {
+			auto& config = configs[peer]; config.sessionId = 0x158; config.roundId = peer == 0 ? 0x1580001 : 0; config.localPeerId = peer + 1; config.peerCount = 3;
+			config.inputDelayFrames = 4; config.timeoutMs = 1000000; config.matchConfig = match; config.relayToOtherPeers = peer == 0;
+			if (peer) { config.remoteTransportPeerIds[1] = hostOnClient[peer - 1]; config.joinsRunningRound = true; }
+		}
+		NetLockstepCoordinator peers[3];
+		if (!peers[0].Start(links[0], configs[0], &error)) return Fail(error);
+		configs[2].startFrame = peers[0].GetStats().nextFrame + 1;
+		if (!peers[0].AdmitWorldMember(3, remotes[1], configs[2].startFrame, &error)) return Fail(error);
+		if (!peers[2].Start(links[2], configs[2], &error)) return Fail(error);
+		uint64_t now = 0;
+		auto pump = [&] { for (int peer: {0, 2, 1}) if (peer != 1 || peers[1].GetState() != NetLockstepState::Idle) peers[peer].Tick(now); for (auto& link: links) link.AdvanceTimeMs(1); ++now; };
+		for (int i = 0; i < 30; ++i) pump();
+		if (!peers[2].IsRunning()) return Fail("resident did not start: " + peers[2].GetStats().timeoutReason);
+		NetGameWorldTransition transition = BuildWorldActivateTransition(*bootstrap.FindSession(7), match, bootstrap.Membership().Revision());
+		transition.activationFrame = boundary;
+		if (!peers[0].ProposeWorldAdmission(remotes[0], 1, transition, &error)) return Fail(error);
+		if (peers[0].HasWorldAdmission(2, boundary)) return Fail("world admission committed before resident acknowledgement");
+		for (int i = 0; i < 30; ++i) pump();
+		if (!peers[0].HasWorldAdmission(2, boundary) || !peers[2].HasWorldAdmission(2, boundary)) return Fail("world admission did not agree at the replacement boundary world=" + peers[0].BuildReportJson() + " resident=" + peers[2].BuildReportJson());
+		configs[1].startFrame = boundary;
+		if (!peers[1].Start(links[1], configs[1], &error)) return Fail(error);
+		for (int i = 0; i < 30; ++i) pump();
+		if (!peers[1].IsRunning()) return Fail("joiner rejected agreed boundary: " + peers[1].GetStats().timeoutReason);
+		std::map<uint64_t, NetLockstepFrame> frames[3];
+		for (uint64_t produced = 0; produced <= boundary + 12; ++produced) {
+			for (int peer = 0; peer < 3; ++peer) if (produced >= configs[peer].startFrame) {
+				if (!peers[peer].QueueLocalInput(produced, {}, {}, &error)) return Fail("activation input: " + error);
+			}
+			for (int i = 0; i < 3; ++i) pump();
+			for (int peer = 0; peer < 3; ++peer) for (NetLockstepReadyFrame ready; peers[peer].PopReadyFrame(ready);) frames[peer][ready.frame] = PackWorldJoinReadyFrame(ready);
+		}
+		for (uint64_t frame = boundary; frame <= boundary + 8; ++frame) {
+			for (int peer = 0; peer < 3; ++peer) if (!frames[peer].contains(frame)) return Fail("activation frame missing peer=" + std::to_string(peer + 1) + " frame=" + std::to_string(frame) + " reason=" + peers[peer].GetStats().timeoutReason);
+			for (int peer = 1; peer < 3; ++peer) if (frames[peer].at(frame) != frames[0].at(frame)) return Fail("agreed activation frames differ at " + std::to_string(frame));
+		}
+		NetLockstepTiming repeated;
+		repeated.senderPeerId = 1; repeated.peerId = 2; repeated.action = NetTimingAction::WorldAdmission;
+		repeated.sessionId = configs[0].sessionId; repeated.roundId = peers[0].GetRoundId(); repeated.revision = 1;
+		repeated.applyFrame = boundary; repeated.nextFrame = 4; repeated.delayFrames = 4; repeated.requiredPeers = 5;
+		repeated.seatIncarnations[1] = 1; repeated.neutralThroughFrame = boundary + 4; repeated.worldTransition = transition;
+		for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+			repeated.phase = phase; std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode({repeated}, bytes) || !links[0].Send(remotes[0], NetTransportLane::ControlReliable, bytes, &error)) return Fail("repeat admission send: " + error);
+		}
+		for (int step = 0; step < 4; ++step) pump();
+		if (!peers[1].IsRunning()) return Fail("completed admission was refused on retransmission: " + peers[1].GetStats().timeoutReason);
+		const auto& activated = frames[0].at(boundary);
+		if (std::count_if(activated.commands.begin(), activated.commands.end(), [&](const auto& command) { const auto* value = std::get_if<NetGameWorldTransition>(&command.payload); return value && *value == transition; }) != 1) return Fail("brain handoff did not commit once at agreed activation");
+		return 0;
+	}
+
 	int TestStaleWorldTransitionRefused() {
 		NetGameWorldTransition live;
 		live.schema = c_NetWorldJoinSchema;
@@ -2797,7 +2880,8 @@ namespace RTE {
 		// An ordinary round decodes these packets now, so it must refuse to apply one.
 		std::string error;
 		LoopbackTransport ordinaryTransport;
-		if (!ordinaryTransport.StartHost(47122, &error)) {
+		LoopbackTransport ordinaryRemote;
+		if (!ordinaryTransport.StartHost(47122, &error) || !ordinaryRemote.Connect("loopback", 47122, &error)) {
 			return Fail("ordinary-round-applied-a-world-transition: loopback: " + error);
 		}
 		NetLockstepCoordinator ordinaryRound;
@@ -2805,6 +2889,8 @@ namespace RTE {
 		ordinaryConfig.sessionId = 11;
 		ordinaryConfig.localPeerId = 1;
 		ordinaryConfig.peerCount = 2;
+		ordinaryConfig.remotePeerId = 2;
+		ordinaryConfig.remoteTransportPeerId = 1;
 		ordinaryConfig.timeoutMs = 1000000;
 		ordinaryConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x4F52440ULL);
 		ordinaryConfig.matchConfig.players = {
@@ -5919,6 +6005,7 @@ namespace RTE {
 	}
 
 	int RunNamed(const char* name) {
+		if (std::strcmp(name, "-net-world-agreed-activation-selftest") == 0) { s_FailTag = "net-world-agreed-activation-selftest"; return TestAgreedWorldActivation(); }
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
 			return TestIdentitySurvivesRestart();
@@ -6313,6 +6400,7 @@ namespace RTE {
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
+		if (const int result = TestAgreedWorldActivation(); result != 0) return result;
 		if (const int result = TestStaleWorldTransitionRefused(); result != 0) {
 			return result;
 		}
