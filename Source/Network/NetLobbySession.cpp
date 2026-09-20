@@ -776,7 +776,12 @@ namespace RTE {
 		}
 		if (!changed || next.configRevision == UINT64_MAX) return;
 		++next.configRevision;
-		RepublishMatchConfig(next);
+		const bool startPending = m_StartRequested;
+		// The host asked for this round to start once, as a player presses it once. A re-size the host
+		// never typed re-opens the acknowledgement, never withdraws that request.
+		if (RepublishMatchConfig(next) && startPending) {
+			m_StartRequested = true;
+		}
 	}
 
 	void NetLobbySession::SyncSessionPeers() {
