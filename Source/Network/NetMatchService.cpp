@@ -1254,7 +1254,8 @@ static std::string ResyncSaveName() {
 		const std::string why = !held ? reason : (!hasManifest ? manifestReason : "the checkpoint's world or agreed state differs");
 		std::cout << "[autosave] resume offer match=" << offer.matchId << " tick=" << offer.savedTick
 		          << (same ? " held locally" : " not held: " + why) << std::endl;
-		std::lock_guard<std::mutex> lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex, std::defer_lock);
+		if (!HoldsServiceLock()) lock.lock();
 		m_ResumeHeldMatchId.clear();
 		m_ResumeHeldTick = 0;
 		m_ResumeHeldRound = 0;
@@ -3491,6 +3492,9 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
+		// This runs under m_Mutex and hands lobby messages to the session below, so the service calls
+		// those messages make have to take the locked path.
+		const LockedLobbyDrive lockedDrive(*this);
 		// A member catching up privately is replaying on this thread and the round is not feeding its
 		// session: that silence is its own, not the host's. The windows stay open for as long as the
 		// catch-up runs; a host that really goes away still arrives as a transport close below.
@@ -4163,6 +4167,7 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::OpenMigrationCapsule(const NetLobbyMigration& capsule) {
+		if (HoldsServiceLock()) return OpenMigrationCapsuleLocked(capsule);
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return OpenMigrationCapsuleLocked(capsule);
 	}
