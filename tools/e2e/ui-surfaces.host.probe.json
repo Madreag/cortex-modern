@@ -86,7 +86,7 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -114,7 +114,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 825
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -123,7 +123,7 @@
     {
       "op": "wait",
       "screen": "PauseMatchOptions",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -155,7 +155,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 990
+      "elapsed_ms": 600
     },
     {
       "op": "menu",
@@ -164,7 +164,7 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -173,7 +173,7 @@
     {
       "op": "wait",
       "screen": "PauseSettings",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -181,7 +181,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -193,7 +193,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -210,11 +210,11 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -226,7 +226,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 1000
+      "elapsed_ms": 100
     },
     {
       "op": "key_down",
@@ -239,7 +239,7 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 400
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -248,7 +248,7 @@
     {
       "op": "wait",
       "screen": "PauseLeaveConfirm",
-      "elapsed_ms": 500
+      "elapsed_ms": 100
     },
     {
       "op": "menu",
@@ -260,7 +260,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 700
+      "elapsed_ms": 600
     },
     {
       "op": "menu",
@@ -269,12 +269,12 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 400,
+      "elapsed_ms": 100,
       "scope": "menu"
     },
     {
       "op": "wait",
-      "elapsed_ms": 1000,
+      "elapsed_ms": 100,
       "scope": "menu"
     },
     {
