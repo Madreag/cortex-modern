@@ -1,107 +1,164 @@
 # Every host-side surface this multiplayer effort added or changed, opened in order and held long
 # enough for the recorder: landing, host setup, the six host options pages, the seat dialog with
 # kick and ban, the visibility selector, the lobby and its chat.
-wait 60
+wait_ms 1980
 activate ButtonMainToMultiplayer
-wait 15
+wait_ms 495
 assert_substate Landing
-assert_label LabelMultiplayerNamePrompt Multiplayer name:
+observe assert_label LabelMultiplayerNamePrompt Multiplayer name:
 settext TextMultiplayerName Host
-wait 15
+wait_ms 495
 activate ButtonMultiplayerHostGame
-wait 15
+wait_ms 495
 assert_substate HostSetup
+observe combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 500
 settext TextHostPort {PORT}
 settext TextHostPlayers 2
-wait 15
+wait_ms 495
 activate ButtonHostOptions
-wait 15
+wait_ms 495
+video_mark ui-seats
 activate TabHostPageSeats
-wait 25
-assert_visible CollectionBoxHostPageSeats 1
+wait_ms 825
+observe assert_visible CollectionBoxHostPageSeats 1
 dump_host_options
-activate ButtonHostSeatDetails0
-wait 20
-assert_visible HostSeatDialog 1
-assert_enabled ButtonHostSeatDlgKick 0
-assert_enabled ButtonHostSeatDlgBan 0
-assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.
-dump_host_options
-activate ButtonHostSeatDlgClose
-wait 15
-assert_visible HostSeatDialog 0
+video_mark ui-rules
 activate TabHostPageRules
-wait 25
-assert_visible CollectionBoxHostPageRules 1
+wait_ms 825
+observe assert_visible CollectionBoxHostPageRules 1
+observe combo_select ComboHostRulesBrainless End the match
+wait_ms 600
+observe assert_label ComboHostRulesBrainless End the match
+observe combo_select ComboHostRulesBrainless Keep playing, humans spectate
+wait_ms 500
+observe assert_label ComboHostRulesBrainless Keep playing, humans spectate
 dump_host_options
 activate TabHostPageNetwork
-wait 25
-assert_visible CollectionBoxHostPageNetwork 1
-assert_label ComboHostNetVisibility LAN only
+video_mark ui-network-routing
+activate TabHostNetRouting
+wait_ms 700
+observe assert_visible CollectionBoxHostNetworkRouting 1
+observe combo_select ComboHostNetRelay Off
+wait_ms 600
+observe assert_label ComboHostNetRelay Off
+observe combo_select ComboHostNetIce Off (LAN or port-forwarded only)
+wait_ms 600
+observe assert_label ComboHostNetIce Off
+video_mark ui-network-tuning
+activate TabHostNetTuning
+wait_ms 700
+observe assert_visible CollectionBoxHostNetworkTuning 1
+observe set_text TextHostNetSlowBound 4
+wait_ms 500
+observe assert_label TextHostNetSlowBound 4
+observe combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)
+wait_ms 500
+observe assert_label ComboHostNetSlowPolicy Pause for them
+observe combo_select ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin
+observe set_text TextHostNetSlowBound 3
+wait_ms 500
+observe assert_label TextHostNetSlowBound 3
+observe assert_label ComboHostNetSlowPolicy Hand the seat to the AI
+video_mark ui-visibility
+wait_ms 825
+observe assert_visible CollectionBoxHostPageNetwork 1
+observe assert_label ComboHostNetVisibility LAN only
 combo_drop ComboHostNetVisibility
-wait 20
+wait_ms 660
 dump_host_options
-combo_select ComboHostNetVisibility Unlisted
-wait 20
-assert_label ComboHostNetVisibility Unlisted
+observe combo_select ComboHostNetVisibility Internet: Unlisted
+wait_ms 660
+observe assert_label ComboHostNetVisibility Unlisted
 dump_host_options
-combo_select ComboHostNetVisibility Listed
-wait 20
-assert_label ComboHostNetVisibility Listed
+observe combo_select ComboHostNetVisibility Internet: Listed
+wait_ms 660
+observe assert_label ComboHostNetVisibility Listed
 dump_host_options
-combo_select ComboHostNetVisibility LAN only
-wait 20
-assert_label ComboHostNetVisibility LAN only
+wait_ms 700
+video_mark ui-recovery
 activate TabHostPageRecovery
-wait 25
-assert_visible CollectionBoxHostPageRecovery 1
-assert_enabled ButtonHostRecRepairNow 0
-assert_label LabelHostRecRepairHint Repair needs a live match session
+wait_ms 825
+observe assert_visible CollectionBoxHostPageRecovery 1
+observe setcheck CheckHostRecAutosave 1
+wait_ms 600
+observe assert_enabled TextHostRecAutosaveInterval 1
+observe set_text TextHostRecAutosaveInterval 30
+wait_ms 500
+observe assert_label TextHostRecAutosaveInterval 30
+observe setcheck CheckHostRecAutosave 0
+wait_ms 500
+observe assert_enabled TextHostRecAutosaveInterval 0
+observe assert_enabled ButtonHostRecRepairNow 0
+observe assert_label LabelHostRecRepairHint Repair needs a live match session
 dump_host_options
+video_mark ui-files
 activate TabHostPageFiles
-wait 25
-assert_visible CollectionBoxHostPageFiles 1
+wait_ms 825
+observe assert_visible CollectionBoxHostPageFiles 1
+observe combo_select ComboHostFilesWidget Always
+wait_ms 600
+observe assert_label ComboHostFilesWidget Always
 dump_host_options
+video_mark ui-session
 activate TabHostPageSession
-wait 25
-assert_visible CollectionBoxHostPageSession 1
+wait_ms 825
+observe assert_visible CollectionBoxHostPageSession 1
+observe combo_select ComboHostSessIdle 5 minutes
+wait_ms 600
+observe assert_label ComboHostSessIdle 5 minutes
 dump_host_options
 activate ButtonHostOptBack
-wait 15
+wait_ms 495
 activate ButtonMultiplayerCreate
-wait 25
+wait_ms 825
 assert_substate Lobby
-wait_connected 2
-wait 25
+video_mark host-listening
+wait_file {DIRECTORY_ROOT}/listed.json 30
+wait_connected 2 90
+wait_ms 825
 dump_lobby
-chat Both peers can read this line
-wait 30
+video_mark ui-chat
+chat all Both peers can read this line
+wait_ms 990
+observe assert_label LabelLobbyChatAny Both peers can read this line
 dump_lobby
 activate ButtonLobbyOptions
-wait 20
+wait_ms 660
 assert_substate HostOptions
 activate TabHostPageSeats
-wait 25
-assert_visible CollectionBoxHostPageSeats 1
-activate ButtonHostSeatDetails1
-wait 20
-assert_visible HostSeatDialog 1
-assert_enabled ButtonHostSeatDlgKick 1
-assert_enabled ButtonHostSeatDlgBan 1
+wait_ms 825
+observe assert_visible CollectionBoxHostPageSeats 1
+video_mark ui-seat-dialog-own
+activate ButtonHostSeatDetails0
+wait_ms 660
+observe assert_visible HostSeatDialog 1
+observe assert_enabled ButtonHostSeatDlgKick 0
+observe assert_enabled ButtonHostSeatDlgBan 0
+observe assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.
 dump_host_options
-activate ButtonHostSeatDlgClose
-wait 15
-assert_visible HostSeatDialog 0
+observe activate ButtonHostSeatDlgClose
+wait_ms 495
+observe assert_visible HostSeatDialog 0
+video_mark ui-seat-dialog-other
+activate ButtonHostSeatDetails1
+wait_ms 660
+observe assert_visible HostSeatDialog 1
+observe assert_enabled ButtonHostSeatDlgKick 1
+observe assert_enabled ButtonHostSeatDlgBan 1
+dump_host_options
+observe activate ButtonHostSeatDlgClose
+wait_ms 495
+observe assert_visible HostSeatDialog 0
 activate ButtonHostOptBack
-wait 15
+wait_ms 495
 assert_substate Lobby
-activate ButtonMultiplayerReady
-wait 20
-wait_all_ready 90
+wait_ms 660
+wait_remote_ready 90
 dump_lobby
 activate ButtonMultiplayerStart
 wait_file {PROBE_DIR}/done.json 240
-wait 40
+wait_ms 1320
 dump_lobby
-wait 30
+wait_ms 990
 exit
