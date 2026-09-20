@@ -3913,6 +3913,15 @@ static bool IsControlClickable(GUIControl* control) {
 }
 
 bool MainMenuGUI::AutomationActivateControl(const std::string& controlName) {
+	if (controlName.starts_with("GameRow")) {
+		const std::string number = controlName.substr(7);
+		if (number.empty() || number.size() > 3 || number.find_first_not_of("0123456789") != std::string::npos) return false;
+		const size_t index = static_cast<size_t>(std::stoul(number));
+		if (index >= m_GameRows.size() || !IsControlClickable(m_MultiplayerLanGamesList) || m_ActiveDialogBox) return false;
+		m_MultiplayerLanGamesList->SetSelectedIndex(static_cast<int>(index));
+		HandleMultiplayerScreenInputEvents(m_MultiplayerLanGamesList);
+		return true;
+	}
 	if (const auto index = ReplayRowIndex(controlName)) {
 		if (*index >= m_ReplayRows.size() || !IsControlClickable(m_ReplayList) || m_ActiveDialogBox) return false;
 		m_ReplayList->SetSelectedIndex(static_cast<int>(*index));
