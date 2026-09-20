@@ -41,6 +41,7 @@
 #include "SceneMan.h"
 #include "SLTerrain.h"
 #include "SettingsMan.h"
+#include "SimChecksum.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
 #include "allegro.h"
@@ -14965,6 +14966,8 @@ namespace RTE {
 
 	int NetLockstepSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!SimChecksum::IsConstructed()) SimChecksum::Construct();
 		if (!MovableMan::IsConstructed()) MovableMan::Construct();
 		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
 		if (!AudioMan::IsConstructed()) AudioMan::Construct();
