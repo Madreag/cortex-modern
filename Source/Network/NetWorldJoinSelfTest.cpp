@@ -2223,7 +2223,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 31},
+			{"lockstep_codec_version", 33},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
