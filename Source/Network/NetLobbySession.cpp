@@ -311,6 +311,11 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
+		if (!m_Config.host || peerId == 0 || peerId == m_Config.localPeerId || transport == c_InvalidNetPeerId) {
+			if (error) *error = "late lobby remote is invalid";
+			return false;
+		}
+		if (IsKnownRemote(peerId) && RemoteTransportOf(peerId) != transport) RemoveRemotePeer(peerId);
 		std::vector<uint8_t> previous;
 		for (const auto& [bound, connection]: m_RemoteTransports)
 			if (connection == transport && bound != peerId) previous.push_back(bound);
@@ -322,17 +327,27 @@ namespace RTE {
 		return true;
 	}
 
-	void NetLobbySession::SendMatchConfigTo(uint8_t peerId) {
+	bool NetLobbySession::SendMatchConfigTo(uint8_t peerId) {
 		if (!m_Config.host || !IsKnownRemote(peerId)) {
-			return;
+			return false;
 		}
 		SendSeatAssign(peerId);
 		std::string error;
-		(void)SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error);
+		if (!SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error)) return false;
 		SendResumeOfferTo(peerId);
+		return true;
 	}
 
 	void NetLobbySession::PumpOutgoingChunks() {
+		if (m_Config.host && m_Config.session) {
+			const auto ready = m_Config.session->GetReadyPeers();
+			std::vector<uint8_t> disconnected;
+			for (uint8_t peer: m_WorldTransferPeers) {
+				const NetPeerId connection = RemoteTransportOf(peer);
+				if (std::none_of(ready.begin(), ready.end(), [&](const auto& live) { return live.transportPeerId == connection; })) disconnected.push_back(peer);
+			}
+			for (uint8_t peer: disconnected) RemoveRemotePeer(peer);
+		}
 		SendQueuedStateChunks();
 	}
 
@@ -689,6 +704,13 @@ namespace RTE {
 	}
 
 	void NetLobbySession::RemoveRemotePeer(uint8_t peerId) {
+		std::erase_if(m_QueuedStateTransfers, [&](const auto& transfer) { return transfer.first == peerId; });
+		if (m_StateTransferOnlyPeer == peerId) {
+			m_StateTransferOnlyPeer = 0;
+			m_StateBytesToSend.clear();
+			m_OutgoingChunkCount = 0;
+			m_OutgoingChunkIndexByPeer.clear();
+		}
 		m_RemoteTransports.erase(peerId);
 		std::erase(m_RemotePeerIds, peerId);
 		m_RemoteLobbyUp.erase(peerId);

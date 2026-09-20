@@ -971,6 +971,7 @@ namespace RTE {
 		friend bool TestWorldRestartOpensOnCheckpoint(std::string* error);
 		friend bool TestWorldFreshFlagOpensNewRound(std::string* error);
 		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
+		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.

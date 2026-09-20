@@ -1571,7 +1571,7 @@ namespace RTE {
 			return config;
 		}
 
-		int TestWorldBootstrapSenderIdentity() {
+		int TestWorldBootstrapSenderIdentity(bool disconnectedTransfer = false) {
 			std::string error;
 			LoopbackTransport hostWire, residentWire, lateWire;
 			NetSession hostSession, residentSession, lateSession;
@@ -1612,6 +1612,16 @@ namespace RTE {
 			for (int i = 0; i < 10; ++i) pumpLobbies();
 			if (joiner.IsFailed() || joiner.IsRejected() || !host.IsRemoteLobbyUp(route) || !host.IsRemoteLobbyUp(2))
 				return Fail("bootstrap sender rejected: session peer=3 world route=" + std::to_string(route) + " reason=" + joiner.GetFailureReason());
+			if (disconnectedTransfer) {
+				if (!host.BindWorldTransferRemote(2, residentConnection, &error) ||
+				    host.BeginStateTransferToPeer(2, std::vector<uint8_t>(128, 0x11)) != NetLobbyStateTransfer::Started ||
+				    host.BeginStateTransferToPeer(route, std::vector<uint8_t>(128, 0x6D)) != NetLobbyStateTransfer::Queued) return Fail("two bootstrap images did not queue");
+				residentWire.Stop();
+				for (const auto& event: hostWire.PollEvents()) hostSession.InjectEvent(event, now);
+				for (int i = 0; i < 20 && !joiner.HasCompleteStateTransfer(); ++i) pumpLobbies();
+				if (joiner.TakeReceivedState() != std::vector<uint8_t>(128, 0x6D)) return Fail("a disconnected bootstrap blocked the next joiner's image");
+				return 0;
+			}
 			if (host.BeginStateTransferToPeer(route, std::vector<uint8_t>(128, 0x6D)) == NetLobbyStateTransfer::Refused) return Fail("bootstrap image refused");
 			for (int i = 0; i < 20 && !joiner.HasCompleteStateTransfer(); ++i) pumpLobbies();
 			if (joiner.TakeReceivedState() != std::vector<uint8_t>(128, 0x6D) || resident.IsFailed()) return Fail("bootstrap image lost or resident disconnected");
@@ -5080,6 +5090,64 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestWorldBootstrapWaitsForLobby(std::string* error) {
+		for (const bool spectator: {false, true}) {
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession, clientSession;
+			const uint16_t port = spectator ? 48926 : 48924;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "World"), error) ||
+			    !clientSession.StartClient(clientWire, "loopback", MakeWorldSessionConfig(port, 22, "Joiner"), error)) return false;
+			uint64_t now = 0;
+			while (hostSession.GetReadyPeers().empty() && now < 1000) {
+				hostSession.Tick(now); clientSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (hostSession.GetReadyPeers().empty()) { *error = "bootstrap session never became ready"; return false; }
+			const auto connection = hostSession.GetReadyPeers().front().transportPeerId;
+			NetMatchService service;
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			NetMatchConfig config = MakeWorldConfig(); config.sessionId = hostSession.GetSessionId();
+			if (!service.m_WorldJoin.Configure(config, MakeIdentity(), error)) return false;
+			if (spectator && !service.m_WorldJoin.BeginJoin(99, 2, "Resident", now, error)) return false;
+			if (!service.m_WorldJoin.BeginJoin(connection, spectator ? 0 : 2, "Joiner", now, error)) return false;
+			const auto join = *service.m_WorldJoin.FindSession(connection);
+			if (join.spectator != spectator) { *error = "bootstrap role differs"; return false; }
+			const auto archive = std::make_shared<std::vector<uint8_t>>(8, 0x5A);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 40;
+			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive); image.path = "bootstrap.ccsave";
+			service.m_WorldJoin.PublishImage(image);
+			service.m_WorldJoinImageArchive = archive; service.m_WorldJoinImageDigest = image.digest;
+			NetLobbySession& lobby = service.m_Runner->GetLobbySession();
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
+			hostConfig.matchConfig = config; hostConfig.autoStart = false;
+			if (!lobby.Start(hostWire, hostConfig, error)) return false;
+			if (service.StartJoinerImageTransfer(join, error) || lobby.IsStateTransferOutgoing()) {
+				*error = "bootstrap sent its image before the joiner's lobby could receive the config"; return false;
+			}
+			NetLobbySession client;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			if (!client.Start(clientWire, clientConfig, error)) return false;
+			for (const auto& event: hostWire.PollEvents()) lobby.HandleTransportEvent(event, now);
+			if (!service.StartJoinerImageTransfer(join, error)) return false;
+			for (int i = 0; i < 20 && !client.HasCompleteStateTransfer(); ++i) {
+				lobby.PumpOutgoingChunks(); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (!client.HasCompleteStateTransfer() || client.GetMatchConfig() != config) {
+				*error = "bootstrap image arrived with the client's default config instead of the world's config"; return false;
+			}
+			if (!lobby.BindWorldTransferRemote(WorldJoinLobbyPeer(join), 98, error) || lobby.IsRemoteLobbyUp(WorldJoinLobbyPeer(join))) {
+				*error = "a replacement connection inherited the old bootstrap's lobby readiness"; return false;
+			}
+		}
+		return true;
+	}
+
 	bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error) {
 		uint64_t tick = 7;
 		// A world host at committed tick 900 owes the checkpoint that tick.
@@ -5944,6 +6012,10 @@ namespace RTE {
 			s_FailTag = "net-world-bootstrap-identity-selftest";
 			return TestWorldBootstrapSenderIdentity();
 		}
+		if (std::strcmp(name, "-net-world-transfer-disconnect-selftest") == 0) {
+			s_FailTag = "net-world-transfer-disconnect-selftest";
+			return TestWorldBootstrapSenderIdentity(true);
+		}
 		if (std::strcmp(name, "admit") == 0 || std::strcmp(name, "-net-world-admit-selftest") == 0) {
 			s_FailTag = "net-world-admit-selftest";
 			return TestDueActivationAdmits();
@@ -6054,6 +6126,11 @@ namespace RTE {
 			s_FailTag = "net-world-fresh-selftest";
 			std::string error;
 			return TestWorldFreshFlagOpensNewRound(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "-net-world-bootstrap-ready-selftest") == 0) {
+			s_FailTag = "net-world-bootstrap-ready-selftest";
+			std::string error;
+			return TestWorldBootstrapWaitsForLobby(&error) ? 0 : Fail(error);
 		}
 		if (std::strcmp(name, "final-checkpoint") == 0 || std::strcmp(name, "-net-world-final-checkpoint-selftest") == 0) {
 			s_FailTag = "net-world-final-checkpoint-selftest";
@@ -6204,6 +6281,7 @@ namespace RTE {
 		}
 		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
 		if (const int result = TestWorldBootstrapSenderIdentity(); result != 0) return result;
+		if (const int result = TestWorldBootstrapSenderIdentity(true); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
@@ -6264,6 +6342,7 @@ namespace RTE {
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
 			if (!TestWorldRestartKeepsTickets(&error)) return Fail(error);
 			if (!TestWorldFreshFlagOpensNewRound(&error)) return Fail(error);
+			if (!TestWorldBootstrapWaitsForLobby(&error)) return Fail(error);
 			if (!TestWorldCleanStopWritesFinalCheckpoint(&error)) return Fail(error);
 			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
 			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);
