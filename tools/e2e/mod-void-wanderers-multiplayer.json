@@ -10,7 +10,9 @@
       "name": "host",
       "args": [
         "-input-script",
-        "{INPUT_SCRIPT}"
+        "{INPUT_SCRIPT}",
+        "-module",
+        "VoidWanderers.rte"
       ],
       "menu_script": "mod-void-wanderers-multiplayer.host.menu.txt",
       "input_script": "play-input.txt",
@@ -24,7 +26,9 @@
       "name": "client",
       "args": [
         "-input-script",
-        "{INPUT_SCRIPT}"
+        "{INPUT_SCRIPT}",
+        "-module",
+        "VoidWanderers.rte"
       ],
       "menu_script": "mod-void-wanderers-multiplayer.client.menu.txt",
       "input_script": "play-input.txt",
