@@ -220,7 +220,7 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 1,
+          "start_delay_s": 5,
           "output_dirs": [
             "feel"
           ],
@@ -331,7 +331,13 @@
       "feel_gate": {
         "lag_ms": 100,
         "loss_percent": 5,
-        "silent_tick": 600
+        "silent_tick": 600,
+        "per_peer_fake_lag_ms": {
+          "host": 0,
+          "client": 200,
+          "survivor": 0,
+          "client-rejoined": 200
+        }
       }
     },
     {
@@ -548,7 +554,7 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 1,
+          "start_delay_s": 5,
           "output_dirs": [
             "feel"
           ],
@@ -659,7 +665,13 @@
       "feel_gate": {
         "lag_ms": 200,
         "loss_percent": 5,
-        "silent_tick": 600
+        "silent_tick": 600,
+        "per_peer_fake_lag_ms": {
+          "host": 0,
+          "client": 400,
+          "survivor": 0,
+          "client-rejoined": 400
+        }
       }
     }
   ],
