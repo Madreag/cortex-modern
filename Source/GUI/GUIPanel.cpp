@@ -1,8 +1,34 @@
 #include "GUI.h"
+#include "GUIDrawRecord.h"
 
 #include <cassert>
+#include <chrono>
+#include <unordered_map>
 
 using namespace RTE;
+
+namespace RTE {
+	// Keyed by panel, so a readback can ask the renderer instead of a visible flag.
+	static std::unordered_map<const void*, std::chrono::steady_clock::time_point> s_PanelDraws;
+
+	void RecordPanelDraw(const void* panel) {
+		if (panel) {
+			s_PanelDraws[panel] = std::chrono::steady_clock::now();
+		}
+	}
+
+	bool PanelDrewRecently(const void* panel, double seconds) {
+		const auto drawn = s_PanelDraws.find(panel);
+		if (drawn == s_PanelDraws.end()) {
+			return false;
+		}
+		return std::chrono::duration<double>(std::chrono::steady_clock::now() - drawn->second).count() <= seconds;
+	}
+
+	void ClearPanelDrawRecord() {
+		s_PanelDraws.clear();
+	}
+} // namespace RTE
 
 GUIPanel::GUIPanel(GUIManager* Manager) {
 	Clear();
@@ -146,6 +172,7 @@ void GUIPanel::Draw(GUIScreen* Screen) {
 		if (P->_GetVisible()) {
 			// Re-set the clipping rect of this panel since the last child has messed with it
 			Screen->GetBitmap()->SetClipRect(&thisClip);
+			RecordPanelDraw(P);
 			P->Draw(Screen);
 		}
 	}

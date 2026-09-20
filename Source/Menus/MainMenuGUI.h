@@ -7,7 +7,6 @@
 #include "NetMatchService.h"
 #include "NetReconnectUx.h"
 
-#include "MenuPanelVisibility.h"
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
 #include "ModManagerGUI.h"
@@ -339,7 +338,6 @@ namespace RTE {
 		GUITextBox* m_MultiplayerLobbyChatInput;
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
-		MenuPanelVisibility m_PanelVisibility; //!< A swapped-out panel takes the controls inside it with it.
 		// §9.2/9.3's host options panel: six pages over the lobby, or the host-setup draft of the next one.
 		GUICollectionBox* m_HostOptionsPanel = nullptr;
 		GUILabel* m_HostOptionsTitle = nullptr;
