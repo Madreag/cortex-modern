@@ -7620,7 +7620,56 @@ namespace RTE {
 			return 0;
 		}
 
+	int TestRemovalStoreKindsAndAlias() {
+		ScriptedAuthCrypto crypto; ScopedTestCrypto scoped(&crypto);
+		uint64_t unixNow = 1700000000000ULL; std::string error;
+		for (const auto action: {NetParticipantRemovalAction::Kick, NetParticipantRemovalAction::BanSession}) {
+			Wire wire; ConfigureWire(wire); NetHostBanStore store;
+			wire.host.SetBanStore(&store);
+			Endpoint player; player.connection = 391;
+			ConfigureEndpoint(player, "Named player", &unixNow); wire.Add(&player);
+			wire.host.BindParticipantId(player.connection, Ramp<32>(73));
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || player.client.GetState() != NetH4ClientState::Joined) return Fail("removal kind admission: " + error);
+			const auto seats = wire.host.GetModerationView(); NetParticipantRemovalIssue issue;
+			if (seats.empty() || wire.host.RemoveParticipant(NetSelectModerationSeat(seats.front()), action, wire.nowMs, unixNow, 0x4831, 0, 0, issue) != NetKickBanResult::Ok) return Fail("removal kind action");
+			const auto bans = store.List();
+			if (action == NetParticipantRemovalAction::Kick && !bans.empty()) return Fail("a kick was inserted into the ban store");
+			if (action == NetParticipantRemovalAction::BanSession && (bans.size() != 1 || bans.front().displayAlias != "Named player")) return Fail("a ban lost the participant's display alias");
+		}
+		std::cout << "[net-reconnect-session-selftest] PASS removal_store kick_is_not_ban alias=retained" << std::endl;
+		return 0;
+	}
+
+	int TestLocalHostPresence() {
+		ScriptedAuthCrypto crypto; ScopedTestCrypto scoped(&crypto);
+		NetMatchConfig match = NetMatchConfigUtil::MakeDefault(0x134);
+		match.players = {{1, 0, false, "Host"}, {2, 1, false, "Client"}};
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) return Fail("local host presence registry");
+		NetReconnectHost host;
+		host.Configure(&registry, match.sessionId, MakeIdentity());
+		host.SetSeatTable(NetH4BuildSeatTable(match), match.mode); host.SetLiveMatch(true);
+		NetH4TicketRecord ticket;
+		if (!host.EnsureLocalTicket(ticket)) return Fail("local host presence ticket");
+		for (uint64_t frame = 0; frame < 300; ++frame) {
+			host.Tick(frame * 17);
+			const auto statuses = host.GetSeatStatuses(); const auto seats = host.GetModerationView();
+			if (statuses.empty() || seats.empty() || statuses.front().dropped || seats.front().dropped) return Fail("the committing host is disconnected because it has no remote socket");
+		}
+		const auto state = host.ExportMigrationState();
+		NetReconnectHost successor; NetSeatAuthRegistry successorRegistry;
+		match.hostPeerId = 2;
+		if (!successor.ImportMigrationState(state, successorRegistry, match, 2, {}, 5100)) return Fail("local host presence migration import");
+		const auto seats = successor.GetModerationView();
+		const auto lost = std::find_if(seats.begin(), seats.end(), [](const auto& seat) { return seat.lockstepPeerId == 1; });
+		if (lost == seats.end() || !lost->dropped) return Fail("a real host loss was hidden by local presence");
+		std::cout << "[net-reconnect-session-selftest] PASS local_host_presence frames=300 migrated_old_host=dropped" << std::endl;
+		return 0;
+	}
+
 	int NetReconnectSessionSelfTest::Run() {
+		if (const int result = TestLocalHostPresence(); result != 0) return result;
+		if (const int result = TestRemovalStoreKindsAndAlias(); result != 0) return result;
 		if (const int result = TestStoreFailsClosed(); result != 0) {
 			return result;
 		}
