@@ -407,6 +407,29 @@ def log_assertions(peer_root, required=(), forbidden=()):
             for denied, patterns in ((False, required), (True, forbidden)) for pattern in patterns]
 
 
+def frame_gap_evidence(record, spec):
+    """The recorder's own wall clock between presented frames. A menu that holds one is a render stall."""
+    rows = [row for row in record.get("index", []) if isinstance(row.get("wall_ms"), (int, float))]
+    limit = int(spec.get("max_ms", 1000))
+    wanted = spec.get("screens")
+    ignored = set(spec.get("ignore_screens", ["Loading", "LoadingScreen", "game"]))
+    worst, over = None, []
+    for earlier, later in zip(rows, rows[1:]):
+        screens = (earlier.get("screen"), later.get("screen"))
+        if any(screen in ignored for screen in screens):
+            continue
+        if wanted and any(screen not in wanted for screen in screens):
+            continue
+        gap = {"frames": [earlier.get("frame"), later.get("frame")], "screen": later.get("screen"),
+               "gap_ms": later["wall_ms"] - earlier["wall_ms"], "wall_ms": earlier["wall_ms"]}
+        if worst is None or gap["gap_ms"] > worst["gap_ms"]:
+            worst = gap
+        if gap["gap_ms"] > limit:
+            over.append(gap)
+    return {"max_ms": limit, "screens": wanted, "measured_frames": len(rows), "worst": worst,
+            "over": over[:10], "over_count": len(over), "pass": worst is not None and not over}
+
+
 def drop_evidence(record, tick):
     if not record:
         return {"pass": False, "reason": "The dropped peer was not launched"}
@@ -482,6 +505,15 @@ def item_evidence(record, item):
         evidence["log_assertions"] = assertions
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
+    if item.get("frame_gap"):
+        evidence["frame_gap"] = frame_gap_evidence(record, item["frame_gap"])
+        passed = evidence["frame_gap"]["pass"]
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
+        if not passed:
+            evidence["reason"] = ("No presented frames to measure" if evidence["frame_gap"]["worst"] is None else
+                                  f"{evidence['frame_gap']['over_count']} render stall(s) over "
+                                  f"{evidence['frame_gap']['max_ms']} ms; worst {evidence['frame_gap']['worst']['gap_ms']} ms")
     if item.get("drop_tick") is not None:
         evidence["process_drop"] = drop_evidence(record, item["drop_tick"])
         passed = evidence["process_drop"]["pass"]

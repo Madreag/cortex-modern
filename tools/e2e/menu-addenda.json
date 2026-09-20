@@ -547,6 +547,225 @@
       "log_regex": [
         "\\[menu-script\\] assert_settings_page Network:Player .* PASS"
       ]
+    },
+    {
+      "id": "addenda-landing-not-drawn",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The landing panel it replaced is gone from the screen, controls and all.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLandingPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-lobby-not-drawn",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "HOST OPTIONS stands alone: the lobby behind it is not drawn.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLobbyPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-options-not-drawn",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "Closing HOST OPTIONS takes its own controls off the screen.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerHostOptionsPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-activity-combo-fits",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
+    },
+    {
+      "id": "addenda-landing-not-drawn",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The landing panel it replaced is gone from the screen, controls and all.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLandingPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-lobby-not-drawn",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "HOST OPTIONS stands alone: the lobby behind it is not drawn.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLobbyPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-options-not-drawn",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "Closing HOST OPTIONS takes its own controls off the screen.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerHostOptionsPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-activity-combo-fits",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
+    },
+    {
+      "id": "addenda-landing-not-drawn",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The landing panel it replaced is gone from the screen, controls and all.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLandingPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-lobby-not-drawn",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "HOST OPTIONS stands alone: the lobby behind it is not drawn.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerLobbyPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-options-not-drawn",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "Closing HOST OPTIONS takes its own controls off the screen.",
+      "assert": "Renderer-rule readback: no panel under the box is still drawn.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn MultiplayerHostOptionsPanel drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-activity-combo-fits",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
+    },
+    {
+      "id": "addenda-no-render-stall",
+      "run": "640x360",
+      "peer": "ui",
+      "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
+      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "frame_gap": {
+        "max_ms": 1000,
+        "ignore_screens": [
+          "Loading",
+          "LoadingScreen",
+          "game"
+        ]
+      }
+    },
+    {
+      "id": "addenda-no-render-stall",
+      "run": "960x540",
+      "peer": "ui",
+      "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
+      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "frame_gap": {
+        "max_ms": 1000,
+        "ignore_screens": [
+          "Loading",
+          "LoadingScreen",
+          "game"
+        ]
+      }
+    },
+    {
+      "id": "addenda-no-render-stall",
+      "run": "1280x720",
+      "peer": "ui",
+      "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
+      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "frame_gap": {
+        "max_ms": 1000,
+        "ignore_screens": [
+          "Loading",
+          "LoadingScreen",
+          "game"
+        ]
+      }
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "640x360",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "960x540",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "1280x720",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
     }
   ]
 }

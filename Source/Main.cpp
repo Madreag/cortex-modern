@@ -2250,6 +2250,13 @@ void ProcessMenuScript() {
 			if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
 			pass = panel->AutomationLabelText(control, text) && text.find(sub) != std::string::npos;
 			observation = control + " \"" + sub + "\" text=\"" + text + "\"";
+		} else if (pass && inner == "assert_label_absent") {
+			std::string control, sub, text;
+			iss >> control;
+			std::getline(iss, sub);
+			if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+			pass = panel->AutomationLabelText(control, text) && text.find(sub) == std::string::npos;
+			observation = control + " \"" + sub + "\" text=\"" + text + "\"";
 		} else if (pass) {
 			pass = MenuAutomation::Handles(inner) &&
 			       MenuAutomation::Execute(panel->AutomationManager(), "NetSeats", inner, iss, observation);
@@ -2415,6 +2422,17 @@ void ProcessMenuScript() {
 		const bool pass = found && text.find(sub) != std::string::npos;
 		MenuScriptPrint("assert_label " + control + " \"" + sub + "\" text=\"" + text + "\" " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_label " + control + " missing substring: " + sub); }
+	} else if (cmd == "assert_label_absent") {
+		std::string control;
+		std::string sub;
+		iss >> control;
+		std::getline(iss, sub);
+		if (!sub.empty() && sub[0] == ' ') { sub.erase(0, 1); }
+		std::string text;
+		const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, text) : menu->AutomationLabelText(control, text);
+		const bool pass = found && text.find(sub) == std::string::npos;
+		MenuScriptPrint("assert_label_absent " + control + " \"" + sub + "\" text=\"" + text + "\" " + (pass ? "PASS" : "FAIL"));
+		if (!pass) { return MenuScriptFail("assert_label_absent " + control + " carries: " + sub); }
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;

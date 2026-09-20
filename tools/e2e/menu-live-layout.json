@@ -316,6 +316,99 @@
       "mark": "pause-transition-Misc",
       "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
       "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "live-toast-band",
+      "run": "640x360",
+      "mark": "live-toast-band",
+      "what": "The toast band lies inside the screen and clear of the open seats panel.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
+      ]
+    },
+    {
+      "id": "live-status-one-surface",
+      "run": "640x360",
+      "mark": "live-toast-band",
+      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "live-pause-menu-panel",
+      "run": "640x360",
+      "mark": "live-pause-menu",
+      "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
+      ]
+    },
+    {
+      "id": "live-toast-band",
+      "run": "960x540",
+      "mark": "live-toast-band",
+      "what": "The toast band lies inside the screen and clear of the open seats panel.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
+      ]
+    },
+    {
+      "id": "live-status-one-surface",
+      "run": "960x540",
+      "mark": "live-toast-band",
+      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "live-pause-menu-panel",
+      "run": "960x540",
+      "mark": "live-pause-menu",
+      "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
+      ]
+    },
+    {
+      "id": "live-toast-band",
+      "run": "1280x720",
+      "mark": "live-toast-band",
+      "what": "The toast band lies inside the screen and clear of the open seats panel.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        5
+      ]
+    },
+    {
+      "id": "live-status-one-surface",
+      "run": "1280x720",
+      "mark": "live-toast-band",
+      "what": "The NET STATUS panel keeps the pace numbers and leaves the slow-machine notice to the banner.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        6,
+        7
+      ]
+    },
+    {
+      "id": "live-pause-menu-panel",
+      "run": "1280x720",
+      "mark": "live-pause-menu",
+      "what": "The in-match pause menu has its own panel; the live world does not draw through its rows.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        15
+      ]
     }
   ]
 }
