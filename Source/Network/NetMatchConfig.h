@@ -131,7 +131,7 @@ namespace RTE {
 		static constexpr size_t c_MaxMigrationAddresses = 8;
 		static constexpr uint16_t c_Version = 6;
 		static constexpr uint16_t c_LiveMinVersion = 6;
-		static constexpr uint16_t c_PersistentWorldVersion = 6;
+		static constexpr uint16_t c_PersistentWorldVersion = 7;
 		static constexpr uint16_t c_WorldLayoutVersion = 5;
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
 		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;

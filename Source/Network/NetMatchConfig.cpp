@@ -312,11 +312,14 @@ namespace RTE {
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
-		if (config.version < 2 || config.version > c_Version) {
+		if (config.version < 2 || config.version > c_PersistentWorldVersion) {
 			if (error) *error = "match config version is unsupported";
 			return false;
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
+		if (config.version < c_TimingOptionsVersion &&
+		    (config.slowPlayerBoundTicks != c_DefaultSlowPlayerBoundTicks || config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause))
+			return refuse("legacy config cannot carry timing options");
 		if (config.version >= c_TimingOptionsVersion &&
 		    (config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > c_MaxSlowPlayerBoundTicks ||
 		     (config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute && config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause)))
@@ -577,7 +580,8 @@ namespace RTE {
 			const auto rules = RuleFields(config);
 			fields.insert(fields.end(), rules.begin(), rules.end());
 		}
-		const char* domain = config.version >= c_TimingOptionsVersion ? "NetMatchConfig/v6" : config.persistentWorld ? "NetMatchConfig/v5"
+		const char* domain = config.version >= c_PersistentWorldVersion && config.persistentWorld ? "NetMatchConfig/v7"
+		                                            : config.version >= c_TimingOptionsVersion ? "NetMatchConfig/v6" : config.persistentWorld ? "NetMatchConfig/v5"
 		                                            : (config.version >= 4 ? "NetMatchConfig/v4" : (config.version >= 3 ? "NetMatchConfig/v3" : "NetMatchConfig/v2"));
 		return NetIdentity::HashCanonicalText(domain, fields);
 	}

@@ -759,7 +759,7 @@ def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
         "game_version": "7.0.0",
         "build_id": "stage2-world",
         "network_protocol_version": 1,
-        "lockstep_codec_version": 24,
+        "lockstep_codec_version": 25,
         "controller_frame_version": 7,
         "match_config_hash": "a" * 64,
         "session_identity_hash": "b" * 64,
