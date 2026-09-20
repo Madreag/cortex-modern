@@ -795,12 +795,15 @@ def finalize_only(options):
     capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
     scenario = capture["scenario_definition"]
     existing = {run["name"]: run for run in capture["runs"]}
+    prior_manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").is_file() else {}
     recovered = []
     for index, definition in enumerate(scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]):
         name = definition.get("name", f"run{index}")
         root = out / name
         definitions = definition.get("peers") or scenario.get("peers", [])
         if not any((root / peer["name"] / "launch.json").is_file() for peer in definitions):
+            if existing.get(name, {}).get("skip_finding"):
+                recovered.append(existing[name])
             continue
         run = existing.get(name, {"name": name, "root": str(root), "size": capture.get("size") or definition.get("size") or scenario.get("size") or DEFAULT_SIZE, "peers": []})
         prior = {peer["peer"]: peer for peer in run["peers"]}
@@ -827,7 +830,9 @@ def finalize_only(options):
         run["peers"] = peers
         recovered.append(run)
     capture["runs"] = recovered
-    capture["interrupted"] = capture.get("interrupted") or "Finalized after the capture owner ended; unstarted runs remain findings"
+    incomplete = len(recovered) != len(scenario.get("runs") or [None]) or any(run.get("interrupted") for run in recovered)
+    if incomplete and not capture.get("interrupted"):
+        capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
     capture["finalized"] = stamp()
     budget = options.scratch_root or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
     metadata_only = options.metadata_only or scratch_bytes(budget) >= SCRATCH_LIMIT
@@ -837,7 +842,7 @@ def finalize_only(options):
         review(scenario, run, Path(run["root"]))
     start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
     end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
-    scenario_manifest(capture, out, (end - start).total_seconds())
+    scenario_manifest(capture, out, prior_manifest.get("wall_seconds", (end - start).total_seconds()))
     aggregate_review(capture, out)
     for run in recovered:
         for peer in run["peers"]:
