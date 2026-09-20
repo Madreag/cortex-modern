@@ -303,6 +303,9 @@ namespace RTE {
 		/// Completely restarts whatever Activity was last started.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		bool RestartActivity();
+
+		/// How long the last activity restart took, so a peer can publish the start work its machine does.
+		uint32_t GetLastRestartMs() const { return m_LastRestartMs; }
 		void NoteLockstepRelaunch();
 		bool LockstepRelaunchInProgress() const { return m_LockstepRelaunchInProgress; }
 		void EndLockstepRelaunch();
@@ -398,6 +401,7 @@ namespace RTE {
 		};
 		PendingCheckpoint m_PendingCheckpoint;
 		bool m_RestartRestoresSnapshot = false;
+		uint32_t m_LastRestartMs = 0;
 		bool m_LockstepRelaunchInProgress = false;
 		int m_StaleActivitySlots = 0;
 

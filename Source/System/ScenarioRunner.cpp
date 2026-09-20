@@ -59,6 +59,7 @@ namespace RTE {
 		std::unique_ptr<ControllerLog> s_ControllerReplayLog;
 		std::string s_ControllerReplayError;
 		NetLockstepCoordinator* s_LockstepCoordinator = nullptr;
+		bool s_LocalStartParkPublished = false;
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
@@ -933,6 +934,7 @@ namespace RTE {
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
 		s_LockstepCoordinator = coordinator;
+		s_LocalStartParkPublished = false;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
 			s_E2eFirstTransferUid = 0; // A resync does not undo the first transfer; the latch clears with the coordinator.
@@ -2647,6 +2649,11 @@ namespace RTE {
 		bool stalled = false;
 		bool stalledOnHold = false;
 		uint32_t nextPumpMs = 0;
+		// The round's activity restart runs before the first frame wait, so publish what it cost us here.
+		if (!s_LocalStartParkPublished) {
+			s_LocalStartParkPublished = true;
+			s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
+		}
 		while (true) {
 			s_LockstepCoordinator->Tick(NetLockstepNowMs());
 			// A stalled round must not stall the admission plane with it: the peer we are waiting on may

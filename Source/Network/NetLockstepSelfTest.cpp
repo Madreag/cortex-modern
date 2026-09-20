@@ -1710,6 +1710,85 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestASlowStartingPeerIsJudgedByItsOwnRestart(std::string* error) {
+			// Two peers at delay 1 and ping 0: the allowance before the bound judges a sender that has not
+			// produced yet is the start work its machine does, published with its start, or ours as the floor.
+			const auto play = [&](uint16_t port, uint64_t sessionId, uint32_t hostParkMs, uint32_t clientParkMs,
+			                      uint64_t clientStartsAtMs, std::string* failure) {
+				LoopbackTransport hostWire, clientWire;
+				NetLockstepCoordinator host, client;
+				auto a = MakeCoordinatorConfig(1, 2, sessionId, 1, NetTransportLane::ControlReliable);
+				auto b = MakeCoordinatorConfig(2, 1, sessionId, 1, NetTransportLane::ControlReliable);
+				a.startFrame = b.startFrame = 1;
+				a.roundId = b.roundId = 27;
+				a.substituteSlowPeers = b.substituteSlowPeers = true;
+				a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+				a.timeoutMs = b.timeoutMs = 30000;
+				a.relayToOtherPeers = true;
+				a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 1}};
+				a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
+				if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, a, b, failure)) return false;
+				host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+				host.NoteLocalStartPark(hostParkMs);
+				client.NoteLocalStartPark(clientParkMs);
+				uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0;
+				std::string queueError;
+				const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
+					for (uint64_t now = from; now < to; ++now) {
+						while (host.IsRunning() && hostProduced <= hostApplied + 2 &&
+						       host.QueueLocalInput(hostProduced, {MakeFrame(100, hostProduced)}, {}, &queueError)) ++hostProduced;
+						if (clientPlays) {
+							while (client.IsRunning() && clientProduced <= clientApplied + 2 &&
+							       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
+						}
+						host.Tick(now); client.Tick(now);
+						NetLockstepReadyFrame ready;
+						while (host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+						while (client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
+						if (host.IsRunning() && hostApplied < host.GetStats().nextFrame) host.NoteFrameWait(host.GetStats().nextFrame, now);
+						hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+					}
+				};
+				const auto describe = [&](const char* what) {
+					*failure = std::string(what) + "; host_park=" + std::to_string(hostParkMs) +
+					           " published_peer_park=" + std::to_string(host.GetStats().peers.at(2).startParkMs) +
+					           " state=" + NetLockstepCoordinator::StateName(host.GetState()) +
+					           " applied=" + std::to_string(hostApplied) + " next_frame=" + std::to_string(host.GetStats().nextFrame) +
+					           " holds=" + std::to_string(host.GetStats().peers.at(2).holds) +
+					           " peer2_frames=" + std::to_string(host.GetStats().peers.at(2).framePacketsReceived) +
+					           " queue=" + queueError + " client=" + NetLockstepCoordinator::StateName(client.GetState()) +
+					           " client_reason=" + client.GetStats().timeoutReason;
+					return false;
+				};
+				// The joiner's machine is still restarting; nothing of its has reached the round yet.
+				pump(0, clientStartsAtMs, false);
+				if (host.GetStats().peers.at(2).holds != 0 || host.IsSeatUnderAI(2, 2)) {
+					return describe("the host gave a starting peer's seat to the AI before its machine had started");
+				}
+				if (clientParkMs > 0 && host.GetStats().peers.at(2).startParkMs != clientParkMs) {
+					return describe("the peer's published start park never reached the host");
+				}
+				// It starts producing; the round takes the skew once and plays on.
+				pump(clientStartsAtMs, clientStartsAtMs + 120, true);
+				if (host.GetStats().peers.at(2).framePacketsReceived == 0 || host.GetStats().peers.at(2).holds != 0) {
+					return describe("the started peer's frames did not reach the round, or it was held on arrival");
+				}
+				// Negative control: the same peer stops sending while the round waits, and is held at the bound.
+				const uint64_t silentFrame = host.GetStats().nextFrame;
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 400);
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 460);
+				host.Tick(clientStartsAtMs + 460);
+				if (host.GetStats().peers.at(2).holds != 1 || !host.IsSeatUnderAI(2, silentFrame)) {
+					return describe("the bounded wait no longer holds a peer that went silent while the round waited");
+				}
+				return true;
+			};
+			// A peer whose own machine measured 120 ms of start work is allowed it, though ours cost nothing.
+			if (!play(48897, 0x9A0B, 0, 120, 110, error)) return false;
+			// A peer that published nothing gets our own measured start work as its floor.
+			return play(48898, 0x9A0C, 150, 0, 140, error);
+		}
+
 		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -15884,6 +15963,7 @@ namespace RTE {
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
+		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
