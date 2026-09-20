@@ -3046,7 +3046,7 @@ static std::string ResyncSaveName() {
 				if (m_Runner) {
 					const uint8_t lobbyPeer = WorldJoinLobbyPeer(*session);
 					if (lobbyPeer != 0) {
-						(void)m_Runner->GetLobbySession().BindLateRemote(lobbyPeer, peer.transportPeerId, nullptr);
+						(void)m_Runner->GetLobbySession().BindWorldTransferRemote(lobbyPeer, peer.transportPeerId, nullptr);
 						if (session->assignedPeerId != 0) {
 							m_Runner->GetLobbySession().SendMatchConfigTo(lobbyPeer);
 						}

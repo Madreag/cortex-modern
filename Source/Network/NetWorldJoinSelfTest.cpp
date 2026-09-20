@@ -1513,6 +1513,58 @@ namespace RTE {
 			return config;
 		}
 
+		int TestWorldBootstrapSenderIdentity() {
+			std::string error;
+			LoopbackTransport hostWire, residentWire, lateWire;
+			NetSession hostSession, residentSession, lateSession;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(48916, 11, "World"), &error) ||
+			    !residentSession.StartClient(residentWire, "loopback", MakeWorldSessionConfig(48916, 22, "Resident"), &error)) return Fail(error);
+			uint64_t now = 0;
+			auto pumpSessions = [&] {
+				hostSession.Tick(now); residentSession.Tick(now); lateSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
+			};
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("resident session did not become ready");
+			const NetPeerId residentConnection = hostSession.GetReadyPeers().front().transportPeerId;
+			if (!lateSession.StartClient(lateWire, "loopback", MakeWorldSessionConfig(48916, 33, "Late"), &error)) return Fail(error);
+			while (hostSession.GetReadyPeers().size() < 2 && now < 2000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 2) return Fail("late session did not become ready");
+			const auto late = hostSession.GetReadyPeers().back();
+			if (late.assignedPeerId + 1 != 3) return Fail("late session did not retain its provisional id");
+			NetLobbySession host, resident, joiner;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
+			hostConfig.matchConfig = MakeWorldConfig(); hostConfig.autoStart = false;
+			hostConfig.remoteTransportPeerIds = {{2, residentConnection}};
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = residentSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = hostConfig.matchConfig;
+			if (!host.Start(hostWire, hostConfig, &error) || !resident.Start(residentWire, clientConfig, &error)) return Fail(error);
+			const uint8_t route = c_WorldSpectatorLobbyPeerFirst;
+			if (!host.BindWorldTransferRemote(route, late.transportPeerId, &error)) return Fail(error);
+			clientConfig.localPeerId = 3; clientConfig.remoteTransportPeerId = lateSession.GetRemoteTransportPeerId();
+			if (!joiner.Start(lateWire, clientConfig, &error)) return Fail(error);
+			auto pumpLobbies = [&] {
+				for (const auto& event: hostWire.PollEvents()) host.HandleTransportEvent(event, now);
+				host.PumpOutgoingChunks(); resident.Tick(now); joiner.Tick(now);
+				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
+			};
+			for (int i = 0; i < 10; ++i) pumpLobbies();
+			if (joiner.IsFailed() || joiner.IsRejected() || !host.IsRemoteLobbyUp(route) || !host.IsRemoteLobbyUp(2))
+				return Fail("bootstrap sender rejected: session peer=3 world route=" + std::to_string(route) + " reason=" + joiner.GetFailureReason());
+			if (host.BeginStateTransferToPeer(route, std::vector<uint8_t>(128, 0x6D)) == NetLobbyStateTransfer::Refused) return Fail("bootstrap image refused");
+			for (int i = 0; i < 20 && !joiner.HasCompleteStateTransfer(); ++i) pumpLobbies();
+			if (joiner.TakeReceivedState() != std::vector<uint8_t>(128, 0x6D) || resident.IsFailed()) return Fail("bootstrap image lost or resident disconnected");
+			NetLobbyPeerState impostor;
+			impostor.peerId = 2; impostor.displayName = "Impostor";
+			if (!joiner.SendPayload(impostor, &error)) return Fail(error);
+			for (int i = 0; i < 10; ++i) pumpLobbies();
+			if (!joiner.IsFailed() || resident.IsFailed()) return Fail("bootstrap identity guard accepted another session's sender");
+			return 0;
+		}
+
 		// A joiner activates inside a sim update: the start has to hand that update back and finish its
 		// handshake over the updates that follow, whatever the remote does.
 		int TestWorldJoinLockstepStartDoesNotHoldTheSimUpdate() {
@@ -5822,6 +5874,10 @@ namespace RTE {
 			s_FailTag = "net-world-ordinary-identity-selftest";
 			return TestOrdinaryIdentityStamps();
 		}
+		if (std::strcmp(name, "-net-world-bootstrap-identity-selftest") == 0) {
+			s_FailTag = "net-world-bootstrap-identity-selftest";
+			return TestWorldBootstrapSenderIdentity();
+		}
 		if (std::strcmp(name, "admit") == 0 || std::strcmp(name, "-net-world-admit-selftest") == 0) {
 			s_FailTag = "net-world-admit-selftest";
 			return TestDueActivationAdmits();
@@ -6079,6 +6135,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
+		if (const int result = TestWorldBootstrapSenderIdentity(); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
