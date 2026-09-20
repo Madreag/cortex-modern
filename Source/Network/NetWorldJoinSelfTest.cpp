@@ -2691,6 +2691,7 @@ namespace RTE {
 		NetWorldCheckpointImage decoded;
 		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.authorityPeerId != 2 || decoded.privateSessionId != config.sessionId)
 			return Fail("private checkpoint lost the migrated authority");
+		if (DecodeWorldJoinOffer(R"({"schema":1,"private_session_id":"bad"})", decoded, &error)) return Fail("private offer accepted a mistyped identity");
 		host.PublishImage(image);
 		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
 		host.NoteRejoinLinkFit(42, true);

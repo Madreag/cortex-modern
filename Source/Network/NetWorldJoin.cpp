@@ -111,6 +111,7 @@ namespace RTE {
 	}
 
 	bool DecodeWorldJoinOffer(const std::string& text, NetWorldCheckpointImage& out, std::string* error) {
+		try {
 		json parsed = json::parse(text, nullptr, false);
 		if (parsed.is_discarded() || !parsed.is_object()) {
 			if (error) *error = "world join offer is not an object";
@@ -148,6 +149,10 @@ namespace RTE {
 		}
 		out = image;
 		return true;
+		} catch (const json::exception&) {
+			if (error) *error = "world join offer has invalid field types";
+			return false;
+		}
 	}
 
 	std::string NetWorldIdentityFile::Encode(const NetWorldIdentity& identity) {

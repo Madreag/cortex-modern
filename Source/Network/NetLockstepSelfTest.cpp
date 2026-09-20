@@ -1500,6 +1500,26 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
+		bool TestHoldDeadlinePrecedesConsumerWait(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A37, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A37, 0, NetTransportLane::ControlReliable);
+			a.substituteSlowPeers = b.substituteSlowPeers = true; a.relayToOtherPeers = true;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(48902, hostWire, clientWire, host, client, a, b, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!host.QueueLocalInput(0, {}, {}, error)) return false;
+			NetLockstepReadyFrame ready;
+			for (uint64_t now = 10; now < 58; ++now) { host.Tick(now); if (host.PopReadyFrame(ready)) return false; }
+			host.Tick(58);
+			if (!host.PopReadyFrame(ready) || !host.IsSeatUnderAI(2, 0) || host.GetStats().blockingFrameWaits != 0 ||
+			    host.GetStats().lastHoldDeclarationMs + host.GetStats().holdNoticeBudgetMs > 50) {
+				*error = "the first-missing deadline waited for a render consumer or spent a second wait budget"; return false;
+			}
+			return true;
+		}
+
 		bool TestHoldWaitsForSurvivorDecision(std::string* error, bool bothSilent = false, bool lostAck = false) {
 			LoopbackTransport hostTransport, slowTransport, survivorTransport;
 			if (!hostTransport.StartHost(48893, error) || !slowTransport.Connect("loopback", 48893, error) || !survivorTransport.Connect("loopback", 48893, error)) return false;
@@ -12073,6 +12093,12 @@ namespace RTE {
 					NetActorOwnership::SeedOwner(actor->GetUniqueID(), 2, Activity::TeamTwo);
 					ScenarioRunner::HandLockstepActorToAI(actor->GetUniqueID(), 2);
 					valid &= controller.LoadCheckpoint(baseline);
+					NetLockstepReadyFrame recorded = index == 0 ? first : second;
+					const ControllerFrame oldAI = MakeFrame(actor->GetUniqueID(), uint64_t{1} << PRESS_PRIMARY);
+					recorded.localFrames.push_back(oldAI); recorded.remoteFrames.push_back(oldAI);
+					recorded.remoteFrameCounts = {{index == 0 ? uint8_t{2} : uint8_t{1}, 1}};
+					ScenarioRunner::FilterReclaimControllerInputs(recorded);
+					valid &= recorded.localFrames.empty() && recorded.remoteFrames.empty() && recorded.remoteFrameCounts.begin()->second == 0;
 					ApplyLockstepSeatReclaims(index == 0 ? first : second, {actor.get()});
 					const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
 					valid &= owner == 2 && controller.GetInputMode() == mode && controller.IsQuickDisabled() == disabled;
@@ -15594,6 +15620,7 @@ namespace RTE {
 		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
+		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
