@@ -4481,6 +4481,7 @@ static std::string ResyncSaveName() {
 			}
 			for (auto it = m_PendingHeldReseats.begin(); it != m_PendingHeldReseats.end();) {
 				const NetGameReseat& reseat = *it;
+				if (m_Coordinator && m_Coordinator->HasAgreedSeatReclaim(reseat.newOwnerPeerId)) { it = m_PendingHeldReseats.erase(it); continue; }
 				if (m_Coordinator && m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(reseat.newOwnerPeerId)) { ++it; continue; }
 				if (!PrepareHeldPeerRejoinLocked(reseat.newOwnerPeerId)) { ++it; continue; }
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
@@ -4495,6 +4496,7 @@ static std::string ResyncSaveName() {
 				}
 				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
 					const NetHoldResolutionNotice& notice = *it;
+					if (notice.resolution == NetHoldResolution::Reclaimed && m_Coordinator->HasAgreedSeatReclaim(notice.lockstepPeerId)) { it = m_PendingHeldResolutions.erase(it); continue; }
 					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId) && notice.resolution != NetHoldResolution::Expired) { ++it; continue; }
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
@@ -4585,7 +4587,7 @@ static std::string ResyncSaveName() {
 	std::string NetMatchService::GetConnectedRouteLocked(uint8_t peerId) const {
 		INetTransport* wire = ActiveWireLocked();
 		if (!wire) return {};
-		if (m_Coordinator) for (const auto& [peer, transport]: m_Coordinator->GetConfig().remoteTransportPeerIds) {
+		if (m_Coordinator) for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) {
 			if (peerId != 0 && peer != peerId) continue;
 			const auto route = wire->GetConnectedRoute(transport); if (!route.empty()) return route;
 		}
@@ -4601,6 +4603,12 @@ static std::string ResyncSaveName() {
 		return GetConnectedRouteLocked(peerId);
 	}
 
+	NetHostHandoverState NetMatchService::GetHostHandoverState() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (!m_Coordinator || !m_Coordinator->IsMigrating()) return NetHostHandoverState::Live;
+		return m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting ? NetHostHandoverState::HostLost : NetHostHandoverState::Migrating;
+	}
+
 	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
@@ -4609,6 +4617,12 @@ static std::string ResyncSaveName() {
 		                                                                                                 : 1;
 		snapshot.serviceState = StateName(m_State);
 		snapshot.statusText = m_StatusText;
+		snapshot.migrating = m_Coordinator && m_Coordinator->IsMigrating();
+		snapshot.hostLost = snapshot.migrating && m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::Contacting;
+		if (snapshot.migrating) {
+			snapshot.serviceState = snapshot.hostLost ? "HostLost" : "Migrating";
+			snapshot.statusText = snapshot.hostLost ? "Host lost - contacting the next host" : "Changing hosts - recovering the shared frame";
+		}
 		if (!m_ErrorText.empty()) snapshot.errorText = m_ErrorText;
 		snapshot.isHost = m_IsHost;
 		snapshot.localPeerId = m_LocalPeerId;
@@ -5962,7 +5976,7 @@ static std::string ResyncSaveName() {
 	std::string NetMatchService::SetupFailureStatus(const NetSession* session, bool noDirectRoute, bool relayFailed) {
 		if (session && session->HasReject()) {
 			if (session->GetRejectReason() == NetRejectReason::ParticipantRemoved) return "The host removed you from this session";
-			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return "The host banned you from this session";
+			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return session->BuildRejectText();
 			if (session->GetRejectSummary() == "Match roster refused") return "Match roster refused";
 		}
 		if (relayFailed) return "Relay route failed (TURN): check the relay or forward the host's UDP port";

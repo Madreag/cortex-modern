@@ -34,6 +34,8 @@ namespace RTE {
 		bool inLobby = false;
 		bool running = false;
 		bool failed = false;
+		bool hostLost = false;
+		bool migrating = false;
 		uint8_t localPeerId = 0;
 		uint8_t hostPeerId = 1;
 		int localTeam = -1;
