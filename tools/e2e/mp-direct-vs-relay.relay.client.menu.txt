@@ -1,6 +1,8 @@
 wait_ms 1800
 activate ButtonMainToOptions
 wait_ms 600
+select_settings_page Network
+wait_ms 250
 select_settings_page Network:Connection
 video_mark relay-connection-client
 wait_ms 900
