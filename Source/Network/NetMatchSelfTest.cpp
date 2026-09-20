@@ -948,8 +948,7 @@ namespace RTE {
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
 				{"path_horizon", [](auto& c) { ++c.pathHorizonTicks; }},
 				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
-				// The redundancy window rides reserved bit 0x8 and a trailing word, so its round trip
-				// proves the bit and the hash sensitivity proves peers cannot disagree about it.
+				// The redundancy window must survive the round trip and affect the hash.
 				{"frame_redundancy_off", [](auto& c) { c.frameRedundancyTicks = 1; }},
 				{"frame_redundancy_max", [](auto& c) { c.frameRedundancyTicks = NetMatchConfigUtil::c_MaxFrameRedundancyTicks; }},
 				{"floor", [](auto& c) { ++c.inputDelayFrames; }}, {"sender_1", [](auto& c) { ++c.peerInputDelayFrames[0]; }},
@@ -1391,16 +1390,18 @@ namespace RTE {
 				*error = "a reserved word of 32 was not refused";
 				return false;
 			}
-			// The redundancy window rides reserved bit 0x8 and a word after the body. A host that
-			// keeps the default window publishes the same bytes it always did.
+			// The redundancy word precedes the versioned relay payload.
 			NetMatchConfig windowed = MakeConfig();
 			windowed.frameRedundancyTicks = 2;
+			const size_t relaySize = windowed.version >= NetMatchConfigUtil::c_RelayLayoutVersion ? 2 + windowed.relay.ToJson().size() : 0;
+			const size_t redundancyOffset = plainSize - relaySize;
 			message.payload = NetLobbyMatchConfig{windowed};
 			std::vector<uint8_t> windowedBytes;
 			if (!NetLobbyProtocol::Encode(message, windowedBytes, &encodeError) || windowedBytes.size() != plainSize + 2 ||
 			    windowedBytes[reservedOffset] != 8 || windowedBytes[reservedOffset + 1] != 0 ||
-			    windowedBytes[windowedBytes.size() - 2] != 2 || windowedBytes.back() != 0) {
-				*error = "a non-default redundancy window did not encode reserved bit 0x8 and its trailing word";
+			    windowedBytes[redundancyOffset] != 2 || windowedBytes[redundancyOffset + 1] != 0 ||
+			    !std::equal(bytes.begin() + redundancyOffset, bytes.end(), windowedBytes.begin() + redundancyOffset + 2)) {
+				*error = "a non-default redundancy window did not encode bit 0x8 and its word before the relay payload";
 				return false;
 			}
 			const NetLobbyDecodeResult windowDecoded = NetLobbyProtocol::Decode(windowedBytes);
@@ -1411,7 +1412,7 @@ namespace RTE {
 			}
 			for (const uint8_t outOfRange : {0, NetMatchConfigUtil::c_MaxFrameRedundancyTicks + 1}) {
 				std::vector<uint8_t> broken = windowedBytes;
-				broken[broken.size() - 2] = outOfRange;
+				broken[redundancyOffset] = outOfRange;
 				const NetLobbyDecodeResult refusedWindow = NetLobbyProtocol::Decode(broken);
 				if (refusedWindow.ok || refusedWindow.error.code != NetLobbyErrorCode::InvalidValue) {
 					*error = "a redundancy window outside its range was accepted";
@@ -7993,6 +7994,9 @@ namespace RTE {
 		uint8_t stayingPeerId = 0;
 		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) {
 			const uint8_t lockstepPeerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			for (NetMatchPlayerSlot& slot: matchConfig.players) {
+				if (slot.peerId == lockstepPeerId) slot.displayName = peer.displayName;
+			}
 			if (peer.displayName == "Joiner") {
 				seated = peer.transportPeerId;
 				kickedPeerId = lockstepPeerId;
@@ -8011,8 +8015,9 @@ namespace RTE {
 		NetLobbySessionConfig lobbyConfig;
 		lobbyConfig.host = true;
 		lobbyConfig.localPeerId = 1;
-		lobbyConfig.remotePeerId = kickedPeerId;
-		lobbyConfig.remoteTransportPeerId = seated;
+		for (const NetSessionPeerInfo& peer: hostSession.GetReadyPeers()) {
+			lobbyConfig.remoteTransportPeerIds.emplace(static_cast<uint8_t>(peer.assignedPeerId + 1), peer.transportPeerId);
+		}
 		lobbyConfig.matchConfig = matchConfig;
 		lobbyConfig.session = &hostSession;
 		lobbyConfig.sessionNowMs = [&now]() { return now; };
@@ -10532,9 +10537,17 @@ namespace RTE {
 		class ScriptedTransport final : public NetDirectoryClient::Transport {
 		public:
 			explicit ScriptedTransport(std::shared_ptr<Wire> wire) : m_Wire(std::move(wire)) {}
-			void Start(const NetDirectoryClient::Request& request) override { m_Wire->sent.push_back(request); ++m_Wire->requests; }
+			void Start(const NetDirectoryClient::Request& request) override {
+				m_IceRequest = request.path.ends_with("/ice-servers");
+				m_Wire->sent.push_back(request);
+				++m_Wire->requests;
+			}
 			bool Finished() override { return !m_Wire->hold; }
 			NetDirectoryClient::Reply Take() override {
+				if (m_IceRequest) {
+					std::cout << "[net-match-selftest] MEASURE directory lease relay endpoint status=503" << std::endl;
+					return {503, R"({"error":"relay_unavailable"})", ""};
+				}
 				if (m_Wire->replies.empty()) {
 					return {500, "", ""};
 				}
@@ -10546,6 +10559,7 @@ namespace RTE {
 
 		private:
 			std::shared_ptr<Wire> m_Wire;
+			bool m_IceRequest = false;
 		};
 		struct SettingsGuard {
 			std::string url = g_SettingsMan.GetSessionDirectoryUrl();
@@ -10850,7 +10864,10 @@ namespace RTE {
 					step = "the visible 404 never re-registered";
 				} else {
 					const std::string first = body(wire->sent.at(0)).value("join_mode", "");
-					const std::string second = body(wire->sent.at(2)).value("join_mode", "");
+					const auto registration = std::find_if(wire->sent.rbegin(), wire->sent.rend(), [](const auto& request) {
+						return request.method == "POST" && request.path == "/v1/sessions";
+					});
+					const std::string second = body(*registration).value("join_mode", "");
 					service.FinishMatch("match over");
 					if (!pumpUntil(service, 500, [&] { return count(*wire, "DELETE", "/v1/sessions/" + idB) == 1; })) {
 						step = "the end kept a row GNS is not pinned to";
@@ -11306,6 +11323,7 @@ namespace RTE {
 					*error = "ice refusal fixture: ban could not be encoded";
 					return false;
 				}
+				p2p->Queue({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
 				p2p->Queue({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}});
 			} else if (arm == 0 || arm == 8) {
 				if (arm == 8) p2p->Queue({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
@@ -11324,6 +11342,10 @@ namespace RTE {
 				return false;
 			}
 			const bool retry = arm < 3 || arm == 7 || arm == 10;
+			if (arm == 4 && (!session.IsRejected() || session.GetRejectReason() != NetRejectReason::ParticipantBanned)) {
+				*error = "ice refusal fixture: the connected host's ban was not retained";
+				return false;
+			}
 			const auto ipDials = std::count(log.begin(), log.end(), "retry.Connect(203.0.113.9:41237)");
 			if (iceDials != (arm == 2 ? 0 : 1) || ipDials != (retry ? 1 : 0) || noDirectRoute != (arm < 4 || arm == 6 || arm == 7 || arm == 10)) {
 				*error = "ice retry arm " + std::to_string(arm) + ": ICE dials=" + std::to_string(iceDials) +
@@ -11478,6 +11500,15 @@ namespace RTE {
 		return true;
 	}
 
+	int NetMatchSelfTest::RunBeforeInitialization() {
+		std::string error;
+		if (!TestIceDefaultsAndOverrides(&error) || !TestRelayOfferAndPolicy(&error)) {
+			std::cerr << "[net-match-selftest] FAIL: " << error << std::endl;
+			return 1;
+		}
+		return 0;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -11485,8 +11516,6 @@ namespace RTE {
 		};
 
 		std::string error;
-		if (!TestIceDefaultsAndOverrides(&error)) return fail(error);
-		if (!TestRelayOfferAndPolicy(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
