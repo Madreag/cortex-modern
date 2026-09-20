@@ -3038,6 +3038,8 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// BuildMatchConfig reads the mode off the request, not the rules block it carries inside.
 		request.mode = m_HostSetupOptions->mode;
 		request.delayPolicy = m_HostSetupOptions->delayPolicy;
+		request.slowPlayerBoundTicks = m_HostSetupOptions->slowPlayerBoundTicks;
+		request.slowPlayerPolicy = m_HostSetupOptions->slowPlayerPolicy;
 		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
 		request.automaticRepair = m_HostSetupOptions->automaticRepair;
 		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
