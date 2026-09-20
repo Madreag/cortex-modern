@@ -4,7 +4,7 @@ Run only after build authorization and removal of the phase lock:
 
 ```powershell
 $env:CCCP_HEADLESS = '1'
-python -B tools/feel_measure.py
+python -B tools/feel_measure.py --out D:\mx\feel-item9a-review --skip-gates
 ```
 
 The driver uses the assigned worktree's executable and `run_sim_test.make_run` for
@@ -15,6 +15,28 @@ omits `-free-run-sim`: at the pinned source tip that option skips the normal dra
 call. The ordinary e2e loop renders and contributes to the existing pace counters.
 All traces request 1200 ticks. The service's stop/drain tail is retained separately
 in the raw records; trace coverage must be exactly ticks 1 through 1200.
+
+The item 9a cases add 5% GNS packet loss and a three-peer match whose client stops
+at tick 600 for 1500 ms, then takes the normal reclaim path. The latter keeps AI
+enabled and compares every committed hash on the two survivors through the hold
+and rejoin. The impaired client uses twice the lag argument while the host and
+survivor use zero, keeping 200 ms on each leg of that client's link. The loss arm
+sets GNS send and receive loss in that client and records whether both setters
+succeeded. It is reapplied when recovery opens another round.
+
+Fast peers must sustain at least 59.5 ticks/s after tick 300, spend less than 1%
+of that wall time waiting for input, and have no wait over 50 ms. The elapsed
+window spans recovery; restarted pace counters cannot remove a rejoin pause.
+The requested zero `steady_missing_frame_stalls` check is also retained. That
+counter keeps its transport/prefetch meaning; actual blocking has a separate
+counter and wait log. Every MISS is retained, including a disagreement between
+those two measures. The slow client's presentation checks still run.
+
+Delay checks read the engine's timestep and measured RTT, require the initial
+pick to cover `ceil(RTT / tick) + 1`, and compare the final displayed delay with
+the live configuration. The preview's 2 ms budget applies at the full negotiated
+depth, including 25 or more ticks. None of these additions has been run in the
+compile-only work phase.
 
 There is one local SP baseline per render cap. It wraps the stock P4 Alpha Duel
 activity, keeps its scene and loadout, seats two humans on teams 0 and 1, and
