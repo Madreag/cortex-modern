@@ -784,6 +784,7 @@ static std::string ResyncSaveName() {
 			AccumulateLockstepTotalsLocked();
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
+			m_WorkerSession = session.get();
 			runner = std::move(m_Runner);
 			if (m_IsHost) {
 				// A rematch restarts from a zeroed sim count.
@@ -976,7 +977,7 @@ static std::string ResyncSaveName() {
 			m_ResyncHealOpen = true;
 			// The round owned the transport for the whole match, so nothing stamped a receive while it
 			// played. The silence windows start again here instead of measuring the match behind us.
-			if (m_Session) m_Session->NotePumpParked();
+			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
@@ -1098,6 +1099,7 @@ static std::string ResyncSaveName() {
 			AccumulateLockstepTotalsLocked();
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
+			m_WorkerSession = session.get();
 			runner = std::move(m_Runner);
 			if (isHost) {
 				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
@@ -1123,8 +1125,8 @@ static std::string ResyncSaveName() {
 	void NetMatchService::NoteResyncRelaunched() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// Staging the checkpoint and restarting the activity parked this peer's pump for seconds.
-		if (m_Session) {
-			m_Session->NotePumpParked();
+		if (NetSession* live = LiveSessionLocked()) {
+			live->NotePumpParked();
 		}
 		if (!m_ResyncHealOpen) {
 			return;
@@ -1168,6 +1170,7 @@ static std::string ResyncSaveName() {
 			}
 			RestoreTransportLinkLocked(std::move(link));
 			m_Session = std::move(session);
+			m_WorkerSession = nullptr;
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
 			if (!started && !m_IsHost && m_Runner->DidLoseHostDuringSetup() && m_MigrationFallbackCoordinator && m_MigrationFallbackCoordinator->BeginHostMigrationAfterHeal(NetLockstepNowMs())) {
@@ -1433,6 +1436,7 @@ static std::string ResyncSaveName() {
 			}
 			RestoreTransportLinkLocked(std::move(link));
 			m_Session = std::move(session);
+			m_WorkerSession = nullptr;
 			m_Coordinator = std::move(coordinator);
 			m_Runner = std::move(runner);
 			if (started) {
@@ -1595,7 +1599,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateJoinError.clear();
+		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateImageTakenMs = 0; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
@@ -2464,11 +2468,16 @@ static std::string ResyncSaveName() {
 		const bool seatHeld = m_Coordinator->AnyHeldAISeat();
 		if (m_PrivateImageSeatHeld && !seatHeld) m_PrivateImageStaleFrom = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		m_PrivateImageSeatHeld = seatHeld;
+		// The capture freezes the sim for 160-200 ms, and no survivor may feel one per rejoin: a refreshed
+		// base waits for the cadence, so a longer private replay is paid by the peer that is rejoining.
+		const uint64_t nowMs = SteadyNowMs();
+		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
 		const bool stale = m_PrivateImageStaleFrom != 0 && !seatHeld && m_WorldJoin.Sessions().empty() &&
-		                   !m_PrivateImageTask.valid() && m_WorldJoin.Image().tick < m_PrivateImageStaleFrom;
+		                   !m_PrivateImageTask.valid() && m_WorldJoin.Image().tick < m_PrivateImageStaleFrom && cadenceOpen;
 		if (m_PrivateImageRound == round && !stale) return;
 		m_PrivateImageStaleFrom = 0;
 		m_PrivateImageRound = round;
+		m_PrivateImageTakenMs = nowMs;
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
 		std::string error;
@@ -3422,7 +3431,7 @@ static std::string ResyncSaveName() {
 		// A member catching up privately is replaying on this thread and the round is not feeding its
 		// session: that silence is its own, not the host's. The windows stay open for as long as the
 		// catch-up runs; a host that really goes away still arrives as a transport close below.
-		if (m_Session) m_Session->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
+		if (NetSession* live = LiveSessionLocked()) live->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
@@ -3518,7 +3527,7 @@ static std::string ResyncSaveName() {
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
 			// The tail replayed on this thread; the session read nothing while it ran.
-			if (m_Session) m_Session->NotePumpParked();
+			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			std::cout << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << std::endl;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {

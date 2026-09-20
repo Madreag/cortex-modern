@@ -942,6 +942,7 @@ namespace RTE {
 		/// coordinator on the game thread, which never holds this lock.
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
 		friend struct HostOptionsLobbyRow;
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
@@ -1232,6 +1233,10 @@ namespace RTE {
 		std::string m_DirectoryToken;
 		bool m_DirectoryRegistered = false;
 		std::unique_ptr<NetSession> m_Session;
+		/// The session a rematch or resync worker owns; m_Session is empty for as long as it runs, and a
+		/// park declared on this thread must still reach the session that is evaluating silence.
+		NetSession* m_WorkerSession = nullptr;
+		NetSession* LiveSessionLocked() const { return m_Session ? m_Session.get() : m_WorkerSession; }
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;
@@ -1310,6 +1315,8 @@ namespace RTE {
 		std::future<PrivateJoinImage> m_PrivateImageTask;
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
+		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
+		static constexpr uint64_t c_PrivateImageMinIntervalMs = 30000; //!< The shortest wall gap between two captures.
 		bool m_PrivateImageSeatHeld = false;
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
