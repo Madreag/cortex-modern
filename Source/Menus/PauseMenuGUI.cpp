@@ -91,13 +91,13 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PauseScreen"));
 	m_PauseMenuBox->CenterInParent(true, true);
 	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
-	m_MatchOptionsBox->Resize(568, 308);
+	m_MatchOptionsBox->Resize(568, 324);
 	m_MatchOptionsBox->CenterInParent(true, true);
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
-	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 276, 260, 20));
+	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 292, 260, 20));
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetText("Repair match now");
 	m_MatchRepairHint = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(
-	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 236, 544, 34));
+	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 252, 544, 34));
 	m_MatchRepairHint->SetHAlignment(GUIFont::Left);
 	m_MatchRepairHint->SetVAlignment(GUIFont::Top);
 
@@ -137,11 +137,11 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
 	m_MatchOptionsBox->CenterInParent(true, true);
 	m_MatchOptionsLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchOptions"));
-	m_MatchOptionsLabel->Resize(544, 210);
-	m_GUIControlManager->GetControl("LabelMatchOptionsTitle")->Resize(568, 14);
-	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, 276);
+	m_MatchOptionsLabel->Resize(544, 225);
+	m_GUIControlManager->GetControl("LabelMatchOptionsTitle")->Resize(568, 16);
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, 292);
 	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->Resize(260, 20);
-	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, 276);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, 292);
 
 	int boxPosX = 0;
 	int boxPosY = 0;
