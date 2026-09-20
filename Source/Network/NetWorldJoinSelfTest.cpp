@@ -17,6 +17,11 @@
 #include "NetReconnectTicketStore.h"
 #include "NetWorldJoin.h"
 #include "ActivityMan.h"
+#include "LuaMan.h"
+#include "MovableMan.h"
+#include "PresetMan.h"
+#include "SettingsMan.h"
+#include "TimerMan.h"
 #include "AutosaveStore.h"
 #include "System/ScenarioRunner.h"
 
@@ -108,7 +113,7 @@ namespace RTE {
 			config.peerCount = 2;
 			config.hostPeerId = 1;
 			config.players = {
-				NetMatchPlayerSlot{1, 0, true, "World"},
+				NetMatchPlayerSlot{0, 0, true, "World"},
 				NetMatchPlayerSlot{2, 1, false, "Player"},
 			};
 			return config;
@@ -493,6 +498,7 @@ namespace RTE {
 			clientConfig.localPeerId = 2;
 			clientConfig.remotePeerId = 1;
 			clientConfig.remoteTransportPeerId = 1;
+			clientConfig.remoteTransportPeerIds = {{1, 1}};
 			clientConfig.peerCount = 2;
 			clientConfig.timeoutMs = 1000000;
 			clientConfig.matchConfig = MakeWorldConfig();
@@ -910,8 +916,8 @@ namespace RTE {
 			}
 			ScenarioRunner::SetWorldCatchUpActivation(e);
 
-			LoopbackTransport holdTransport;
-			if (!holdTransport.StartHost(47120, &error)) {
+			LoopbackTransport authorityTransport, holdTransport;
+			if (!authorityTransport.StartHost(47120, &error) || !holdTransport.Connect("loopback", 47120, &error)) {
 				return Fail("hold loopback: " + error);
 			}
 			NetLockstepCoordinator joinerRound;
@@ -920,6 +926,7 @@ namespace RTE {
 			joinerConfig.localPeerId = 2;
 			joinerConfig.remotePeerId = 1;
 			joinerConfig.remoteTransportPeerId = 1;
+			joinerConfig.remoteTransportPeerIds = {{1, 1}};
 			joinerConfig.peerCount = 2;
 			joinerConfig.timeoutMs = 1000000;
 			joinerConfig.startFrame = e;
@@ -1002,7 +1009,7 @@ namespace RTE {
 			NetMatchConfig config = MakeWorldConfig();
 			// Co-op: every human seat is team 0, so two members share the team an Activate names.
 			config.players = {
-			    NetMatchPlayerSlot{1, 0, true, "World"},
+			    NetMatchPlayerSlot{0, 1, true, "World"},
 			    NetMatchPlayerSlot{2, 0, false, "First"},
 			    NetMatchPlayerSlot{3, 0, false, "Second"},
 			};
@@ -1119,13 +1126,17 @@ namespace RTE {
 			image.digest = "d";
 			image.path = "Worlds/image.bin";
 			host.PublishImage(image);
-			// The spectator pool is 16 ids wide; the bootstrap past the last one holds none.
+			// The full spectator pool refuses a join before it opens a bootstrap.
 			NetPeerId overflow = c_InvalidNetPeerId;
 			int spectators = 0;
 			for (int index = 0; index < static_cast<int>(c_WorldSpectatorLobbyCap) + 4 && overflow == c_InvalidNetPeerId; ++index) {
 				const NetPeerId connection = static_cast<NetPeerId>(100 + index);
 				if (!host.BeginJoin(connection, 0, "spectator", 1000, &error)) {
-					return Fail("bootstrap spectator " + std::to_string(index) + " did not open: " + error);
+					if (spectators != c_WorldSpectatorLobbyCap || error != "the world is full" || host.FindSession(connection) != nullptr) {
+						return Fail("bootstrap spectator " + std::to_string(index) + " refused with " + std::to_string(spectators) + " watchers: " + error);
+					}
+					overflow = connection;
+					break;
 				}
 				const NetWorldJoinSession* opened = host.FindSession(connection);
 				if (opened == nullptr) {
@@ -1136,7 +1147,7 @@ namespace RTE {
 				}
 				++spectators;
 				if (opened->spectatorLobbyPeer == 0) {
-					overflow = connection;
+					return Fail("a spectator bootstrap opened without a lobby id");
 				}
 			}
 			if (overflow == c_InvalidNetPeerId) {
@@ -1144,7 +1155,10 @@ namespace RTE {
 				            " spectators all held a lobby id, the pool is " + std::to_string(c_WorldSpectatorLobbyCap));
 			}
 			std::string reason;
-			if (NetMatchService::WorldBootstrapCanStart(*host.FindSession(overflow), &reason)) {
+			NetWorldJoinSession noLobbyId;
+			noLobbyId.connection = overflow;
+			noLobbyId.spectator = true;
+			if (NetMatchService::WorldBootstrapCanStart(noLobbyId, &reason)) {
 				return Fail("bootstrap-read-the-archive-it-cannot-send: connection " + std::to_string(overflow) +
 				            " with no lobby id was reported startable");
 			}
@@ -1572,10 +1586,13 @@ namespace RTE {
 			joinerConfig.localPeerId = 2;
 			joinerConfig.remotePeerId = 1;
 			joinerConfig.remoteTransportPeerId = clientSession.GetReadyPeers().front().transportPeerId;
+			joinerConfig.remoteTransportPeerIds = {{1, joinerConfig.remoteTransportPeerId}};
 			joinerConfig.peerCount = config.matchConfig.peerCount;
 			joinerConfig.timeoutMs = 1000000;
 			joinerConfig.startFrame = e;
 			joinerConfig.matchConfig = config.matchConfig;
+			joinerConfig.scenario = config.scenario;
+			joinerConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(config.matchConfig.ownershipPolicy);
 			if (!joinerSide.Start(clientTransport, joinerConfig, &error)) {
 				return Fail("world-join-lockstep-did-not-start: the answering side did not start: " + error);
 			}
@@ -1847,6 +1864,7 @@ namespace RTE {
 			joinerConfig.localPeerId = joinerApplied->peerId;
 			joinerConfig.remotePeerId = 1;
 			joinerConfig.remoteTransportPeerId = 1;
+			joinerConfig.remoteTransportPeerIds = {{1, 1}};
 			joinerConfig.peerCount = 2;
 			joinerConfig.timeoutMs = 1000000;
 			joinerConfig.matchConfig = MakeWorldConfig();
@@ -2196,6 +2214,11 @@ namespace RTE {
 	}
 
 	int TestOrdinaryIdentityStamps() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!PresetMan::IsConstructed()) PresetMan::Construct();
 		std::string error;
 		NetLockstepPacket ordinaryPacket;
 		NetLockstepFrame ordinaryFrame;
@@ -2239,6 +2262,7 @@ namespace RTE {
 		NetLockstepCoordinator world;
 		NetLockstepConfig worldConfig;
 		worldConfig.sessionId = 3;
+		worldConfig.startFrame = 2;
 		worldConfig.localPeerId = 1;
 		worldConfig.peerCount = 2;
 		worldConfig.timeoutMs = 1000000;
@@ -2314,7 +2338,7 @@ namespace RTE {
 		worldRunning.peerCount = 3;
 		worldRunning.inputDelayFrames = 4;
 		worldRunning.players = {
-		    NetMatchPlayerSlot{1, 0, true, "World"},
+		    NetMatchPlayerSlot{0, 0, true, "World"},
 		    NetMatchPlayerSlot{2, 1, false, "Joiner"},
 		    NetMatchPlayerSlot{3, 2, false, "Resident"},
 		};
@@ -2381,7 +2405,9 @@ namespace RTE {
 		}
 		if (!resident.IsRunning()) {
 			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 is " +
-			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "not running"));
+			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "not running") +
+			            ", host start=" + std::to_string(running.GetConfig().startFrame) + " resident start=" + std::to_string(resident.GetConfig().startFrame) +
+			            " host state=" + NetLockstepCoordinator::StateName(running.GetState()) + " host reason=" + running.GetStats().timeoutReason);
 		}
 		// One reading before the epoch, so the resident's table for the host is not empty when it moves.
 		NetSoundObservation early;
@@ -2750,7 +2776,7 @@ namespace RTE {
 		};
 		NetMatchConfig world = MakeWorldConfig();
 		world.peerCount = 3;
-		world.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		world.players = {NetMatchPlayerSlot{0, 2, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
 		world.worldTeamCapacity = {1, 1, 0, 0};
 		world.worldMaxSpectators = 3;
 		world.worldRespawnDelaySeconds = 20;
@@ -2855,7 +2881,7 @@ namespace RTE {
 		NetWorldMembership membership;
 		NetMatchConfig coop = MakeWorldConfig();
 		coop.peerCount = 3;
-		coop.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 0, false, "B"}};
+		coop.players = {NetMatchPlayerSlot{0, 1, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 0, false, "B"}};
 		coop.worldTeamCapacity = {2, 0, 0, 0};
 		if (!membership.Configure(coop, &reason) || membership.Slots().size() != 2) {
 			return Fail("world-capacity-left-the-slot-table: a capacity of two built " +
@@ -2902,7 +2928,7 @@ namespace RTE {
 	int TestSpectatorOverflowIsBounded() {
 		NetMatchConfig config = MakeWorldConfig();
 		config.peerCount = 3;
-		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.players = {NetMatchPlayerSlot{0, 2, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
 		config.worldTeamCapacity = {1, 1, 0, 0};
 		config.worldMaxSpectators = 1;
 		NetWorldJoinHost host;
@@ -3098,7 +3124,7 @@ namespace RTE {
 	int TestConcurrentJoinsKeepTheirOwnActivation() {
 		NetMatchConfig config = MakeWorldConfig();
 		config.peerCount = 3;
-		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.players = {NetMatchPlayerSlot{0, 2, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
 		config.worldTeamCapacity = {1, 1, 0, 0};
 		config.worldMaxSpectators = 2;
 		NetWorldJoinHost host;
@@ -3202,7 +3228,7 @@ namespace RTE {
 	NetMatchConfig MakeTwoSeatWorld() {
 		NetMatchConfig config = MakeWorldConfig();
 		config.peerCount = 3;
-		config.players = {NetMatchPlayerSlot{1, 0, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
+		config.players = {NetMatchPlayerSlot{0, 2, true, "World"}, NetMatchPlayerSlot{2, 0, false, "A"}, NetMatchPlayerSlot{3, 1, false, "B"}};
 		config.worldTeamCapacity = {1, 1, 0, 0};
 		config.worldMaxSpectators = 4;
 		return config;
@@ -4006,7 +4032,7 @@ namespace RTE {
 		NetMatchConfig config = MakeWorldConfig();
 		// Co-op: both members share team 0, so the next Activate names the team the leaver played.
 		config.players = {
-		    NetMatchPlayerSlot{1, 0, true, "World"},
+		    NetMatchPlayerSlot{0, 1, true, "World"},
 		    NetMatchPlayerSlot{2, 0, false, "First"},
 		    NetMatchPlayerSlot{3, 0, false, "Second"},
 		};
