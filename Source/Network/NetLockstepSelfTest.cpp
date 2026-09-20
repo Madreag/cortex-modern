@@ -1455,7 +1455,7 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
-		bool TestHoldWaitsForSurvivorDecision(std::string* error, bool bothSilent = false) {
+		bool TestHoldWaitsForSurvivorDecision(std::string* error, bool bothSilent = false, bool lostAck = false) {
 			LoopbackTransport hostTransport, slowTransport, survivorTransport;
 			if (!hostTransport.StartHost(48893, error) || !slowTransport.Connect("loopback", 48893, error) || !survivorTransport.Connect("loopback", 48893, error)) return false;
 			const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
@@ -1490,6 +1490,13 @@ namespace RTE {
 			}
 			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(0)) {
 				*error = "a hold committed before the surviving peer acknowledged the decision"; return false;
+			}
+			if (lostAck) {
+				host.Tick(201);
+				if (!host.PopReadyFrame(hostFrame) || hostFrame.aiHeldPeerIds != std::vector<uint8_t>({2, 3})) {
+					*error = "a peer that vanished before its hold acknowledgement blocked the survivor"; return false;
+				}
+				return true;
 			}
 			for (uint64_t now = 151; now < 165; ++now) {
 				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
@@ -15336,6 +15343,7 @@ namespace RTE {
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
+		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
