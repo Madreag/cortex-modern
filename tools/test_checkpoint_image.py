@@ -279,7 +279,7 @@ def score_walk_attribution(stdout: str) -> dict:
     failures = []
     for tick in sorted(walked):
         rows = [row for row in parts if int(row[0]) == tick]
-        required = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish"}
+        required = {"native_setup", "setup", "paths", "globals", "engine", "rng", "assembly", "concat", "finish", "native_finish", "cache"}
         for vm in sorted({row[1] for row in rows}):
             names = {row[2] for row in rows if row[1] == vm}
             missing = required - names
@@ -287,6 +287,8 @@ def score_walk_attribution(stdout: str) -> dict:
                 failures.append(f"tick {tick} VM {vm} missing walk parts {sorted(missing)}; actual {sorted(names)}")
         if not any(row[2] == "object" for row in rows):
             failures.append(f"tick {tick} has no per-object walk attribution")
+        if not any(row[2] == "index_finish" for row in rows):
+            failures.append(f"tick {tick} has no native index completion cost")
     if not walked:
         failures.append("no walked capture")
     return {"pass": not failures, "failures": failures, "rows": parts}
