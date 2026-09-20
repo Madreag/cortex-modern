@@ -2773,7 +2773,7 @@ static std::string ResyncSaveName() {
 			if (error) *error = bindError;
 			return false;
 		}
-		if (!lobby.IsRemoteLobbyUp(lobbyPeer)) return false;
+		if (!lobby.IsRemoteConnectionLobbyUp(lobbyPeer)) return false;
 		// Once per bootstrap, not once per retry: the seat's config does not change while it waits.
 		if (!session.matchConfigSent) {
 			if (!lobby.SendMatchConfigTo(lobbyPeer)) return false;
