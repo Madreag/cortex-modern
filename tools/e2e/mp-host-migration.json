@@ -219,7 +219,7 @@
       "log_regex": [
         "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
       ],
-      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+      "gate": "migration-hashes"
     },
     {
       "id": "migration-before-clientb",
@@ -285,7 +285,14 @@
       "log_regex": [
         "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
       ],
-      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+      "gate": "migration-hashes"
     }
-  ]
+  ],
+  "migration_gate": {
+    "peers": [
+      "clienta",
+      "clientb"
+    ],
+    "cap": 900
+  }
 }

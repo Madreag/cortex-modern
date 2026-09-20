@@ -5,8 +5,6 @@
   "size": "960x540",
   "timeout_s": 170,
   "title": "Autosave in the real Recovery page, both peers dropped, then disk resume and continued play",
-  "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
-  "capture_policy": "Capture only mp-resume-from-disk-autosave until the restore seam is implemented; blocked_by is evidence metadata, not a driver skip switch.",
   "runs": [
     {
       "name": "died",
@@ -74,7 +72,6 @@
     },
     {
       "name": "resumed",
-      "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
       "start_when": {
         "run": "died",
         "peers": [
@@ -114,7 +111,6 @@
             "-net-resume-tick",
             "{RESUME_TICK}"
           ],
-          "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
           "start_when": {
             "run": "died",
             "peer": "host",
@@ -127,6 +123,10 @@
             "NetworkIceEnable": "0",
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "host"
           }
         },
         {
@@ -156,7 +156,6 @@
             "-net-join",
             "127.0.0.1"
           ],
-          "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
           "start_when": {
             "run": "died",
             "peer": "client",
@@ -169,9 +168,18 @@
             "NetworkIceEnable": "0",
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
-          }
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "client"
+          },
+          "start_delay_s": 2
         }
-      ]
+      ],
+      "resume_from": {
+        "run": "died",
+        "peer": "host"
+      }
     }
   ],
   "checklist": [
@@ -225,7 +233,6 @@
       "mark": "resume-reloaded",
       "screen": "game",
       "what": "The relaunched peer displays the restored match and checkpoint tick.",
-      "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
       "log_regex": [
         "\\[autosave\\] resuming match=\\S+ tick=\\d+ activity=.* peers=\\d+ directory=\\S+"
       ]
@@ -238,7 +245,6 @@
       "screen": "game",
       "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
       "sim_progress": 120,
-      "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists. The restored tick must also parameterize a per-peer log/trace advance check.",
       "log_regex": [
         "\\[autosave\\] tick=\\d+ capture_ms="
       ]
@@ -281,7 +287,6 @@
       "mark": "resume-reloaded",
       "screen": "game",
       "what": "The relaunched peer displays the restored match and checkpoint tick.",
-      "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists.",
       "log_regex": [
         "\\[autosave\\] resume offer match=\\S+ tick=\\d+ (held locally|not held: .*)"
       ]
@@ -294,7 +299,6 @@
       "screen": "game",
       "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
       "sim_progress": 120,
-      "blocked_by": "The video driver creates fresh runtimes, has no cross-run start_when or retained-runtime state transfer, and cannot resolve the saved MatchId/SavedTick from the first run. Restore each peer's own Autosaves, Userdata/NetworkIdentity.key and ticket without copying a run directory tree; resolve {RESUME_MATCH} and {RESUME_TICK}. Do not execute the blocked restore run until this driver seam exists. The restored tick must also parameterize a per-peer log/trace advance check.",
       "log_regex": [
         "\\[autosave\\] tick=\\d+ capture_ms="
       ]

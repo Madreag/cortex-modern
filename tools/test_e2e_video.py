@@ -23,7 +23,9 @@ if str(TOOLS) not in sys.path:
 import e2e_video as driver  # noqa: E402
 
 SCENARIOS = ("sp-smoke", "mp-host-join", "mp-reconnect-repair", "world-late-join", "ui-surfaces",
-             "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag")
+             "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag",
+             "mp-moderation", "mp-host-migration", "mp-resume-from-disk", "mp-direct-vs-relay",
+             "mod-void-wanderers-multiplayer")
 
 
 def row(results, name, ok, detail=""):
@@ -340,6 +342,55 @@ def check_completion(results, scratch):
     return ok
 
 
+def check_resume_seams(results, scratch):
+    import run_sim_test
+    from compare_sim_traces import CORE
+    tokens = driver.supplied_tokens(["TURN_USER=override"], {"TURN_USER": "env", "TURN_PASS": "secret"})
+    ok = row(results, "tokens/environment-and-override", tokens == {"TURN_USER": "override", "TURN_PASS": "secret"})
+    scenario = {"name": "tokens", "path": "unit", "peers": [{"name": "host", "args": ["{TURN_SERVER}"]}]}
+    missing = driver.run_preflight(scenario, {}, [], {})
+    ok &= row(results, "tokens/unresolved-prevents-launch", missing["class"] == "harness" and missing["tokens"] == ["TURN_SERVER"])
+    ok &= row(results, "tokens/resolved", driver.run_preflight(scenario, {}, [], {"TURN_SERVER": "turn:example"}) is None)
+    runtime = scratch / "retained/runtime"
+    (runtime / "Userdata").mkdir(parents=True)
+    (runtime / "Autosaves").mkdir()
+    (runtime / "Temp").mkdir()
+    (runtime / "Userdata/Settings.ini").write_text("SettingsMan\n")
+    (runtime / "Userdata/NetworkIdentity.key").write_bytes(b"same-identity")
+    for tick in (60, 120):
+        (runtime / f"Autosaves/match-{tick}.ccmanifest").write_text(f"MatchId = match\nSavedTick = {tick}\n")
+        (runtime / f"Autosaves/match-{tick}.ccsave").write_bytes(b"retained-checkpoint")
+    (runtime / "Autosaves/match.admission").write_bytes(b"same-admission")
+    peer = {"peer": "host", "root": str(runtime.parent), "runtime": str(runtime), "record": {"exit_code": 137}}
+    captures = [{"name": "died", "peers": [peer]}]
+    condition = {"run": "died", "peers": ["host"], "ended": True}
+    ok &= row(results, "resume/ended-prior-run", driver.cross_run_ready(captures, condition))
+    ok &= row(results, "resume/no-missing-peer", not driver.cross_run_ready(captures, {**condition, "peers": ["host", "client"]}))
+    saved, evidence = driver.checkpoint_tokens(peer)
+    ok &= row(results, "resume/newest-complete-checkpoint", saved == {"RESUME_MATCH": "match", "RESUME_TICK": 120} and len(evidence) == 4)
+    original = run_sim_test.IsolatedRun
+    try:
+        run_sim_test.IsolatedRun = lambda argv, cwd, out, timeout, **kwargs: SimpleNamespace(argv=argv, cwd=cwd, out=out, **kwargs)
+        handle = run_sim_test.make_run(scratch, ["-test"], scratch / "resumed/host", runtime=runtime)
+        ok &= row(results, "resume/same-runtime-without-copy", handle.cwd == runtime.resolve() and not (handle.out / "runtime").exists() and (runtime / "Userdata/NetworkIdentity.key").read_bytes() == b"same-identity")
+    finally:
+        run_sim_test.IsolatedRun = original
+    rows = [{"tick": tick, "total": "a" * 64, "subsystems": {key: "b" * 64 for key in CORE | {"controller"}}} for tick in range(1, 6)]
+    paths = [scratch / "left.json", scratch / "right.json"]
+    for path in paths:
+        driver.write_json(path, {"runs": [{"tick_hashes": rows}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-ok")
+    ok &= row(results, "migration/full-post-boundary-range", result["status"] == "PASS" and result["exclusions"] == [])
+    rows[3]["subsystems"]["controller"] = "c" * 64
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-controller")
+    ok &= row(results, "migration/controller-is-not-excluded", result["status"] == "FAIL" and result["first_difference"] == 4)
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:-1]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-missing")
+    ok &= row(results, "migration/missing-cap-fails", result["status"] == "FAIL" and not result["full_rows_equal"])
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -363,6 +414,7 @@ def main():
         ok &= check_stop_request(results, scratch)
         ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)
+        ok &= check_resume_seams(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

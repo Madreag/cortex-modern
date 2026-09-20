@@ -60,7 +60,28 @@ def seed_settings(run, values):
     ini.write_text(text, encoding="utf-8")
 
 
-def make_run(repo, args, out, timeout=120, env=None, expected=None):
+def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=None):
+    if runtime is not None:
+        out, runtime = Path(out).resolve(), Path(runtime).resolve()
+        if not runtime.is_dir() or not (runtime / "Userdata/Settings.ini").is_file():
+            raise ValueError(f"retained runtime is incomplete: {runtime}")
+        out.mkdir(parents=True, exist_ok=False)
+        if sys.platform == "win32":
+            exe = Path(repo).resolve() / "Cortex Command.exe"
+            argv = [str(exe), "-headless", *map(str, args)]
+            private_env = dict(env or {})
+            private_env.update(TEMP=str(runtime / "Temp"), TMP=str(runtime / "Temp"))
+        else:
+            if __package__:
+                from .posix_test_runner import resolve_binary, posix_launch_env, with_headless
+            else:
+                from posix_test_runner import resolve_binary, posix_launch_env, with_headless
+            exe = resolve_binary(Path(repo).resolve())
+            argv = [str(exe), *with_headless(args)]
+            private_env = posix_launch_env(Path(repo).resolve(), runtime, exe, env)
+        (out / "runtime.json").write_text(json.dumps({"executable": str(exe), "cwd": str(runtime),
+            "retained_runtime": str(runtime), "copied": False}, indent=2), encoding="utf-8")
+        return IsolatedRun(argv, runtime, out, timeout, env=private_env, evidence_expected=expected)
     if sys.platform != "win32":
         return posix_make_run(repo, args, out, timeout, env, expected)
     out = Path(out).resolve()
