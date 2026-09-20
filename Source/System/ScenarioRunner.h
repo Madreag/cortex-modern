@@ -278,6 +278,7 @@ namespace RTE {
 		static uint64_t GetLockstepAppliedFrame();
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
+		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
 		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
 		static void ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId);

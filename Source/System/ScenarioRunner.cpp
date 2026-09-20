@@ -1348,6 +1348,28 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
 	}
 
+	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
+		if (!s_LockstepCoordinator || !MovableMan::IsConstructed() || s_LockstepCoordinator->GetConfig().matchConfig.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) return;
+		const auto suppressed = [&](const ControllerFrame& input) {
+			const auto* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(input.actorUniqueID)));
+			if (!actor) return false;
+			const uint8_t owner = GetLockstepDropTimeActorOwner(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled());
+			return s_LockstepCoordinator->IsSeatReclaimGap(owner, ready.frame);
+		};
+		const size_t before = ready.localFrames.size() + ready.remoteFrames.size();
+		std::erase_if(ready.localFrames, suppressed);
+		if (!ready.remoteFrameCounts.empty()) {
+			auto incoming = std::move(ready.remoteFrames);
+			ready.remoteFrames.clear(); size_t offset = 0;
+			for (auto& [peer, count]: ready.remoteFrameCounts) {
+				const size_t end = std::min(incoming.size(), offset + count);
+				count = 0;
+				for (; offset < end; ++offset) if (!suppressed(incoming[offset])) { ready.remoteFrames.push_back(std::move(incoming[offset])); ++count; }
+			}
+		} else std::erase_if(ready.remoteFrames, suppressed);
+		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
+	}
+
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
 		if (!IsLockstepSeatUnderAI(peerId, frame)) return;
 		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
@@ -2621,6 +2643,7 @@ namespace RTE {
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
+					FilterReclaimControllerInputs(ready);
 					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();

@@ -767,6 +767,7 @@ namespace RTE {
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
 		/// The committed ready-frame for that tick, if it is still held or was just advanced.
 		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
+		void RememberAppliedFrameInputs(const NetLockstepReadyFrame& ready);
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
