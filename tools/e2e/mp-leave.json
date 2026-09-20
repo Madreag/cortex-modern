@@ -485,7 +485,7 @@
       ]
     },
     {
-      "id": "announced-toast-band",
+      "id": "announced-toast-band-host",
       "run": "announced",
       "peer": "host",
       "mark": "survivor-after-leave",
@@ -496,7 +496,7 @@
       ]
     },
     {
-      "id": "announced-toast-band",
+      "id": "announced-toast-band-survivor",
       "run": "announced",
       "peer": "survivor",
       "mark": "survivor-after-leave",
