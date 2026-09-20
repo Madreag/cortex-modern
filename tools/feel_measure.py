@@ -15,8 +15,9 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, write_json
+from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, item9a_gates, write_json
 from run_sim_test import make_run
+from run_selftests import SELFTESTS
 from compare_sim_traces import strict_compare
 
 REPO = Path(__file__).resolve().parents[1]
@@ -54,7 +55,8 @@ def scratch_bytes(root):
 def private_settings(run, cap):
     path = Path(run.cwd) / 'Userdata/Settings.ini'
     text = path.read_text(encoding='utf-8-sig')
-    values = {'EnableVSync': '0', 'LocalPrediction': '1', 'LocalPredictionMaxTicks': '20'}
+    values = {'EnableVSync': '0', 'LocalPrediction': '1', 'LocalPredictionMaxTicks': '20',
+              'NetworkSlowPlayerBoundTicks': '3', 'NetworkSlowPlayerPolicy': 'Substitute', 'NetworkShowDiagnostics': '1'}
     for name, value in values.items():
         text, count = re.subn(rf'(?m)^(\s*{name}\s*=\s*)[^\r\n]*', lambda match: match[1] + value, text)
         if count == 0:
@@ -69,10 +71,14 @@ def private_settings(run, cap):
     write_json(Path(run.out) / 'runtime.json', manifest)
 
 
-def stage_baseline(run):
+def stage_baseline(run, active_ai=False):
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
-    (module / 'FeelBaseline.lua').write_bytes((HELPERS / 'FeelBaseline.lua').read_bytes())
+    script = (HELPERS / 'FeelBaseline.lua').read_text(encoding='utf-8')
+    if active_ai:
+        script = script.replace('self:DisableAIs(true);', 'self:DisableAIs(false);')
+        script = script.replace('ParkTeam(self, team, 400,', 'ParkTeam(self, team, 400 + team * SceneMan.SceneWidth / 3,')
+    (module / 'FeelBaseline.lua').write_text(script, encoding='utf-8')
     (module / 'Index.ini').write_text(
         'DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n'
         '\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n'
@@ -103,15 +109,18 @@ def input_pattern(path):
     write_json(path.with_name('input-schedule.json'), dict(probes=probes, initial_aim='0.8,0.6', fire_presses=8))
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None):
     out = root / name
     out.mkdir(exist_ok=False)
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else 'two-peer service e2e, normal render loop',
                     ticks=TICKS, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
+                    loss_percent=loss_percent, loss_scope='outbound client controller packets before transport', silent_tick=silent_tick,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
-    peers = ['sp'] if sp else ['host', 'client']
+    peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
+    manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
+    write_json(out / 'manifest.json', manifest)
     runs, records = {}, {}
     try:
         for peer in peers:
@@ -128,20 +137,25 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 flags += ['-scenario', 'FeelBaseline', '-controller-log-out', str(out / 'controllers.json')]
             else:
                 flags += ['-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(TICKS),
-                          '-net-match-humans', '2', '-net-match-cpu-slots', '0',
+                          '-net-match-humans', str(len(peers)), '-net-match-peers', str(len(peers)), '-net-match-cpu-slots', '0',
                           '-net-match-service-preset', 'Determinism FeelBaseline',
                           '-net-match-service-module', 'UserScenes.rte',
-                          '-net-match-auto-delay', '-net-fake-lag', str(lag), '-net-local-prediction', 'on',
+                          '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on',
+                          '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{TICKS}', PYTHONDONTWRITEBYTECODE='1')
+            if peer == 'client' and loss_percent:
+                environment['CC_TEST_FRAME_PACKET_LOSS_PERCENT'] = str(loss_percent)
+            if peer == 'client' and silent_tick:
+                flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
             run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
                            expected=[trace, Path(str(trace) + '.simdump.txt'), out / f'{peer}_controller.jsonl'])
             runs[peer] = run
             private_settings(run, cap)
             if record:
                 (run_out / 'feel').mkdir()
-            stage_baseline(run)
+            stage_baseline(run, active_ai=bool(silent_tick))
             run.start()
             if not sp and peer == 'host':
                 time.sleep(.75)
@@ -279,12 +293,22 @@ def analyze(root):
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
+    for name in ('200ms-loss5', '200ms-silent600'):
+        run = root / name
+        if not run.is_dir():
+            continue
+        peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if name.endswith('silent600') else ('host',))}
+        proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if name.endswith('silent600') else 'client_trace.json'))
+        report = dict(name=name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
+                      proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
+        write_json(run / 'feel-report.json', report)
+        results.append(report)
     write_json(root / 'matrix-report.json', results)
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({report["name"]}-on/summary.md) |')
-    lines += ['', 'Every pinned threshold is unchanged. A numerical MISS is a finding; missing records and failed',
+    lines += ['', 'Item 9a adds the 59.5 tps, 50 ms and one-percent wait gates. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return results
@@ -329,7 +353,7 @@ def gates(root, control, timeout):
     suite_json = json.loads((out / 'selftests/result.json').read_text(encoding='utf-8'))
     graph_text = (out / 'script-graph/stdout.log').read_text(encoding='utf-8-sig', errors='replace')
     result = dict(measured=stamp(), selftests_command=command, selftests=suite_json,
-                  selftests_pass=suite.returncode == 0 and suite_json.get('passed') == 13 and suite_json.get('total') == 13,
+                  selftests_pass=suite.returncode == 0 and suite_json.get('passed') == len(SELFTESTS) and suite_json.get('total') == len(SELFTESTS),
                   script_graph_pass=graph_record.get('exit_code') == 0 and not graph_record.get('timed_out')
                   and bool(re.search(r'\bPASS\b', graph_text)) and not re.search(r'\bFAIL\b', graph_text),
                   sp_comparator=file_record(SP_COMPARATOR), sp_compare_command=compare_command,
@@ -352,8 +376,8 @@ def parse_args(argv=None):
 def main(argv=None):
     parser, args = parse_args(argv)
     root = args.out.resolve()
-    if not 48231 <= args.port <= 48242:
-        parser.error('the eight pair ports must stay within 48231..48249')
+    if not 48231 <= args.port <= 48240:
+        parser.error('the ten match ports must stay within 48231..48249')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
@@ -367,7 +391,7 @@ def main(argv=None):
         plan = dict(started=stamp(), exe=exe, branch=branch,
                     commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                     source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
-                    ports=list(range(args.port, args.port + 8)), ticks=TICKS,
+                    ports=list(range(args.port, args.port + 10)), ticks=TICKS,
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame')
         write_json(root / 'matrix-plan.json', plan)
@@ -382,6 +406,8 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
                     port += 1
+        launch_case(root, '200ms-loss5', 200, 60, True, port, script, exe['sha256'], args.timeout, loss_percent=5)
+        launch_case(root, '200ms-silent600', 200, 60, True, port + 1, script, exe['sha256'], args.timeout, silent_tick=600)
     try:
         results = analyze(root)
     except EarlyDecision:
@@ -389,14 +415,16 @@ def main(argv=None):
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
+    item9a_pass = all(pin['status'] == 'PASS' for row in results for peer in row.get('peers', {}).values()
+                     for name, pin in peer['pins'].items() if name.startswith('item9a_'))
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, gates_pass=gate_pass,
+    completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
-    return 0 if complete and (gate_pass or skip_gates) else 1
+    return 0 if complete and item9a_pass and (gate_pass or skip_gates) else 1
 
 
 if __name__ == '__main__':
