@@ -5680,6 +5680,8 @@ void RunGameLoop() {
 				}
 			}
 
+			g_NetMatchService.PreparePrivateRejoinCheckpoint();
+
 			if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult < 0) {
 				s_bitmapSaveSelfTestResult = g_FrameMan.RunBitmapSaveSelfTest() ? 0 : 1;
 				System::SetQuit(true);

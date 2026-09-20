@@ -364,6 +364,7 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
 		std::map<uint8_t, uint32_t> peerIncarnations;
+		std::map<uint8_t, uint64_t> initialPeerLeaves;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
 		uint32_t timeoutMs = 500;

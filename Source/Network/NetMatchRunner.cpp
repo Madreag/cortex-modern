@@ -726,12 +726,13 @@ namespace RTE {
 			lockstepConfig.roundId = m_PrivateJoinConfig->roundId;
 			lockstepConfig.migrationGeneration = m_PrivateJoinConfig->migrationGeneration;
 			lockstepConfig.originalRoundConfigHash = m_PrivateJoinConfig->originalRoundConfigHash;
+			lockstepConfig.initialPeerLeaves = m_PrivateJoinConfig->initialPeerLeaves;
 			lockstepConfig.initialSeatHolds = m_PrivateJoinConfig->initialSeatHolds;
 			lockstepConfig.initialSeatReclaims = m_PrivateJoinConfig->initialSeatReclaims;
 			lockstepConfig.peerIncarnations = m_PrivateJoinConfig->peerIncarnations;
 			lockstepConfig.activePeerIds.clear();
 			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
-				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialSeatHolds.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
+				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialPeerLeaves.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
 		}
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");

@@ -76,6 +76,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
 		std::vector<NetValueObservation> s_DroppedValueObservations;
+		NetCatchUpHeadroom s_CatchUpHeadroom;
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
@@ -811,7 +812,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepLocalMachineSlow() {
-		return s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow;
+		return (s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow) ||
+		    (s_WorldCatchUpActive && WorldCatchUpWorkTicks() >= 120 && s_CatchUpHeadroom.Ratio() <= 1.0);
 	}
 
 	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
@@ -846,6 +848,7 @@ namespace RTE {
 			}
 		}
 		if (WorldCatchUpActive()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", GetLockstepLocalPeerId()});
+		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match", GetLockstepLocalPeerId()});
 		return visible;
 	}
 
@@ -1137,6 +1140,7 @@ namespace RTE {
 		s_CatchUpWorkUs += s_CatchUpHadQueuedWork && wallUs > s_CatchUpLastWallUs ? std::max(workUs, wallUs - s_CatchUpLastWallUs) : workUs;
 		s_CatchUpLastWallUs = wallUs;
 		s_CatchUpHadQueuedWork = WorldCatchUpHasFrame(tick + 1);
+		s_CatchUpHeadroom.Observe(s_CatchUpWorkTicks, s_CatchUpWorkUs, g_TimerMan.GetDeltaTimeMS());
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
@@ -1156,6 +1160,7 @@ namespace RTE {
 		s_WorldCatchUpAppliedThrough = snapshotTick;
 		s_CatchUpWorkTicks = s_CatchUpWorkUs = s_CatchUpLastWallUs = 0;
 		s_CatchUpHadQueuedWork = false;
+		s_CatchUpHeadroom = {};
 		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;

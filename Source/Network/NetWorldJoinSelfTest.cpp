@@ -2687,6 +2687,10 @@ namespace RTE {
 		NetWorldCheckpointImage image;
 		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
 		image.checkpointConfig = "config"; image.sideState = "state";
+		image.authorityPeerId = 2;
+		NetWorldCheckpointImage decoded;
+		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.authorityPeerId != 2 || decoded.privateSessionId != config.sessionId)
+			return Fail("private checkpoint lost the migrated authority");
 		host.PublishImage(image);
 		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
 		host.NoteRejoinLinkFit(42, true);
