@@ -53,12 +53,15 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
-      "fits": true,
       "text_contains": "Frame redundancy:"
     },
     {
+      "op": "menu",
+      "command": "assert_vertical_scroll NetworkSeatsOptionsText"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 990
+      "elapsed_ms": 7000
     },
     {
       "op": "key_down",
@@ -226,8 +229,38 @@
       "elapsed_ms": 1000
     },
     {
-      "op": "wait_file",
-      "path": "{PROBE_DIR_host}/done.json",
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveMatch"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseLeaveConfirm",
+      "elapsed_ms": 500
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonLeaveConfirm 1"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonLeaveConfirm"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 700,
       "scope": "menu"
     },
     {

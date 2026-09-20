@@ -53,12 +53,15 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
-      "fits": true,
       "text_contains": "Frame redundancy:"
     },
     {
+      "op": "menu",
+      "command": "assert_vertical_scroll NetworkSeatsOptionsText"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 990
+      "elapsed_ms": 7000
     },
     {
       "op": "key_down",
@@ -224,6 +227,10 @@
     {
       "op": "wait",
       "elapsed_ms": 1000
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_client}/done.json"
     },
     {
       "op": "key_down",

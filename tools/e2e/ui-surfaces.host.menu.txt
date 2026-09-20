@@ -49,6 +49,7 @@ video_mark ui-network-tuning
 activate TabHostNetTuning
 wait_ms 700
 observe assert_visible CollectionBoxHostNetworkTuning 1
+focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 4
 wait_ms 500
 observe assert_label TextHostNetSlowBound 4
@@ -56,6 +57,7 @@ observe combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)
 wait_ms 500
 observe assert_label ComboHostNetSlowPolicy Pause for them
 observe combo_select ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin
+focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 3
 wait_ms 500
 observe assert_label TextHostNetSlowBound 3
@@ -83,6 +85,7 @@ observe assert_visible CollectionBoxHostPageRecovery 1
 observe setcheck CheckHostRecAutosave 1
 wait_ms 600
 observe assert_enabled TextHostRecAutosaveInterval 1
+focus TextHostRecAutosaveInterval
 observe set_text TextHostRecAutosaveInterval 30
 wait_ms 500
 observe assert_label TextHostRecAutosaveInterval 30
@@ -90,7 +93,7 @@ observe setcheck CheckHostRecAutosave 0
 wait_ms 500
 observe assert_enabled TextHostRecAutosaveInterval 0
 observe assert_enabled ButtonHostRecRepairNow 0
-observe assert_label LabelHostRecRepairHint Repair needs a live match session
+observe assert_label LabelHostRecRepairHint Repair is the host's call
 dump_host_options
 video_mark ui-files
 activate TabHostPageFiles
@@ -126,6 +129,12 @@ dump_lobby
 activate ButtonLobbyOptions
 wait_ms 660
 assert_substate HostOptions
+video_mark ui-hosted-recovery
+activate TabHostPageRecovery
+wait_ms 700
+assert_enabled ButtonHostRecRepairNow 0
+assert_label LabelHostRecRepairHint Repair needs a live match session
+wait_ms 700
 activate TabHostPageSeats
 wait_ms 825
 observe assert_visible CollectionBoxHostPageSeats 1
