@@ -899,6 +899,36 @@
       "assert": "rejoin report and gameplay frames",
       "peer": "client-rejoined",
       "run": "lag-200"
+    },
+    {
+      "id": "lag-100-role-order",
+      "run": "lag-100",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        599
+      ],
+      "what": "Before the hold, the host roster names the impaired client as peer 2 and the fast survivor as peer 3.",
+      "assert": "host roster line preserves the role assumed by the unchanged feel gates",
+      "log_regex": [
+        "\\[net-match-service-e2e\\] roster: peer1=host.*peer2=client.*peer3=survivor"
+      ]
+    },
+    {
+      "id": "lag-200-role-order",
+      "run": "lag-200",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        599
+      ],
+      "what": "Before the hold, the host roster names the impaired client as peer 2 and the fast survivor as peer 3.",
+      "assert": "host roster line preserves the role assumed by the unchanged feel gates",
+      "log_regex": [
+        "\\[net-match-service-e2e\\] roster: peer1=host.*peer2=client.*peer3=survivor"
+      ]
     }
   ]
 }
