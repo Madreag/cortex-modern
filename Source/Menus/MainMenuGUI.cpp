@@ -1941,8 +1941,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		                            (m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? " / pause <=20s" : " / wait " + std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks) + " ticks / AI") + "\n" +
 		                            (m_HostOptionsSetupDraft ? NetHostNatModeText(g_SettingsMan) : g_NetMatchService.GetNatModeText()));
 	}
-	// The visibility combo mirrors the live lease's state; a pick applies through the setter.
-	HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
+	// The setup choice stays local until the hosted lease supplies the live state.
+	if (!m_HostOptionsSetupDraft) HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox && !HostOptBoxFocused(m_HostNetPortBox)) {
 		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
 	}
@@ -2855,7 +2855,9 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		g_GUISound.ItemChangeSound()->Play();
 		return;
 	}
-	// Every other editable control marks the draft; DraftHostOptionsFromControls reads them on Apply.
+	if (guiEventControl == m_HostRulesBrainlessCombo || guiEventControl == m_HostRecAutosaveCheck || guiEventControl == m_HostSessIdleCombo) {
+		DraftHostOptionsFromControls();
+	}
 }
 
 void MainMenuGUI::StartMultiplayer(bool host) {
