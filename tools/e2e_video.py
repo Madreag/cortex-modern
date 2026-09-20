@@ -378,7 +378,8 @@ def menu_script_failures(peer_root):
 
 def log_assertions(peer_root, required=(), forbidden=()):
     lines = []
-    for leaf in ("stdout.log", "stderr.log", "runtime/LogConsole.txt"):
+    console = "console.log" if (Path(peer_root) / "console.log").is_file() else "runtime/LogConsole.txt"
+    for leaf in ("stdout.log", "stderr.log", console):
         path = Path(peer_root) / leaf
         if path.is_file():
             lines += [{"path": str(path), "line": index + 1, "text": line}
@@ -443,6 +444,14 @@ def item_evidence(record, item):
         assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
         passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)
         evidence["log_assertions"] = assertions
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
+    if item.get("drop_tick") is not None:
+        path = Path(record["video_dir"]) / "injected-drop.json"
+        receipt = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        passed = receipt.get("requested_tick") == item["drop_tick"] and receipt.get("last_recorded_frame", {}).get("sim_tick", -1) >= item["drop_tick"]
+        passed = passed and str(record.get("record", {}).get("injected_termination", "")).startswith("scenario drop")
+        evidence["process_drop"] = {"path": str(path), "receipt": receipt, "pass": passed}
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
     return frame_range(rows, item), evidence
@@ -717,6 +726,9 @@ def run_one(options, scenario, run, run_index, out):
         name = peer["name"]
         peer_root = root / name
         video_dir = peer_root / "video"
+        console = Path(runs[name].cwd) / "LogConsole.txt"
+        if console.is_file():
+            (peer_root / "console.log").write_bytes(console.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick")),
         "record": {k: records.get(name, {}).get(k) for k in
@@ -905,10 +917,12 @@ def compare_hash_range(first, second, start, cap, out):
         paths.append(path)
     passed, strict = strict_compare(*paths, expected_ticks=cap - start + 1, first_tick=start)
     coverage = all([row["tick"] for row in trace] == list(range(start, cap + 1)) for trace in rows)
+    present = [{row["tick"] for row in trace} for trace in rows]
+    first_missing = next((tick for tick in range(start, cap + 1) if any(tick not in ticks for ticks in present)), None)
     first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
     exact = coverage and rows[0] == rows[1]
     return {"status": "PASS" if passed and exact else "FAIL", "first_tick": start, "last_tick": cap,
-            "first_difference": first_difference, "full_rows_equal": exact, "strict": strict,
+            "first_difference": first_difference, "first_missing_tick": first_missing, "full_rows_equal": exact, "strict": strict,
             "traces": [file_evidence(first), file_evidence(second)], "exclusions": []}
 
 
@@ -921,11 +935,15 @@ def migration_probes(config, capture):
         declarations = [re.findall(r"(?m)^\[net-match\] Host left - (.+) is now hosting; boundary=(\d+) round=(\d+)",
                         (Path(peer["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace")) for peer in peers]
         result["declarations"] = declarations
-        if any(len(lines) != 1 for lines in declarations) or declarations[0] != declarations[1]:
-            raise ValueError("Survivors did not declare the same single host, boundary and round")
-        boundary = int(declarations[0][0][1])
+        agreed = all(len(lines) == 1 for lines in declarations) and declarations[0] == declarations[1]
+        distinct = {entry for lines in declarations for entry in lines}
+        if len(distinct) != 1:
+            raise ValueError("Survivors did not declare one common host, boundary and round")
+        boundary = int(next(iter(distinct))[1])
         result.update(compare_hash_range(*(root / f"{name}_trace.json" for name in names), boundary + 1, config["cap"], root / "migration-hashes"))
         result["boundary"] = boundary
+        if not agreed:
+            result.update(status="FAIL", reason="A survivor did not declare the common host, boundary and round")
     except (OSError, ValueError, KeyError, IndexError) as error:
         result["reason"] = str(error)
     result["evidence"] = str(root / "migration-hashes.json")

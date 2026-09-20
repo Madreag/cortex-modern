@@ -343,6 +343,30 @@ def check_completion(results, scratch):
     return ok
 
 
+def check_drop_receipts(results, scratch):
+    root = scratch / "drop-receipt"
+    video = root / "video"
+    video.mkdir(parents=True)
+    record = {"root": str(root), "video_dir": str(video), "probe_dir": str(root / "probe"),
+              "record": {}, "index": [{"frame": 0, "wall_ms": 1000, "sim_tick": 601, "screen": "game"}]}
+    item = {"id": "drop", "drop_tick": 601, "screen": "game"}
+    _, evidence = driver.item_evidence(record, item)
+    ok = row(results, "drop/no-receipt-is-not-proof", evidence["probe"] == "fail")
+    driver.write_json(video / "injected-drop.json", {"requested_tick": 601, "last_recorded_frame": record["index"][0]})
+    record["record"]["injected_termination"] = "capture interrupted"
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "drop/observer-stop-is-not-injected-drop", evidence["probe"] == "fail")
+    record["record"]["injected_termination"] = "scenario drop after recorded tick 601"
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "drop/receipt-and-runner-termination", evidence["probe"] == "pass")
+    (root / "runtime").mkdir()
+    (root / "runtime/LogConsole.txt").write_text("later process\n")
+    (root / "console.log").write_text("original process\n")
+    matches = driver.log_assertions(root, ["original process"], ["later process"])
+    ok &= row(results, "resume/console-evidence-is-stable", len(matches[0]["matches"]) == 1 and not matches[1]["matches"])
+    return ok
+
+
 def check_menu_commands(results):
     repo = TOOLS.parent
     source = (repo / "Source/Main.cpp").read_text() + (repo / "Source/Menus/MenuAutomation.cpp").read_text()
@@ -439,6 +463,7 @@ def main():
         ok &= check_completion(results, scratch)
         ok &= check_resume_seams(results, scratch)
         ok &= check_menu_commands(results)
+        ok &= check_drop_receipts(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",
