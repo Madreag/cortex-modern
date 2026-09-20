@@ -33,6 +33,10 @@
       "command": "video_mark mp-pause-client"
     },
     {
+      "op": "wait",
+      "elapsed_ms": 500
+    },
+    {
       "op": "assert",
       "equals": {
         "service": "Running",
@@ -87,7 +91,7 @@
     },
     {
       "op": "menu",
-      "command": "video_mark mp-end-match"
+      "command": "video_mark mp-resume-client"
     },
     {
       "op": "menu",

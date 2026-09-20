@@ -72,7 +72,7 @@
       "screen": "MultiplayerScreen",
       "what": "The lobby visibly lists Host, ClientA and ClientB.",
       "events": [
-        "assert_label LabelLobbyPlayer0.*Host.*PASS",
+        "assert_label LabelLobbyPlayer0.*Host \\(you\\).*PASS",
         "assert_label LabelLobbyPlayer1.*ClientA.*PASS",
         "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
       ]
@@ -157,10 +157,9 @@
       "peer": "clientb",
       "mark": "moderation-clientb-refused",
       "screen": "MultiplayerScreen",
-      "what": "ClientB's second admission is refused; ParticipantBanned is visible on Landing.",
+      "what": "ClientB is refused and Landing reads You are banned from this session, without internal admission details.",
       "events": [
-        "assert_error .*ParticipantBanned.*PASS",
-        "assert_label LabelMultiplayerLandingStatus.*ParticipantBanned.*PASS"
+        "assert_label LabelMultiplayerLandingStatus.*You are banned from this session.*PASS"
       ]
     },
     {

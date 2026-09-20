@@ -13,6 +13,7 @@ activate ButtonMultiplayerReady
 wait_file {PROBE_DIR}/first-round-done.json 90
 video_mark rematch-lobby
 assert_substate Lobby
+record_tick_hashes
 dump_lobby
 wait_ms 1200
 activate ButtonMultiplayerReady

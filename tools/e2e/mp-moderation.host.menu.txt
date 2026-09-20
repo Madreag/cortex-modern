@@ -19,8 +19,11 @@ wait_connected 3 90
 wait_ms 1200
 video_mark moderation-three-seats
 wait_ms 900
-observe assert_label LabelLobbyPlayer0 Host
+observe assert_text_fits LabelLobbyPlayer0
+observe assert_label LabelLobbyPlayer0 Host (you)
+observe assert_text_fits LabelLobbyPlayer1
 observe assert_label LabelLobbyPlayer1 ClientA
+observe assert_text_fits LabelLobbyPlayer2
 observe assert_label LabelLobbyPlayer2 ClientB
 dump_lobby
 wait_ms 1200
@@ -32,6 +35,8 @@ activate ButtonHostSeatDetails1
 video_mark moderation-kick
 wait_ms 900
 observe assert_label LabelHostSeatDlgName ClientA
+assert_text_fits LabelHostSeatDlgActionHint
+assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
 assert_enabled ButtonHostSeatDlgKick 1
 activate ButtonHostSeatDlgKick
 wait_ms 1200
@@ -41,6 +46,7 @@ activate ButtonHostOptBack
 wait_ms 900
 video_mark moderation-kick-roster
 observe assert_substate Lobby
+observe assert_text_fits LabelLobbyPlayer1
 observe assert_label LabelLobbyPlayer1 ClientB
 observe assert_visible LabelLobbyPlayer2 0
 dump_lobby

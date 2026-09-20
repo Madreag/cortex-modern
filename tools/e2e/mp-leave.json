@@ -49,7 +49,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 0,
-          "probe": "mp-leave.survivor.probe.json"
+          "probe": "mp-leave.announced-host.probe.json"
         },
         {
           "name": "leaver",
@@ -137,7 +137,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 5,
-          "probe": "mp-leave.survivor.probe.json"
+          "probe": "mp-leave.announced-survivor.probe.json"
         }
       ]
     },
@@ -361,6 +361,102 @@
       ],
       "log_regex": [
         "\\[net-match\\] hold peer=2 frame=\\d+ AI in control"
+      ]
+    },
+    {
+      "id": "announced-ai-label",
+      "peer": "host",
+      "run": "announced",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departed seat reads Left - AI in control, without drop or hold timers.",
+      "probe_steps": [
+        8
+      ]
+    },
+    {
+      "id": "held-client-rejoining",
+      "peer": "leaver",
+      "run": "held",
+      "screen": "RejoinOverlay",
+      "what": "The held client sees Held - AI in control - rejoining, then returns to play.",
+      "assert": "Private catch-up completes in the held client log; its rejoin overlay is recorded.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    },
+    {
+      "id": "announced-ai-toast-host",
+      "peer": "host",
+      "run": "announced",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departure toast names leaver and says AI in control while the survivors keep playing.",
+      "probe_steps": [
+        2
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "AI in control"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "leaver"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
+      ]
+    },
+    {
+      "id": "announced-ai-toast-survivor",
+      "peer": "survivor",
+      "run": "announced",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departure toast names leaver and says AI in control while the survivors keep playing.",
+      "probe_steps": [
+        2
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "AI in control"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "leaver"
+        },
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     }
   ]

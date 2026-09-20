@@ -290,6 +290,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	static const char* hints[] = {"Direct first: lowest latency; relay adds a round trip if direct fails.", "Direct only: lowest latency; fails when routers block a direct route.", "Relay only: every packet uses the relay and adds its round trip."};
 	m_ConnectionHint->SetText(hints[static_cast<int>(g_SettingsMan.GetNetworkConnectionMode())]);
 	m_StunServersTextbox->SetText(g_SettingsMan.GetNetworkStunServersSetting());
+	m_StunServersTextbox->SetCursorPos(static_cast<int>(m_StunServersTextbox->GetText().size()));
 	m_RelayAddressTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnServers());
 	m_RelayUserTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnUser());
 	m_RelayPassTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnPass());

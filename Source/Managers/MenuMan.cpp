@@ -194,6 +194,8 @@ void MenuMan::UpdateLocalPauseMenu() {
 			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 				g_NetMatchService.FinishMatch("Match ended by host");
 			}
+			// The full pause loop is already out of the activity; the local menu must leave it.
+			g_ActivityMan.PauseActivity(true, true);
 			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
 			break;
 		default:

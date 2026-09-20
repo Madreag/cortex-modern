@@ -21,6 +21,30 @@ CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", 
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
+LAYOUT_PAIRS = {
+    "Gameplay": (("CheckboxShowForeignItems", "CheckboxEnemyHUD"),),
+    "Misc": (("CheckboxShowLoadingScreenProgressReport", "CheckboxShowAdvancedPerfStats"),),
+}
+
+
+def layout_readback(capture):
+    rows = {control["name"]: control for control in capture["controls"]}
+    results = []
+    for left, right in LAYOUT_PAIRS.get(capture.get("settings_page"), ()):
+        a, b = rows[left]["rect"], rows[right]["rect"]
+        overlap = a[0] < b[0] + b[2] and b[0] < a[0] + a[2] and a[1] < b[1] + b[3] and b[1] < a[1] + a[3]
+        results.append({"controls": [left, right], "rects": [a, b], "pitch": [b[0] - a[0], b[1] - a[1]], "pass": not overlap})
+    for name in ("LabelHostSeatDlgActionHint", "TextNetworkStunServers", "LabelLobbyPlayer0", "LabelLobbyPlayer1", "LabelLobbyPlayer2"):
+        if name in rows:
+            results.append({"control": name, "rect": rows[name]["rect"], "text": rows[name].get("text"),
+                            "measurement": rows[name].get("text_measure"), "pass": rows[name].get("text_fits") is True})
+    hint = rows.get("LabelHostSeatDlgActionHint", {})
+    if rows.get("ButtonHostSeatDlgKick", {}).get("enabled"):
+        results.append({"control": "LabelHostSeatDlgActionHint", "kind": "selected-seat-hint", "text": hint.get("text"),
+                        "pass": "host's own seat" not in hint.get("text", "")})
+    return results
+
+
 # The network page's own selector names its sub-pages; a script reaches one as "Network:<page>"
 # once the network page is up - the same reach a player's tab clicks take.
 NETWORK_PAGES = ("Player", "Chat", "Recovery", "Files", "Internet", "Connection")
@@ -138,7 +162,8 @@ def page_value_columns(captures, first_value):
         value = next(c for c in capture["controls"] if c["name"] == first_value[page])
         rel_x = value["rect"][0] - box["rect"][0]
         rows.append([page, value["name"], rel_x])
-        assert rel_x == SETTINGS_VALUE_COLUMN, (page, value["name"], rel_x, SETTINGS_VALUE_COLUMN)
+        expected = 245 if page in ("Gameplay", "Misc") else SETTINGS_VALUE_COLUMN
+        assert rel_x == expected, (page, value["name"], rel_x, expected)
     return rows
 
 
@@ -1626,6 +1651,8 @@ def run_case(options, case, root, failing=None):
                 pause_settings = [capture for capture in peer if capture["screen"] == "PauseSettings"]
                 assert [capture["settings_page"].split(":")[0] for capture in pause_settings] == list(PAUSE_PAGES), (who, pause_settings)
                 result.setdefault("pause_page_value_columns", {})[who] = page_value_columns(pause_settings, PAUSE_PAGE_FIRST_VALUE)
+                result.setdefault("pause_layout", {})[who] = [row for capture in pause_settings for row in layout_readback(capture)]
+                assert all(row["pass"] for row in result["pause_layout"][who]), result["pause_layout"][who]
                 result.setdefault("pause_video_input_fit", {})[who] = video_input_fit_rows(
                     pause_settings, set(VIDEO_INPUT_FIT))
                 pauses = [capture for capture in peer if capture["screen"] == "Pause"]
@@ -1660,6 +1687,8 @@ def run_case(options, case, root, failing=None):
             assert not result["text_overflow"], result["text_overflow"]
             result["video_input_fit"] = video_input_fit_rows(images, set(VIDEO_INPUT_FIT))
             result["page_value_columns"] = page_value_columns(images, PAGE_FIRST_VALUE)
+            result["layout"] = [row for capture in images for row in layout_readback(capture)]
+            assert all(row["pass"] for row in result["layout"]), result["layout"]
             result["fontsmall_latin1"] = assert_fontsmall_latin1_ink(options.repo)
             fill = assert_tabblue_selected_fill(options.repo)
             result["tab_luma"] = {

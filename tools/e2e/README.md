@@ -19,7 +19,9 @@ Add `--metadata-only` to leave media untouched; finalization uses this mode auto
 An exit code missing from an interrupted runner record stays unknown. Finalization never launches the engine.
 
 The minimum set is `sp-smoke`, `mp-host-join`, `mp-reconnect-repair`, `world-late-join`, `ui-surfaces`,
-`mod-void-wanderers`, `mp-leave`, `mp-rematch`, and `mp-rollback-lag`. The single-process smoke includes the shipped
+`mod-void-wanderers`, `mp-leave`, `mp-rematch`, and `mp-rollback-lag`. The extended set adds
+`mp-moderation`, `mp-host-migration`, `mp-resume-from-disk`, `mp-direct-vs-relay`, and
+`mod-void-wanderers-multiplayer`. `menu-layout` records the settings geometry detector at three sizes. The single-process smoke includes the shipped
 Scenario Battle picker and local play. Its FeelBaseline leg separately checks fixture startup and Lua errors.
 
 ## The file
@@ -102,10 +104,47 @@ The scratch counter excludes symlinks and Windows reparse points. It stops at 5 
 
 Windows uses `run_sim_test`'s private-desktop runner and its existing fullscreen guard. The Scoop ffmpeg fallback is
 Windows-specific; PATH and the Homebrew/Unix fallbacks are also supported. The POSIX runner selects
-`<repo>/build-gns/CortexCommand`. Mac GL readback, runner isolation, codecs, and installed Python dependencies still
+`<repo>/build-gns/CortexCommand`, or `CCCP_TEST_BINARY` when set; manifest hashing uses the same selection. Mac GL readback, runner isolation, codecs, and installed Python dependencies still
 require an actual Mac capture.
 
 ## Ports
 
 `tools/e2e_video.py` owns 49400-49479 and gives each run of a scenario one port from that block. No scenario may name a
 port outside it: the readback detector owns 49180-49199, the launch driver 48320-48539 and 48630-48649.
+
+## Retained state and prerequisites
+
+`--run NAME` selects named runs; unselected items remain explicitly unrecorded in that invocation. Combine their
+separate reviews when handing off a scenario recorded in several invocations. `--token NAME=VALUE` supplies tokens;
+TURN_SERVER, TURN_USER and TURN_PASS also read the environment, with command-line values taking precedence.
+An unresolved token skips its run with a harness finding. A run-level `blocked_by` skips the run with its stated
+engine finding; item-level blockers retain context frames when the rest of the run can still be captured.
+
+A restore run declares `start_when: {"run": "died", "peers": ["host", "client"], "ended": true}`. Each restoring
+peer declares `retain_runtime_from: {"run": "died", "peer": "host"}` (its own peer name). The runner starts in that
+same private runtime. No directory tree is copied or moved; the new launch, stdout and video have their own output
+paths. The earlier console log is retained as a single file before restart. `resume_from` on the run selects the
+checkpoint-owning peer. `{RESUME_MATCH}` and `{RESUME_TICK}` come from its newest complete checkpoint, restart
+manifest and admission file; hashes of those files are retained in the scenario definition's checkpoint evidence.
+
+`migration_gate: {"peers": ["clienta", "clientb"], "cap": 900}` requires both survivors to declare the same new host,
+round and boundary. The `migration-hashes` gate checks every tick from boundary + 1 through the cap. It runs the
+existing strict comparer and also compares every complete hash record, including total and controller, with no
+exclusions. The original traces remain unchanged beside the gate report and its selected-range inputs.
+
+`forbidden_log_regex` is the negative counterpart of `log_regex`; a matching line fails the item. Required module
+versions are checked before launch through `requires_version`. The installed VW package declares 6.2.2 and is
+blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linked in both VW definitions.
+
+The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
+
+A peer with `gameplay_epochs: 2` also receives `<stage>/gameplay-epoch-2.json` when saved gameplay frames show the
+simulation counter reset. Rematch probes wait for that record before measuring their second play window.
+
+`record_tick_hashes` is a menu-script command for a lobby with `-out` and a positive `-max-ticks` already configured.
+With video recording active, it arms the existing native hash path and collector for the next round. The recorder's completion action exports that collector before engine shutdown. This lets a rematch capture end round one normally and
+trace round two through its cap. `hash_gate` names the two trace peers, first tick and cap; it uses the same complete
+record comparison as the migration gate. The command does not alter a wire flag, hash mask or comparison rule.
+
+An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
+both exact visibility and text without blocking all later capture steps when the expected toast is absent.

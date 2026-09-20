@@ -1,0 +1,14 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 300
+activate ButtonMultiplayerJoinGame
+wait_ms 300
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 90
+wait_ms 300
+assert_substate Lobby
+activate ButtonMultiplayerReady
+video_mark migration-client-admitted
+wait_ms 120000

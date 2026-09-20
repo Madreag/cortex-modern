@@ -100,10 +100,14 @@
           },
           "start_when": {
             "peer": "client-dropped",
-            "ended": true,
-            "timeout_s": 80
+            "ended": true
           },
-          "after_gate_delay_s": 2
+          "after_gate_delay_s": 2,
+          "retain_runtime_from": {
+            "run": "reconnect",
+            "peer": "client-dropped"
+          },
+          "probe": "mp-reconnect-repair.rejoined.probe.json"
         }
       ]
     },
@@ -131,7 +135,7 @@
             "{INPUT_SCRIPT}",
             "-net-host"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.host.probe.json"
         },
@@ -157,7 +161,7 @@
             "-net-join",
             "127.0.0.1"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.client.probe.json",
           "start_delay_s": 3.0
@@ -181,6 +185,7 @@
     {
       "id": "rc-drop-seen",
       "peer": "host",
+      "peer_drop": {"peer": "client-dropped", "tick": 900},
       "screen": "game",
       "sim_ticks": [
         900,
@@ -195,26 +200,29 @@
       "peer": "client-rejoined",
       "screen": "game",
       "sim_ticks": [
-        0,
+        1200,
         3000
       ],
       "what": "the relaunched client rejoins the running match from its stored ticket and plays on from the host's state",
-      "assert": "the rejoin match report and the host's seat rows",
-      "run": "reconnect"
+      "assert": "Rejoined client probe requires Running at tick 1200 and again at tick 1300.",
+      "run": "reconnect",
+      "service_state": "Running"
     },
     {
       "id": "rc-dropped-index-kept",
       "peer": "client-dropped",
       "what": "the killed peer's own video still ends at the frame it was killed on, with its index intact",
       "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected",
-      "run": "reconnect"
+      "run": "reconnect",
+      "drop_tick": 900
     },
     {
       "id": "rp-f6-overlay",
       "screen": "game",
       "what": "F6 opens the network overlay in the running match and its Options view reads the live match rules",
       "assert": "probe: wait panel_open true, assert_control NetworkSeatsOptionsText",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-f6"
     },
     {
       "id": "rp-repair-hint-host",
@@ -222,7 +230,8 @@
       "screen": "PauseMatchOptions",
       "what": "the host's Match Options offers Repair with its hint inside the dialog",
       "assert": "probe: assert_enabled ButtonMatchRepairNow 1 and the two-press hint",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-pause"
     },
     {
       "id": "rp-repair-hint-client",
@@ -230,14 +239,32 @@
       "screen": "PauseMatchOptions",
       "what": "the client's Match Options shows no Repair button and says the repair is the host's call",
       "assert": "probe: assert_visible ButtonMatchRepairNow 0, assert_label LabelMatchRepairHint Repair is the host's call",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-pause"
     },
     {
       "id": "rp-repair-applied",
       "screen": "game",
       "what": "the second press repairs the match: both peers pause, reload the host's snapshot and keep playing",
-      "assert": "host log: one [net-match] resync snapshot line and one relaunch line per peer",
-      "run": "repair"
+      "assert": "Each peer logs snapshot reload and relaunch; an accepted button press alone is insufficient.",
+      "run": "repair",
+      "log_regex": [
+        "\\[net-match\\] resync: reloading from the host snapshot",
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ],
+      "mark": "repair-post-play",
+      "service_state": "Running"
+    },
+    {
+      "id": "rp-reload-overlay",
+      "run": "repair",
+      "screen": "ResyncOverlay",
+      "what": "The snapshot reload overlay appears on each peer during Repair Match.",
+      "log_regex": [
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "assert": "A recorded ResyncOverlay frame and the peer snapshot-reload log line.",
+      "probe_steps": []
     }
   ]
 }

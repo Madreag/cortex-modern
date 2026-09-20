@@ -56,6 +56,13 @@
 
 using namespace RTE;
 
+static std::string PlayerFacingStatus(const std::string& text) {
+	if (text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos) {
+		return text.starts_with("A player could not join:") ? "A banned player could not join this session" : "You are banned from this session";
+	}
+	return text;
+}
+
 // Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
 static bool Cp1252FromCodepoint(int codepoint, char& out) {
 	if (codepoint < 0) {
@@ -1088,7 +1095,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		std::string rejoinError;
 		if (!g_NetMatchService.BeginTicketRejoin(&rejoinError)) {
 			reconnect.NoteAttemptFailed(MenuClockMs(), rejoinError);
-			m_MultiplayerLandingStatusLabel->SetText(rejoinError);
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(rejoinError));
 		} else {
 			reconnect.NoteAttemptStarted(MenuClockMs());
 			m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
@@ -2448,6 +2455,7 @@ void MainMenuGUI::ShowHostSeatDetails(int row) {
 	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
 	m_HostOptionsSeatRow = row;
 	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgActionHint->SetText("");
 	RefreshHostSeatDialog();
 	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
 	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]->SetFocus();
@@ -2989,7 +2997,7 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_ReconnectStatusShown.clear();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else {
-		m_MultiplayerLandingStatusLabel->SetText(error);
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 	}
 	g_GUISound.ButtonPressSound()->Play();
@@ -3002,7 +3010,7 @@ void MainMenuGUI::ApplyToSubstitute() {
 		m_MultiplayerLandingStatusLabel->SetText("Asking the host for a seat...");
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
 	} else {
-		m_MultiplayerLandingStatusLabel->SetText(error);
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
 	}
 	m_ReconnectStatusShown = m_MultiplayerLandingStatusLabel->GetText();
 }
@@ -3087,7 +3095,7 @@ void MainMenuGUI::UpdateMultiplayerScreen() {
 	} else if (!inMatchOrLobby && (m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby || m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation ||
 	            (m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && !m_HostOptionsSetupDraft))) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
-		m_MultiplayerLandingStatusLabel->SetText(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText)));
+		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(GroupDelimiterForDisplay(FormatModuleMismatchStatus(snapshot.errorText))));
 	}
 
 	RefreshMultiplayerScreenControls(snapshot);
@@ -3123,7 +3131,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 	if (awaiting && offering) {
 		const std::string waiting = reconnect.GetHostReturnText();
 		if (waiting != m_ReconnectStatusShown) {
-			m_MultiplayerLandingStatusLabel->SetText(waiting);
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(waiting));
 			m_ReconnectStatusShown = waiting;
 		}
 		return;
@@ -3145,7 +3153,7 @@ void MainMenuGUI::RefreshReconnectControls() {
 		// A recovery in progress owns the line. What the scan of the record found does not: it clears
 		// its own sentence, but never replaces a refusal or an error the screen just put there.
 		if (recovering || m_MultiplayerLandingStatusLabel->GetText() == m_ReconnectStatusShown) {
-			m_MultiplayerLandingStatusLabel->SetText(status);
+			m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(status));
 		}
 		m_ReconnectStatusShown = status;
 	}
@@ -3316,34 +3324,37 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	if (m_MultiplayerLobbyMatchModeLabel) {
 		m_MultiplayerLobbyMatchModeLabel->SetText(matchMode);
 	}
+	std::vector<const NetLobbyMember*> visibleMembers;
+	for (const auto& member: snapshot.members) {
+		if (member.connected || member.cpu || member.isLocal) visibleMembers.push_back(&member);
+	}
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
-	std::array<std::string, 4> lobbyRowTailMarked;
-	std::array<std::string, 4> lobbyRowTailBare;
+	std::array<std::string, 4> lobbyRowTailWithoutMetrics;
+	std::array<std::string, 4> lobbyRowTailCompact;
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
-		if (i >= snapshot.members.size()) {
+		if (i >= visibleMembers.size()) {
 			label->SetText("");
 			label->SetVisible(false);
 			continue;
 		}
-		const NetLobbyMember& member = snapshot.members[i];
+		const NetLobbyMember& member = *visibleMembers[i];
 		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
 		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
-		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withDelay = true) {
+		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withMetrics = true) {
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 			tail += seat;
-			if (!member.cpu) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
-			(void)withDelay;
+			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
 		lobbyRowName[i] = member.displayName;
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
-		lobbyRowTailMarked[i] = buildTail(seatMark);
-		// The delay's own tail is the rung after the seat's: a row still too long sheds it next.
-		lobbyRowTailBare[i] = buildTail(seatMark, false);
+		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
+		// The row drops connection metrics before shortening the seat state.
+		lobbyRowTailCompact[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
 	const int contentWidth = 300;
@@ -3397,7 +3408,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		}
 	} else {
 		s_ShareResolved = false;
-		m_MultiplayerStatusLabel->SetText(snapshot.statusText);
+		m_MultiplayerStatusLabel->SetText(PlayerFacingStatus(snapshot.statusText));
 	}
 	if (!addressOnOwnRow) {
 		m_MultiplayerStatusLabel->SetHorizontalOverflowScroll(false);
@@ -3432,7 +3443,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetPositionRel(contentWidth - 74, 178 + statusExtra);
 	m_MultiplayerLobbyPortMapLabel->SetPositionRel(12, 178 + statusExtra + summaryHeight);
 	const int portMapHeight = snapshot.portMap.empty() ? 0 : 14;
-	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(snapshot.errorText));
+	m_MultiplayerErrorLabel->SetText(GroupDelimiterForDisplay(PlayerFacingStatus(snapshot.errorText)));
 	m_MultiplayerErrorLabel->EnsureDrawableTextFont("FontSmall.png");
 	const int desiredWidth = std::max(300, m_MultiplayerErrorLabel->GetMaxWordWidth() + 24);
 	FitMultiplayerPanelWidth(m_MultiplayerLobbyPanel, m_MultiplayerErrorLabel, contentWidth, {});
@@ -3441,32 +3452,23 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		if (!label || lobbyRowTailFull[i].empty()) {
 			continue;
 		}
-		const auto fitRow = [this, rowBoxWidth](const std::string& name, const std::string& tailFull, const std::string& tailMarked, const std::string& tailBare) {
-			const auto elide = [this, rowBoxWidth](const std::string& name, const std::string& tail) {
-				if (!m_MultiplayerLobbyPlayerRowFont || m_MultiplayerLobbyPlayerRowFont->CalculateWidth(name + tail, m_MultiplayerLobbyPlayerRowFallbackFont) <= rowBoxWidth) {
-					return name + tail;
-				}
-				std::string trimmed = name;
-				while (!trimmed.empty() && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(trimmed + "..." + tail, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth) {
-					trimmed.pop_back();
-				}
-				return trimmed + "..." + tail;
-			};
-			std::string row = elide(name, tailFull);
-			const auto tooLong = [this, rowBoxWidth](const std::string& text) {
-				return m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(text, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth;
-			};
-			if (tooLong(row)) {
-				row = elide(name, tailMarked);
-			}
-			// A tail still too long sheds the delay's rung before the row wraps.
-			if (tooLong(row)) {
-				row = elide(name, tailBare);
-			}
-			return row;
-		};
-		label->SetText(fitRow(lobbyRowName[i], lobbyRowTailFull[i], lobbyRowTailMarked[i], lobbyRowTailBare[i]));
 		label->EnsureDrawableTextFont("FontSmall.png");
+		GUIFont* font = m_MultiplayerLobbyPlayerRowFallbackFont;
+		if (font) label->SetFont(font);
+		const int width = std::min(rowBoxWidth, label->GetWidth());
+		const auto fits = [font, width](const std::string& text) { return !font || font->CalculateWidth(text) <= width; };
+		const std::string& name = lobbyRowName[i];
+		std::string tail = lobbyRowTailFull[i];
+		if (!fits(name + tail)) tail = lobbyRowTailWithoutMetrics[i];
+		if (!fits(name + tail)) tail = lobbyRowTailCompact[i];
+		if (!fits(name + tail)) {
+			while (!tail.empty() && !fits(name + tail + "...")) tail.pop_back();
+			if (!tail.empty()) tail += "...";
+		}
+		const bool scrollName = !fits(name);
+		label->SetHorizontalOverflowScroll(scrollName);
+		label->ActivateDeactivateOverflowScroll(scrollName);
+		label->SetText(name + (scrollName ? std::string() : tail));
 	}
 	// The port-map row sits under the wrapped status, so the error starts below both.
 	m_MultiplayerErrorLabel->SetPositionRel(12, 178 + statusExtra + portMapHeight + summaryHeight);

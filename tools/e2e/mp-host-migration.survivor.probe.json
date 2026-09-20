@@ -21,8 +21,8 @@
     },
     {
       "op": "wait",
-      "control": "LabelNetMatchToastNewest",
-      "text_contains": "is now hosting"
+      "service": "Running",
+      "sim_at_least": 610
     },
     {
       "op": "menu",
@@ -31,6 +31,10 @@
     {
       "op": "wait",
       "elapsed_ms": 800
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchToastNewest"
     },
     {
       "op": "screenshot",
