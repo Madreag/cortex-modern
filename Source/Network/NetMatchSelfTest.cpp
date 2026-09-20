@@ -6194,6 +6194,29 @@ namespace RTE {
 			*error = "the park stopped reaching the session once the worker handed it back";
 			return false;
 		}
+		// A lobby message handled inside the client's private world-join drive calls back into the
+		// service while the drive already holds its lock; taking the lock again is an error, not a wait.
+		{
+			NetMatchService reentrant;
+			reentrant.m_IsHost = false;
+			reentrant.m_State = NetMatchServiceState::Running;
+			reentrant.m_WorldCatchUp.active = true;
+			std::lock_guard<std::mutex> held(reentrant.m_Mutex);
+			const NetMatchService::LockedLobbyDrive drive(reentrant);
+			NetLobbyMigration capsule;
+			capsule.kind = 2;
+			bool threw = false;
+			try {
+				(void)reentrant.OpenMigrationCapsule(capsule);
+			} catch (const std::exception&) {
+				threw = true;
+			}
+			std::cout << "[net-match-selftest] locked_lobby_callback threw=" << (threw ? 1 : 0) << std::endl;
+			if (threw) {
+				*error = "a lobby callback inside the locked world-join drive took the service lock again";
+				return false;
+			}
+		}
 		// The arm itself: WorkerMain holds the session in a local before it hands it to the service, so
 		// nothing the game thread drives can reach it and the replay may never return to the pump.
 		NetMatchService arming;

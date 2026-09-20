@@ -1039,6 +1039,18 @@ namespace RTE {
 
 
 		mutable std::mutex m_Mutex;
+		/// The thread driving a client's private world join under m_Mutex. A lobby message it handles can
+		/// call back into the service, and a second lock from the owning thread is an error, not a wait.
+		std::atomic<std::thread::id> m_LockedLobbyDriveThread;
+		bool HoldsServiceLock() const { return m_LockedLobbyDriveThread.load(std::memory_order_acquire) == std::this_thread::get_id(); }
+		/// Marks the calling thread as the one holding m_Mutex for a lobby drive, for as long as it lives.
+		struct LockedLobbyDrive {
+			std::atomic<std::thread::id>& owner;
+			explicit LockedLobbyDrive(NetMatchService& service): owner(service.m_LockedLobbyDriveThread) { owner.store(std::this_thread::get_id(), std::memory_order_release); }
+			~LockedLobbyDrive() { owner.store(std::thread::id{}, std::memory_order_release); }
+			LockedLobbyDrive(const LockedLobbyDrive&) = delete;
+			LockedLobbyDrive& operator=(const LockedLobbyDrive&) = delete;
+		};
 		std::string m_DiagnosticIdentity;
 		NetIdentityManifest m_DiagnosticIdentityInputs; //!< The manager reads a captured build is waiting on.
 		bool m_DiagnosticIdentityInputsPending = false;
