@@ -190,7 +190,7 @@ namespace RTE {
 		return NetIdentity::BuildCurrentManifest(manifest, error, options);
 	}
 
-	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal) {
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal, bool reservedSeat) {
 		for (const NetDirectorySessionRow& row : rows) {
 			if (row.sessionId != sessionId) {
 				continue;
@@ -200,7 +200,7 @@ namespace RTE {
 			if (merged.empty()) {
 				break;
 			}
-			if (!merged.front().joinable) {
+			if (!merged.front().joinable && !(reservedSeat && merged.front().reason == "full")) {
 				return merged.front().reason.empty() ? "refused" : merged.front().reason;
 			}
 			if (out) {
@@ -5763,6 +5763,14 @@ static std::string ResyncSaveName() {
 			FillDirectoryLocalIdentity(worldLocal, worldManifest);
 		}
 
+		bool reservedSeat = false;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			NetH4TicketRecord record;
+			m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+			reservedSeat = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded &&
+			    TicketMatchesRequest(record, request.sessionId, request.address);
+		}
 		std::string why = "no such session";
 		const uint64_t deadline = SteadyNowMs() + c_IceResolveBudgetMs;
 		while (SteadyNowMs() < deadline && !m_CancelRequested.load()) {
@@ -5770,7 +5778,7 @@ static std::string ResyncSaveName() {
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
-				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr);
+				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat);
 				if (why.empty() || why != "no such session") {
 					break;
 				}

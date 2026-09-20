@@ -11191,6 +11191,28 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestReservedSeatDirectoryResolve(std::string* error) {
+		NetDirectoryLocalIdentity identity;
+		identity.networkProtocolVersion = 1; identity.lockstepCodecVersion = NetLockstepCodec::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.sessionIdentityHash = std::string(64, 'b'); identity.moduleManifestHash = std::string(64, 'c');
+		NetDirectorySessionRow row;
+		row.sessionId = "reserved-seat"; row.peerCount = 4; row.seatsFree = 0; row.joinMode = "ice"; row.state = "running";
+		row.networkProtocolVersion = identity.networkProtocolVersion; row.lockstepCodecVersion = identity.lockstepCodecVersion;
+		row.controllerFrameVersion = identity.controllerFrameVersion; row.sessionIdentityHash = identity.sessionIdentityHash; row.moduleManifestHash = identity.moduleManifestHash;
+		NetIceJoinTarget target;
+		const auto ordinary = NetIceResolveSessionRow({row}, identity, row.sessionId, &target);
+		const auto returning = NetIceResolveSessionRow({row}, identity, row.sessionId, &target, nullptr, true);
+		if (ordinary != "full" || !returning.empty() || target.identity != NetIceHostIdentity(row.sessionId)) {
+			*error = "reserved-seat rejoin was judged as a new join: new=" + ordinary + " returning=" + returning;
+			return false;
+		}
+		row.lockstepCodecVersion = 1;
+		if (NetIceResolveSessionRow({row}, identity, row.sessionId, &target, nullptr, true).empty()) { *error = "reserved seat bypassed identity validation"; return false; }
+		std::cout << "[net-match-selftest] PASS reserved_seat_directory_resolve full_new=refused full_returning=resolved identity=checked" << std::endl;
+		return true;
+	}
+
 	bool TestSessionIdJoinRefusals(std::string* error) {
 		NetDirectoryLocalIdentity local;
 		local.networkProtocolVersion = 1;
@@ -11700,6 +11722,7 @@ namespace RTE {
 		};
 
 		std::string error;
+		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
