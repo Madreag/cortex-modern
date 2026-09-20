@@ -2796,7 +2796,8 @@ namespace RTE {
 		const auto type = static_cast<uint16_t>(message.type);
 		if (type < 1 || type > static_cast<uint16_t>(NetHostMigrationMessageType::Abort) || message.sessionId == 0 || message.roundId == 0 || message.generation == 0 ||
 		    message.senderPeerId == 0 || message.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || message.successorPeerId == 0 || message.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount ||
-		    message.members.size() > NetMatchConfigUtil::c_MaxPeerCount || message.bytes.size() > c_ChunkBytes || message.totalBytes > c_MaxFrameBytes ||
+		    message.members.size() > NetMatchConfigUtil::c_MaxPeerCount || message.futureDelays.size() > 128 ||
+		    (!message.futureDelays.empty() && message.bytes.size() > 4) || message.bytes.size() > c_ChunkBytes || message.totalBytes > c_MaxFrameBytes ||
 		    std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
 			return false;
 		bytes.clear();
@@ -2819,6 +2820,13 @@ namespace RTE {
 		bytes.insert(bytes.end(), message.members.begin(), message.members.end());
 		AppendU32LE(bytes, static_cast<uint32_t>(message.bytes.size()));
 		bytes.insert(bytes.end(), message.bytes.begin(), message.bytes.end());
+		AppendU16LE(bytes, static_cast<uint16_t>(message.futureDelays.size()));
+		for (const auto& decision: message.futureDelays) {
+			if (decision.action != NetTimingAction::Delay || decision.phase != NetTimingPhase::Commit || decision.sessionId != message.sessionId) return false;
+			std::vector<uint8_t> encoded;
+			if (!NetLockstepCodec::Encode({decision}, encoded) || encoded.size() > 256) return false;
+			AppendU16LE(bytes, static_cast<uint16_t>(encoded.size())); bytes.insert(bytes.end(), encoded.begin(), encoded.end());
+		}
 		uint8_t mac[32]{};
 		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size(), mac)) {
 			bytes.clear();
@@ -2854,10 +2862,22 @@ namespace RTE {
 		for (uint8_t peer: decoded.members)
 			if (peer == 0 || peer > NetMatchConfigUtil::c_MaxPeerCount || !unique.insert(peer).second)
 				return false;
-		if (!reader.ReadU32LE(count) || count > c_ChunkBytes || !reader.ReadBytes(data, count) || !reader.AtEnd() || decoded.sessionId == 0 || decoded.roundId == 0 || decoded.generation == 0 ||
+		if (!reader.ReadU32LE(count) || count > c_ChunkBytes || !reader.ReadBytes(data, count) || decoded.sessionId == 0 || decoded.roundId == 0 || decoded.generation == 0 ||
 		    decoded.senderPeerId == 0 || decoded.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || decoded.successorPeerId == 0 || decoded.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount)
 			return false;
 		decoded.bytes.assign(data, data + count);
+		uint16_t decisions = 0;
+		if (!reader.ReadU16LE(decisions) || decisions > 128 || (decisions != 0 && decoded.bytes.size() > 4)) return false;
+		for (uint16_t index = 0; index < decisions; ++index) {
+			uint16_t length = 0;
+			if (!reader.ReadU16LE(length) || length > 256 || !reader.ReadBytes(data, length)) return false;
+			const auto packet = NetLockstepCodec::Decode(data, length);
+			if (!packet.ok) return false;
+			const auto* decision = std::get_if<NetLockstepTiming>(&packet.packet.payload);
+			if (!decision || decision->action != NetTimingAction::Delay || decision->phase != NetTimingPhase::Commit || decision->sessionId != decoded.sessionId) return false;
+			decoded.futureDelays.push_back(*decision);
+		}
+		if (!reader.AtEnd()) return false;
 		decoded.type = static_cast<NetHostMigrationMessageType>(type);
 		message = std::move(decoded);
 		return true;
@@ -3008,6 +3028,15 @@ namespace RTE {
 			message.completeFrom = UINT64_MAX;
 		message.boundary = m_MigrationBoundary;
 		message.members = m_MigrationResult.members;
+		if (type == NetHostMigrationMessageType::Plan || type == NetHostMigrationMessageType::Commit) message.futureDelays = m_MigrationFutureDelays;
+		if (type == NetHostMigrationMessageType::Answer || type == NetHostMigrationMessageType::Ready) {
+			for (const auto& decision: m_MigrationFutureDelays) if (decision.applyFrame > message.appliedFrame) message.futureDelays.push_back(decision);
+			for (const auto& [revision, decision]: m_TimingDecisions) {
+				if (!decision.committed || decision.proposal.action != NetTimingAction::Delay || decision.proposal.applyFrame <= message.appliedFrame) continue;
+				auto committed = decision.proposal; committed.phase = NetTimingPhase::Commit;
+				if (std::find(message.futureDelays.begin(), message.futureDelays.end(), committed) == message.futureDelays.end()) message.futureDelays.push_back(committed);
+			}
+		}
 		return message;
 	}
 
@@ -3320,6 +3349,20 @@ namespace RTE {
 			FailHostMigration("no recoverable committed boundary");
 			return;
 		}
+		std::map<std::pair<uint64_t, uint64_t>, NetLockstepTiming> agreed;
+		for (const auto& [peer, answer]: m_MigrationAnswers) for (const auto& decision: answer.futureDelays) {
+			if (decision.applyFrame <= m_MigrationBoundary) continue;
+			const auto identity = std::make_pair(decision.authorityGeneration, decision.revision);
+			const auto [prior, inserted] = agreed.emplace(identity, decision);
+			if (!inserted && prior->second != decision) { FailHostMigration("conflicting future delay identity"); return; }
+		}
+		m_MigrationFutureDelays.clear();
+		std::map<std::pair<uint8_t, uint64_t>, uint16_t> boundaries;
+		for (const auto& [identity, decision]: agreed) {
+			const auto [at, inserted] = boundaries.emplace(std::make_pair(decision.peerId, decision.applyFrame), decision.delayFrames);
+			if (!inserted && at->second != decision.delayFrames) { FailHostMigration("conflicting future input delay"); return; }
+			m_MigrationFutureDelays.push_back(decision);
+		}
 		const uint64_t availableFrom = m_MigrationAnswers.at(m_MigrationDonor).completeFrom;
 		for (const auto& [peer, answer]: m_MigrationAnswers) {
 			if (answer.completeFrom == UINT64_MAX || (answer.appliedFrame < m_MigrationBoundary && answer.appliedFrame + 1 < availableFrom)) {
@@ -3438,9 +3481,10 @@ namespace RTE {
 				if (!hosting && IsMigrating() && m_MigrationPhase != NetHostMigrationPhase::ResyncAdmission && message.boundary != UINT64_MAX && message.boundary >= m_MigrationBoundary &&
 				    std::find(message.members.begin(), message.members.end(), m_MigrationSuccessor) != message.members.end()) {
 					m_MigrationAuthoritySeen = true;
-					if (m_MigrationResult.generation != 0 && message.boundary == m_MigrationBoundary && message.members == m_MigrationResult.members) {
+					if (m_MigrationResult.generation != 0 && message.boundary == m_MigrationBoundary && message.members == m_MigrationResult.members && message.futureDelays == m_MigrationFutureDelays) {
 						break;
 					}
+					m_MigrationFutureDelays = message.futureDelays;
 					m_MigrationBoundary = message.boundary;
 					m_MigrationSinceMs = nowMs;
 					m_MigrationWireRound = message.frame;
@@ -3501,6 +3545,10 @@ namespace RTE {
 					}
 					if ((message.completeFrom == UINT64_MAX || message.appliedFrame != m_MigrationBoundary) && std::find(m_MigrationResult.resyncPeers.begin(), m_MigrationResult.resyncPeers.end(), message.senderPeerId) == m_MigrationResult.resyncPeers.end())
 						m_MigrationResult.resyncPeers.push_back(message.senderPeerId);
+					for (const auto& decision: message.futureDelays) if (decision.applyFrame > m_MigrationBoundary &&
+					    std::find(m_MigrationFutureDelays.begin(), m_MigrationFutureDelays.end(), decision) == m_MigrationFutureDelays.end()) {
+						m_MigrationAnswers[message.senderPeerId] = message; PublishMigrationPlan(nowMs); return;
+					}
 					m_MigrationReady.insert(message.senderPeerId);
 				}
 				break;
@@ -3508,6 +3556,7 @@ namespace RTE {
 				if (!hosting && IsMigrating() && message.boundary == m_MigrationBoundary && std::is_sorted(message.members.begin(), message.members.end()) &&
 				    std::includes(m_MigrationResult.members.begin(), m_MigrationResult.members.end(), message.members.begin(), message.members.end()) &&
 				    std::find(message.members.begin(), message.members.end(), m_Config.localPeerId) != message.members.end() && GetResumeFrame() == m_MigrationBoundary + 1) {
+					if (message.futureDelays != m_MigrationFutureDelays) { FailHostMigration("future delays changed after the recovery plan"); break; }
 					m_MigrationResult.members = message.members;
 					if (!message.bytes.empty()) {
 						if (message.bytes.size() != 1 || std::find(message.members.begin(), message.members.end(), message.bytes.front()) == message.members.end() || message.bytes.front() == m_MigrationSuccessor)
@@ -3686,6 +3735,7 @@ namespace RTE {
 		const auto leaves = m_PeerLeaveFrames;
 		const auto heldSeats = m_AiHeldSeats;
 		const auto holdTransactions = m_HoldTransactions;
+		const auto reclaimTransactions = m_ReclaimTransactions;
 		const auto heldResolutions = m_DroppedSeatResolutions;
 		const auto droppedSeats = m_DroppedSeats;
 		const auto droppedAt = m_DroppedAtMs;
@@ -3715,7 +3765,10 @@ namespace RTE {
 				m_RemotePeerIds.push_back(peer);
 		m_RelayHost = m_Config.relayToOtherPeers;
 		m_Transport = m_MigrationTransport.get();
+		m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
 		ResetRoundState();
+		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
+		for (const auto& [peer, reclaim]: reclaimTransactions) if (reclaim.activationFrame <= m_MigrationBoundary) m_ReclaimTransactions[peer] = reclaim;
 		m_LastCompletedSimulationTick = completed;
 		m_LastDeliveredFrame = m_MigrationBoundary;
 		for (const auto& [peer, frame]: heldSeats) {
@@ -3914,6 +3967,7 @@ namespace RTE {
 		}
 
 		m_Transport = &transport;
+		m_MigrationFutureDelays.clear();
 		m_Config = config;
 		m_OpeningMatchConfig = config.matchConfig;
 		m_RoundConfigHash = config.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(config.matchConfig));
@@ -4303,6 +4357,7 @@ namespace RTE {
 			return false;
 		}
 		m_Transport = &transport;
+		m_MigrationFutureDelays.clear();
 		m_Config = config;
 		m_OpeningMatchConfig = config.matchConfig;
 		m_RoundConfigHash = config.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(config.matchConfig));
@@ -4531,6 +4586,10 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error) {
+		if (std::any_of(m_MigrationFutureDelays.begin(), m_MigrationFutureDelays.end(), [&](const auto& decision) { return decision.peerId == peerId && decision.applyFrame >= m_Stats.nextFrame; })) {
+			if (error) *error = "the peer still has a recovered future delay";
+			return false;
+		}
 		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peerId == 0 || peerId > m_Config.peerCount ||
 		    delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || applyFrame < FutureTimingFrame() ||
 		    applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || m_NextTimingRevision == UINT64_MAX || m_Config.matchConfig.configRevision == UINT64_MAX) {
