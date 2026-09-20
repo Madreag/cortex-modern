@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "name": "menu-layout",
+  "title": "Settings geometry and complete STUN defaults at every supported resolution",
+  "port_base": 49400,
+  "timeout_s": 35,
+  "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360"
+    },
+    {
+      "name": "960x540",
+      "size": "960x540"
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720"
+    }
+  ],
+  "peers": [
+    {
+      "name": "sp",
+      "args": [],
+      "menu_script": "menu-layout.menu.txt",
+      "observe_after_failure": true
+    }
+  ],
+  "checklist": [
+    {
+      "id": "layout-gameplay",
+      "peer": "sp",
+      "mark": "layout-gameplay",
+      "screen": "SettingsScreen",
+      "what": "Gameplay controls occupy separate rows and every default STUN address is readable.",
+      "assert": "assert_settings_page Gameplay",
+      "events": [
+        "assert_no_overlap .*PASS"
+      ]
+    },
+    {
+      "id": "layout-misc",
+      "peer": "sp",
+      "mark": "layout-misc",
+      "screen": "SettingsScreen",
+      "what": "Misc controls occupy separate rows and every default STUN address is readable.",
+      "assert": "assert_settings_page Misc",
+      "events": [
+        "assert_no_overlap .*PASS"
+      ]
+    },
+    {
+      "id": "layout-network-connection",
+      "peer": "sp",
+      "mark": "layout-network-connection",
+      "screen": "SettingsScreen",
+      "what": "Network:Connection controls occupy separate rows and every default STUN address is readable.",
+      "assert": "assert_settings_page Network:Connection",
+      "events": [
+        "assert_text_fits TextNetworkStunServers.*PASS"
+      ]
+    }
+  ]
+}

@@ -142,6 +142,9 @@ video_mark ui-seat-dialog-own
 activate ButtonHostSeatDetails0
 wait_ms 660
 observe assert_visible HostSeatDialog 1
+assert_text_fits LabelHostSeatDlgActionHint
+assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgCancel
+assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
 observe assert_enabled ButtonHostSeatDlgKick 0
 observe assert_enabled ButtonHostSeatDlgBan 0
 observe assert_label LabelHostSeatDlgActionHint The host's own seat is never kicked or banned.
@@ -153,6 +156,9 @@ video_mark ui-seat-dialog-other
 activate ButtonHostSeatDetails1
 wait_ms 660
 observe assert_visible HostSeatDialog 1
+assert_text_fits LabelHostSeatDlgActionHint
+assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgCancel
+assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
 observe assert_enabled ButtonHostSeatDlgKick 1
 observe assert_enabled ButtonHostSeatDlgBan 1
 dump_host_options
