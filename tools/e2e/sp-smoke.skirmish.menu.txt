@@ -1,0 +1,23 @@
+wait_ms 2000
+assert_screen MainScreen
+activate ButtonMainToSkirmish
+wait_ms 1600
+video_mark sp-skirmish-picker
+assert_screen ScenarioPicker
+combo_select ComboBoxActivitySelect P4 Alpha Duel
+wait_ms 700
+select_scene Grasslands
+wait_ms 900
+activate ButtonStartActivityConfig
+video_mark sp-player-setup
+wait_ms 700
+assert_screen ScenarioConfig
+activate P1T1Box
+activate P2T2Box
+wait_ms 1000
+assert_visible ButtonStartGame 1
+video_mark sp-play
+activate ButtonStartGame
+wait_file {PROBE_DIR}/done.json 80
+wait_ms 700
+exit

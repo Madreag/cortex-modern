@@ -54,6 +54,8 @@ namespace RTE {
 		if (!std::filesystem::create_directory(frames, code) || code) return refuse("could not create " + frames.string());
 		m_Index.open(std::filesystem::path(directory) / "frames.jsonl", std::ios::out);
 		if (!m_Index) return refuse("could not open the frame index in " + directory);
+		m_Events.open(std::filesystem::path(directory) / "events.jsonl", std::ios::out);
+		if (!m_Events) return refuse("could not open the event index in " + directory);
 
 		m_Directory = directory;
 		m_FramesDirectory = frames.string();
@@ -67,6 +69,11 @@ namespace RTE {
 		return true;
 	}
 
+	void FrameRecorder::RecordEvent(const std::string& message) {
+		if (!m_Enabled) return;
+		m_Events << nlohmann::json({{"wall_ms", SteadyNowMS()}, {"message", message}}).dump() << '\n' << std::flush;
+	}
+
 	// Called with the lock held; the pacer is the render thread's alone.
 	bool FrameRecorder::DueAt(long long wallMS) {
 		if (!m_PacerStarted) {
@@ -78,7 +85,7 @@ namespace RTE {
 		// The slot this wall time falls in at the capture rate; a slot is admitted once.
 		const std::size_t slot = static_cast<std::size_t>((elapsed * m_Fps) / 1000);
 		if (slot < m_Admitted) return false;
-		++m_Admitted;
+		m_Admitted = slot + 1;
 		return true;
 	}
 
@@ -196,6 +203,7 @@ namespace RTE {
 		m_Index.flush();
 		WriteManifest();
 		m_Index.close();
+		m_Events.close();
 		m_Enabled = false;
 	}
 

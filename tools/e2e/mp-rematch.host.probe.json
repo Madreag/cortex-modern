@@ -1,0 +1,143 @@
+{
+  "schema": 1,
+  "timeout_ms": 145000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play-end"
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 700
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonEndMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000,
+      "scope": "menu"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Starting"
+      },
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "first-round-done",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play-end"
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 700
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonEndMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000,
+      "scope": "menu"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Starting"
+      },
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "done",
+      "scope": "menu"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

@@ -48,6 +48,9 @@ namespace RTE {
 
 		/// Draws the ScenarioActivityConfigGUI to the screen.
 		void Draw();
+
+		/// Activates a selectable player/team cell through its normal click handler.
+		bool AutomationActivateCell(const std::string& controlName);
 #pragma endregion
 
 	private:

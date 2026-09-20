@@ -1,17 +1,17 @@
 # The mod's load is the first thing to see: the engine reaches the main menu with the mod's module
 # loaded and nothing red in the console.
-wait 90
+wait_ms 2970
 assert_screen MainScreen
 assert_console 0
-wait 40
+wait_ms 1320
 activate ButtonMainToOptions
-wait 20
+wait_ms 660
 assert_screen SettingsScreen
 select_settings_page Misc
-wait 20
+wait_ms 660
 assert_settings_page Misc
 post_command ButtonBackToMainMenu
-wait 25
+wait_ms 825
 assert_screen MainScreen
-wait 30
+wait_ms 990
 exit

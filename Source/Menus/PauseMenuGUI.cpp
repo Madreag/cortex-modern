@@ -2,6 +2,7 @@
 
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "MenuMan.h"
 #include "ConsoleMan.h"
 #include "ActivityMan.h"
 #include "UInputMan.h"
@@ -524,6 +525,7 @@ GUIControlManager* PauseMenuGUI::AutomationManager() const {
 }
 
 std::string PauseMenuGUI::AutomationActiveScreenName() const {
+	if (!g_MenuMan.GetIsInMenuScreen() && !g_MenuMan.IsLocalPauseMenuOpen()) return "Gameplay";
 	if (m_ActiveMenuScreen == PauseMenuScreen::MainScreen) {
 		if (m_MatchOptionsShown) {
 			return "PauseMatchOptions";

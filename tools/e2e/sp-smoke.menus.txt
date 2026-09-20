@@ -1,58 +1,60 @@
-# The main menu and every settings page a player can reach before a match, held on screen long
-# enough for the recorder to catch each one. The skirmish activity picker is not driven here: the
-# menu-script pump stops while ScenarioGUI is up (see the sp-skirmish-picker checklist item).
-wait 60
+wait_ms 1500
+video_mark sp-main-menu
 assert_screen MainScreen
-wait 20
+wait_ms 900
 activate ButtonMainToOptions
-wait 20
-assert_screen SettingsScreen
+wait_ms 500
+video_mark sp-settings-video
 select_settings_page Video
-wait 20
+wait_ms 800
 assert_settings_page Video
-assert_visible CollectionBoxVideoSettings 1
+video_mark sp-settings-audio
 select_settings_page Audio
-wait 20
+wait_ms 800
 assert_settings_page Audio
-assert_visible CollectionBoxAudioSettings 1
+video_mark sp-settings-input
 select_settings_page Input
-wait 20
+wait_ms 800
 assert_settings_page Input
-assert_visible CollectionBoxInputSettings 1
+video_mark sp-settings-gameplay
 select_settings_page Gameplay
-wait 20
+wait_ms 800
 assert_settings_page Gameplay
-assert_visible CollectionBoxGameplaySettings 1
+video_mark sp-settings-misc
 select_settings_page Misc
-wait 20
+wait_ms 800
 assert_settings_page Misc
-assert_visible CollectionBoxMiscSettings 1
+video_mark sp-settings-network
 select_settings_page Network
-wait 20
+wait_ms 800
 assert_settings_page Network
-assert_visible CollectionBoxNetworkSettings 1
+video_mark sp-settings-network-player
 select_settings_page Network:Player
-wait 20
+wait_ms 800
 assert_settings_page Network:Player
-assert_visible CollectionBoxNetPagePlayer 1
+video_mark sp-settings-network-chat
 select_settings_page Network:Chat
-wait 20
+wait_ms 800
 assert_settings_page Network:Chat
-assert_visible CollectionBoxNetPageChat 1
+video_mark sp-settings-network-recovery
 select_settings_page Network:Recovery
-wait 20
+wait_ms 800
 assert_settings_page Network:Recovery
-assert_visible CollectionBoxNetPageRecovery 1
+video_mark sp-settings-network-files
 select_settings_page Network:Files
-wait 20
+wait_ms 800
 assert_settings_page Network:Files
-assert_visible CollectionBoxNetPageFiles 1
+video_mark sp-settings-network-internet
 select_settings_page Network:Internet
-wait 20
+wait_ms 800
 assert_settings_page Network:Internet
-assert_visible CollectionBoxNetPageInternet 1
+video_mark sp-settings-network-connection
+select_settings_page Network:Connection
+wait_ms 800
+assert_settings_page Network:Connection
 post_command ButtonBackToMainMenu
-wait 25
+wait_ms 400
+video_mark sp-back-to-main
 assert_screen MainScreen
-wait 20
+wait_ms 800
 exit

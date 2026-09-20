@@ -1,0 +1,34 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 400
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 400
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 500
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+activate ButtonMultiplayerCreate
+wait_ms 600
+assert_substate Lobby
+video_mark host-listening
+wait_connected 2 90
+wait_remote_ready 90
+video_mark round1-start
+assert_enabled ButtonMultiplayerStart 1
+wait_ms 800
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/first-round-done.json 90
+video_mark rematch-lobby
+assert_substate Lobby
+dump_lobby
+wait_ms 1200
+wait_remote_ready 90
+video_mark round2-start
+assert_enabled ButtonMultiplayerStart 1
+wait_ms 800
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/done.json 90
+wait_ms 800
+dump_lobby
+exit

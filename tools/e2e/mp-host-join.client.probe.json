@@ -2,26 +2,118 @@
   "schema": 1,
   "timeout_ms": 175000,
   "steps": [
-    {"op": "wait", "service": "Running", "sim_at_least": 600},
-    {"op": "key_down", "key": "Escape"},
-    {"op": "key_up", "key": "Escape"},
-    {"op": "wait", "screen": "Pause"},
-    {"op": "assert", "equals": {"service": "Running", "paused": false}, "sim_at_least": 600},
-    {"op": "menu", "command": "assert_visible ButtonLeaveMatch 1"},
-    {"op": "menu", "command": "assert_visible ButtonMatchOptions 1"},
-    {"op": "menu", "command": "assert_enabled ButtonEndMatch 0"},
-    {"op": "menu", "command": "activate ButtonMatchOptions"},
-    {"op": "wait", "screen": "PauseMatchOptions"},
-    {"op": "menu", "command": "assert_visible ButtonMatchRepairNow 0"},
-    {"op": "menu", "command": "dump_host_options"},
-    {"op": "wait", "renders": 25},
-    {"op": "menu", "command": "activate ButtonMatchOptionsClose"},
-    {"op": "wait", "screen": "Pause"},
-    {"op": "menu", "command": "activate ButtonResume"},
-    {"op": "wait", "screen": "Gameplay"},
-    {"op": "wait_file", "path": "{PROBE_DIR_host}/done.json"},
-    {"op": "wait", "renders": 60},
-    {"op": "signal", "name": "done"},
-    {"op": "finish"}
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark mp-play-client"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "elapsed_ms": 10500
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark mp-pause-client"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "paused": false
+      }
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonLeaveMatch 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchOptions 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_enabled ButtonEndMatch 0"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonMatchOptions"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseMatchOptions",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark mp-match-options-client"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchRepairNow 0"
+    },
+    {
+      "op": "menu",
+      "command": "dump_host_options"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 825
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonMatchOptionsClose"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark mp-end-match"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonResume"
+    },
+    {
+      "op": "wait",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_host}/done.json",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1980,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "done",
+      "scope": "menu"
+    },
+    {
+      "op": "finish"
+    }
   ]
 }

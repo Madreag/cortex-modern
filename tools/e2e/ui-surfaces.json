@@ -3,80 +3,458 @@
   "name": "ui-surfaces",
   "port_base": 49440,
   "title": "Every multiplayer UI surface at 640x360, 960x540 and 1280x720: lobby, host options, kick/ban, chat, F6, visibility, Repair, pause Match Options",
-  "timeout_s": 480,
+  "timeout_s": 160,
   "runs": [
-    {"name": "640x360", "size": "640x360"},
-    {"name": "960x540", "size": "960x540"},
-    {"name": "1280x720", "size": "1280x720"}
+    {
+      "name": "640x360",
+      "size": "640x360"
+    },
+    {
+      "name": "960x540",
+      "size": "960x540"
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720"
+    },
+    {
+      "name": "player-settings",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "settings",
+          "args": [],
+          "menu_script": "ui-surfaces.settings.menu.txt",
+          "settings": {
+            "NetworkAutoReconnect": "1",
+            "NetworkRecordReplays": "0",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+          }
+        }
+      ]
+    }
   ],
   "peers": [
     {
       "name": "host",
-      "args": ["-input-script", "{INPUT_SCRIPT}"],
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}"
+      ],
       "menu_script": "ui-surfaces.host.menu.txt",
       "input_script": "play-input.txt",
-      "probe": "ui-surfaces.probe.json",
-      "settings": {"NetworkDisplayName": "Host",
-                   "SessionDirectoryUrl": "dir.example.test/serve",
-                   "SessionDirectoryCertSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                   "NetworkChatVisible": "1", "NetworkChatNotify": "1"}
+      "probe": "ui-surfaces.host.probe.json",
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "SessionDirectoryUrl": "{DIRECTORY_URL}",
+        "SessionDirectoryCertSha256": "{DIRECTORY_PIN}",
+        "NetworkChatVisible": "1",
+        "NetworkChatNotify": "1"
+      },
+      "observe_after_failure": true
     },
     {
       "name": "client",
-      "args": ["-input-script", "{INPUT_SCRIPT}"],
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}"
+      ],
       "menu_script": "ui-surfaces.client.menu.txt",
       "input_script": "play-input.txt",
-      "probe": "ui-surfaces.probe.json",
-      "settings": {"NetworkDisplayName": "Joiner", "NetworkChatVisible": "1", "NetworkChatNotify": "1"},
-      "start_delay_s": 3.0
+      "probe": "ui-surfaces.client.probe.json",
+      "settings": {
+        "NetworkDisplayName": "Joiner",
+        "NetworkChatVisible": "1",
+        "NetworkChatNotify": "1",
+        "SessionDirectoryUrl": "{DIRECTORY_URL}",
+        "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
+      },
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark host-listening",
+        "timeout_s": 100
+      },
+      "observe_after_failure": true
     }
   ],
   "checklist": [
-    {"id": "ui-landing", "screen": "MultiplayerScreen",
-     "what": "the multiplayer landing: name prompt, Host, Join, Resume, Replays, all inside the panel at this resolution",
-     "assert": "menu script: assert_substate Landing, assert_label LabelMultiplayerNamePrompt"},
-    {"id": "ui-host-setup", "peer": "host", "screen": "MultiplayerScreen",
-     "what": "host setup with the activity, scene and mode pickers, the port and the player count, no text clipped",
-     "assert": "menu script: assert_substate HostSetup"},
-    {"id": "ui-host-pages", "peer": "host", "screen": "MultiplayerScreen",
-     "what": "each of the six host options pages (Seats, Rules, Network, Recovery, Files, Session) drawn whole, rows above the Back button",
-     "assert": "menu script: assert_visible CollectionBoxHostPage<page> 1 and dump_host_options per page"},
-    {"id": "ui-seat-dialog-own", "peer": "host", "screen": "MultiplayerScreen",
-     "what": "the host's own seat dialog shows Kick and Ban disabled with the reason spelled out",
-     "assert": "menu script: assert_enabled ButtonHostSeatDlgKick 0 and the action hint"},
-    {"id": "ui-seat-dialog-other", "peer": "host", "screen": "MultiplayerScreen",
-     "what": "a seated client's dialog offers Kick and Ban enabled",
-     "assert": "menu script: assert_enabled ButtonHostSeatDlgKick 1 and ButtonHostSeatDlgBan 1"},
-    {"id": "ui-visibility", "peer": "host", "screen": "MultiplayerScreen",
-     "what": "the visibility selector drops open and steps LAN only, Unlisted, Listed with the drop inside the panel",
-     "assert": "menu script: combo_drop then combo_select with assert_label after each"},
-    {"id": "ui-directory-listing", "peer": "host",
-     "what": "a Listed session is published to the session directory and shows in the listing",
-     "assert": "not scripted",
-     "blocked_by": "no live session directory on this machine: the run seeds SessionDirectoryUrl so the Internet page shows its real values, but nothing serves it. The lead runs -net-directory-list against a served directory for this item."},
-    {"id": "ui-lobby", "screen": "MultiplayerScreen",
-     "what": "the lobby: both seats named, the activity and mode line, the status line, all fitting at this resolution",
-     "assert": "menu script: dump_lobby on both peers"},
-    {"id": "ui-chat", "screen": "MultiplayerScreen",
-     "what": "a chat line sent from each peer appears on both peers' lobby chat",
-     "assert": "menu script: chat on the host, then chat on the client, with dump_lobby after each"},
-    {"id": "ui-details-read-only", "peer": "client", "screen": "MultiplayerScreen",
-     "what": "the client's MATCH DETAILS is read-only and its seat dialog offers no moderation",
-     "assert": "menu script: assert_label LabelHostOptionsTitle M A T C H   D E T A I L S, assert_enabled ButtonHostSeatDlgKick 0"},
-    {"id": "ui-f6-overlay", "screen": "game",
-     "what": "F6 opens the in-match network overlay and closes again; the panel is inside the viewport",
-     "assert": "probe: wait panel_open true then false"},
-    {"id": "ui-f6-options", "screen": "game",
-     "what": "the overlay's Options view reads the live match rules and its text fits its row",
-     "assert": "probe: assert_control NetworkSeatsOptionsText fits true"},
-    {"id": "ui-pause-match-options", "screen": "PauseMatchOptions",
-     "what": "the pause Match Options dialog: title, rules text, repair hint and Close all inside the box",
-     "assert": "probe: assert_rect_inside on each row"},
-    {"id": "ui-pause-settings", "screen": "PauseSettings",
-     "what": "the in-match settings pages are reachable and drawn at this resolution",
-     "assert": "probe: assert_settings_page Video and Gameplay"},
-    {"id": "ui-resume", "screen": "game",
-     "what": "Resume returns to the match with the overlay and dialogs gone",
-     "assert": "probe: wait screen Gameplay"}
-  ]
+    {
+      "id": "ui-seats",
+      "peer": "host",
+      "mark": "ui-seats",
+      "screen": "MultiplayerScreen",
+      "what": "The Seats page shows the configured human seats.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageSeats 1 actual=1 PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-rules",
+      "peer": "host",
+      "mark": "ui-rules",
+      "screen": "MultiplayerScreen",
+      "what": "Changing the brain-loss rule updates the selected label live.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label ComboHostRulesBrainless .*End the match.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-network-routing",
+      "peer": "host",
+      "mark": "ui-network-routing",
+      "screen": "MultiplayerScreen",
+      "what": "Routing switches relay and NAT settings; the labels update.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label ComboHostNetRelay .*Off.* PASS",
+        "assert_label ComboHostNetIce .*Off.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-network-tuning",
+      "peer": "host",
+      "mark": "ui-network-tuning",
+      "screen": "MultiplayerScreen",
+      "what": "Both slow-player rows are visible; bound and policy changes update live.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label TextHostNetSlowBound .*4.* PASS",
+        "assert_label ComboHostNetSlowPolicy .*Hand the seat.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-visibility",
+      "peer": "host",
+      "mark": "ui-visibility",
+      "screen": "MultiplayerScreen",
+      "what": "The visibility selector opens and selects Unlisted and Listed.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label ComboHostNetVisibility .*Unlisted.* PASS",
+        "assert_label ComboHostNetVisibility .*Listed.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-recovery",
+      "peer": "host",
+      "mark": "ui-recovery",
+      "screen": "MultiplayerScreen",
+      "what": "Autosave enables its interval field, accepts 30, then disables it when unchecked.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_enabled TextHostRecAutosaveInterval expected=1 actual=1 PASS",
+        "assert_enabled TextHostRecAutosaveInterval expected=0 actual=0 PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-files",
+      "peer": "host",
+      "mark": "ui-files",
+      "screen": "MultiplayerScreen",
+      "what": "The Files page changes the match status widget to Always.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label ComboHostFilesWidget .*Always.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-session",
+      "peer": "host",
+      "mark": "ui-session",
+      "screen": "MultiplayerScreen",
+      "what": "The Session idle setting changes to five minutes.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_label ComboHostSessIdle .*5 minutes.* PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-seat-dialog-own",
+      "peer": "host",
+      "mark": "ui-seat-dialog-own",
+      "screen": "MultiplayerScreen",
+      "what": "The host seat dialog disables Kick and Ban and explains why.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_enabled ButtonHostSeatDlgKick expected=0 actual=0 PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-seat-dialog-other",
+      "peer": "host",
+      "mark": "ui-seat-dialog-other",
+      "screen": "MultiplayerScreen",
+      "what": "The other seat offers Kick and Ban, and Close dismisses the dialog.",
+      "assert": "menu assertions in the marked interval",
+      "events": [
+        "assert_enabled ButtonHostSeatDlgKick expected=1 actual=1 PASS",
+        "assert_enabled ButtonHostSeatDlgBan expected=1 actual=1 PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-directory-listing",
+      "peer": "client",
+      "mark": "ui-directory-listing",
+      "screen": "MultiplayerScreen",
+      "what": "A published session appears in discovery; selecting the row fills its join target.",
+      "assert": "directory/listed.json; activate GameRow0",
+      "events": [
+        "activate GameRow0 ok=1"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-chat-host",
+      "peer": "host",
+      "mark": "ui-chat",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby chat band shows messages sent by both players.",
+      "assert": "chat all returns ok=1",
+      "events": [
+        "chat scope=all ok=1"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-chat-client",
+      "peer": "client",
+      "mark": "ui-chat",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby chat band shows messages sent by both players.",
+      "assert": "chat all returns ok=1",
+      "events": [
+        "chat scope=all ok=1"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-f6-overlay-host",
+      "peer": "host",
+      "mark": "ui-f6-overlay",
+      "screen": "game",
+      "what": "F6 opens the live seats overlay.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-f6-options-host",
+      "peer": "host",
+      "mark": "ui-f6-options",
+      "screen": "game",
+      "what": "The F6 Options view shows the live rules.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-pause-match-options-host",
+      "peer": "host",
+      "mark": "ui-pause-match-options",
+      "screen": "PauseMatchOptions",
+      "what": "Pause Match Options draws the rules, repair hint and Close button.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-f6-overlay-client",
+      "peer": "client",
+      "mark": "ui-f6-overlay",
+      "screen": "game",
+      "what": "F6 opens the live seats overlay.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-f6-options-client",
+      "peer": "client",
+      "mark": "ui-f6-options",
+      "screen": "game",
+      "what": "The F6 Options view shows the live rules.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-pause-match-options-client",
+      "peer": "client",
+      "mark": "ui-pause-match-options",
+      "screen": "PauseMatchOptions",
+      "what": "Pause Match Options draws the rules, repair hint and Close button.",
+      "assert": "probe assertions in the marked interval",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ]
+    },
+    {
+      "id": "ui-player-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-player-settings",
+      "what": "Player name and fixed input delay update live.",
+      "events": [
+        "assert_label TextNetworkFixedDelay .*7.* PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-chat-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-chat-settings",
+      "what": "Chat scope and text size selections update.",
+      "events": [
+        "assert_label ComboNetworkChatTextSize .*Small.* PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-recovery-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-recovery-settings",
+      "what": "Automatic reconnect toggles off and on.",
+      "events": [
+        "assert_checked CheckboxNetworkAutoReconnect expected=1 actual=1 PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-files-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-files-settings",
+      "what": "Retention changes to five and replay recording turns on.",
+      "events": [
+        "assert_checked CheckboxNetworkRecordReplays expected=1 actual=1 PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-internet-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-internet-settings",
+      "what": "The local directory URL and certificate pin are accepted.",
+      "events": [
+        "assert_label LabelNetDirStatus .*Configured.* PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-connection-settings",
+      "run": "player-settings",
+      "peer": "settings",
+      "screen": "SettingsScreen",
+      "mark": "ui-connection-settings",
+      "what": "Direct only, Relay only and Automatic each show their own performance hint.",
+      "events": [
+        "assert_label LabelNetworkConnectionHint .*Direct first.* PASS"
+      ],
+      "assert": "menu assertions inside the marked interval"
+    },
+    {
+      "id": "ui-leave-confirm",
+      "peer": "host",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ],
+      "mark": "ui-leave-confirm",
+      "screen": "PauseLeaveConfirm",
+      "what": "Leave Match opens its consequence/confirmation dialog; confirming closes this capture session.",
+      "assert": "probe asserts ButtonLeaveConfirm and activates it"
+    }
+  ],
+  "directory_port": 49479
 }
