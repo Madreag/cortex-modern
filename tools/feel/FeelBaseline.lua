@@ -5,7 +5,7 @@ local updateDuel = FeelBaseline.UpdateActivity;
 
 local function CollectTeamActors(team)
     local actors = {};
-    local actor = MovableMan:GetFirstTeamActor(team);
+    local actor = MovableMan:GetFirstTeamActor(team, Activity.PLAYER_NONE);
     if not actor then
         return actors;
     end
@@ -66,7 +66,7 @@ function FeelBaseline:StartActivity(startNewGame)
             ParkTeam(self, team, 400, parkY[team] or 0);
         end
     end
-    self:DisableAIs(true);
+    self:DisableAIs(true, Activity.NOTEAM);
     print("[feel-baseline] parked brains out of reach");
 end
 

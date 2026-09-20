@@ -305,6 +305,18 @@ def menu_script_failures(peer_root):
             ("[menu-script] FAILED", "[record-video] refused", "[net-ui-probe] FAIL"))]
 
 
+def log_assertions(peer_root, required=(), forbidden=()):
+    lines = []
+    for leaf in ("stdout.log", "stderr.log", "runtime/LogConsole.txt"):
+        path = Path(peer_root) / leaf
+        if path.is_file():
+            lines += [{"path": str(path), "line": index + 1, "text": line}
+                      for index, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines())]
+    return [{"assertion": pattern, "forbidden": denied,
+             "matches": [line for line in lines if re.search(pattern, line["text"])]}
+            for denied, patterns in ((False, required), (True, forbidden)) for pattern in patterns]
+
+
 def item_evidence(record, item):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -339,13 +351,6 @@ def item_evidence(record, item):
         gate = record.get("gates", {}).get(item["gate"])
         evidence.update(probe="pass" if gate and gate.get("status") == "PASS" else "fail", assertions=[gate],
                         reason=None if gate else f"Missing feel gate {item['gate']}")
-    elif item.get("log_regex"):
-        path = Path(record["root"]) / "stdout.log"
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines() if path.is_file() else []
-        assertions = [{"assertion": pattern, "matches": [{"line": index + 1, "text": line}
-                       for index, line in enumerate(lines) if re.search(pattern, line)]} for pattern in item["log_regex"]]
-        evidence.update(probe="pass" if all(value["matches"] for value in assertions) else "fail",
-                        path=str(path), assertions=assertions)
     elif probe_steps is not None:
         path = Path(record["probe_dir"]) / "net-ui-result.json"
         observed = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
@@ -363,6 +368,12 @@ def item_evidence(record, item):
                 evidence["probe"] = "fail"
     else:
         evidence.update(probe_verdict(record.get("probe_dir", ""), item))
+    if item.get("log_regex") or item.get("forbidden_log_regex"):
+        assertions = log_assertions(record["root"], item.get("log_regex", []), item.get("forbidden_log_regex", []))
+        passed = all(bool(value["matches"]) != value["forbidden"] for value in assertions)
+        evidence["log_assertions"] = assertions
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
     return frame_range(rows, item), evidence
 
 
@@ -381,20 +392,20 @@ def review(scenario, capture, out):
                 items.append({**item, "peer": name, "frames": None, "state": "no such peer in this capture"})
                 continue
             found, assertions = item_evidence(record, item)
-            video_frames = found
+            video_frames = found if record.get("video") else None
             encode_result = record.get("encode", {})
             seconds = None
-            if found and encode_result.get("timing") == "wall-clock-cfr":
+            if video_frames and encode_result.get("timing") == "wall-clock-cfr":
                 indexed = {row["frame"]: row for row in record["index"]}
                 seconds = [(indexed[frame]["wall_ms"] - encode_result["origin_wall_ms"]) / 1000 for frame in found]
                 video_frames = [round(second * encode_result["fps"]) for second in seconds]
             resolved = {**item, "peer": name, "run": capture["name"], "frames": video_frames,
                           "capture_frames": found, "video_seconds": seconds,
                           "video": record.get("video"), "contact_sheet": record.get("contact_sheet"),
-                          "state": "captured" if found else "not seen in the capture",
+                          "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
-            if not found or item.get("blocked_by") or assertions.get("probe") in ("fail", "not-reached"):
-                resolved["finding"] = {"class": "unclassified", "reason": item.get("blocked_by") or assertions.get("reason") or
+            if not video_frames or item.get("blocked_by") or assertions.get("probe") in ("fail", "not-reached"):
+                resolved["finding"] = {"class": "harness" if capture.get("interrupted") else "unclassified", "reason": capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
@@ -540,62 +551,72 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")
                 return
 
-    for peer in peers:
-        name = peer["name"]
-        delay = float(peer.get("start_delay_s", 0) or 0)
-        if delay:
-            # A menu-driven join has to find the host's lobby already listening, and a late joiner
-            # has to find a world already running.
-            if failed.wait(delay):
-                records[name] = {"error": "not launched because an earlier peer failed"}
-                break
-        gate = peer.get("start_when")
-        if gate:
-            deadline = time.monotonic() + gate.get("timeout_s", 90)
-            while not gate_met(gate):
-                if failed.wait(.1) or time.monotonic() >= deadline:
-                    records[name] = {"error": f"start gate not reached: {gate}"}
-                    failed.set()
+    interrupted = None
+    try:
+        for peer in peers:
+            name = peer["name"]
+            delay = float(peer.get("start_delay_s", 0) or 0)
+            if delay:
+                # A menu-driven join has to find the host's lobby already listening, and a late joiner
+                # has to find a world already running.
+                if failed.wait(delay):
+                    records[name] = {"error": "not launched because an earlier peer failed"}
                     break
+            gate = peer.get("start_when")
+            if gate:
+                deadline = time.monotonic() + gate.get("timeout_s", 90)
+                while not gate_met(gate):
+                    if failed.wait(.1) or time.monotonic() >= deadline:
+                        records[name] = {"error": f"start gate not reached: {gate}"}
+                        failed.set()
+                        break
+                if failed.is_set():
+                    break
+                if failed.wait(float(peer.get("after_gate_delay_s", 0))):
+                    break
+            thread = threading.Thread(target=drive, args=(name,))
+            threads.append(thread)
+            thread.start()
+            # A scenario that drops a peer kills it through the runner, never by name or by PID.
+            kill_after = float(peer.get("kill_after_s", 0) or 0)
+            if kill_after:
+                timer = threading.Timer(kill_after, lambda handle=runs[name]: drop_peer(handle))
+                timer.daemon = True
+                timer.start()
+                killers.append(timer)
+            if peer.get("kill_at_tick"):
+                watcher = threading.Thread(target=kill_at_tick, args=(name, int(peer["kill_at_tick"])), daemon=True)
+                watcher.start()
+                killers.append(watcher)
+        next_size_check = time.monotonic()
+        while any(thread.is_alive() for thread in threads):
+            request = Path(out) / "stop-request.json"
+            if request.is_file():
+                raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
+            for name in runs:
+                signal = Path(staged[name]["gameplay_signal"])
+                if not signal.exists():
+                    first = next((row for row in read_index(shared[f"VIDEO_{name}"]) if row.get("screen") == "game"), None)
+                    if first:
+                        write_json(signal, first)
             if failed.is_set():
-                break
-            if failed.wait(float(peer.get("after_gate_delay_s", 0))):
-                break
-        thread = threading.Thread(target=drive, args=(name,))
-        threads.append(thread)
-        thread.start()
-        # A scenario that drops a peer kills it through the runner, never by name or by PID.
-        kill_after = float(peer.get("kill_after_s", 0) or 0)
-        if kill_after:
-            timer = threading.Timer(kill_after, lambda handle=runs[name]: drop_peer(handle))
-            timer.daemon = True
-            timer.start()
-            killers.append(timer)
-        if peer.get("kill_at_tick"):
-            watcher = threading.Thread(target=kill_at_tick, args=(name, int(peer["kill_at_tick"])), daemon=True)
-            watcher.start()
-            killers.append(watcher)
-    next_size_check = time.monotonic()
-    while any(thread.is_alive() for thread in threads):
-        for name in runs:
-            signal = Path(staged[name]["gameplay_signal"])
-            if not signal.exists():
-                first = next((row for row in read_index(shared[f"VIDEO_{name}"]) if row.get("screen") == "game"), None)
-                if first:
-                    write_json(signal, first)
-        if failed.is_set():
-            for handle in runs.values():
-                drop_peer(handle, "another scenario peer failed")
-        for thread in threads:
-            thread.join(.1)
-        if time.monotonic() >= next_size_check:
-            footprint = scratch_bytes(options.scratch_root)
-            if footprint >= SCRATCH_LIMIT:
                 for handle in runs.values():
-                    drop_peer(handle)
-                raise RuntimeError(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
-            next_size_check = time.monotonic() + 10
-    stop_watchers.set()
+                    drop_peer(handle, "another scenario peer failed")
+            for thread in threads:
+                thread.join(.1)
+            if time.monotonic() >= next_size_check:
+                footprint = scratch_bytes(options.scratch_root)
+                if footprint >= SCRATCH_LIMIT:
+                    raise RuntimeError(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
+                next_size_check = time.monotonic() + 10
+    except (KeyboardInterrupt, Exception) as error:
+        interrupted = f"{type(error).__name__}: {error}"
+        for handle in runs.values():
+            drop_peer(handle, "capture interrupted: " + interrupted)
+    finally:
+        stop_watchers.set()
+        for thread in threads:
+            thread.join()
     for timer in killers:
         if isinstance(timer, threading.Timer):
             timer.cancel()
@@ -618,13 +639,15 @@ def run_one(options, scenario, run, run_index, out):
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
                           "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
-    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected}
+    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted}
 
 
 def render(capture_run, fps, every):
-    """Encodes and tiles every peer of one run; safe to repeat over an existing capture."""
+    """Encodes missing media while preserving a completed peer's retained output."""
     ffmpeg = find_ffmpeg()
     for peer in capture_run["peers"]:
+        if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
+            continue
         root = Path(peer["root"])
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
         sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
@@ -655,6 +678,63 @@ def review_only(options):
     return 0 if complete else 1
 
 
+def finalize_only(options):
+    out = options.finalize_only.resolve()
+    capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
+    scenario = capture["scenario_definition"]
+    existing = {run["name"]: run for run in capture["runs"]}
+    recovered = []
+    for index, definition in enumerate(scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]):
+        name = definition.get("name", f"run{index}")
+        root = out / name
+        definitions = definition.get("peers") or scenario.get("peers", [])
+        if not any((root / peer["name"] / "launch.json").is_file() for peer in definitions):
+            continue
+        run = existing.get(name, {"name": name, "root": str(root), "size": capture.get("size") or definition.get("size") or scenario.get("size") or DEFAULT_SIZE, "peers": []})
+        prior = {peer["peer"]: peer for peer in run["peers"]}
+        peers = []
+        for definition_peer in definitions:
+            peer_name = definition_peer["name"]
+            peer_root = root / peer_name
+            launch_path = peer_root / "launch.json"
+            launch = json.loads(launch_path.read_text(encoding="utf-8")) if launch_path.is_file() else {}
+            video = peer_root / "video"
+            peer = prior.get(peer_name, {"peer": peer_name, "root": str(peer_root), "video_dir": str(video),
+                                        "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
+                                        "args": launch.get("argv"), "env": launch.get("env_set"),
+                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick"))})
+            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+                              "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
+            peer["manifest"] = read_manifest(video)
+            peer["index"] = read_index(video)
+            peer["menu_script_failures"] = menu_script_failures(peer_root)
+            if launch.get("exit_code") is None:
+                peer["error"] = "The recorder owner ended before the runner saved an exit record"
+                run["interrupted"] = peer["error"]
+            peers.append(peer)
+        run["peers"] = peers
+        recovered.append(run)
+    capture["runs"] = recovered
+    capture["interrupted"] = capture.get("interrupted") or "Finalized after the capture owner ended; unstarted runs remain findings"
+    capture["finalized"] = stamp()
+    budget = options.scratch_root or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
+    metadata_only = options.metadata_only or scratch_bytes(budget) >= SCRATCH_LIMIT
+    for run in recovered:
+        if not metadata_only:
+            render(run, capture["fps"], options.sheet_every)
+        review(scenario, run, Path(run["root"]))
+    start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
+    end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
+    scenario_manifest(capture, out, (end - start).total_seconds())
+    aggregate_review(capture, out)
+    for run in recovered:
+        for peer in run["peers"]:
+            peer.pop("index", None)
+    write_json(out / "capture.json", capture)
+    print(f"Finalized retained evidence: {out}; metadata_only={metadata_only}")
+    return 1
+
+
 def scenario_manifest(capture, out, elapsed):
     peers = []
     for run in capture["runs"]:
@@ -668,7 +748,7 @@ def scenario_manifest(capture, out, elapsed):
                           "launch": peer.get("launch"), "recorder": peer["manifest"]})
     manifest = {"schema": 1, "scenario": capture["scenario"], "source": capture["source"],
                 "exe": capture["exe"], "started": capture["started"], "finished": stamp(),
-                "wall_seconds": round(elapsed, 3), "fps": capture["fps"],
+                "wall_seconds": round(elapsed, 3), "fps": capture["fps"], "interrupted": capture.get("interrupted"),
                 "frame_count": sum(peer["frames"] for peer in peers), "peers": peers}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
@@ -676,10 +756,24 @@ def scenario_manifest(capture, out, elapsed):
 
 def aggregate_review(capture, out):
     documents = [json.loads((Path(run["root"]) / "review.json").read_text(encoding="utf-8")) for run in capture["runs"]]
+    items = [item for review_doc in documents for item in review_doc["checklist"]]
+    recorded = {run["name"] for run in capture["runs"]}
+    definition = capture["scenario_definition"]
+    for index, run in enumerate(definition.get("runs") or [{"name": "run0", "peers": definition.get("peers", [])}]):
+        name = run.get("name", f"run{index}")
+        if name in recorded:
+            continue
+        for item in definition.get("checklist", []):
+            scope = item.get("run")
+            if scope and name not in ([scope] if isinstance(scope, str) else scope):
+                continue
+            for peer in ([item["peer"]] if item.get("peer") else [peer["name"] for peer in run.get("peers", definition.get("peers", []))]):
+                items.append({**item, "run": name, "peer": peer, "frames": None, "probe": "not-run", "state": "not started",
+                              "finding": {"class": "harness", "reason": capture.get("interrupted") or "Capture ended before this run"}})
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "command": capture["command"], "verdict": "agent-review-required",
-                "checklist": [item for review_doc in documents for item in review_doc["checklist"]],
+                "checklist": items, "interrupted": capture.get("interrupted"),
                 "reviews": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}
     write_json(Path(out) / "review.json", document)
     return document
@@ -727,6 +821,8 @@ def main():
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
+    parser.add_argument("--finalize-only", type=Path)
+    parser.add_argument("--metadata-only", action="store_true")
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
@@ -738,6 +834,8 @@ def main():
                 continue
             print(f"{scenario.get('name', path.stem):<22} {scenario.get('title', '')}")
         return 0
+    if options.finalize_only:
+        return finalize_only(options)
     if options.review_only:
         options.port = options.port or PORT_LO
         return review_only(options)
@@ -785,22 +883,37 @@ def main():
         print(f"{scenario['name']}: requires-missing: {missing}")
         return 2
     complete = True
-    for index, run in enumerate(runs):
-        service = nullcontext({})
-        if scenario.get("directory_port"):
-            from e2e.directory import serve
-            service = serve(out / f"{run.get('name', f'run{index}')}-directory", scenario["directory_port"])
-        with service as tokens:
-            options.service_tokens = tokens
-            captured = run_one(options, scenario, run, index, out)
-            captured["services"] = {key: str(value) for key, value in tokens.items()}
-        feel_probes(run, captured, source)
-        render(captured, options.fps, options.sheet_every)
-        review(scenario, captured, Path(captured["root"]))
-        capture["runs"].append(captured)
-        for peer in captured["peers"]:
-            complete &= peer_completed(peer)
-        write_json(out / "capture.json", capture)
+    write_json(out / "capture.json", capture)
+    try:
+        for index, run in enumerate(runs):
+            service = nullcontext({})
+            if scenario.get("directory_port"):
+                from e2e.directory import serve
+                service = serve(out / f"{run.get('name', f'run{index}')}-directory", scenario["directory_port"])
+            with service as tokens:
+                options.service_tokens = tokens
+                captured = run_one(options, scenario, run, index, out)
+                captured["services"] = {key: str(value) for key, value in tokens.items()}
+            capture["runs"].append(captured)
+            write_json(out / "capture.json", capture)
+            if captured.get("interrupted"):
+                capture["interrupted"] = captured["interrupted"]
+            else:
+                feel_probes(run, captured, source)
+                render(captured, options.fps, options.sheet_every)
+            review(scenario, captured, Path(captured["root"]))
+            for peer in captured["peers"]:
+                complete &= peer_completed(peer)
+            write_json(out / "capture.json", capture)
+            if captured.get("interrupted"):
+                complete = False
+                break
+    except (KeyboardInterrupt, Exception) as error:
+        capture["interrupted"] = f"{type(error).__name__}: {error}"
+        complete = False
+        for captured in capture["runs"]:
+            captured["interrupted"] = capture["interrupted"]
+            review(scenario, captured, Path(captured["root"]))
     scenario_manifest(capture, out, time.monotonic() - started)
     document = aggregate_review(capture, out)
     complete &= not any(item.get("finding") or item.get("blocked_by") for item in document["checklist"])

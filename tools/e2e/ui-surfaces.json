@@ -452,8 +452,38 @@
       ],
       "mark": "ui-leave-confirm",
       "screen": "PauseLeaveConfirm",
-      "what": "Leave Match opens its consequence/confirmation dialog; confirming closes this capture session.",
-      "assert": "probe asserts ButtonLeaveConfirm and activates it"
+      "what": "Leave Match opens its consequence dialog; Cancel returns the host to the local pause menu.",
+      "assert": "probe asserts ButtonLeaveConfirm, activates ButtonLeaveCancel and waits for Pause"
+    },
+    {
+      "id": "ui-hosted-recovery",
+      "peer": "host",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ],
+      "mark": "ui-hosted-recovery",
+      "screen": "MultiplayerScreen",
+      "what": "The hosted lobby disables Repair and explains that it needs a live match.",
+      "assert": "assert_enabled ButtonHostRecRepairNow 0; assert_label LabelHostRecRepairHint Repair needs a live match session",
+      "events": [
+        "assert_enabled ButtonHostRecRepairNow expected=0 actual=0 PASS",
+        "assert_label LabelHostRecRepairHint .*Repair needs a live match session.* PASS"
+      ]
+    },
+    {
+      "id": "ui-leave-confirm-client",
+      "peer": "client",
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
+      ],
+      "mark": "ui-leave-confirm-client",
+      "screen": "PauseLeaveConfirm",
+      "what": "The client reads the leave consequence and confirms; both capture processes then finish.",
+      "assert": "probe asserts ButtonLeaveConfirm and activates it; both launch records end without a timeout"
     }
   ],
   "directory_port": 49479

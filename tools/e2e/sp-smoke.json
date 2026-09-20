@@ -345,8 +345,17 @@
       "run": "play",
       "peer": "sp",
       "screen": "game",
-      "what": "The unchanged FeelBaseline fixture starts and renders without Lua errors.",
-      "assert": "The original FeelBaseline launch exits zero and writes gameplay frames."
+      "what": "The FeelBaseline activity starts, parks its brains, and resumes after the pause pages without a Lua error.",
+      "assert": "parked-brains log line, completed play probe and no Lua ERROR in LogConsole.txt",
+      "mark": "sp-feel-baseline",
+      "log_regex": [
+        "\\[feel-baseline\\] parked brains out of reach"
+      ],
+      "forbidden_log_regex": [
+        "^ERROR:",
+        "RTE Aborted",
+        "Assertion failed"
+      ]
     }
   ]
 }
