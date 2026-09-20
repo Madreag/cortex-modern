@@ -1687,6 +1687,26 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
+		bool TestPrivateCheckpointKeepsDepartures(std::string* error) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A35; config.roundId = 35; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 3; config.startFrame = 41;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 3;
+			config.matchConfig.players.push_back({3, 2, false, "Successor"});
+			config.initialPeerLeaves = {{1, 39}, {2, 40}};
+			config.initialSeatHolds[2] = NetGameSeatHold{2, 1, 1, 1, 40};
+			if (!replay.StartReplay(wire, config, error) || replay.GetHostPeerId() != 3 || !replay.IsPeerGoneAtFrame(1, 41)) return false;
+			const NetGameCommand reclaim{3, NetGameSeatReclaim{2, 1, 2, 2, 41, 4, 45}};
+			if (!replay.QueueReplayFrame(41, {}, {reclaim}, error)) return false;
+			replay.Tick(0); NetLockstepReadyFrame ready;
+			if (!replay.PopReadyFrame(ready) || !replay.IsPeerGoneAtFrame(1, 41) || replay.IsPeerGoneAtFrame(2, 41) ||
+			    ready.reclaimedPeerIds != std::vector<uint8_t>{2} || !replay.IsSeatReclaimGap(2, 45) || replay.IsSeatReclaimGap(2, 46)) {
+				*error = "private catch-up revived a departed host or lost the current authority's reclaim"; return false;
+			}
+			return true;
+		}
+
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
 			LoopbackTransport transport;
@@ -15523,6 +15543,7 @@ namespace RTE {
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
+		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||

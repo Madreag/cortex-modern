@@ -100,6 +100,8 @@ namespace RTE {
 		std::string heldState;
 		std::string roundConfigHash;
 		uint64_t authorityGeneration = 0;
+		uint8_t authorityPeerId = 1;
+		std::map<uint8_t, uint64_t> departedPeers;
 		std::string worldId;
 		uint64_t boot = 0;
 		uint64_t round = 0;
@@ -365,6 +367,8 @@ namespace RTE {
 		std::string sideState;
 		std::map<uint8_t, NetGameSeatHold> initialHolds;
 		uint64_t roundId = 0, authorityGeneration = 0;
+		uint8_t authorityPeerId = 1;
+		std::map<uint8_t, uint64_t> initialPeerLeaves;
 		NetHash32 roundConfigHash{};
 		uint64_t snapshotTick = 0;        //!< B, the tick the restored image froze at.
 		uint64_t appliedThrough = 0;      //!< The last committed tail frame the sim has applied.

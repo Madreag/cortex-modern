@@ -104,6 +104,8 @@ namespace RTE {
 			offer["held_state"] = image.heldState;
 			offer["round_config_hash"] = image.roundConfigHash;
 			offer["authority_generation"] = image.authorityGeneration;
+			offer["authority_peer_id"] = image.authorityPeerId;
+			offer["departed_peers"] = image.departedPeers;
 		}
 		return offer.dump();
 	}
@@ -125,6 +127,8 @@ namespace RTE {
 		image.heldState = parsed.value("held_state", std::string());
 		image.roundConfigHash = parsed.value("round_config_hash", std::string());
 		image.authorityGeneration = parsed.value("authority_generation", uint64_t{0});
+		image.authorityPeerId = parsed.value("authority_peer_id", uint8_t{1});
+		image.departedPeers = parsed.value("departed_peers", std::map<uint8_t, uint64_t>{});
 		image.worldId = parsed.value("world_id", std::string());
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});

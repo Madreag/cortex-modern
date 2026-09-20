@@ -3765,7 +3765,7 @@ namespace RTE {
 				m_RemotePeerIds.push_back(peer);
 		m_RelayHost = m_Config.relayToOtherPeers;
 		m_Transport = m_MigrationTransport.get();
-		m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
+		m_Config.initialPeerLeaves.clear(); m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
 		ResetRoundState();
 		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
 		for (const auto& [peer, reclaim]: reclaimTransactions) if (reclaim.activationFrame <= m_MigrationBoundary) m_ReclaimTransactions[peer] = reclaim;
@@ -4176,6 +4176,7 @@ namespace RTE {
 		m_PreStartChecksums.clear();
 		m_LastStartSentMs = UINT64_MAX;
 		m_RemoteFrameWindow.clear();
+		m_PeerLeaveFrames = m_Config.initialPeerLeaves;
 		for (const auto& [peer, hold]: m_Config.initialSeatHolds) {
 			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame; m_PeerLeaveFrames[peer] = hold.cutoffFrame;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
@@ -4629,6 +4630,7 @@ namespace RTE {
 			std::cout << "[net-match] delay change peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
 		} else if (timing.action == NetTimingAction::Reclaim) {
+			if (timing.peerId != m_Config.localPeerId && !IsKnownRemotePeer(timing.peerId)) { m_RemotePeerIds.push_back(timing.peerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame};
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
@@ -7751,7 +7753,7 @@ namespace RTE {
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
 	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary) {
-		if (UsesBoundedWait() && !announced && !agreedBoundary && m_Config.localPeerId == GetHostPeerId()) {
+		if (UsesBoundedWait() && !agreedBoundary && m_Config.localPeerId == GetHostPeerId()) {
 			ProposePeerHold(peerId, nowMs);
 			return;
 		}
