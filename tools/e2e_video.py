@@ -403,6 +403,16 @@ def log_assertions(peer_root, required=(), forbidden=()):
             for denied, patterns in ((False, required), (True, forbidden)) for pattern in patterns]
 
 
+def drop_evidence(record, tick):
+    if not record:
+        return {"pass": False, "reason": "The dropped peer was not launched"}
+    path = Path(record["video_dir"]) / "injected-drop.json"
+    receipt = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    passed = receipt.get("requested_tick") == tick and receipt.get("last_recorded_frame", {}).get("sim_tick", -1) >= tick
+    passed = passed and str(record.get("record", {}).get("injected_termination", "")).startswith("scenario drop")
+    return {"path": str(path), "receipt": receipt, "pass": passed}
+
+
 def item_evidence(record, item):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -461,11 +471,8 @@ def item_evidence(record, item):
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("drop_tick") is not None:
-        path = Path(record["video_dir"]) / "injected-drop.json"
-        receipt = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        passed = receipt.get("requested_tick") == item["drop_tick"] and receipt.get("last_recorded_frame", {}).get("sim_tick", -1) >= item["drop_tick"]
-        passed = passed and str(record.get("record", {}).get("injected_termination", "")).startswith("scenario drop")
-        evidence["process_drop"] = {"path": str(path), "receipt": receipt, "pass": passed}
+        evidence["process_drop"] = drop_evidence(record, item["drop_tick"])
+        passed = evidence["process_drop"]["pass"]
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
     if item.get("readback"):
@@ -501,6 +508,12 @@ def review(scenario, capture, out):
                               "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
             found, assertions = item_evidence(record, item)
+            if item.get("peer_drop"):
+                required = item["peer_drop"]
+                witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
+                assertions["peer_drop"] = {"peer": required["peer"], **drop_evidence(witness, required["tick"])}
+                if not assertions["peer_drop"]["pass"]:
+                    assertions.update(probe="fail", reason="The other peer has no matching recorded process drop")
             video_frames = found if record.get("video") else None
             encode_result = record.get("encode", {})
             seconds = None

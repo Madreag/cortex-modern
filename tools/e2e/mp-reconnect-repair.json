@@ -185,6 +185,7 @@
     {
       "id": "rc-drop-seen",
       "peer": "host",
+      "peer_drop": {"peer": "client-dropped", "tick": 900},
       "screen": "game",
       "sim_ticks": [
         900,
