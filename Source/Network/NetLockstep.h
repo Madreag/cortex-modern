@@ -557,6 +557,8 @@ namespace RTE {
 		uint32_t consecutiveLateInputs = 0;
 		double localComputeDebtMs = 0;
 		bool localMachineSlow = false;
+		std::optional<uint32_t> measuredMissingFrameBase;
+		std::optional<uint32_t> measuredBlockingWaitBase;
 		uint32_t delayChangesProposed = 0;
 		uint32_t delayChangesCommitted = 0;
 		uint32_t delayPaddingFrames = 0;
