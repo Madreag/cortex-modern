@@ -54,6 +54,9 @@ namespace RTE {
 		bool Enabled() const { return m_Enabled; }
 		int Fps() const { return m_Fps; }
 
+		/// Records an automation observation on the frame index's clock.
+		void RecordEvent(const std::string& message);
+
 		/// A buffer of bytes for this wall time, or null when the recorder is off, the frame is not
 		/// due at the capture rate, or the queue is full. Render thread only, paired with EndFrame.
 		unsigned char* BeginFrame(long long wallMS, std::size_t bytes);
@@ -88,6 +91,7 @@ namespace RTE {
 		std::string m_Directory;
 		std::string m_FramesDirectory;
 		std::ofstream m_Index;
+		std::ofstream m_Events;
 
 		long long m_StartedWallMS = 0;
 		long long m_EndedWallMS = 0;
