@@ -724,6 +724,48 @@
           "game"
         ]
       }
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "640x360",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "960x540",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
+    },
+    {
+      "id": "addenda-settings-page-clean",
+      "run": "1280x720",
+      "peer": "ui",
+      "what": "Each settings page takes its own controls with it: the page left behind is not drawn under the new one.",
+      "assert": "Renderer-rule readback on every page the walk leaves.",
+      "log_regex": [
+        "\\[menu-script\\] assert_not_drawn CollectionBoxVideoSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxAudioSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxInputSettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxGameplaySettings drawn=none PASS",
+        "\\[menu-script\\] assert_not_drawn CollectionBoxMiscSettings drawn=none PASS"
+      ]
     }
   ]
 }
