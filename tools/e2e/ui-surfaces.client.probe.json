@@ -260,7 +260,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 100
+      "elapsed_ms": 300
     },
     {
       "op": "menu",
