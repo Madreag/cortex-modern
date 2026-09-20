@@ -860,13 +860,14 @@ def scripts(case, port, root):
             {"op": "wait", "scope": "menu", "elapsed_ms": 500},
             {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}}
     elif case == "net-activity":
+        # Fresh host setup uses Skirmish Defense; P4 is the explicit keyboard-navigation anchor.
         # A vanished pick needs a module unload the menu harness cannot drive; the native
         # host_request_fallback row covers the empty-list Base.rte request fields instead.
         # The keyboard commits the activity and scene combos and the mouse the mode combo; Create
         # uses those picks, not a later mouse Select.
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "assert_visible LabelHostActivity 1\nassert_label LabelHostActivity Activity\n"
-                "assert_label ComboHostActivity P4 Alpha Duel - Base.rte\n"
+                "assert_label ComboHostActivity Skirmish Defense - Base.rte\n"
                 "assert_text_fits ComboHostActivity\n"
                 "dump_host_options\n"
                 "assert_visible LabelHostScene 1\nassert_label LabelHostScene Scene\n"
@@ -874,6 +875,7 @@ def scripts(case, port, root):
                 "assert_text_fits ComboHostScene\n"
                 "assert_visible ComboHostMode 1\nassert_label ComboHostMode PvP\n"
                 "assert_label LabelHostInfo Grasslands - PvP\n"
+                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 3\n"
                 "focus ComboHostActivity\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
@@ -2011,8 +2013,8 @@ def run_case(options, case, root, failing=None):
             scenes = [next(c for c in image["controls"] if c["name"] == "ComboHostScene")
                       for image in host_setup if any(c["name"] == "ComboHostScene" for c in image["controls"])]
             assert scenes, "ComboHostScene missing from host dumps"
-            assert picker[0]["text"] == "P4 Alpha Duel - Base.rte" and picker[0]["dropped"] is False, picker[0]
-            assert picker[1]["text"] == picker[0]["text"] and picker[1]["dropped"] is True, picker[1]
+            assert picker[0]["text"] == "Skirmish Defense - Base.rte" and picker[0]["dropped"] is False, picker[0]
+            assert picker[1]["text"] == "P4 Alpha Duel - Base.rte" and picker[1]["dropped"] is True, picker[1]
             assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
             assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
