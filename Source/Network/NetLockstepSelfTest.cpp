@@ -1587,6 +1587,53 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestFutureDelaySurvivesSplitMigration(std::string* error) {
+			class SplitCommitWire final : public LoopbackTransport {
+			public:
+				bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* reason = nullptr, bool* congested = nullptr) override {
+					const auto packet = NetLockstepCodec::Decode(bytes);
+					if (packet.ok) if (const auto* timing = std::get_if<NetLockstepTiming>(&packet.packet.payload))
+						if (peer == 2 && timing->action == NetTimingAction::Delay && timing->phase == NetTimingPhase::Commit) return true;
+					return LoopbackTransport::Send(peer, lane, bytes, reason, congested);
+				}
+			} hostWire;
+			LoopbackTransport firstWire, successorWire;
+			if (!hostWire.StartHost(48896, error) || !firstWire.Connect("loopback", 48896, error) || !successorWire.Connect("loopback", 48896, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x9A34);
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Successor"}); match.successorOrder = {3, 2};
+			for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(48896 + peer), {"loopback"}});
+			const auto configuration = [&](uint8_t peer) {
+				NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match; config.peerCount = 3;
+				config.localPeerId = peer; config.startFrame = 1; config.timeoutMs = 1000; config.roundId = peer == 1 ? 34 : 0;
+				config.relayToOtherPeers = peer == 1; config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				config.migrationKey.fill(0x39); config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+				return config;
+			};
+			NetLockstepCoordinator host, first, successor;
+			if (!host.Start(hostWire, configuration(1), error) || !first.Start(firstWire, configuration(2), error) || !successor.Start(successorWire, configuration(3), error)) return false;
+			uint64_t now = 0;
+			const auto pump = [&] { hostWire.AdvanceTimeMs(1); firstWire.AdvanceTimeMs(1); successorWire.AdvanceTimeMs(1); host.Tick(++now); first.Tick(now); successor.Tick(now); };
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (!host.ProposeInputDelay(2, 4, 100, error)) return false;
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (first.InputDelayAt(2, 100) != 4 || successor.InputDelayAt(2, 100) != 0) { *error = "the migration fixture did not split the future commit"; return false; }
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &first, &successor}) if (!peer->QueueLocalInput(frame, {}, {}, error)) return false;
+				pump(); pump();
+				for (auto* peer: {&host, &first, &successor}) { NetLockstepReadyFrame ready; if (!peer->PopReadyFrame(ready) || ready.frame != frame) return false; }
+			}
+			hostWire.Stop();
+			for (int pass = 0; pass < 1000; ++pass) {
+				first.Tick(now); successor.Tick(now); now += 5;
+				if (first.GetMigrationResult().generation != 0 && successor.GetMigrationResult().generation != 0 && !first.IsMigrating() && !successor.IsMigrating()) break;
+			}
+			if (!first.IsRunning() || !successor.IsRunning() || first.GetHostPeerId() != 3 || successor.GetHostPeerId() != 3 ||
+			    first.InputDelayAt(2, 99) != 0 || successor.InputDelayAt(2, 99) != 0 || first.InputDelayAt(2, 100) != 4 || successor.InputDelayAt(2, 100) != 4) {
+				*error = "host migration lost or split a committed future delay: " + first.BuildReportJson() + " / " + successor.BuildReportJson(); return false;
+			}
+			return true;
+		}
+
 		bool TestPrivateReclaimKeepsRoundRunning(std::string* error) {
 			LoopbackTransport hostWire, oldWire, returnWire;
 			NetLockstepCoordinator host, oldClient, returning;
@@ -15477,6 +15524,7 @@ namespace RTE {
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) ||
+		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||

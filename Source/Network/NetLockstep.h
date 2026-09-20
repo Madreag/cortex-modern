@@ -436,12 +436,13 @@ namespace RTE {
 		uint32_t offset = 0;
 		std::vector<uint8_t> members;
 		std::vector<uint8_t> bytes;
+		std::vector<NetLockstepTiming> futureDelays;
 	};
 
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
@@ -964,6 +965,7 @@ namespace RTE {
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
+		std::vector<NetLockstepTiming> m_MigrationFutureDelays;
 		std::map<uint8_t, NetPeerId> m_MigrationPeers;
 		std::set<uint8_t> m_MigrationReady;
 		std::map<uint64_t, std::vector<uint8_t>> m_MigrationHistory;
