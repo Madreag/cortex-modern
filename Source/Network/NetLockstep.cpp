@@ -7260,6 +7260,10 @@ namespace RTE {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
+		if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && start.startFrame < admission->second.frame) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
 		const auto hostTransport = m_RemoteTransports.find(GetHostPeerId());
 		const bool introducedByHost = IsPersistentWorldRound() && !m_RelayHost && hostTransport != m_RemoteTransports.end() &&
 		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&
