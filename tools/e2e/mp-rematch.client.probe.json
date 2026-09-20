@@ -39,6 +39,11 @@
       "scope": "menu"
     },
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-epoch-2.json",
+      "scope": "menu"
+    },
+    {
       "op": "wait",
       "service": "Running",
       "screen": "Gameplay"

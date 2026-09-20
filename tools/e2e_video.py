@@ -556,6 +556,21 @@ def peer_arguments(peer, tokens, fps):
     return args + [str(value) for value in substitute(peer.get("args", []), tokens)]
 
 
+def gameplay_signals(video, stage, epochs=1):
+    last_tick, starts = None, []
+    for row in read_index(video):
+        if row.get("screen") != "game":
+            continue
+        tick = row.get("sim_tick", 0)
+        if last_tick is None or tick < last_tick:
+            starts.append(row)
+        last_tick = tick
+    for index, row in enumerate(starts[:epochs], 1):
+        path = Path(stage) / ("gameplay-started.json" if index == 1 else f"gameplay-epoch-{index}.json")
+        if not path.exists():
+            write_json(path, row)
+
+
 def run_one(options, scenario, run, run_index, out):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
@@ -704,10 +719,9 @@ def run_one(options, scenario, run, run_index, out):
                 raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
             for name in runs:
                 signal = Path(staged[name]["gameplay_signal"])
-                if not signal.exists():
-                    first = next((row for row in read_index(shared[f"VIDEO_{name}"]) if row.get("screen") == "game"), None)
-                    if first:
-                        write_json(signal, first)
+                epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
+                if not signal.exists() or epochs > 1:
+                    gameplay_signals(shared[f"VIDEO_{name}"], staged[name]["stage"], epochs)
             if failed.is_set():
                 for handle in runs.values():
                     drop_peer(handle, "another scenario peer failed")
