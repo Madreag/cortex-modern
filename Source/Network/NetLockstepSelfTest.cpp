@@ -1093,7 +1093,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x1A, 0x00,
+				0x1C, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1331,8 +1331,8 @@ namespace RTE {
 			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}, {1, NetGameSeatReclaim{2, 7, 92, 4, 40, 26}}};
 			std::vector<uint8_t> recovery;
 			NetLockstepFrame decoded;
-			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 3 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
-				*error = "recovery v3 lost a committed hold identity"; return false;
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 4 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
+				*error = "recovery v4 lost a committed hold identity"; return false;
 			}
 			recovery[4] = 1;
 			if (NetLockstepCodec::DecodeRecoveryInput(recovery, decoded)) { *error = "recovery v1 reinterpreted a new timing command"; return false; }
@@ -5765,7 +5765,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x1A, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x1C, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,

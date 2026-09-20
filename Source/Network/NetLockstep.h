@@ -389,7 +389,7 @@ namespace RTE {
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
 		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
-		uint8_t frameRedundancyTicks = 4;
+		uint8_t frameRedundancyTicks = 1;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
 		std::optional<NetHash32> originalRoundConfigHash;
