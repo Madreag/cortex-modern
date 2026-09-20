@@ -196,7 +196,8 @@ namespace RTE::MenuAutomation {
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
-			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" || command == "assert_label";
+			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
+			command == "assert_label" || command == "assert_checked";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
 		if (command == "video_mark") {
@@ -207,11 +208,22 @@ namespace RTE::MenuAutomation {
 		}
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "assert_checked") {
+				std::string name;
+				int expected = -1;
+				args >> name >> expected;
+				auto* box = dynamic_cast<GUICheckbox*>(manager->GetControl(name));
+				const int actual = box && box->GetCheck() == GUICheckbox::Checked ? 1 : 0;
+				observation = name + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual);
+				return box && Visible(box) && (expected == 0 || expected == 1) && actual == expected;
+			}
 			if (command == "assert_label") {
 				std::string name, expected, text;
 				args >> name;
 				std::getline(args >> std::ws, expected);
-				const bool found = Text(manager->GetControl(name), text);
+				bool found = Text(manager->GetControl(name), text);
+				MainMenuGUI* main = g_MenuMan.GetMainMenu();
+				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
 				observation = name + " \"" + expected + "\" text=\"" + text + "\"";
 				return found && text.find(expected) != std::string::npos;
 			}
