@@ -1,0 +1,285 @@
+{
+  "schema": 1,
+  "name": "mp-host-migration",
+  "port_base": 49468,
+  "title": "The host drops after tick 600; two survivors name the successor and continue to tick 900",
+  "size": "960x540",
+  "timeout_s": 150,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-net-match-service-e2e",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-humans",
+        "3",
+        "-net-match-cpu-slots",
+        "0",
+        "-net-match-ticks",
+        "900",
+        "-net-match-auto-delay",
+        "-net-autosave-seconds",
+        "0",
+        "-num-lua-states",
+        "4",
+        "-seed",
+        "42",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-player-name",
+        "Host",
+        "-net-match-report",
+        "{OUT}/host-match.json",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-tick-hashes",
+        "-net-host"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "start_delay_s": 0,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "kill_at_tick": 601
+    },
+    {
+      "name": "clienta",
+      "args": [
+        "-net-match-service-e2e",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-humans",
+        "3",
+        "-net-match-cpu-slots",
+        "0",
+        "-net-match-ticks",
+        "900",
+        "-net-match-auto-delay",
+        "-net-autosave-seconds",
+        "0",
+        "-num-lua-states",
+        "4",
+        "-seed",
+        "42",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-player-name",
+        "ClientA",
+        "-net-match-report",
+        "{OUT}/clienta-match.json",
+        "-out",
+        "{OUT}/clienta_trace.json",
+        "-tick-hashes",
+        "-net-join",
+        "127.0.0.1"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "start_delay_s": 1,
+      "settings": {
+        "NetworkDisplayName": "ClientA",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "probe": "mp-host-migration.survivor.probe.json"
+    },
+    {
+      "name": "clientb",
+      "args": [
+        "-net-match-service-e2e",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-humans",
+        "3",
+        "-net-match-cpu-slots",
+        "0",
+        "-net-match-ticks",
+        "900",
+        "-net-match-auto-delay",
+        "-net-autosave-seconds",
+        "0",
+        "-num-lua-states",
+        "4",
+        "-seed",
+        "42",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-player-name",
+        "ClientB",
+        "-net-match-report",
+        "{OUT}/clientb-match.json",
+        "-out",
+        "{OUT}/clientb_trace.json",
+        "-tick-hashes",
+        "-net-join",
+        "127.0.0.1"
+      ],
+      "input_script": "mp-host-migration.input.txt",
+      "observe_after_failure": true,
+      "start_delay_s": 5,
+      "settings": {
+        "NetworkDisplayName": "ClientB",
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always",
+        "NetworkSlowPlayerBoundTicks": "3",
+        "NetworkSlowPlayerPolicy": "Substitute"
+      },
+      "probe": "mp-host-migration.survivor.probe.json"
+    }
+  ],
+  "checklist": [
+    {
+      "id": "migration-host-last-frame",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame."
+    },
+    {
+      "id": "migration-before-clienta",
+      "peer": "clienta",
+      "mark": "migration-play",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        600
+      ],
+      "what": "The survivor plays in the original three-peer match before the host drops."
+    },
+    {
+      "id": "migration-drop-clienta",
+      "peer": "clienta",
+      "mark": "migration-host-drop",
+      "screen": "game",
+      "what": "The survivor video spans the original host loss and handover toast."
+    },
+    {
+      "id": "migration-named-clienta",
+      "peer": "clienta",
+      "mark": "migration-new-host",
+      "screen": "game",
+      "what": "The migration toast names ClientA as the new host."
+    },
+    {
+      "id": "migration-continued-clienta",
+      "peer": "clienta",
+      "mark": "migration-continued",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "The survivor resumes play and reaches at least tick 880 after handover."
+    },
+    {
+      "id": "migration-completion-clienta",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "The resumed view is backed by the committed handover line naming the new host and boundary.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .*ClientA.* is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "migration-hashes-clienta",
+      "peer": "clienta",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "Both surviving worlds agree on every tick hash from the committed migration boundary through tick 900.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+    },
+    {
+      "id": "migration-before-clientb",
+      "peer": "clientb",
+      "mark": "migration-play",
+      "screen": "game",
+      "sim_ticks": [
+        1,
+        600
+      ],
+      "what": "The survivor plays in the original three-peer match before the host drops."
+    },
+    {
+      "id": "migration-drop-clientb",
+      "peer": "clientb",
+      "mark": "migration-host-drop",
+      "screen": "game",
+      "what": "The survivor video spans the original host loss and handover toast."
+    },
+    {
+      "id": "migration-named-clientb",
+      "peer": "clientb",
+      "mark": "migration-new-host",
+      "screen": "game",
+      "what": "The migration toast names ClientA as the new host."
+    },
+    {
+      "id": "migration-continued-clientb",
+      "peer": "clientb",
+      "mark": "migration-continued",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "The survivor resumes play and reaches at least tick 880 after handover."
+    },
+    {
+      "id": "migration-completion-clientb",
+      "peer": "clientb",
+      "screen": "game",
+      "sim_ticks": [
+        601,
+        900
+      ],
+      "what": "The resumed view is backed by the committed handover line naming the new host and boundary.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .*ClientA.* is now hosting; boundary=\\d+ round=\\d+"
+      ]
+    },
+    {
+      "id": "migration-hashes-clientb",
+      "peer": "clientb",
+      "screen": "game",
+      "sim_ticks": [
+        602,
+        900
+      ],
+      "what": "Both surviving worlds agree on every tick hash from the committed migration boundary through tick 900.",
+      "log_regex": [
+        "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+    }
+  ]
+}
