@@ -2,6 +2,7 @@
 #include "SettingsGUI.h"
 #include "MenuMan.h"
 #include "MainMenuGUI.h"
+#include "NetModerationGUI.h"
 
 #include "GUI.h"
 #include "GUIFont.h"
@@ -197,9 +198,19 @@ namespace RTE::MenuAutomation {
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
-			command == "assert_label" || command == "assert_checked";
+			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "assert_vertical_scroll") {
+			std::string name;
+			args >> name;
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			auto* label = dynamic_cast<GUILabel*>(panel ? panel->GetControl(name) : nullptr);
+			const bool enabled = label && label->GetVerticalOverflowScroll();
+			const bool active = label && label->OverflowScrollIsActivated();
+			observation = name + " enabled=" + std::to_string(enabled) + " active=" + std::to_string(active);
+			return label && Visible(label) && enabled && active;
+		}
 		if (command == "video_mark") {
 			args >> observation;
 			if (observation.empty()) return false;
