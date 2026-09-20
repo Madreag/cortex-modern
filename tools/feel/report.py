@@ -97,17 +97,18 @@ def item9a_gates(run, peer='host', rows=None):
     raw = run / peer / 'feel/raw.jsonl'
     manifest_path = run / 'manifest.json'
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    final_tick = manifest.get('ticks', TICKS)
     rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
-    committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= TICKS]
+    committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= final_tick]
     by_tick = defaultdict(list)
     for row in committed:
         by_tick[row['tick']].append(row['wall_ms'])
     first_tick = min(by_tick, default=None)
-    wall_ms = (max(by_tick[TICKS]) - min(by_tick[first_tick])) if TICKS in by_tick and first_tick is not None and first_tick < TICKS else None
-    tps = (TICKS - first_tick) * 1000 / wall_ms if wall_ms and wall_ms > 0 else None
+    wall_ms = (max(by_tick[final_tick]) - min(by_tick[first_tick])) if final_tick in by_tick and first_tick is not None and first_tick < final_tick else None
+    tps = (final_tick - first_tick) * 1000 / wall_ms if wall_ms and wall_ms > 0 else None
     log_path = run / peer / 'stdout.log'
     log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
-    waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= TICKS]
+    waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= final_tick]
     wait_ms = sum(ms for _, ms in waits)
     wait_fraction = wait_ms / wall_ms if wall_ms else None
     longest = max((ms for _, ms in waits), default=0) if wall_ms else None
@@ -154,7 +155,7 @@ def item9a_gates(run, peer='host', rows=None):
             text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
             found = re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', text)
             return [(int(tick), int(live)) for seat, tick, live in found
-                    if held is not None and int(seat) == 2 and held < int(tick) <= TICKS and int(live) > 0], path
+                    if held is not None and int(seat) == 2 and held < int(tick) <= final_tick and int(live) > 0], path
         host_reclaims, host_reclaim_path = reclaims('host')
         survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
         rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims
@@ -174,14 +175,14 @@ def item9a_gates(run, peer='host', rows=None):
             return values, path
         host_hashes, host_path = hashes('host')
         survivor_hashes, survivor_path = hashes('survivor')
-        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, TICKS + 1))
+        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, final_tick + 1))
         pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same, [host_path, survivor_path])
     return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
                              confirmed_horizon_lag_ms=horizon_lag_ms,
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
-                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=TICKS if TICKS in by_tick else None,
+                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
                              sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
 
 

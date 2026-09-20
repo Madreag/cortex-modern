@@ -25,22 +25,22 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log=''):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', final_tick=1200):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
             (run / 'host').mkdir()
-            (run / 'manifest.json').write_text(json.dumps({'silent_tick': 600} if silent else {}), encoding='utf-8')
+            (run / 'manifest.json').write_text(json.dumps(dict(silent_tick=600 if silent else None, ticks=final_tick)), encoding='utf-8')
             (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
             if silent:
                 (run / 'survivor').mkdir()
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
             (run / 'host_report.json').write_text(json.dumps({'runner': {'lockstep': {
-                'next_frame': 1201, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing,
+                'next_frame': final_tick + 1, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing,
                 'sim_tick_ms': 1000 / 60}}}), encoding='utf-8')
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
-                rows.append(dict(type='committed', tick=1200, wall_ms=5000 + wall_ms))
+                rows.append(dict(type='committed', tick=final_tick, wall_ms=5000 + wall_ms))
             return report.item9a_gates(run, rows=rows)
 
     def test_item9a_steady_rate_and_wait_boundaries(self):
@@ -66,6 +66,12 @@ class ReportTests(unittest.TestCase):
         result = self.item9a(wall_ms=15051)
         self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'PASS')
         self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'MISS')
+
+    def test_item9a_extended_rejoin_window_requires_its_actual_end(self):
+        result = self.item9a(final_tick=2400, wall_ms=35000)
+        self.assertTrue(result['pass_check'])
+        self.assertEqual(result['metrics']['last_tick'], 2400)
+        self.assertFalse(self.item9a(final_tick=2400, complete=False)['pass_check'])
 
     def test_item9a_rejoin_requires_committed_live_reclaim_on_both_survivors(self):
         request = '[net-match] hold peer=2 frame=603 AI in control\n[net-match] rejoin: player reconnected - resyncing the match\n'
