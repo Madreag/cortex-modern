@@ -1,0 +1,23 @@
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 600
+settext TextMultiplayerName ClientA
+activate ButtonMultiplayerJoinGame
+wait_ms 600
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 90
+wait_ms 900
+assert_substate Lobby
+video_mark moderation-clienta-seated
+dump_lobby
+wait_state Failed 90
+video_mark moderation-clienta-removed
+wait_ms 900
+observe assert_status The host removed you from this session
+observe assert_substate Landing
+screenshot moderation-clienta-removed
+wait_file {PROBE_DIR}/removed.json 40
+wait_ms 1800
+exit

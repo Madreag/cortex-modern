@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "timeout_ms": 160000,
+  "steps": [
+    {
+      "op": "wait",
+      "scope": "menu",
+      "screen": "MultiplayerScreen"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "control": "LabelMultiplayerLandingStatus",
+      "text_contains": "The host removed you from this session"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "elapsed_ms": 1600
+    },
+    {
+      "op": "signal",
+      "scope": "menu",
+      "name": "removed"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

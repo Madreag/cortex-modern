@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "timeout_ms": 160000,
+  "steps": [
+    {
+      "op": "wait",
+      "scope": "menu",
+      "screen": "MultiplayerScreen"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "control": "LabelMultiplayerLandingStatus",
+      "text_contains": "ParticipantBanned"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "elapsed_ms": 1600
+    },
+    {
+      "op": "signal",
+      "scope": "menu",
+      "name": "refused"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

@@ -1,0 +1,185 @@
+{
+  "schema": 1,
+  "name": "mp-moderation",
+  "title": "Three real lobby peers: Kick, Ban, the ban list and refused readmission",
+  "port_base": 49466,
+  "size": "960x540",
+  "timeout_s": 180,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-net-reconnect-ticket",
+        "{OUT}/host.ticket"
+      ],
+      "menu_script": "mp-moderation.host.menu.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "Host",
+        "NetworkIceEnable": "0",
+        "NetworkAutoReconnect": "0",
+        "NetworkOfferStoredRejoin": "1"
+      }
+    },
+    {
+      "name": "clienta",
+      "args": [
+        "-net-reconnect-ticket",
+        "{OUT}/clienta.ticket"
+      ],
+      "menu_script": "mp-moderation.clienta.menu.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientA",
+        "NetworkIceEnable": "0",
+        "NetworkAutoReconnect": "0",
+        "NetworkOfferStoredRejoin": "1"
+      },
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark moderation-host-listening",
+        "timeout_s": 90
+      },
+      "probe": "mp-moderation.clienta.probe.json"
+    },
+    {
+      "name": "clientb",
+      "args": [
+        "-net-reconnect-ticket",
+        "{OUT}/clientb.ticket"
+      ],
+      "menu_script": "mp-moderation.clientb.menu.txt",
+      "observe_after_failure": true,
+      "settings": {
+        "NetworkDisplayName": "ClientB",
+        "NetworkIceEnable": "0",
+        "NetworkAutoReconnect": "0",
+        "NetworkOfferStoredRejoin": "1"
+      },
+      "start_when": {
+        "peer": "clienta",
+        "event": "video_mark moderation-clienta-seated",
+        "timeout_s": 90
+      },
+      "probe": "mp-moderation.clientb.probe.json"
+    }
+  ],
+  "checklist": [
+    {
+      "id": "moderation-three-seats",
+      "peer": "host",
+      "mark": "moderation-three-seats",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby visibly lists Host, ClientA and ClientB.",
+      "events": [
+        "assert_label LabelLobbyPlayer[012].*PASS"
+      ]
+    },
+    {
+      "id": "moderation-kick",
+      "peer": "host",
+      "mark": "moderation-kick",
+      "screen": "MultiplayerScreen",
+      "what": "The host opens ClientA's seat dialog and presses Kick.",
+      "events": [
+        "assert_label LabelHostSeatDlgName.*ClientA.*PASS",
+        "activate ButtonHostSeatDlgKick ok=1"
+      ]
+    },
+    {
+      "id": "moderation-kick-roster",
+      "peer": "host",
+      "mark": "moderation-kick-roster",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby removes ClientA and leaves ClientB next to Host.",
+      "events": [
+        "assert_label LabelLobbyPlayer1.*ClientB.*PASS",
+        "assert_visible LabelLobbyPlayer2 0 actual=0 PASS"
+      ]
+    },
+    {
+      "id": "moderation-clienta-removed",
+      "peer": "clienta",
+      "mark": "moderation-clienta-removed",
+      "screen": "MultiplayerScreen",
+      "what": "ClientA sees the host removal reason on Landing.",
+      "events": [
+        "assert_status .*The host removed you from this session.*PASS"
+      ]
+    },
+    {
+      "id": "moderation-ban",
+      "peer": "host",
+      "mark": "moderation-ban",
+      "screen": "MultiplayerScreen",
+      "what": "The host opens ClientB's seat dialog and presses Ban.",
+      "events": [
+        "assert_label LabelHostSeatDlgName.*ClientB.*PASS",
+        "activate ButtonHostSeatDlgBan ok=1"
+      ]
+    },
+    {
+      "id": "moderation-ban-list",
+      "peer": "host",
+      "mark": "moderation-ban-list",
+      "screen": "MultiplayerScreen",
+      "what": "The ban dialog visibly lists ClientB with session scope.",
+      "events": [
+        "assert_label LabelHostBannedList.*ClientB.*PASS",
+        "assert_label LabelHostBannedList.*session.*PASS"
+      ]
+    },
+    {
+      "id": "moderation-clientb-removed",
+      "peer": "clientb",
+      "mark": "moderation-clientb-removed",
+      "screen": "MultiplayerScreen",
+      "what": "ClientB sees the ban removal reason on Landing.",
+      "events": [
+        "assert_status .*The host banned you from this session.*PASS"
+      ]
+    },
+    {
+      "id": "moderation-clientb-rejoin",
+      "peer": "clientb",
+      "mark": "moderation-clientb-rejoin",
+      "screen": "MultiplayerScreen",
+      "what": "ClientB uses Join Game again with the same process identity and host address.",
+      "events": [
+        "activate ButtonMultiplayerJoinGame ok=1",
+        "activate ButtonMultiplayerConnect ok=1"
+      ]
+    },
+    {
+      "id": "moderation-clientb-refused",
+      "peer": "clientb",
+      "mark": "moderation-clientb-refused",
+      "screen": "MultiplayerScreen",
+      "what": "ClientB's second admission is refused; ParticipantBanned is visible on Landing.",
+      "events": [
+        "assert_error .*ParticipantBanned.*PASS",
+        "assert_label LabelMultiplayerLandingStatus.*ParticipantBanned.*PASS"
+      ]
+    },
+    {
+      "id": "moderation-final-roster",
+      "peer": "host",
+      "mark": "moderation-final-roster",
+      "screen": "MultiplayerScreen",
+      "what": "After both removals only Host remains in the lobby.",
+      "events": [
+        "assert_visible LabelLobbyPlayer1 0 actual=0 PASS"
+      ]
+    },
+    {
+      "id": "moderation-ban-reject-wire",
+      "peer": "clientb",
+      "mark": "moderation-clientb-refused",
+      "screen": "MultiplayerScreen",
+      "what": "The on-screen refused rejoin carries the protocol ban reason in its log.",
+      "log_regex": [
+        "ParticipantBanned"
+      ]
+    }
+  ]
+}
