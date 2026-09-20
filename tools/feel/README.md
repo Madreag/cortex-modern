@@ -147,3 +147,10 @@ completed launch matrix whose analysis directories do not yet exist.
 Detector checks are `python -B tools/feel/test_report.py`. They use synthetic
 records only and do not establish engine correctness. They remain unrun in the
 compile-only lane; the review runs them with the engine gates and drivers.
+
+Item 9a also writes 100/200 ms timing cases with 5 percent loss, silence at tick 600,
+and loss combined with silence and private rejoin. Silent cases run to tick 2400;
+the manifest selects the final tick for every rate, wait, horizon and full-hash gate.
+The 59.5 tps, 50 ms and one-percent bounds remain unchanged across the entire window.
+Missing-frame probes remain diagnostic. Reclaim evidence requires the same committed
+seat transition on both survivors; an attempted reconnect is not completion.
