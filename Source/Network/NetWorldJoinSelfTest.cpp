@@ -2869,7 +2869,8 @@ namespace RTE {
 		// An ordinary round decodes these packets now, so it must refuse to apply one.
 		std::string error;
 		LoopbackTransport ordinaryTransport;
-		if (!ordinaryTransport.StartHost(47122, &error)) {
+		LoopbackTransport ordinaryRemote;
+		if (!ordinaryTransport.StartHost(47122, &error) || !ordinaryRemote.Connect("loopback", 47122, &error)) {
 			return Fail("ordinary-round-applied-a-world-transition: loopback: " + error);
 		}
 		NetLockstepCoordinator ordinaryRound;
@@ -2877,6 +2878,8 @@ namespace RTE {
 		ordinaryConfig.sessionId = 11;
 		ordinaryConfig.localPeerId = 1;
 		ordinaryConfig.peerCount = 2;
+		ordinaryConfig.remotePeerId = 2;
+		ordinaryConfig.remoteTransportPeerId = 1;
 		ordinaryConfig.timeoutMs = 1000000;
 		ordinaryConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x4F52440ULL);
 		ordinaryConfig.matchConfig.players = {
