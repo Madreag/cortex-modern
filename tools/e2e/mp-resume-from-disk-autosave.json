@@ -1,0 +1,147 @@
+{
+  "schema": 1,
+  "name": "mp-resume-from-disk-autosave",
+  "port_base": 49470,
+  "size": "960x540",
+  "timeout_s": 170,
+  "title": "The capturable original run of mp-resume-from-disk",
+  "capture_policy": "Original run only; the full scenario retains the blocked disk restore definition.",
+  "runs": [
+    {
+      "name": "died",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-match-report",
+            "{OUT}/host-match.json"
+          ],
+          "menu_script": "mp-resume-from-disk.host.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-resume-from-disk.before.probe.json",
+          "kill_at_tick": 601,
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "0",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-match-report",
+            "{OUT}/client-match.json"
+          ],
+          "menu_script": "mp-resume-from-disk.client.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-resume-from-disk.before.probe.json",
+          "kill_at_tick": 601,
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "0",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark resume-host-listening",
+            "timeout_s": 90
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "resume-autosave-options",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-autosave-options",
+      "screen": "MultiplayerScreen",
+      "what": "Recovery visibly keeps Autosave on at the shortest valid interval, one simulation second.",
+      "events": [
+        "assert_checked CheckHostRecAutosave 1 actual=1 PASS",
+        "assert_label TextHostRecAutosaveInterval.*1.*PASS"
+      ]
+    },
+    {
+      "id": "resume-original-play-host",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-play-before-drop",
+      "screen": "game",
+      "what": "The peer plays the original match before either process is killed."
+    },
+    {
+      "id": "resume-two-autosaves-host",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-two-checkpoints",
+      "screen": "game",
+      "what": "The original match keeps playing after two distinct one-second autosaves have been published.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+      ]
+    },
+    {
+      "id": "resume-process-drop-host",
+      "run": "died",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+    },
+    {
+      "id": "resume-original-play-client",
+      "run": "died",
+      "peer": "client",
+      "mark": "resume-play-before-drop",
+      "screen": "game",
+      "what": "The peer plays the original match before either process is killed."
+    },
+    {
+      "id": "resume-two-autosaves-client",
+      "run": "died",
+      "peer": "client",
+      "mark": "resume-two-checkpoints",
+      "screen": "game",
+      "what": "The original match keeps playing after two distinct one-second autosaves have been published.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+      ]
+    },
+    {
+      "id": "resume-process-drop-client",
+      "run": "died",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+    }
+  ]
+}

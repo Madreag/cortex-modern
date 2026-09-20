@@ -1,0 +1,40 @@
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 600
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 600
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+activate ButtonHostOptions
+wait_ms 600
+activate TabHostPageRecovery
+video_mark resume-autosave-options
+wait_ms 900
+assert_visible CollectionBoxHostPageRecovery 1
+setcheck CheckHostRecAutosave 1
+wait_ms 600
+observe assert_checked CheckHostRecAutosave 1
+observe assert_enabled TextHostRecAutosaveInterval 1
+observe focus TextHostRecAutosaveInterval
+observe set_text TextHostRecAutosaveInterval 1
+wait_ms 600
+observe assert_label TextHostRecAutosaveInterval 1
+activate ButtonHostOptApply
+wait_ms 900
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 600
+activate ButtonMultiplayerCreate
+wait_ms 900
+assert_substate Lobby
+video_mark resume-host-listening
+wait_connected 2 90
+wait_remote_ready 90
+video_mark resume-ready-start
+dump_lobby
+assert_enabled ButtonMultiplayerStart 1
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/ready-to-drop.json 120
+wait_ms 120000
