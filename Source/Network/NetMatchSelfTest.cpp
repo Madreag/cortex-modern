@@ -4820,7 +4820,13 @@ namespace RTE {
 			}
 			std::string ignored;
 			if (round.IsRunning() && round.NeedsResyncPriming()) {
-				(void)round.PrimeResyncInputs({}, &ignored);
+				std::vector<NetLockstepFrame> priming(round.GetConfig().inputDelayFrames);
+				for (size_t index = 0; index < priming.size(); ++index) {
+					priming[index].senderPeerId = round.GetConfig().localPeerId;
+					priming[index].roundId = round.GetRoundId();
+					priming[index].targetFrame = round.GetConfig().startFrame + index;
+				}
+				(void)round.PrimeResyncInputs(priming, &ignored);
 			}
 			while (round.IsRunning() && !round.NeedsResyncPriming() && peer.nextProduce <= peer.lastApplied + 2 &&
 			       round.QueueLocalInput(peer.nextProduce, {RematchFrame(round.GetConfig().localPeerId, peer.nextProduce)}, {}, &ignored)) {
