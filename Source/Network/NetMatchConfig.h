@@ -118,6 +118,7 @@ namespace RTE {
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
 		std::vector<uint8_t> successorOrder;
+		std::vector<uint8_t> activePeerIds;
 		std::vector<NetMatchMigrationPeer> migrationPeers;
 
 		bool operator==(const NetMatchConfig&) const = default;

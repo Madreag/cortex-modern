@@ -33,6 +33,7 @@ namespace RTE {
 	std::map<uint8_t, NetPeerId> NetMatchRunner::BuildRemoteTransportMap(const NetSession& session) const {
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
+			if (!m_ActivePeerIds.empty() && std::find(m_ActivePeerIds.begin(), m_ActivePeerIds.end(), LockstepPeerId(peer.assignedPeerId)) == m_ActivePeerIds.end()) continue;
 			transports[LockstepPeerId(peer.assignedPeerId)] = peer.transportPeerId;
 		}
 		return transports;
@@ -49,6 +50,7 @@ namespace RTE {
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
 		m_ResyncRound = !m_StateToStream.empty();
 		m_MatchConfig = config.matchConfig;
+		m_ActivePeerIds = m_MatchConfig.activePeerIds;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
 		m_WorldJoinImage = false;
@@ -374,6 +376,10 @@ namespace RTE {
 		m_HostOptionsRefused = false;
 		m_SetupError.clear();
 		m_ResyncRound = !stateToStream.empty() || m_SnapshotProviderPeerId != 0;
+		if (m_ResyncRound && coordinator.UsesBoundedWait() && !m_MatchConfig.persistentWorld) {
+			m_ActivePeerIds = coordinator.ResumePeerIds();
+			m_MatchConfig.activePeerIds = m_ActivePeerIds;
+		}
 		m_RematchRound = false;
 		m_RematchDerivedPeerId = 0;
 		// A rematch re-forms the roster on the peers still here; a resync must keep the one its snapshot
@@ -549,7 +555,7 @@ namespace RTE {
 		lobbyConfig.resumeSideStateHash = m_Config.resumeSideStateHash;
 		lobbyConfig.resumeHeld = m_Config.resumeHeld;
 		if (!m_ActivePeerIds.empty())
-			lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
+			lobbyConfig.activePeerCount = static_cast<uint8_t>(m_ActivePeerIds.size());
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately. This is the
 		// technical message-hearing deadline; the host's seating policy is the budget below.
@@ -667,6 +673,10 @@ namespace RTE {
 		lockstepConfig.adaptiveInputDelay = m_UseLobbyProtocol ? m_MatchConfig.delayPolicy == NetMatchDelayPolicy::Auto : config.autoInputDelay;
 		lockstepConfig.simTickMs = g_TimerMan.GetDeltaTimeMS();
 		lockstepConfig.initialDelaySamples = m_Lobby.GetInputDelaySamples();
+		lockstepConfig.publishLiveConfig = [this](const NetMatchConfig& live) {
+			m_MatchConfig = live;
+			m_MatchConfigHash = NetMatchConfigUtil::HashConfig(live);
+		};
 		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
 		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
@@ -692,6 +702,7 @@ namespace RTE {
 		lockstepConfig.matchConfig = m_MatchConfig;
 		lockstepConfig.authorityPeerId = m_ActiveHostPeerId;
 		lockstepConfig.activePeerIds = m_ActivePeerIds;
+		if (lockstepConfig.activePeerIds.empty()) lockstepConfig.activePeerIds = m_MatchConfig.activePeerIds;
 		if (m_Config.configureMigration)
 			m_Config.configureMigration(lockstepConfig);
 		// The host tags each round so a late packet from the previous round cannot join this one.

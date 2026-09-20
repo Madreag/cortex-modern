@@ -147,6 +147,7 @@ namespace RTE {
 			        {"path_horizon_ticks", config.pathHorizonTicks},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
 			        {"slow_player_bound_ticks", config.slowPlayerBoundTicks}, {"slow_player_policy", static_cast<uint8_t>(config.slowPlayerPolicy)},
+			        {"active_peer_ids", config.activePeerIds},
 			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
 		}
 
@@ -172,6 +173,9 @@ namespace RTE {
 			if (config.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
 				fields.emplace_back("slow_player_bound_ticks", std::to_string(config.slowPlayerBoundTicks));
 				fields.emplace_back("slow_player_policy", std::to_string(static_cast<uint8_t>(config.slowPlayerPolicy)));
+				std::string active;
+				for (uint8_t peer: config.activePeerIds) active += (active.empty() ? "" : ",") + std::to_string(peer);
+				fields.emplace_back("active_peer_ids", active);
 			}
 			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
@@ -244,6 +248,7 @@ namespace RTE {
 			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
 		}
 		NetMatchConfig config = previous;
+		config.activePeerIds.clear();
 		config.peerCount = static_cast<uint8_t>(survivors.size());
 		config.hostPeerId = seatMap.at(previous.hostPeerId);
 		config.players.clear();
@@ -314,6 +319,14 @@ namespace RTE {
 		    (config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > c_MaxSlowPlayerBoundTicks ||
 		     (config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute && config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause)))
 			return refuse("invalid slow player bound or policy");
+		if (!config.activePeerIds.empty()) {
+			if (config.version < c_TimingOptionsVersion || config.persistentWorld ||
+			    !std::is_sorted(config.activePeerIds.begin(), config.activePeerIds.end()) ||
+			    std::adjacent_find(config.activePeerIds.begin(), config.activePeerIds.end()) != config.activePeerIds.end() ||
+			    config.activePeerIds.front() == 0 || config.activePeerIds.back() > config.peerCount ||
+			    std::find(config.activePeerIds.begin(), config.activePeerIds.end(), config.hostPeerId) == config.activePeerIds.end())
+				return refuse("invalid active resync roster");
+		}
 		if (config.version == 2) {
 			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
 			NetMatchConfig legacyDefaults;

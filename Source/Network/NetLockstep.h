@@ -385,6 +385,7 @@ namespace RTE {
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
 		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;
+		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 	};
@@ -751,7 +752,10 @@ namespace RTE {
 		void FinishFrameWait(uint64_t nowMs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
+		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }

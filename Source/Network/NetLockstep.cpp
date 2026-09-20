@@ -3848,8 +3848,14 @@ namespace RTE {
 		// A round of our own produces its own input; a round we FOLLOW keeps what we already queued.
 		if (!config.activePeerIds.empty()) {
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)
-				if (std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) == config.activePeerIds.end())
+				if (std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) == config.activePeerIds.end()) {
 					m_PeerLeaveFrames[peer] = config.startFrame;
+					if (UsesBoundedWait()) {
+						m_AiHeldSeats[peer] = config.startFrame;
+						m_DroppedSeats.insert(peer);
+						m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+					}
+				}
 		}
 		m_LocalFrames.clear();
 		m_LocalInputHistory.clear();
@@ -4494,6 +4500,34 @@ namespace RTE {
 	bool NetLockstepCoordinator::IsSeatUnderAI(uint8_t peerId, uint64_t frame) const {
 		const auto seat = m_AiHeldSeats.find(peerId);
 		return seat != m_AiHeldSeats.end() && frame >= seat->second;
+	}
+
+	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
+		if (!UsesBoundedWait() || !m_AiHeldSeats.contains(peerId)) return true;
+		if (!m_LastDeliveredFrame || *m_LastDeliveredFrame < m_AiHeldSeats.at(peerId)) {
+			if (error) *error = "Rejoining: waiting for the agreed AI handoff frame";
+			return false;
+		}
+		auto& estimate = m_DelayEstimators[peerId];
+		estimate.Observe(nowMs, rttMs);
+		const uint32_t needed = estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+		const uint16_t current = InputDelayAt(peerId, m_LastDeliveredFrame.value_or(m_Config.startFrame));
+		if (needed <= current) return true;
+		if (needed > NetLockstepCodec::c_MaxInputDelayFrames || m_Config.matchConfig.delayPolicy == NetMatchDelayPolicy::Fixed) {
+			if (error) *error = "Your connection needs " + std::to_string(needed) + " delay frames; the match currently allows " + std::to_string(current) + ". Your seat remains under AI control.";
+			return false;
+		}
+		ProposeInputDelay(peerId, static_cast<uint16_t>(needed), FutureTimingFrame());
+		if (error) *error = "Rejoining: waiting for the agreed input delay to take effect";
+		return false;
+	}
+
+	std::vector<uint8_t> NetLockstepCoordinator::ResumePeerIds() const {
+		std::vector<uint8_t> peers;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+			if (peer == m_Config.localPeerId || !IsPeerGoneAtFrame(peer, GetResumeFrame()) || HeldSeatResolution(peer) == NetLockstepHoldResolution::Reclaimed)
+				peers.push_back(peer);
+		return peers;
 	}
 
 	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs) {
@@ -5597,6 +5631,7 @@ namespace RTE {
 			return true;
 		}
 		if (m_PendingRecoveryStop && m_Config.localPeerId == GetHostPeerId()) {
+			for (const auto& [peer, frame]: m_AiHeldSeats) if (frame > completedTick) return false;
 			const NetLockstepStop stop = *m_PendingRecoveryStop;
 			m_PendingRecoveryStop.reset();
 			Fail(stop.reason, completedTick + 1, stop.message);
@@ -5674,6 +5709,14 @@ namespace RTE {
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
+		bool changedDelay = false;
+		for (const auto& [peer, changes]: m_DelayChanges) changedDelay = changedDelay || changes.contains(outFrame.frame);
+		if (changedDelay) {
+			m_Config.matchConfig.peerInputDelayFrames.resize(m_Config.peerCount);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) m_Config.matchConfig.peerInputDelayFrames[peer - 1] = InputDelayAt(peer, outFrame.frame);
+			++m_Config.matchConfig.configRevision;
+			if (m_Config.publishLiveConfig) m_Config.publishLiveConfig(m_Config.matchConfig);
+		}
 		if (m_Playback) {
 			for (const auto* commands: {&outFrame.localCommands, &outFrame.remoteCommands}) {
 				for (const NetGameCommand& command: *commands) {
@@ -5781,10 +5824,10 @@ namespace RTE {
 			return ownerPeerId;
 		}
 		const uint8_t team = actorTeam < 0 ? 0 : static_cast<uint8_t>(actorTeam);
-		if (IsSeatUnderAI(ownerPeerId, std::max(GetResumeFrame(), m_LastDeliveredFrame.value_or(m_Config.startFrame)))) return GetHostPeerId();
+		if (m_LastDeliveredFrame && IsSeatUnderAI(ownerPeerId, *m_LastDeliveredFrame)) return GetHostPeerId();
 		// A leaver's team falls to its next surviving human peer, so the units play on. The
 		// lockstep gate synchronizes leave knowledge, so every peer re-resolves identically.
-		if (UsesBoundedWait() || m_Playback ? IsPeerGoneAtFrame(ownerPeerId, std::max(GetResumeFrame(), m_LastDeliveredFrame.value_or(m_Config.startFrame)))
+		if (UsesBoundedWait() || m_Playback ? m_LastDeliveredFrame && IsPeerGoneAtFrame(ownerPeerId, *m_LastDeliveredFrame)
 		                                 : m_PeerLeaveFrames.contains(ownerPeerId)) {
 			const uint8_t survivor = FirstAliveHumanPeerForTeam(team, std::numeric_limits<uint64_t>::max());
 			// The host produces AI controllers for a departed team while the round continues.
@@ -6113,6 +6156,7 @@ namespace RTE {
 		m_PeerLeaveFrames.erase(peerId);
 		m_PeerFrameWaivers.erase(peerId);
 		m_DroppedSeats.erase(peerId);
+		m_AiHeldSeats.erase(peerId);
 		m_DroppedSeatResolutions.erase(peerId);
 		// The member's round starts at E, so its own first produced target is E plus its input delay.
 		// The frames before that are the ones this admission replays; the round must not wait on the

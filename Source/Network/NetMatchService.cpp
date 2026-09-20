@@ -1535,6 +1535,8 @@ static std::string ResyncSaveName() {
 			m_HostRepairPending = false;
 			m_ResyncHealStartMs = 0;
 			m_LastResync = {};
+			m_PendingHeldReseats.clear();
+			m_PendingHeldResolutions.clear();
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
@@ -4076,12 +4078,25 @@ static std::string ResyncSaveName() {
 			// on the host is exactly the id MovableMan's reseat gate requires.
 			DriveAutoSubstitution(nowMs);
 			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
+				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == reseat.newOwnerPeerId && pending.team == reseat.team; });
+				m_PendingHeldReseats.push_back(reseat);
+			}
+			for (auto it = m_PendingHeldReseats.begin(); it != m_PendingHeldReseats.end();) {
+				const NetGameReseat& reseat = *it;
+				if (!PrepareHeldPeerRejoinLocked(reseat.newOwnerPeerId)) { ++it; continue; }
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
+				it = m_PendingHeldReseats.erase(it);
 			}
 			if (m_Coordinator) {
 				for (const NetHoldResolutionNotice& notice: m_ReconnectHost.TakePendingHoldResolutions()) {
+					std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == notice.lockstepPeerId; });
+					m_PendingHeldResolutions.push_back(notice);
+				}
+				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
+					const NetHoldResolutionNotice& notice = *it;
+					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
 						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
@@ -4089,6 +4104,9 @@ static std::string ResyncSaveName() {
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
 					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
+					if (notice.resolution == NetHoldResolution::Expired)
+						std::erase_if(m_PendingHeldReseats, [&](const auto& reseat) { return reseat.newOwnerPeerId == notice.lockstepPeerId; });
+					it = m_PendingHeldResolutions.erase(it);
 				}
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
@@ -4109,6 +4127,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->IsPersistentWorldRound()) {
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+					if (!PrepareHeldPeerRejoinLocked(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
 					rejoinName = peer.displayName.empty() ? "a player" : peer.displayName;
 					if (ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
 						answerMatchOver = true;
@@ -4125,6 +4144,22 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - match is over" << std::endl;
 			AnswerMatchOverRejoin("match over");
 		}
+	}
+
+	bool NetMatchService::PrepareHeldPeerRejoinLocked(uint8_t peerId) {
+		if (!m_Coordinator || !m_Coordinator->UsesBoundedWait() || !m_Coordinator->HasHeldAISeat(peerId)) return true;
+		if (!m_Session || !ActiveWireLocked()) return false;
+		for (const auto& peer: m_Session->GetReadyPeers()) {
+			if (peer.assignedPeerId + 1 != peerId) continue;
+			std::string reason;
+			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) return true;
+			if (reason.starts_with("Your connection needs")) {
+				m_RejoinOutcome = "waiting_for_delay";
+				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
+			}
+			return false;
+		}
+		return false;
 	}
 
 	NetMatchServiceState NetMatchService::GetState() const {

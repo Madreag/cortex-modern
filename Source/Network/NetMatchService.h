@@ -950,6 +950,9 @@ namespace RTE {
 		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
+		bool PrepareHeldPeerRejoinLocked(uint8_t peerId);
+		std::vector<NetGameReseat> m_PendingHeldReseats;
+		std::vector<NetHoldResolutionNotice> m_PendingHeldResolutions;
 		/// Destroys a rematch lobby whose peers did not all come back inside c_CompletedLobbyExpiryMs.
 		/// Game thread only, from Update(): it takes the lock and then destroys without it.
 		void UpdateCompletedLobbyExpiry(uint64_t nowMs);
