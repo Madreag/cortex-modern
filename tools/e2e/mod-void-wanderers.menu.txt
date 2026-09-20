@@ -1,17 +1,19 @@
-# The mod's load is the first thing to see: the engine reaches the main menu with the mod's module
-# loaded and nothing red in the console.
-wait_ms 2970
+wait_ms 1800
+video_mark vw-loads
 assert_screen MainScreen
 assert_console 0
-wait_ms 1320
-activate ButtonMainToOptions
-wait_ms 660
-assert_screen SettingsScreen
-select_settings_page Misc
-wait_ms 660
-assert_settings_page Misc
-post_command ButtonBackToMainMenu
-wait_ms 825
-assert_screen MainScreen
-wait_ms 990
+wait_ms 700
+activate ButtonMainToSkirmish
+wait_ms 800
+assert_screen ScenarioPicker
+combo_select ComboBoxActivitySelect Void Wanderers
+wait_ms 700
+select_scene Void Wanderers
+activate ButtonStartActivityConfig
+wait_ms 700
+assert_screen ScenarioConfig
+activate P1T1Box
+wait_ms 700
+activate ButtonStartGame
+wait_file {PROBE_DIR}/done.json 90
 exit
