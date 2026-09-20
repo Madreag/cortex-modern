@@ -1,11 +1,15 @@
 {
   "schema": 1,
-  "timeout_ms": 170000,
+  "timeout_ms": 150000,
   "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
     {
       "op": "wait",
       "service": "Running",
-      "sim_at_least": 200
+      "elapsed_ms": 1000
     },
     {
       "op": "key_down",
@@ -20,6 +24,10 @@
       "panel_open": true
     },
     {
+      "op": "menu",
+      "command": "video_mark ui-f6-overlay"
+    },
+    {
       "op": "wait",
       "elapsed_ms": 990
     },
@@ -30,6 +38,10 @@
     {
       "op": "mouse_up",
       "control": "NetworkSeatsOptions"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-f6-options"
     },
     {
       "op": "wait",
@@ -109,6 +121,10 @@
       "op": "wait",
       "screen": "PauseMatchOptions",
       "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark ui-pause-match-options"
     },
     {
       "op": "menu",
@@ -207,11 +223,17 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 700
+      "elapsed_ms": 1000
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_host}/done.json",
+      "scope": "menu"
     },
     {
       "op": "signal",
-      "name": "done"
+      "name": "done",
+      "scope": "menu"
     },
     {
       "op": "finish"

@@ -1,52 +1,61 @@
 # The joining player's side of every shared surface: join setup, the read-only match details, the
 # lobby's chat in both directions, ready.
-wait 60
+wait_ms 1980
 activate ButtonMainToMultiplayer
-wait 15
+wait_ms 495
 assert_substate Landing
 settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
-wait 20
+wait_ms 660
 assert_substate JoinSetup
-settext TextJoinAddress 127.0.0.1
-settext TextJoinPort {PORT}
-wait 20
+video_mark ui-directory-listing
+wait_file {DIRECTORY_ROOT}/listed.json 30
+wait_ms 4000
+assert_visible ListLanGames 1
+activate GameRow0
+wait_ms 800
+dump_player_options
+assert_label TextJoinPort {PORT}
+wait_ms 660
 activate ButtonMultiplayerConnect
 wait_connected 2
-wait 30
+wait_ms 990
 assert_substate Lobby
 dump_lobby
-wait 40
-chat And the joiner can answer on the same line
-wait 30
+wait_ms 1320
+video_mark ui-chat
+chat all And the joiner can answer on the same line
+wait_ms 990
+assert_label LabelLobbyChatAny And the joiner can answer on the same line
 dump_lobby
 activate ButtonLobbyOptions
-wait 20
+wait_ms 660
 assert_substate HostOptions
 assert_label LabelHostOptionsTitle M A T C H   D E T A I L S
 activate TabHostPageSeats
-wait 25
+wait_ms 825
 assert_visible CollectionBoxHostPageSeats 1
 activate ButtonHostSeatDetails0
-wait 20
+wait_ms 660
 assert_visible HostSeatDialog 1
 assert_enabled ButtonHostSeatDlgKick 0
 assert_enabled ButtonHostSeatDlgBan 0
 dump_host_options
 activate ButtonHostSeatDlgClose
-wait 15
+wait_ms 495
 activate TabHostPageNetwork
-wait 25
+activate TabHostNetTuning
+wait_ms 825
 assert_visible CollectionBoxHostPageNetwork 1
 dump_host_options
 activate ButtonHostOptBack
-wait 15
+wait_ms 495
 assert_substate Lobby
 activate ButtonMultiplayerReady
-wait 20
+wait_ms 660
 dump_lobby
 wait_file {PROBE_DIR}/done.json 240
-wait 40
+wait_ms 1320
 dump_lobby
-wait 30
+wait_ms 990
 exit

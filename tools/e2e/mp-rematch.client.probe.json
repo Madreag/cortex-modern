@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "timeout_ms": 145000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play-end"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "first-round-done",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play-end"
+    },
+    {
+      "op": "wait",
+      "service": "Starting",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "done",
+      "scope": "menu"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

@@ -20,6 +20,7 @@
 #include "GUIComboBox.h"
 #include "GUIButton.h"
 #include "GUILabel.h"
+#include "MenuAutomation.h"
 
 using namespace RTE;
 
@@ -50,6 +51,8 @@ void ScenarioGUI::Clear() {
 }
 
 void ScenarioGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
+	m_AutomationInput = guiInput->CreateAutomationInput();
+	if (m_AutomationInput) guiInput = m_AutomationInput.get();
 	m_GUIControlManager = std::make_unique<GUIControlManager>();
 	RTEAssert(m_GUIControlManager->Create(guiScreen, guiInput, "Base.rte/GUIs/Skins/Menus", "MainMenuSubMenuSkin.ini"), "Failed to create GUI Control Manager and load it from Base.rte/GUIs/Skins/Menus/MainMenuSubMenuSkin.ini");
 	m_GUIControlManager->Load("Base.rte/GUIs/ScenarioGUI.ini");
@@ -102,6 +105,7 @@ void ScenarioGUI::CreateSceneInfoBox() {
 }
 
 void ScenarioGUI::SetEnabled(const Vector& center, float radius) {
+	s_AutomationActive = this;
 	bool centerChanged = (center != m_PlanetCenter);
 	m_PlanetCenter = center;
 	m_PlanetRadius = radius;
@@ -376,6 +380,24 @@ void ScenarioGUI::CalculateLinesToSitePoint() {
 	}
 }
 
+bool ScenarioGUI::AutomationPostCommand(const std::string& controlName) {
+	if (m_ActivityConfigBox->AutomationActivateCell(controlName)) return true;
+	GUIControl* control = m_GUIControlManager->GetControl(controlName);
+	if (!control || !MenuAutomation::Enabled(control)) return false;
+	m_AutomationCommand = controlName;
+	return true;
+}
+
+bool ScenarioGUI::AutomationSelectScene(const std::string& sceneName) {
+	if (!m_ActivityScenes || m_ActivityConfigBox->IsEnabled()) return false;
+	for (Scene* scene: *m_ActivityScenes) {
+		if (scene->GetPresetName() != sceneName) continue;
+		SetSelectedScene(scene);
+		return true;
+	}
+	return false;
+}
+
 ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
 	m_UpdateResult = ScenarioMenuUpdateResult::NoEvent;
 
@@ -387,6 +409,7 @@ ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
 		if (m_ActivityConfigBox->IsEnabled()) {
 			m_ActivityConfigBox->SetEnabled(false);
 		} else {
+			s_AutomationActive = nullptr;
 			return ScenarioMenuUpdateResult::BackToMain;
 		}
 	}
@@ -395,6 +418,11 @@ ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
 	int mousePosY;
 	m_GUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mousePosX, &mousePosY);
 	m_GUIControlManager->Update();
+	if (!m_AutomationCommand.empty()) {
+		GUIControl* control = m_GUIControlManager->GetControl(m_AutomationCommand);
+		m_AutomationCommand.clear();
+		if (control && MenuAutomation::Enabled(control)) control->AddEvent(GUIEvent::Command, 0, 0);
+	}
 
 	if (!m_ActivityConfigBox->IsEnabled()) {
 		m_RootBox->SetVisible(true);
@@ -426,6 +454,7 @@ ScenarioGUI::ScenarioMenuUpdateResult ScenarioGUI::Update() {
 			m_UpdateResult = ScenarioMenuUpdateResult::ActivityStarted;
 		}
 	}
+	if (m_UpdateResult != ScenarioMenuUpdateResult::NoEvent) s_AutomationActive = nullptr;
 	return m_UpdateResult;
 }
 

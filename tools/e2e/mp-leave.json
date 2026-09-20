@@ -1,0 +1,367 @@
+{
+  "schema": 1,
+  "name": "mp-leave",
+  "title": "A leaving player and a held player hand their seats to AI while two survivors play on",
+  "port_base": 49460,
+  "size": "960x540",
+  "timeout_s": 100,
+  "runs": [
+    {
+      "name": "announced",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "probe": "mp-leave.survivor.probe.json"
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-e2e-leave",
+            "-net-match-e2e-leave-tick",
+            "600"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5,
+          "probe": "mp-leave.survivor.probe.json"
+        }
+      ]
+    },
+    {
+      "name": "held",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "probe": "mp-leave.survivor.probe.json"
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1",
+            "-selftest-frame-stall",
+            "600:1500"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "observe_after_failure": true
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5,
+          "probe": "mp-leave.survivor.probe.json"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "announced-before",
+      "what": "Both survivors show the original three-seat match before tick 600.",
+      "screen": "game",
+      "assert": "Running service, gameplay frames and scripted movement",
+      "run": "announced",
+      "sim_ticks": [
+        30,
+        590
+      ]
+    },
+    {
+      "id": "announced-continues",
+      "what": "The host continues to advance after the departure, with the seat under AI control.",
+      "screen": "game",
+      "assert": "Probe asserts Running at tick 1000; inspect the AI seat and acting units",
+      "peer": "host",
+      "run": "announced",
+      "sim_ticks": [
+        620,
+        1100
+      ]
+    },
+    {
+      "id": "announced-survivor",
+      "what": "The second surviving peer also continues; its overlay reflects the departed seat.",
+      "screen": "game",
+      "assert": "Probe asserts Running at tick 1000 and opens F6",
+      "peer": "survivor",
+      "run": "announced",
+      "sim_ticks": [
+        620,
+        1100
+      ]
+    },
+    {
+      "id": "held-before",
+      "what": "Both survivors show the original three-seat match before tick 600.",
+      "screen": "game",
+      "assert": "Running service, gameplay frames and scripted movement",
+      "run": "held",
+      "sim_ticks": [
+        30,
+        590
+      ]
+    },
+    {
+      "id": "held-continues",
+      "what": "The host continues to advance after the departure, with the seat under AI control.",
+      "screen": "game",
+      "assert": "Probe asserts Running at tick 1000; inspect the AI seat and acting units",
+      "peer": "host",
+      "run": "held",
+      "sim_ticks": [
+        620,
+        1100
+      ]
+    },
+    {
+      "id": "held-survivor",
+      "what": "The second surviving peer also continues; its overlay reflects the departed seat.",
+      "screen": "game",
+      "assert": "Probe asserts Running at tick 1000 and opens F6",
+      "peer": "survivor",
+      "run": "held",
+      "sim_ticks": [
+        620,
+        1100
+      ]
+    },
+    {
+      "id": "held-ai",
+      "what": "The silent seat is held at an agreed frame and its units keep acting.",
+      "screen": "game",
+      "assert": "host log: hold peer=2 ... AI in control; inspect post-hold unit motion",
+      "peer": "host",
+      "run": "held",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "log_regex": [
+        "\\[net-match\\] hold peer=2 frame=\\d+ AI in control"
+      ]
+    }
+  ]
+}

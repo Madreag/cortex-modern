@@ -1,0 +1,75 @@
+wait_ms 1500
+activate ButtonMainToOptions
+wait_ms 500
+select_settings_page Network
+wait_ms 500
+video_mark ui-player-settings
+select_settings_page Network:Player
+wait_ms 600
+set_text TextNetworkDisplayName VideoScout
+wait_ms 500
+assert_label TextNetworkDisplayName VideoScout
+post_command RadioNetworkDelayFixed
+wait_ms 500
+assert_visible TextNetworkFixedDelay 1
+set_text TextNetworkFixedDelay 7
+wait_ms 500
+assert_label TextNetworkFixedDelay 7
+video_mark ui-chat-settings
+select_settings_page Network:Chat
+wait_ms 600
+combo_select ComboNetworkChatScope Team
+wait_ms 500
+assert_label ComboNetworkChatScope Team
+combo_select ComboNetworkChatTextSize Large
+wait_ms 500
+assert_label ComboNetworkChatTextSize Large
+combo_select ComboNetworkChatTextSize Small
+wait_ms 500
+assert_label ComboNetworkChatTextSize Small
+video_mark ui-recovery-settings
+select_settings_page Network:Recovery
+wait_ms 600
+post_command CheckboxNetworkAutoReconnect
+wait_ms 500
+assert_checked CheckboxNetworkAutoReconnect 0
+post_command CheckboxNetworkAutoReconnect
+wait_ms 500
+assert_checked CheckboxNetworkAutoReconnect 1
+assert_label LabelNetRecoveryRecord No recovery record
+video_mark ui-files-settings
+select_settings_page Network:Files
+wait_ms 600
+set_text TextNetworkAutosavesKept 5
+wait_ms 500
+assert_label TextNetworkAutosavesKept 5
+post_command CheckboxNetworkRecordReplays
+wait_ms 500
+assert_checked CheckboxNetworkRecordReplays 1
+video_mark ui-internet-settings
+select_settings_page Network:Internet
+wait_ms 600
+set_text TextNetworkDirUrl {DIRECTORY_URL}
+set_text TextNetworkDirPin {DIRECTORY_PIN}
+wait_ms 600
+assert_label TextNetworkDirUrl {DIRECTORY_URL}
+assert_label LabelNetDirStatus Configured
+video_mark ui-connection-settings
+select_settings_page Network:Connection
+wait_ms 600
+combo_select ComboNetworkConnection Direct only
+wait_ms 600
+assert_label ComboNetworkConnection Direct only
+assert_label LabelNetworkConnectionHint lowest latency
+combo_select ComboNetworkConnection Relay only
+wait_ms 600
+assert_label ComboNetworkConnection Relay only
+assert_label LabelNetworkConnectionHint every packet
+combo_select ComboNetworkConnection Automatic
+wait_ms 600
+assert_label ComboNetworkConnection Automatic
+assert_label LabelNetworkConnectionHint Direct first
+post_command ButtonBackToMainMenu
+wait_ms 700
+assert_screen MainScreen
+exit

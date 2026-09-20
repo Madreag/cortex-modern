@@ -11,33 +11,99 @@
       "peers": [
         {
           "name": "host",
-          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
-                   "-net-match-ticks", "3000", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
-                   "-net-match-report", "{OUT}/host-match.json", "-net-reconnect-ticket", "{OUT}/host.ticket",
-                   "-input-script", "{INPUT_SCRIPT}", "-net-host"],
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "3000",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
           "input_script": "play-input.txt",
-          "settings": {"NetworkDisplayName": "Host", "NetworkAutoReconnect": "1"}
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkAutoReconnect": "1"
+          }
         },
         {
           "name": "client-dropped",
-          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
-                   "-net-match-ticks", "3000", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
-                   "-net-match-report", "{OUT}/client-match.json", "-net-reconnect-ticket", "{OUT}/client.ticket",
-                   "-input-script", "{INPUT_SCRIPT}", "-net-join", "127.0.0.1"],
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "3000",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
           "input_script": "play-input.txt",
-          "settings": {"NetworkDisplayName": "Joiner", "NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"},
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1"
+          },
           "start_delay_s": 3.0,
-          "kill_after_s": 60
+          "kill_at_tick": 900
         },
         {
           "name": "client-rejoined",
-          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
-                   "-net-match-ticks", "3000", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
-                   "-net-match-report", "{OUT}/rejoin-match.json", "-net-reconnect-ticket", "{OUT}/client.ticket",
-                   "-input-script", "{INPUT_SCRIPT}", "-net-join", "127.0.0.1"],
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "3000",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/rejoin-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
           "input_script": "play-input.txt",
-          "settings": {"NetworkDisplayName": "Joiner", "NetworkAutoReconnect": "1", "NetworkOfferStoredRejoin": "1"},
-          "start_delay_s": 75.0
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1"
+          },
+          "start_when": {
+            "peer": "client-dropped",
+            "ended": true,
+            "timeout_s": 80
+          },
+          "after_gate_delay_s": 2
         }
       ]
     },
@@ -46,20 +112,51 @@
       "peers": [
         {
           "name": "host",
-          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
-                   "-net-match-ticks", "1200", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
-                   "-net-match-e2e-resync", "-net-match-report", "{OUT}/host-match.json",
-                   "-input-script", "{INPUT_SCRIPT}", "-net-host"],
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
           "input_script": "play-input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.host.probe.json"
         },
         {
           "name": "client",
-          "args": ["-net-match-service-e2e", "-net-port", "{PORT}", "-net-match-peers", "2",
-                   "-net-match-ticks", "1200", "-net-match-input-delay", "3", "-net-autosave-seconds", "0",
-                   "-net-match-e2e-resync", "-net-match-report", "{OUT}/client-match.json",
-                   "-input-script", "{INPUT_SCRIPT}", "-net-join", "127.0.0.1"],
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
           "input_script": "play-input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.client.probe.json",
@@ -69,29 +166,78 @@
     }
   ],
   "checklist": [
-    {"id": "rc-play-before-drop", "peer": "host", "screen": "game", "sim_ticks": [30, 900],
-     "what": "both peers play the match normally before the drop",
-     "assert": "runner record and the host's match report"},
-    {"id": "rc-drop-seen", "peer": "host", "screen": "game", "sim_ticks": [900, 1600],
-     "what": "the host keeps running when the client is killed and its seat is shown as dropped, not as a crash",
-     "assert": "the client-dropped peer's runner record carries injected_termination"},
-    {"id": "rc-rejoin", "peer": "client-rejoined", "screen": "game", "sim_ticks": [0, 3000],
-     "what": "the relaunched client rejoins the running match from its stored ticket and plays on from the host's state",
-     "assert": "the rejoin match report and the host's seat rows"},
-    {"id": "rc-dropped-index-kept", "peer": "client-dropped",
-     "what": "the killed peer's own video still ends at the frame it was killed on, with its index intact",
-     "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected"},
-    {"id": "rp-f6-overlay", "screen": "game",
-     "what": "F6 opens the network overlay in the running match and its Options view reads the live match rules",
-     "assert": "probe: wait panel_open true, assert_control NetworkSeatsOptionsText"},
-    {"id": "rp-repair-hint-host", "peer": "host", "screen": "PauseMatchOptions",
-     "what": "the host's Match Options offers Repair with its hint inside the dialog",
-     "assert": "probe: assert_enabled ButtonMatchRepairNow 1 and the two-press hint"},
-    {"id": "rp-repair-hint-client", "peer": "client", "screen": "PauseMatchOptions",
-     "what": "the client's Match Options shows no Repair button and says the repair is the host's call",
-     "assert": "probe: assert_visible ButtonMatchRepairNow 0, assert_label LabelMatchRepairHint Repair is the host's call"},
-    {"id": "rp-repair-applied", "screen": "game",
-     "what": "the second press repairs the match: both peers pause, reload the host's snapshot and keep playing",
-     "assert": "host log: one [net-match] resync snapshot line and one relaunch line per peer"}
+    {
+      "id": "rc-play-before-drop",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        30,
+        900
+      ],
+      "what": "both peers play the match normally before the drop",
+      "assert": "runner record and the host's match report",
+      "run": "reconnect"
+    },
+    {
+      "id": "rc-drop-seen",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        900,
+        1600
+      ],
+      "what": "the host keeps running when the client is killed and its seat is shown as dropped, not as a crash",
+      "assert": "the client-dropped peer's runner record carries injected_termination",
+      "run": "reconnect"
+    },
+    {
+      "id": "rc-rejoin",
+      "peer": "client-rejoined",
+      "screen": "game",
+      "sim_ticks": [
+        0,
+        3000
+      ],
+      "what": "the relaunched client rejoins the running match from its stored ticket and plays on from the host's state",
+      "assert": "the rejoin match report and the host's seat rows",
+      "run": "reconnect"
+    },
+    {
+      "id": "rc-dropped-index-kept",
+      "peer": "client-dropped",
+      "what": "the killed peer's own video still ends at the frame it was killed on, with its index intact",
+      "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected",
+      "run": "reconnect"
+    },
+    {
+      "id": "rp-f6-overlay",
+      "screen": "game",
+      "what": "F6 opens the network overlay in the running match and its Options view reads the live match rules",
+      "assert": "probe: wait panel_open true, assert_control NetworkSeatsOptionsText",
+      "run": "repair"
+    },
+    {
+      "id": "rp-repair-hint-host",
+      "peer": "host",
+      "screen": "PauseMatchOptions",
+      "what": "the host's Match Options offers Repair with its hint inside the dialog",
+      "assert": "probe: assert_enabled ButtonMatchRepairNow 1 and the two-press hint",
+      "run": "repair"
+    },
+    {
+      "id": "rp-repair-hint-client",
+      "peer": "client",
+      "screen": "PauseMatchOptions",
+      "what": "the client's Match Options shows no Repair button and says the repair is the host's call",
+      "assert": "probe: assert_visible ButtonMatchRepairNow 0, assert_label LabelMatchRepairHint Repair is the host's call",
+      "run": "repair"
+    },
+    {
+      "id": "rp-repair-applied",
+      "screen": "game",
+      "what": "the second press repairs the match: both peers pause, reload the host's snapshot and keep playing",
+      "assert": "host log: one [net-match] resync snapshot line and one relaunch line per peer",
+      "run": "repair"
+    }
   ]
 }

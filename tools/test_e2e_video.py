@@ -8,6 +8,7 @@ a real capture are named at the bottom of the result and are the driver's own fi
 """
 
 import argparse
+import contextlib
 import json
 from pathlib import Path
 import sys
@@ -20,7 +21,7 @@ if str(TOOLS) not in sys.path:
 import e2e_video as driver  # noqa: E402
 
 SCENARIOS = ("sp-smoke", "mp-host-join", "mp-reconnect-repair", "world-late-join", "ui-surfaces",
-             "mod-void-wanderers")
+             "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag")
 
 
 def row(results, name, ok, detail=""):
@@ -87,6 +88,25 @@ def check_substitution(results):
     return ok
 
 
+def check_launch_contract(results, scratch):
+    stage = scratch / "launch"
+    stage.mkdir()
+    scenario = {"scripts": {"probe.json": json.dumps({"schema": 1, "steps": [
+        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n"}}
+    peer = {"probe": "probe.json", "menu_script": "menu.txt", "args": ["-net-port", "{PORT}"]}
+    tokens = {"PROBE_DIR_client": r"D:\mx\client-stage\probe", "VIDEO": stage / "video",
+              "MENU_SCRIPT": stage / "menu.txt", "PORT": 49400}
+    env = driver.stage_peer(scenario, peer, stage, tokens)
+    probe = json.loads(Path(env["CC_TEST_NET_UI_SCRIPT"]).read_text(encoding="utf-8"))
+    ok = row(results, "launch/windows-probe-path",
+             probe["steps"][0]["path"] == r"D:\mx\client-stage\probe/done.json")
+    args = driver.peer_arguments(peer, tokens, 30)
+    ok &= row(results, "launch/menu-script-passed",
+              args[args.index("-menu-script") + 1] == str(stage / "menu.txt"), str(args))
+    ok &= row(results, "launch/headless", env["CCCP_HEADLESS"] == "1")
+    return ok
+
+
 def check_index_and_checklist(results, scratch):
     """A synthetic capture: the checklist resolves to the frames that carry each screen and tick."""
     video = scratch / "video"
@@ -130,9 +150,24 @@ def check_encode(results, scratch):
     sheet = driver.contact_sheet(empty, [], scratch / "sheet.png", 15, "ffmpeg")
     ok &= row(results, "sheet/no-frames", sheet["written"] is False)
     missing = driver.encode(None, scratch / "video", 30, scratch / "out.mp4")
+    ok &= row(results, "encode/no-ffmpeg-empty-capture", missing["encoded"] is False and "no frames" in missing["reason"])
+    (scratch / "video/frames/frame-000000.png").write_bytes(b"frame")
+    missing = driver.encode(None, scratch / "video", 30, scratch / "out.mp4")
     ok &= row(results, "encode/no-ffmpeg", missing["encoded"] is False and "ffmpeg" in missing["reason"])
     located = driver.find_ffmpeg()
     row(results, "encode/ffmpeg-located", True, str(located))
+    if located:
+        from PIL import Image
+        video = scratch / "timed-video"
+        (video / "frames").mkdir(parents=True)
+        rows = [{"frame": frame, "wall_ms": wall, "saved": True} for frame, wall in enumerate((1000, 1100, 2100))]
+        for row_value in rows:
+            Image.new("RGB", (16, 16), (row_value["frame"] * 100, 20, 30)).save(
+                video / "frames" / f"frame-{row_value['frame']:06d}.png")
+        (video / "frames.jsonl").write_text("".join(json.dumps(value) + "\n" for value in rows), encoding="utf-8")
+        result = driver.encode(located, video, 10, scratch / "timed.mp4")
+        duration = float(result.get("ffprobe", {}).get("format", {}).get("duration", 0))
+        ok &= row(results, "encode/keeps-one-second-stall", result["encoded"] and 1.1 <= duration <= 1.4, str(result))
     return ok
 
 
@@ -158,6 +193,37 @@ def check_review(results, scratch):
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "none" for item in document["checklist"]))
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
+    marker_video = scratch / "markers"
+    marker_video.mkdir()
+    (marker_video / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [
+        {"wall_ms": 10, "message": "video_mark first"}, {"wall_ms": 12, "message": "assert_label Value shown PASS"},
+        {"wall_ms": 25, "message": "video_mark next"}]), encoding="utf-8")
+    record = {"video_dir": str(marker_video), "probe_dir": str(scratch / "absent-probe"), "index": [
+        {"frame": index, "wall_ms": at, "sim_tick": 0, "screen": "SettingsScreen", "saved": True}
+        for index, at in enumerate((0, 10, 20, 30))]}
+    frames, observed = driver.item_evidence(record, {"mark": "first", "screen": "SettingsScreen", "events": ["assert_label Value shown PASS"]})
+    ok &= row(results, "review/marker-bounds", frames == [1, 2] and observed["probe"] == "pass", str(frames))
+    frames, observed = driver.item_evidence(record, {"mark": "missing", "screen": "SettingsScreen"})
+    ok &= row(results, "review/missing-marker-is-not-a-screen-pass", frames is None and observed["probe"] == "not-reached")
+    return ok
+
+
+def check_completion(results, scratch):
+    probe = scratch / "completion-probe"
+    probe.mkdir()
+    peer = {"probe_dir": str(probe), "record": {"exit_code": 0, "timed_out": False},
+            "index": [{"frame": 0}], "video": "retained.mp4", "menu_script_failures": []}
+    ok = row(results, "completion/clean", driver.peer_completed(peer))
+    (probe / "probe.json").write_text('{}', encoding="utf-8")
+    (probe / "net-ui-result.json").write_text('{"pass": false, "complete": false}', encoding="utf-8")
+    ok &= row(results, "completion/probe-failure-with-zero-exit", not driver.peer_completed(peer))
+    (probe / "net-ui-result.json").write_text('{"pass": true, "complete": true}', encoding="utf-8")
+    peer["record"].update(exit_code=137, injected_termination="scenario drop after recorded tick 900")
+    ok &= row(results, "completion/unplanned-exit", not driver.peer_completed(peer))
+    peer["expected_termination"] = True
+    ok &= row(results, "completion/planned-drop", driver.peer_completed(peer))
+    peer["record"]["injected_termination"] = "another scenario peer failed"
+    ok &= row(results, "completion/observer-abort-is-not-a-planned-drop", not driver.peer_completed(peer))
     return ok
 
 
@@ -167,13 +233,19 @@ def main():
     parser.add_argument("--out", type=Path)
     options = parser.parse_args()
     results = []
-    with tempfile.TemporaryDirectory() as temporary:
+    if options.out:
+        options.out.mkdir(parents=True, exist_ok=True)
+        retained = options.out / "scratch"
+        retained.mkdir()
+    with contextlib.nullcontext(retained) if options.out else tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         ok = check_scenarios(results)
         ok &= check_substitution(results)
+        ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)
         ok &= check_review(results, scratch)
+        ok &= check_completion(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

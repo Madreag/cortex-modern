@@ -21,52 +21,332 @@
       "peers": [
         {
           "name": "sp",
-          "args": ["-scenario", "FeelBaseline", "-seed", "42", "-max-ticks", "4000",
-                   "-num-lua-states", "4", "-input-script", "{INPUT_SCRIPT}"],
+          "args": [
+            "-scenario",
+            "FeelBaseline",
+            "-seed",
+            "42",
+            "-max-ticks",
+            "4000",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
           "input_script": "play-input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "sp-smoke.play.probe.json",
-          "settings": {"LocalPrediction": "1", "LocalPredictionMaxTicks": "20"},
+          "settings": {
+            "LocalPrediction": "1",
+            "LocalPredictionMaxTicks": "20"
+          },
           "runtime_files": [
-            {"copy": "tools/feel/FeelBaseline.lua", "to": "Userdata/UserScenes.rte/FeelBaseline.lua"},
-            {"to": "Userdata/UserScenes.rte/Index.ini",
-             "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"}
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
           ]
+        }
+      ]
+    },
+    {
+      "name": "skirmish",
+      "timeout_s": 90,
+      "peers": [
+        {
+          "name": "sp",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "sp-smoke.skirmish.menu.txt",
+          "probe": "sp-smoke.skirmish.probe.json"
         }
       ]
     }
   ],
   "checklist": [
-    {"id": "sp-main-menu", "peer": "sp", "screen": "MainScreen",
-     "what": "the main menu is on screen with its buttons drawn and no loading artefacts",
-     "assert": "menu script: assert_screen MainScreen"},
-    {"id": "sp-settings-pages", "peer": "sp", "screen": "SettingsScreen",
-     "what": "each of Video, Audio, Input, Gameplay, Misc and Network is shown with its rows inside its box",
-     "assert": "menu script: assert_settings_page <page> and assert_visible CollectionBox<page>Settings 1"},
-    {"id": "sp-settings-network-pages", "peer": "sp", "screen": "SettingsScreen",
-     "what": "the Network page's five sub-pages (Player, Chat, Recovery, Files, Internet) each show their box",
-     "assert": "menu script: assert_settings_page Network:<page>"},
-    {"id": "sp-back-to-main", "peer": "sp", "screen": "MainScreen",
-     "what": "Back returns to the main menu with nothing left drawn over it",
-     "assert": "menu script: assert_screen MainScreen"},
-    {"id": "sp-skirmish-picker", "peer": "sp",
-     "what": "the skirmish activity picker (ScenarioGUI) is opened from the main menu and a match is started from it",
-     "assert": "not scripted",
-     "blocked_by": "ScenarioGUI has no menu-automation seam: the menu script pump stops while it is up, so this leg cannot be driven or asserted. The play run below boots the activity directly instead."},
-    {"id": "sp-play", "peer": "sp", "screen": "game", "sim_ticks": [60, 1500],
-     "what": "the skirmish is played: actors walk, aim, jump, crouch, fire and swap weapons; the HUD is drawn",
-     "assert": "input script tools/e2e/play-input.txt drives both seats"},
-    {"id": "sp-pause-menu", "peer": "sp", "screen": "Pause",
-     "what": "Escape opens the pause menu and its rows (Resume, Settings, Save or Load, Mod Manager, Back to Main) are inside the panel",
-     "assert": "probe: assert_visible/assert_rect_inside on each pause row"},
-    {"id": "sp-pause-settings", "peer": "sp", "screen": "PauseSettings",
-     "what": "every pause settings page (Video, Audio, Input, Gameplay, Misc) is shown mid-match",
-     "assert": "probe: assert_settings_page <page> and assert_visible CollectionBox<page>Settings 1"},
-    {"id": "sp-resume", "peer": "sp", "screen": "game", "sim_ticks": [1500, 4000],
-     "what": "Resume closes the pause menu and the match keeps running from where it paused",
-     "assert": "probe: wait screen=game after ButtonResume"},
-    {"id": "sp-quit", "peer": "sp",
-     "what": "the run leaves the match and quits cleanly, with exit code 0 and no assert dialog",
-     "assert": "runner record: exit_code 0, timed_out false"}
+    {
+      "id": "sp-main-menu",
+      "peer": "sp",
+      "mark": "sp-main-menu",
+      "screen": "MainScreen",
+      "what": "Main menu buttons are drawn and readable.",
+      "assert": "assert_screen MainScreen",
+      "run": "menus",
+      "events": [
+        "assert_screen expected=MainScreen actual=MainScreen PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-video",
+      "peer": "sp",
+      "mark": "sp-settings-video",
+      "screen": "SettingsScreen",
+      "what": "The Video settings page fills its panel.",
+      "assert": "assert_settings_page Video",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Video .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-audio",
+      "peer": "sp",
+      "mark": "sp-settings-audio",
+      "screen": "SettingsScreen",
+      "what": "The Audio settings page fills its panel.",
+      "assert": "assert_settings_page Audio",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Audio .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-input",
+      "peer": "sp",
+      "mark": "sp-settings-input",
+      "screen": "SettingsScreen",
+      "what": "The Input settings page fills its panel.",
+      "assert": "assert_settings_page Input",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Input .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-gameplay",
+      "peer": "sp",
+      "mark": "sp-settings-gameplay",
+      "screen": "SettingsScreen",
+      "what": "The Gameplay settings page fills its panel.",
+      "assert": "assert_settings_page Gameplay",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Gameplay .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-misc",
+      "peer": "sp",
+      "mark": "sp-settings-misc",
+      "screen": "SettingsScreen",
+      "what": "The Misc settings page fills its panel.",
+      "assert": "assert_settings_page Misc",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Misc .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network",
+      "peer": "sp",
+      "mark": "sp-settings-network",
+      "screen": "SettingsScreen",
+      "what": "The Network settings page fills its panel.",
+      "assert": "assert_settings_page Network",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-player",
+      "peer": "sp",
+      "mark": "sp-settings-network-player",
+      "screen": "SettingsScreen",
+      "what": "The Network:Player settings page fills its panel.",
+      "assert": "assert_settings_page Network:Player",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Player .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-chat",
+      "peer": "sp",
+      "mark": "sp-settings-network-chat",
+      "screen": "SettingsScreen",
+      "what": "The Network:Chat settings page fills its panel.",
+      "assert": "assert_settings_page Network:Chat",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Chat .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-recovery",
+      "peer": "sp",
+      "mark": "sp-settings-network-recovery",
+      "screen": "SettingsScreen",
+      "what": "The Network:Recovery settings page fills its panel.",
+      "assert": "assert_settings_page Network:Recovery",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Recovery .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-files",
+      "peer": "sp",
+      "mark": "sp-settings-network-files",
+      "screen": "SettingsScreen",
+      "what": "The Network:Files settings page fills its panel.",
+      "assert": "assert_settings_page Network:Files",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Files .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-internet",
+      "peer": "sp",
+      "mark": "sp-settings-network-internet",
+      "screen": "SettingsScreen",
+      "what": "The Network:Internet settings page fills its panel.",
+      "assert": "assert_settings_page Network:Internet",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Internet .* PASS"
+      ]
+    },
+    {
+      "id": "sp-settings-network-connection",
+      "peer": "sp",
+      "mark": "sp-settings-network-connection",
+      "screen": "SettingsScreen",
+      "what": "The Network:Connection settings page fills its panel.",
+      "assert": "assert_settings_page Network:Connection",
+      "run": "menus",
+      "events": [
+        "assert_settings_page Network:Connection .* PASS"
+      ]
+    },
+    {
+      "id": "sp-back-to-main",
+      "peer": "sp",
+      "mark": "sp-back-to-main",
+      "screen": "MainScreen",
+      "what": "Back returns to the main menu.",
+      "assert": "assert_screen MainScreen",
+      "run": "menus",
+      "events": [
+        "assert_screen expected=MainScreen actual=MainScreen PASS"
+      ]
+    },
+    {
+      "id": "sp-skirmish-picker",
+      "peer": "sp",
+      "mark": "sp-skirmish-picker",
+      "screen": "ScenarioPicker",
+      "what": "The Scenario Battle picker selects P4 Alpha Duel and Grasslands.",
+      "assert": "select_scene Grasslands",
+      "run": "skirmish",
+      "events": [
+        "select_scene Grasslands PASS"
+      ]
+    },
+    {
+      "id": "sp-player-setup",
+      "peer": "sp",
+      "mark": "sp-player-setup",
+      "screen": "ScenarioConfig",
+      "what": "Player one joins team one and the second local player joins team two; Start becomes available.",
+      "assert": "activate P1T1Box; activate P2T2Box; assert_visible ButtonStartGame 1",
+      "run": "skirmish",
+      "events": [
+        "activate P1T1Box ok=1",
+        "activate P2T2Box ok=1",
+        "assert_visible ButtonStartGame 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "sp-play",
+      "peer": "sp",
+      "mark": "sp-play",
+      "screen": "game",
+      "what": "The stock P4 Alpha Duel plays with movement, fire and a drawn HUD.",
+      "assert": "activate ButtonStartGame; scripted input; visual motion review",
+      "run": "skirmish",
+      "events": [
+        "activate ButtonStartGame ok=1"
+      ]
+    },
+    {
+      "id": "sp-pause-menu",
+      "peer": "sp",
+      "mark": "sp-pause-menu",
+      "screen": "Pause",
+      "what": "Escape opens the single-player pause menu.",
+      "assert": "probe asserts every pause row visible",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-pause-video",
+      "peer": "sp",
+      "mark": "sp-pause-video",
+      "screen": "PauseSettings",
+      "what": "The Video page opens during the paused match.",
+      "assert": "probe: assert_settings_page Video",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-pause-audio",
+      "peer": "sp",
+      "mark": "sp-pause-audio",
+      "screen": "PauseSettings",
+      "what": "The Audio page opens during the paused match.",
+      "assert": "probe: assert_settings_page Audio",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-pause-input",
+      "peer": "sp",
+      "mark": "sp-pause-input",
+      "screen": "PauseSettings",
+      "what": "The Input page opens during the paused match.",
+      "assert": "probe: assert_settings_page Input",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-pause-gameplay",
+      "peer": "sp",
+      "mark": "sp-pause-gameplay",
+      "screen": "PauseSettings",
+      "what": "The Gameplay page opens during the paused match.",
+      "assert": "probe: assert_settings_page Gameplay",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-pause-misc",
+      "peer": "sp",
+      "mark": "sp-pause-misc",
+      "screen": "PauseSettings",
+      "what": "The Misc page opens during the paused match.",
+      "assert": "probe: assert_settings_page Misc",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-resume",
+      "peer": "sp",
+      "mark": "sp-resume",
+      "screen": "game",
+      "what": "Resume returns to gameplay; the same match advances to tick 400.",
+      "assert": "probe waits for Gameplay and sim_at_least 400",
+      "run": "skirmish"
+    },
+    {
+      "id": "sp-feel-baseline",
+      "run": "play",
+      "peer": "sp",
+      "screen": "game",
+      "what": "The unchanged FeelBaseline fixture starts and renders without Lua errors.",
+      "assert": "The original FeelBaseline launch exits zero and writes gameplay frames."
+    }
   ]
 }
