@@ -5169,11 +5169,19 @@ namespace RTE {
 					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
-					// A peer still filling its pipeline owes its delay window before it counts as silent.
+					// A peer still filling its pipeline owes its delay window before it counts as silent, and a
+					// peer still starting cannot acknowledge anything: its own start work is part of the ramp.
 					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) ? 0 :
-					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs));
+					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
+					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
-					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp) unresponsive.insert(peer);
+					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp) {
+						std::cout << "[net-lockstep] timing ack overdue from peer " << static_cast<int>(peer)
+						          << " at frame " << *m_ConsumerWaitingFrame << ": waited=" << (nowMs - decision.proposedAtMs)
+						          << "ms budget=" << budget << "ms ramp=" << ramp << "ms own_park=" << m_Stats.longestOwnParkMs
+						          << "ms peer_park=" << stats.startParkMs << std::endl;
+						unresponsive.insert(peer);
+					}
 				}
 			}
 			for (uint8_t peer: unresponsive) ProposePeerHold(peer, nowMs);
