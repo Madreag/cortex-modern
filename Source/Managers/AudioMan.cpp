@@ -36,6 +36,7 @@
 #include "backward/backward.hpp"
 
 #include <iostream>
+#include <format>
 
 #include <algorithm>
 #include <array>
@@ -2644,6 +2645,59 @@ std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* 
 	}
 	CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
 }
+bool AudioMan::RunCheckpointEffectsSelfTest() {
+	if (!m_AudioEnabled) return false;
+	StopAll();
+	bool passed = true;
+	for (bool spatial: {false, true}) {
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", spatial ? "Brain Pod Hit" : "Funds Changed", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			source->SetImmobile(!spatial);
+			source->SetLoopSetting(-1);
+			source->SetVolume(0.35F);
+			source->SetPitch(1.125F);
+			source->SetPitchVariation(0);
+			source->SetPosition(m_CurrentActivityHumanPlayerPositions.empty() ? Vector() : *m_CurrentActivityHumanPlayerPositions.front());
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const int identity = *source->GetPlayingChannels()->begin();
+			FMOD::Channel* live = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &live));
+			const auto fresh = AudioCheckpoint::Control::Capture(live, spatial);
+			const std::string checkpoint = SaveCheckpoint();
+			std::unique_ptr<SoundContainer> restored;
+			{ MovableObject::FaithfulCloneScope clone(true); restored.reset(static_cast<SoundContainer*>(source->Clone())); }
+			if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("audio checkpoint refused");
+			FMOD::Channel* reloaded = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &reloaded));
+			const auto after = AudioCheckpoint::Control::Capture(reloaded, spatial);
+			const FMOD_VECTOR position = GetAsFMODVector(restored->GetPosition());
+			const FMOD_RESULT updated = spatial ? UpdatePositionalEffectsForSoundChannel(reloaded, &position) : FMOD_OK;
+			const bool same = fresh.SaveCheckpoint() == after.SaveCheckpoint();
+			if (!same) {
+				System::PrintDiagnosticLine("[checkpoint-audio-effects-selftest] fresh=" + fresh.SaveCheckpoint() + "\n");
+				System::PrintDiagnosticLine("[checkpoint-audio-effects-selftest] restored=" + after.SaveCheckpoint() + "\n");
+			}
+			const bool rebound = reloaded != live && restored->IsBeingPlayed() && !source->IsBeingPlayed();
+			const bool row = same && rebound && updated == FMOD_OK && !after.paused;
+			System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} spatial={} fresh_mode={} restored_mode={} fresh_effects={} restored_effects={} update_result={} same_controls={} rebound={}\n",
+			    row ? "PASS" : "FAIL", spatial, fresh.mode, after.mode, fresh.effects.size(), after.effects.size(), static_cast<int>(updated), same, rebound));
+			Update3DEffectsForSFXChannels();
+			passed = row && passed;
+			StopAll();
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] FAIL spatial={} reason={}\n", spatial, error.what()));
+			passed = false;
+			StopAll();
+		}
+	}
+	g_ConsoleMan.SaveAllText(System::GetWorkingDirectory() + "checkpoint-audio-console.log");
+	System::PrintDiagnosticLine(std::string("[checkpoint-audio-effects-selftest] ") + (passed ? "PASS\n" : "FAIL\n"));
+	return passed;
+}
+
 bool AudioMan::RunCheckpointSelfTest() {
 	if (!m_AudioEnabled) return false;
 	RestorePlayPhaseScope::ResetRestorePlayCount();

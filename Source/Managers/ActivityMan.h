@@ -175,6 +175,7 @@ namespace RTE {
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
 		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
+		bool RunCheckpointCaptureSelfTest(uint64_t tick);
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
 		/// The last automatic capture this process published; empty when none has.
