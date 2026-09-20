@@ -3274,7 +3274,7 @@ namespace RTE {
 				clientConfig.displayName = "Client";
 				++clientConfig.localNonce;
 				tap.afterHostStart = [&](uint16_t, std::string* startError) { return clientSession.StartClient(clientTransport, "loopback", clientConfig, startError); };
-				uint64_t transportClock = 0, lobbyStartedAt = 0;
+				uint64_t transportClock = 0, lobbyStartedAt = 0, startPublishedAt = 0;
 				bool lobbyActive = false, coordinatorActive = false;
 				std::string peerError;
 				std::vector<uint8_t> received;
@@ -3316,7 +3316,7 @@ namespace RTE {
 					}
 					if (coordinatorActive) clientCoordinator.Tick(NetLockstepNowMs());
 				};
-				tap.afterLobbyStart = tap.beforePoll;
+				tap.afterLobbyStart = [&] { startPublishedAt = nowMs(); tap.beforePoll(); };
 				bool transferActive = false;
 				uint64_t transferStartedAt = 0, lastProgress = 0;
 				std::vector<uint64_t> progressTimes;
@@ -3363,8 +3363,17 @@ namespace RTE {
 						if (progressAt - previous > config.lobbyWaitMs) { *error = "throttled transfer had a real progress stall"; return false; }
 						previous = progressAt;
 					}
-					if (!ok || received != state || lastProgress != 12 || progressTimes.back() <= config.lobbyWaitMs || !clientCoordinator.IsRunning()) {
-						*error = "runner timed out a progressing state transfer: " + transferError;
+					// The host's completed handshake can leave its Start queued for the client.
+					while (ok && !clientCoordinator.IsRunning() && nowMs() - startPublishedAt < config.lockstepWaitMs) {
+						hostCoordinator.Tick(NetLockstepNowMs());
+						std::this_thread::sleep_for(std::chrono::milliseconds(5));
+					}
+					const bool joinedInBudget = clientCoordinator.IsRunning() && nowMs() - startPublishedAt <= config.lockstepWaitMs;
+					if (!ok || received != state || lastProgress != 12 || progressTimes.back() <= config.lobbyWaitMs || !joinedInBudget) {
+						*error = "runner state transfer: ok=" + std::to_string(ok) + " received=" + std::to_string(received.size()) +
+						         " bytes_equal=" + std::to_string(received == state) + " progress=" + std::to_string(lastProgress) +
+						         " last_progress_ms=" + std::to_string(progressTimes.back()) + " client=" + NetLockstepCoordinator::StateName(clientCoordinator.GetState()) +
+						         " error=" + transferError;
 						return false;
 					}
 				}
