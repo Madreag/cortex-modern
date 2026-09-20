@@ -367,6 +367,11 @@ namespace RTE {
 			if (error) *error = "the host is not among the surviving peers";
 			return false;
 		}
+		const bool cpuOnly = previous.dedicated && std::all_of(previous.players.begin(), previous.players.end(), [](const auto& slot) { return slot.cpu; });
+		if (survivors.size() < c_MinPeerCount && !cpuOnly) {
+			if (error) *error = "not enough players for a rematch";
+			return false;
+		}
 		std::rotate(survivors.begin(), std::find(survivors.begin(), survivors.end(), previous.hostPeerId), std::find(survivors.begin(), survivors.end(), previous.hostPeerId) + 1);
 		std::map<uint8_t, uint8_t> seatMap;
 		for (size_t index = 0; index < survivors.size(); ++index) {
