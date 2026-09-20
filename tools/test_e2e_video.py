@@ -172,7 +172,8 @@ def check_encode(results, scratch):
 
 
 def check_review(results, scratch):
-    scenario = driver.load_scenario("mp-host-join")
+    scenario = {"name": "paired-review", "checklist": [
+        {"id": "mp-play", "screen": "game", "what": "Both peers have gameplay evidence."}]}
     capture = {"name": "run0", "peers": [
         {"peer": "host", "root": str(scratch / "host"), "video_dir": str(scratch / "video"),
          "probe_dir": str(scratch / "host-stage/probe"), "index": driver.read_index(scratch / "video"),
@@ -193,6 +194,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "none" for item in document["checklist"]))
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
+    ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
     marker_video = scratch / "markers"
     marker_video.mkdir()
     (marker_video / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [
@@ -205,6 +207,52 @@ def check_review(results, scratch):
     ok &= row(results, "review/marker-bounds", frames == [1, 2] and observed["probe"] == "pass", str(frames))
     frames, observed = driver.item_evidence(record, {"mark": "missing", "screen": "SettingsScreen"})
     ok &= row(results, "review/missing-marker-is-not-a-screen-pass", frames is None and observed["probe"] == "not-reached")
+    return ok
+
+
+def check_interruption(results, scratch):
+    out = scratch / "interrupted"
+    first = out / "first"
+    first.mkdir(parents=True)
+    scenario = {"name": "interrupted", "runs": [{"name": "first", "peers": [{"name": "host"}]},
+                                                {"name": "second", "peers": [{"name": "client"}]}],
+                "checklist": [{"id": "play", "screen": "game", "what": "Gameplay is visible."}]}
+    run = {"name": "first", "root": str(first), "size": "640x360", "interrupted": "test interruption",
+           "peers": [{"peer": "host", "root": str(first / "host"), "video_dir": str(scratch / "video"),
+                      "probe_dir": str(first / "probe"), "record": {}, "manifest": {},
+                      "index": driver.read_index(scratch / "video"), "menu_script_failures": []}]}
+    capture = {"scenario": "interrupted", "scenario_definition": scenario, "runs": [run], "source": {}, "exe": {},
+               "started": "test", "fps": 6, "command": [], "interrupted": "test interruption"}
+    driver.review(scenario, run, first)
+    manifest = driver.scenario_manifest(capture, out, 1)
+    review = driver.aggregate_review(capture, out)
+    ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
+    ok &= row(results, "interruption/unstarted-checklist-retained", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
+    return ok
+
+
+def check_item_assertions(results, scratch):
+    root = scratch / "item-assertions"
+    probe = root / "probe"
+    probe.mkdir(parents=True)
+    observed = {"complete": True, "pass": True, "script": {"steps": [{"op": "wait"}, {"op": "assert"}]},
+                "steps": [{"index": 0, "observed": {"sim_frame": 100}}, {"index": 1, "observed": {"sim_frame": 700}}]}
+    path = probe / "net-ui-result.json"
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    record = {"root": str(root), "video_dir": str(root / "video"), "index": [], "probe_dir": str(probe)}
+    _, evidence = driver.item_evidence(record, {"probe_steps": [0, 1], "sim_progress": 600})
+    ok = row(results, "review/simulation-progress", evidence["probe"] == "pass")
+    observed["steps"][1]["observed"]["sim_frame"] = 200
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, {"probe_steps": [0, 1], "sim_progress": 600})
+    ok &= row(results, "review/missing-simulation-progress", evidence["probe"] == "fail")
+    (root / "runtime").mkdir()
+    (root / "runtime/LogConsole.txt").write_text("parked brains\nERROR: Lua failure\n", encoding="utf-8")
+    checks = driver.log_assertions(root, ["parked brains"], ["^ERROR:"])
+    ok &= row(results, "review/console-errors-retained", checks[0]["matches"][0]["line"] == 1 and checks[1]["matches"][0]["line"] == 2 and checks[1]["forbidden"])
+    _, evidence = driver.item_evidence(record, {"log_regex": ["parked brains"], "forbidden_log_regex": ["^ERROR:"]})
+    ok &= row(results, "review/positive-log-cannot-hide-lua-error", evidence["probe"] == "fail")
     return ok
 
 
@@ -245,6 +293,8 @@ def main():
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)
         ok &= check_review(results, scratch)
+        ok &= check_interruption(results, scratch)
+        ok &= check_item_assertions(results, scratch)
         ok &= check_completion(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
