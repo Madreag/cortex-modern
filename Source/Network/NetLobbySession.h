@@ -172,6 +172,7 @@ namespace RTE {
 			uint64_t value = 0;
 			uint8_t fromPeer = 0;
 			bool pending = false;
+			uint64_t workTicks = 0, workUs = 0, sentThrough = 0;
 		};
 		WorldJoinReport TakeWorldJoinReport();
 		std::vector<uint8_t> TakePendingTailBytes();
@@ -299,7 +300,7 @@ namespace RTE {
 		uint16_t m_IncomingNextChunkIndex = 0;
 		bool m_IncomingStateComplete = false;
 		std::vector<uint8_t> m_ReceivedState;
-		WorldJoinReport m_WorldJoinReport;
+		std::deque<WorldJoinReport> m_WorldJoinReports;
 		std::vector<uint8_t> m_PendingTailBytes;
 		NetLobbyStats m_Stats;
 	};

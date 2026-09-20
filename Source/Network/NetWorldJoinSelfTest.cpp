@@ -2080,7 +2080,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 25},
+			{"lockstep_codec_version", 27},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2191,7 +2191,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 25");
+			return Fail("WorldTransition frame did not stamp lockstep version 27");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2232,8 +2232,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 24) {
-			return Fail("ordinary lockstep frame did not stamp version 24");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 26) {
+			return Fail("ordinary lockstep frame did not stamp version 26");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2242,7 +2242,7 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 24 and match config 6");
+			return Fail("ordinary identity did not stamp lockstep 26 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
@@ -2620,6 +2620,142 @@ namespace RTE {
 		if (packed.targetFrame != 11 || packed.frames.size() != 2 || packed.commands.size() != 1) {
 			return Fail("committed ready-frame pack dropped a remote Controller or command");
 		}
+		ready.localCommands.push_back({1, NetGamePlayerBindings{}});
+		ready.remoteCommands.push_back({2, NetGamePlayerBindings{}});
+		ready.localCommands.push_back({1, NetGameSeatHold{3, 7, 91, 2, 11}});
+		NetSoundObservation sound;
+		sound.senderPeerId = 2; sound.objectUID = 91; sound.tick = 11; sound.value = .5F;
+		ready.remoteObservations.push_back(sound);
+		NetValueObservation value;
+		value.senderPeerId = 3; value.objectUID = 92; value.tick = 11; value.key = "join"; value.numberValue = 3;
+		ready.remoteValueObservations.push_back(value);
+		NetWorldFrameLog log;
+		const auto complete = PackWorldJoinReadyFrame(ready);
+		std::string error;
+		if (!log.Append(complete, &error)) return Fail("a real committed frame with mixed senders cannot enter the join tail: " + error);
+		std::vector<std::vector<uint8_t>> tail;
+		(void)log.CopyFrom(11, 1, 65536, tail);
+		NetLockstepFrame decoded;
+		if (tail.size() != 1 || !DecodeCommittedJoinFrame(tail.front(), decoded, &error) || decoded != complete)
+			return Fail("join tail changed a controller, binding, command, observation or hold identity: " + error);
+		tail.front().pop_back();
+		if (DecodeCommittedJoinFrame(tail.front(), decoded, &error)) return Fail("truncated committed join input was accepted");
+		return 0;
+	}
+
+	int TestCommittedTailJournal() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "committed.inputs";
+		NetWorldFrameLog log;
+		log.Configure(2, 1024 * 1024);
+		log.EnableJournal(path.string());
+		std::string error;
+		for (uint64_t tick = 1; tick <= 8; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		if (log.Count() != 2 || !log.Covers(1)) return Fail("bounded memory discarded the checkpoint's committed history");
+		std::vector<std::vector<uint8_t>> records;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (log.CopyFrom(1, 8, 1024 * 1024, records) == 0 && std::chrono::steady_clock::now() < deadline && !log.JournalFailed())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		if (records.size() != 8) return Fail("the asynchronous journal did not return its complete older window");
+		for (size_t index = 0; index < records.size(); ++index) {
+			NetLockstepFrame frame;
+			if (!DecodeCommittedJoinFrame(records[index], frame, &error) || frame != MakeCommittedFrame(index + 1)) return Fail("journal input differs from committed input: " + error);
+		}
+		log.Clear();
+		if (std::filesystem::exists(path)) return Fail("the ended round retained its private input journal");
+		return 0;
+	}
+
+	int TestPrivateNeutralPrelude() {
+		LoopbackTransport transport;
+		NetLockstepCoordinator coordinator;
+		NetLockstepConfig config;
+		config.sessionId = 0x9A38; config.roundId = 38; config.localPeerId = 1; config.peerCount = 1; config.inputDelayFrames = 5;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 1;
+		config.matchConfig.players = {{1, 0, false, "Host"}};
+		std::string error;
+		if (!coordinator.Start(transport, config, &error)) return Fail(error);
+		NetWorldFrameLog tail;
+		for (uint64_t tick = 1; tick < 5; ++tick) {
+			NetLockstepReadyFrame ready;
+			if (!NetMatchService::ReadCommittedJoinFrame(coordinator, tick, ready) || ready.frame != tick || !ready.localFrames.empty() || !ready.remoteFrames.empty())
+				return Fail("the initial private checkpoint omitted a neutral input-delay tick");
+			auto frame = PackWorldJoinReadyFrame(ready); frame.roundId = coordinator.GetRoundId();
+			if (!tail.Append(frame, &error)) return Fail(error);
+		}
+		NetLockstepReadyFrame missing;
+		if (NetMatchService::ReadCommittedJoinFrame(coordinator, 5, missing)) return Fail("a required missing input became a neutral prefix tick");
+		return tail.Count() == 4 && tail.Covers(1) ? 0 : Fail("the neutral catch-up prefix has a gap");
+	}
+
+	int TestLargePrivateTailChunks() {
+		std::string error;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A33);
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 1; image.tick = 40; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state";
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		NetLockstepFrame frame = MakeCommittedFrame(41, 0);
+		frame.frames.clear();
+		for (int64_t uid = 1; uid <= 1024; ++uid) {
+			ControllerFrame controller; controller.actorUniqueID = uid; controller.inputMode = static_cast<uint8_t>(Controller::CIM_PLAYER);
+			frame.frames.push_back(controller);
+		}
+		if (!host.Tail().Append(frame, &error)) return Fail(error);
+		WorldLobbyPair pair;
+		if (!pair.Open(47139, &error) || !pair.host.BindLateRemote(2, pair.hostRemote, &error) || !ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) return Fail(error);
+		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.roundId = 1; client.snapshotTick = client.appliedThrough = 40;
+		size_t chunks = 0;
+		while (host.FindSession(42)->deliveredThrough < 41 && chunks++ < 32) {
+			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
+			pair.Pump(1);
+			NetMatchService::StepWorldJoinCatchUpClient(pair.client, client);
+			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
+		}
+		NetLockstepReadyFrame applied;
+		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames.size() == frame.frames.size() &&
+		    std::equal(applied.remoteFrames.begin(), applied.remoteFrames.end(), frame.frames.begin(), [](const auto& a, const auto& b) { return ControllerFrameCodec::Encode(a) == ControllerFrameCodec::Encode(b); }) && client.partialTail.empty();
+		ScenarioRunner::ReleaseWorldCatchUp();
+		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
+	}
+
+	int TestPrivateRejoinHeadroom() {
+		NetCatchUpHeadroom capacity;
+		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
+		if (!capacity.Observe(240, 3000000, 1000.0 / 60.0) || !capacity.Ready()) return Fail("sustained 120 tps did not establish catch-up headroom");
+		if (!capacity.Observe(360, 5000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("lost headroom remained admitted");
+		if (capacity.Observe(359, 5000000, 1000.0 / 60.0)) return Fail("catch-up work counters went backwards");
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A20);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state";
+		image.authorityPeerId = 2;
+		image.tick = 40; image.pauseState = {true, 90, 7};
+		NetWorldCheckpointImage decoded;
+		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.authorityPeerId != 2 || decoded.privateSessionId != config.sessionId ||
+		    !decoded.pauseState.paused || decoded.pauseState.resumeCountdown != 90 || decoded.pauseState.pausedFrames != 7)
+			return Fail("private checkpoint lost the migrated authority or committed pause state");
+		auto badPause = image; badPause.pauseState.pausedFrames = 41;
+		if (DecodeWorldJoinOffer(EncodeWorldJoinOffer(badPause), decoded, &error)) return Fail("private checkpoint accepted more paused frames than committed frames");
+		if (DecodeWorldJoinOffer(R"({"schema":1,"private_session_id":"bad"})", decoded, &error)) return Fail("private offer accepted a mistyped identity");
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		uint64_t activation = 0;
+		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 600, 120, 2000, 610, &activation, &error) || activation != 0)
+			return Fail("a peer without compute headroom scheduled a reclaim");
+		host.NoteRejoinLinkFit(42, false);
+		if (!host.NoteRejoinCapacity(42, 240, 3000000, 900) || !host.NoteCatchUpProgress(42, 620, 20, 1000, 630, &activation, &error) || activation != 0)
+			return Fail("a peer whose delay does not fit scheduled a reclaim");
+		host.NoteRejoinLinkFit(42, true);
+		if (!host.NoteCatchUpProgress(42, 621, 1, 5, 631, &activation, &error) || activation <= 900)
+			return Fail("reclaim did not wait beyond every old input after proving capacity");
 		return 0;
 	}
 
@@ -5695,6 +5831,9 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
+		if (std::strcmp(name, "private-neutral-prelude") == 0) return TestPrivateNeutralPrelude();
+		if (std::strcmp(name, "private-large-tail") == 0) return TestLargePrivateTailChunks();
+		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
 			s_FailTag = "net-world-restart-selftest";
 			std::string error;
@@ -5907,6 +6046,10 @@ namespace RTE {
 		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {
 			return result;
 		}
+		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
+		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
+		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
+		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		{
 			std::string error;
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);

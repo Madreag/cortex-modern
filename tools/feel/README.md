@@ -27,10 +27,11 @@ succeeded. It is reapplied when recovery opens another round.
 Fast peers must sustain at least 59.5 ticks/s after tick 300, spend less than 1%
 of that wall time waiting for input, and have no wait over 50 ms. The elapsed
 window spans recovery; restarted pace counters cannot remove a rejoin pause.
-The requested zero `steady_missing_frame_stalls` check is also retained. That
-counter keeps its transport/prefetch meaning; actual blocking has a separate
-counter and wait log. Every MISS is retained, including a disagreement between
-those two measures. The slow client's presentation checks still run.
+Confirmed ticks may fall at most 50 ms behind their steady wall-clock baseline;
+the maximum lag spans recovery and cannot be hidden by later catch-up. The
+`steady_missing_frame_stalls` counter remains a transport/prefetch diagnostic;
+actual blocking has a separate counter and wait log. The slow client's
+presentation checks still run.
 
 Delay checks read the engine's timestep and measured RTT, require the initial
 pick to cover `ceil(RTT / tick) + 1`, and compare the final displayed delay with
@@ -146,3 +147,10 @@ completed launch matrix whose analysis directories do not yet exist.
 Detector checks are `python -B tools/feel/test_report.py`. They use synthetic
 records only and do not establish engine correctness. They remain unrun in the
 compile-only lane; the review runs them with the engine gates and drivers.
+
+Item 9a also writes 100/200 ms timing cases with 5 percent loss, silence at tick 600,
+and loss combined with silence and private rejoin. Silent cases run to tick 2400;
+the manifest selects the final tick for every rate, wait, horizon and full-hash gate.
+The 59.5 tps, 50 ms and one-percent bounds remain unchanged across the entire window.
+Missing-frame probes remain diagnostic. Reclaim evidence requires the same committed
+seat transition on both survivors; an attempted reconnect is not completion.

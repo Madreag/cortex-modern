@@ -33,7 +33,7 @@ RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
 RED_DIRECTORY_TOKEN = "directory resume did not issue a new token"
 RED_DIRECTORY_SEIZED = "directory resume took a row without its token"
 RED_CODEC = "WorldTransition codec did not round-trip"
-RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 24 and match config 6"
+RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 26 and match config 6"
 RED_ADMIT = "a due activation cancelled instead of admitting"
 RED_ORDINARY_JOIN_ACCEPTED = "an ordinary NewJoin was accepted"
 RED_CATCHUP_PAST_TAIL = "catch-up-ran-past-the-tail"
@@ -297,7 +297,7 @@ CASES = (
         "pass_token": "[net-world-codec-selftest] PASS",
     },
     {
-        "name": "ordinary-identity-stamps-24-and-6",
+        "name": "ordinary-identity-stamps-26-and-6",
         "argv": ["-net-world-ordinary-identity-selftest"],
         "red": RED_ORDINARY_IDENTITY,
         "pass_token": "[net-world-ordinary-identity-selftest] PASS",
@@ -759,7 +759,7 @@ def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
         "game_version": "7.0.0",
         "build_id": "stage2-world",
         "network_protocol_version": 1,
-        "lockstep_codec_version": 25,
+        "lockstep_codec_version": 27,
         "controller_frame_version": 7,
         "match_config_hash": "a" * 64,
         "session_identity_hash": "b" * 64,

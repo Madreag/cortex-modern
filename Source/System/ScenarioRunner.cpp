@@ -77,6 +77,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> s_AppliedCommandSequences;
 		std::map<uint8_t, NetResyncPlayerBindings> s_PeerPlayerBindings;
 		std::vector<NetValueObservation> s_DroppedValueObservations;
+		NetCatchUpHeadroom s_CatchUpHeadroom;
 		bool s_WorldCatchUpActive = false;
 		bool s_WorldCatchUpHeld = false;
 		int s_WorldCatchUpBudget = 0;
@@ -812,7 +813,8 @@ namespace RTE {
 	}
 
 	bool ScenarioRunner::IsLockstepLocalMachineSlow() {
-		return s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow;
+		return (s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow) ||
+		    (s_WorldCatchUpActive && WorldCatchUpWorkTicks() >= 120 && s_CatchUpHeadroom.Ratio() <= 1.0);
 	}
 
 	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
@@ -846,6 +848,8 @@ namespace RTE {
 				visible.push_back(toast.record);
 			}
 		}
+		if (WorldCatchUpActive()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", GetLockstepLocalPeerId()});
+		if (WorldCatchUpActive() && IsLockstepLocalMachineSlow()) visible.push_back({s_WorldCatchUpAppliedThrough, "slow_machine", "Your machine cannot keep up with this match", GetLockstepLocalPeerId()});
 		return visible;
 	}
 
@@ -985,7 +989,7 @@ namespace RTE {
 
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
 		// Playback owns no actor: the file drives everything through the remote apply.
-		if (s_ReplayReader.IsOpen()) {
+		if (s_ReplayReader.IsOpen() || s_WorldCatchUpActive) {
 			return false;
 		}
 		if (!s_LockstepCoordinator) {
@@ -1126,8 +1130,27 @@ namespace RTE {
 		return true;
 	}
 
-	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error) {
-		if (snapshotTick == 0) {
+	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0;
+	static uint64_t s_CatchUpLastWallUs = 0;
+	static bool s_CatchUpHadQueuedWork = false;
+
+	void ScenarioRunner::NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs) {
+		if (!s_WorldCatchUpActive || tick <= s_CatchUpLastMeasured) return;
+		s_CatchUpLastMeasured = tick;
+		++s_CatchUpWorkTicks;
+		s_CatchUpWorkUs += s_CatchUpHadQueuedWork && wallUs > s_CatchUpLastWallUs ? std::max(workUs, wallUs - s_CatchUpLastWallUs) : workUs;
+		s_CatchUpLastWallUs = wallUs;
+		s_CatchUpHadQueuedWork = WorldCatchUpHasFrame(tick + 1);
+		s_CatchUpHeadroom.Observe(s_CatchUpWorkTicks, s_CatchUpWorkUs, g_TimerMan.GetDeltaTimeMS());
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
+	uint64_t ScenarioRunner::WorldCatchUpWorkUs() { return s_CatchUpWorkUs; }
+	uint64_t ScenarioRunner::WorldCatchUpPriorInputThrough() { return s_CatchUpPriorInputThrough; }
+	void ScenarioRunner::SetWorldCatchUpPriorInputThrough(uint64_t frame) { s_CatchUpPriorInputThrough = frame; }
+
+	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error, bool initialSnapshot) {
+		if (snapshotTick == 0 && !initialSnapshot) {
 			if (error) *error = "world catch-up has no snapshot tick";
 			return false;
 		}
@@ -1136,6 +1159,10 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_CatchUpWorkTicks = s_CatchUpWorkUs = s_CatchUpLastWallUs = 0;
+		s_CatchUpHadQueuedWork = false;
+		s_CatchUpHeadroom = {};
+		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;
 		s_WorldCatchUpHeld = false;
@@ -1164,6 +1191,7 @@ namespace RTE {
 		s_WorldCatchUpActive = false;
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpTail.clear();
+		s_CatchUpPriorInputThrough = 0;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
@@ -1230,6 +1258,12 @@ namespace RTE {
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
+		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning()) {
+			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
+			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
+			s_LockstepCoordinator->Tick(0);
+			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
+		}
 		s_WorldCatchUpAppliedThrough = simTick;
 		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
 		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and
@@ -1309,6 +1343,33 @@ namespace RTE {
 
 	bool ScenarioRunner::IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame) {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
+	}
+
+	bool ScenarioRunner::IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
+	}
+
+	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) || !MovableMan::IsConstructed()) return;
+		const auto suppressed = [&](const ControllerFrame& input) {
+			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
+			const auto* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(input.actorUniqueID)));
+			if (!actor) return false;
+			const uint8_t owner = GetLockstepDropTimeActorOwner(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled());
+			return s_LockstepCoordinator->IsSeatReclaimGap(owner, ready.frame);
+		};
+		const size_t before = ready.localFrames.size() + ready.remoteFrames.size();
+		std::erase_if(ready.localFrames, suppressed);
+		if (!ready.remoteFrameCounts.empty()) {
+			auto incoming = std::move(ready.remoteFrames);
+			ready.remoteFrames.clear(); size_t offset = 0;
+			for (auto& [peer, count]: ready.remoteFrameCounts) {
+				const size_t end = std::min(incoming.size(), offset + count);
+				count = 0;
+				for (; offset < end; ++offset) if (!suppressed(incoming[offset])) { ready.remoteFrames.push_back(std::move(incoming[offset])); ++count; }
+			}
+		} else std::erase_if(ready.remoteFrames, suppressed);
+		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
 	}
 
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
@@ -1478,6 +1539,19 @@ namespace RTE {
 
 	int ScenarioRunner::GetLockstepResumeCountdown() {
 		return s_LockstepResumeCountdown;
+	}
+
+	NetLockstepPauseState ScenarioRunner::CaptureLockstepPauseState() {
+		return {s_LockstepPaused, s_LockstepResumeCountdown, GetLockstepPausedFrames()};
+	}
+
+	bool ScenarioRunner::RestoreLockstepPauseState(const NetLockstepPauseState& state, uint64_t frame) {
+		if (!state.IsValid(frame)) return false;
+		s_LockstepPaused = state.paused;
+		s_LockstepResumeCountdown = state.resumeCountdown;
+		RestoreLockstepPausedFrames(state.pausedFrames);
+		g_TimerMan.SetSimTimeFrozen(state.paused);
+		return true;
 	}
 
 	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId) {
@@ -1855,6 +1929,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (s_WorldCatchUpActive) return;
 		if (g_MovableMan.IsRestoringSnapshot()) {
 			return;
 		}
@@ -1995,7 +2070,7 @@ namespace RTE {
 		return agreed;
 	}
 
-	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
+	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error, bool captureLocalBindings) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
 		captured.sessionId = s_LockstepCoordinator->GetConfig().sessionId;
@@ -2007,7 +2082,7 @@ namespace RTE {
 		captured.e2eFirstTransferUid = agreed.firstTransferUid;
 		captured.playerBindings = s_PeerPlayerBindings;
 		captured.appliedCommands = agreed.appliedCommands;
-		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+		if (const Activity* activity = g_ActivityMan.GetActivity(); captureLocalBindings && activity) {
 			auto& own = captured.playerBindings[GetLockstepLocalPeerId()];
 			own.frame = savedTick;
 			activity->CaptureNetPlayerBindings(own.bindings);
@@ -2059,6 +2134,32 @@ namespace RTE {
 			if (command.sequence == 0 && command.senderPeerId == GetLockstepHostPeerId() && std::holds_alternative<NetGameReseat>(command.payload)) captured.admittedReseats.push_back(command);
 		}
 		state = std::move(captured);
+		return true;
+	}
+
+	bool ScenarioRunner::RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error) {
+		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
+		    state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame || !state.pendingInputs.empty() || !state.pendingCommands.empty() ||
+		    !state.pendingPlayerBindings.empty() || !state.admittedReseats.empty()) {
+			if (error) *error = "catch-up state is not a committed boundary";
+			return false;
+		}
+		std::vector<uint8_t> validation;
+		if (!NetResyncCodec::Encode(state, {0}, validation, error)) return false;
+		const auto member = [&](uint8_t peer) { return peer > 0 && peer <= s_LockstepCoordinator->GetConfig().peerCount; };
+		for (const auto& [uid, peer]: state.controlOwners) if (!member(peer)) return false;
+		for (const auto& [uid, peer]: state.droppedControlOwners) if (!member(peer)) return false;
+		for (const auto& [peer, binding]: state.playerBindings) if (!member(peer)) return false;
+		for (const auto& [peer, sequence]: state.appliedCommands) if (!member(peer)) return false;
+		DiscardHeldLocalInputs();
+		s_LockstepControlOverrides = state.controlOwners;
+		s_LockstepDroppedControlOverrides = state.droppedControlOwners;
+		s_PeerPlayerBindings = state.playerBindings;
+		s_AppliedCommandSequences = state.appliedCommands;
+		s_LockstepAppliedFrame = state.savedTick;
+		s_E2eFirstTransferUid = state.e2eFirstTransferUid;
+		const auto applied = state.appliedCommands.find(GetLockstepLocalPeerId());
+		s_NextLocalCommandSequence = applied == state.appliedCommands.end() ? 1 : applied->second + 1;
 		return true;
 	}
 
@@ -2557,6 +2658,7 @@ namespace RTE {
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
+					FilterReclaimControllerInputs(ready);
 					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
