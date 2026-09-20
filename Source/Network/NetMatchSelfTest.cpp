@@ -6185,6 +6185,23 @@ namespace RTE {
 			*error = "the park stopped reaching the session once the worker handed it back";
 			return false;
 		}
+		// The arm itself: WorkerMain holds the session in a local before it hands it to the service, so
+		// nothing the game thread drives can reach it and the replay may never return to the pump.
+		NetMatchService arming;
+		arming.m_IsHost = false;
+		arming.m_State = NetMatchServiceState::Starting;
+		std::unique_ptr<NetSession> workerLocal = std::make_unique<NetSession>();
+		arming.m_WorldCatchUp.active = true;
+		arming.DriveWorldJoinClient(0);
+		if (workerLocal->IsSilenceSuspended()) {
+			*error = "the service pump reached a session only the worker thread holds";
+			return false;
+		}
+		arming.NoteWorldCatchUpArmed(*workerLocal);
+		if (!workerLocal->IsSilenceSuspended()) {
+			*error = "arming the private catch-up declared no park on the session the worker holds";
+			return false;
+		}
 		return true;
 	}
 

@@ -1160,6 +1160,9 @@ static std::string ResyncSaveName() {
 			receivedEnvelope = receivedState.size();
 			(void)PrepareReceivedResync(receivedState, *coordinator, pendingLoad, resyncState, &error, &receivedArchive);
 		}
+		// Staging the snapshot parked this thread for seconds and the game thread cannot reach this
+		// session while the worker owns it, so the silence windows start again here.
+		session->NotePumpParked();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LastResync.transferMs = transferMs;
@@ -3317,6 +3320,13 @@ static std::string ResyncSaveName() {
 			(void)m_WorldJoin.Membership().NoteSeatRespawn(peerId, nowFrame);
 			std::cout << "[net-world] seat respawn peer=" << static_cast<int>(peerId) << " at=" << nowFrame << std::endl;
 		}
+	}
+
+	// The catch-up is armed on the worker thread, which owns the session until it hands it back, and the
+	// replay that follows may never reach the service pump: the park is declared here, on that session.
+	void NetMatchService::NoteWorldCatchUpArmed(NetSession& session) {
+		session.NotePumpParked();
+		session.SetSilenceSuspended(true);
 	}
 
 	bool NetMatchService::PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error) {
@@ -6353,6 +6363,7 @@ static std::string ResyncSaveName() {
 			if (!receivedState.empty()) {
 				if (IsWorldJoinImageBlob(receivedState)) {
 					started = PrepareReceivedWorldJoin(receivedState, runner->GetMatchConfig(), pendingLoad, &error);
+					if (started) NoteWorldCatchUpArmed(*session);
 				} else {
 					NetResyncState state;
 					started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
