@@ -364,6 +364,21 @@ def check_drop_receipts(results, scratch):
     (root / "console.log").write_text("original process\n")
     matches = driver.log_assertions(root, ["original process"], ["later process"])
     ok &= row(results, "resume/console-evidence-is-stable", len(matches[0]["matches"]) == 1 and not matches[1]["matches"])
+    probe = root / "probe"
+    probe.mkdir()
+    value = {"steps": [{"index": 7, "observed": {"control": {"text": "ClientA is now hosting", "visible": True}}}]}
+    driver.write_json(probe / "net-ui-result.json", value)
+    item = {"screen": "game", "probe_steps": [7], "readback": [{"step": 7, "path": ["control", "text"], "contains": "is now hosting"}, {"step": 7, "path": ["control", "visible"], "equals": True}]}
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/visible-named-toast", evidence["probe"] == "pass")
+    value["steps"][0]["observed"]["control"]["visible"] = False
+    driver.write_json(probe / "net-ui-result.json", value)
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/hidden-text-is-not-visible-proof", evidence["probe"] == "fail")
+    value["steps"][0]["observed"]["control"].update(visible=True, text="LIVE")
+    driver.write_json(probe / "net-ui-result.json", value)
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/changed-toast-fails-without-blocking-observer", evidence["probe"] == "fail")
     return ok
 
 
