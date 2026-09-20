@@ -198,9 +198,10 @@ namespace RTE::MenuAutomation {
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
-			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll";
+			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" || command == "finish_tick_hashes";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "finish_tick_hashes") return FinishTickHashes(observation);
 		if (command == "assert_vertical_scroll") {
 			std::string name;
 			args >> name;

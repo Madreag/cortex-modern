@@ -201,6 +201,7 @@ static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
 static bool s_menuScriptObserveStep = false;
+static bool s_menuHashCapture = false;
 static bool s_menuScriptComplete = false;
 static bool s_menuScriptHoldE2ePause = false;
 static std::string s_snapshotRoundtripSelfTestName;
@@ -2040,6 +2041,17 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 	return false;
 }
 
+bool RTE::MenuAutomation::FinishTickHashes(std::string& observation) {
+	if (!s_menuHashCapture) { observation = "no menu hash capture is armed"; return false; }
+	g_MetricsCollector.EndRun();
+	const bool saved = g_MetricsCollector.WriteReport(ScenarioRunner::GetArgs().outPath);
+	s_recordTickHashes = false;
+	s_menuHashCapture = false;
+	g_MetricsCollector.SetRecordTickHashes(false);
+	observation = "finish_tick_hashes ticks=" + std::to_string(g_MetricsCollector.GetTickHashCount()) + " saved=" + std::to_string(saved);
+	return saved;
+}
+
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
 	s_menuScriptObserveStep = false;
@@ -2374,6 +2386,9 @@ void ProcessMenuScript() {
 			return MenuScriptFail("record_tick_hashes needs a lobby, -out and a positive -max-ticks");
 		}
 		s_recordTickHashes = true;
+		s_menuHashCapture = true;
+		g_MetricsCollector.BeginHostRun("Menu round", ScenarioRunner::GetArgs().seed);
+		g_MetricsCollector.SetRecordTickHashes(true);
 		MenuScriptPrint("record_tick_hashes armed for the next round");
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
