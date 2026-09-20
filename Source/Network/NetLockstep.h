@@ -581,6 +581,7 @@ namespace RTE {
 		bool holdDeadlineFeasible = true;
 		uint64_t lastHoldDeclarationMs = 0;
 		uint32_t ownParksExcluded = 0; //!< Gaps in our own ticks that were not charged to a peer.
+		uint64_t longestOwnParkMs = 0; //!< The longest of them; the start work a peer's machine is also doing.
 		uint64_t localTickOverruns = 0;
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;

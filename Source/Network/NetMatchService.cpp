@@ -974,6 +974,9 @@ static std::string ResyncSaveName() {
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
+			// The round owned the transport for the whole match, so nothing stamped a receive while it
+			// played. The silence windows start again here instead of measuring the match behind us.
+			if (m_Session) m_Session->NotePumpParked();
 			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
