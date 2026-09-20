@@ -1,0 +1,60 @@
+wait_ms 1800
+activate ButtonMainToOptions
+wait_ms 600
+select_settings_page Network:Connection
+video_mark direct-connection-client
+wait_ms 900
+combo_select ComboNetworkConnection Direct only
+wait_ms 600
+assert_label ComboNetworkConnection Direct only
+post_command ButtonBackToMainMenu
+wait_ms 900
+assert_screen MainScreen
+# The joining player's path through the real lobby UI: landing, join setup, connect, the read-only
+# match details, ready. The match is driven by this peer's probe; the script leaves afterwards.
+wait_ms 1980
+activate ButtonMainToMultiplayer
+video_mark direct-mp-landing-client
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait_ms 660
+assert_substate JoinSetup
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+wait_ms 495
+activate ButtonMultiplayerConnect
+video_mark direct-mp-lobby-client
+wait_connected 2
+wait_ms 825
+assert_substate Lobby
+dump_lobby
+video_mark direct-mp-details-read-only
+activate ButtonLobbyOptions
+wait_ms 495
+assert_substate HostOptions
+assert_label LabelHostOptionsTitle M A T C H   D E T A I L S
+activate TabHostPageRules
+wait_ms 660
+assert_visible CollectionBoxHostPageRules 1
+assert_enabled ButtonHostOptApply 0
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 495
+assert_substate Lobby
+activate ButtonMultiplayerReady
+wait_ms 495
+dump_lobby
+wait_file {PROBE_DIR}/done.json 90
+video_mark direct-mp-post-match-client
+wait_ms 1320
+assert_substate Lobby
+dump_lobby
+wait_ms 1980
+video_mark direct-mp-lobby-leave
+activate ButtonMultiplayerLeave
+wait_ms 1320
+assert_substate Landing
+wait_ms 660
+exit
