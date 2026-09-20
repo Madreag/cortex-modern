@@ -26,11 +26,40 @@ import time
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from compare_sim_traces import strict_compare
 from run_sim_test import make_run
 
 # The private port range: a lane takes its own block inside it so two lanes never share a listener.
 PRIVATE_PORTS = (49152, 65535)
+# A resumed peer that is resynced replays the ticks it already ran, so a pass is compared on its own.
+MIN_SHARED_TICKS = 30
+
+
+def read_live_hashes(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def split_passes(lines: list[dict]) -> list[list[dict]]:
+    passes: list[list[dict]] = []
+    for entry in lines:
+        if not passes or entry["tick"] <= passes[-1][-1]["tick"]:
+            passes.append([])
+        passes[-1].append(entry)
+    return passes
+
+
+def compare_live_hashes(host_path: Path, client_path: Path, first_tick: int) -> list[dict]:
+    """Every tick both peers ran carries the same gated hash and the same subsystem hashes."""
+    host = {entry["tick"]: entry for entry in read_live_hashes(host_path)}
+    results = []
+    for index, run in enumerate(split_passes(read_live_hashes(client_path))):
+        shared = [entry for entry in run if entry["tick"] >= first_tick and entry["tick"] in host]
+        mismatched = [entry["tick"] for entry in shared
+                      if entry["sim_gated"] != host[entry["tick"]]["sim_gated"] or entry["subsystems"] != host[entry["tick"]]["subsystems"]]
+        subsystems = sorted({name for entry in shared for name, value in entry["subsystems"].items()
+                             if value != host[entry["tick"]]["subsystems"].get(name)})
+        results.append({"pass": index, "first_tick": run[0]["tick"], "last_tick": run[-1]["tick"], "compared_ticks": len(shared),
+                        "mismatched_ticks": len(mismatched), "first_mismatches": mismatched[:8], "subsystems": subsystems})
+    return results
 
 
 def main() -> int:
@@ -123,15 +152,22 @@ def main() -> int:
         check = report.get("desync_check", {})
         if check.get("compares", 0) == 0 or check.get("mismatches", 0) != 0:
             failures.append(f"{who}: missing or mismatched live checksum comparisons")
-    compared, comparison = strict_compare(root / "host_trace.json", root / "client_trace.json",
-                                          first_tick=options.tick + 1, min_ticks=options.ticks)
-    if not compared:
-        failures.append("the restored peers' committed ticks differ")
+    comparison = compare_live_hashes(root / "host-live.jsonl", root / "client-live.jsonl", options.tick + 1)
+    if not comparison:
+        failures.append("the client recorded no live tick hashes")
+    for run in comparison:
+        if run["compared_ticks"] < MIN_SHARED_TICKS:
+            failures.append(f"pass {run['pass']} shared only {run['compared_ticks']} ticks with the host")
+        if run["mismatched_ticks"]:
+            failures.append(f"pass {run['pass']} ({run['first_tick']}-{run['last_tick']}) differs from the host on "
+                            f"{run['mismatched_ticks']} of {run['compared_ticks']} ticks: {run['first_mismatches']} {run['subsystems']}")
     passed = not failures
-    line = f"[retained-resume] {'PASS' if passed else 'FAIL'} tick={options.tick} compared_ticks={comparison['compared_ticks']}"
+    compared_ticks = sum(run["compared_ticks"] for run in comparison)
+    line = f"[retained-resume] {'PASS' if passed else 'FAIL'} tick={options.tick} passes={len(comparison)} compared_ticks={compared_ticks}"
     result = {"passed": passed, "final_line": line, "failures": failures, "comparison": comparison,
               "checkpoint_sha256": archive_hash, "deterministic_config_hash": expected_hash,
               "peer_config_hashes": identities, "port": options.port,
+              "desync_checks": {who: reports[who].get("desync_check", {}) for who in ("host", "client")},
               "retained_runtimes": {who: str(getattr(options, f"runtime_{who}").resolve()) for who in ("host", "client")}}
     (root / "result.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     print(line)
