@@ -1851,8 +1851,12 @@ static bool RunFrameRecorderSelfTest() {
 	FrameRecorder pacedRecorder;
 	if (!pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("the paced recorder refused to start: " + error);
 	if (pacedRecorder.Start(paced.string(), 5, &error)) return FrameRecorderSelfTestFail("a second Start on the same recorder was accepted");
+	int finishActions = 0;
+	pacedRecorder.SetFinishAction([&finishActions] { ++finishActions; });
 	feed(pacedRecorder);
 	pacedRecorder.Finish();
+	pacedRecorder.Finish();
+	if (finishActions != 1) return FrameRecorderSelfTestFail("the finish action must run exactly once");
 	nlohmann::json manifest;
 	if (!manifestOf(paced, manifest)) return FrameRecorderSelfTestFail("no readable manifest in " + paced.string());
 	if (manifest.value("schema", 0) != 1 || manifest.value("fps", 0) != 5) return FrameRecorderSelfTestFail("manifest schema/fps: " + manifest.dump());
@@ -2041,15 +2045,15 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 	return false;
 }
 
-bool RTE::MenuAutomation::FinishTickHashes(std::string& observation) {
-	if (!s_menuHashCapture) { observation = "no menu hash capture is armed"; return false; }
+static void FinishMenuTickHashes() {
+	if (!s_menuHashCapture) return;
 	g_MetricsCollector.EndRun();
 	const bool saved = g_MetricsCollector.WriteReport(ScenarioRunner::GetArgs().outPath);
 	s_recordTickHashes = false;
 	s_menuHashCapture = false;
 	g_MetricsCollector.SetRecordTickHashes(false);
-	observation = "finish_tick_hashes ticks=" + std::to_string(g_MetricsCollector.GetTickHashCount()) + " saved=" + std::to_string(saved);
-	return saved;
+	MenuScriptPrint("finish_tick_hashes ticks=" + std::to_string(g_MetricsCollector.GetTickHashCount()) + " saved=" + std::to_string(saved));
+	if (!saved) s_menuScriptFailed = true;
 }
 
 // Menu scripts use real controls and the normal screenshot render path.
@@ -2380,7 +2384,7 @@ void ProcessMenuScript() {
 		MenuScriptPrint("chat scope=" + scope + " ok=" + std::to_string(static_cast<int>(ok)) + " text=\"" + text + "\"");
 		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
 	} else if (cmd == "record_tick_hashes") {
-		if (s_recordTickHashes || g_ActivityMan.IsInActivity() ||
+		if (s_recordTickHashes || !FrameRecorder::Instance().Enabled() || g_ActivityMan.IsInActivity() ||
 		    g_NetMatchService.GetState() != NetMatchServiceState::Starting ||
 		    ScenarioRunner::GetArgs().outPath.empty() || ScenarioRunner::GetArgs().maxTicks <= 0) {
 			return MenuScriptFail("record_tick_hashes needs a lobby, -out and a positive -max-ticks");
@@ -2389,6 +2393,7 @@ void ProcessMenuScript() {
 		s_menuHashCapture = true;
 		g_MetricsCollector.BeginHostRun("Menu round", ScenarioRunner::GetArgs().seed);
 		g_MetricsCollector.SetRecordTickHashes(true);
+		FrameRecorder::Instance().SetFinishAction(FinishMenuTickHashes);
 		MenuScriptPrint("record_tick_hashes armed for the next round");
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();

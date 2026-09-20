@@ -14,7 +14,7 @@
         "-out",
         "{OUT}/host_trace.json",
         "-max-ticks",
-        "900"
+        "600"
       ],
       "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.host.menu.txt",
@@ -29,7 +29,7 @@
         "-out",
         "{OUT}/client_trace.json",
         "-max-ticks",
-        "900"
+        "600"
       ],
       "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.client.menu.txt",

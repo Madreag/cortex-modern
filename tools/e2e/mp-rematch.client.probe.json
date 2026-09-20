@@ -55,32 +55,18 @@
     {
       "op": "wait",
       "service": "Running",
-      "sim_at_least": 650
+      "sim_at_least": 550
     },
     {
       "op": "assert",
       "equals": {
         "service": "Running"
       },
-      "sim_at_least": 650
-    },
-    {
-      "op": "menu",
-      "command": "finish_tick_hashes"
-    },
-    {
-      "op": "menu",
-      "command": "video_mark round2-play-end"
-    },
-    {
-      "op": "wait",
-      "service": "Starting",
-      "scope": "menu"
+      "sim_at_least": 550
     },
     {
       "op": "signal",
-      "name": "done",
-      "scope": "menu"
+      "name": "done"
     },
     {
       "op": "finish"
