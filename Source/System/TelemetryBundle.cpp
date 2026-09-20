@@ -147,7 +147,7 @@ namespace RTE {
 		}
 
 		bool SecretSettingsKey(std::string_view name) {
-			if (name == "SessionDirectoryInstallKey" || name == "NetworkTurnPass" || name == "NetworkTurnUser" ||
+			if (name == "SessionDirectoryInstallKey" || name == "NetworkTurnPass" || name == "NetworkTurnUser" || name == "NetworkPlayerTurnUser" ||
 			    name == "SessionDirectoryCertSha256") {
 				return true;
 			}

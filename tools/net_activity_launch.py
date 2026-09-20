@@ -111,6 +111,8 @@ def encode_config(rules, wire, dedicated=False, default=False):
     payload += struct.pack("<BIBBB", 0, 0, 10, 1, 1)
     if horizon:
         payload += struct.pack("<H", horizon)
+    if wire.config_version.value >= 6:
+        payload += string("{}")
     return struct.pack(ENVELOPE, wire.magic.value, wire.version.value, wire.header_bytes.value,
                        wire.match_config_type.value, 0, len(payload)) + payload
 
@@ -1125,4 +1127,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

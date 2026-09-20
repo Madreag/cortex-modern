@@ -32,7 +32,7 @@ namespace {
 	constexpr int c_FixedDelayRowHeight = 20;
 
 	// The selector row and the page boxes share their names with the page they switch in.
-	constexpr std::array<const char*, 5> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet"};
+	constexpr std::array<const char*, 6> c_PageNames{"Player", "Chat", "Recovery", "Files", "Internet", "Connection"};
 
 	// The boxes take typed digits only, so anything else came from a skin edit and is discarded.
 	bool ParseWholeNumber(const std::string& text, int& value) {
@@ -216,7 +216,20 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 		natButton->SetText("NAT setup");
 	}
 	if (auto* reason = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetInternetReason"))) {
-		reason->SetText("NAT traversal: Host Options > Network. No relay is provided.");
+		reason->SetText("Connection sets your route. Host Options > Network sets the match's relay.");
+	}
+	m_ConnectionCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkConnection"));
+	for (const char* state : {"Automatic", "Direct only", "Relay only"}) m_ConnectionCombo->AddItem(state);
+	m_ConnectionHint = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkConnectionHint"));
+	m_StunServersTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkStunServers"));
+	m_RelayAddressTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayAddress"));
+	m_RelayUserTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayUser"));
+	m_RelayPassTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayPass"));
+	m_RelayPassTextbox->SetPasswordMask(true);
+	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkRelayHint"))->SetText("Leave the address empty for the host's offer. Changes apply next connection.\nThis build uses UDP TURN; TCP/TLS and live credential renewal are unavailable.");
+	for (GUITextBox* box : {m_StunServersTextbox, m_RelayAddressTextbox, m_RelayUserTextbox, m_RelayPassTextbox}) box->SetMaxTextLength(1024);
+	for (const char* name : {"LabelNetworkConnectionHint", "LabelNetworkStunHint", "LabelNetworkOwnRelay", "LabelNetworkRelayHint", "LabelNetInternetReason"}) {
+		if (auto* label = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl(name))) label->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	}
 
 	const auto rowTop = [](GUIControl* control) {
@@ -270,11 +283,22 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_RecordReplaysCheckbox->SetCheck(g_SettingsMan.GetNetworkRecordReplays());
 	m_DirUrlTextbox->SetText(g_SettingsMan.GetSessionDirectoryUrl());
 	m_DirPinTextbox->SetText(g_SettingsMan.GetSessionDirectoryCertSha256());
+	m_ConnectionCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkConnectionMode()));
+	static const char* hints[] = {"Direct first: lowest latency; relay adds a round trip if direct fails.", "Direct only: lowest latency; fails when routers block a direct route.", "Relay only: every packet uses the relay and adds its round trip."};
+	m_ConnectionHint->SetText(hints[static_cast<int>(g_SettingsMan.GetNetworkConnectionMode())]);
+	m_StunServersTextbox->SetText(g_SettingsMan.GetNetworkStunServersSetting());
+	m_RelayAddressTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnServers());
+	m_RelayUserTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnUser());
+	m_RelayPassTextbox->SetText(g_SettingsMan.GetNetworkPlayerTurnPass());
 	UpdateDelayPolicyRow();
 	UpdateStatusLines();
 }
 
 void SettingsNetworkGUI::ApplyTextboxes() {
+	g_SettingsMan.SetNetworkStunServers(m_StunServersTextbox->GetText());
+	g_SettingsMan.SetNetworkPlayerTurnServers(m_RelayAddressTextbox->GetText());
+	g_SettingsMan.SetNetworkPlayerTurnUser(m_RelayUserTextbox->GetText());
+	g_SettingsMan.SetNetworkPlayerTurnPass(m_RelayPassTextbox->GetText());
 	g_SettingsMan.SetNetworkDisplayName(m_DisplayNameTextbox->GetText());
 	g_SettingsMan.SetNetworkChatKey(m_ChatKeyTextbox->GetText());
 	m_ChatKeyTextbox->SetText(g_SettingsMan.GetNetworkChatKey());
@@ -462,6 +486,10 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkToastsEnabled(m_ToastsCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_PredictionCheckbox) {
 		g_SettingsMan.SetLocalPredictionEnabled(m_PredictionCheckbox->GetCheck());
+	} else if (guiEvent.GetControl() == m_ConnectionCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
+		g_SettingsMan.SetNetworkConnectionMode(static_cast<SettingsMan::NetworkConnectionMode>(std::clamp(m_ConnectionCombo->GetSelectedIndex(), 0, 2)));
+		ApplyTextboxes();
+		g_SettingsMan.UpdateSettingsFile();
 	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
 	} else if (guiEvent.GetControl() == m_ChatVisibleCheckbox) {
@@ -480,7 +508,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkOfferStoredRejoin(m_OfferRejoinCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_RecordReplaysCheckbox) {
 		g_SettingsMan.SetNetworkRecordReplays(m_RecordReplaysCheckbox->GetCheck());
-	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_PathHorizonTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_AutosavesKeptTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
+	} else if ((guiEvent.GetControl() == m_DisplayNameTextbox || guiEvent.GetControl() == m_IdleWaitTextbox || guiEvent.GetControl() == m_PathHorizonTextbox || guiEvent.GetControl() == m_FixedDelayTextbox || guiEvent.GetControl() == m_AutosavesKeptTextbox || guiEvent.GetControl() == m_DiagDirTextbox || guiEvent.GetControl() == m_DirUrlTextbox || guiEvent.GetControl() == m_DirPinTextbox || guiEvent.GetControl() == m_ChatKeyTextbox || guiEvent.GetControl() == m_StunServersTextbox || guiEvent.GetControl() == m_RelayAddressTextbox || guiEvent.GetControl() == m_RelayUserTextbox || guiEvent.GetControl() == m_RelayPassTextbox) && guiEvent.GetMsg() == GUITextBox::Enter) {
 		ApplyTextboxes();
 		// Clicking off a focused text box must commit it too, otherwise it keeps the keyboard.
 	} else if (guiEvent.GetMsg() == GUICollectionBox::Clicked &&

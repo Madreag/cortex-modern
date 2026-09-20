@@ -73,6 +73,10 @@ namespace RTE {
 
 		/// Gets the text in the textpanel.
 		const std::string& GetText() const { return m_Text; }
+		/// Masks presentation and clipboard text while retaining the editable value.
+		void SetPasswordMask(bool masked) { m_PasswordMask = masked; if (m_Font) UpdateText(); }
+		bool HasPasswordMask() const { return m_PasswordMask; }
+		std::string GetDisplayText() const { return m_PasswordMask ? std::string(m_Text.size(), '*') : m_Text; }
 
 		/// Gets the extra text which appears right-justified in the textpanel.
 		const std::string& GetRightText() const { return m_RightText; }
@@ -126,6 +130,7 @@ namespace RTE {
 		unsigned long m_FontSelectColor;
 
 		std::string m_Text;
+		bool m_PasswordMask = false;
 		std::string m_RightText; // Appears right-justified in the text field
 		bool m_Focus;
 		bool m_Locked;
