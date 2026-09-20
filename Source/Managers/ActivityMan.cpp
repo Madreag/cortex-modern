@@ -579,9 +579,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		if (!captured) {
 			// Every refused script value reaches the player the same way a manual save reports it.
 			ReportScriptGraphSaveRefusal(matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave, problems);
-			std::string message = "script graph capture refused";
-			for (const auto& problem: problems) message += ": " + problem;
-			throw std::runtime_error(message);
+			return false;
 		}
 		image->luaReused = false;
 		cow.RememberLua(image->graphs, LuaCheckpointWriteGeneration());
