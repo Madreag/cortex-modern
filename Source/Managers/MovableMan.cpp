@@ -955,6 +955,9 @@ void RTE::ResetLockstepPausedFrames() {
 	s_LockstepPausedFrames = 0;
 }
 
+uint64_t RTE::GetLockstepPausedFrames() { return s_LockstepPausedFrames; }
+void RTE::RestoreLockstepPausedFrames(uint64_t frames) { s_LockstepPausedFrames = frames; }
+
 void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
 	for (uint8_t peer: ready.reclaimedPeerIds) {
 		size_t reclaimed = 0;
@@ -1207,14 +1210,21 @@ namespace {
 bool MovableMan::RunLockstepPausedTick() {
 	const uint64_t simTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	std::string error;
-	if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, {}, &error)) {
-		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused queue: " + error);
-		return false;
-	}
 	NetLockstepReadyFrame readyFrame;
-	if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
-		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
-		return false;
+	if (ScenarioRunner::WorldCatchUpActive()) {
+		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused catch-up: " + error);
+			return false;
+		}
+	} else {
+		if (!ScenarioRunner::QueueLockstepLocalControllerFrames(simTick, {}, &error)) {
+			ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused queue: " + error);
+			return false;
+		}
+		if (!ScenarioRunner::WaitForLockstepControllerFrame(simTick, readyFrame, &error)) {
+			ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
+			return false;
+		}
 	}
 	ApplyLockstepSeatReclaims(readyFrame, m_Actors);
 	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, true);

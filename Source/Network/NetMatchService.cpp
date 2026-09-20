@@ -1253,15 +1253,16 @@ static std::string ResyncSaveName() {
 			if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false; };
 				const auto local = std::make_shared<LocalState>();
+				const auto pause = m_WorldCatchUp.pauseState;
 				m_ActivateCatchUpLocalSeat = [local](Activity& activity) { return local->valid && activity.RestoreNetLocalPlayerState(local->activity); };
 				if (!g_ActivityMan.SetPendingCheckpointCallbacks([local] {
 					local->input = g_UInputMan.SaveCheckpoint(); local->gui = GUIInput::SaveSharedCheckpoint(); local->frame = g_FrameMan.SaveNetLocalState();
 					if (g_ActivityMan.GetActivity()) local->valid = g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity);
 					return true;
-				}, [local, committed](Activity& activity) {
+				}, [local, committed, pause](Activity& activity) {
 					if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != committed->savedTick || !activity.ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
 					return g_UInputMan.LoadCheckpoint(local->input) && GUIInput::LoadSharedCheckpoint(local->gui) && g_FrameMan.LoadNetLocalState(local->frame) &&
-					    ScenarioRunner::RestoreCommittedCatchUpState(*committed);
+					    ScenarioRunner::RestoreCommittedCatchUpState(*committed) && ScenarioRunner::RestoreLockstepPauseState(pause, committed->savedTick);
 				})) return false;
 				g_ActivityMan.NoteLockstepRelaunch();
 			}
@@ -2406,6 +2407,7 @@ static std::string ResyncSaveName() {
 		state.pendingInputs.clear(); state.pendingCommands.clear(); state.pendingPlayerBindings.clear(); state.admittedReseats.clear();
 		NetWorldCheckpointImage image;
 		image.privateSessionId = config.sessionId; image.round = round; image.tick = tick;
+		image.pauseState = ScenarioRunner::CaptureLockstepPauseState();
 		image.authorityGeneration = config.migrationGeneration;
 		image.authorityPeerId = m_Coordinator->GetHostPeerId();
 		for (const auto& [peer, frame]: m_Coordinator->GetPeerLeaveFrames()) if (frame <= tick) image.departedPeers[peer] = frame;
@@ -3221,6 +3223,7 @@ static std::string ResyncSaveName() {
 			for (const auto& [peer, frame]: image.departedPeers) if (peer == 0 || peer > adopted.peerCount || frame > image.tick) return false;
 			std::copy(hash.begin(), hash.end(), m_WorldCatchUp.roundConfigHash.begin());
 			m_WorldCatchUp.sideState = image.sideState;
+			m_WorldCatchUp.pauseState = image.pauseState;
 			for (const auto& command: holds.commands) {
 				const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
 				if (!hold || hold->peerId == 0 || hold->peerId > adopted.peerCount || hold->cutoffFrame > image.tick) return false;
@@ -3408,8 +3411,11 @@ static std::string ResyncSaveName() {
 			std::string error;
 			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) { ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return; }
 			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
-			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error)) { ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return; }
+			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
+				ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return;
+			}
 			if (g_ActivityMan.GetActivity() && m_ActivateCatchUpLocalSeat && !m_ActivateCatchUpLocalSeat(*g_ActivityMan.GetActivity())) {
 				const auto binding = committed.playerBindings.find(m_LocalPeerId);
 				if (binding == committed.playerBindings.end() || !g_ActivityMan.GetActivity()->ApplyNetPlayerBindings(binding->second.bindings)) {

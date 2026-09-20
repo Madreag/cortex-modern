@@ -2710,9 +2710,13 @@ namespace RTE {
 		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
 		image.checkpointConfig = "config"; image.sideState = "state";
 		image.authorityPeerId = 2;
+		image.tick = 40; image.pauseState = {true, 90, 7};
 		NetWorldCheckpointImage decoded;
-		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.authorityPeerId != 2 || decoded.privateSessionId != config.sessionId)
-			return Fail("private checkpoint lost the migrated authority");
+		if (!DecodeWorldJoinOffer(EncodeWorldJoinOffer(image), decoded, &error) || decoded.authorityPeerId != 2 || decoded.privateSessionId != config.sessionId ||
+		    !decoded.pauseState.paused || decoded.pauseState.resumeCountdown != 90 || decoded.pauseState.pausedFrames != 7)
+			return Fail("private checkpoint lost the migrated authority or committed pause state");
+		auto badPause = image; badPause.pauseState.pausedFrames = 41;
+		if (DecodeWorldJoinOffer(EncodeWorldJoinOffer(badPause), decoded, &error)) return Fail("private checkpoint accepted more paused frames than committed frames");
 		if (DecodeWorldJoinOffer(R"({"schema":1,"private_session_id":"bad"})", decoded, &error)) return Fail("private offer accepted a mistyped identity");
 		host.PublishImage(image);
 		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);

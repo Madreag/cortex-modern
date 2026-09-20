@@ -493,6 +493,15 @@ namespace RTE {
 
 	/// Clears the paused-frame discount a coordinator handoff or resync relaunch starts from zero.
 	void ResetLockstepPausedFrames();
+	uint64_t GetLockstepPausedFrames();
+	void RestoreLockstepPausedFrames(uint64_t frames);
+
+	struct NetLockstepPauseState {
+		bool paused = false;
+		int resumeCountdown = -1;
+		uint64_t pausedFrames = 0;
+		bool IsValid(uint64_t frame) const { return pausedFrames <= frame && (resumeCountdown == -1 || (paused && resumeCountdown > 0)); }
+	};
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
