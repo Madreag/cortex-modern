@@ -418,6 +418,16 @@ def repair_probe(who, root):
     return {"schema": 1, "timeout_ms": 90000, "steps": steps + [{"op": "finish"}]}
 
 
+def combo_drawn_follows(control):
+    """The closed box's own line is the selected item, or the fit's shortening of it."""
+    selected, drawn = control.get("text", ""), control.get("drawn", "")
+    head = selected.split(" - ")[0]
+    if drawn in (selected, head):
+        return True
+    trimmed = drawn[:-3] if drawn.endswith("...") else drawn
+    return bool(trimmed) and (selected.startswith(trimmed) or head.startswith(trimmed))
+
+
 def combo_name(text):
     return text.rsplit(" - ", 1)[0] if " - " in (text or "") else (text or "")
 
@@ -1556,6 +1566,10 @@ def run_case(options, case, root, failing=None):
                 assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
         if not failing:
             if case == "net-activity":
+                drawn = [(image["json"], control) for image in images for control in image["controls"]
+                         if control["name"] in ("ComboHostActivity", "ComboHostScene", "ComboHostMode")
+                         and "drawn" in control and not combo_drawn_follows(control)]
+                assert not drawn, drawn
                 host_setup = [image for image in images if image["peer"] == "host"
                               and any(c["name"] == "ComboHostActivity" for c in image["controls"])]
                 assert host_setup, "ComboHostActivity missing from host dumps"

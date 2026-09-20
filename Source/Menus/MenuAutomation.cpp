@@ -587,6 +587,8 @@ namespace RTE::MenuAutomation {
 						row["fit_needed"] = needed;
 						row["fit_clamp"] = clamp;
 						row["fit_width"] = combo->GetWidth();
+						// The line the closed box draws, which a fit elides: it must follow every pick.
+						row["drawn"] = combo->GetText();
 					}
 					// Measure every drawn caption here so a layout review reads the whole page, not the named controls.
 					std::string measured;
