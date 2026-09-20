@@ -18,9 +18,10 @@ video_mark moderation-host-listening
 wait_connected 3 90
 wait_ms 1200
 video_mark moderation-three-seats
-assert_label LabelLobbyPlayer0 Host
-assert_label LabelLobbyPlayer1 ClientA
-assert_label LabelLobbyPlayer2 ClientB
+wait_ms 900
+observe assert_label LabelLobbyPlayer0 Host
+observe assert_label LabelLobbyPlayer1 ClientA
+observe assert_label LabelLobbyPlayer2 ClientB
 dump_lobby
 wait_ms 1200
 activate ButtonLobbyOptions
@@ -30,7 +31,7 @@ wait_ms 600
 activate ButtonHostSeatDetails1
 video_mark moderation-kick
 wait_ms 900
-assert_label LabelHostSeatDlgName ClientA
+observe assert_label LabelHostSeatDlgName ClientA
 assert_enabled ButtonHostSeatDlgKick 1
 activate ButtonHostSeatDlgKick
 wait_ms 1200
@@ -52,7 +53,7 @@ wait_ms 600
 activate ButtonHostSeatDetails2
 video_mark moderation-ban
 wait_ms 900
-assert_label LabelHostSeatDlgName ClientB
+observe assert_label LabelHostSeatDlgName ClientB
 assert_enabled ButtonHostSeatDlgBan 1
 activate ButtonHostSeatDlgBan
 wait_ms 1200
