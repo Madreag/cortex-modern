@@ -373,6 +373,17 @@
       "probe_steps": [
         7
       ]
+    },
+    {
+      "id": "held-client-rejoining",
+      "peer": "leaver",
+      "run": "held",
+      "screen": "RejoinOverlay",
+      "what": "The held client sees Held - AI in control - rejoining, then returns to play.",
+      "assert": "Private catch-up completes in the held client log; its rejoin overlay is recorded.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
     }
   ]
 }
