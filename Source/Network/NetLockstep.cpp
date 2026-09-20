@@ -6262,17 +6262,6 @@ namespace RTE {
 				continue;
 			}
 			const std::vector<uint8_t>& bytes = bytesFor(peerId);
-			static const auto testLossPercent = TestFrameFromEnvironment("CC_TEST_FRAME_PACKET_LOSS_PERCENT");
-			if (frame && testLossPercent && *testLossPercent <= 100 && std::getenv("CCCP_HEADLESS")) {
-				uint64_t sample = frame->targetFrame + 0x9e3779b97f4a7c15ULL * (peerId + 8ULL * m_Config.localPeerId);
-				sample = (sample ^ (sample >> 30)) * 0xbf58476d1ce4e5b9ULL;
-				sample = (sample ^ (sample >> 27)) * 0x94d049bb133111ebULL;
-				sample ^= sample >> 31;
-				if (sample % 100 < *testLossPercent) {
-					std::cout << "[net-frame-loss] frame=" << frame->targetFrame << " to=" << static_cast<int>(peerId) << " percent=" << *testLossPercent << std::endl;
-					continue;
-				}
-			}
 			// Only a frame has a reserved byte there; another payload's byte 1 means something else.
 			if (frame && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];

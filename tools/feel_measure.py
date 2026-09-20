@@ -115,7 +115,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     out.mkdir(exist_ok=False)
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else 'two-peer service e2e, normal render loop',
                     ticks=TICKS, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
-                    loss_percent=loss_percent, loss_scope='outbound client controller packets before transport', silent_tick=silent_tick,
+                    loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
@@ -147,7 +147,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{TICKS}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
-                environment['CC_TEST_FRAME_PACKET_LOSS_PERCENT'] = str(loss_percent)
+                environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
             if peer == 'client' and silent_tick:
                 flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
             run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
