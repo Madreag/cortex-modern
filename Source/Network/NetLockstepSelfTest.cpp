@@ -1435,6 +1435,50 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestAutomaticDelayKeepsFourPeersCommitting(std::string* error) {
+			std::array<LoopbackTransport, 4> wires;
+			std::array<NetLockstepCoordinator, 4> peers;
+			if (!wires[0].StartHost(48911, error)) return false;
+			for (size_t i = 1; i < wires.size(); ++i) if (!wires[i].Connect("loopback", 48911, error)) return false;
+			for (size_t i = 0; i < peers.size(); ++i) {
+				auto config = MakeCoordinatorConfig(static_cast<uint8_t>(i + 1), i == 0 ? 2 : 1, 0x9A39, 0, NetTransportLane::ControlReliable);
+				config.startFrame = 1; config.roundId = 39; config.peerCount = 4; config.timeoutMs = 30000;
+				config.adaptiveInputDelay = true; config.relayToOtherPeers = i == 0;
+				config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+				config.matchConfig.peerCount = 4; config.matchConfig.inputDelayFrames = 0;
+				config.remoteTransportPeerIds = i == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				if (!peers[i].Start(wires[i], config, error)) return false;
+			}
+			std::array<uint64_t, 4> produced{1, 1, 1, 1}, applied{};
+			std::array<std::string, 4> queueError;
+			std::array<std::map<uint64_t, std::map<int64_t, uint64_t>>, 4> traces;
+			for (uint64_t now = 0; now < 1000; ++now) {
+				for (size_t i = 0; i < peers.size(); ++i) {
+					auto& peer = peers[i];
+					while (peer.IsRunning() && produced[i] <= applied[i] + 2 && peer.QueueLocalInput(produced[i], {MakeFrame(100 + i, produced[i])}, {}, &queueError[i])) ++produced[i];
+					peer.Tick(now);
+					NetLockstepReadyFrame ready;
+					while (peer.PopReadyFrame(ready)) {
+						applied[i] = ready.frame;
+						for (const auto* frames: {&ready.localFrames, &ready.remoteFrames}) for (const auto& frame: *frames) traces[i][ready.frame][frame.actorUniqueID] = frame.stateMask;
+						if (!peer.FinishSimulationTick(ready.frame)) return false;
+					}
+				}
+				for (auto& wire: wires) wire.AdvanceTimeMs(1);
+				if (std::all_of(applied.begin(), applied.end(), [](uint64_t frame) { return frame >= 12; })) {
+					for (size_t i = 1; i < peers.size(); ++i) for (uint64_t frame = 1; frame <= 12; ++frame)
+						if (traces[i][frame] != traces[0][frame]) { *error = "automatic four-peer delay changed the committed controller trace"; return false; }
+					if (peers[0].GetStats().delayChangesCommitted != 3) { *error = "automatic four-peer delay did not resize all three zero-RTT peers"; return false; }
+					std::cout << "[net-lockstep-selftest] PASS automatic_four_peer_delay commits=12 changes=3" << std::endl;
+					return true;
+				}
+			}
+			*error = "automatic four-peer delay stopped committing";
+			for (size_t i = 0; i < peers.size(); ++i) *error += " peer=" + std::to_string(i + 1) + " applied=" + std::to_string(applied[i]) +
+			    " produced=" + std::to_string(produced[i]) + " queue=" + queueError[i] + " state=" + peers[i].BuildReportJson();
+			return false;
+		}
+
 		bool TestBoundedHoldKeepsCommitting(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -15645,6 +15689,7 @@ namespace RTE {
 		    !TestTimingDecisionCodec(&error) ||
 		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
+		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
