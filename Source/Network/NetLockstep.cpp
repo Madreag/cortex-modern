@@ -7954,12 +7954,9 @@ namespace RTE {
 			discardHeldInputs(m_RemoteValueObservations);
 		}
 		for (auto it = m_RemoteCommands.begin(); !UsesBoundedWait() && it != m_RemoteCommands.end();) {
-			it->second.erase(peerId);
-			if (it->second.empty()) {
-				it = m_RemoteCommands.erase(it);
-			} else {
-				++it;
-			}
+			const auto accepted = m_RemoteFrames.find(it->first);
+			if (accepted == m_RemoteFrames.end() || !accepted->second.contains(peerId)) it->second.erase(peerId);
+			if (it->second.empty()) it = m_RemoteCommands.erase(it); else ++it;
 		}
 		m_LastLeaveMessage = message;
 		if (agreedBoundary) {
