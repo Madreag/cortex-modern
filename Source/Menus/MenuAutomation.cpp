@@ -193,7 +193,7 @@ namespace RTE::MenuAutomation {
 		return fits;
 	}
 	bool Handles(const std::string& command) {
-		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" ||
+		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" || command == "assert_no_overlap" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
@@ -490,6 +490,13 @@ namespace RTE::MenuAutomation {
 				return input && input->QueueAutomationCommand([box] { box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0); });
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
+			if (command == "assert_no_overlap") {
+				auto* other = manager->GetControl(argument);
+				if (!Visible(control) || !Visible(other)) return false;
+				const auto a = Rectangle(control->GetPanel()), b = Rectangle(other->GetPanel());
+				observation += " rect=" + Json(a).dump() + " other=" + Json(b).dump();
+				return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+			}
 			if (command == "assert_rect_inside") {
 				auto* parent = argument == "parent" ? control->GetPanel()->GetParentPanel() : manager->GetControl(argument) ? manager->GetControl(argument)->GetPanel() : nullptr;
 				observation += " rect=" + Json(Rectangle(control->GetPanel())).dump() + " bounds=" + Json(Rectangle(parent)).dump();
