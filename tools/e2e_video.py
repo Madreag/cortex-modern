@@ -355,6 +355,12 @@ def item_evidence(record, item):
                         assertions=[{"step": index, "command": observed.get("script", {}).get("steps", [])[index]
                                      if index < len(observed.get("script", {}).get("steps", [])) else None,
                                      "observed": steps.get(index)} for index in required], path=str(path))
+        if item.get("sim_progress") is not None:
+            ticks = [steps[index]["observed"]["sim_frame"] for index in required if index in steps]
+            progress = ticks[-1] - ticks[0] if len(ticks) > 1 else 0
+            evidence["simulation_progress"] = {"observed": progress, "required": item["sim_progress"]}
+            if progress < item["sim_progress"]:
+                evidence["probe"] = "fail"
     else:
         evidence.update(probe_verdict(record.get("probe_dir", ""), item))
     return frame_range(rows, item), evidence
@@ -507,7 +513,8 @@ def run_one(options, scenario, run, run_index, out):
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": repr(error)}
         observe = next(peer.get("observe_after_failure", False) for peer in peers if peer["name"] == name)
-        if not observe and (records[name].get("error") or records[name].get("exit_code") not in (0, None) and not records[name].get("injected_termination")):
+        if not observe and (records[name].get("error") or menu_script_failures(runs[name].out) or
+                            records[name].get("exit_code") not in (0, None) and not records[name].get("injected_termination")):
             failed.set()
 
     threads, killers = [], []
