@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -173,6 +174,9 @@ namespace RTE {
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
 
 		void Configure(size_t maxFrames, uint64_t maxBytes);
+		void EnableJournal(const std::string& path);
+		bool HasJournal() const { return static_cast<bool>(m_Journal); }
+		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
 		/// Whether the log still covers the frame, so a join opened at B-1 can still converge.
@@ -196,6 +200,9 @@ namespace RTE {
 		};
 
 		void Trim();
+		struct Journal;
+		std::shared_ptr<Journal> m_Journal;
+		uint64_t m_JournalFirst = 0, m_JournalLast = 0;
 
 		std::deque<Record> m_Records;
 		size_t m_MaxFrames = c_DefaultMaxFrames;

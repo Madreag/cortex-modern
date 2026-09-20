@@ -9,13 +9,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <random>
 #include <sstream>
+#include <thread>
+#include <tuple>
 
 namespace RTE {
 
@@ -798,6 +804,116 @@ namespace RTE {
 
 #pragma region Committed frame tail
 
+	struct NetWorldFrameLog::Journal {
+		struct ReadResult { std::vector<std::vector<uint8_t>> records; uint64_t last = 0; };
+		struct Job {
+			uint64_t frame = 0, maxBytes = 0;
+			size_t maxRecords = 0;
+			std::vector<uint8_t> bytes;
+			std::shared_ptr<std::promise<ReadResult>> result;
+		};
+		std::string path;
+		std::mutex mutex;
+		std::condition_variable changed;
+		std::deque<Job> jobs;
+		uint64_t queuedBytes = 0;
+		bool stopping = false;
+		std::atomic<bool> failed{false};
+		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
+		std::thread worker;
+
+		explicit Journal(std::string value): path(std::move(value)), worker([this] { Run(); }) {}
+		~Journal() {
+			{ std::lock_guard lock(mutex); stopping = true; }
+			changed.notify_one();
+			if (worker.joinable()) worker.join();
+			std::error_code ignored;
+			std::filesystem::remove(path, ignored);
+		}
+		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
+			std::lock_guard lock(mutex);
+			if (failed || queuedBytes + bytes.size() > 32ULL * 1024 * 1024) { failed = true; return false; }
+			Job job; job.frame = frame; job.bytes = bytes;
+			queuedBytes += bytes.size(); jobs.push_back(std::move(job));
+			changed.notify_one();
+			return true;
+		}
+		size_t Copy(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* last) {
+			if (failed) return 0;
+			const auto key = std::make_tuple(from, maxRecords, maxBytes);
+			auto found = reads.find(key);
+			if (found == reads.end()) {
+				Job job; job.frame = from; job.maxRecords = maxRecords; job.maxBytes = maxBytes;
+				job.result = std::make_shared<std::promise<ReadResult>>();
+				found = reads.emplace(key, job.result->get_future().share()).first;
+				{ std::lock_guard lock(mutex); jobs.push_back(std::move(job)); }
+				changed.notify_one();
+			}
+			if (found->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return 0;
+			try {
+				const auto& ready = found->second.get();
+				out = ready.records;
+				if (last) *last = ready.last;
+			} catch (...) { failed = true; return 0; }
+			while (reads.size() > 32) {
+				auto oldest = reads.begin();
+				if (oldest == found) ++oldest;
+				reads.erase(oldest);
+			}
+			return out.size();
+		}
+		void Run() {
+			try {
+				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+				std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+				if (!stream) { failed = true; return; }
+				std::map<uint64_t, std::pair<uint64_t, uint32_t>> index;
+				uint64_t endOffset = 0;
+				while (true) {
+					Job job;
+					{
+						std::unique_lock lock(mutex);
+						changed.wait(lock, [&] { return stopping || !jobs.empty(); });
+						if (stopping) break;
+						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
+					}
+					if (!job.result) {
+						stream.clear(); stream.seekp(static_cast<std::streamoff>(endOffset));
+						stream.write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
+						if (!stream) { failed = true; return; }
+						index[job.frame] = {endOffset, static_cast<uint32_t>(job.bytes.size())};
+						endOffset += job.bytes.size();
+					} else {
+						ReadResult result;
+						uint64_t total = 0, expected = job.frame;
+						stream.flush();
+						for (auto record = index.lower_bound(job.frame); record != index.end(); ++record) {
+							const auto [offset, size] = record->second;
+							if (record->first != expected || result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
+							std::vector<uint8_t> bytes(size);
+							stream.clear(); stream.seekg(static_cast<std::streamoff>(offset));
+							stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+							if (!stream) { failed = true; result = {}; break; }
+							result.records.push_back(std::move(bytes)); total += size; result.last = record->first; ++expected;
+						}
+						job.result->set_value(std::move(result));
+					}
+				}
+			} catch (...) { failed = true; }
+		}
+	};
+
+	void NetWorldFrameLog::EnableJournal(const std::string& path) {
+		m_Journal = std::make_shared<Journal>(path);
+		for (const auto& record: m_Records) {
+			if (!m_Journal->Append(record.frame, record.bytes)) break;
+			if (m_JournalFirst == 0) m_JournalFirst = record.frame;
+			m_JournalLast = record.frame;
+		}
+	}
+
+	bool NetWorldFrameLog::JournalFailed() const { return m_Journal && m_Journal->failed; }
+
 	void NetWorldFrameLog::Configure(size_t maxFrames, uint64_t maxBytes) {
 		m_MaxFrames = maxFrames == 0 ? c_DefaultMaxFrames : maxFrames;
 		m_MaxBytes = maxBytes == 0 ? c_DefaultMaxBytes : maxBytes;
@@ -814,6 +930,10 @@ namespace RTE {
 		if (!EncodeCommittedJoinFrame(frame, record.bytes, error)) {
 			return false;
 		}
+		if (m_Journal && m_Journal->Append(frame.targetFrame, record.bytes)) {
+			if (m_JournalFirst == 0) m_JournalFirst = frame.targetFrame;
+			m_JournalLast = frame.targetFrame;
+		}
 		m_Bytes += record.bytes.size();
 		m_Records.push_back(std::move(record));
 		Trim();
@@ -829,7 +949,8 @@ namespace RTE {
 	}
 
 	bool NetWorldFrameLog::Covers(uint64_t frame) const {
-		return !m_Records.empty() && frame >= m_Records.front().frame && frame <= m_Records.back().frame;
+		return (m_Journal && !m_Journal->failed && m_JournalFirst != 0 && frame >= m_JournalFirst && frame <= m_JournalLast) ||
+		    (!m_Records.empty() && frame >= m_Records.front().frame && frame <= m_Records.back().frame);
 	}
 
 	size_t NetWorldFrameLog::CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied) const {
@@ -837,6 +958,7 @@ namespace RTE {
 		if (lastCopied) {
 			*lastCopied = 0;
 		}
+		if (m_Journal && (m_Records.empty() || from < m_Records.front().frame)) return m_Journal->Copy(from, maxRecords, maxBytes, out, lastCopied);
 		uint64_t bytes = 0;
 		for (const Record& record: m_Records) {
 			if (record.frame < from) {
@@ -862,6 +984,8 @@ namespace RTE {
 	}
 
 	void NetWorldFrameLog::Clear() {
+		m_Journal.reset();
+		m_JournalFirst = m_JournalLast = 0;
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;
@@ -1779,7 +1903,8 @@ namespace RTE {
 			{"joins_cancelled", m_JoinsCancelled},
 			{"image", {{"tick", m_Image.tick}, {"bytes", m_Image.bytes}, {"digest", m_Image.digest}, {"capture_ms", m_Image.captureMs}}},
 			{"spectators", {{"live", SpectatorCount()}, {"bound", SpectatorBound()}, {"free", SpectatorsFree()}}},
-			{"tail", {{"first", m_Tail.FirstFrame()}, {"last", m_Tail.LastFrame()}, {"count", m_Tail.Count()}, {"bytes", m_Tail.Bytes()}, {"evicted", m_Tail.Evicted()}}},
+			{"tail", {{"first", m_Tail.FirstFrame()}, {"last", m_Tail.LastFrame()}, {"count", m_Tail.Count()}, {"bytes", m_Tail.Bytes()}, {"evicted", m_Tail.Evicted()},
+			          {"journal", m_Tail.HasJournal()}, {"journal_failed", m_Tail.JournalFailed()}}},
 			{"sessions", std::move(sessions)},
 		};
 		report["membership"] = json::parse(m_Membership.BuildReportJson(), nullptr, false);

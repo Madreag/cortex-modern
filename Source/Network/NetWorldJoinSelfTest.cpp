@@ -2617,6 +2617,29 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestCommittedTailJournal() {
+		ResumeScratchDirectory scratch;
+		const auto path = scratch.path / "committed.inputs";
+		NetWorldFrameLog log;
+		log.Configure(2, 1024 * 1024);
+		log.EnableJournal(path.string());
+		std::string error;
+		for (uint64_t tick = 1; tick <= 8; ++tick) if (!log.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+		if (log.Count() != 2 || !log.Covers(1)) return Fail("bounded memory discarded the checkpoint's committed history");
+		std::vector<std::vector<uint8_t>> records;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (log.CopyFrom(1, 8, 1024 * 1024, records) == 0 && std::chrono::steady_clock::now() < deadline && !log.JournalFailed())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		if (records.size() != 8) return Fail("the asynchronous journal did not return its complete older window");
+		for (size_t index = 0; index < records.size(); ++index) {
+			NetLockstepFrame frame;
+			if (!DecodeCommittedJoinFrame(records[index], frame, &error) || frame != MakeCommittedFrame(index + 1)) return Fail("journal input differs from committed input: " + error);
+		}
+		log.Clear();
+		if (std::filesystem::exists(path)) return Fail("the ended round retained its private input journal");
+		return 0;
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -5928,6 +5951,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
+		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		{
 			std::string error;
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
