@@ -4,9 +4,9 @@
   "port_base": 49474,
   "size": "960x540",
   "timeout_s": 190,
-  "title": "Definition only: Direct only versus Relay only, proven by the connected transport and visible diagnostics",
+  "title": "Direct and relay UI with actual transport proof pending ENGINE 143",
   "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
-  "capture_policy": "No capture on this tip: direct lacks route evidence; relay also awaits the fixed coturn pair. The two log patterns are a proposed seam contract, not lines this build emits. The local TLS directory on 49478 supplies real listing and ICE signaling; both clients select its listed row. TURN remains external and unconfigured.",
+  "capture_policy": "The direct run captures its UI half. Actual route items and the relay run remain blocked by ENGINE 143.",
   "requires_tokens": [
     "TURN_SERVER",
     "TURN_USER",
@@ -15,7 +15,6 @@
   "runs": [
     {
       "name": "direct",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
       "peers": [
         {
           "name": "host",
@@ -113,7 +112,8 @@
             "timeout_s": 90
           }
         }
-      ]
+      ],
+      "blocker_class": "engine"
     }
   ],
   "checklist": [
