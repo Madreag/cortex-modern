@@ -420,7 +420,8 @@ class StateBirthNumberTests(unittest.TestCase):
                 self.assertIn(wanted, str(raised.exception))
 
     def test_a_threaded_state_accepts_one_uniform_offset_among_moved_nodes(self):
-        for version in ("SG5", "SG6"):
+        # Birth-number reports are an SG6 contract; SG5 was never released and reports no offsets.
+        for version in ("SG6",):
             def make(ids, serial):
                 return birth_graph(version, (table(1, ()), *(table(index, ((string("k"), f"n{value};"),))
                                     for value, index in enumerate(ids))),
