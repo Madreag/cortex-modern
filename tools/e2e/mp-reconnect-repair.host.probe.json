@@ -146,16 +146,13 @@
       "elapsed_ms": 660
     },
     {
-      "op": "assert_control",
-      "control": "LabelMatchRepairHint"
-    },
-    {
-      "op": "menu",
-      "command": "dump_host_options"
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 900
     },
     {
       "op": "wait",
-      "elapsed_ms": 1980
+      "elapsed_ms": 990
     },
     {
       "op": "signal",
