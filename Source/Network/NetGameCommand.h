@@ -30,6 +30,7 @@ namespace RTE {
 		PlaceBrain = 16, //!< 14 and 15 carry the AI intent commands.
 		WorldTransition = 17,
 		SeatHold = 18,
+		InputDelay = 19,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -357,7 +358,14 @@ namespace RTE {
 		bool operator==(const NetGameSeatHold&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold>;
+	/// The committed copy of a delay decision, for replay and recovery.
+	struct NetGameInputDelay {
+		uint8_t peerId = 0;
+		uint16_t frames = 0;
+		bool operator==(const NetGameInputDelay&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;
