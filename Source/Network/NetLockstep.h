@@ -299,6 +299,7 @@ namespace RTE {
 		uint32_t jitterMs = 0;
 		uint64_t authorityGeneration = 0;
 		uint64_t cutoffFrame = 0;
+		uint64_t neutralThroughFrame = 0;
 		std::array<uint32_t, 4> seatIncarnations{};
 		bool operator==(const NetLockstepTiming&) const = default;
 	};
@@ -560,6 +561,8 @@ namespace RTE {
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
 		uint32_t blockingFrameWaits = 0;
+		uint64_t holdNoticeBudgetMs = 0;
+		bool holdDeadlineFeasible = true;
 		uint64_t localTickOverruns = 0;
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;
@@ -776,6 +779,7 @@ namespace RTE {
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);

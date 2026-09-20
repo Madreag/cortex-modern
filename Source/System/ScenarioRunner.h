@@ -133,7 +133,7 @@ namespace RTE {
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
-		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr);
+		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr, bool captureLocalBindings = true);
 		/// The lockstep state every peer agrees on at the tick just completed. One reader for two
 		/// callers: the heal's snapshot capture and every checkpoint take these four fields from here.
 		static AutosaveSideState CaptureAgreedSideState();
@@ -277,6 +277,7 @@ namespace RTE {
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
+		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
 		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
 		static void ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId);

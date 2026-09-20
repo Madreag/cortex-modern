@@ -348,6 +348,8 @@ static std::vector<ControllerFrame> SnapshotLockstepControllerFrames(const std::
 	frames.reserve(actors.size());
 	for (Actor* actor: actors) {
 		const int64_t actorID = static_cast<int64_t>(actor->GetUniqueID());
+		const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actorID, actor->GetTeam(), !actor->IsPlayerControlled());
+		if (ScenarioRunner::IsLockstepSeatReclaimGap(owner, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) continue;
 		if (IsLockstepLocalActor(actor) == localOwned) {
 			frames.push_back(ControllerFrameCodec::Snapshot(actorID, *actor->GetController(), actor));
 		}

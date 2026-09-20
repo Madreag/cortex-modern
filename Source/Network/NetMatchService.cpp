@@ -3335,7 +3335,7 @@ static std::string ResyncSaveName() {
 					if (!decision || decision->senderPeerId != live.matchConfig.hostPeerId || decision->sessionId != live.sessionId || decision->roundId != live.roundId) continue;
 					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
 						live.initialSeatReclaims[m_LocalPeerId] = {m_LocalPeerId, decision->authorityGeneration, decision->revision,
-						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames};
+						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames, decision->neutralThroughFrame};
 				}
 				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
 				m_Runner->ConfigurePrivateJoin(live);
@@ -3355,11 +3355,14 @@ static std::string ResyncSaveName() {
 		if (m_Coordinator && m_Coordinator->IsRunning() && m_WorldCatchUp.privateMatch) {
 			NetResyncState committed;
 			std::string error;
-			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error)) { m_ErrorText = error; return; }
+			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) { m_ErrorText = error; return; }
 			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error)) { m_ErrorText = error; return; }
 			if (g_ActivityMan.GetActivity() && m_ActivateCatchUpLocalSeat) m_ActivateCatchUpLocalSeat(*g_ActivityMan.GetActivity());
+			g_UInputMan.ClearMouseButtons();
+			for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object))
+				actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;

@@ -649,7 +649,7 @@ namespace RTE {
 						if (!holdIdentity || command.sequence != 0 || !ValidatePeerId(reclaim.peerId, error, "reclaimed peer") ||
 						    reclaim.seatIncarnation == 0 || reclaim.eventSequence == 0 || reclaim.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames) return false;
 						AppendU8(out, reclaim.peerId); AppendU64LE(out, reclaim.authorityGeneration); AppendU64LE(out, reclaim.eventSequence);
-						AppendU32LE(out, reclaim.seatIncarnation); AppendU64LE(out, reclaim.activationFrame); AppendU16LE(out, reclaim.delayFrames);
+						AppendU32LE(out, reclaim.seatIncarnation); AppendU64LE(out, reclaim.activationFrame); AppendU16LE(out, reclaim.delayFrames); AppendU64LE(out, reclaim.neutralThroughFrame);
 						break;
 					}
 					case NetGameCommandType::SeatHold: {
@@ -1125,6 +1125,7 @@ namespace RTE {
 				return false;
 			}
 			if (phase >= 5) {
+				if (timing.peerId > 4 || (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) return false;
 				if (timing.cutoffFrame != timing.applyFrame) {
 					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "hold cutoff differs from its committed frame");
 					return false;
@@ -1158,6 +1159,7 @@ namespace RTE {
 			AppendU64LE(out, timing.authorityGeneration);
 			AppendU64LE(out, timing.cutoffFrame);
 			for (uint32_t incarnation: timing.seatIncarnations) AppendU32LE(out, incarnation);
+			AppendU64LE(out, timing.neutralThroughFrame);
 			return true;
 		}
 
@@ -1178,6 +1180,7 @@ namespace RTE {
 				if (!ReadOrTruncated(reader.ReadU64LE(timing.authorityGeneration) && reader.ReadU64LE(timing.cutoffFrame), reader, error, "timing authority")) return false;
 				for (auto& incarnation: timing.seatIncarnations)
 					if (!ReadOrTruncated(reader.ReadU32LE(incarnation), reader, error, "timing incarnation")) return false;
+				if (!ReadOrTruncated(reader.ReadU64LE(timing.neutralThroughFrame), reader, error, "reclaim neutral gap")) return false;
 			} else if (phase > 4) {
 				SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "hold transactions require the current wire");
 				return false;
@@ -1610,7 +1613,7 @@ namespace RTE {
 						NetGameSeatReclaim reclaim;
 						if (version < NetLockstepCodec::c_HoldTransactionVersion || command.sequence != 0 ||
 						    !ReadOrTruncated(reader.ReadU8(reclaim.peerId) && reader.ReadU64LE(reclaim.authorityGeneration) && reader.ReadU64LE(reclaim.eventSequence) &&
-						    reader.ReadU32LE(reclaim.seatIncarnation) && reader.ReadU64LE(reclaim.activationFrame) && reader.ReadU16LE(reclaim.delayFrames), reader, error, "seat reclaim") ||
+						    reader.ReadU32LE(reclaim.seatIncarnation) && reader.ReadU64LE(reclaim.activationFrame) && reader.ReadU16LE(reclaim.delayFrames) && reader.ReadU64LE(reclaim.neutralThroughFrame), reader, error, "seat reclaim") ||
 						    !ValidatePeerId(reclaim.peerId, error, "reclaimed peer") || reclaim.seatIncarnation == 0 || reclaim.eventSequence == 0 ||
 						    reclaim.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames) return false;
 						command.payload = reclaim;
@@ -4568,7 +4571,7 @@ namespace RTE {
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
 		} else if (timing.action == NetTimingAction::Reclaim) {
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
-			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames};
+			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame};
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_RemoteStartsReceived.erase(timing.peerId);
@@ -4576,6 +4579,7 @@ namespace RTE {
 			SetObservationEpoch(timing.applyFrame);
 		} else if (timing.action == NetTimingAction::Hold) {
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((timing.heldPeers & (1U << (peer - 1))) != 0) {
+				m_ReclaimTransactions.erase(peer);
 				m_HoldTransactions[peer] = {peer, timing.authorityGeneration, timing.revision, timing.seatIncarnations[peer - 1], timing.cutoffFrame};
 				m_Config.peerIncarnations[peer] = timing.seatIncarnations[peer - 1];
 			}
@@ -4606,7 +4610,7 @@ namespace RTE {
 			return false;
 		}
 		for (const auto& [revision, pending]: m_TimingDecisions)
-			if (pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & (1U << (peerId - 1))) != 0) return true;
+			if (!pending.committed && pending.proposal.action == NetTimingAction::Hold && (pending.proposal.heldPeers & (1U << (peerId - 1))) != 0) return true;
 		NetLockstepTiming timing;
 		timing.senderPeerId = m_Config.localPeerId; timing.peerId = peerId;
 		timing.action = NetTimingAction::Hold;
@@ -4656,12 +4660,22 @@ namespace RTE {
 		timing.action = NetTimingAction::Reclaim; timing.phase = NetTimingPhase::ReclaimAtFrame;
 		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId; timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.revision = m_NextTimingRevision++; timing.applyFrame = timing.cutoffFrame = frame; timing.nextFrame = m_Stats.nextFrame;
+		timing.neutralThroughFrame = frame + InputDelayAt(peerId, frame);
+		for (uint64_t produced = frame > NetLockstepCodec::c_MaxInputDelayFrames ? frame - NetLockstepCodec::c_MaxInputDelayFrames : 0; produced <= frame; ++produced)
+			timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, produced + InputDelayAt(GetHostPeerId(), produced));
 		timing.delayFrames = InputDelayAt(peerId, frame); timing.heldPeers = static_cast<uint8_t>(1U << (peerId - 1));
 		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1)); timing.seatIncarnations[peerId - 1] = incarnation;
 		m_RemoteTransports[peerId] = transport;
 		m_TimingDecisions[timing.revision] = {timing, timing.requiredPeers, true, m_TimingNowMs};
 		QueueTiming(timing); FlushTimingOutgoing(); ApplyTiming(timing);
 		return true;
+	}
+
+	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
+		const auto found = m_ReclaimTransactions.find(peerId);
+		if (found == m_ReclaimTransactions.end()) return false;
+		const auto& reclaim = found->second;
+		return frame >= reclaim.activationFrame && frame <= std::max(reclaim.neutralThroughFrame, reclaim.activationFrame + reclaim.delayFrames);
 	}
 
 	bool NetLockstepCoordinator::IsSeatUnderAI(uint8_t peerId, uint64_t frame) const {
@@ -4728,7 +4742,17 @@ namespace RTE {
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
 		const uint64_t boundMs = static_cast<uint64_t>(std::max<long long>(1, std::llround(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		if (m_Config.localPeerId == GetHostPeerId() && elapsed >= boundMs) {
+		uint64_t noticeMs = 2;
+		for (uint8_t survivor: m_RemotePeerIds) {
+			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame)) continue;
+			const auto estimate = m_DelayEstimators.find(survivor);
+			const auto& stats = m_Stats.peers[survivor];
+			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
+		}
+		m_Stats.holdNoticeBudgetMs = noticeMs;
+		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : 0;
+		if (m_Config.localPeerId == GetHostPeerId() && elapsed >= declarationDeadline) {
 			for (uint8_t peer: missing) ProposePeerHold(peer, nowMs);
 			AdvanceReadyFrames(nowMs);
 		}
@@ -6327,6 +6351,8 @@ namespace RTE {
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
+		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
+		out << "\"hold_deadline_feasible\":" << (m_Stats.holdDeadlineFeasible ? "true" : "false") << ",";
 		out << "\"steady_missing_frame_stalls\":" << (m_Stats.measuredMissingFrameBase ? std::to_string(m_Stats.missingFrameStalls - *m_Stats.measuredMissingFrameBase) : "null") << ",";
 		out << "\"steady_blocking_frame_waits\":" << (m_Stats.measuredBlockingWaitBase ? std::to_string(m_Stats.blockingFrameWaits - *m_Stats.measuredBlockingWaitBase) : "null") << ",";
 		out << "\"delay_changes_proposed\":" << m_Stats.delayChangesProposed << ",";
@@ -6459,7 +6485,7 @@ namespace RTE {
 			// Behind an undrained backlog, or this peer's stream would arrive out of order.
 			const bool backlogged = lane == m_Config.frameLane && [&] {
 				const auto backlogIt = m_RelayBacklog.find(peerId);
-				return backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty();
+				return (backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId);
 			}();
 			std::string sendError;
 			bool congested = false;
@@ -6730,7 +6756,7 @@ namespace RTE {
 			}
 			// Behind an undrained backlog, or this peer's stream would arrive out of order.
 			const auto backlogIt = m_RelayBacklog.find(peerId);
-			if (backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) {
+			if ((backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId)) {
 				QueueRelayBacklog(peerId, bytes);
 				continue;
 			}
@@ -6843,7 +6869,7 @@ namespace RTE {
 				it = m_RelayBacklog.erase(it);
 				continue;
 			}
-			while (!it->second.empty()) {
+			while (!it->second.empty() && !m_TimingOutgoing.contains(peerId)) {
 				std::string sendError;
 				bool congested = false;
 				if (!m_Transport->Send(transportIt->second, m_Config.frameLane, it->second.front(), &sendError, &congested)) {
@@ -7044,7 +7070,7 @@ namespace RTE {
 					}
 					return;
 				}
-				if (std::holds_alternative<NetLockstepRecoveryChunk>(decoded.packet.payload) && event.lane != NetTransportLane::ControlReliable) {
+				if ((std::holds_alternative<NetLockstepRecoveryChunk>(decoded.packet.payload) || std::holds_alternative<NetLockstepTiming>(decoded.packet.payload)) && event.lane != NetTransportLane::ControlReliable) {
 					if (UsesTransportPeer(event.peerId)) Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "recovery input requires the reliable control lane");
 					return;
 				}
