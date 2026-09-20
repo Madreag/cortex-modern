@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -233,6 +233,8 @@ def read_settings(path, names):
 
 
 def seeds(case):
+    if case == "prehost-visibility":
+        return {"host": {"SessionDirectoryUrl": "https://127.0.0.1:49479"}}
     if case in ("host-relay", "net-connection"):
         return {"host": {"SessionDirectoryUrl": ""}}
     if case in ("host-stun", "host-stun-empty"):
@@ -531,6 +533,35 @@ def connection_readback():
 
 
 def scripts(case, port, root):
+    if case == "local-end-match":
+        host = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
+                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
+                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
+                "activate ButtonMultiplayerStart\n")
+        client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait_ms 400\n"
+                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+                  "activate ButtonMultiplayerConnect\nwait_connected 2 60\nactivate ButtonMultiplayerReady\n")
+        probes = {}
+        for who in ("host", "client"):
+            steps = [{"op": "wait", "service": "Running"}, {"op": "wait", "elapsed_ms": 2000}]
+            if who == "host":
+                steps += [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+                          {"op": "wait", "screen": "Pause", "elapsed_ms": 400},
+                          menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
+            steps += [{"op": "wait", "service": "Starting", "scope": "menu"},
+                      {"op": "assert", "equals": {"service": "Starting"}, "scope": "menu"},
+                      {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
+            probes[who] = {"schema": 1, "timeout_ms": 45000, "steps": steps}
+        return ({who: text + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
+                 for who, text in (("host", host), ("client", client))}, probes)
+    if case == "prehost-visibility":
+        text = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
+                "activate ButtonHostOptions\nwait_ms 400\nactivate TabHostPageNetwork\n"
+                "activate TabHostNetTuning\nwait_ms 400\n")
+        for label in ("Internet: Unlisted", "Internet: Listed", "LAN only"):
+            text += f"combo_select ComboHostNetVisibility {label}\nwait_ms 500\nassert_label ComboHostNetVisibility {label}\n"
+        return {"host": text + "exit\n"}, {}
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: repair_probe(who, root) for who in ("host", "client")})
@@ -1012,6 +1043,10 @@ def scripts(case, port, root):
         text += "assert_rect_inside LabelHostRulesBrainless CollectionBoxHostPageRules\n"
         text += "assert_label LabelHostRulesBrainless When every human brain is lost\n"
         text += "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n"
+        text += ("combo_select ComboHostRulesBrainless End the match\nwait_ms 500\n"
+                 "assert_label ComboHostRulesBrainless End the match\n"
+                 "combo_select ComboHostRulesBrainless Keep playing, humans spectate\nwait_ms 500\n"
+                 "assert_label ComboHostRulesBrainless Keep playing, humans spectate\n")
         text += checks("ComboHostRulesBrainless", "CollectionBoxHostPageRules")
         text += "dump_host_options\n"
         # H21-H24 Network.
@@ -1055,6 +1090,10 @@ def scripts(case, port, root):
         text += "assert_label LabelHostOptionsTitle M A T C H   R E C O V E R Y\n"
         text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
+        text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled TextHostRecAutosaveInterval 1\n"
+                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
+                 "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
         # H25: a lobby is not a live match, so the button is off and the hint says why.
         text += checks("ButtonHostRecRepairNow", "CollectionBoxHostPageRecovery")
@@ -1073,6 +1112,10 @@ def scripts(case, port, root):
         text += "assert_label LabelHostOptionsTitle S E S S I O N\n"
         text += checks("LabelHostSessHosting", "CollectionBoxHostPageSession")
         text += checks("ComboHostSessIdle", "CollectionBoxHostPageSession")
+        text += ("combo_select ComboHostSessIdle 5 minutes\nwait_ms 500\n"
+                 "assert_label ComboHostSessIdle 5 minutes\n"
+                 "combo_select ComboHostSessIdle 10 minutes\nwait_ms 500\n"
+                 "assert_label ComboHostSessIdle 10 minutes\n")
         text += checks("LabelHostSessIdleState", "CollectionBoxHostPageSession")
         text += checks("LabelHostSessBanned", "CollectionBoxHostPageSession")
         text += checks("ButtonHostSessBanned", "CollectionBoxHostPageSession")
@@ -1370,9 +1413,9 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "repair", "live", "net-options", "net-activity")
+    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case == "net-activity"
+    menu_driven = case in ("net-activity", "local-end-match")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
