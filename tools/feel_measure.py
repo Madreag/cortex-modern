@@ -72,13 +72,13 @@ def private_settings(run, cap):
     write_json(Path(run.out) / 'runtime.json', manifest)
 
 
-def stage_baseline(run, active_ai=False):
+def stage_baseline(run, window_ticks=TICKS):
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
-    script = (HELPERS / 'FeelBaseline.lua').read_text(encoding='utf-8')
-    if active_ai:
-        script = script.replace('self:DisableAIs(true);', 'self:DisableAIs(false);')
-        script = script.replace('ParkTeam(self, team, 400,', 'ParkTeam(self, team, 400 + team * SceneMan.SceneWidth / 3,')
+    script, rewritten = re.subn(r'(?m)^local WINDOW_TICKS = \d+;$', f'local WINDOW_TICKS = {window_ticks};',
+                                (HELPERS / 'FeelBaseline.lua').read_text(encoding='utf-8'))
+    if rewritten != 1:
+        raise RuntimeError('the feel fixture does not carry exactly one WINDOW_TICKS line')
     (module / 'FeelBaseline.lua').write_text(script, encoding='utf-8')
     (module / 'Index.ini').write_text(
         'DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n'
@@ -167,7 +167,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             private_settings(run, cap)
             if record:
                 (run_out / 'feel').mkdir()
-            stage_baseline(run, active_ai=bool(silent_tick))
+            stage_baseline(run, final_tick)
             run.start()
             if not sp and peer == 'host':
                 time.sleep(.75)

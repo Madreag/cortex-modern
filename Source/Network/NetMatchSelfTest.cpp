@@ -6145,6 +6145,49 @@ namespace RTE {
 		return true;
 	}
 
+	// A rematch or resync worker owns the session while the game thread replays a private catch-up, so the
+	// park it declares has to reach the session that is evaluating silence, not the empty member.
+	bool TestAParkReachesTheSessionAWorkerOwns(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = false;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession& session = *service.m_Session;
+		service.m_WorldCatchUp.active = true;
+		service.DriveWorldJoinClient(0);
+		if (!session.IsSilenceSuspended()) {
+			*error = "a private catch-up did not hold the session's silence windows open";
+			return false;
+		}
+		// The worker takes the session exactly as StartResync does, and the catch-up keeps replaying.
+		std::unique_ptr<NetSession> owned = std::move(service.m_Session);
+		service.m_WorkerSession = owned.get();
+		owned->SetSilenceSuspended(false);
+		service.DriveWorldJoinClient(1);
+		if (!owned->IsSilenceSuspended()) {
+			*error = "the private catch-up's park never reached the session the resync worker owns";
+			return false;
+		}
+		// The catch-up ends: the windows are released on the same session, never left suspended.
+		service.m_WorldCatchUp.active = false;
+		service.DriveWorldJoinClient(2);
+		if (owned->IsSilenceSuspended()) {
+			*error = "the silence windows stayed suspended after the private catch-up ended";
+			return false;
+		}
+		// And the worker's session is the one a relaunch declares its park on.
+		service.NoteResyncRelaunched();
+		service.m_Session = std::move(owned);
+		service.m_WorkerSession = nullptr;
+		service.m_WorldCatchUp.active = true;
+		service.DriveWorldJoinClient(3);
+		if (!service.m_Session->IsSilenceSuspended()) {
+			*error = "the park stopped reaching the session once the worker handed it back";
+			return false;
+		}
+		return true;
+	}
+
 	bool TestHoldResolutionPumpDoesNotRelock(std::string* error) {
 		auto pumpOne = [&](NetHoldResolution resolution) -> bool {
 			NetMatchService service;
@@ -10525,7 +10568,7 @@ namespace RTE {
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 30}, {"supported_world_lockstep_codec_version", 31},
+		        {"supported_lockstep_codec_version", 32}, {"supported_world_lockstep_codec_version", 33},
 		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
@@ -12046,6 +12089,7 @@ namespace RTE {
 		if (!earlyOverTickError.empty()) return fail(earlyOverTickError);
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
+		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
 		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);

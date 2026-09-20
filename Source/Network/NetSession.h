@@ -6,6 +6,7 @@
 #include "NetReconnectSession.h"
 #include "NetTransport.h"
 
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -130,6 +131,7 @@ namespace RTE {
 		/// Holds the silence windows open for as long as this peer is the one not listening (a private
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.
 		void SetSilenceSuspended(bool suspended) { m_SilenceSuspended = suspended; }
+		bool IsSilenceSuspended() const { return m_SilenceSuspended; }
 		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
@@ -346,8 +348,9 @@ namespace RTE {
 		uint64_t m_LastTimeoutCheckMs = 0;
 		bool m_TimeoutsEvaluated = false;
 		bool m_ResumedWithoutTraffic = false;
-		bool m_PumpParked = false;
-		bool m_SilenceSuspended = false;
+		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
+		std::atomic<bool> m_PumpParked{false};
+		std::atomic<bool> m_SilenceSuspended{false};
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;
 		NetPeerId m_RemoteTransportPeerId = c_InvalidNetPeerId;
