@@ -149,7 +149,7 @@ namespace RTE {
 
 	/// Resolves a session id against a directory listing. Empty and a filled target when the row can
 	/// be joined, else the join list's own refusal label for it.
-	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal = nullptr);
+	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal = nullptr, bool reservedSeat = false);
 
 	enum class NetMatchServiceState {
 		Idle,
@@ -287,7 +287,7 @@ namespace RTE {
 		std::string resolved;
 		if (!sessionId.empty() && !rows.empty()) {
 			NetIceJoinTarget target;
-			if (NetIceResolveSessionRow(rows, local, sessionId, &target).empty() && !target.address.empty()) {
+			if (NetIceResolveSessionRow(rows, local, sessionId, &target, nullptr, TicketMatchesRequest(record, requestSessionId, requestAddress)).empty() && !target.address.empty()) {
 				resolved = target.address;
 			}
 		}
