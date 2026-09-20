@@ -10,6 +10,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 #include <variant>
 
