@@ -1,0 +1,93 @@
+# The host's own path: landing, host setup, every host options page, create, lobby, ready, start.
+# The match itself is driven by this peer's probe; the script picks the lobby up again afterwards
+# for the rematch round.
+wait_ms 1980
+activate ButtonMainToMultiplayer
+video_mark vw-mp-landing-host
+wait_ms 495
+assert_substate Landing
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+video_mark vw-mp-host-setup
+wait_ms 396
+assert_substate HostSetup
+video_mark vw-mp-activity-picker
+observe combo_select ComboHostActivity Void Wanderers - VoidWanderers.rte
+wait_ms 900
+assert_label ComboHostActivity Void Wanderers - VoidWanderers.rte
+wait_ms 500
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+wait_ms 495
+activate ButtonHostOptions
+wait_ms 396
+video_mark vw-mp-options-seats
+activate TabHostPageSeats
+wait_ms 660
+assert_visible CollectionBoxHostPageSeats 1
+dump_host_options
+video_mark vw-mp-options-rules
+activate TabHostPageRules
+wait_ms 660
+assert_visible CollectionBoxHostPageRules 1
+dump_host_options
+video_mark vw-mp-options-network
+activate TabHostPageNetwork
+wait_ms 660
+assert_visible CollectionBoxHostPageNetwork 1
+dump_host_options
+video_mark vw-mp-options-recovery
+activate TabHostPageRecovery
+wait_ms 660
+assert_visible CollectionBoxHostPageRecovery 1
+dump_host_options
+video_mark vw-mp-options-files
+activate TabHostPageFiles
+wait_ms 660
+assert_visible CollectionBoxHostPageFiles 1
+dump_host_options
+video_mark vw-mp-options-session
+activate TabHostPageSession
+wait_ms 660
+assert_visible CollectionBoxHostPageSession 1
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 396
+assert_substate HostSetup
+activate ButtonMultiplayerCreate
+video_mark vw-mp-lobby-host
+wait_ms 825
+assert_substate Lobby
+wait_connected 2 90
+wait_ms 825
+dump_lobby
+video_mark vw-mp-lobby-options
+activate ButtonLobbyOptions
+wait_ms 495
+assert_substate HostOptions
+activate TabHostPageSeats
+wait_ms 660
+assert_visible CollectionBoxHostPageSeats 1
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 495
+assert_substate Lobby
+wait_ms 495
+wait_remote_ready 90
+dump_lobby
+video_mark vw-mp-ready-start
+assert_enabled ButtonMultiplayerStart 1
+wait_ms 500
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/done.json 90
+video_mark vw-mp-post-match-host
+wait_ms 1320
+assert_substate Lobby
+dump_lobby
+wait_ms 990
+wait_ms 990
+dump_lobby
+# The client leaves on its own script; the lobby row it vacates is what this last stretch records.
+wait_ms 6600
+dump_lobby
+exit
