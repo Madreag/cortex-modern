@@ -179,8 +179,12 @@ configuration hash, complementary host/client roles, distinct peer ids, and unch
 It preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
 `local-pair-validation-only`; it is not a Mac capture. Picture review remains pending after a successful merge.
 
-On the Mac, both this definition and `sp-smoke` need Python with Pillow, ffmpeg on PATH (or a listed Unix path),
+On the Mac, both this definition and `sp-smoke` need Python, `date`, ffmpeg/ffprobe on PATH (or a listed Unix path),
 the matching data modules, and a built executable selected by `CCCP_TEST_BINARY` or `build-gns/CortexCommand`.
-The POSIX runner supplies the runtime and `CCCP_HEADLESS=1`; a working native display/GL context is still required.
+Pillow supplies labelled contact sheets; the ffmpeg fallback is unlabelled. The binary must include `wait_label`,
+`dump_match_identity` and the recorder flags. `CCCP_TEST_DATA` and `CCCP_TEST_SETTINGS` can select the data and settings.
+The POSIX runner supplies the runtime, `CCCP_HEADLESS=1`, `SDL_MAC_BACKGROUND_APP=1` and its dylib search path;
+a working native display/GL context is still required. The engine requests an SDL hidden window in both creation paths.
 Windows private-desktop isolation has no POSIX equivalent in this driver. The Mac lane must verify its own display
 isolation, GL frame readback, encoding and runtime dependencies. No Mac execution is implied by these definitions.
+Reading the scripts and runtime setup reveals no additional Mac-specific change needed by `sp-smoke`.
