@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "timeout_ms": 175000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark vw-mp-play-client"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "elapsed_ms": 10500
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark vw-mp-pause-client"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running",
+        "paused": false
+      }
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonLeaveMatch 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchOptions 1"
+    },
+    {
+      "op": "menu",
+      "command": "assert_enabled ButtonEndMatch 0"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonMatchOptions"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseMatchOptions",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark vw-mp-match-options-client"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible ButtonMatchRepairNow 0"
+    },
+    {
+      "op": "menu",
+      "command": "dump_host_options"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 825
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonMatchOptionsClose"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark vw-mp-end-match"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonResume"
+    },
+    {
+      "op": "wait",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_host}/done.json",
+      "scope": "menu"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 1980,
+      "scope": "menu"
+    },
+    {
+      "op": "signal",
+      "name": "done",
+      "scope": "menu"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 600
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait_ms 600
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 90
+wait_ms 900
+assert_substate Lobby
+video_mark resume-client-lobby
+dump_lobby
+activate ButtonMultiplayerReady
+wait_file {PROBE_DIR}/ready-to-drop.json 120
+wait_ms 120000

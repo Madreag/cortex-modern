@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "timeout_ms": 160000,
+  "steps": [
+    {
+      "op": "wait",
+      "scope": "menu",
+      "screen": "MultiplayerScreen"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "service": "Starting"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "service": "Failed"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "elapsed_ms": 1800
+    },
+    {
+      "op": "signal",
+      "scope": "menu",
+      "name": "removed"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

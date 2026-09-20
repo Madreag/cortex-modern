@@ -1,0 +1,37 @@
+wait_ms 1800
+activate ButtonMainToMultiplayer
+wait_ms 600
+settext TextMultiplayerName ClientB
+activate ButtonMultiplayerJoinGame
+wait_ms 600
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 3 90
+wait_ms 900
+assert_substate Lobby
+video_mark moderation-clientb-seated
+dump_lobby
+wait_state Failed 90
+video_mark moderation-clientb-removed
+wait_ms 900
+observe assert_status The host banned you from this session
+observe assert_substate Landing
+screenshot moderation-clientb-removed
+wait_ms 1800
+video_mark moderation-clientb-rejoin
+activate ButtonMultiplayerJoinGame
+wait_ms 600
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_state Failed 60
+video_mark moderation-clientb-refused
+wait_ms 1200
+observe assert_status The host banned you from this session
+observe assert_error ParticipantBanned
+observe assert_label LabelMultiplayerLandingStatus ParticipantBanned
+screenshot moderation-clientb-refused
+wait_file {PROBE_DIR}/refused.json 40
+wait_ms 1800
+exit
