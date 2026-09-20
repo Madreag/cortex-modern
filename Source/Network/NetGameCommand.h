@@ -352,9 +352,13 @@ namespace RTE {
 		bool operator==(const NetGamePlayerBindings&) const = default;
 	};
 
-	/// The committed copy of an acknowledged hold, retained by recordings and recovery.
+	/// The host's committed seat cutoff, retained by recordings and recovery.
 	struct NetGameSeatHold {
 		uint8_t peerId = 0;
+		uint64_t authorityGeneration = 0;
+		uint64_t eventSequence = 0;
+		uint32_t seatIncarnation = 0;
+		uint64_t cutoffFrame = 0;
 		bool operator==(const NetGameSeatHold&) const = default;
 	};
 

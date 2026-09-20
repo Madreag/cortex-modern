@@ -664,6 +664,12 @@ namespace RTE {
 		lockstepConfig.resumeFromSnapshot = m_ResyncRound || !m_ReceivedStateBytes.empty();
 		if (const auto* admission = session.GetReconnectHost()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetEpoch();
+			for (const auto& seat: admission->GetSeatTable()) {
+				NetPeerId connection = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (!seat.cpu && admission->GetSeatHolder(seat.stableSeat, connection, generation, incarnation) && incarnation != 0)
+					lockstepConfig.peerIncarnations[seat.lockstepPeerId] = incarnation;
+			}
 		} else if (const auto* admission = session.GetReconnectClient(); admission && admission->IsAdmitted() && admission->HasRecord()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetRecord().epoch;
 		}

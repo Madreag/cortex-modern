@@ -279,9 +279,9 @@ namespace RTE {
 	};
 
 	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2 };
-	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4 };
+	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6 };
 
-	/// A round-scoped timing decision and the peers that must acknowledge its boundary.
+	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
 	struct NetLockstepTiming {
 		uint8_t senderPeerId = 0;
 		uint8_t peerId = 0;
@@ -297,6 +297,9 @@ namespace RTE {
 		uint8_t heldPeers = 0;
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
+		uint64_t authorityGeneration = 0;
+		uint64_t cutoffFrame = 0;
+		std::array<uint32_t, 4> seatIncarnations{};
 		bool operator==(const NetLockstepTiming&) const = default;
 	};
 
@@ -359,6 +362,7 @@ namespace RTE {
 		uint64_t startFrame = 0;
 		uint16_t inputDelayFrames = 0;
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
+		std::map<uint8_t, uint32_t> peerIncarnations;
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -597,9 +601,10 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 24;
-		static constexpr uint16_t c_WorldVersion = 25;
+		static constexpr uint16_t c_Version = 26;
+		static constexpr uint16_t c_WorldVersion = 27;
 		static constexpr uint16_t c_TimingVersion = 24;
+		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
@@ -1100,6 +1105,7 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
