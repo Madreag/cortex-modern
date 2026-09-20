@@ -47,7 +47,10 @@
       "peer": "ui",
       "mark": "addenda-landing",
       "what": "The landing panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerBlurb .* PASS"
+      ]
     },
     {
       "id": "host",
@@ -55,7 +58,12 @@
       "peer": "ui",
       "mark": "addenda-host",
       "what": "The host panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
+        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
+      ]
     },
     {
       "id": "lobby",
@@ -63,7 +71,12 @@
       "peer": "ui",
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      ]
     },
     {
       "id": "transition-audio",
@@ -71,7 +84,10 @@
       "peer": "ui",
       "mark": "transition-audio",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Audio .* PASS"
+      ]
     },
     {
       "id": "transition-input",
@@ -79,7 +95,10 @@
       "peer": "ui",
       "mark": "transition-input",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Input .* PASS"
+      ]
     },
     {
       "id": "transition-gameplay",
@@ -87,7 +106,10 @@
       "peer": "ui",
       "mark": "transition-gameplay",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Gameplay .* PASS"
+      ]
     },
     {
       "id": "transition-misc",
@@ -95,7 +117,10 @@
       "peer": "ui",
       "mark": "transition-misc",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Misc .* PASS"
+      ]
     },
     {
       "id": "transition-video",
@@ -103,7 +128,10 @@
       "peer": "ui",
       "mark": "transition-video",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Video .* PASS"
+      ]
     },
     {
       "id": "transition-network",
@@ -111,7 +139,10 @@
       "peer": "ui",
       "mark": "transition-network",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network .* PASS"
+      ]
     },
     {
       "id": "transition-network-chat",
@@ -119,7 +150,10 @@
       "peer": "ui",
       "mark": "transition-network-chat",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Chat .* PASS"
+      ]
     },
     {
       "id": "transition-network-recovery",
@@ -127,7 +161,10 @@
       "peer": "ui",
       "mark": "transition-network-recovery",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Recovery .* PASS"
+      ]
     },
     {
       "id": "transition-network-files",
@@ -135,7 +172,10 @@
       "peer": "ui",
       "mark": "transition-network-files",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Files .* PASS"
+      ]
     },
     {
       "id": "transition-network-internet",
@@ -143,7 +183,10 @@
       "peer": "ui",
       "mark": "transition-network-internet",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Internet .* PASS"
+      ]
     },
     {
       "id": "transition-network-connection",
@@ -151,7 +194,10 @@
       "peer": "ui",
       "mark": "transition-network-connection",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Connection .* PASS"
+      ]
     },
     {
       "id": "transition-network-player",
@@ -159,7 +205,10 @@
       "peer": "ui",
       "mark": "transition-network-player",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Player .* PASS"
+      ]
     },
     {
       "id": "landing",
@@ -167,7 +216,10 @@
       "peer": "ui",
       "mark": "addenda-landing",
       "what": "The landing panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerBlurb .* PASS"
+      ]
     },
     {
       "id": "host",
@@ -175,7 +227,12 @@
       "peer": "ui",
       "mark": "addenda-host",
       "what": "The host panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
+        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
+      ]
     },
     {
       "id": "lobby",
@@ -183,7 +240,12 @@
       "peer": "ui",
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      ]
     },
     {
       "id": "transition-audio",
@@ -191,7 +253,10 @@
       "peer": "ui",
       "mark": "transition-audio",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Audio .* PASS"
+      ]
     },
     {
       "id": "transition-input",
@@ -199,7 +264,10 @@
       "peer": "ui",
       "mark": "transition-input",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Input .* PASS"
+      ]
     },
     {
       "id": "transition-gameplay",
@@ -207,7 +275,10 @@
       "peer": "ui",
       "mark": "transition-gameplay",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Gameplay .* PASS"
+      ]
     },
     {
       "id": "transition-misc",
@@ -215,7 +286,10 @@
       "peer": "ui",
       "mark": "transition-misc",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Misc .* PASS"
+      ]
     },
     {
       "id": "transition-video",
@@ -223,7 +297,10 @@
       "peer": "ui",
       "mark": "transition-video",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Video .* PASS"
+      ]
     },
     {
       "id": "transition-network",
@@ -231,7 +308,10 @@
       "peer": "ui",
       "mark": "transition-network",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network .* PASS"
+      ]
     },
     {
       "id": "transition-network-chat",
@@ -239,7 +319,10 @@
       "peer": "ui",
       "mark": "transition-network-chat",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Chat .* PASS"
+      ]
     },
     {
       "id": "transition-network-recovery",
@@ -247,7 +330,10 @@
       "peer": "ui",
       "mark": "transition-network-recovery",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Recovery .* PASS"
+      ]
     },
     {
       "id": "transition-network-files",
@@ -255,7 +341,10 @@
       "peer": "ui",
       "mark": "transition-network-files",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Files .* PASS"
+      ]
     },
     {
       "id": "transition-network-internet",
@@ -263,7 +352,10 @@
       "peer": "ui",
       "mark": "transition-network-internet",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Internet .* PASS"
+      ]
     },
     {
       "id": "transition-network-connection",
@@ -271,7 +363,10 @@
       "peer": "ui",
       "mark": "transition-network-connection",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Connection .* PASS"
+      ]
     },
     {
       "id": "transition-network-player",
@@ -279,7 +374,10 @@
       "peer": "ui",
       "mark": "transition-network-player",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Player .* PASS"
+      ]
     },
     {
       "id": "landing",
@@ -287,7 +385,10 @@
       "peer": "ui",
       "mark": "addenda-landing",
       "what": "The landing panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerBlurb .* PASS"
+      ]
     },
     {
       "id": "host",
@@ -295,7 +396,12 @@
       "peer": "ui",
       "mark": "addenda-host",
       "what": "The host panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_no_overlap CheckHostPortMap ButtonHostOptions .* PASS",
+        "\\[menu-script\\] assert_text_fits CheckHostPortMap .* PASS",
+        "\\[menu-script\\] assert_label ComboHostActivity .*Skirmish Defense.* PASS"
+      ]
     },
     {
       "id": "lobby",
@@ -303,7 +409,12 @@
       "peer": "ui",
       "mark": "addenda-lobby",
       "what": "The lobby panel shows the corrected labels and geometry.",
-      "assert": "Recorded control readbacks and first-frame screenshots."
+      "assert": "Recorded control readbacks and first-frame screenshots.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*Waiting for 2 players.* PASS",
+        "\\[menu-script\\] assert_label LabelMultiplayerStatus .*LAN address:.* PASS",
+        "\\[menu-script\\] assert_text_fits LabelHostSeatHeader .* PASS"
+      ]
     },
     {
       "id": "transition-audio",
@@ -311,7 +422,10 @@
       "peer": "ui",
       "mark": "transition-audio",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Audio .* PASS"
+      ]
     },
     {
       "id": "transition-input",
@@ -319,7 +433,10 @@
       "peer": "ui",
       "mark": "transition-input",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Input .* PASS"
+      ]
     },
     {
       "id": "transition-gameplay",
@@ -327,7 +444,10 @@
       "peer": "ui",
       "mark": "transition-gameplay",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Gameplay .* PASS"
+      ]
     },
     {
       "id": "transition-misc",
@@ -335,7 +455,10 @@
       "peer": "ui",
       "mark": "transition-misc",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Misc .* PASS"
+      ]
     },
     {
       "id": "transition-video",
@@ -343,7 +466,10 @@
       "peer": "ui",
       "mark": "transition-video",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Video .* PASS"
+      ]
     },
     {
       "id": "transition-network",
@@ -351,7 +477,10 @@
       "peer": "ui",
       "mark": "transition-network",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network .* PASS"
+      ]
     },
     {
       "id": "transition-network-chat",
@@ -359,7 +488,10 @@
       "peer": "ui",
       "mark": "transition-network-chat",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Chat .* PASS"
+      ]
     },
     {
       "id": "transition-network-recovery",
@@ -367,7 +499,10 @@
       "peer": "ui",
       "mark": "transition-network-recovery",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Recovery .* PASS"
+      ]
     },
     {
       "id": "transition-network-files",
@@ -375,7 +510,10 @@
       "peer": "ui",
       "mark": "transition-network-files",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Files .* PASS"
+      ]
     },
     {
       "id": "transition-network-internet",
@@ -383,7 +521,10 @@
       "peer": "ui",
       "mark": "transition-network-internet",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Internet .* PASS"
+      ]
     },
     {
       "id": "transition-network-connection",
@@ -391,7 +532,10 @@
       "peer": "ui",
       "mark": "transition-network-connection",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Connection .* PASS"
+      ]
     },
     {
       "id": "transition-network-player",
@@ -399,7 +543,10 @@
       "peer": "ui",
       "mark": "transition-network-player",
       "what": "The selected page and its title appear without the old page controls.",
-      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility.",
+      "log_regex": [
+        "\\[menu-script\\] assert_settings_page Network:Player .* PASS"
+      ]
     }
   ]
 }
