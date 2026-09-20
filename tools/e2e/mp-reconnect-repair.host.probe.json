@@ -8,6 +8,10 @@
       "sim_at_least": 150
     },
     {
+      "op": "menu",
+      "command": "video_mark repair-f6"
+    },
+    {
       "op": "key_down",
       "key": "F6"
     },
@@ -58,6 +62,10 @@
     {
       "op": "wait",
       "panel_open": false
+    },
+    {
+      "op": "menu",
+      "command": "video_mark repair-pause"
     },
     {
       "op": "key_down",
@@ -136,6 +144,10 @@
     {
       "op": "wait",
       "elapsed_ms": 660
+    },
+    {
+      "op": "menu",
+      "command": "video_mark repair-request"
     },
     {
       "op": "menu",

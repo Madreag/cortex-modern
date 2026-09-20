@@ -220,7 +220,8 @@
       "screen": "game",
       "what": "F6 opens the network overlay in the running match and its Options view reads the live match rules",
       "assert": "probe: wait panel_open true, assert_control NetworkSeatsOptionsText",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-f6"
     },
     {
       "id": "rp-repair-hint-host",
@@ -228,7 +229,8 @@
       "screen": "PauseMatchOptions",
       "what": "the host's Match Options offers Repair with its hint inside the dialog",
       "assert": "probe: assert_enabled ButtonMatchRepairNow 1 and the two-press hint",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-pause"
     },
     {
       "id": "rp-repair-hint-client",
@@ -236,7 +238,8 @@
       "screen": "PauseMatchOptions",
       "what": "the client's Match Options shows no Repair button and says the repair is the host's call",
       "assert": "probe: assert_visible ButtonMatchRepairNow 0, assert_label LabelMatchRepairHint Repair is the host's call",
-      "run": "repair"
+      "run": "repair",
+      "mark": "repair-pause"
     },
     {
       "id": "rp-repair-applied",
@@ -259,7 +262,8 @@
       "log_regex": [
         "\\[net-match\\] resync: reloading from the host snapshot"
       ],
-      "assert": "A recorded ResyncOverlay frame and the peer snapshot-reload log line."
+      "assert": "A recorded ResyncOverlay frame and the peer snapshot-reload log line.",
+      "probe_steps": []
     }
   ]
 }
