@@ -11998,6 +11998,8 @@ namespace RTE {
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
 		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
+		NetMatchService keepaliveService;
+		if (!keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error)) return fail(error);
 		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
 		if (!stopCancelError.empty()) return fail(stopCancelError);
 		if (!endedAdmissionError.empty()) return fail(endedAdmissionError);
