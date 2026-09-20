@@ -2966,6 +2966,9 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	ScenarioRunner::NoteResyncOverlayFrame();
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
+	if (FrameRecorder::Instance().Enabled()) {
+		g_FrameMan.RecordVideoFrame(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
 	NetModerationGUIProbe::AfterDraw();
 	g_UInputMan.EndFrame();
 	g_UInputMan.EndSimUpdate();
