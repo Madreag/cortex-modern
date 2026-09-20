@@ -199,8 +199,9 @@ def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
         kill_gate = node.get("kill_when")
-        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or not kill_gate.get("event")):
-            return {"class": "harness", "reason": "A process-drop event must name an existing peer and event"}
+        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or
+                          bool(kill_gate.get("event")) == (kill_gate.get("probe_complete") is True)):
+            return {"class": "harness", "reason": "A process-drop gate must name a peer and either an event or a completed probe"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -414,6 +415,14 @@ def drop_evidence(record, tick):
     passed = receipt.get("requested_tick") == tick and receipt.get("last_recorded_frame", {}).get("sim_tick", -1) >= tick
     passed = passed and str(record.get("record", {}).get("injected_termination", "")).startswith("scenario drop")
     return {"path": str(path), "receipt": receipt, "pass": passed}
+
+
+def completed_probe(path):
+    try:
+        result = json.loads(Path(path).read_text(encoding="utf-8"))
+        return isinstance(result, dict) and result.get("complete") is True and result.get("pass") is True
+    except (OSError, ValueError):
+        return False
 
 
 def item_evidence(record, item):
@@ -712,6 +721,8 @@ def run_one(options, scenario, run, run_index, out):
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
+        if gate.get("probe_complete"):
+            return completed_probe(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json")
         video = Path(shared[f"VIDEO_{name}"])
         if "sim_tick" in gate:
             return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
@@ -737,7 +748,8 @@ def run_one(options, scenario, run, run_index, out):
             if gate_met(gate):
                 rows = read_index(shared[f"VIDEO_{name}"])
                 write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None})
-                drop_peer(runs[name], "scenario drop after peer event " + gate["event"])
+                description = "completed peer probe" if gate.get("probe_complete") else "peer event " + gate["event"]
+                drop_peer(runs[name], "scenario drop after " + description)
                 return
 
     interrupted, stop_finding = None, None
