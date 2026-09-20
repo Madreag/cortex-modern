@@ -20,7 +20,7 @@ An exit code missing from an interrupted runner record stays unknown. Finalizati
 
 The minimum set is `sp-smoke`, `mp-host-join`, `mp-reconnect-repair`, `world-late-join`, `ui-surfaces`,
 `mod-void-wanderers`, `mp-leave`, `mp-rematch`, and `mp-rollback-lag`. The single-process smoke includes the shipped
-Scenario Battle picker and local play. Its original, unchanged FeelBaseline leg remains a separate prerequisite.
+Scenario Battle picker and local play. Its FeelBaseline leg separately checks fixture startup and Lua errors.
 
 ## The file
 
