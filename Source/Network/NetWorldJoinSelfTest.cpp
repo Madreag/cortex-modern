@@ -2062,7 +2062,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 22},
+			{"lockstep_codec_version", 24},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2172,8 +2172,8 @@ namespace RTE {
 			return Fail("WorldTransition frame did not encode: " + encodeError.message);
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
-		if (worldVersion != NetLockstepCodec::c_WorldTransitionVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 23");
+		if (worldVersion != NetLockstepCodec::c_Version) {
+			return Fail("WorldTransition frame did not stamp lockstep version 24");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2209,8 +2209,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 22) {
-			return Fail("ordinary lockstep frame did not stamp version 22");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 24) {
+			return Fail("ordinary lockstep frame did not stamp version 24");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2219,11 +2219,11 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 22 and match config 4");
+			return Fail("ordinary identity did not stamp lockstep 24 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
-		    manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_WorldTransitionVersion ||
+		    manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion) {
 			return Fail("world identity did not stamp the live world versions");
 		}
@@ -2604,7 +2604,7 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, wire)) {
 				return false;
 			}
-			const auto decoded = NetLobbyProtocol::Decode(wire);
+			const auto decoded = NetLobbyProtocol::Decode(wire, NetLobbyDecodeOptions{true});
 			const NetLobbyMatchConfig* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
 			if (payload == nullptr) {
 				return false;
@@ -2631,6 +2631,8 @@ namespace RTE {
 		}
 		// An ordinary config must not carry a byte of the world block, whatever the struct holds.
 		NetMatchConfig ordinary = NetMatchConfigUtil::MakeDefault(0x4F52443ULL);
+		ordinary.version = 4;
+		ordinary.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 		std::vector<uint8_t> plainWire;
 		NetMatchConfig plainBack;
 		if (!roundTrip(ordinary, plainBack, plainWire)) {
