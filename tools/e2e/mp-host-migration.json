@@ -145,6 +145,32 @@
       "what": "The migration toast names ClientA as the new host.",
       "log_regex": [
         "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     },
     {
@@ -211,6 +237,32 @@
       "what": "The migration toast names ClientA as the new host.",
       "log_regex": [
         "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     },
     {

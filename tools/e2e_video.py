@@ -454,6 +454,19 @@ def item_evidence(record, item):
         evidence["process_drop"] = {"path": str(path), "receipt": receipt, "pass": passed}
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
+    if item.get("readback"):
+        observed = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+        steps = {step["index"]: step.get("observed", {}) for step in observed.get("steps", [])}
+        checks = []
+        for check in item["readback"]:
+            value = steps.get(check["step"])
+            for key in check["path"]:
+                value = value.get(key) if isinstance(value, dict) else None
+            passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
+            checks.append({**check, "actual": value, "pass": passed})
+        evidence["readback_assertions"] = checks
+        if not all(check["pass"] for check in checks):
+            evidence["probe"] = "fail"
     return frame_range(rows, item), evidence
 
 
