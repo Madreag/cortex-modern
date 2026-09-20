@@ -456,6 +456,7 @@ static std::string ResyncSaveName() {
 		// Past the refusals: the settings are read once here, where a real host starts, and ride the
 		// request to both roster builds, so the worker's copy cannot pick up a later menu edit.
 		SeatSavedOptions(request);
+		if (!request.host) m_LastJoinRoute = request;
 		if (request.playerName.size() > NetProtocol::c_MaxDisplayNameBytes) {
 			const std::string configError = "display_name exceeds max encoded length";
 			if (error) *error = configError;
@@ -1585,6 +1586,7 @@ static std::string ResyncSaveName() {
 		m_ActivateCatchUpLocalSeat = {};
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
+		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
 		m_WorldCapturePending = false;
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
@@ -4235,6 +4237,11 @@ static std::string ResyncSaveName() {
 			const std::string address = (connected.empty() ? endpoint->listenAddrs.front() : connected) + ":" + std::to_string(endpoint->listenPort);
 			if (!m_IsHost) {
 				(void)m_ReconnectClient.MigrateHostContext(address, m_MigrationDirectorySession, NetMatchConfigUtil::HashConfig(config));
+				if (m_LastJoinRoute) {
+					m_LastJoinRoute->address = address;
+					m_LastJoinRoute->port = endpoint->listenPort;
+					if (!m_LastJoinRoute->sessionId.empty()) m_LastJoinRoute->sessionId = m_MigrationDirectorySession;
+				}
 				if (m_Coordinator->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission) {
 					NetSessionConfig sessionConfig = m_Session->GetConfig();
 					sessionConfig.port = endpoint->listenPort;
@@ -6694,16 +6701,31 @@ static std::string ResyncSaveName() {
 		return request;
 	}
 
+	NetMatchServiceRequest NetMatchService::BuildHeldRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget, const NetMatchServiceRequest& liveRoute) {
+		NetMatchServiceRequest request = BuildTicketRejoinRequest(record, playerName, liveWorldTarget);
+		if (!liveRoute.host && (!liveRoute.address.empty() || !liveRoute.sessionId.empty())) {
+			request.address = liveRoute.address;
+			request.sessionId = liveRoute.sessionId;
+			request.port = liveRoute.port;
+		}
+		return request;
+	}
+
 	bool NetMatchService::BeginHeldRejoin(std::string* error) {
 		const uint64_t prior = m_Coordinator ? m_Coordinator->SentInputThrough() : 0;
+		const auto liveRoute = m_LastJoinRoute;
 		m_LeaveExchangeRun = true;
 		ScenarioRunner::DiscardHeldLocalInputs();
-		const bool started = BeginTicketRejoin(error);
+		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
 		return started;
 	}
 
 	bool NetMatchService::BeginTicketRejoin(std::string* error) {
+		return BeginTicketRejoinOnRoute(error, nullptr);
+	}
+
+	bool NetMatchService::BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute) {
 		NetH4TicketRecord record;
 		m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
 		const NetH4TicketLoadResult load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
@@ -6712,7 +6734,8 @@ static std::string ResyncSaveName() {
 			if (error) *error = m_ReconnectUx.GetOfferText().empty() ? "no reconnect ticket to rejoin with" : m_ReconnectUx.GetOfferText();
 			return false;
 		}
-		return Start(BuildTicketRejoinRequest(record, m_LocalName, m_MatchConfig.persistentWorld || m_LastJoinTargetPersistentWorld), error);
+		const bool world = m_MatchConfig.persistentWorld || m_LastJoinTargetPersistentWorld;
+		return Start(liveRoute ? BuildHeldRejoinRequest(record, m_LocalName, world, *liveRoute) : BuildTicketRejoinRequest(record, m_LocalName, world), error);
 	}
 
 	NetSessionConfig NetMatchService::BuildSessionConfig(const NetIdentityManifest& manifest, const NetMatchServiceRequest& request, const NetMatchConfig& matchConfig) const {

@@ -606,6 +606,7 @@ namespace RTE {
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
+		static NetMatchServiceRequest BuildHeldRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget, const NetMatchServiceRequest& liveRoute);
 
 		/// The joiner's catch-up step over one lobby pump: applies the tail that arrived, adopts the
 		/// announced E and reports what the sim has applied. The value it sends is the report the host
@@ -1284,6 +1285,8 @@ namespace RTE {
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
+		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
+		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;
