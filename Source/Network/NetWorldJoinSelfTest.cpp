@@ -2668,7 +2668,8 @@ namespace RTE {
 			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
 		}
 		NetLockstepReadyFrame applied;
-		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames == frame.frames && client.partialTail.empty();
+		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames.size() == frame.frames.size() &&
+		    std::equal(applied.remoteFrames.begin(), applied.remoteFrames.end(), frame.frames.begin(), [](const auto& a, const auto& b) { return ControllerFrameCodec::Encode(a) == ControllerFrameCodec::Encode(b); }) && client.partialTail.empty();
 		ScenarioRunner::ReleaseWorldCatchUp();
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
