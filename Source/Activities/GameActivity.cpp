@@ -410,6 +410,8 @@ void GameActivity::ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTe
 void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame) {
 	const NetMatchConfig* config = ScenarioRunner::GetLockstepMatchConfig();
 	if (!config) return;
+	if (held) for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player)
+		if (LockstepSeatPeerId(player) == peerId) ReleaseLockstepControlOfActor(player);
 	std::array<bool, Teams::MaxTeamCount> cpuTeams;
 	std::copy(std::begin(m_TeamIsCPU), std::end(m_TeamIsCPU), cpuTeams.begin());
 	for (const auto& seat: config->players) {

@@ -322,11 +322,13 @@ namespace RTE {
 		     (config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute && config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause)))
 			return refuse("invalid slow player bound or policy");
 		if (!config.activePeerIds.empty()) {
+			const bool hasAuthority = std::find(config.activePeerIds.begin(), config.activePeerIds.end(), config.hostPeerId) != config.activePeerIds.end() ||
+			    std::any_of(config.successorOrder.begin(), config.successorOrder.end(), [&](uint8_t peer) { return std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) != config.activePeerIds.end(); });
 			if (config.version < c_TimingOptionsVersion || config.persistentWorld ||
 			    !std::is_sorted(config.activePeerIds.begin(), config.activePeerIds.end()) ||
 			    std::adjacent_find(config.activePeerIds.begin(), config.activePeerIds.end()) != config.activePeerIds.end() ||
 			    config.activePeerIds.front() == 0 || config.activePeerIds.back() > config.peerCount ||
-			    std::find(config.activePeerIds.begin(), config.activePeerIds.end(), config.hostPeerId) == config.activePeerIds.end())
+			    !hasAuthority)
 				return refuse("invalid active resync roster");
 		}
 		if (config.version == 2) {
