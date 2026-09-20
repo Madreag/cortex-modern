@@ -371,7 +371,7 @@
       "mark": "survivor-after-leave",
       "what": "The departed seat reads Left - AI in control, without drop or hold timers.",
       "probe_steps": [
-        8
+        9
       ]
     },
     {
@@ -467,7 +467,7 @@
       "what": "The remote roster names AI control once for the departed seat.",
       "readback": [
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "text"
@@ -475,13 +475,35 @@
           "contains": "AI in control"
         },
         {
-          "step": 8,
+          "step": 9,
           "path": [
             "control",
             "text"
           ],
           "not_contains": "AI in control - AI in control"
         }
+      ]
+    },
+    {
+      "id": "announced-toast-band",
+      "run": "announced",
+      "peer": "host",
+      "mark": "survivor-after-leave",
+      "what": "The departure toasts lie inside the screen and clear of the open seats panel.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        7
+      ]
+    },
+    {
+      "id": "announced-toast-band",
+      "run": "announced",
+      "peer": "survivor",
+      "mark": "survivor-after-leave",
+      "what": "The departure toasts lie inside the screen and clear of the open seats panel.",
+      "assert": "The probe's own refused-step record: a failed readback stops the probe at that index.",
+      "probe_steps": [
+        7
       ]
     }
   ]
