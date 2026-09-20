@@ -2858,7 +2858,10 @@ static bool NetMatchScreenshotDue() {
 
 /// The screen name a recorded frame is stamped with, read from the seam the menu probes read.
 static std::string RecordedScreenName() {
-	if (PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationActiveScreenName();
+	if (PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu()) {
+		const std::string screen = pause->AutomationActiveScreenName();
+		return screen == "Gameplay" ? "game" : screen;
+	}
 	if (!g_MenuMan.GetIsInMenuScreen()) return "game";
 	if (!g_MenuMan.IsMainMenuInteractive()) return "game";
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
