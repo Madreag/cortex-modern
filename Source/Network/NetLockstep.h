@@ -1050,6 +1050,8 @@ namespace RTE {
 		bool IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const;
 		/// Whether a start describes the round this peer is configured for, field by field.
 		bool StartMatchesConfig(const NetLockstepStart& start) const;
+		/// Names the fields a refused start disagreed on, so a protocol error says what it saw.
+		std::string DescribeStartMismatch(const NetLockstepStart& start) const;
 		/// Leaves the round we formed for the one the host is in, keeping our own production.
 		void ReadoptRound(uint64_t roundId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.

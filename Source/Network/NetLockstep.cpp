@@ -4120,6 +4120,26 @@ namespace RTE {
 	// A peer that repeats its start is still waiting for one it missed, and ours may be it. Every
 	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
 	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
+	std::string NetLockstepCoordinator::DescribeStartMismatch(const NetLockstepStart& start) const {
+		const auto admission = m_PeerAdmissions.find(start.localPeerId);
+		const bool admitted = admission != m_PeerAdmissions.end();
+		std::string named;
+		const auto note = [&named](const char* field, auto theirs, auto ours) {
+			named += std::string(named.empty() ? "" : " ") + field + "=" + std::to_string(theirs) + "/" + std::to_string(ours);
+		};
+		if (start.sessionId != m_Config.sessionId) note("session", start.sessionId, m_Config.sessionId);
+		if (start.startFrame != (admitted ? admission->second.frame : m_Config.startFrame)) note("start_frame", start.startFrame, admitted ? admission->second.frame : m_Config.startFrame);
+		if (start.inputDelayFrames != (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId))) note("delay", start.inputDelayFrames, admitted ? admission->second.delay : PeerInputDelay(start.localPeerId));
+		if (start.controllerFrameVersion != ControllerFrame::c_Version) note("controller_version", start.controllerFrameVersion, ControllerFrame::c_Version);
+		if (start.controllerFrameEncodedSize != ControllerFrame::c_EncodedSize) note("controller_size", start.controllerFrameEncodedSize, ControllerFrame::c_EncodedSize);
+		if (!IsKnownRemotePeer(start.localPeerId)) note("unknown_peer", start.localPeerId, start.localPeerId);
+		if (start.peerCount != m_Config.peerCount) note("peer_count", start.peerCount, m_Config.peerCount);
+		if (start.scenario != m_Config.scenario) named += (named.empty() ? "" : " ") + std::string("scenario=") + start.scenario + "/" + m_Config.scenario;
+		if (start.ownershipPolicy != m_Config.ownershipPolicy) named += (named.empty() ? "" : " ") + std::string("ownership=") + start.ownershipPolicy + "/" + m_Config.ownershipPolicy;
+		if (start.resumeFromSnapshot != (admitted ? false : m_Config.resumeFromSnapshot)) note("resume", start.resumeFromSnapshot ? 1 : 0, (admitted ? false : m_Config.resumeFromSnapshot) ? 1 : 0);
+		return named;
+	}
+
 	bool NetLockstepCoordinator::StartMatchesConfig(const NetLockstepStart& start) const {
 		const auto admission = m_PeerAdmissions.find(start.localPeerId);
 		const bool admitted = admission != m_PeerAdmissions.end();
@@ -6073,7 +6093,9 @@ namespace RTE {
 		// The round's own restart runs before our first Tick, so the tick-gap detector never sees it.
 		m_LocalStartParkMs = restartMs;
 		m_Stats.longestOwnParkMs = std::max<uint64_t>(m_Stats.longestOwnParkMs, restartMs);
-		if (m_State != NetLockstepState::Idle && !m_RemotePeerIds.empty()) {
+		// Only the handshake carries it out: a start re-sent after the round is running is judged against a
+		// config that may have moved since, and a round must never be re-defined to publish a measurement.
+		if (m_State == NetLockstepState::WaitingForStart && !m_RemotePeerIds.empty()) {
 			std::string ignored;
 			(void)SendStart(&ignored);
 		}
@@ -7465,7 +7487,7 @@ namespace RTE {
 				std::cout << "[lockstep] ignored a start of round " << start.roundId << " that disagrees with this round's setup" << std::endl;
 				return;
 			}
-			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch");
+			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch (" + DescribeStartMismatch(start) + ")");
 			return;
 		}
 		if (m_RoundId == 0 && start.roundId != 0) {
