@@ -6,7 +6,7 @@
   "timeout_s": 190,
   "title": "Definition only: Direct only versus Relay only, proven by the connected transport and visible diagnostics",
   "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
-  "capture_policy": "No capture on this tip: direct lacks route evidence; relay also awaits the fixed coturn pair. The two log patterns are a proposed seam contract, not lines this build emits.",
+  "capture_policy": "No capture on this tip: direct lacks route evidence; relay also awaits the fixed coturn pair. The two log patterns are a proposed seam contract, not lines this build emits. The local TLS directory on 49478 supplies real listing and ICE signaling; both clients select its listed row. TURN remains external and unconfigured.",
   "requires_tokens": [
     "TURN_SERVER",
     "TURN_USER",
@@ -30,7 +30,9 @@
             "NetworkDisplayName": "Host",
             "NetworkIceEnable": "1",
             "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
+            "NetworkMatchStatusMode": "Always",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           }
         },
         {
@@ -46,7 +48,9 @@
             "NetworkDisplayName": "Joiner",
             "NetworkIceEnable": "1",
             "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
+            "NetworkMatchStatusMode": "Always",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           },
           "start_when": {
             "peer": "host",
@@ -77,7 +81,9 @@
             "NetworkTurnServers": "{TURN_SERVER}",
             "NetworkTurnUser": "{TURN_USER}",
             "NetworkTurnPass": "{TURN_PASS}",
-            "NetworkHostRelayMode": "Fixed"
+            "NetworkHostRelayMode": "Fixed",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           }
         },
         {
@@ -97,7 +103,9 @@
             "NetworkTurnServers": "{TURN_SERVER}",
             "NetworkTurnUser": "{TURN_USER}",
             "NetworkTurnPass": "{TURN_PASS}",
-            "NetworkHostRelayMode": "Fixed"
+            "NetworkHostRelayMode": "Fixed",
+            "SessionDirectoryUrl": "{DIRECTORY_URL}",
+            "SessionDirectoryCertSha256": "{DIRECTORY_PIN}"
           },
           "start_when": {
             "peer": "host",
@@ -114,7 +122,7 @@
       "run": "direct",
       "peer": "host",
       "mark": "direct-connection-host",
-      "screen": "Settings:Network",
+      "screen": "SettingsScreen",
       "what": "The player selects Connection = Direct only on the Network Connection page.",
       "events": [
         "assert_label ComboNetworkConnection.*Direct only.*PASS"
@@ -147,7 +155,7 @@
       "run": "direct",
       "peer": "client",
       "mark": "direct-connection-client",
-      "screen": "Settings:Network",
+      "screen": "SettingsScreen",
       "what": "The player selects Connection = Direct only on the Network Connection page.",
       "events": [
         "assert_label ComboNetworkConnection.*Direct only.*PASS"
@@ -180,7 +188,7 @@
       "run": "relay",
       "peer": "host",
       "mark": "relay-connection-host",
-      "screen": "Settings:Network",
+      "screen": "SettingsScreen",
       "what": "The player selects Connection = Relay only on the Network Connection page.",
       "events": [
         "assert_label ComboNetworkConnection.*Relay only.*PASS"
@@ -213,7 +221,7 @@
       "run": "relay",
       "peer": "client",
       "mark": "relay-connection-client",
-      "screen": "Settings:Network",
+      "screen": "SettingsScreen",
       "what": "The player selects Connection = Relay only on the Network Connection page.",
       "events": [
         "assert_label ComboNetworkConnection.*Relay only.*PASS"
@@ -241,5 +249,6 @@
       ],
       "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens."
     }
-  ]
+  ],
+  "directory_port": 49478
 }
