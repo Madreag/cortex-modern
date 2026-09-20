@@ -157,7 +157,7 @@ namespace RTE {
 		NetPeerId RemoteTransportOf(uint8_t peerId) const;
 		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
 		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
-		void SendMatchConfigTo(uint8_t peerId);
+		bool SendMatchConfigTo(uint8_t peerId);
 		/// Sends queued chunks after Started; Tick itself stops once the lobby is terminal.
 		void PumpOutgoingChunks();
 		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);

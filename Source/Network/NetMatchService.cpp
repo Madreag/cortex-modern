@@ -2769,9 +2769,11 @@ static std::string ResyncSaveName() {
 			if (error) *error = bindError;
 			return false;
 		}
+		if (!lobby.IsRemoteLobbyUp(lobbyPeer)) return false;
 		// Once per bootstrap, not once per retry: the seat's config does not change while it waits.
-		if (session.assignedPeerId != 0 && m_WorldJoin.NoteMatchConfigSent(session.connection)) {
-			lobby.SendMatchConfigTo(lobbyPeer);
+		if (!session.matchConfigSent) {
+			if (!lobby.SendMatchConfigTo(lobbyPeer)) return false;
+			m_WorldJoin.NoteMatchConfigSent(session.connection);
 		}
 		// The bytes and their digest were read once, when the image was published; re-reading the
 		// archive per pump is a sim-thread stall the world pays for every waiting bootstrap.
@@ -3059,9 +3061,6 @@ static std::string ResyncSaveName() {
 					const uint8_t lobbyPeer = WorldJoinLobbyPeer(*session);
 					if (lobbyPeer != 0) {
 						(void)m_Runner->GetLobbySession().BindWorldTransferRemote(lobbyPeer, peer.transportPeerId, nullptr);
-						if (session->assignedPeerId != 0) {
-							m_Runner->GetLobbySession().SendMatchConfigTo(lobbyPeer);
-						}
 					}
 				}
 			}
@@ -3073,7 +3072,7 @@ static std::string ResyncSaveName() {
 				std::string transferError;
 				bool cannotStart = false;
 				if (!StartJoinerImageTransfer(session, &transferError, &cannotStart)) {
-					std::cout << "[net-world] transfer wait connection=" << session.connection << " " << transferError << std::endl;
+					if (!transferError.empty()) std::cout << "[net-world] transfer wait connection=" << session.connection << " " << transferError << std::endl;
 					if (cannotStart) {
 						unstartable.emplace_back(session.connection, transferError);
 					}
