@@ -3886,7 +3886,13 @@ namespace RTE {
 				return false;
 			}
 
-			for (uint64_t producedFrame : {1ULL, 0ULL, 2ULL, 3ULL}) {
+			if (!host.QueueLocalInput(1, {MakeFrame(101, 2)}, {}, error) ||
+			    !client.QueueLocalInput(1, {MakeFrame(201, 12)}, {}, error)) return false;
+			// Deliver the future frame before a redundant window can fill its missing predecessor.
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] {
+				return host.GetStats().framePacketsReceived > 0 && client.GetStats().framePacketsReceived > 0;
+			}, error)) return false;
+			for (uint64_t producedFrame : {0ULL, 2ULL, 3ULL}) {
 				if (!host.QueueLocalInput(producedFrame, {MakeFrame(100 + static_cast<int64_t>(producedFrame), producedFrame + 1)}, {}, error) ||
 				    !client.QueueLocalInput(producedFrame, {MakeFrame(200 + static_cast<int64_t>(producedFrame), producedFrame + 11)}, {}, error)) {
 					return false;
@@ -15638,6 +15644,22 @@ namespace RTE {
 			}
 		}
 	} // namespace
+
+	int NetLockstepSelfTest::RunOrdering() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		std::string error;
+		const bool passed = TestCoordinatorUnreliableOutOfOrderDuplicate(&error);
+		std::cout << "[net-lockstep-ordering-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
+		return passed ? 0 : 1;
+	}
+
+	int NetLockstepSelfTest::RunHoldHeartbeat() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		std::string error;
+		const bool passed = TestFrameWindowHoldHeartbeatKeepsTicksOne(&error);
+		std::cout << "[net-lockstep-hold-heartbeat-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
+		return passed ? 0 : 1;
+	}
 
 	int NetLockstepSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();

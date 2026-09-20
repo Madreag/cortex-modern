@@ -643,6 +643,67 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestMovedActivationReleasesCatchUp() {
+			struct Clear { ~Clear() { ScenarioRunner::ReleaseWorldCatchUp(); } } clear;
+			std::string error;
+			std::vector<NetLockstepFrame> tail;
+			for (uint64_t tick = 41; tick <= 45; ++tick) tail.push_back(MakeCommittedFrame(tick));
+			if (!ScenarioRunner::InstallWorldCatchUp(40, std::move(tail), &error)) return Fail(error);
+			ScenarioRunner::SetWorldCatchUpActivation(42);
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			NetLockstepReadyFrame frame;
+			if (!ScenarioRunner::TakeWorldCatchUpGrant(41) || !ScenarioRunner::TakeWorldCatchUpReadyFrame(41, frame, &error) ||
+			    !ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::TakeWorldCatchUpGrant(42)) return Fail("catch-up did not stop before its first activation");
+			ScenarioRunner::SetWorldCatchUpActivation(45);
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			for (uint64_t tick = 42; tick < 45; ++tick) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(tick) || !ScenarioRunner::TakeWorldCatchUpReadyFrame(tick, frame, &error) || frame.frame != tick)
+					return Fail("catch-up stayed held at the old activation after the host moved it forward");
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(45);
+			if (!ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::TakeWorldCatchUpGrant(45) || ScenarioRunner::WorldCatchUpAppliedThrough() != 44)
+				return Fail("catch-up crossed the replacement activation boundary");
+			return 0;
+		}
+
+		int TestOrdinaryLobbyAcknowledgesJoinImage() {
+			std::string error;
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(48928, &error) || !clientWire.Connect("loopback", 48928, &error)) return Fail(error);
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			for (const auto& event: hostWire.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
+			for (const auto& event: clientWire.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.remotePeerId = 2; hostConfig.remoteTransportPeerId = hostPeer;
+			hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(31); hostConfig.autoStart = false;
+			auto clientConfig = hostConfig;
+			clientConfig.host = false; clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1; clientConfig.remoteTransportPeerId = clientPeer;
+			if (!host.Start(hostWire, hostConfig, &error) || !client.Start(clientWire, clientConfig, &error) ||
+			    !host.BindWorldTransferRemote(2, hostPeer, &error)) return Fail(error);
+			const std::vector<uint8_t> archive(8, 0x5A);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 40;
+			image.bytes = archive.size(); image.digest = DigestWorldJoinBytes(archive); image.path = "private.ccsave";
+			std::vector<uint8_t> blob;
+			if (!EncodeWorldJoinImageBlob(image, archive, {}, blob, &error)) return Fail(error);
+			if (host.BeginStateTransferToPeer(2, std::move(blob)) != NetLobbyStateTransfer::Started) return Fail("private image did not start");
+			for (uint64_t now = 0; now < 400; now += 10) {
+				host.Tick(now); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+			}
+			const auto report = host.TakeWorldJoinReport();
+			if (!report.pending || report.kind != c_NetWorldReportProgress || !client.HasCompleteStateTransfer() || client.IsFailed())
+				return Fail("ordinary-match join image was not acknowledged: pending=" + std::to_string(report.pending) + " client=" + client.GetFailureReason());
+			if (!host.Start(hostWire, hostConfig, &error) || !client.SendPayload(MakeWorldJoinReport(c_NetWorldReportProgress, report.value), &error)) return Fail(error);
+			for (uint64_t now = 400; now < 500; now += 10) {
+				host.Tick(now); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+			}
+			if (!client.IsFailed()) return Fail("an ordinary peer sent bootstrap progress without a bound transfer");
+			return 0;
+		}
+
 		int TestJoinerTransferPump() {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -1295,6 +1356,26 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestHeldRejoinKeepsItsRoute() {
+			NetH4TicketRecord record;
+			record.hostAddress = "192.168.4.2";
+			record.directorySessionId = c_WorldId;
+			record.persistentWorld = true;
+			NetMatchServiceRequest live;
+			live.address = "127.0.0.1"; live.port = 49478;
+			const auto local = NetMatchService::BuildHeldRejoinRequest(record, "Player", true, live);
+			if (local.address != live.address || local.port != live.port || !local.sessionId.empty() || !local.persistentWorld)
+				return Fail("a held direct-IP client replaced its live route with the world's directory identity");
+			live.address.clear(); live.sessionId = "live-internet-session"; live.port = 42100;
+			const auto internet = NetMatchService::BuildHeldRejoinRequest(record, "Player", true, live);
+			if (internet.address != live.address || internet.sessionId != live.sessionId || internet.port != live.port)
+				return Fail("a held Internet client lost its live session route");
+			const auto restarted = NetMatchService::BuildTicketRejoinRequest(record, "Player", false);
+			if (restarted.address != record.hostAddress || restarted.sessionId != record.directorySessionId)
+				return Fail("a restarted client lost its stored ticket route");
+			return 0;
+		}
+
 		int TestTicketRejoinTargetsTheWorld() {
 			NetH4TicketRecord record;
 			record.epoch.fill(7);
@@ -1511,6 +1592,68 @@ namespace RTE {
 			config.heartbeatIntervalMs = 50;
 			config.timeoutMs = 4000;
 			return config;
+		}
+
+		int TestWorldBootstrapSenderIdentity(bool disconnectedTransfer = false) {
+			std::string error;
+			LoopbackTransport hostWire, residentWire, lateWire;
+			NetSession hostSession, residentSession, lateSession;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(48916, 11, "World"), &error) ||
+			    !residentSession.StartClient(residentWire, "loopback", MakeWorldSessionConfig(48916, 22, "Resident"), &error)) return Fail(error);
+			uint64_t now = 0;
+			auto pumpSessions = [&] {
+				hostSession.Tick(now); residentSession.Tick(now); lateSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
+			};
+			while (hostSession.GetReadyPeers().size() < 1 && now < 1000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 1) return Fail("resident session did not become ready");
+			const NetPeerId residentConnection = hostSession.GetReadyPeers().front().transportPeerId;
+			if (!lateSession.StartClient(lateWire, "loopback", MakeWorldSessionConfig(48916, 33, "Late"), &error)) return Fail(error);
+			while (hostSession.GetReadyPeers().size() < 2 && now < 2000) pumpSessions();
+			if (hostSession.GetReadyPeers().size() != 2) return Fail("late session did not become ready");
+			const auto late = hostSession.GetReadyPeers().back();
+			if (late.assignedPeerId + 1 != 3) return Fail("late session did not retain its provisional id");
+			NetLobbySession host, resident, joiner;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
+			hostConfig.matchConfig = MakeWorldConfig(); hostConfig.autoStart = false;
+			hostConfig.remoteTransportPeerIds = {{2, residentConnection}};
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = residentSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = hostConfig.matchConfig;
+			if (!host.Start(hostWire, hostConfig, &error) || !resident.Start(residentWire, clientConfig, &error)) return Fail(error);
+			const uint8_t route = c_WorldSpectatorLobbyPeerFirst;
+			if (!host.BindWorldTransferRemote(route, late.transportPeerId, &error)) return Fail(error);
+			clientConfig.localPeerId = 3; clientConfig.remoteTransportPeerId = lateSession.GetRemoteTransportPeerId();
+			if (!joiner.Start(lateWire, clientConfig, &error)) return Fail(error);
+			auto pumpLobbies = [&] {
+				for (const auto& event: hostWire.PollEvents()) host.HandleTransportEvent(event, now);
+				host.PumpOutgoingChunks(); resident.Tick(now); joiner.Tick(now);
+				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
+			};
+			for (int i = 0; i < 10; ++i) pumpLobbies();
+			if (joiner.IsFailed() || joiner.IsRejected() || !host.IsRemoteConnectionLobbyUp(route) || !host.IsRemoteLobbyUp(2))
+				return Fail("bootstrap sender rejected: session peer=3 world route=" + std::to_string(route) + " reason=" + joiner.GetFailureReason());
+			if (disconnectedTransfer) {
+				if (!host.BindWorldTransferRemote(2, residentConnection, &error) ||
+				    host.BeginStateTransferToPeer(2, std::vector<uint8_t>(128, 0x11)) != NetLobbyStateTransfer::Started ||
+				    host.BeginStateTransferToPeer(route, std::vector<uint8_t>(128, 0x6D)) != NetLobbyStateTransfer::Queued) return Fail("two bootstrap images did not queue");
+				residentWire.Stop();
+				for (const auto& event: hostWire.PollEvents()) hostSession.InjectEvent(event, now);
+				for (int i = 0; i < 20 && !joiner.HasCompleteStateTransfer(); ++i) pumpLobbies();
+				if (joiner.TakeReceivedState() != std::vector<uint8_t>(128, 0x6D)) return Fail("a disconnected bootstrap blocked the next joiner's image");
+				return 0;
+			}
+			if (host.BeginStateTransferToPeer(route, std::vector<uint8_t>(128, 0x6D)) == NetLobbyStateTransfer::Refused) return Fail("bootstrap image refused");
+			for (int i = 0; i < 20 && !joiner.HasCompleteStateTransfer(); ++i) pumpLobbies();
+			if (joiner.TakeReceivedState() != std::vector<uint8_t>(128, 0x6D) || resident.IsFailed()) return Fail("bootstrap image lost or resident disconnected");
+			NetLobbyPeerState impostor;
+			impostor.peerId = 2; impostor.displayName = "Impostor";
+			if (!joiner.SendPayload(impostor, &error)) return Fail(error);
+			for (int i = 0; i < 10; ++i) pumpLobbies();
+			if (!joiner.IsFailed() || resident.IsFailed()) return Fail("bootstrap identity guard accepted another session's sender");
+			return 0;
 		}
 
 		// A joiner activates inside a sim update: the start has to hand that update back and finish its
@@ -2545,14 +2688,20 @@ namespace RTE {
 		// The host keeps producing, window and all: one more reading on the key the epoch already bound,
 		// which the live table spells as a slot. The member can only read it if the replay left its
 		// table where the live one is.
-		if (!running.QueueLocalInput(8, {}, {}, &error, {reading})) {
+		NetSoundObservation liveReading = reading;
+		liveReading.value = 0.75F;
+		if (!running.QueueLocalInput(8, {}, {}, &error, {liveReading})) {
 			return Fail("replayed-member-table-diverged-from-the-live-table: the live frame after the replay did not queue: " + error);
 		}
-		(void)member.QueueLocalInput(8, {}, {}, &error);
+		bool memberInputQueued = false;
 		for (uint64_t now = 400; now < 1600; now += 10) {
 			running.Tick(now);
 			member.Tick(now);
 			resident.Tick(now);
+			if (member.IsRunning() && !memberInputQueued) {
+				if (!member.QueueLocalInput(8, {}, {}, &error)) return Fail("member input after admission: " + error);
+				memberInputQueued = true;
+			}
 			hostLink.AdvanceTimeMs(10);
 			memberLink.AdvanceTimeMs(10);
 			residentLink.AdvanceTimeMs(10);
@@ -2561,11 +2710,14 @@ namespace RTE {
 			return Fail("window-copy-before-the-members-start-failed-the-round: " + member.GetStats().timeoutReason +
 			            " after " + std::to_string(member.GetStats().windowCopiesSkipped) + " skipped copies");
 		}
-		auto readingsOf = [&](NetLockstepCoordinator& peer, std::vector<uint64_t>& frames, uint64_t& sawReadingAt, uint64_t& sawEarlyAt) {
+		auto readingsOf = [&](NetLockstepCoordinator& peer, std::vector<uint64_t>& frames, uint64_t& sawReadingAt, uint64_t& sawEarlyAt, uint64_t& sawLiveAt) {
 			for (NetLockstepReadyFrame ready; peer.PopReadyFrame(ready);) {
 				frames.push_back(ready.frame);
 				for (const NetSoundObservation& observed: ready.remoteObservations) {
-					if (observed.objectUID == reading.objectUID && observed.tick == reading.tick) sawReadingAt = ready.frame;
+					if (observed.objectUID == reading.objectUID && observed.tick == reading.tick) {
+						if (observed.value == reading.value) sawReadingAt = ready.frame;
+						if (observed.value == liveReading.value) sawLiveAt = ready.frame;
+					}
 					if (observed.objectUID == early.objectUID && observed.tick == early.tick) sawEarlyAt = ready.frame;
 				}
 			}
@@ -2573,7 +2725,8 @@ namespace RTE {
 		std::vector<uint64_t> residentFrames;
 		uint64_t residentReadingAt = 0;
 		uint64_t residentEarlyAt = 0;
-		readingsOf(resident, residentFrames, residentReadingAt, residentEarlyAt);
+		uint64_t residentLiveAt = 0;
+		readingsOf(resident, residentFrames, residentReadingAt, residentEarlyAt, residentLiveAt);
 		if (resident.IsFailed() || residentReadingAt != e + 1 || residentEarlyAt != first + 1) {
 			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 " +
 			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "is running") +
@@ -2583,7 +2736,8 @@ namespace RTE {
 		std::vector<uint64_t> memberFrames;
 		uint64_t memberReadingAt = 0;
 		uint64_t memberEarlyAt = 0;
-		readingsOf(member, memberFrames, memberReadingAt, memberEarlyAt);
+		uint64_t memberLiveAt = 0;
+		readingsOf(member, memberFrames, memberReadingAt, memberEarlyAt, memberLiveAt);
 		std::string heldText;
 		for (const uint64_t frame: memberFrames) heldText += (heldText.empty() ? "" : ",") + std::to_string(frame);
 		if (memberFrames.size() < 4 || memberFrames.front() != e) {
@@ -2599,6 +2753,10 @@ namespace RTE {
 		if (std::find(memberFrames.begin(), memberFrames.end(), e + 4) == memberFrames.end()) {
 			return Fail("replayed-member-table-diverged-from-the-live-table: the member holds " + heldText +
 			            " and never committed the live frame " + std::to_string(e + 4));
+		}
+		if (residentLiveAt != e + 4 || memberLiveAt != e + 4) {
+			return Fail("replayed-member-table-diverged-from-the-live-table: live reading resident=" + std::to_string(residentLiveAt) +
+			            " member=" + std::to_string(memberLiveAt));
 		}
 		return 0;
 	}
@@ -4955,6 +5113,64 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestWorldBootstrapWaitsForLobby(std::string* error) {
+		for (const bool spectator: {false, true}) {
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession, clientSession;
+			const uint16_t port = spectator ? 48926 : 48924;
+			if (!hostSession.StartHost(hostWire, MakeWorldSessionConfig(port, 11, "World"), error) ||
+			    !clientSession.StartClient(clientWire, "loopback", MakeWorldSessionConfig(port, 22, "Joiner"), error)) return false;
+			uint64_t now = 0;
+			while (hostSession.GetReadyPeers().empty() && now < 1000) {
+				hostSession.Tick(now); clientSession.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (hostSession.GetReadyPeers().empty()) { *error = "bootstrap session never became ready"; return false; }
+			const auto connection = hostSession.GetReadyPeers().front().transportPeerId;
+			NetMatchService service;
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			NetMatchConfig config = MakeWorldConfig(); config.sessionId = hostSession.GetSessionId();
+			if (!service.m_WorldJoin.Configure(config, MakeIdentity(), error)) return false;
+			if (spectator && !service.m_WorldJoin.BeginJoin(99, 2, "Resident", now, error)) return false;
+			if (!service.m_WorldJoin.BeginJoin(connection, spectator ? 0 : 2, "Joiner", now, error)) return false;
+			const auto join = *service.m_WorldJoin.FindSession(connection);
+			if (join.spectator != spectator) { *error = "bootstrap role differs"; return false; }
+			const auto archive = std::make_shared<std::vector<uint8_t>>(8, 0x5A);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 40;
+			image.bytes = archive->size(); image.digest = DigestWorldJoinBytes(*archive); image.path = "bootstrap.ccsave";
+			service.m_WorldJoin.PublishImage(image);
+			service.m_WorldJoinImageArchive = archive; service.m_WorldJoinImageDigest = image.digest;
+			NetLobbySession& lobby = service.m_Runner->GetLobbySession();
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.session = &hostSession;
+			hostConfig.matchConfig = config; hostConfig.autoStart = false;
+			if (!lobby.Start(hostWire, hostConfig, error)) return false;
+			if (service.StartJoinerImageTransfer(join, error) || lobby.IsStateTransferOutgoing()) {
+				*error = "bootstrap sent its image before the joiner's lobby could receive the config"; return false;
+			}
+			NetLobbySession client;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+			clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			if (!client.Start(clientWire, clientConfig, error)) return false;
+			for (const auto& event: hostWire.PollEvents()) lobby.HandleTransportEvent(event, now);
+			if (!service.StartJoinerImageTransfer(join, error)) return false;
+			for (int i = 0; i < 20 && !client.HasCompleteStateTransfer(); ++i) {
+				lobby.PumpOutgoingChunks(); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10); now += 10;
+			}
+			if (!client.HasCompleteStateTransfer() || client.GetMatchConfig() != config) {
+				*error = "bootstrap image arrived with the client's default config instead of the world's config"; return false;
+			}
+			if (!lobby.BindWorldTransferRemote(WorldJoinLobbyPeer(join), 98, error) || lobby.IsRemoteConnectionLobbyUp(WorldJoinLobbyPeer(join))) {
+				*error = "a replacement connection inherited the old bootstrap's lobby readiness"; return false;
+			}
+		}
+		return true;
+	}
+
 	bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error) {
 		uint64_t tick = 7;
 		// A world host at committed tick 900 owes the checkpoint that tick.
@@ -5727,6 +5943,14 @@ namespace RTE {
 			s_FailTag = "net-world-rejoin-selftest";
 			return TestH4LeaveThenNewJoinSameHolder();
 		}
+		if (std::strcmp(name, "-net-world-moved-activation-selftest") == 0) {
+			s_FailTag = "net-world-moved-activation-selftest";
+			return TestMovedActivationReleasesCatchUp();
+		}
+		if (std::strcmp(name, "-net-world-private-progress-selftest") == 0) {
+			s_FailTag = "net-world-private-progress-selftest";
+			return TestOrdinaryLobbyAcknowledgesJoinImage();
+		}
 		if (std::strcmp(name, "transfer") == 0 || std::strcmp(name, "-net-world-transfer-selftest") == 0) {
 			s_FailTag = "net-world-transfer-selftest";
 			return TestJoinerTransferPump();
@@ -5758,6 +5982,10 @@ namespace RTE {
 		if (std::strcmp(name, "watermark") == 0 || std::strcmp(name, "-net-world-watermark-selftest") == 0) {
 			s_FailTag = "net-world-watermark-selftest";
 			return TestImageWatermarkSurvivesAnEmptyCopy();
+		}
+		if (std::strcmp(name, "-net-world-held-route-selftest") == 0) {
+			s_FailTag = "net-world-held-route-selftest";
+			return TestHeldRejoinKeepsItsRoute();
 		}
 		if (std::strcmp(name, "ticket") == 0 || std::strcmp(name, "-net-world-ticket-selftest") == 0) {
 			s_FailTag = "net-world-ticket-selftest";
@@ -5806,6 +6034,14 @@ namespace RTE {
 		if (std::strcmp(name, "ordinary-identity") == 0 || std::strcmp(name, "-net-world-ordinary-identity-selftest") == 0) {
 			s_FailTag = "net-world-ordinary-identity-selftest";
 			return TestOrdinaryIdentityStamps();
+		}
+		if (std::strcmp(name, "-net-world-bootstrap-identity-selftest") == 0) {
+			s_FailTag = "net-world-bootstrap-identity-selftest";
+			return TestWorldBootstrapSenderIdentity();
+		}
+		if (std::strcmp(name, "-net-world-transfer-disconnect-selftest") == 0) {
+			s_FailTag = "net-world-transfer-disconnect-selftest";
+			return TestWorldBootstrapSenderIdentity(true);
 		}
 		if (std::strcmp(name, "admit") == 0 || std::strcmp(name, "-net-world-admit-selftest") == 0) {
 			s_FailTag = "net-world-admit-selftest";
@@ -5918,6 +6154,11 @@ namespace RTE {
 			std::string error;
 			return TestWorldFreshFlagOpensNewRound(&error) ? 0 : Fail(error);
 		}
+		if (std::strcmp(name, "-net-world-bootstrap-ready-selftest") == 0) {
+			s_FailTag = "net-world-bootstrap-ready-selftest";
+			std::string error;
+			return TestWorldBootstrapWaitsForLobby(&error) ? 0 : Fail(error);
+		}
 		if (std::strcmp(name, "final-checkpoint") == 0 || std::strcmp(name, "-net-world-final-checkpoint-selftest") == 0) {
 			s_FailTag = "net-world-final-checkpoint-selftest";
 			std::string error;
@@ -5973,6 +6214,8 @@ namespace RTE {
 		if (const int result = TestImageBlobRoundTrip(); result != 0) {
 			return result;
 		}
+		if (const int result = TestMovedActivationReleasesCatchUp(); result != 0) return result;
+		if (const int result = TestOrdinaryLobbyAcknowledgesJoinImage(); result != 0) return result;
 		if (const int result = TestJoinerTransferPump(); result != 0) {
 			return result;
 		}
@@ -6006,6 +6249,7 @@ namespace RTE {
 		if (const int result = TestImageWatermarkSurvivesAnEmptyCopy(); result != 0) {
 			return result;
 		}
+		if (const int result = TestHeldRejoinKeepsItsRoute(); result != 0) return result;
 		if (const int result = TestTicketRejoinTargetsTheWorld(); result != 0) {
 			return result;
 		}
@@ -6064,6 +6308,8 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
+		if (const int result = TestWorldBootstrapSenderIdentity(); result != 0) return result;
+		if (const int result = TestWorldBootstrapSenderIdentity(true); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
@@ -6124,6 +6370,7 @@ namespace RTE {
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
 			if (!TestWorldRestartKeepsTickets(&error)) return Fail(error);
 			if (!TestWorldFreshFlagOpensNewRound(&error)) return Fail(error);
+			if (!TestWorldBootstrapWaitsForLobby(&error)) return Fail(error);
 			if (!TestWorldCleanStopWritesFinalCheckpoint(&error)) return Fail(error);
 			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
 			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);

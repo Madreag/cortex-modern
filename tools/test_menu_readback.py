@@ -17,7 +17,7 @@ from test_telemetry_bundle import set_visual_resolution
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -110,7 +110,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network", "net-host-left")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -808,6 +808,32 @@ def scripts(case, port, root):
                  "dump_host_options\n"
                  f"set_share_address {WIDE_SHARE_HOST}\nwait 5\n"
                  "dump_host_options\nexit\n")
+    elif case == "net-host-left":
+        done = probe_root(root, "host") / "done.json"
+        host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
+                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
+                f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
+                "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
+                "activate ButtonMultiplayerStart\n"
+                f"wait_file {done} 90\nwait_ms 500\ndump_lobby\ndump_host_options\nexit\n")
+        client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait 5\n"
+                  f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
+                  "activate ButtonMultiplayerConnect\nwait_connected 2 60\nwait 5\n"
+                  "activate ButtonMultiplayerReady\n"
+                  f"wait_file {done} 90\nwait_ms 1000\n"
+                  "assert_status The host left the match\n"
+                  "assert_substate Landing\nassert_visible LabelMultiplayerLandingStatus 1\n"
+                  "assert_label LabelMultiplayerLandingStatus The host left the match\n"
+                  "assert_text_fits LabelMultiplayerLandingStatus\ndump_lobby\ndump_host_options\nexit\n")
+        return {"host": host, "client": client}, {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
+            {"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 150},
+            {"op": "wait", "elapsed_ms": 500},
+            {"op": "assert", "equals": {"paused": False, "service": "Running"}},
+            {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+            {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonLeaveMatch"),
+            {"op": "wait", "screen": "PauseLeaveConfirm"}, menu_step("activate ButtonLeaveConfirm"),
+            {"op": "wait", "scope": "menu", "elapsed_ms": 500},
+            {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}}
     elif case == "net-activity":
         # A vanished pick needs a module unload the menu harness cannot drive; the native
         # host_request_fallback row covers the empty-list Base.rte request fields instead.
@@ -1413,9 +1439,9 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match")
+    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case in ("net-activity", "local-end-match")
+    menu_driven = case in ("net-activity", "local-end-match", "net-host-left")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
@@ -1425,6 +1451,8 @@ def run_case(options, case, root, failing=None):
             script.write_text(texts[who], encoding="utf-8")
             result["scripts"][str(script)] = sha(script)
             args = ["-menu-script", str(script)]
+            if case == "net-host-left":
+                args += ["-input-script", str(inputs)]
             if case == "landing":
                 # The flag takes the same over-cap name the box gets below: one console refusal.
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
@@ -1925,6 +1953,11 @@ def run_case(options, case, root, failing=None):
                        for who in ("host", "client")}
             assert reports["host"]["service"]["status"] == "Match left", reports["host"]["service"]["status"]
             assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
+        if case == "net-host-left":
+            status = [control["text"] for capture in images if capture["peer"] == "client"
+                      for control in capture["controls"] if control["name"] == "LabelMultiplayerLandingStatus"]
+            assert status and all("The host left the match" in value and "rematch roster:" not in value for value in status), status
+            result["host_departure_status"] = status
         if case == "net-activity":
             # The combo's picked row is what the lobby carries, and both peers read the same
             # preset, module and scene off the wire - the client's label is the proof a bare name never was.

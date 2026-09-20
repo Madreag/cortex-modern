@@ -157,7 +157,8 @@ namespace RTE {
 		NetPeerId RemoteTransportOf(uint8_t peerId) const;
 		/// Whether that remote's own lobby has spoken; before it does, its session discards lobby packets.
 		bool IsRemoteLobbyUp(uint8_t peerId) const { return m_RemoteLobbyUp.find(peerId) != m_RemoteLobbyUp.end(); }
-		void SendMatchConfigTo(uint8_t peerId);
+		bool IsRemoteConnectionLobbyUp(uint8_t peerId) const { return m_LobbyUpConnections.contains(RemoteTransportOf(peerId)); }
+		bool SendMatchConfigTo(uint8_t peerId);
 		/// Sends queued chunks after Started; Tick itself stops once the lobby is terminal.
 		void PumpOutgoingChunks();
 		void HandleTransportEvent(const NetTransportEvent& event, uint64_t nowMs);
@@ -233,6 +234,7 @@ namespace RTE {
 		void HandlePeerState(const NetLobbyPeerState& message);
 		void SyncSessionPeers();
 		void RemoveRemote(NetPeerId transportPeerId);
+		void RemoveRemotePeer(uint8_t peerId);
 		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
@@ -282,6 +284,7 @@ namespace RTE {
 		std::map<uint8_t, uint32_t> m_RemotePingByPeer; //!< Peer pings; the host stamps relayed states with its measurement.
 		std::map<uint8_t, std::string> m_RemotePlatformsByPeer;
 		std::set<uint8_t> m_RemoteLobbyUp; //!< Remotes that have sent a lobby message of their own.
+		std::set<NetPeerId> m_LobbyUpConnections;
 		std::set<uint8_t> m_WorldTransferPeers; //!< World bootstraps the host bound; no lobby-up gate.
 		bool m_SeatAssigned = false;       //!< Client: the host has named the id it bound to this connection.
 		std::vector<uint8_t> m_StateBytesToSend;

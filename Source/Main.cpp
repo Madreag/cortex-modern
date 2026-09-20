@@ -180,6 +180,7 @@ using namespace RTE;
 
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
+static std::string s_netLiveTickHashPath;
 // The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
 static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
@@ -754,6 +755,12 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			s_recordTickHashes = true;
 			// Deterministic runs drain async path solves each frame so they can't race the node-cost rewrite.
 			g_SettingsMan.SetForceImmediatePathingRequestCompletion(true);
+		}
+		if (currentArg == "-net-live-tick-hashes") {
+			if (lastArg) return false;
+			s_netLiveTickHashPath = argValue[i + 1];
+			i += 2;
+			continue;
 		}
 		if (currentArg == "-cow-checkpoint-autosave") {
 			s_cowCheckpointAutosave = true;
@@ -5014,7 +5021,8 @@ void RunGameLoop() {
 			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
-			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick;
+			const bool liveHashTick = !s_netLiveTickHashPath.empty() && ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick || liveHashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
 			}
@@ -5490,6 +5498,16 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				if (liveHashTick) {
+					static std::ofstream trace(s_netLiveTickHashPath, std::ios::trunc);
+					nlohmann::json subsystems = nlohmann::json::object();
+					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
+					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
+					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
+					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
+					    {"subsystems", std::move(subsystems)}}.dump() << '\n';
+					trace.flush();
+				}
 				if (a7HashTick && ScenarioRunner::GetLockstepAppliedFrame() == simTick) {
 					const uint64_t round = ScenarioRunner::GetLockstepRoundId();
 					NetA7Journal::AppliedTick(round, simTick, ScenarioRunner::GetLockstepLocalPeerId(), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult)));
@@ -7967,6 +7985,7 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
+	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
@@ -8001,9 +8020,19 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {
 			return NetLockstepSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-ordering-selftest") {
+			return NetLockstepSelfTest::RunOrdering();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-hold-heartbeat-selftest") {
+			return NetLockstepSelfTest::RunHoldHeartbeat();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
 			netMatchSelfTest = true;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-lobby-lifecycle-selftest") {
+			netMatchSelfTest = true;
+			netMatchLobbyLifecycleSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-auth-selftest") {
 			return NetAuthSelfTest::Run();
@@ -8265,7 +8294,7 @@ int main(int argc, char** argv) {
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
-		const int result = NetMatchSelfTest::Run();
+		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();
 		NetMatchService::Construct();
 		return ShutDown(result);
 	}

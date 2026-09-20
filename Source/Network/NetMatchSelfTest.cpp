@@ -5386,7 +5386,15 @@ namespace RTE {
 					return fail(peer->name + " did not receive the host's snapshot (" + std::to_string(received.size()) + " of " + std::to_string(snapshot.size()) + " bytes)");
 				}
 			}
-			if (!PlayRematchTicks(fixture, 8)) return fail("the healed round never committed");
+			if (!PlayRematchTicks(fixture, 8)) {
+				for (RematchPeer* peer: LiveRematchPeers(fixture)) {
+					step += "; " + peer->name + " delay=" + std::to_string(peer->round->GetConfig().inputDelayFrames) +
+					        " priming=" + std::to_string(peer->round->NeedsResyncPriming()) + " next=" + std::to_string(peer->round->GetStats().nextFrame) +
+					        " produced=" + std::to_string(peer->nextProduce) + " applied=" + std::to_string(peer->lastApplied) +
+					        " stop=" + peer->round->GetStats().timeoutReason;
+				}
+				return fail("the healed round never committed");
+			}
 			const auto sameTicks = [&step](const std::map<uint64_t, std::string>& reference, const std::map<uint64_t, std::string>& other, const std::string& who, size_t& shared) {
 				shared = 0;
 				for (const auto& [frame, text]: reference) {
@@ -9004,6 +9012,87 @@ namespace RTE {
 
 	// NetMatchService::ReturnToLobby forms the next roster itself, on a client's own played round.
 	// ReturnToLobby discards the round it derived from, so every case plays its own.
+	bool TestSnapshotTransferKeepsSessionAlive(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetSession hostSession, clientSession;
+		if (!StartServiceRematchSession(48918, hostWire, clientWire, hostSession, clientSession, error)) return false;
+		NetLobbySession lobby;
+		NetLobbySessionConfig config;
+		config.localPeerId = 2; config.remotePeerId = 1;
+		config.remoteTransportPeerId = clientSession.GetRemoteTransportPeerId();
+		config.session = &clientSession;
+		config.matchConfig = MakeConfig(); config.matchConfig.sessionId = hostSession.GetSessionId();
+		config.timeoutMs = 60000;
+		if (!lobby.Start(clientWire, config, error)) return false;
+		const NetPeerId clientConnection = hostSession.GetReadyPeers().front().transportPeerId;
+		auto send = [&](const NetLobbyPayload& payload) {
+			std::vector<uint8_t> bytes;
+			return NetLobbyProtocol::Encode({payload}, bytes) && hostWire.Send(clientConnection, NetTransportLane::ControlReliable, bytes, error);
+		};
+		if (!send(NetLobbyMatchConfig{config.matchConfig})) return false;
+		lobby.Tick(0);
+		NetLobbyStateChunk chunk;
+		chunk.transferId = 77; chunk.chunkCount = 40;
+		chunk.totalBytes = static_cast<uint32_t>(chunk.chunkCount * NetLobbyProtocol::c_MaxStateChunkBytes);
+		chunk.bytes.assign(NetLobbyProtocol::c_MaxStateChunkBytes, 0x53);
+		for (uint16_t index = 0; index < chunk.chunkCount; ++index) {
+			chunk.chunkIndex = index;
+			if (!send(chunk)) return false;
+			hostWire.AdvanceTimeMs(1000); clientWire.AdvanceTimeMs(1000);
+			lobby.Tick((index + 1) * 1000);
+			if (lobby.IsFailed() || clientSession.IsFailed()) {
+				*error = "snapshot progress timed out at chunk " + std::to_string(index) + ": " + lobby.GetFailureReason();
+				return false;
+			}
+		}
+		if (!lobby.HasCompleteStateTransfer() || clientSession.GetStats().timeouts != 0) {
+			*error = "snapshot transfer did not remain live through the session timeout budget";
+			return false;
+		}
+		for (uint64_t now = 41000; now <= 71000 && !clientSession.IsFailed(); now += 1000) lobby.Tick(now);
+		if (!clientSession.IsFailed() || clientSession.GetStats().timeouts != 1) {
+			*error = "snapshot completion disabled the ordinary silence timeout";
+			return false;
+		}
+		std::cout << "PASS snapshot_progress_keeps_session_alive chunks=40 silence_still_expires=1" << std::endl;
+		return true;
+	}
+
+	bool TestRematchAfterHostDeparture(std::string* error) {
+		NetMatchConfig solo;
+		std::string rosterRefusal;
+		const bool rosterAccepted = NetMatchConfigUtil::DeriveRematchConfig(MakeConfig(), {1}, solo, nullptr, &rosterRefusal);
+		LoopbackTransport hostWire, clientWire;
+		NetSession hostSession;
+		NetMatchService service;
+		service.m_IsHost = false;
+		service.m_Transport = std::make_unique<GnsTransport>();
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!StartServiceRematchSession(48914, hostWire, clientWire, hostSession, *service.m_Session, error)) return false;
+		const uint8_t local = service.m_Session->GetLocalPeerId();
+		hostSession.Close("host left");
+		hostWire.AdvanceTimeMs(10);
+		clientWire.AdvanceTimeMs(10);
+		service.m_PendingSessionEvents = clientWire.PollEvents();
+		if (service.m_PendingSessionEvents.empty() || !service.m_Session->IsReady()) {
+			*error = "host departure was not retained in the round's handover queue";
+			return false;
+		}
+		NetMatchConfig unused;
+		std::string refusal;
+		const bool opened = ServiceRematchRoster(service, MakeConfig(), local, unused, &refusal);
+		const auto snapshot = service.GetLobbySnapshot();
+		if (rosterAccepted || rosterRefusal != "not enough players for a rematch" || opened ||
+		    snapshot.errorText != "The host left the match" || service.GetState() != NetMatchServiceState::Failed) {
+			*error = "host departure roster='" + rosterRefusal + "' opened rematch=" + std::to_string(opened) + " player error='" + snapshot.errorText + "' refusal='" + refusal + "'";
+			return false;
+		}
+		std::cout << "PASS rematch_host_departure message=The host left the match" << std::endl;
+		return true;
+	}
+
 	bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error) {
 		struct Case {
 			const char* name;
@@ -11591,6 +11680,13 @@ namespace RTE {
 		return 0;
 	}
 
+	int NetMatchSelfTest::RunLobbyLifecycle() {
+		std::string error;
+		const bool passed = TestSnapshotTransferKeepsSessionAlive(&error) && TestRematchAfterHostDeparture(&error);
+		std::cout << "[net-match-lobby-lifecycle-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetMatchSelfTest::Run() {
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-match-selftest] FAIL: " << message << std::endl;
@@ -11658,6 +11754,8 @@ namespace RTE {
 		if (!seatingWaitError.empty()) return fail(seatingWaitError);
 		if (!hostDefaultsError.empty()) return fail(hostDefaultsError);
 		if (!stagedRematchError.empty()) return fail(stagedRematchError);
+		if (!TestSnapshotTransferKeepsSessionAlive(&error)) return fail(error);
+		if (!TestRematchAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
