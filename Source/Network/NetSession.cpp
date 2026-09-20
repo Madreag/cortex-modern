@@ -1864,6 +1864,7 @@ namespace RTE {
 				{"num_lua_states", m_Config.localIdentity.deterministicConfig.numLuaStates},
 				{"num_lua_states_override", m_Config.localIdentity.deterministicConfig.numLuaStatesOverride},
 				{"selected_module", m_Config.localIdentity.deterministicConfig.selectedModule},
+				{"scenario_test_module_loaded", m_Config.localIdentity.deterministicConfig.scenarioTestModuleLoaded},
 			}},
 			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
 			{"peers", peers},

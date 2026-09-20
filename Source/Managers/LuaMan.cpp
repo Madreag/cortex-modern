@@ -2612,7 +2612,17 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		fail("the Lua state's random generator could not be restored")
 	end
 	-- The sequence carries on from where the host stood, so tables born next take the numbers it would give.
-	if graph.serial then _ScriptGraphSetStateSerial(graph.serial) end
+	local liveSerial = graph.serial
+	local callbacks = rawget(_G, "_ScriptGraphCallbacks")
+	if adoptRoots and type(callbacks) == "table" and callbacks.liveSerial ~= nil then
+		local saved = callbacks.liveSerial
+		if type(saved) ~= "number" or saved < 1 or saved > (graph.serial or 0) or saved ~= math.floor(saved) then
+			fail("the checkpoint's live birth horizon is invalid")
+		else
+			liveSerial = saved
+		end
+	end
+	if liveSerial then _ScriptGraphSetStateSerial(liveSerial) end
 	graphCache = nil
 	return roots, problems
 end
@@ -5660,9 +5670,15 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		return false;
 	}
 	ScriptGraphCaptureScope captureScope(captured != nullptr);
-	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
-	CaptureScriptCallbacks();
+	// Native scratch allocations belong to the capture, not to the live VM's birth sequence.
+	struct CaptureSerial {
+		lua_State* state;
+		uint64_t value;
+		~CaptureSerial() { luaJIT_set_state_serial(state, value); }
+	} captureSerial{m_State, luaJIT_state_serial(m_State)};
+	ScriptCallbackRootScope callbackRoot{m_State};
+	CaptureScriptCallbacks(captureSerial.value);
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
 	if (serialized) serialized->clear();
@@ -5679,6 +5695,11 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		if (lua_isnil(m_State, -1)) {
 			lua_pop(m_State, 1);
 			lua_newtable(m_State);
+			lua_getglobal(m_State, "_ScriptGraphCallbacks");
+			lua_getfield(m_State, -1, "emptyRoots");
+			lua_pushboolean(m_State, 1);
+			lua_setfield(m_State, -2, std::to_string(mo->GetUniqueID()).c_str());
+			lua_pop(m_State, 2);
 		}
 		lua_settable(m_State, -3);
 	}
@@ -5851,8 +5872,23 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 			}
 			lua_pop(m_State, 1);
 			if (rep && lua_istable(m_State, -1)) {
-				lua_pushvalue(m_State, -1);
-				rep->get_lua_table().set(m_State);
+				const int fieldTop = lua_gettop(m_State);
+				lua_getglobal(m_State, "_ScriptGraphCallbacks");
+				if (lua_istable(m_State, -1)) lua_getfield(m_State, -1, "emptyRoots");
+				if (lua_istable(m_State, -1)) lua_getfield(m_State, -1, std::to_string(uid).c_str());
+				const bool absent = lua_isboolean(m_State, -1) && lua_toboolean(m_State, -1);
+				lua_settop(m_State, fieldTop);
+				if (absent) {
+					bool empty = !lua_getmetatable(m_State, -1);
+					if (!empty) lua_pop(m_State, 1);
+					lua_pushnil(m_State);
+					if (lua_next(m_State, -2)) { empty = false; lua_pop(m_State, 2); }
+					if (empty) rep->get_lua_table().reset();
+					else problems.push_back("an absent script field table contains state for object " + std::to_string(uid));
+				} else {
+					lua_pushvalue(m_State, -1);
+					rep->get_lua_table().set(m_State);
+				}
 			} else {
 				problems.push_back("the script state of object " + std::to_string(uid) + " has no live object to land on");
 			}
@@ -5892,10 +5928,16 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 	return restored;
 }
 
-void LuaStateWrapper::CaptureScriptCallbacks() {
+void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	const int top = lua_gettop(m_State);
 	lua_newtable(m_State);
 	const int callbacks = lua_gettop(m_State);
+	if (liveSerial != 0) {
+		lua_pushnumber(m_State, static_cast<lua_Number>(liveSerial));
+		lua_setfield(m_State, callbacks, "liveSerial");
+	}
+	lua_newtable(m_State);
+	lua_setfield(m_State, callbacks, "emptyRoots");
 	lua_newtable(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
 	if (lua_istable(m_State, -1)) {
@@ -6945,6 +6987,32 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		const uint64_t serialBefore = luaJIT_state_serial(m_State);
+		std::string first, repeated;
+		CheckpointText image;
+		std::vector<std::string> problems;
+		const bool captured = SerializeScriptGraph(first, problems) && CaptureScriptGraph(image, problems) && SerializeScriptGraph(repeated, problems);
+		const uint64_t serialAfter = luaJIT_state_serial(m_State);
+		const bool same = captured && first == image.Text() && first == repeated && serialBefore == serialAfter;
+		std::cout << "[script-graph-selftest] " << (same ? "PASS" : "FAIL") << " same_tick_native_graph_capture serial_before=" << serialBefore << " serial_after=" << serialAfter << " synchronous_bytes=" << first.size() << " image_bytes=" << image.Text().size() << std::endl;
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] same-tick capture: " << problem << std::endl;
+		checkpointValues = same && checkpointValues;
+		if (same) {
+			// A restored peer counts on from the horizon the capture recorded, not from the scratch that capture spent.
+			std::string restored;
+			const bool walked = RestoreScriptGraph(first, problems) && SerializeScriptGraph(restored, problems);
+			const uint64_t horizon = luaJIT_state_serial(m_State);
+			const bool keeps = walked && horizon == serialBefore;
+			std::cout << "[script-graph-selftest] " << (keeps ? "PASS" : "FAIL") << " native_graph_restore_keeps_live_birth_horizon live=" << serialBefore << " restored=" << horizon << " archive=" << first.substr(0, first.find(';', 4)) << std::endl;
+			checkpointValues = keeps && checkpointValues;
+			size_t offset = 0;
+			while (offset < std::min(first.size(), restored.size()) && first[offset] == restored[offset]) ++offset;
+			// Open: the archive still names a capture's own scratch by the order that capture drew it.
+			std::cout << "[script-graph-selftest] OPEN restore_recapture_names_scratch_by_draw_order bytes=" << first.size() << "/" << restored.size() << " equal=" << (first == restored) << " first_difference=" << offset << std::endl;
+			for (const std::string& problem: problems) std::cout << "[script-graph-selftest] native restore: " << problem << std::endl;
+		}
+	}
 	{
 		// An adopted root need not be on a coroutine's stack until its next resume.
 		auto first = std::make_unique<MOPixel>();

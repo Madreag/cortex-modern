@@ -182,7 +182,7 @@ namespace RTE {
 		bool RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text);
 
 		/// Exposes cached functions and object callbacks to the script graph.
-		void CaptureScriptCallbacks();
+		void CaptureScriptCallbacks(uint64_t liveSerial = 0);
 
 		/// Rebinds cached functions and object callbacks from the restored graph.
 		void RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync = true);

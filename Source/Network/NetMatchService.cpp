@@ -1260,6 +1260,47 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	void NetMatchService::StartSnapshotLoadKeepalive() {
+		if (m_SnapshotLoadKeepalive.joinable()) return;
+		m_SnapshotLoadKeepaliveWindowTicks.store(0);
+		m_SnapshotLoadKeepalive = std::jthread([this](std::stop_token stop) {
+			while (!stop.stop_requested()) {
+				{
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					if (m_Session) m_Session->TickKeepalive(AdmissionNowMs());
+					// Counted under the lock: a load that held it would show a window with no ticks.
+					m_SnapshotLoadKeepaliveTicks.fetch_add(1);
+					m_SnapshotLoadKeepaliveWindowTicks.fetch_add(1);
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(50));
+			}
+		});
+	}
+
+	void NetMatchService::StopSnapshotLoadKeepalive() {
+		if (!m_SnapshotLoadKeepalive.joinable()) return;
+		m_SnapshotLoadKeepalive.request_stop();
+		m_SnapshotLoadKeepalive.join();
+		std::cout << "[net-match] snapshot keepalive ticks=" << m_SnapshotLoadKeepaliveWindowTicks.load() << std::endl;
+	}
+
+	// The load runs on the sim thread without the service lock, so the keepalive must tick right through it.
+	bool NetMatchService::RunSnapshotLoadKeepaliveSelfTest(std::string* error) {
+		StopSnapshotLoadKeepalive();
+		const uint64_t before = m_SnapshotLoadKeepaliveTicks.load();
+		StartSnapshotLoadKeepalive();
+		const auto start = std::chrono::steady_clock::now();
+		while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(300)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		const uint64_t during = m_SnapshotLoadKeepaliveTicks.load() - before;
+		StopSnapshotLoadKeepalive();
+		if (during < 3) {
+			if (error) *error = "the snapshot-load keepalive ticked " + std::to_string(during) + " times across a 300 ms load";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS snapshot_load_keepalive_ticks during_300ms=" << during << " window=" << m_SnapshotLoadKeepaliveWindowTicks.load() << std::endl;
+		return true;
+	}
+
 	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
 		if (m_WorldCatchUp.active) {
 			const std::string pendingLoad = TakePendingResyncLoad();
@@ -1342,12 +1383,15 @@ static std::string ResyncSaveName() {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
+		StartSnapshotLoadKeepalive();
 		if (autosave) {
 			if (!g_ActivityMan.LoadAutosaveToRestart(autosave->matchId, autosave->tick)) {
+				StopSnapshotLoadKeepalive();
 				if (error) *error = "checkpoint load failed: " + AutosaveStore::ArchiveName(autosave->matchId, autosave->tick);
 				return false;
 			}
 		} else if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
+			StopSnapshotLoadKeepalive();
 			if (error) *error = "resync snapshot load failed: " + pendingLoad;
 			return false;
 		}
@@ -1375,7 +1419,8 @@ static std::string ResyncSaveName() {
 			local->gui = GUIInput::SaveSharedCheckpoint();
 			local->frame = g_FrameMan.SaveNetLocalState();
 			return !keepLocalPlayer || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity));
-		}, [local, state, keepLocalPlayer, dedicated, newestBinding, ownCheckpoint](Activity& activity) {
+		}, [this, local, state, keepLocalPlayer, dedicated, newestBinding, ownCheckpoint](Activity& activity) {
+			StopSnapshotLoadKeepalive();
 			if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != state->savedTick ||
 			    !g_UInputMan.LoadCheckpoint(local->input, true) || !GUIInput::LoadSharedCheckpoint(local->gui, true) || !g_FrameMan.LoadNetLocalState(local->frame, true)) return false;
 			const NetGamePlayerBindings seatless{};
@@ -1388,7 +1433,7 @@ static std::string ResyncSaveName() {
 			}
 			if (!g_UInputMan.LoadCheckpoint(local->input) || !GUIInput::LoadSharedCheckpoint(local->gui) || !g_FrameMan.LoadNetLocalState(local->frame)) return false;
 			return ScenarioRunner::RestoreNetResyncState(*state);
-		})) { if (error) *error = "could not stage resync local state restoration"; return false; }
+		})) { StopSnapshotLoadKeepalive(); if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
 		return true;
 	}
@@ -1572,6 +1617,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::Destroy() {
 		m_CancelRequested.store(true);
+		StopSnapshotLoadKeepalive();
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
@@ -2451,6 +2497,13 @@ static std::string ResyncSaveName() {
 		    !m_Coordinator->UsesBoundedWait() || m_Coordinator->IsPersistentWorldRound() || m_Coordinator->IsMigrating() || !g_ActivityMan.ActivityRunning()) return;
 		const uint64_t round = m_Coordinator->GetRoundId();
 		if (round == 0 || m_PrivateImageRound == round) return;
+		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
+		StartSnapshotLoadKeepalive();
+		struct FinishCapture {
+			NetMatchService& service;
+			bool owns;
+			~FinishCapture() { if (owns) service.StopSnapshotLoadKeepalive(); }
+		} finishCapture{*this, ownsKeepalive};
 		m_PrivateImageRound = round;
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
