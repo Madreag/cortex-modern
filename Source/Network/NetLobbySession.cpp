@@ -729,8 +729,12 @@ namespace RTE {
 	void NetLobbySession::SyncSessionPeers() {
 		if (!m_Config.host || !m_Config.session) return;
 		const std::vector<NetSessionPeerInfo> readyPeers = m_Config.session->GetReadyPeers();
+		const auto active = [&](uint8_t peer) {
+			return m_Config.matchConfig.activePeerIds.empty() || std::binary_search(m_Config.matchConfig.activePeerIds.begin(), m_Config.matchConfig.activePeerIds.end(), peer);
+		};
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
+			if (!active(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
 			transports[static_cast<uint8_t>(peer.assignedPeerId + 1)] = peer.transportPeerId;
 		}
 		// A world bootstrap's id comes from the join plane, never from the session roster; without this
@@ -748,6 +752,7 @@ namespace RTE {
 		}
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			const uint8_t peerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			if (!active(peerId)) continue;
 			if (IsKnownRemote(peerId)) continue;
 			addedPeer = true;
 			m_RemoteTransports[peerId] = peer.transportPeerId;
