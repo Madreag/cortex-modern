@@ -7,6 +7,7 @@
 #include "NetMatchService.h"
 #include "NetReconnectUx.h"
 
+#include "MenuPanelVisibility.h"
 #include "SaveLoadMenuGUI.h"
 #include "SettingsGUI.h"
 #include "ModManagerGUI.h"
@@ -298,6 +299,7 @@ namespace RTE {
 		NetMatchMode m_MultiplayerHostMode;
 		GUITextBox* m_MultiplayerJoinAddressTextBox;
 		GUITextBox* m_MultiplayerJoinPortTextBox;
+		std::string m_JoinPortAutoValue; //!< The last port this screen filled in by itself; a typed one is never overwritten.
 		GUIListBox* m_MultiplayerLanGamesList;
 		GUILabel* m_MultiplayerLanGamesLabel; //!< The line above the list; doubles as the join refusal status.
 		std::string m_LanGamesLabelText;      //!< Its ini text, restored when a refusal clears.
@@ -337,6 +339,7 @@ namespace RTE {
 		GUITextBox* m_MultiplayerLobbyChatInput;
 		std::deque<std::string> m_MultiplayerLobbyChatLines; //!< Newest at the back; the labels show the last eight.
 		MultiplayerSubScreen m_MultiplayerSubScreen;
+		MenuPanelVisibility m_PanelVisibility; //!< A swapped-out panel takes the controls inside it with it.
 		// §9.2/9.3's host options panel: six pages over the lobby, or the host-setup draft of the next one.
 		GUICollectionBox* m_HostOptionsPanel = nullptr;
 		GUILabel* m_HostOptionsTitle = nullptr;
@@ -463,6 +466,10 @@ namespace RTE {
 		/// Runs the LAN browser and the directory lister while the join screen is up and mirrors the
 		/// merged rows into the list; a non-joinable row stays visible with its refusal reason.
 		void RefreshGamesList();
+		/// Fills the join Port field with a port the screen knows, unless the player typed one.
+		void SetJoinPortAuto(uint16_t port);
+		/// Keeps a closed picker's line inside its box: the module suffix goes first, then the tail elides.
+		void FitClosedComboText(GUIComboBox* combo);
 
 		/// Creates all the elements that compose the editor selection menu screen.
 		void CreateEditorsScreen();

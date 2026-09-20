@@ -205,8 +205,16 @@ namespace {
 		}
 	}
 
+	// A seat's own state names the seat; only a toast about an action names who did it.
+	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
+	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
+
 	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
 		uint8_t sender = toast.senderPeerId;
+		if (ToastNamesNobody(toast.kind)) return toast.text;
+		if (ToastNamesTheSeat(toast.kind)) {
+			return sender ? g_NetMatchService.GetPeerDisplayName(sender) + ": " + toast.text : toast.text;
+		}
 		if (toast.kind == "resumed" && sender == 0) {
 			const auto& events = ScenarioRunner::GetNetUiToastLog();
 			auto event = std::find_if(events.rbegin(), events.rend(), [&](const auto& entry) {
@@ -694,7 +702,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
-	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics() && !ScenarioRunner::IsLockstepLocalMachineSlow()) {
+	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics()) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
 		const int fullHeight = font->GetFontHeight() + 7;
@@ -827,7 +835,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	text += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
 	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
-	if (ScenarioRunner::IsLockstepLocalMachineSlow()) text += "\nYour machine cannot keep up with this match";
+	// The slow-machine notice has one surface, the toast band; this panel keeps the pace numbers.
 	if (g_SettingsMan.GetNetworkShowDiagnostics()) {
 		for (const auto& member: snapshot.members) {
 			if (member.cpu) continue;
@@ -1177,6 +1185,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 
 void NetModerationGUI::DrawMatchToasts() {
 	m_ToastRect = {};
+	m_SeatsPanelRect = {};
 	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
@@ -1196,26 +1205,29 @@ void NetModerationGUI::DrawMatchToasts() {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
-	// A compact screen with the seats panel open reserves one toast row under the strip band: the
-	// oldest waiting toast takes it and the rest of the stack waits for the room to come back.
-	const bool reserved = m_Open && backbuffer->h < c_CompactMaxHeight;
+	// The stack never crosses a seat's own message band, which owns the rows it draws in.
+	int topLimit = 2;
+	for (const auto& band: editor.textBands) {
+		if (band.y + band.h <= backbuffer->h / 2) topLimit = std::max(topLimit, band.y + band.h + 4);
+		else bottom = std::min(bottom, band.y - 4);
+	}
 	if (m_Open) {
-		// The seats panel owns its rows too: a stack that would cross them piles up above it instead.
-		// On a compact screen the reservation is the only band the stack gets: the editing anchor
-		// points at a strip the open panel already lifted off the bottom, so the reservation wins.
+		// The seats panel owns its rows too: the stack takes the larger free band beside it, and takes
+		// none at all when the panel leaves no room - a row laid out off the screen is not a reading.
 		int panelX, panelTop, panelWidth, panelHeight;
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		bottom = reserved ? panelTop - 4 : std::min(bottom, panelTop - 4);
+		m_SeatsPanelRect = {panelX, panelTop, panelWidth, panelHeight, true};
+		const int panelBottom = panelTop + panelHeight;
+		if (panelTop < bottom && panelBottom > topLimit) {
+			const int above = panelTop - 4 - topLimit, below = bottom - (panelBottom + 4);
+			if (above >= below) bottom = panelTop - 4;
+			else topLimit = panelBottom + 4;
+		}
 	}
-	size_t firstRow = 0;
-	size_t rowCount = visible.size();
-	if (reserved && !visible.empty()) {
-		firstRow = 0;
-		rowCount = 1;
-	} else if (visible.size() > 3) {
-		firstRow = visible.size() - 3;
-		rowCount = 3;
-	}
+	size_t rowCount = std::min<size_t>(visible.size(), 3);
+	while (rowCount > 0 && bottom - static_cast<int>(rowCount) * rowHeight < topLimit) --rowCount;
+	// A short band keeps the oldest waiting toasts; a full one keeps the newest.
+	size_t firstRow = rowCount < 3 ? 0 : visible.size() - rowCount;
 	int top = bottom - static_cast<int>(rowCount) * rowHeight;
 	EditorArea toastArea = editor;
 	if (m_StatusRect.visible) {
@@ -1228,11 +1240,11 @@ void NetModerationGUI::DrawMatchToasts() {
 	toastArea.FreeSpan(top, bottom, backbuffer->w, freeLeft, freeRight);
 	const int countNeed = font->CalculateWidth(std::string("0 of 0")) + 14;
 	if (freeRight - freeLeft < countNeed) {
-		// No column-free span wide enough: the oldest toast takes the top band, the rest wait.
+		// No column-free span wide enough: the oldest toast takes the band's first row, the rest wait.
 		firstRow = 0;
-		rowCount = visible.empty() ? 0 : 1;
-		top = 2;
-		bottom = 2 + static_cast<int>(rowCount) * rowHeight;
+		rowCount = visible.empty() || bottom - rowHeight < topLimit ? 0 : 1;
+		top = topLimit;
+		bottom = topLimit + static_cast<int>(rowCount) * rowHeight;
 		freeLeft = 0;
 		freeRight = backbuffer->w;
 	}
