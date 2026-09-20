@@ -569,7 +569,7 @@ def connection_readback():
     return text
 
 
-def scripts(case, port, root):
+def scripts(case, port, root, size="960x540"):
     if case == "local-end-match":
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\n"
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait_ms 400\n"
@@ -601,7 +601,7 @@ def scripts(case, port, root):
         return {"host": text + "exit\n"}, {}
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
-                {who: repair_probe(who, root, options.size != "640x360") for who in ("host", "client")})
+                {who: repair_probe(who, root, size != "640x360") for who in ("host", "client")})
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
         # Both peers wait for the leaver's own signal: a peer that quits on its checks records the
@@ -1478,7 +1478,7 @@ def timing_options_geometry(images):
 
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
-    texts, probes = scripts(case, options.port, root)
+    texts, probes = scripts(case, options.port, root, options.size)
     if failing:
         prelude, setup, assertion = failing
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
