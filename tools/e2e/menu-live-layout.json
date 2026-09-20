@@ -31,7 +31,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 0
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
         },
         {
           "name": "client",
@@ -55,7 +59,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 3
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
         }
       ]
     },
@@ -84,7 +92,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 0
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
         },
         {
           "name": "client",
@@ -108,7 +120,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 3
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
         }
       ]
     },
@@ -137,7 +153,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 0
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
         },
         {
           "name": "client",
@@ -161,7 +181,11 @@
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "menu-live-layout.probe.json",
-          "start_delay_s": 3
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
         }
       ]
     }
@@ -292,6 +316,153 @@
       "mark": "pause-transition-Misc",
       "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
       "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Network",
+      "run": "640x360",
+      "mark": "pause-transition-Network",
+      "what": "The pause Network page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Chat",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Chat",
+      "what": "The pause Network:Chat page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Recovery",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Recovery",
+      "what": "The pause Network:Recovery page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Files",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Files",
+      "what": "The pause Network:Files page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Internet",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Internet",
+      "what": "The pause Network:Internet page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Connection",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Connection",
+      "what": "The pause Network:Connection page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Player",
+      "run": "640x360",
+      "mark": "pause-transition-Network-Player",
+      "what": "The pause Network:Player page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network",
+      "run": "960x540",
+      "mark": "pause-transition-Network",
+      "what": "The pause Network page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Chat",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Chat",
+      "what": "The pause Network:Chat page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Recovery",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Recovery",
+      "what": "The pause Network:Recovery page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Files",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Files",
+      "what": "The pause Network:Files page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Internet",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Internet",
+      "what": "The pause Network:Internet page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Connection",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Connection",
+      "what": "The pause Network:Connection page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Player",
+      "run": "960x540",
+      "mark": "pause-transition-Network-Player",
+      "what": "The pause Network:Player page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network",
+      "run": "1280x720",
+      "mark": "pause-transition-Network",
+      "what": "The pause Network page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Chat",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Chat",
+      "what": "The pause Network:Chat page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Recovery",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Recovery",
+      "what": "The pause Network:Recovery page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Files",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Files",
+      "what": "The pause Network:Files page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Internet",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Internet",
+      "what": "The pause Network:Internet page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Connection",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Connection",
+      "what": "The pause Network:Connection page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
+    },
+    {
+      "id": "pause-transition-Network-Player",
+      "run": "1280x720",
+      "mark": "pause-transition-Network-Player",
+      "what": "The pause Network:Player page replaces its previous page with the matching title.",
+      "assert": "First native screenshot, effective page/previous-page assertions and software GUI dump."
     }
   ]
 }
