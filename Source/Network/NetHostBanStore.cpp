@@ -223,6 +223,17 @@ namespace RTE {
 			return false;
 		}
 		if (!present) {
+			// A missing leaf can still have a file blocking its parent directories.
+			for (auto parent = path.parent_path(); !parent.empty(); parent = parent.parent_path()) {
+				const auto parentStatus = std::filesystem::status(parent, code);
+				if (!code && std::filesystem::is_directory(parentStatus)) break;
+				if ((code && code != std::errc::no_such_file_or_directory) ||
+				    parentStatus.type() != std::filesystem::file_type::not_found || parent == parent.parent_path()) {
+					if (error) *error = "could not access the host ban store directory";
+					m_PersistentReady = false;
+					return false;
+				}
+			}
 			m_Records.erase(std::remove_if(m_Records.begin(), m_Records.end(), [](const NetHostBanRecord& record) {
 				return record.scope == NetHostBanScope::UntilRemoved;
 			}), m_Records.end());

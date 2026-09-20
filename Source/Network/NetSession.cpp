@@ -1210,6 +1210,9 @@ namespace RTE {
 			return;
 		}
 		if (const auto* rejected = std::get_if<NetJoinRejected>(&message.payload)) {
+			if (m_ReconnectClient && (rejected->rejectReason == NetRejectReason::ParticipantRemoved || rejected->rejectReason == NetRejectReason::ParticipantBanned)) {
+				m_ReconnectClient->NotifyParticipantRemoved(rejected->rejectReason);
+			}
 			// A refused reclaim is not automatically a refused join: the stored ticket may simply name a
 			// hosted session that has ended. One fallback attempt, then a refusal is a refusal.
 			if (m_ReconnectClient && m_State == NetSessionState::Accepted && m_ReconnectClient->AbsorbRejection(m_NowMs, rejected->rejectReason)) {
