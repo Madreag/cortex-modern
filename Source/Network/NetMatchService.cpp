@@ -3109,11 +3109,16 @@ static std::string ResyncSaveName() {
 				if (m_Runner) {
 					(void)m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(*slow), MakeWorldJoinReport(c_NetWorldReportActivate, later), nullptr);
 				}
-				std::cout << "[net-world] reannounce peer=" << static_cast<int>(slow->assignedPeerId) << " e=" << later << std::endl;
+				std::cout << "[net-world] reannounce peer=" << static_cast<int>(slow->assignedPeerId) << " e=" << later
+				          << " previous=" << previous << " applied=" << slow->acknowledgedThrough << " delivered=" << slow->deliveredThrough
+				          << " input_horizon=" << nowFrame << " simulated=" << g_TimerMan.GetSimUpdateCount() << std::endl;
 				continue;
 			}
 			// CancelJoin erases the session this pointer names, so the id is read before the call.
 			const NetPeerId cancelled = slow->connection;
+			std::cout << "[net-world] activation missed connection=" << cancelled << " e=" << slow->activationTick
+			          << " applied=" << slow->acknowledgedThrough << " delivered=" << slow->deliveredThrough
+			          << " input_horizon=" << nowFrame << " simulated=" << g_TimerMan.GetSimUpdateCount() << std::endl;
 			m_WorldJoin.CancelJoin(cancelled, "the joiner missed the announced activation");
 			std::cout << "[net-world] cancel slow join connection=" << cancelled << std::endl;
 		}
@@ -3173,6 +3178,7 @@ static std::string ResyncSaveName() {
 			}
 			std::string admitError;
 			if (!m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, plan.firstRequired, &admitError)) {
+				std::cout << "[net-world] admission refused peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << " reason=" << admitError << std::endl;
 				m_WorldJoin.CancelJoin(due->connection, admitError);
 				return;
 			}
