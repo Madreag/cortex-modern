@@ -415,29 +415,9 @@ static std::string s_netReplayVerifyPath;
 static uint64_t s_netReplayDumpFrom = 1;
 static uint64_t s_netReplayDumpTo = 0;
 
-// The launch target decides whether the bundled test module belongs in the session's identity.
-bool HarnessMatchRunActive() {
-	std::string type = "GAScripted", preset = s_netMatchServiceE2EPreset, module = s_netMatchServiceE2EModule;
-	const auto selected = [&](const NetMatchConfig& config) {
-		type = config.activityType; preset = config.activityPreset; module = config.activityModule;
-	};
-	if (!s_netReplayInPath.empty()) {
-		NetMatchReplayReader replay;
-		if (!replay.Open(s_netReplayInPath)) return false;
-		selected(replay.GetConfig());
-	} else if (!s_netMatchServiceE2E) {
-		return false;
-	} else if (!s_netMatchServiceConfigPath.empty()) {
-		std::ifstream input(s_netMatchServiceConfigPath, std::ios::binary);
-		std::vector<uint8_t> bytes(NetLobbyProtocol::c_HeaderBytes + NetLobbyProtocol::c_MaxPayloadBytes + 1);
-		input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-		bytes.resize(static_cast<size_t>(input.gcount()));
-		const auto decoded = NetLobbyProtocol::Decode(bytes);
-		if (const auto* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr) selected(payload->config);
-	}
-	if (!module.empty()) return module == "Tests.rte";
-	return g_PresetMan.GetEntityPreset(type, preset) == nullptr;
-}
+// The harness's own match runs: the scripted e2e match and the playback of one it recorded. Both start
+// their activity from a match config, so PresetMan asks before loading the bundled Tests.rte module.
+bool HarnessMatchRunActive() { return s_netMatchServiceE2E || !s_netReplayInPath.empty(); }
 static long long s_lpInvarianceTick = 0;
 static std::vector<int> s_lpInvarianceDepths;
 static std::vector<int> s_lpInvarianceRepeats;
@@ -8157,7 +8137,6 @@ int main(int argc, char** argv) {
 	// a fixed default so its traces compare across machines; the identity no longer hashes the count.
 	bool explicitLuaStateOverride = false;
 	bool netSessionRequested = false;
-	bool matchServiceRequested = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] == nullptr) {
 			continue;
@@ -8169,13 +8148,9 @@ int main(int argc, char** argv) {
 			++i;
 		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
 			netSessionRequested = true;
-			if (arg == "-net-dedicated") matchServiceRequested = true;
-		} else if (arg == "-net-match-service-e2e" || arg == "-net-persistent-world") {
-			matchServiceRequested = true;
 		}
 	}
-	// Service launches keep the saved VM layout, including a match restarted from this runtime.
-	if (netSessionRequested && !matchServiceRequested && !explicitLuaStateOverride) {
+	if (netSessionRequested && !explicitLuaStateOverride) {
 		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
 	}
 
