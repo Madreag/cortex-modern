@@ -3913,7 +3913,7 @@ namespace RTE {
 		m_Transport = &transport;
 		m_Config = config;
 		m_OpeningMatchConfig = config.matchConfig;
-		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(config.matchConfig);
+		m_RoundConfigHash = config.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(config.matchConfig));
 		m_MigrationPhase = NetHostMigrationPhase::None;
 		m_MigrationHistory.clear();
 		m_MigrationHistoryBytes = 0;
@@ -4123,6 +4123,7 @@ namespace RTE {
 			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame; m_PeerLeaveFrames[peer] = hold.cutoffFrame;
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 		}
+		m_ReclaimTransactions = m_Config.initialSeatReclaims;
 	}
 
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
@@ -4301,7 +4302,7 @@ namespace RTE {
 		m_Transport = &transport;
 		m_Config = config;
 		m_OpeningMatchConfig = config.matchConfig;
-		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(config.matchConfig);
+		m_RoundConfigHash = config.originalRoundConfigHash.value_or(NetMatchConfigUtil::HashConfig(config.matchConfig));
 		m_Config.inputDelayFrames = 0;
 		m_Config.peerInputDelayFrames.clear();
 		m_RemotePeerIds.clear();

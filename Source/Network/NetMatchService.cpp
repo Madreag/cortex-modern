@@ -1534,6 +1534,7 @@ static std::string ResyncSaveName() {
 		m_ActivateCatchUpLocalSeat = {};
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
+		m_PrivateActivations.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		ScenarioRunner::ReleaseWorldCatchUp();
 		m_WorldJoinImageArchive.reset(); m_WorldJoinImageDigest.clear();
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
@@ -2851,7 +2852,54 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
+		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
+		m_WorldJoin.ExpireStaleJoins(nowMs);
+		const auto ready = m_Session->GetReadyPeers();
+		std::vector<NetPeerId> live;
+		uint64_t sentThrough = m_Coordinator->SentInputThrough();
+		for (const auto& [peer, stats]: m_Coordinator->GetStats().peers) sentThrough = std::max(sentThrough, stats.highestTargetFrame);
+		m_WorldJoin.NoteSentInputThrough(sentThrough);
+		for (const auto& peer: ready) {
+			live.push_back(peer.transportPeerId);
+			if (m_Coordinator->UsesTransportPeer(peer.transportPeerId) || m_WorldJoin.FindSession(peer.transportPeerId)) continue;
+			const uint8_t member = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			if (!m_Coordinator->HasHeldAISeat(member)) continue;
+			const uint16_t seat = m_ReconnectHost.StableSeatOfConnection(peer.transportPeerId);
+			NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+			if (seat == 0 || !m_ReconnectHost.GetSeatHolder(seat, holder, generation, incarnation) || holder != peer.transportPeerId) continue;
+			std::string error;
+			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
+			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
+			m_Runner->GetLobbySession().SendMatchConfigTo(member);
+			std::cout << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation << std::endl;
+		}
+		m_WorldJoin.ReleaseLostConnections(live);
+		for (const auto& session: m_WorldJoin.Sessions()) {
+			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid())
+				StartJoinerImageTransfer(session, nullptr, nullptr);
+			if (session.phase == NetWorldJoinPhase::CatchingUp) SendWorldJoinTailTo(m_Runner->GetLobbySession(), m_WorldJoin, session);
+		}
+		PumpWorldJoinLobby(nowMs);
+		for (const auto& session: m_WorldJoin.Sessions()) {
+			if (session.activationTick == 0 || session.phase != NetWorldJoinPhase::CatchingUp) continue;
+			if (!m_PrivateActivations.contains(session.connection)) {
+				std::string error;
+				if (!m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, session.incarnation, session.activationTick, &error)) {
+					m_PrivateJoinError = error; continue;
+				}
+				m_PrivateActivations.insert(session.connection);
+				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == session.assignedPeerId; });
+				std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == session.assignedPeerId; });
+			}
+			if (session.acknowledgedThrough + 1 >= session.activationTick)
+				m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
+		}
+	}
+
 	void NetMatchService::DriveWorldJoins(uint64_t nowMs) {
+		if (m_WorldJoin.IsPrivateMatch()) { DrivePrivateMatchRejoins(nowMs); return; }
 		if (!m_WorldJoin.IsConfigured() || !m_Coordinator || !m_Session) {
 			return;
 		}
@@ -3251,42 +3299,81 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
-		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) {
-			return;
-		}
-		if (ReleaseWorldCatchUpOnceRunning(m_Coordinator != nullptr && m_Coordinator->IsRunning(), m_WorldCatchUp)) {
-			return;
-		}
+		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
-		if (wire) {
+		if (wire && !(m_Coordinator && m_Coordinator->IsRunning())) {
 			for (const NetTransportEvent& event: wire->PollEvents()) {
 				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 					lobby.HandleTransportEvent(event, nowMs);
-				} else if (m_Session) {
-					m_Session->InjectEvent(event, nowMs);
-				}
+				} else if (event.type == NetTransportEventType::PacketReceived && m_WorldCatchUp.privateMatch && NetLockstepCodec::LooksLikePacket(event.bytes)) {
+					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
+						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
+						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
+					}
+					m_CatchUpWireBytes += event.bytes.size(); m_CatchUpWirePackets.push_back(event);
+				} else if (m_Session) m_Session->InjectEvent(event, nowMs);
 			}
 		}
 		uint64_t refusal = 0;
 		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
 		if (refusal != 0) {
-			const std::string reason = NetWorldJoinRefusalText(refusal);
-			SetState(NetMatchServiceState::Failed, "World join refused", reason);
-			std::cout << "[net-world] refused " << reason << std::endl;
-			return;
+			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		// The joiner's lockstep starts here, after the E-1 frame has been applied, never from inside Take.
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {
-			std::string startError;
-			const bool running = m_Runner->IsWorldJoinLockstepStarting()
-			                         ? m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, &startError)
-			                         : m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &startError);
-			if (!running && !startError.empty()) {
-				std::cout << "[net-world] joiner lockstep start: " << startError << std::endl;
+			std::string error;
+			if (m_WorldCatchUp.privateMatch && !m_Runner->IsWorldJoinLockstepStarting() && m_CatchUpCoordinator) {
+				NetLockstepConfig live = m_CatchUpCoordinator->GetConfig();
+				live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
+				live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
+				for (const auto& event: m_CatchUpWirePackets) {
+					if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) continue;
+					const auto decoded = NetLockstepCodec::Decode(event.bytes);
+					if (!decoded.ok) continue;
+					const auto* decision = std::get_if<NetLockstepTiming>(&decoded.packet.payload);
+					if (!decision || decision->senderPeerId != live.matchConfig.hostPeerId || decision->sessionId != live.sessionId || decision->roundId != live.roundId) continue;
+					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
+						live.initialSeatReclaims[m_LocalPeerId] = {m_LocalPeerId, decision->authorityGeneration, decision->revision,
+						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames};
+				}
+				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
+				m_Runner->ConfigurePrivateJoin(live);
 			}
+			if (!m_Runner->IsWorldJoinLockstepStarting())
+				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &error);
+			else {
+				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
+					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start)) {
+						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
+					} else ++it;
+				}
+				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, &error);
+			}
+			if (!error.empty()) { m_PrivateJoinError = error; m_ErrorText = error; }
 		}
+		if (m_Coordinator && m_Coordinator->IsRunning() && m_WorldCatchUp.privateMatch) {
+			NetResyncState committed;
+			std::string error;
+			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error)) { m_ErrorText = error; return; }
+			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
+			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error)) { m_ErrorText = error; return; }
+			if (g_ActivityMan.GetActivity() && m_ActivateCatchUpLocalSeat) m_ActivateCatchUpLocalSeat(*g_ActivityMan.GetActivity());
+			for (const auto& event: m_CatchUpWirePackets) {
+				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
+					if (event.bytes.size() < offset + 8) continue;
+					uint64_t first = 0; for (size_t i = 0; i < 8; ++i) first |= uint64_t(event.bytes[offset + i]) << (8 * i);
+					if (first < m_WorldCatchUp.activationTick) continue;
+				}
+				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
+			}
+			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
+			std::cout << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << std::endl;
+		}
+		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}
 
 	void NetMatchService::NoteRewindAnchor(const std::string& matchId, uint64_t tick, bool host, const AutosaveDescriptor* known) {
@@ -4232,6 +4319,7 @@ static std::string ResyncSaveName() {
 			}
 			for (auto it = m_PendingHeldReseats.begin(); it != m_PendingHeldReseats.end();) {
 				const NetGameReseat& reseat = *it;
+				if (m_Coordinator && m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(reseat.newOwnerPeerId)) { ++it; continue; }
 				if (!PrepareHeldPeerRejoinLocked(reseat.newOwnerPeerId)) { ++it; continue; }
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
@@ -4245,6 +4333,7 @@ static std::string ResyncSaveName() {
 				}
 				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
 					const NetHoldResolutionNotice& notice = *it;
+					if (m_Coordinator->UsesBoundedWait() && m_Coordinator->HasHeldAISeat(notice.lockstepPeerId) && notice.resolution != NetHoldResolution::Expired) { ++it; continue; }
 					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
@@ -4262,7 +4351,7 @@ static std::string ResyncSaveName() {
 			PublishModerationView();
 			CaptureA7SeatView();
 		}
-		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && m_Coordinator->IsPersistentWorldRound()) {
+		if (m_IsHost && m_Coordinator && m_Coordinator->IsRunning() && (m_Coordinator->IsPersistentWorldRound() || m_WorldJoin.IsPrivateMatch())) {
 			DriveWorldJoins(nowMs);
 		}
 		if (m_Runner) AdoptWorldTicketSession(m_Runner->GetLobbySession().GetMatchConfig());
@@ -4273,7 +4362,7 @@ static std::string ResyncSaveName() {
 		// A transport peer that reached session-Ready but carries no lockstep remote is a
 		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
 		// A persistent world never takes that path: a fresh join is a bootstrap, not a ResyncMatch.
-		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->IsPersistentWorldRound()) {
+		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->IsPersistentWorldRound() && !m_Coordinator->UsesBoundedWait()) {
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
 					if (!PrepareHeldPeerRejoinLocked(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
@@ -6258,6 +6347,15 @@ static std::string ResyncSaveName() {
 			request.activityPreset = "Persistent World";
 		}
 		return request;
+	}
+
+	bool NetMatchService::BeginHeldRejoin(std::string* error) {
+		const uint64_t prior = m_Coordinator ? m_Coordinator->SentInputThrough() : 0;
+		m_LeaveExchangeRun = true;
+		ScenarioRunner::DiscardHeldLocalInputs();
+		const bool started = BeginTicketRejoin(error);
+		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
+		return started;
 	}
 
 	bool NetMatchService::BeginTicketRejoin(std::string* error) {

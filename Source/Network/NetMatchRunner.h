@@ -179,6 +179,7 @@ namespace RTE {
 		/// Starts the joiner's lockstep at its activation tick without blocking the sim update it runs
 		/// inside: the handshake finishes over the pumps that follow.
 		/// @return Whether the coordinator is already running.
+		void ConfigurePrivateJoin(const NetLockstepConfig& config) { m_PrivateJoinConfig = config; m_MatchConfig = config.matchConfig; }
 		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, std::string* error = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
@@ -228,6 +229,7 @@ namespace RTE {
 		NetLobbySession m_Lobby;
 		NetMatchConfig m_MatchConfig;
 		NetHash32 m_MatchConfigHash{};
+		std::optional<NetLockstepConfig> m_PrivateJoinConfig;
 		bool m_UseLobbyProtocol = false;
 		bool m_ResyncRound = false;
 		bool m_HostLostDuringSetup = false;

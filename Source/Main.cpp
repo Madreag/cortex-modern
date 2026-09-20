@@ -4588,23 +4588,20 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running)) {
 			const bool heldRejoin = error.find("PeerHeld:") != std::string::npos;
-			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
-			// snapshots its state, every peer reloads the identical file, the match plays on.
-			s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
-			g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
-			{
-				std::ostringstream line;
-				line << "[net-match] resync: " << (error.find("ResyncRequested") != std::string::npos ? "requested" : "desync detected") << ", reloading from the host snapshot";
-				System::PrintDiagnosticLine(line.str());
+			if (heldRejoin) {
+				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
+				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
+			} else {
+				s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
+				g_ConsoleMan.PrintString("NETWORK: Resyncing from the host (" + std::to_string(s_netMatchHeals.Total()) + "): " + error);
+				System::PrintDiagnosticLine("[net-match] resync: reloading from the host snapshot");
+				ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			}
-			ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
 			bool resyncOk = false;
 			if (heldRejoin) {
-				g_NetMatchService.ReportRuntimeError(error);
-				ScenarioRunner::DiscardHeldLocalInputs();
-				resyncOk = g_NetMatchService.BeginTicketRejoin(&resyncError);
+				resyncOk = g_NetMatchService.BeginHeldRejoin(&resyncError);
 			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			if (resyncOk) {
 				std::string launchPreset;
@@ -4642,14 +4639,14 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			if (resyncOk) {
 				{
 					std::ostringstream line;
-					line << "[net-match] resync: match relaunched from the snapshot";
+					line << (heldRejoin ? "[net-match] held client: replaying the private committed tail" : "[net-match] resync: match relaunched from the snapshot");
 					System::PrintDiagnosticLine(line.str());
 				}
 				g_NetMatchService.NoteResyncRelaunched();
 				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
 				// toast names the frame it resumes on.
 				ScenarioRunner::ClearNetUiToasts();
-				ScenarioRunner::PushNetUiToast("resync_finish", "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
+				ScenarioRunner::PushNetUiToast(heldRejoin ? "seat_held" : "resync_finish", heldRejoin ? "Held - AI in control - rejoining" : "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
 				if (s_netMatchServiceE2E) {
 					const uint64_t resumeFrame = ScenarioRunner::HasLockstepCoordinator()
 						                             ? ScenarioRunner::GetLockstepResumeFrame()
