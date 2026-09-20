@@ -57,9 +57,20 @@ namespace RTE {
 
 		/// Draws the ScenarioGUI to the screen.
 		void Draw() const;
+
+		/// The picker currently accepting automation input.
+		static ScenarioGUI* AutomationActive() { return s_AutomationActive; }
+		~ScenarioGUI() { if (s_AutomationActive == this) s_AutomationActive = nullptr; }
+		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
+		std::string AutomationScreen() const { return m_ActivityConfigBox->IsEnabled() ? "ScenarioConfig" : "ScenarioPicker"; }
+		bool AutomationPostCommand(const std::string& controlName);
+		bool AutomationSelectScene(const std::string& sceneName);
 #pragma endregion
 
 	private:
+		inline static ScenarioGUI* s_AutomationActive = nullptr;
+		std::string m_AutomationCommand;
+		std::unique_ptr<GUIInputWrapper> m_AutomationInput;
 		int m_RootBoxMaxWidth; //!< The maximum width the root CollectionBox that holds all this menu's GUI elements. This is to constrain this menu to the primary window's display (left-most) while in multi-display fullscreen, otherwise positioning can get stupid.
 
 		std::unique_ptr<GUIControlManager> m_GUIControlManager; //!< The GUIControlManager which owns all the GUIControls of the ScenarioGUI.
