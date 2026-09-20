@@ -2545,14 +2545,20 @@ namespace RTE {
 		// The host keeps producing, window and all: one more reading on the key the epoch already bound,
 		// which the live table spells as a slot. The member can only read it if the replay left its
 		// table where the live one is.
-		if (!running.QueueLocalInput(8, {}, {}, &error, {reading})) {
+		NetSoundObservation liveReading = reading;
+		liveReading.value = 0.75F;
+		if (!running.QueueLocalInput(8, {}, {}, &error, {liveReading})) {
 			return Fail("replayed-member-table-diverged-from-the-live-table: the live frame after the replay did not queue: " + error);
 		}
-		(void)member.QueueLocalInput(8, {}, {}, &error);
+		bool memberInputQueued = false;
 		for (uint64_t now = 400; now < 1600; now += 10) {
 			running.Tick(now);
 			member.Tick(now);
 			resident.Tick(now);
+			if (member.IsRunning() && !memberInputQueued) {
+				if (!member.QueueLocalInput(8, {}, {}, &error)) return Fail("member input after admission: " + error);
+				memberInputQueued = true;
+			}
 			hostLink.AdvanceTimeMs(10);
 			memberLink.AdvanceTimeMs(10);
 			residentLink.AdvanceTimeMs(10);
@@ -2561,11 +2567,14 @@ namespace RTE {
 			return Fail("window-copy-before-the-members-start-failed-the-round: " + member.GetStats().timeoutReason +
 			            " after " + std::to_string(member.GetStats().windowCopiesSkipped) + " skipped copies");
 		}
-		auto readingsOf = [&](NetLockstepCoordinator& peer, std::vector<uint64_t>& frames, uint64_t& sawReadingAt, uint64_t& sawEarlyAt) {
+		auto readingsOf = [&](NetLockstepCoordinator& peer, std::vector<uint64_t>& frames, uint64_t& sawReadingAt, uint64_t& sawEarlyAt, uint64_t& sawLiveAt) {
 			for (NetLockstepReadyFrame ready; peer.PopReadyFrame(ready);) {
 				frames.push_back(ready.frame);
 				for (const NetSoundObservation& observed: ready.remoteObservations) {
-					if (observed.objectUID == reading.objectUID && observed.tick == reading.tick) sawReadingAt = ready.frame;
+					if (observed.objectUID == reading.objectUID && observed.tick == reading.tick) {
+						if (observed.value == reading.value) sawReadingAt = ready.frame;
+						if (observed.value == liveReading.value) sawLiveAt = ready.frame;
+					}
 					if (observed.objectUID == early.objectUID && observed.tick == early.tick) sawEarlyAt = ready.frame;
 				}
 			}
@@ -2573,7 +2582,8 @@ namespace RTE {
 		std::vector<uint64_t> residentFrames;
 		uint64_t residentReadingAt = 0;
 		uint64_t residentEarlyAt = 0;
-		readingsOf(resident, residentFrames, residentReadingAt, residentEarlyAt);
+		uint64_t residentLiveAt = 0;
+		readingsOf(resident, residentFrames, residentReadingAt, residentEarlyAt, residentLiveAt);
 		if (resident.IsFailed() || residentReadingAt != e + 1 || residentEarlyAt != first + 1) {
 			return Fail("existing-member-lost-the-dictionary-across-an-admission: peer 3 " +
 			            std::string(resident.IsFailed() ? "failed: " + resident.GetStats().timeoutReason : "is running") +
@@ -2583,7 +2593,8 @@ namespace RTE {
 		std::vector<uint64_t> memberFrames;
 		uint64_t memberReadingAt = 0;
 		uint64_t memberEarlyAt = 0;
-		readingsOf(member, memberFrames, memberReadingAt, memberEarlyAt);
+		uint64_t memberLiveAt = 0;
+		readingsOf(member, memberFrames, memberReadingAt, memberEarlyAt, memberLiveAt);
 		std::string heldText;
 		for (const uint64_t frame: memberFrames) heldText += (heldText.empty() ? "" : ",") + std::to_string(frame);
 		if (memberFrames.size() < 4 || memberFrames.front() != e) {
@@ -2599,6 +2610,10 @@ namespace RTE {
 		if (std::find(memberFrames.begin(), memberFrames.end(), e + 4) == memberFrames.end()) {
 			return Fail("replayed-member-table-diverged-from-the-live-table: the member holds " + heldText +
 			            " and never committed the live frame " + std::to_string(e + 4));
+		}
+		if (residentLiveAt != e + 4 || memberLiveAt != e + 4) {
+			return Fail("replayed-member-table-diverged-from-the-live-table: live reading resident=" + std::to_string(residentLiveAt) +
+			            " member=" + std::to_string(memberLiveAt));
 		}
 		return 0;
 	}
