@@ -1,8 +1,10 @@
 wait_ms 1500
 activate ButtonMainToMultiplayer
+video_mark cross-landing-client
 wait_ms 400
 settext TextMultiplayerName Cross Client
-video_mark cross-landing-client
+assert_substate Landing
+observe assert_label TextMultiplayerName Cross Client
 activate ButtonMultiplayerJoinGame
 wait_ms 400
 settext TextJoinAddress {HOST_ADDRESS}
