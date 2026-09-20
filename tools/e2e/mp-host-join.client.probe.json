@@ -13,7 +13,7 @@
     {
       "op": "wait",
       "service": "Running",
-      "elapsed_ms": 3000
+      "elapsed_ms": 10500
     },
     {
       "op": "key_down",
