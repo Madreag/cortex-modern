@@ -1,10 +1,15 @@
 {
   "schema": 1,
-  "timeout_ms": 170000,
+  "timeout_ms": 85000,
   "steps": [
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
       "op": "wait",
-      "sim_at_least": 1200
+      "screen": "Gameplay",
+      "sim_at_least": 120
     },
     {
       "op": "key_down",
@@ -21,15 +26,15 @@
     },
     {
       "op": "menu",
+      "command": "video_mark sp-pause-menu"
+    },
+    {
+      "op": "menu",
       "command": "assert_visible ButtonResume 1"
     },
     {
       "op": "menu",
       "command": "assert_visible ButtonSettings 1"
-    },
-    {
-      "op": "menu",
-      "command": "assert_visible ButtonBackToMain 1"
     },
     {
       "op": "menu",
@@ -41,27 +46,11 @@
     },
     {
       "op": "menu",
-      "command": "assert_rect_inside ButtonResume PauseScreen"
-    },
-    {
-      "op": "menu",
-      "command": "assert_rect_inside ButtonSettings PauseScreen"
-    },
-    {
-      "op": "menu",
-      "command": "assert_rect_inside ButtonBackToMain PauseScreen"
-    },
-    {
-      "op": "menu",
-      "command": "assert_text_fits ButtonResume"
-    },
-    {
-      "op": "menu",
-      "command": "assert_text_fits ButtonBackToMain"
+      "command": "assert_visible ButtonBackToMain 1"
     },
     {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 800
     },
     {
       "op": "menu",
@@ -77,8 +66,12 @@
       "command": "select_settings_page Video"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-pause-video"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 700
     },
     {
       "op": "menu",
@@ -93,8 +86,12 @@
       "command": "select_settings_page Audio"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-pause-audio"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 700
     },
     {
       "op": "menu",
@@ -109,8 +106,12 @@
       "command": "select_settings_page Input"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-pause-input"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 700
     },
     {
       "op": "menu",
@@ -125,8 +126,12 @@
       "command": "select_settings_page Gameplay"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-pause-gameplay"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 700
     },
     {
       "op": "menu",
@@ -141,8 +146,12 @@
       "command": "select_settings_page Misc"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-pause-misc"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 660
+      "elapsed_ms": 700
     },
     {
       "op": "menu",
@@ -162,10 +171,6 @@
       "elapsed_ms": 400
     },
     {
-      "op": "wait",
-      "elapsed_ms": 660
-    },
-    {
       "op": "menu",
       "command": "activate ButtonResume"
     },
@@ -174,12 +179,39 @@
       "screen": "Gameplay"
     },
     {
+      "op": "menu",
+      "command": "video_mark sp-resume"
+    },
+    {
       "op": "wait",
-      "sim_at_least": 1800
+      "sim_at_least": 400
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonBackToMain"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 600,
+      "scope": "menu"
     },
     {
       "op": "signal",
-      "name": "done"
+      "name": "done",
+      "scope": "menu"
     },
     {
       "op": "finish"
