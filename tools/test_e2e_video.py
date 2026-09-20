@@ -10,6 +10,7 @@ a real capture are named at the bottom of the result and are the driver's own fi
 import argparse
 import contextlib
 import json
+import os
 import re
 from pathlib import Path
 import sys
@@ -33,6 +34,25 @@ def row(results, name, ok, detail=""):
     results.append({"row": name, "pass": bool(ok), "detail": detail})
     print(f"[e2e-video] {'PASS' if ok else 'FAIL'} {name}{': ' + detail if detail else ''}", flush=True)
     return ok
+
+
+def check_capture_binary(results, scratch):
+    platform = sys.platform
+    previous = os.environ.pop("CCCP_TEST_BINARY", None)
+    try:
+        sys.platform = "win32"
+        ok = row(results, "manifest/windows-runner-binary", driver.capture_binary(scratch) == scratch.resolve() / "Cortex Command.exe")
+        sys.platform = "darwin"
+        ok &= row(results, "manifest/posix-default-binary", driver.capture_binary(scratch) == scratch.resolve() / "build-gns/CortexCommand")
+        os.environ["CCCP_TEST_BINARY"] = str(scratch / "custom-engine")
+        ok &= row(results, "manifest/posix-override-binary", driver.capture_binary(scratch) == (scratch / "custom-engine").resolve())
+        return ok
+    finally:
+        sys.platform = platform
+        if previous is None:
+            os.environ.pop("CCCP_TEST_BINARY", None)
+        else:
+            os.environ["CCCP_TEST_BINARY"] = previous
 
 
 def check_scenarios(results):
@@ -504,6 +524,7 @@ def main():
     with contextlib.nullcontext(retained) if options.out else tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         ok = check_scenarios(results)
+        ok &= check_capture_binary(results, scratch)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)

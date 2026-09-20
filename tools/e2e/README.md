@@ -104,7 +104,7 @@ The scratch counter excludes symlinks and Windows reparse points. It stops at 5 
 
 Windows uses `run_sim_test`'s private-desktop runner and its existing fullscreen guard. The Scoop ffmpeg fallback is
 Windows-specific; PATH and the Homebrew/Unix fallbacks are also supported. The POSIX runner selects
-`<repo>/build-gns/CortexCommand`. Mac GL readback, runner isolation, codecs, and installed Python dependencies still
+`<repo>/build-gns/CortexCommand`, or `CCCP_TEST_BINARY` when set; manifest hashing uses the same selection. Mac GL readback, runner isolation, codecs, and installed Python dependencies still
 require an actual Mac capture.
 
 ## Ports
