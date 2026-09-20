@@ -138,7 +138,7 @@ def scenario_text(scenario, key):
 def substitute(value, tokens):
     if isinstance(value, str):
         for name, replacement in tokens.items():
-            value = value.replace("{" + name + "}", str(replacement))
+            value = value.replace("{" + name + "}", replacement.as_posix() if isinstance(replacement, Path) else str(replacement))
         return value
     if isinstance(value, list):
         return [substitute(item, tokens) for item in value]
