@@ -137,3 +137,14 @@ versions are checked before launch through `requires_version`. The installed VW 
 blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linked in both VW definitions.
 
 The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
+
+A peer with `gameplay_epochs: 2` also receives `<stage>/gameplay-epoch-2.json` when saved gameplay frames show the
+simulation counter reset. Rematch probes wait for that record before measuring their second play window.
+
+`record_tick_hashes` is a menu-script command for a lobby with `-out` and a positive `-max-ticks` already configured.
+It arms the existing native hash path for the next round. This lets a rematch capture end round one normally and
+trace round two through its cap. `hash_gate` names the two trace peers, first tick and cap; it uses the same complete
+record comparison as the migration gate. The command does not alter a wire flag, hash mask or comparison rule.
+
+An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
+both exact visibility and text without blocking all later capture steps when the expected toast is absent.
