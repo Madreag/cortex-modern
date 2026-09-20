@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "name": "mp-rematch",
+  "title": "The real lobby starts a match, reconvenes after End Match and starts a second round",
+  "port_base": 49462,
+  "size": "960x540",
+  "timeout_s": 150,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}"
+      ],
+      "input_script": "play-input.txt",
+      "menu_script": "mp-rematch.host.menu.txt",
+      "probe": "mp-rematch.host.probe.json"
+    },
+    {
+      "name": "client",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}"
+      ],
+      "input_script": "play-input.txt",
+      "menu_script": "mp-rematch.client.menu.txt",
+      "probe": "mp-rematch.client.probe.json",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark host-listening"
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "round1-host",
+      "what": "Round 1 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe Running at ticks 120-450 in round 1",
+      "peer": "host",
+      "mark": "round1-play"
+    },
+    {
+      "id": "round2-host",
+      "what": "Round 2 runs on host, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe Running at ticks 120-450 in round 2",
+      "peer": "host",
+      "mark": "round2-play"
+    },
+    {
+      "id": "lobby-host",
+      "what": "The completed match returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "host",
+      "mark": "rematch-lobby"
+    },
+    {
+      "id": "round1-client",
+      "what": "Round 1 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe Running at ticks 120-450 in round 1",
+      "peer": "client",
+      "mark": "round1-play"
+    },
+    {
+      "id": "round2-client",
+      "what": "Round 2 runs on client, with actors responding to the input script.",
+      "screen": "game",
+      "assert": "probe Running at ticks 120-450 in round 2",
+      "peer": "client",
+      "mark": "round2-play"
+    },
+    {
+      "id": "lobby-client",
+      "what": "The completed match returns to the live rematch lobby.",
+      "screen": "MultiplayerScreen",
+      "assert": "menu assert_substate Lobby; dump_lobby",
+      "peer": "client",
+      "mark": "rematch-lobby"
+    }
+  ]
+}
