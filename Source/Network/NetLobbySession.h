@@ -233,6 +233,7 @@ namespace RTE {
 		void HandlePeerState(const NetLobbyPeerState& message);
 		void SyncSessionPeers();
 		void RemoveRemote(NetPeerId transportPeerId);
+		void RemoveRemotePeer(uint8_t peerId);
 		void RejectRemote(NetPeerId transportPeerId, const std::string& reason);
 		void HandleStateChunk(const NetLobbyStateChunk& message);
 		void HandleSeatAssign(const NetLobbySeatAssign& message);
