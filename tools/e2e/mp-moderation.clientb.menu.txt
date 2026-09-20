@@ -29,8 +29,8 @@ wait_state Failed 60
 video_mark moderation-clientb-refused
 wait_ms 1200
 observe assert_status The host banned you from this session
+observe assert_label LabelMultiplayerLandingStatus You are banned from this session
 observe assert_error ParticipantBanned
-observe assert_label LabelMultiplayerLandingStatus ParticipantBanned
 screenshot moderation-clientb-refused
 wait_file {PROBE_DIR}/refused.json 40
 wait_ms 1800
