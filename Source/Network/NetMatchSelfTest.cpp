@@ -10428,7 +10428,7 @@ namespace RTE {
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 28}, {"supported_world_lockstep_codec_version", 29},
+		        {"supported_lockstep_codec_version", 30}, {"supported_world_lockstep_codec_version", 31},
 		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);

@@ -332,6 +332,7 @@ namespace RTE {
 				case NetLockstepStopReason::PeerDropped:
 				case NetLockstepStopReason::Reclaimed:
 				case NetLockstepStopReason::Substituted:
+				case NetLockstepStopReason::PeerRemoved:
 				case NetLockstepStopReason::Expired:
 					return true;
 			}
@@ -2478,6 +2479,7 @@ namespace RTE {
 			case NetLockstepStopReason::PeerDropped: return "PeerDropped";
 			case NetLockstepStopReason::Reclaimed: return "Reclaimed";
 			case NetLockstepStopReason::Substituted: return "Substituted";
+			case NetLockstepStopReason::PeerRemoved: return "PeerRemoved";
 			case NetLockstepStopReason::Expired: return "Expired";
 		}
 		return "Unknown";
@@ -7601,14 +7603,15 @@ namespace RTE {
 			ScheduleRecoveryStop(stop.reason, stop.frame, stop.message);
 			return;
 		}
-		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::PeerDropped) {
+		if (stop.reason == NetLockstepStopReason::PeerRemoved && (m_RelayHost || LockstepPeerOfTransport(fromTransport) != GetHostPeerId())) return;
+		if (stop.reason == NetLockstepStopReason::PeerLeft || stop.reason == NetLockstepStopReason::PeerDropped || stop.reason == NetLockstepStopReason::PeerRemoved) {
 			if (IsKnownRemotePeer(stop.senderPeerId)) {
 				if (m_Config.resumeFromSnapshot && m_RemoteTransports.contains(stop.senderPeerId) &&
 				    stop.frame <= m_Config.startFrame) {
 					++m_Stats.ignoredAdmissionFaults;
 					return;
 				}
-				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason == NetLockstepStopReason::PeerLeft);
+				ApplyPeerLeave(stop.senderPeerId, stop.frame, stop.message, nowMs, stop.reason != NetLockstepStopReason::PeerDropped, false, false, stop.reason == NetLockstepStopReason::PeerRemoved);
 			}
 			return;
 		}
@@ -7805,7 +7808,7 @@ namespace RTE {
 		if (m_PeerLeaveFrames.find(peerId) != m_PeerLeaveFrames.end()) {
 			return;
 		}
-		ApplyPeerLeave(peerId, FirstFrameWithout(peerId), message, nowMs, true, false);
+		ApplyPeerLeave(peerId, m_Stats.nextFrame, message, nowMs, true, false, false, true);
 	}
 
 	void NetLockstepCoordinator::ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay) {
@@ -7912,8 +7915,8 @@ namespace RTE {
 
 	// A leave is deterministic by construction: no survivor can advance to the leaver's first missing
 	// frame without processing this, so every peer drops the requirement at the same tick.
-	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary) {
-		if (UsesBoundedWait() && !agreedBoundary && m_Config.localPeerId == GetHostPeerId()) {
+	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary, bool removed) {
+		if (UsesBoundedWait() && !agreedBoundary && !removed && m_Config.localPeerId == GetHostPeerId()) {
 			ProposePeerHold(peerId, nowMs);
 			return;
 		}
@@ -7928,7 +7931,7 @@ namespace RTE {
 		std::cout << "[net-match] " << DescribePeer(peerId) << " left the match at frame " << firstFrameWithout << " (" << message << ")" << std::endl;
 		NetLockstepStop notice;
 		notice.senderPeerId = peerId;
-		notice.reason = announced ? NetLockstepStopReason::PeerLeft : NetLockstepStopReason::PeerDropped;
+		notice.reason = removed ? NetLockstepStopReason::PeerRemoved : announced ? NetLockstepStopReason::PeerLeft : NetLockstepStopReason::PeerDropped;
 		notice.frame = firstFrameWithout;
 		notice.message = message;
 		if (!agreedBoundary) {
@@ -7953,7 +7956,7 @@ namespace RTE {
 				if (it->second.empty()) it = inputs.erase(it); else ++it;
 			}
 		};
-		if (UsesBoundedWait()) {
+		if (UsesBoundedWait() || removed) {
 			discardHeldInputs(m_RemoteFrames);
 			discardHeldInputs(m_RemoteCommands);
 			discardHeldInputs(m_RemoteObservations);
