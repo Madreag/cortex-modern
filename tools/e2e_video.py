@@ -265,7 +265,7 @@ def stage_peer(scenario, peer, root, tokens):
         directory = Path(root) / "probe"
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / "probe.json"
-        probe = json.loads(substitute(scenario_text(scenario, peer["probe"]), tokens))
+        probe = substitute(json.loads(scenario_text(scenario, peer["probe"])), tokens)
         path.write_text(json.dumps(probe, indent=2) + "\n", encoding="utf-8")
         environment["CC_TEST_NET_UI_SCRIPT"] = str(path)
     if peer.get("input_script"):
@@ -284,6 +284,13 @@ def drop_peer(handle):
         handle.terminate(reason="scenario drop")
     except RuntimeError:
         pass
+
+
+def peer_arguments(peer, tokens, fps):
+    args = ["-record-video", str(tokens["VIDEO"]), "-record-video-fps", str(fps)]
+    if peer.get("menu_script"):
+        args += ["-menu-script", str(tokens["MENU_SCRIPT"])]
+    return args + [str(value) for value in substitute(peer.get("args", []), tokens)]
 
 
 def run_one(options, scenario, run, run_index, out):
@@ -319,8 +326,7 @@ def run_one(options, scenario, run, run_index, out):
                   "MENU_SCRIPT": stage / "menu.txt", "INPUT_SCRIPT": stage / "input.txt",
                   "VIDEO": peer_root / "video"}
         environment = stage_peer(scenario, peer, stage, tokens)
-        args = ["-record-video", str(peer_root / "video"), "-record-video-fps", str(options.fps)]
-        args += [str(value) for value in substitute(peer.get("args", []), tokens)]
+        args = peer_arguments(peer, tokens, options.fps)
         run_handle = make_run(options.repo, args, peer_root, timeout, env=environment)
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         seed = {"ResolutionX": width, "ResolutionY": height}
