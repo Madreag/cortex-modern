@@ -1072,6 +1072,7 @@ namespace RTE {
 				{"delay count", [](auto& c) { c.peerInputDelayFrames.pop_back(); }},
 				{"delay range", [](auto& c) { c.peerInputDelayFrames[0] = 61; }},
 				{"lossy downgrade", [](auto& c) { c.version = 2; }},
+				{"lossy timing downgrade", [](auto& c) { c.version = 4; c.slowPlayerBoundTicks = 7; }},
 			};
 			for (const auto& edit : invalid) {
 				NetMatchConfig changed = config;
@@ -3913,6 +3914,10 @@ namespace RTE {
 			if (NetHostDefaults::Parse("Difficulty = 5\n", newer, &refusal) || refusal.empty()) {
 				*error = "a host defaults template without its version line was read";
 				return false;
+			}
+			NetHostDefaultsTemplate historical;
+			if (!NetHostDefaults::Parse("Version = 1\nFrameRedundancyTicks = 4\n", historical, error) || historical.slowPlayerPolicy != NetSlowPlayerPolicy::Pause) {
+				*error = "an old defaults file changed its classic hold policy"; return false;
 			}
 			// The saved template seeds a new lobby's draft without reshaping its roster.
 			NetMatchConfig fresh = MakeConfig();
@@ -10273,13 +10278,13 @@ namespace RTE {
 			       " completed_lockstep=" + std::to_string(observed.completedLockstep) +
 			       " config_hash=" + observed.configHash.substr(0, 16) + "}";
 		};
-		if (persistent.capturedLockstep != NetLockstepCodec::c_Version ||
+		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
-		    persistent.completedLockstep != NetLockstepCodec::c_Version ||
+		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 24}, {"supported_world_lockstep_codec_version", 24},
-		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 6}} ||
+		        {"supported_lockstep_codec_version", 24}, {"supported_world_lockstep_codec_version", 25},
+		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
 			return false;

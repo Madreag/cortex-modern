@@ -2523,7 +2523,7 @@ namespace RTE {
 		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
 			for (const NetGameCommand& command: frame->commands) {
 				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
-					encodeVersion = std::max(encodeVersion, c_WorldTransitionVersion);
+					encodeVersion = c_WorldVersion;
 					break;
 				}
 			}
@@ -2572,7 +2572,7 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : c_Version, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : c_WorldVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		if (!EncodeRecoveryInput(frame, canonical, error)) return false;
@@ -2614,7 +2614,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_Version) {
+		if (version < c_MinVersion || version > c_WorldVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2728,7 +2728,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_Version && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_WorldVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 
@@ -5869,7 +5869,7 @@ namespace RTE {
 		}
 		for (const auto& [peer, frame]: m_AiHeldSeats) {
 			if (frame != outFrame.frame) continue;
-			++m_Stats.peers[peer].substitutions;
+			if (m_Playback || m_DroppedAtMs.contains(peer)) ++m_Stats.peers[peer].substitutions;
 			if (std::find(outFrame.aiHeldPeerIds.begin(), outFrame.aiHeldPeerIds.end(), peer) == outFrame.aiHeldPeerIds.end()) outFrame.aiHeldPeerIds.push_back(peer);
 		}
 		if (IsMigrationCatchUp()) {
