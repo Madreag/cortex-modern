@@ -674,6 +674,12 @@ namespace RTE {
 		lockstepConfig.resumeFromSnapshot = m_ResyncRound || !m_ReceivedStateBytes.empty();
 		if (const auto* admission = session.GetReconnectHost()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetEpoch();
+			for (const auto& seat: admission->GetSeatTable()) {
+				NetPeerId connection = c_InvalidNetPeerId;
+				uint32_t generation = 0, incarnation = 0;
+				if (!seat.cpu && admission->GetSeatHolder(seat.stableSeat, connection, generation, incarnation) && incarnation != 0)
+					lockstepConfig.peerIncarnations[seat.lockstepPeerId] = incarnation;
+			}
 		} else if (const auto* admission = session.GetReconnectClient(); admission && admission->IsAdmitted() && admission->HasRecord()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetRecord().epoch;
 		}
@@ -724,6 +730,20 @@ namespace RTE {
 				lockstepConfig.roundId = (high << 32) ^ low ^
 				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 			} while (lockstepConfig.roundId == 0);
+		}
+		if (m_PrivateJoinConfig) {
+			lockstepConfig.resumeFromSnapshot = false;
+			lockstepConfig.roundId = m_PrivateJoinConfig->roundId;
+			lockstepConfig.migrationGeneration = m_PrivateJoinConfig->migrationGeneration;
+			lockstepConfig.originalRoundConfigHash = m_PrivateJoinConfig->originalRoundConfigHash;
+			lockstepConfig.initialPeerLeaves = m_PrivateJoinConfig->initialPeerLeaves;
+			lockstepConfig.initialDelayChanges = m_PrivateJoinConfig->initialDelayChanges;
+			lockstepConfig.initialSeatHolds = m_PrivateJoinConfig->initialSeatHolds;
+			lockstepConfig.initialSeatReclaims = m_PrivateJoinConfig->initialSeatReclaims;
+			lockstepConfig.peerIncarnations = m_PrivateJoinConfig->peerIncarnations;
+			lockstepConfig.activePeerIds.clear();
+			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
+				if (peer == lockstepConfig.localPeerId || !lockstepConfig.initialPeerLeaves.contains(peer)) lockstepConfig.activePeerIds.push_back(peer);
 		}
 		if (!coordinator.Start(transport, lockstepConfig, error)) {
 			SetFailed(error ? *error : "lockstep start failed");

@@ -9,13 +9,19 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <mutex>
 #include <random>
 #include <sstream>
+#include <thread>
+#include <tuple>
 
 namespace RTE {
 
@@ -91,10 +97,22 @@ namespace RTE {
 			{"capture_ms", image.captureMs},
 			{"activation_lead", c_NetWorldActivationLeadFrames},
 		};
+		if (image.privateSessionId != 0) {
+			offer["private_session_id"] = image.privateSessionId;
+			offer["checkpoint_config"] = image.checkpointConfig;
+			offer["side_state"] = image.sideState;
+			offer["pause_state"] = {{"paused", image.pauseState.paused}, {"resume_countdown", image.pauseState.resumeCountdown}, {"paused_frames", image.pauseState.pausedFrames}};
+			offer["held_state"] = image.heldState;
+			offer["round_config_hash"] = image.roundConfigHash;
+			offer["authority_generation"] = image.authorityGeneration;
+			offer["authority_peer_id"] = image.authorityPeerId;
+			offer["departed_peers"] = image.departedPeers;
+		}
 		return offer.dump();
 	}
 
 	bool DecodeWorldJoinOffer(const std::string& text, NetWorldCheckpointImage& out, std::string* error) {
+		try {
 		json parsed = json::parse(text, nullptr, false);
 		if (parsed.is_discarded() || !parsed.is_object()) {
 			if (error) *error = "world join offer is not an object";
@@ -105,10 +123,26 @@ namespace RTE {
 			return false;
 		}
 		NetWorldCheckpointImage image;
+		image.privateSessionId = parsed.value("private_session_id", uint64_t{0});
+		image.checkpointConfig = parsed.value("checkpoint_config", std::string());
+		image.sideState = parsed.value("side_state", std::string());
+		image.heldState = parsed.value("held_state", std::string());
+		image.roundConfigHash = parsed.value("round_config_hash", std::string());
+		image.authorityGeneration = parsed.value("authority_generation", uint64_t{0});
+		image.authorityPeerId = parsed.value("authority_peer_id", uint8_t{1});
+		image.departedPeers = parsed.value("departed_peers", std::map<uint8_t, uint64_t>{});
 		image.worldId = parsed.value("world_id", std::string());
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});
 		image.tick = parsed.value("tick", uint64_t{0});
+		if (image.privateSessionId != 0) {
+			const auto& pause = parsed.at("pause_state");
+			image.pauseState = {pause.at("paused").get<bool>(), pause.at("resume_countdown").get<int>(), pause.at("paused_frames").get<uint64_t>()};
+			if (!image.pauseState.IsValid(image.tick)) {
+				if (error) *error = "private checkpoint pause state is invalid";
+				return false;
+			}
+		}
 		image.configRevision = parsed.value("config_revision", uint64_t{0});
 		image.membershipRevision = parsed.value("membership_revision", uint64_t{0});
 		image.matchConfigHash = parsed.value("match_config_hash", std::string());
@@ -124,6 +158,10 @@ namespace RTE {
 		}
 		out = image;
 		return true;
+		} catch (const json::exception&) {
+			if (error) *error = "world join offer has invalid field types";
+			return false;
+		}
 	}
 
 	std::string NetWorldIdentityFile::Encode(const NetWorldIdentity& identity) {
@@ -404,6 +442,7 @@ namespace RTE {
 		frame.targetFrame = ready.frame;
 		frame.frames = ready.localFrames;
 		frame.frames.insert(frame.frames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+		std::sort(frame.frames.begin(), frame.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; });
 		frame.commands = ready.localCommands;
 		frame.commands.insert(frame.commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
 		frame.observations = ready.localObservations;
@@ -413,13 +452,112 @@ namespace RTE {
 		return frame;
 	}
 
+	bool EncodeCommittedJoinFrame(const NetLockstepFrame& frame, std::vector<uint8_t>& bytes, std::string* error) {
+		constexpr uint32_t magic = 0x46544A57U;
+		constexpr size_t maxBytes = 2ULL * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes;
+		std::vector<uint8_t> encoded;
+		AppendU32LE(encoded, magic);
+		AppendU16LE(encoded, 1);
+		AppendU16LE(encoded, frame.senderPeerId);
+		AppendU64LE(encoded, frame.targetFrame);
+		AppendU64LE(encoded, frame.roundId);
+		AppendU32LE(encoded, 0);
+		uint32_t packets = 0;
+		const auto append = [&](NetLockstepFrame part) {
+			part.targetFrame = frame.targetFrame; part.roundId = frame.roundId;
+			std::vector<uint8_t> packet;
+			NetLockstepError failure;
+			if (!NetLockstepCodec::EncodeRecoveryInput(part, packet, &failure) || encoded.size() + packet.size() + 4 > maxBytes) {
+				if (error) *error = "committed join frame exceeds its bounds or has invalid input: " + failure.message;
+				return false;
+			}
+			AppendU32LE(encoded, static_cast<uint32_t>(packet.size()));
+			encoded.insert(encoded.end(), packet.begin(), packet.end());
+			++packets;
+			return true;
+		};
+		for (size_t first = 0; first < frame.frames.size(); first += NetLockstepCodec::c_MaxFramesPerPacket) {
+			NetLockstepFrame part;
+			part.senderPeerId = 1;
+			part.frames.assign(frame.frames.begin() + first, frame.frames.begin() + std::min(frame.frames.size(), first + NetLockstepCodec::c_MaxFramesPerPacket));
+			if (!append(std::move(part))) return false;
+		}
+		for (const auto& command: frame.commands) {
+			NetLockstepFrame part;
+			part.senderPeerId = command.senderPeerId; part.commands.push_back(command);
+			if (!append(std::move(part))) return false;
+		}
+		for (size_t first = 0; first < frame.observations.size();) {
+			NetLockstepFrame part;
+			part.senderPeerId = frame.observations[first].senderPeerId;
+			do { part.observations.push_back(frame.observations[first++]); }
+			while (first < frame.observations.size() && part.observations.size() < 64 && frame.observations[first].senderPeerId == part.senderPeerId);
+			if (!append(std::move(part))) return false;
+		}
+		for (size_t first = 0; first < frame.valueObservations.size();) {
+			NetLockstepFrame part;
+			part.senderPeerId = frame.valueObservations[first].senderPeerId;
+			do { part.valueObservations.push_back(frame.valueObservations[first++]); }
+			while (first < frame.valueObservations.size() && part.valueObservations.size() < 32 && frame.valueObservations[first].senderPeerId == part.senderPeerId);
+			if (!append(std::move(part))) return false;
+		}
+		for (int byte = 0; byte < 4; ++byte) encoded[24 + byte] = static_cast<uint8_t>(packets >> (8 * byte));
+		bytes = std::move(encoded);
+		return true;
+	}
+
+	bool DecodeCommittedJoinFrame(const std::vector<uint8_t>& bytes, NetLockstepFrame& frame, std::string* error) {
+		constexpr size_t maxBytes = 2ULL * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes;
+		if (bytes.size() < 4 || bytes.size() > maxBytes) { if (error) *error = "invalid committed join frame size"; return false; }
+		const uint8_t* cursor = bytes.data();
+		const uint8_t* end = cursor + bytes.size();
+		bool ok = true;
+		if (ReadU32LE(cursor, end, ok) != 0x46544A57U) {
+			NetLockstepError failure;
+			if (NetLockstepCodec::DecodeRecoveryInput(bytes, frame, &failure)) return true;
+			if (error) *error = failure.message;
+			return false;
+		}
+		if (ReadU16LE(cursor, end, ok) != 1) { if (error) *error = "unsupported committed join frame version"; return false; }
+		NetLockstepFrame decoded;
+		const uint16_t sender = ReadU16LE(cursor, end, ok);
+		decoded.senderPeerId = static_cast<uint8_t>(sender);
+		decoded.targetFrame = ReadU64LE(cursor, end, ok);
+		decoded.roundId = ReadU64LE(cursor, end, ok);
+		const uint32_t count = ReadU32LE(cursor, end, ok);
+		if (!ok || sender > NetLockstepCodec::c_MaxPeerCount || count > bytes.size() / 12) { if (error) *error = "invalid committed join frame header"; return false; }
+		for (uint32_t index = 0; index < count; ++index) {
+			const uint32_t size = ReadU32LE(cursor, end, ok);
+			if (!ok || size > static_cast<size_t>(end - cursor)) { if (error) *error = "truncated committed join frame"; return false; }
+			NetLockstepFrame part;
+			NetLockstepError failure;
+			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(cursor, cursor + size), part, &failure) ||
+			    part.targetFrame != decoded.targetFrame || part.roundId != decoded.roundId) {
+				if (error) *error = "committed join fragment has invalid input or a different tick: " + failure.message;
+				return false;
+			}
+			cursor += size;
+			decoded.frames.insert(decoded.frames.end(), part.frames.begin(), part.frames.end());
+			decoded.commands.insert(decoded.commands.end(), part.commands.begin(), part.commands.end());
+			decoded.observations.insert(decoded.observations.end(), part.observations.begin(), part.observations.end());
+			decoded.valueObservations.insert(decoded.valueObservations.end(), part.valueObservations.begin(), part.valueObservations.end());
+		}
+		if (cursor != end || !std::is_sorted(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; }) ||
+		    std::adjacent_find(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID == rhs.actorUniqueID; }) != decoded.frames.end()) {
+			if (error) *error = "committed join frame has trailing bytes or duplicate controllers";
+			return false;
+		}
+		frame = std::move(decoded);
+		return true;
+	}
+
 	bool IsWorldJoinImageBlob(const std::vector<uint8_t>& bytes) {
 		if (bytes.size() < 5) {
 			return false;
 		}
 		const uint32_t magic = static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
 		                       (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
-		return magic == c_NetWorldImageMagic && bytes[4] == c_NetWorldImageVersion;
+		return magic == c_NetWorldImageMagic && bytes[4] >= 1 && bytes[4] <= c_NetWorldImageVersion;
 	}
 
 	bool EncodeWorldJoinImageBlob(const NetWorldCheckpointImage& image, const std::vector<uint8_t>& archive,
@@ -517,7 +655,12 @@ namespace RTE {
 	}
 
 	NetLobbyStateChunk MakeJoinerCatchUpReport() {
-		return MakeWorldJoinReport(c_NetWorldReportCatchUp, ScenarioRunner::WorldCatchUpAppliedThrough());
+		auto report = MakeWorldJoinReport(c_NetWorldReportCatchUp, ScenarioRunner::WorldCatchUpAppliedThrough());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkTicks());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkUs());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpPriorInputThrough());
+		report.totalBytes = report.bytes.size();
+		return report;
 	}
 
 	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value) {
@@ -543,8 +686,11 @@ namespace RTE {
 		return "the world refused the join";
 	}
 
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value) {
-		if (chunk.transferId != c_NetWorldReportTransferId || chunk.bytes.size() != 9 || chunk.totalBytes != 9 ||
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks, uint64_t* workUs, uint64_t* sentThrough) {
+		if (workTicks) *workTicks = 0;
+		if (workUs) *workUs = 0;
+		if (sentThrough) *sentThrough = 0;
+		if (chunk.transferId != c_NetWorldReportTransferId || (chunk.bytes.size() != 9 && chunk.bytes.size() != 33) || chunk.totalBytes != chunk.bytes.size() ||
 		    chunk.chunkCount != 1 || chunk.chunkIndex != 0) {
 			return false;
 		}
@@ -556,6 +702,16 @@ namespace RTE {
 		value = 0;
 		for (int i = 0; i < 8; ++i) {
 			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
+		}
+		if (chunk.bytes.size() == 33) {
+			if (kind != c_NetWorldReportCatchUp) return false;
+			const uint8_t* cursor = chunk.bytes.data() + 9;
+			const uint8_t* end = chunk.bytes.data() + chunk.bytes.size();
+			bool ok = true;
+			const uint64_t ticks = ReadU64LE(cursor, end, ok), us = ReadU64LE(cursor, end, ok), sent = ReadU64LE(cursor, end, ok);
+			if (workTicks) *workTicks = ticks;
+			if (workUs) *workUs = us;
+			if (sentThrough) *sentThrough = sent;
 		}
 		return true;
 	}
@@ -672,6 +828,116 @@ namespace RTE {
 
 #pragma region Committed frame tail
 
+	struct NetWorldFrameLog::Journal {
+		struct ReadResult { std::vector<std::vector<uint8_t>> records; uint64_t last = 0; };
+		struct Job {
+			uint64_t frame = 0, maxBytes = 0;
+			size_t maxRecords = 0;
+			std::vector<uint8_t> bytes;
+			std::shared_ptr<std::promise<ReadResult>> result;
+		};
+		std::string path;
+		std::mutex mutex;
+		std::condition_variable changed;
+		std::deque<Job> jobs;
+		uint64_t queuedBytes = 0;
+		bool stopping = false;
+		std::atomic<bool> failed{false};
+		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
+		std::thread worker;
+
+		explicit Journal(std::string value): path(std::move(value)), worker([this] { Run(); }) {}
+		~Journal() {
+			{ std::lock_guard lock(mutex); stopping = true; }
+			changed.notify_one();
+			if (worker.joinable()) worker.join();
+			std::error_code ignored;
+			std::filesystem::remove(path, ignored);
+		}
+		bool Append(uint64_t frame, const std::vector<uint8_t>& bytes) {
+			std::lock_guard lock(mutex);
+			if (failed || queuedBytes + bytes.size() > 32ULL * 1024 * 1024) { failed = true; return false; }
+			Job job; job.frame = frame; job.bytes = bytes;
+			queuedBytes += bytes.size(); jobs.push_back(std::move(job));
+			changed.notify_one();
+			return true;
+		}
+		size_t Copy(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* last) {
+			if (failed) return 0;
+			const auto key = std::make_tuple(from, maxRecords, maxBytes);
+			auto found = reads.find(key);
+			if (found == reads.end()) {
+				Job job; job.frame = from; job.maxRecords = maxRecords; job.maxBytes = maxBytes;
+				job.result = std::make_shared<std::promise<ReadResult>>();
+				found = reads.emplace(key, job.result->get_future().share()).first;
+				{ std::lock_guard lock(mutex); jobs.push_back(std::move(job)); }
+				changed.notify_one();
+			}
+			if (found->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return 0;
+			try {
+				const auto& ready = found->second.get();
+				out = ready.records;
+				if (last) *last = ready.last;
+			} catch (...) { failed = true; return 0; }
+			while (reads.size() > 32) {
+				auto oldest = reads.begin();
+				if (oldest == found) ++oldest;
+				reads.erase(oldest);
+			}
+			return out.size();
+		}
+		void Run() {
+			try {
+				std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+				std::fstream stream(path, std::ios::binary | std::ios::in | std::ios::out | std::ios::trunc);
+				if (!stream) { failed = true; return; }
+				std::map<uint64_t, std::pair<uint64_t, uint32_t>> index;
+				uint64_t endOffset = 0;
+				while (true) {
+					Job job;
+					{
+						std::unique_lock lock(mutex);
+						changed.wait(lock, [&] { return stopping || !jobs.empty(); });
+						if (stopping) break;
+						job = std::move(jobs.front()); jobs.pop_front(); queuedBytes -= job.bytes.size();
+					}
+					if (!job.result) {
+						stream.clear(); stream.seekp(static_cast<std::streamoff>(endOffset));
+						stream.write(reinterpret_cast<const char*>(job.bytes.data()), static_cast<std::streamsize>(job.bytes.size()));
+						if (!stream) { failed = true; return; }
+						index[job.frame] = {endOffset, static_cast<uint32_t>(job.bytes.size())};
+						endOffset += job.bytes.size();
+					} else {
+						ReadResult result;
+						uint64_t total = 0, expected = job.frame;
+						stream.flush();
+						for (auto record = index.lower_bound(job.frame); record != index.end(); ++record) {
+							const auto [offset, size] = record->second;
+							if (record->first != expected || result.records.size() >= job.maxRecords || (total != 0 && total + size > job.maxBytes)) break;
+							std::vector<uint8_t> bytes(size);
+							stream.clear(); stream.seekg(static_cast<std::streamoff>(offset));
+							stream.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size));
+							if (!stream) { failed = true; result = {}; break; }
+							result.records.push_back(std::move(bytes)); total += size; result.last = record->first; ++expected;
+						}
+						job.result->set_value(std::move(result));
+					}
+				}
+			} catch (...) { failed = true; }
+		}
+	};
+
+	void NetWorldFrameLog::EnableJournal(const std::string& path) {
+		m_Journal = std::make_shared<Journal>(path);
+		for (const auto& record: m_Records) {
+			if (!m_Journal->Append(record.frame, record.bytes)) break;
+			if (m_JournalFirst == 0) m_JournalFirst = record.frame;
+			m_JournalLast = record.frame;
+		}
+	}
+
+	bool NetWorldFrameLog::JournalFailed() const { return m_Journal && m_Journal->failed; }
+
 	void NetWorldFrameLog::Configure(size_t maxFrames, uint64_t maxBytes) {
 		m_MaxFrames = maxFrames == 0 ? c_DefaultMaxFrames : maxFrames;
 		m_MaxBytes = maxBytes == 0 ? c_DefaultMaxBytes : maxBytes;
@@ -685,10 +951,12 @@ namespace RTE {
 		}
 		Record record;
 		record.frame = frame.targetFrame;
-		NetLockstepError encodeError;
-		if (!NetLockstepCodec::EncodeRecoveryInput(frame, record.bytes, &encodeError)) {
-			if (error) *error = "the committed tail could not encode frame " + std::to_string(frame.targetFrame) + ": " + encodeError.message;
+		if (!EncodeCommittedJoinFrame(frame, record.bytes, error)) {
 			return false;
+		}
+		if (m_Journal && m_Journal->Append(frame.targetFrame, record.bytes)) {
+			if (m_JournalFirst == 0) m_JournalFirst = frame.targetFrame;
+			m_JournalLast = frame.targetFrame;
 		}
 		m_Bytes += record.bytes.size();
 		m_Records.push_back(std::move(record));
@@ -705,7 +973,8 @@ namespace RTE {
 	}
 
 	bool NetWorldFrameLog::Covers(uint64_t frame) const {
-		return !m_Records.empty() && frame >= m_Records.front().frame && frame <= m_Records.back().frame;
+		return (m_Journal && !m_Journal->failed && m_JournalFirst != 0 && frame >= m_JournalFirst && frame <= m_JournalLast) ||
+		    (!m_Records.empty() && frame >= m_Records.front().frame && frame <= m_Records.back().frame);
 	}
 
 	size_t NetWorldFrameLog::CopyFrom(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* lastCopied) const {
@@ -713,6 +982,7 @@ namespace RTE {
 		if (lastCopied) {
 			*lastCopied = 0;
 		}
+		if (m_Journal && (m_Records.empty() || from < m_Records.front().frame)) return m_Journal->Copy(from, maxRecords, maxBytes, out, lastCopied);
 		uint64_t bytes = 0;
 		for (const Record& record: m_Records) {
 			if (record.frame < from) {
@@ -738,6 +1008,8 @@ namespace RTE {
 	}
 
 	void NetWorldFrameLog::Clear() {
+		m_Journal.reset();
+		m_JournalFirst = m_JournalLast = 0;
 		m_Records.clear();
 		m_Bytes = 0;
 		m_Evicted = 0;
@@ -839,8 +1111,8 @@ namespace RTE {
 
 #pragma region Membership
 
-	bool NetWorldMembership::Configure(const NetMatchConfig& config, std::string* error) {
-		if (!config.persistentWorld) {
+	bool NetWorldMembership::Configure(const NetMatchConfig& config, std::string* error, bool privateMatch) {
+		if (!config.persistentWorld && !privateMatch) {
 			if (error) *error = "only a persistent world has world slots";
 			return false;
 		}
@@ -1090,6 +1362,7 @@ namespace RTE {
 #pragma region Join host
 
 	bool NetWorldJoinHost::Configure(const NetMatchConfig& config, const NetWorldIdentity& identity, std::string* error) {
+		m_PrivateRound = 0;
 		if (!identity.IsValid()) {
 			if (error) *error = "the world identity is incomplete";
 			return false;
@@ -1107,6 +1380,49 @@ namespace RTE {
 		m_Image = NetWorldCheckpointImage{};
 		m_Tail.Clear();
 		return true;
+	}
+
+	bool NetCatchUpHeadroom::Observe(uint64_t ticks, uint64_t workUs, double tickMs) {
+		if (!std::isfinite(tickMs) || tickMs <= 0 || ticks < m_Samples.back().first || workUs < m_Samples.back().second) return false;
+		if (ticks == m_Samples.back().first) return workUs == m_Samples.back().second;
+		if (workUs == m_Samples.back().second) return false;
+		m_Samples.emplace_back(ticks, workUs);
+		while (m_Samples.size() > 2 && ticks - m_Samples[1].first >= 120) m_Samples.pop_front();
+		const auto [firstTicks, firstUs] = m_Samples.front();
+		m_Ratio = (ticks - firstTicks) * tickMs * 1000.0 / (workUs - firstUs);
+		if (m_Ratio < 1.1) m_Ready = false;
+		else if (ticks - firstTicks >= 120 && m_Ratio >= 1.2) m_Ready = true;
+		return true;
+	}
+
+	bool NetWorldJoinHost::ConfigureMatchRejoins(const NetMatchConfig& config, uint64_t roundId, double tickMs, std::string* error) {
+		if (config.persistentWorld || config.sessionId == 0 || roundId == 0 || config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute ||
+		    !std::isfinite(tickMs) || tickMs <= 0 || !m_Membership.Configure(config, error, true)) return false;
+		m_Config = config; m_PrivateRound = roundId; m_SimTickMs = tickMs;
+		m_Identity = {}; m_Sessions.clear(); m_Image = {}; m_Tail.Clear();
+		return true;
+	}
+
+	bool NetWorldJoinHost::BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error) {
+		if (!IsPrivateMatch() || incarnation == 0 || peerId == m_Config.hostPeerId) return false;
+		const auto* slot = m_Membership.SlotOfSeat(stableSeat);
+		if (slot && slot->peerId != peerId) return false;
+		if (!slot && !m_Membership.Hold(peerId, stableSeat, name, error)) return false;
+		m_Membership.SetReclaimHold(peerId, true);
+		if (!BeginJoin(connection, stableSeat, name, nowMs, error, true)) return false;
+		Find(connection)->incarnation = incarnation;
+		return Find(connection)->assignedPeerId == peerId;
+	}
+
+	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough) {
+		auto* session = Find(connection);
+		if (!session || !IsPrivateMatch()) return false;
+		session->priorInputThrough = std::max(session->priorInputThrough, sentThrough);
+		return session->headroom.Observe(workTicks, workUs, m_SimTickMs);
+	}
+
+	void NetWorldJoinHost::NoteRejoinLinkFit(NetPeerId connection, bool fits) {
+		if (auto* session = Find(connection)) session->linkFits = fits;
 	}
 
 	uint8_t NetWorldJoinHost::AllocateSpectatorLobbyPeer() const {
@@ -1172,6 +1488,7 @@ namespace RTE {
 	}
 
 	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder) {
+		if (IsPrivateMatch() && !credentialedHolder) { if (error) *error = "a running match only readmits its authenticated holder"; return false; }
 		if (!IsConfigured()) {
 			if (error) *error = "the world join plane is not configured";
 			return false;
@@ -1327,7 +1644,7 @@ namespace RTE {
 		m_Image = image;
 		m_Metrics.NoteCapture(image.captureMs, image.bytes);
 		for (NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.snapshotTick == 0) {
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && session.snapshotTick == 0) {
 				session.snapshotTick = image.tick;
 				session.deliveredThrough = image.tick;
 				session.acknowledgedThrough = image.tick;
@@ -1366,6 +1683,33 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldJoinHost::NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk) {
+		auto* session = Find(connection);
+		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (session->pendingTail.empty()) {
+			std::vector<std::vector<uint8_t>> frames;
+			if (m_Tail.CopyFrom(session->deliveredThrough + 1, 32, 40ULL * 1024, frames, &session->pendingTailThrough) == 0) return false;
+			for (const auto& frame: frames) {
+				AppendU32LE(session->pendingTail, static_cast<uint32_t>(frame.size()));
+				session->pendingTail.insert(session->pendingTail.end(), frame.begin(), frame.end());
+			}
+			session->pendingTailOffset = 0;
+		}
+		const size_t end = std::min(session->pendingTail.size(), session->pendingTailOffset + NetLobbyProtocol::c_MaxStateChunkBytes);
+		chunk.assign(session->pendingTail.begin() + session->pendingTailOffset, session->pendingTail.begin() + end);
+		return !chunk.empty();
+	}
+
+	void NetWorldJoinHost::NoteTailChunkSent(NetPeerId connection, size_t bytes) {
+		auto* session = Find(connection);
+		if (!session || bytes > session->pendingTail.size() - session->pendingTailOffset) return;
+		session->pendingTailOffset += bytes;
+		if (session->pendingTailOffset == session->pendingTail.size()) {
+			session->deliveredThrough = std::max(session->deliveredThrough, session->pendingTailThrough);
+			session->pendingTail.clear(); session->pendingTailOffset = 0;
+		}
+	}
+
 	bool NetWorldJoinHost::NoteDeliveredThrough(NetPeerId connection, uint64_t frame) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {
@@ -1383,7 +1727,7 @@ namespace RTE {
 			if (error) *error = "no world bootstrap for that connection";
 			return false;
 		}
-		if (session->snapshotTick == 0) {
+		if (session->snapshotTick == 0 && !IsPrivateMatch()) {
 			if (error) *error = "the bootstrap has no checkpoint image yet";
 			return false;
 		}
@@ -1412,6 +1756,7 @@ namespace RTE {
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
+		if (IsPrivateMatch() && (!session->linkFits || !session->headroom.Ready())) return true;
 		if (session->activationTick != 0) {
 			return true;
 		}
@@ -1420,7 +1765,7 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
-		session->activationTick = ChooseActivationTick(nowFrame);
+		session->activationTick = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
@@ -1543,7 +1888,8 @@ namespace RTE {
 			    session.spectator || session.openedAtMs == 0) {
 				continue;
 			}
-			if (nowMs > session.openedAtMs && nowMs - session.openedAtMs > c_NetWorldJoinDeadlineMs) {
+			const uint64_t progress = IsPrivateMatch() ? std::max(session.openedAtMs, session.lastCatchUpReportMs) : session.openedAtMs;
+			if (nowMs > progress && nowMs - progress > c_NetWorldJoinDeadlineMs) {
 				stale.push_back(session.connection);
 			}
 		}
@@ -1596,7 +1942,9 @@ namespace RTE {
 			                    {"peer_id", static_cast<int>(session.assignedPeerId)}, {"team", static_cast<int>(session.team)},
 			                    {"spectator", session.spectator}, {"snapshot_tick", session.snapshotTick},
 			                    {"activation_tick", session.activationTick}, {"applied_through", session.acknowledgedThrough},
-			                    {"transfer_bytes", session.transferBytes}});
+			                    {"transfer_bytes", session.transferBytes}, {"incarnation", session.incarnation},
+			                    {"catchup_capacity_ratio", session.headroom.Ratio()}, {"readmission_headroom", session.headroom.Ready()},
+			                    {"delay_fits", session.linkFits}, {"prior_input_through", session.priorInputThrough}});
 		}
 		json report = {
 			{"world_id", m_Identity.worldId},
@@ -1607,7 +1955,8 @@ namespace RTE {
 			{"joins_cancelled", m_JoinsCancelled},
 			{"image", {{"tick", m_Image.tick}, {"bytes", m_Image.bytes}, {"digest", m_Image.digest}, {"capture_ms", m_Image.captureMs}}},
 			{"spectators", {{"live", SpectatorCount()}, {"bound", SpectatorBound()}, {"free", SpectatorsFree()}}},
-			{"tail", {{"first", m_Tail.FirstFrame()}, {"last", m_Tail.LastFrame()}, {"count", m_Tail.Count()}, {"bytes", m_Tail.Bytes()}, {"evicted", m_Tail.Evicted()}}},
+			{"tail", {{"first", m_Tail.FirstFrame()}, {"last", m_Tail.LastFrame()}, {"count", m_Tail.Count()}, {"bytes", m_Tail.Bytes()}, {"evicted", m_Tail.Evicted()},
+			          {"journal", m_Tail.HasJournal()}, {"journal_failed", m_Tail.JournalFailed()}}},
 			{"sessions", std::move(sessions)},
 		};
 		report["membership"] = json::parse(m_Membership.BuildReportJson(), nullptr, false);
@@ -1616,6 +1965,8 @@ namespace RTE {
 	}
 
 	void NetWorldJoinHost::Reset() {
+		m_PrivateRound = 0;
+		m_SimTickMs = 0;
 		m_Identity = NetWorldIdentity{};
 		m_Config = NetMatchConfig{};
 		m_Sessions.clear();

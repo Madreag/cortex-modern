@@ -131,7 +131,7 @@ namespace RTE {
 		m_QueuedStateTransfers.clear();
 		m_OutgoingStateId = 0;
 		m_StateTransferOnlyPeer = 0;
-		m_WorldJoinReport = {};
+		m_WorldJoinReports.clear();
 		m_PendingTailBytes.clear();
 		m_OutgoingChunkIndexByPeer.clear();
 		m_OutgoingChunkCount = 0;
@@ -435,8 +435,9 @@ namespace RTE {
 	}
 
 	NetLobbySession::WorldJoinReport NetLobbySession::TakeWorldJoinReport() {
-		WorldJoinReport report = m_WorldJoinReport;
-		m_WorldJoinReport = {};
+		if (m_WorldJoinReports.empty()) return {};
+		WorldJoinReport report = m_WorldJoinReports.front();
+		m_WorldJoinReports.pop_front();
 		return report;
 	}
 
@@ -1144,8 +1145,11 @@ namespace RTE {
 				if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload)) {
 					uint8_t kind = 0;
 					uint64_t value = 0;
-					if (ParseWorldJoinReport(*chunk, kind, value)) {
-						m_WorldJoinReport = {kind, value, sender->first, true};
+					WorldJoinReport report;
+					if (ParseWorldJoinReport(*chunk, kind, value, &report.workTicks, &report.workUs, &report.sentThrough)) {
+						report.kind = kind; report.value = value; report.fromPeer = sender->first; report.pending = true;
+						std::erase_if(m_WorldJoinReports, [&](const auto& pending) { return pending.kind == kind && pending.fromPeer == sender->first; });
+						m_WorldJoinReports.push_back(report);
 						break;
 					}
 					if (chunk->transferId == c_NetWorldTailTransferId) {

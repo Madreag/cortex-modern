@@ -110,11 +110,22 @@ def input_pattern(path):
     write_json(path.with_name('input-schedule.json'), dict(probes=probes, initial_aim='0.8,0.6', fire_presses=8))
 
 
+TIMING_CASES = (
+    ('100ms-loss5', 100, 5, None),
+    ('200ms-loss5', 200, 5, None),
+    ('100ms-silent600', 100, 0, 600),
+    ('200ms-silent600', 200, 0, 600),
+    ('100ms-loss5-silent600', 100, 5, 600),
+    ('200ms-loss5-silent600', 200, 5, 600),
+)
+
+
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None):
     out = root / name
     out.mkdir(exist_ok=False)
-    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else 'two-peer service e2e, normal render loop',
-                    ticks=TICKS, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
+    final_tick = 2 * TICKS if silent_tick else TICKS
+    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
+                    ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
@@ -127,17 +138,17 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         for peer in peers:
             run_out = out / peer
             trace = out / f'{peer}_trace.json'
-            flags = ['-seed', '42', '-max-ticks', str(TICKS), '-tick-hashes', '-num-lua-states', '4',
+            flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes', '-num-lua-states', '4',
                      '-out', str(trace), '-input-script', str(script),
                      '-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
-                     '-controller-debug-ticks', f'1-{TICKS}',
+                     '-controller-debug-ticks', f'1-{final_tick}',
                      '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini')]
             if record:
                 flags += ['-feel-measure', str(run_out / 'feel')]
             if sp:
                 flags += ['-scenario', 'FeelBaseline', '-controller-log-out', str(out / 'controllers.json')]
             else:
-                flags += ['-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(TICKS),
+                flags += ['-net-match-service-e2e', '-net-port', str(port), '-net-match-ticks', str(final_tick),
                           '-net-match-humans', str(len(peers)), '-net-match-peers', str(len(peers)), '-net-match-cpu-slots', '0',
                           '-net-match-service-preset', 'Determinism FeelBaseline',
                           '-net-match-service-module', 'UserScenes.rte',
@@ -145,7 +156,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
-            environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{TICKS}', PYTHONDONTWRITEBYTECODE='1')
+            environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
             if peer == 'client' and silent_tick:
@@ -177,7 +188,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     write_json(out / 'manifest.json', manifest)
     print(f'{manifest["finished"]} {name}: launches_complete={manifest["launches_complete"]}', flush=True)
     if not sp and record and (out / 'match.ccreplay').is_file():
-        inspect = make_run(REPO, ['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{TICKS}',
+        inspect = make_run(REPO, ['-net-replay-verify', str(out / 'match.ccreplay'), '-net-replay-dump', f'1:{final_tick}',
                                  '-out', str(out / 'replay-report.json')], out / 'replay-inspect', timeout=timeout,
                            env={'CCCP_HEADLESS': '1'}, expected=[out / 'replay-report.json'])
         try:
@@ -187,14 +198,14 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     return out
 
 
-def compare_pair(first, second):
+def compare_pair(first, second, expected_ticks=TICKS):
     result = dict(first=str(first), second=str(second))
-    ok, existing = strict_compare(first, second, expected_ticks=TICKS)
+    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks)
     result.update(sim_gated_pass=ok, existing_comparator=existing)
     try:
         left = json.loads(first.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']
         right = json.loads(second.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']
-        exact_coverage = [row['tick'] for row in left] == [row['tick'] for row in right] == list(range(1, TICKS + 1))
+        exact_coverage = [row['tick'] for row in left] == [row['tick'] for row in right] == list(range(1, expected_ticks + 1))
         result['all_tick_hashes_identical'] = exact_coverage and left == right
         result['first_full_row_difference'] = next((a['tick'] for a, b in zip(left, right) if a != b), None)
     except (OSError, ValueError, KeyError, IndexError) as error:
@@ -258,7 +269,7 @@ def reduce_timing_case(run):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
     peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
-    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'))
+    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS))
     return dict(name=run.name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
@@ -307,7 +318,7 @@ def analyze(root):
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
             results.append(report)
-    for name in ('200ms-loss5', '200ms-silent600'):
+    for name, _, _, _ in TIMING_CASES:
         run = root / name
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
@@ -319,7 +330,7 @@ def analyze(root):
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
-        link = f'{report["name"]}/feel-report.json' if report['name'] in ('200ms-loss5', '200ms-silent600') else f'{report["name"]}-on/summary.md'
+        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a adds the 59.5 tps, 50 ms and one-percent wait gates. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
@@ -419,8 +430,9 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
                     port += 1
-        launch_case(root, '200ms-loss5', 200, 60, True, port, script, exe['sha256'], args.timeout, loss_percent=5)
-        launch_case(root, '200ms-silent600', 200, 60, True, port + 1, script, exe['sha256'], args.timeout, silent_tick=600)
+        for name, lag, loss, silent in TIMING_CASES:
+            launch_case(root, name, lag, 60, True, port, script, exe['sha256'], args.timeout, loss_percent=loss, silent_tick=silent)
+            port += 1
     try:
         results = analyze(root)
     except EarlyDecision:

@@ -133,7 +133,7 @@ namespace RTE {
 		static void ObserveLockstepPlayerBindings(uint8_t peer, uint64_t frame, const NetGamePlayerBindings& bindings);
 		static bool ConsumeLockstepGameCommand(const NetGameCommand& command);
 		static std::vector<NetResyncPendingCommand> CaptureUnacknowledgedLocalCommands();
-		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr);
+		static bool CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error = nullptr, bool captureLocalBindings = true);
 		/// The lockstep state every peer agrees on at the tick just completed. One reader for two
 		/// callers: the heal's snapshot capture and every checkpoint take these four fields from here.
 		static AutosaveSideState CaptureAgreedSideState();
@@ -214,7 +214,8 @@ namespace RTE {
 		/// Refuses a WorldTransition whose generation or membership revision is already stale.
 		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
 		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
-		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
+		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr, bool initialSnapshot = false);
+		static bool RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error = nullptr);
 		/// Later catch-up bytes land here after the image is already installed.
 		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
 		static void SetWorldCatchUpActivation(uint64_t activationTick);
@@ -225,6 +226,11 @@ namespace RTE {
 		static void ReleaseWorldCatchUp();
 		static uint64_t WorldCatchUpAppliedThrough();
 		static uint64_t WorldCatchUpActivationTick();
+		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs = 0);
+		static uint64_t WorldCatchUpWorkTicks();
+		static uint64_t WorldCatchUpWorkUs();
+		static uint64_t WorldCatchUpPriorInputThrough();
+		static void SetWorldCatchUpPriorInputThrough(uint64_t frame);
 		/// Whether the tail still holds a committed frame for this tick.
 		static bool WorldCatchUpHasFrame(uint64_t simTick);
 		/// Builds the ready frame whose targetFrame equals simTick.
@@ -271,6 +277,8 @@ namespace RTE {
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
+		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
+		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
 		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
 		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
 		static void ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId);
@@ -427,6 +435,8 @@ namespace RTE {
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();
 		static int GetLockstepResumeCountdown();
+		static NetLockstepPauseState CaptureLockstepPauseState();
+		static bool RestoreLockstepPauseState(const NetLockstepPauseState& state, uint64_t frame);
 		/// Applies the shared pause and exports its sender for presentation only.
 		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();

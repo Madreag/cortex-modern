@@ -278,10 +278,10 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2 };
-	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3 };
+	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
-	/// A round-scoped timing decision and the peers that must acknowledge its boundary.
+	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
 	struct NetLockstepTiming {
 		uint8_t senderPeerId = 0;
 		uint8_t peerId = 0;
@@ -297,6 +297,10 @@ namespace RTE {
 		uint8_t heldPeers = 0;
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
+		uint64_t authorityGeneration = 0;
+		uint64_t cutoffFrame = 0;
+		uint64_t neutralThroughFrame = 0;
+		std::array<uint32_t, 4> seatIncarnations{};
 		bool operator==(const NetLockstepTiming&) const = default;
 	};
 
@@ -359,6 +363,11 @@ namespace RTE {
 		uint64_t startFrame = 0;
 		uint16_t inputDelayFrames = 0;
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
+		std::map<uint8_t, uint32_t> peerIncarnations;
+		std::map<uint8_t, uint64_t> initialPeerLeaves;
+		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
+		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
+		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -382,6 +391,7 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 4;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		std::optional<NetHash32> originalRoundConfigHash;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
 		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;
@@ -428,12 +438,13 @@ namespace RTE {
 		uint32_t offset = 0;
 		std::vector<uint8_t> members;
 		std::vector<uint8_t> bytes;
+		std::vector<NetLockstepTiming> futureDelays;
 	};
 
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 		static constexpr size_t c_ChunkBytes = 48 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_HistoryFrames = 2 * 240;
@@ -457,6 +468,7 @@ namespace RTE {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
 		std::vector<uint8_t> aiHeldPeerIds;
+		std::vector<uint8_t> reclaimedPeerIds;
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
@@ -472,6 +484,7 @@ namespace RTE {
 	};
 
 	/// Applies the committed frame's departures before its game commands.
+	void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
 	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
 
 	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
@@ -480,6 +493,15 @@ namespace RTE {
 
 	/// Clears the paused-frame discount a coordinator handoff or resync relaunch starts from zero.
 	void ResetLockstepPausedFrames();
+	uint64_t GetLockstepPausedFrames();
+	void RestoreLockstepPausedFrames(uint64_t frames);
+
+	struct NetLockstepPauseState {
+		bool paused = false;
+		int resumeCountdown = -1;
+		uint64_t pausedFrames = 0;
+		bool IsValid(uint64_t frame) const { return pausedFrames <= frame && (resumeCountdown == -1 || (paused && resumeCountdown > 0)); }
+	};
 
 	/// One remote's share of the round, enough to tell a peer that stopped SENDING from one the host
 	/// stopped RELAYING to, and from one whose frames arrived and were refused.
@@ -552,6 +574,9 @@ namespace RTE {
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
 		uint32_t blockingFrameWaits = 0;
+		uint64_t holdNoticeBudgetMs = 0;
+		bool holdDeadlineFeasible = true;
+		uint64_t lastHoldDeclarationMs = 0;
 		uint64_t localTickOverruns = 0;
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;
@@ -597,9 +622,10 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 24;
-		static constexpr uint16_t c_WorldVersion = 25;
+		static constexpr uint16_t c_Version = 26;
+		static constexpr uint16_t c_WorldVersion = 27;
 		static constexpr uint16_t c_TimingVersion = 24;
+		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
@@ -751,6 +777,7 @@ namespace RTE {
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
 		/// The committed ready-frame for that tick, if it is still held or was just advanced.
 		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
+		void RememberAppliedFrameInputs(const NetLockstepReadyFrame& ready);
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
@@ -758,12 +785,17 @@ namespace RTE {
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
+		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
+		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
@@ -948,6 +980,7 @@ namespace RTE {
 		NetHostMigrationResult m_MigrationResult;
 		std::set<uint8_t> m_MigrationExpected;
 		std::map<uint8_t, NetHostMigrationMessage> m_MigrationAnswers;
+		std::vector<NetLockstepTiming> m_MigrationFutureDelays;
 		std::map<uint8_t, NetPeerId> m_MigrationPeers;
 		std::set<uint8_t> m_MigrationReady;
 		std::map<uint64_t, std::vector<uint8_t>> m_MigrationHistory;
@@ -1080,6 +1113,7 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing);
+		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
 			NetLockstepTiming proposal;
@@ -1088,6 +1122,7 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
@@ -1100,6 +1135,10 @@ namespace RTE {
 		uint64_t m_ProductionBaseUs = 0;
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
+		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
+		std::optional<uint64_t> m_FirstMissingFrame;
+		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;

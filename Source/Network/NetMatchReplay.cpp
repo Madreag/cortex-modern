@@ -78,7 +78,7 @@ namespace RTE {
 			auto firstTiming = record.commands.end();
 			while (firstTiming != record.commands.begin()) {
 				const auto& command = *std::prev(firstTiming);
-				if (!std::holds_alternative<NetGameSeatHold>(command.payload) && !std::holds_alternative<NetGameInputDelay>(command.payload)) break;
+				if (!std::holds_alternative<NetGameSeatHold>(command.payload) && !std::holds_alternative<NetGameInputDelay>(command.payload) && !std::holds_alternative<NetGameSeatReclaim>(command.payload)) break;
 				--firstTiming;
 			}
 			if (firstTiming != record.commands.end()) {

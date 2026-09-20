@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -93,6 +94,15 @@ namespace RTE {
 	/// The immutable checkpoint image a join is bootstrapped from: frozen at a COMPLETED tick, never
 	/// partly applied, and reused by every joiner inside its window rather than recaptured per joiner.
 	struct NetWorldCheckpointImage {
+		uint64_t privateSessionId = 0;
+		std::string checkpointConfig;
+		std::string sideState;
+		NetLockstepPauseState pauseState;
+		std::string heldState;
+		std::string roundConfigHash;
+		uint64_t authorityGeneration = 0;
+		uint8_t authorityPeerId = 1;
+		std::map<uint8_t, uint64_t> departedPeers;
 		std::string worldId;
 		uint64_t boot = 0;
 		uint64_t round = 0;
@@ -106,7 +116,18 @@ namespace RTE {
 		uint64_t bytes = 0;
 		double captureMs = 0.0;           //!< The sim-thread interruption this image cost.
 
-		bool IsValid() const { return NetMatchConfigUtil::IsWorldId(worldId) && boot != 0 && tick != 0 && bytes != 0; }
+		bool IsValid() const { return bytes != 0 && (privateSessionId != 0 ? worldId.empty() && round != 0 && !checkpointConfig.empty() && !sideState.empty() : NetMatchConfigUtil::IsWorldId(worldId) && boot != 0 && tick != 0); }
+	};
+
+	class NetCatchUpHeadroom {
+	public:
+		bool Observe(uint64_t ticks, uint64_t workUs, double tickMs);
+		bool Ready() const { return m_Ready; }
+		double Ratio() const { return m_Ratio; }
+	private:
+		std::deque<std::pair<uint64_t, uint64_t>> m_Samples{{0, 0}};
+		bool m_Ready = false;
+		double m_Ratio = 0;
 	};
 
 	/// The offer a joiner is sent with the image: world/boot/round, B, digest and the lead to E.
@@ -122,6 +143,10 @@ namespace RTE {
 		uint16_t stableSeat = 0;
 		std::string holderName;      //!< The name the admission plane gave this connection.
 		uint32_t holderGeneration = 0;
+		uint32_t incarnation = 0;
+		uint64_t priorInputThrough = 0;
+		bool linkFits = false;
+		NetCatchUpHeadroom headroom;
 		bool declinesPromotion = false; //!< A watcher that asked to stay one; promotion skips it.
 		bool promoted = false;          //!< It reached its slot by promotion, not by a fresh join.
 		uint64_t joinOrder = 0;         //!< Monotonic open order, so promotion takes the oldest watcher.
@@ -130,6 +155,9 @@ namespace RTE {
 		bool spectator = false;
 		uint64_t snapshotTick = 0;        //!< B.
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
+		std::vector<uint8_t> pendingTail;
+		size_t pendingTailOffset = 0;
+		uint64_t pendingTailThrough = 0;
 		uint64_t deliveredThrough = 0;    //!< The last tail frame this connection has been sent.
 		uint64_t acknowledgedThrough = 0; //!< The last tail frame it says it applied.
 		uint64_t openedAtMs = 0;
@@ -155,6 +183,9 @@ namespace RTE {
 		static constexpr uint64_t c_DefaultMaxBytes = 32ULL * 1024 * 1024;
 
 		void Configure(size_t maxFrames, uint64_t maxBytes);
+		void EnableJournal(const std::string& path);
+		bool HasJournal() const { return static_cast<bool>(m_Journal); }
+		bool JournalFailed() const;
 		/// Encodes and retains one committed frame. Frames must arrive in order and without gaps.
 		bool Append(const NetLockstepFrame& frame, std::string* error = nullptr);
 		/// Whether the log still covers the frame, so a join opened at B-1 can still converge.
@@ -178,6 +209,9 @@ namespace RTE {
 		};
 
 		void Trim();
+		struct Journal;
+		std::shared_ptr<Journal> m_Journal;
+		uint64_t m_JournalFirst = 0, m_JournalLast = 0;
 
 		std::deque<Record> m_Records;
 		size_t m_MaxFrames = c_DefaultMaxFrames;
@@ -246,7 +280,7 @@ namespace RTE {
 	public:
 		/// Builds the fixed order from the world's config: one slot per non-host peer id, teams in the
 		/// config's team order. Called once at boot and after a restart, never mid-round.
-		bool Configure(const NetMatchConfig& config, std::string* error = nullptr);
+		bool Configure(const NetMatchConfig& config, std::string* error = nullptr, bool privateMatch = false);
 		/// The slot a fresh join takes: the first free one in the configured order that no reclaim
 		/// hold is keeping. Null when the world is full, which makes the joiner a spectator.
 		const NetWorldSlot* FirstFreeSlot() const;
@@ -329,18 +363,28 @@ namespace RTE {
 	/// The joiner's own bootstrap state: the image it restored, the tail it holds and the E it was given.
 	struct NetWorldCatchUpClient {
 		bool active = false;
+		bool privateMatch = false;
+		NetMatchConfig checkpointConfig;
+		std::string sideState;
+		NetLockstepPauseState pauseState;
+		std::map<uint8_t, NetGameSeatHold> initialHolds;
+		uint64_t roundId = 0, authorityGeneration = 0;
+		uint8_t authorityPeerId = 1;
+		std::map<uint8_t, uint64_t> initialPeerLeaves;
+		NetHash32 roundConfigHash{};
 		uint64_t snapshotTick = 0;        //!< B, the tick the restored image froze at.
 		uint64_t appliedThrough = 0;      //!< The last committed tail frame the sim has applied.
 		uint64_t activationTick = 0;      //!< E, once the host has announced it.
 		std::string digest;
 		std::vector<NetLockstepFrame> tail;
+		std::vector<uint8_t> partialTail;
 	};
 
 	/// The catch-up report a joiner sends: what its sim has applied, never the host's frame.
 	NetLobbyStateChunk MakeJoinerCatchUpReport();
 	/// WJIM: the joiner-only checkpoint envelope streamed through the lobby StateChunk pump.
 	inline constexpr uint32_t c_NetWorldImageMagic = 0x4D494A57U;
-	inline constexpr uint8_t c_NetWorldImageVersion = 1;
+	inline constexpr uint8_t c_NetWorldImageVersion = 2;
 	/// A valid 9-byte StateChunk the joiner and host exchange for progress, catch-up and E.
 	inline constexpr uint64_t c_NetWorldReportTransferId = 0x574A5250ULL;
 	inline constexpr uint64_t c_NetWorldTailTransferId = 0x5441494CULL;
@@ -362,6 +406,8 @@ namespace RTE {
 	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size);
 	/// Packs every required Controller, command, binding and observation from one committed tick.
 	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready);
+	bool EncodeCommittedJoinFrame(const NetLockstepFrame& frame, std::vector<uint8_t>& bytes, std::string* error = nullptr);
+	bool DecodeCommittedJoinFrame(const std::vector<uint8_t>& bytes, NetLockstepFrame& frame, std::string* error = nullptr);
 	inline std::string DigestWorldJoinBytes(const std::vector<uint8_t>& bytes) {
 		return DigestWorldJoinBytes(bytes.data(), bytes.size());
 	}
@@ -375,7 +421,7 @@ namespace RTE {
 
 	/// A valid one-chunk StateChunk carrying a typed 8-byte value. Empty payloads stay illegal.
 	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value);
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value);
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks = nullptr, uint64_t* workUs = nullptr, uint64_t* sentThrough = nullptr);
 
 	/// Host-authored Activate binding: seat, team, brain preset and spawn (Persistent World respawn API).
 	NetGameWorldTransition BuildWorldActivateTransition(const NetWorldJoinSession& session, const NetMatchConfig& config, uint64_t membershipRevision);
@@ -425,7 +471,12 @@ namespace RTE {
 	class NetWorldJoinHost {
 	public:
 		bool Configure(const NetMatchConfig& config, const NetWorldIdentity& identity, std::string* error = nullptr);
-		bool IsConfigured() const { return m_Identity.IsValid(); }
+		bool ConfigureMatchRejoins(const NetMatchConfig& config, uint64_t roundId, double tickMs, std::string* error = nullptr);
+		bool BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error = nullptr);
+		bool NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough);
+		void NoteRejoinLinkFit(NetPeerId connection, bool fits);
+		bool IsConfigured() const { return m_Identity.IsValid() || m_PrivateRound != 0; }
+		bool IsPrivateMatch() const { return m_PrivateRound != 0; }
 		const NetWorldIdentity& Identity() const { return m_Identity; }
 
 		/// How many live bootstraps are watching rather than holding a slot.
@@ -460,6 +511,8 @@ namespace RTE {
 		bool NoteTransferComplete(NetPeerId connection, uint64_t bytes, std::string* error = nullptr);
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
 		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
+		bool NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk);
+		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
 		/// send it again on every pump. Returns whether this call was the first.
@@ -517,6 +570,8 @@ namespace RTE {
 		std::string m_IdentityPath;
 
 		NetWorldIdentity m_Identity;
+		uint64_t m_PrivateRound = 0;
+		double m_SimTickMs = 0;
 		NetMatchConfig m_Config;
 		NetWorldMembership m_Membership;
 		NetWorldFrameLog m_Tail;
