@@ -14,7 +14,8 @@
       ],
       "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.host.menu.txt",
-      "probe": "mp-rematch.host.probe.json"
+      "probe": "mp-rematch.host.probe.json",
+      "gameplay_epochs": 2
     },
     {
       "name": "client",
@@ -28,7 +29,8 @@
       "start_when": {
         "peer": "host",
         "event": "video_mark host-listening"
-      }
+      },
+      "gameplay_epochs": 2
     }
   ],
   "checklist": [

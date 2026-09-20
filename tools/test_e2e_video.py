@@ -392,6 +392,21 @@ def check_drop_receipts(results, scratch):
     return ok
 
 
+def check_gameplay_epochs(results, scratch):
+    video, stage = scratch / "epochs-video", scratch / "epochs-stage"
+    video.mkdir(); stage.mkdir()
+    rows = [{"frame": 0, "screen": "game", "sim_tick": 10, "wall_ms": 100},
+            {"frame": 1, "screen": "Pause", "sim_tick": 20, "wall_ms": 200},
+            {"frame": 2, "screen": "game", "sim_tick": 30, "wall_ms": 300},
+            {"frame": 3, "screen": "game", "sim_tick": 0, "wall_ms": 400},
+            {"frame": 4, "screen": "game", "sim_tick": 10, "wall_ms": 500}]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    driver.gameplay_signals(video, stage, 2)
+    first = json.loads((stage / "gameplay-started.json").read_text())
+    second = json.loads((stage / "gameplay-epoch-2.json").read_text())
+    return row(results, "epochs/waits-for-recorded-counter-reset", first["frame"] == 0 and second["frame"] == 3 and second["sim_tick"] == 0)
+
+
 def check_menu_commands(results):
     repo = TOOLS.parent
     source = (repo / "Source/Main.cpp").read_text() + (repo / "Source/Menus/MenuAutomation.cpp").read_text()
@@ -489,6 +504,7 @@ def main():
         ok &= check_resume_seams(results, scratch)
         ok &= check_menu_commands(results)
         ok &= check_drop_receipts(results, scratch)
+        ok &= check_gameplay_epochs(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",
