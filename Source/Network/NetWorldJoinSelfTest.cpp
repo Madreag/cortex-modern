@@ -2828,6 +2828,17 @@ namespace RTE {
 			for (int peer = 0; peer < 3; ++peer) if (!frames[peer].contains(frame)) return Fail("activation frame missing peer=" + std::to_string(peer + 1) + " frame=" + std::to_string(frame) + " reason=" + peers[peer].GetStats().timeoutReason);
 			for (int peer = 1; peer < 3; ++peer) if (frames[peer].at(frame) != frames[0].at(frame)) return Fail("agreed activation frames differ at " + std::to_string(frame));
 		}
+		NetLockstepTiming repeated;
+		repeated.senderPeerId = 1; repeated.peerId = 2; repeated.action = NetTimingAction::WorldAdmission;
+		repeated.sessionId = configs[0].sessionId; repeated.roundId = peers[0].GetRoundId(); repeated.revision = 1;
+		repeated.applyFrame = boundary; repeated.nextFrame = 4; repeated.delayFrames = 4; repeated.requiredPeers = 5;
+		repeated.seatIncarnations[1] = 1; repeated.neutralThroughFrame = boundary + 4; repeated.worldTransition = transition;
+		for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+			repeated.phase = phase; std::vector<uint8_t> bytes;
+			if (!NetLockstepCodec::Encode({repeated}, bytes) || !links[0].Send(remotes[0], NetTransportLane::ControlReliable, bytes, &error)) return Fail("repeat admission send: " + error);
+		}
+		for (int step = 0; step < 4; ++step) pump();
+		if (!peers[1].IsRunning()) return Fail("completed admission was refused on retransmission: " + peers[1].GetStats().timeoutReason);
 		const auto& activated = frames[0].at(boundary);
 		if (std::count_if(activated.commands.begin(), activated.commands.end(), [&](const auto& command) { const auto* value = std::get_if<NetGameWorldTransition>(&command.payload); return value && *value == transition; }) != 1) return Fail("brain handoff did not commit once at agreed activation");
 		return 0;
