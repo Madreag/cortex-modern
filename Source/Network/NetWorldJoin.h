@@ -152,6 +152,9 @@ namespace RTE {
 		bool spectator = false;
 		uint64_t snapshotTick = 0;        //!< B.
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
+		std::vector<uint8_t> pendingTail;
+		size_t pendingTailOffset = 0;
+		uint64_t pendingTailThrough = 0;
 		uint64_t deliveredThrough = 0;    //!< The last tail frame this connection has been sent.
 		uint64_t acknowledgedThrough = 0; //!< The last tail frame it says it applied.
 		uint64_t openedAtMs = 0;
@@ -368,6 +371,7 @@ namespace RTE {
 		uint64_t activationTick = 0;      //!< E, once the host has announced it.
 		std::string digest;
 		std::vector<NetLockstepFrame> tail;
+		std::vector<uint8_t> partialTail;
 	};
 
 	/// The catch-up report a joiner sends: what its sim has applied, never the host's frame.
@@ -501,6 +505,8 @@ namespace RTE {
 		bool NoteTransferComplete(NetPeerId connection, uint64_t bytes, std::string* error = nullptr);
 		bool NoteTransferProgress(NetPeerId connection, uint16_t ackedChunks, uint16_t totalChunks);
 		bool NoteDeliveredThrough(NetPeerId connection, uint64_t frame);
+		bool NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk);
+		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
 		/// send it again on every pump. Returns whether this call was the first.

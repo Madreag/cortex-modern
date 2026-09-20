@@ -226,7 +226,7 @@ namespace RTE {
 		static void ReleaseWorldCatchUp();
 		static uint64_t WorldCatchUpAppliedThrough();
 		static uint64_t WorldCatchUpActivationTick();
-		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs);
+		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs = 0);
 		static uint64_t WorldCatchUpWorkTicks();
 		static uint64_t WorldCatchUpWorkUs();
 		static uint64_t WorldCatchUpPriorInputThrough();

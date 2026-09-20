@@ -1248,6 +1248,7 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			m_WorldCatchUp.tail.clear();
 			if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false; };
 				const auto local = std::make_shared<LocalState>();
@@ -2820,23 +2821,8 @@ static std::string ResyncSaveName() {
 		if (session.phase != NetWorldJoinPhase::CatchingUp) {
 			return;
 		}
-		std::vector<std::vector<uint8_t>> tail;
-		uint64_t lastCopied = 0;
-		if (host.Tail().CopyFrom(session.deliveredThrough + 1, 32, 40ULL * 1024ULL, tail, &lastCopied) == 0) {
-			return;
-		}
 		std::vector<uint8_t> packed;
-		for (const std::vector<uint8_t>& frame: tail) {
-			const uint32_t size = static_cast<uint32_t>(frame.size());
-			packed.push_back(static_cast<uint8_t>(size));
-			packed.push_back(static_cast<uint8_t>(size >> 8));
-			packed.push_back(static_cast<uint8_t>(size >> 16));
-			packed.push_back(static_cast<uint8_t>(size >> 24));
-			packed.insert(packed.end(), frame.begin(), frame.end());
-		}
-		if (packed.empty() || packed.size() > NetLobbyProtocol::c_MaxStateChunkBytes) {
-			return;
-		}
+		if (!host.NextTailChunk(session.connection, packed)) return;
 		NetLobbyStateChunk chunk;
 		chunk.transferId = c_NetWorldTailTransferId;
 		chunk.totalBytes = static_cast<uint32_t>(packed.size());
@@ -2848,7 +2834,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		if (lobby.SendPayloadTo(lobbyPeer, chunk, nullptr)) {
-			(void)host.NoteDeliveredThrough(session.connection, lastCopied);
+			host.NoteTailChunkSent(session.connection, chunk.bytes.size());
 		}
 	}
 
@@ -3210,25 +3196,30 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::StepWorldJoinCatchUpClient(NetLobbySession& lobby, NetWorldCatchUpClient& catchUp, uint64_t* outRefusal) {
 		if (outRefusal) *outRefusal = 0;
-		std::vector<uint8_t> packed = lobby.TakePendingTailBytes();
+		std::vector<uint8_t> incoming = lobby.TakePendingTailBytes();
+		if (incoming.size() + catchUp.partialTail.size() > 32ULL * 1024 * 1024) {
+			ScenarioRunner::SetControllerReplayError("private tail exceeds its bounded receive buffer"); return;
+		}
+		catchUp.partialTail.insert(catchUp.partialTail.end(), incoming.begin(), incoming.end());
+		const auto& packed = catchUp.partialTail;
 		std::vector<NetLockstepFrame> later;
 		size_t offset = 0;
 		while (offset + 4 <= packed.size()) {
 			const uint32_t size = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
 			                      (static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+			if (size == 0 || size > 2 * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes) {
+				ScenarioRunner::SetControllerReplayError("invalid committed tail record length"); return;
+			}
+			if (packed.size() - offset - 4 < size) break;
 			offset += 4;
-			if (offset + size > packed.size()) {
-				break;
-			}
 			NetLockstepFrame frame;
-			if (DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + static_cast<std::ptrdiff_t>(offset),
-			                                                              packed.begin() + static_cast<std::ptrdiff_t>(offset + size)),
-			                                          frame, nullptr)) {
-				later.push_back(frame);
-				catchUp.tail.push_back(std::move(frame));
+			std::string error;
+			if (!DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + size), frame, &error)) {
+				ScenarioRunner::SetControllerReplayError("invalid committed tail: " + error); return;
 			}
-			offset += size;
+			later.push_back(std::move(frame)); offset += size;
 		}
+		catchUp.partialTail.erase(catchUp.partialTail.begin(), catchUp.partialTail.begin() + offset);
 		if (!later.empty()) {
 			ScenarioRunner::AppendWorldCatchUp(std::move(later));
 		}
@@ -4396,7 +4387,7 @@ static std::string ResyncSaveName() {
 			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) return true;
 			if (reason.starts_with("Your connection needs")) {
 				m_RejoinOutcome = "waiting_for_delay";
-				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
+				if (!m_WorldJoin.IsPrivateMatch()) m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
 			}
 			return false;
 		}

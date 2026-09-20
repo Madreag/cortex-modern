@@ -1670,6 +1670,17 @@ namespace RTE {
 				*error = "the catch-up tail bypassed committed hold or delay application";
 				return finish(false);
 			}
+			ScenarioRunner::NoteWorldCatchUpTickCost(41, 5000, 10000);
+			record.commands.clear(); record.targetFrame = 42;
+			auto later = record; later.targetFrame = 43;
+			ScenarioRunner::AppendWorldCatchUp({record, later});
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(42, ready, error)) return finish(false);
+			ScenarioRunner::NoteWorldCatchUpTickCost(42, 5000, 1000000);
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(43, ready, error)) return finish(false);
+			ScenarioRunner::NoteWorldCatchUpTickCost(43, 5000, 1025000);
+			if (ScenarioRunner::WorldCatchUpWorkTicks() != 3 || ScenarioRunner::WorldCatchUpWorkUs() != 35000) {
+				*error = "catch-up capacity counted absent tail time or hid queued work behind render time"; return finish(false);
+			}
 			return finish(true);
 		}
 

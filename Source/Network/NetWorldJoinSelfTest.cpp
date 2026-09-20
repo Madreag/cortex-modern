@@ -2640,6 +2640,39 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestLargePrivateTailChunks() {
+		std::string error;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A33);
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 1; image.tick = 40; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state";
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		NetLockstepFrame frame = MakeCommittedFrame(41, 0);
+		frame.frames.clear();
+		for (int64_t uid = 1; uid <= 1024; ++uid) {
+			ControllerFrame controller; controller.actorUniqueID = uid; controller.inputMode = static_cast<uint8_t>(Controller::CIM_PLAYER);
+			frame.frames.push_back(controller);
+		}
+		if (!host.Tail().Append(frame, &error)) return Fail(error);
+		WorldLobbyPair pair;
+		if (!pair.Open(47139, &error) || !pair.host.BindLateRemote(2, pair.hostRemote, &error) || !ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) return Fail(error);
+		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.snapshotTick = client.appliedThrough = 40;
+		size_t chunks = 0;
+		while (host.FindSession(42)->deliveredThrough < 41 && chunks++ < 32) {
+			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
+			pair.Pump(1);
+			NetMatchService::StepWorldJoinCatchUpClient(pair.client, client);
+			if (host.FindSession(42)->deliveredThrough < 41 && ScenarioRunner::WorldCatchUpHasFrame(41)) return Fail("partial tail bytes became a committed tick");
+		}
+		NetLockstepReadyFrame applied;
+		const bool exact = chunks > 1 && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, applied, &error) && applied.remoteFrames == frame.frames && client.partialTail.empty();
+		ScenarioRunner::ReleaseWorldCatchUp();
+		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -5739,6 +5772,7 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
+		if (std::strcmp(name, "private-large-tail") == 0) return TestLargePrivateTailChunks();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
 			s_FailTag = "net-world-restart-selftest";
@@ -5951,6 +5985,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
+		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		{
 			std::string error;

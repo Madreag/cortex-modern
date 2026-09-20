@@ -845,6 +845,7 @@ namespace RTE {
 				visible.push_back(toast.record);
 			}
 		}
+		if (WorldCatchUpActive()) visible.push_back({s_WorldCatchUpAppliedThrough, "seat_held", "Held - AI in control - rejoining", GetLockstepLocalPeerId()});
 		return visible;
 	}
 
@@ -1126,12 +1127,16 @@ namespace RTE {
 	}
 
 	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0;
+	static uint64_t s_CatchUpLastWallUs = 0;
+	static bool s_CatchUpHadQueuedWork = false;
 
-	void ScenarioRunner::NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs) {
+	void ScenarioRunner::NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs, uint64_t wallUs) {
 		if (!s_WorldCatchUpActive || tick <= s_CatchUpLastMeasured) return;
 		s_CatchUpLastMeasured = tick;
 		++s_CatchUpWorkTicks;
-		s_CatchUpWorkUs += workUs;
+		s_CatchUpWorkUs += s_CatchUpHadQueuedWork && wallUs > s_CatchUpLastWallUs ? std::max(workUs, wallUs - s_CatchUpLastWallUs) : workUs;
+		s_CatchUpLastWallUs = wallUs;
+		s_CatchUpHadQueuedWork = WorldCatchUpHasFrame(tick + 1);
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
@@ -1149,7 +1154,8 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
-		s_CatchUpWorkTicks = s_CatchUpWorkUs = 0;
+		s_CatchUpWorkTicks = s_CatchUpWorkUs = s_CatchUpLastWallUs = 0;
+		s_CatchUpHadQueuedWork = false;
 		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;
