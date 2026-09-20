@@ -1227,7 +1227,7 @@ end
 local function birthId(ctx, value, what)
 	local id = _ScriptGraphValueSerial(value)
 	if id < 1 or id > ctx.base then
-		problem(ctx, "a " .. what .. " with no birth number")
+		problem(ctx, "a " .. what .. " with no birth number (serial=" .. numberText(id) .. ", horizon=" .. numberText(ctx.base) .. ")")
 		return nil
 	end
 	return id
@@ -3731,7 +3731,6 @@ static int ScriptGraphNoteUncacheable(lua_State* L) {
 	CheckpointGraphIndex::Get().NoteUncacheableRoots(static_cast<size_t>(luaL_optnumber(L, 1, 0)));
 	return 0;
 }
-
 // An object's number and the state's counter are the archive's identities; scripts never see them.
 static int ScriptGraphValueSerial(lua_State* L) {
 	lua_pushnumber(L, static_cast<lua_Number>(luaJIT_value_serial(L, 1)));
@@ -5814,6 +5813,30 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	}
 	CollectStrings(m_State, -1, problems);
 	const int roots = lua_gettop(m_State) - 1;
+	// The script receiver is a graph object even when no saved field or coroutine refers to it yet.
+	lua_getglobal(m_State, "_ScriptGraphCallbacks");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, "roots");
+		if (lua_istable(m_State, -1)) {
+			lua_pushnil(m_State);
+			while (lua_next(m_State, -2)) {
+				const long uid = lua_isstring(m_State, -2) ? static_cast<long>(std::strtol(lua_tostring(m_State, -2), nullptr, 10)) : 0;
+				MovableObject* mo = g_MovableMan.FindObjectByUniqueID(uid);
+				auto* rep = luabind::detail::is_class_object(m_State, -1);
+				if (!mo || mo->GetLuaState() != this || !mo->ObjectScriptsInitialized() || !rep || rep->ptr() != mo) {
+					problems.push_back("invalid script receiver for object " + std::to_string(uid));
+				} else {
+					lua_getglobal(m_State, "_ScriptedObjects");
+					lua_pushvalue(m_State, -2);
+					lua_setfield(m_State, -2, std::to_string(uid).c_str());
+					lua_pop(m_State, 1);
+				}
+				lua_pop(m_State, 1);
+			}
+		}
+		lua_pop(m_State, 1);
+	}
+	lua_pop(m_State, 1);
 	if (lua_istable(m_State, roots)) {
 		lua_pushnil(m_State);
 		while (lua_next(m_State, roots) != 0) {
@@ -5873,6 +5896,20 @@ void LuaStateWrapper::CaptureScriptCallbacks() {
 	const int top = lua_gettop(m_State);
 	lua_newtable(m_State);
 	const int callbacks = lua_gettop(m_State);
+	lua_newtable(m_State);
+	lua_getglobal(m_State, "_ScriptedObjects");
+	if (lua_istable(m_State, -1)) {
+		std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
+		objects.insert(m_AddedRegisteredMOs.begin(), m_AddedRegisteredMOs.end());
+		for (const MovableObject* mo: objects) {
+			if (!mo->ObjectScriptsInitialized()) continue;
+			const std::string key = std::to_string(mo->GetUniqueID());
+			lua_getfield(m_State, -1, key.c_str());
+			lua_setfield(m_State, -3, key.c_str());
+		}
+	}
+	lua_pop(m_State, 1);
+	lua_setfield(m_State, callbacks, "roots");
 	if (this == &g_LuaMan.GetMasterScriptState()) {
 		if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity())) {
 			lua_newtable(m_State);
@@ -6908,6 +6945,55 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		// An adopted root need not be on a coroutine's stack until its next resume.
+		auto first = std::make_unique<MOPixel>();
+		auto second = std::make_unique<MOPixel>();
+		for (MOPixel* object: {first.get(), second.get()}) {
+			object->Create();
+			object->MoveScriptsToState(*this);
+			object->AdoptScriptObject();
+		}
+		const std::string firstKey = std::to_string(first->GetUniqueID());
+		const std::string secondKey = std::to_string(second->GetUniqueID());
+		const bool created = RunScriptString("local self = _ScriptedObjects[\"" + firstKey + "\"]; self.job = coroutine.create(function(first, second) local heldFirst, heldSecond = first, second; coroutine.yield(); return heldFirst.UniqueID + heldSecond.UniqueID end)") == 0;
+		std::string before, after;
+		std::vector<std::string> problems;
+		const bool captured = created && SerializeScriptGraph(before, problems);
+		// Rebuilding a world allocates helper tables before it adopts the saved roots.
+		for (size_t index = 0; index < 5000; ++index) { lua_newtable(m_State); lua_pop(m_State, 1); }
+		for (MOPixel* object: {first.get(), second.get()}) {
+			object->DestroyScriptState();
+			object->MoveScriptsToState(*this);
+			object->AdoptScriptObject();
+		}
+		const bool restored = captured && RestoreScriptGraph(before, problems);
+		const bool resumed = restored && RunScriptString("assert(coroutine.resume(_ScriptedObjects[\"" + firstKey + "\"].job, _ScriptedObjects[\"" + firstKey + "\"], _ScriptedObjects[\"" + secondKey + "\"]))") == 0;
+		const bool recaptured = resumed && SerializeScriptGraph(after, problems);
+		for (const std::string& problem: problems) std::cout << "[script-graph-selftest] root coroutine: " << problem << std::endl;
+		std::cout << "[script-graph-selftest] " << (recaptured ? "PASS" : "FAIL") << " adopted_root_coroutine_births captured=" << captured << " restored=" << restored << " resumed=" << resumed << std::endl;
+		checkpointValues = recaptured && checkpointValues;
+		if (recaptured) {
+			CaptureScriptCallbacks();
+			const bool identical = RunScriptString("local roots = {}; roots[\"" + firstKey + "\"] = _ScriptGraphInstance(_ScriptedObjects[\"" + firstKey + "\"]); roots[\"" + secondKey + "\"] = _ScriptGraphInstance(_ScriptedObjects[\"" + secondKey + "\"]); " + R"lua(
+local before, problems = _ScriptGraph.serialize(roots)
+assert(#problems == 0, table.concat(problems, "; "))
+_ScriptGraph.stashObjects()
+local restored, failures = _ScriptGraph.deserialize(before, true)
+assert(#failures == 0, table.concat(failures, "; "))
+local after, repeated = _ScriptGraph.serialize(restored)
+assert(#repeated == 0, table.concat(repeated, "; "))
+assert(after == before, "the frozen coroutine graph changed")
+_ScriptGraph.releaseObjects()
+)lua") == 0;
+			std::cout << "[script-graph-selftest] " << (identical ? "PASS" : "FAIL") << " coroutine_two_userdata_set_aside_bytes" << std::endl;
+			checkpointValues = identical && checkpointValues;
+			lua_pushnil(m_State);
+			lua_setglobal(m_State, "_ScriptGraphCallbacks");
+		}
+		for (MOPixel* object: {first.get(), second.get()}) object->DestroyScriptState();
+	}
+
 	{
 		auto* actor = new Actor();
 		actor->Create();
