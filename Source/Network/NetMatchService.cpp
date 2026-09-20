@@ -3334,9 +3334,16 @@ static std::string ResyncSaveName() {
 					if (!decoded.ok) continue;
 					const auto* decision = std::get_if<NetLockstepTiming>(&decoded.packet.payload);
 					if (!decision || decision->senderPeerId != m_CatchUpCoordinator->GetHostPeerId() || decision->sessionId != live.sessionId || decision->roundId != live.roundId) continue;
+					if (decision->action == NetTimingAction::Delay && decision->phase == NetTimingPhase::Commit && decision->applyFrame >= m_WorldCatchUp.activationTick)
+						live.initialDelayChanges[decision->peerId][decision->applyFrame] = decision->delayFrames;
 					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
 						live.initialSeatReclaims[m_LocalPeerId] = {m_LocalPeerId, decision->authorityGeneration, decision->revision,
 						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames, decision->neutralThroughFrame};
+				}
+				if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
+				for (const auto& [peer, changes]: live.initialDelayChanges) {
+					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
+					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
 				}
 				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
 				m_Runner->ConfigurePrivateJoin(live);
@@ -3345,7 +3352,7 @@ static std::string ResyncSaveName() {
 				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, &error);
 			else {
 				for (auto it = m_CatchUpWirePackets.begin(); it != m_CatchUpWirePackets.end();) {
-					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start)) {
+					if (it->bytes.size() >= NetLockstepCodec::c_HeaderBytes && (it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Start) || it->bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Timing))) {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}

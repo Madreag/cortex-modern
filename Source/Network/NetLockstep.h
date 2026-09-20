@@ -365,6 +365,7 @@ namespace RTE {
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
 		std::map<uint8_t, uint32_t> peerIncarnations;
 		std::map<uint8_t, uint64_t> initialPeerLeaves;
+		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
 		uint32_t timeoutMs = 500;
@@ -785,6 +786,7 @@ namespace RTE {
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
+		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
@@ -1111,6 +1113,7 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;

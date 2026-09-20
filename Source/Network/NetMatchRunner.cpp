@@ -727,6 +727,7 @@ namespace RTE {
 			lockstepConfig.migrationGeneration = m_PrivateJoinConfig->migrationGeneration;
 			lockstepConfig.originalRoundConfigHash = m_PrivateJoinConfig->originalRoundConfigHash;
 			lockstepConfig.initialPeerLeaves = m_PrivateJoinConfig->initialPeerLeaves;
+			lockstepConfig.initialDelayChanges = m_PrivateJoinConfig->initialDelayChanges;
 			lockstepConfig.initialSeatHolds = m_PrivateJoinConfig->initialSeatHolds;
 			lockstepConfig.initialSeatReclaims = m_PrivateJoinConfig->initialSeatReclaims;
 			lockstepConfig.peerIncarnations = m_PrivateJoinConfig->peerIncarnations;
