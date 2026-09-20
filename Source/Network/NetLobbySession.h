@@ -256,6 +256,8 @@ namespace RTE {
 		bool HasRequiredOccupancy() const;
 		bool AllConfigAcked() const;
 		bool AllRemoteReady() const;
+		/// Names the gate a lobby that cannot start is still waiting on, at most once every two seconds.
+		void ReportStartWait();
 
 		INetTransport* m_Transport = nullptr;
 		NetLobbySessionConfig m_Config;
@@ -269,6 +271,7 @@ namespace RTE {
 		uint64_t m_LastConfigSentMs = 0;
 		uint64_t m_LastPeerStateSentMs = 0;
 		uint64_t m_LastReceiveMs = 0;
+		uint64_t m_LastStartWaitLogMs = 0;
 		uint64_t m_SessionClockBaseMs = 0;
 		bool m_PeerStatePending = false;
 		bool m_ConfigResendDue = false; //!< A republished revision goes out on the next tick, not a resend interval later.

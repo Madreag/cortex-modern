@@ -1752,6 +1752,102 @@ namespace RTE {
 			return true;
 		}
 
+		// A loopback whose measured ping the test drives, so the host's automatic delay re-sizes the way a
+		// real link's does while the lobby is still agreeing its configuration.
+		class PingingLoopbackTransport : public INetTransport {
+		public:
+			explicit PingingLoopbackTransport(LoopbackTransport& inner) : m_Inner(inner) {}
+			bool StartHost(uint16_t port, std::string* error = nullptr) override { return m_Inner.StartHost(port, error); }
+			bool Connect(const std::string& address, uint16_t port, std::string* error = nullptr) override { return m_Inner.Connect(address, port, error); }
+			bool Send(NetPeerId peerId, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override { return m_Inner.Send(peerId, lane, bytes, error, congested); }
+			void Disconnect(NetPeerId peerId, const std::string& reason) override { m_Inner.Disconnect(peerId, reason); }
+			void Stop() override { m_Inner.Stop(); }
+			std::vector<NetTransportEvent> PollEvents() override { return m_Inner.PollEvents(); }
+			uint32_t GetPeerPingMs(NetPeerId) const override { return m_PingMs; }
+			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; }
+
+		private:
+			LoopbackTransport& m_Inner;
+			uint32_t m_PingMs = 0;
+		};
+
+		// The host presses Start once, as the menu and the match service do. An automatic delay re-size
+		// republishes the configuration; the pending start must survive it, or the round never begins.
+		bool TestLobbyAutoDelayResizeKeepsRequestedStart(std::string* error) {
+			LoopbackTransport hostInner;
+			LoopbackTransport clientInner;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId;
+			NetPeerId clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43021, hostInner, clientInner, hostRemotePeer, clientRemotePeer, error)) {
+				return false;
+			}
+			LoopbackTransportConfig lag;
+			lag.latencyMs = 200; // symmetric legs: one config/ack round trip costs 400 ms
+			hostInner.SetFaultConfig(lag);
+			clientInner.SetFaultConfig(lag);
+			PingingLoopbackTransport hostTransport(hostInner);
+			PingingLoopbackTransport clientTransport(clientInner);
+			hostTransport.SetPingMs(200);
+
+			NetMatchConfig matchConfig = MakeConfig();
+			matchConfig.delayPolicy = NetMatchDelayPolicy::Auto;
+			NetLobbySession hostLobby;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true;
+			hostConfig.localPeerId = 1;
+			hostConfig.remotePeerId = 2;
+			hostConfig.remoteTransportPeerId = hostRemotePeer;
+			hostConfig.matchConfig = matchConfig;
+			hostConfig.autoStart = false;
+			hostConfig.autoInputDelay = true;
+			NetLobbySessionConfig clientConfig = hostConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.autoReady = true;
+			clientConfig.autoInputDelay = false;
+			if (!hostLobby.Start(hostTransport, hostConfig, error) || !clientLobby.Start(clientTransport, clientConfig, error)) {
+				return false;
+			}
+			const uint16_t firstDelay = NetMatchConfigUtil::PeerInputDelay(hostLobby.GetMatchConfig(), 2);
+			for (uint64_t now = 0; now <= 20000; now += 10) {
+				if (now == 1000) {
+					// The one press, then the link's round trip doubles: the re-size lands on a lobby that
+					// is already waiting to start.
+					hostLobby.RequestStart();
+					hostTransport.SetPingMs(401);
+				}
+				hostLobby.Tick(now);
+				clientLobby.Tick(now);
+				if (hostLobby.IsFailed() || hostLobby.IsRejected() || clientLobby.IsFailed() || clientLobby.IsRejected()) {
+					*error = "auto-delay lobby failed; host=" + std::string(NetLobbySession::StateName(hostLobby.GetState())) +
+					         " client=" + NetLobbySession::StateName(clientLobby.GetState());
+					return false;
+				}
+				if (hostLobby.IsStarted() && clientLobby.IsStarted()) {
+					if (hostLobby.GetStats().configRepublishes == 0) {
+						*error = "the auto-delay lobby started without re-sizing, so the start survived nothing";
+						return false;
+					}
+					if (NetMatchConfigUtil::PeerInputDelay(hostLobby.GetMatchConfig(), 2) <= firstDelay ||
+					    hostLobby.GetMatchConfigHash() != clientLobby.GetMatchConfigHash()) {
+						*error = "the started round did not carry the re-sized delay on both peers";
+						return false;
+					}
+					return true;
+				}
+				hostInner.AdvanceTimeMs(10);
+				clientInner.AdvanceTimeMs(10);
+			}
+			*error = "the lobby never started after an automatic delay re-size; host=" +
+			         std::string(NetLobbySession::StateName(hostLobby.GetState())) +
+			         " republishes=" + std::to_string(hostLobby.GetStats().configRepublishes) +
+			         " client=" + NetLobbySession::StateName(clientLobby.GetState());
+			return false;
+		}
+
 		bool TestLobbyManualReadyCanWait(std::string* error) {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -11837,6 +11933,7 @@ namespace RTE {
 		if (!TestLiveReportDumpsSurviveBadBytes(&error)) return fail(error);
 		if (!TestLobbyManualReadyStart(&error)) return fail(error);
 		if (!TestHostRepairEndsBeforeItsBoundary(&error)) return fail(error);
+		if (!TestLobbyAutoDelayResizeKeepsRequestedStart(&error)) return fail(error);
 		if (!TestLobbyManualReadyCanWait(&error)) return fail(error);
 		if (!TestLobbyReadyDoesNotStartBeforeConfigAck(&error)) return fail(error);
 		if (!TestWorldLobbyRequiresPlayersInsteadOfCapacity(&error)) return fail(error);
