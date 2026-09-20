@@ -189,6 +189,13 @@ void MenuMan::UpdateLocalPauseMenu() {
 			// The leave itself is the running-service path the game loop takes when the activity is no longer in play.
 			g_ActivityMan.PauseActivity(true, true);
 			break;
+		case PauseMenuGUI::PauseMenuUpdateResult::MatchEnded:
+			CloseLocalPauseMenu();
+			if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+				g_NetMatchService.FinishMatch("Match ended by host");
+			}
+			m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeIn);
+			break;
 		default:
 			break;
 	}
