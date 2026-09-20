@@ -716,6 +716,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetSession> session;
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetMatchRunner> runner;
+		bool departedHost = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (m_State != NetMatchServiceState::Completed || !ActiveWireLocked() || !m_Session || !m_Runner) {
@@ -731,12 +732,13 @@ static std::string ResyncSaveName() {
 				return false;
 			}
 			DrainPendingSessionEventsLocked(false);
+			departedHost = !m_IsHost || (m_MigrationGeneration != 0 && m_MigrationMembers.size() == 1);
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Rematch unavailable";
 				std::cout << "[net-match] rematch unavailable: " << m_Session->BuildRejectText() << std::endl;
-				m_ErrorText = m_IsHost ? "The other players left the match" : "The host left the match";
+				m_ErrorText = departedHost ? "The host left the match" : "The other players left the match";
+				m_StatusText = m_ErrorText;
 				if (error) *error = m_ErrorText;
 				return false;
 			}
@@ -802,7 +804,7 @@ static std::string ResyncSaveName() {
 		m_CancelRequested.store(false);
 		m_ReadyRequested.store(false);
 		m_StartRequested.store(false);
-		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release());
+		m_Worker = std::thread(&NetMatchService::WorkerRematchMain, this, std::move(link), session.release(), coordinator.release(), runner.release(), departedHost);
 		return true;
 	}
 
@@ -1393,7 +1395,7 @@ static std::string ResyncSaveName() {
 
 	// Same shape as WorkerMain: the objects live as worker locals while the lobby round runs, so
 	// report/snapshot readers never race a mid-mutation runner; they move back in when it settles.
-	void NetMatchService::WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw) {
+	void NetMatchService::WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, bool departedHost) {
 		std::unique_ptr<NetSession> session(sessionRaw);
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
@@ -1437,11 +1439,13 @@ static std::string ResyncSaveName() {
 				m_AdoptedMatchConfig = m_Runner->GetMatchConfig();
 			} else {
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Rematch setup failed";
 				std::cout << "[net-match] rematch setup failed: " << error << std::endl;
-				m_ErrorText = m_Runner->DidLoseHostDuringSetup() ? "The host left the match" :
-				              error == "rematch roster: not enough players for a rematch" ? "The other players left the match" :
+				const bool missingPlayers = error == "rematch roster: not enough players for a rematch";
+				const bool lostHost = m_Runner->DidLoseHostDuringSetup() || (departedHost && missingPlayers);
+				m_ErrorText = lostHost ? "The host left the match" :
+				              missingPlayers ? "The other players left the match" :
 				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
+				m_StatusText = lostHost || missingPlayers ? m_ErrorText : "Rematch setup failed";
 			}
 			m_WorkerDone = true;
 		}
