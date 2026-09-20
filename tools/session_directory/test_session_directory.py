@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import http.client
 import json
 import logging
@@ -101,6 +103,94 @@ class DirectoryTests(unittest.TestCase):
         self.server: Optional[RunningServer] = None
         self.tls_dir: Optional[tempfile.TemporaryDirectory[str]] = None
         self.use_tls = False
+
+    def test_coturn_offer_ttl_owner_rate_and_expiry(self) -> None:
+        store = session_directory.SessionDirectory(300, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret",
+            "relay_urls": ["turn:relay.example:3478?transport=udp", "turn:relay.example:3478?transport=tcp", "turns:relay.example:5349?transport=tcp"],
+        })
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        data = {"token": row["token"], "match_id": "match:1", "ttl": 600}
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
+            self.assertEqual(set(offer), {"match_id", "expires_at", "iceServers"})
+            self.assertEqual(offer["expires_at"], 1600)
+            server = offer["iceServers"][0]
+            self.assertTrue(server["username"].startswith("1600:"))
+            expected = base64.b64encode(hmac.new(b"server-only-secret", server["username"].encode(), hashlib.sha1).digest()).decode()
+            self.assertEqual(server["credential"], expected)
+            self.assertNotIn("server-only-secret", json.dumps(offer))
+            self.assertEqual(store.get_ice_servers(row["session_id"], 11), offer)
+            for _ in range(session_directory.TURN_REQUESTS_PER_MIN - 1):
+                store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
+            with self.assertRaises(session_directory.TurnError) as limited:
+                store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
+            self.assertEqual(limited.exception.status, 429)
+        with mock.patch.object(session_directory.time, "time", return_value=1600):
+            with self.assertRaises(session_directory.TurnError):
+                store.get_ice_servers(row["session_id"], 12)
+        for bad in ({**data, "token": "wrong"}, {**data, "ttl": 0}, {**data, "ttl": 86401}, {**data, "static_auth_secret": "never"}):
+            with self.assertRaises((PermissionError, session_directory.FieldError)):
+                store.mint_ice_servers(row["session_id"], bad, INSTALL_KEY, 12)
+        with self.assertRaises(PermissionError):
+            store.mint_ice_servers(row["session_id"], data, "fedcba9876543210", 12)
+        store.heartbeat(row["session_id"], {"token": row["token"], "peer_count": 2, "seats_free": 1}, 13, "fedcba9876543210")
+        with mock.patch.object(session_directory.time, "time", return_value=1601):
+            replacement = store.mint_ice_servers(row["session_id"], data, "fedcba9876543210", 14)
+        self.assertEqual(replacement["expires_at"], 2201)
+        self.assertNotEqual(replacement["iceServers"][0]["username"], server["username"])
+        with self.assertRaises(PermissionError):
+            store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 14)
+
+    def test_fixed_offer_and_secret_refusal(self) -> None:
+        store = session_directory.SessionDirectory(300, 5)
+        row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
+        server = {"urls": ["turn:private.example:3478?transport=udp"], "username": "private-user", "credential": "private-password"}
+        body = {"token": row["token"], "match_id": "fixed:1", "ttl": 600, "iceServers": [server]}
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            offer = store.mint_ice_servers(row["session_id"], body, INSTALL_KEY, 11)
+        self.assertEqual(offer, {"match_id": "fixed:1", "expires_at": 1600, "iceServers": [server]})
+        server["static_auth_secret"] = "never-publish"
+        with self.assertRaises(session_directory.FieldError):
+            store.mint_ice_servers(row["session_id"], body, INSTALL_KEY, 12)
+
+    def test_cloudflare_offer_mocks_the_http_boundary(self) -> None:
+        provider = session_directory.TurnCredentialProvider({"backend": "cloudflare", "turn_key_id": "key-id", "api_token": "backend-token"})
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 201
+        response.read.return_value = json.dumps({"iceServers": [
+            {"urls": ["stun:stun.cloudflare.com:3478"]},
+            {"urls": ["turn:turn.cloudflare.com:3478?transport=udp", "turns:turn.cloudflare.com:5349?transport=tcp"], "username": "temporary-user", "credential": "temporary-password"},
+        ]}).encode()
+        with mock.patch.object(session_directory, "urlopen", return_value=response) as fetch:
+            offer = provider.mint("match:2", 900, 1000)
+        request = fetch.call_args.args[0]
+        self.assertEqual(request.full_url, "https://rtc.live.cloudflare.com/v1/turn/keys/key-id/credentials/generate-ice-servers")
+        self.assertEqual(json.loads(request.data), {"ttl": 900})
+        self.assertEqual(request.get_header("Authorization"), "Bearer backend-token")
+        self.assertEqual(offer["expires_at"], 1900)
+        self.assertEqual(offer["iceServers"][1]["credential"], "temporary-password")
+        self.assertNotIn("backend-token", json.dumps(offer))
+        with mock.patch.object(session_directory, "urlopen", side_effect=OSError("backend-token")):
+            with self.assertRaises(session_directory.TurnError) as refused:
+                provider.mint("match:2", 900, 1000)
+        self.assertNotIn("backend-token", str(refused.exception))
+
+    def test_ice_endpoint_refuses_missing_identity_and_host_token(self) -> None:
+        self.start()
+        status, row = self.call("POST", "/v1/sessions", sample_register())
+        self.assertEqual(status, 200)
+        path = "/v1/sessions/" + row["session_id"] + "/ice-servers"
+        body = {"token": "wrong", "match_id": "match:3", "ttl": 600}
+        status, _ = self.call("POST", path, body)
+        self.assertEqual(status, 403)
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
+        connection.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 400)
+        response.read()
+        connection.close()
 
     def tearDown(self) -> None:
         if self.server is not None:

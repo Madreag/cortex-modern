@@ -1,4 +1,5 @@
 #include "GnsTransport.h"
+#include "SettingsMan.h"
 
 #include <algorithm>
 #include <chrono>
@@ -210,6 +211,10 @@ namespace RTE {
 				return false;
 			}
 
+			if (!RouteAllowed(connectionIt->second)) {
+				SetError(error, "ICE route refused by the player's Connection setting");
+				return false;
+			}
 			const EResult result = m_Interface->SendMessageToConnection(
 				connectionIt->second,
 				bytes.data(),
@@ -287,6 +292,7 @@ namespace RTE {
 		}
 
 		void Stop() {
+			m_P2PMode = -1;
 			if (!m_Interface) {
 				m_IsHost = false;
 				m_IsStarted = false;
@@ -335,6 +341,13 @@ namespace RTE {
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
+				if (m_P2PMode >= 0) {
+					PollCallbacks();
+					const auto connections = m_PeersByConnection;
+					for (const auto& [connection, peer] : connections) {
+						if (!RouteAllowed(connection)) RefuseRoute(connection);
+					}
+				}
 				// Drain delivered messages first: a close callback forgets the connection, which would
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
@@ -404,7 +417,7 @@ namespace RTE {
 				}
 
 				const auto peerIt = m_PeersByConnection.find(message->m_conn);
-				if (peerIt != m_PeersByConnection.end()) {
+				if (peerIt != m_PeersByConnection.end() && RouteAllowed(message->m_conn)) {
 					const uint8_t* data = static_cast<const uint8_t*>(message->m_pData);
 					m_PendingEvents.push_back({
 						NetTransportEventType::PacketReceived,
@@ -415,6 +428,20 @@ namespace RTE {
 				}
 				message->Release();
 			}
+		}
+
+		bool RouteAllowed(HSteamNetConnection connection) const {
+			if (m_P2PMode <= 0) return true;
+			SteamNetConnectionInfo_t info{};
+			if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) return true;
+			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
+			return GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
+		}
+
+		void RefuseRoute(HSteamNetConnection connection) {
+			const char* reason = m_P2PMode == 1 ? "Direct only refuses this relay route" : "Relay only refuses this direct route";
+			m_Interface->CloseConnection(connection, 0, reason, false);
+			HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
 		}
 
 		void OnConnectionStatusChanged(SteamNetConnectionStatusChangedCallback_t* info) {
@@ -430,6 +457,14 @@ namespace RTE {
 					}
 					break;
 				case k_ESteamNetworkingConnectionState_Connected:
+					if (!RouteAllowed(info->m_hConn)) {
+						RefuseRoute(info->m_hConn);
+						break;
+					}
+					if (m_IsHost && m_P2PMode >= 0) {
+						const auto peer = m_PeersByConnection.find(info->m_hConn);
+						if (peer != m_PeersByConnection.end()) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peer->second, NetTransportLane::ControlReliable, {}, {}});
+					}
 					if (!m_IsHost && info->m_hConn == m_ServerConnection) {
 						EnsureClientConnected(info->m_hConn);
 					}
@@ -460,7 +495,7 @@ namespace RTE {
 			m_PeersByConnection[connection] = peerId;
 			m_ConnectionsByPeer[peerId] = connection;
 			s_ConnectionOwners[connection] = this;
-			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			if (m_P2PMode < 0) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
 		}
 
 		void EnsureClientConnected(HSteamNetConnection connection) {
@@ -520,6 +555,7 @@ namespace RTE {
 
 		bool StartHostP2P(int virtualPort, const GnsP2PConfig& config, std::string* error) {
 			Stop();
+			m_P2PMode = config.connectionMode;
 			if (!Acquire(error)) {
 				return false;
 			}
@@ -555,6 +591,7 @@ namespace RTE {
 
 		bool ConnectP2P(ISteamNetworkingConnectionSignaling* signaling, const std::string& peerIdentity, int remoteVirtualPort, const GnsP2PConfig& config, std::string* error) {
 			Stop();
+			m_P2PMode = config.connectionMode;
 			if (!signaling) {
 				SetError(error, "GNS P2P connect needs a signaling object");
 				return false;
@@ -697,8 +734,19 @@ namespace RTE {
 			return std::to_string(s_ConnectionOwners.size()) + " connection(s) and " + std::to_string(listenSockets) + " listen socket(s)";
 		}
 
+		void UpdateListenerIceServers(const GnsP2PConfig& config) {
+			GnsTransport::ApplyIceServers(config);
+			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
+			auto* utils = SteamNetworkingUtils();
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnServerList.c_str());
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnUserList.c_str());
+			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
+		}
+
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
-			std::vector<SteamNetworkingConfigValue_t> connectionConfigs(8);
+			GnsTransport::ApplyIceServers(config);
+			std::vector<SteamNetworkingConfigValue_t> connectionConfigs(11);
 			connectionConfigs[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, reinterpret_cast<void*>(SteamNetConnectionStatusChangedCallback));
 			// The IP path's send budget and connected timeout, for the same reasons.
 			connectionConfigs[1].SetInt32(k_ESteamNetworkingConfig_SendBufferSize, 8 * 1024 * 1024);
@@ -708,6 +756,9 @@ namespace RTE {
 			connectionConfigs[5].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, config.iceEnable);
 			connectionConfigs[6].SetString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
 			connectionConfigs[7].SetInt32(k_ESteamNetworkingConfig_P2P_Transport_ICE_Implementation, config.iceImplementation);
+			connectionConfigs[8].SetString(k_ESteamNetworkingConfig_P2P_TURN_ServerList, config.turnServerList.c_str());
+			connectionConfigs[9].SetString(k_ESteamNetworkingConfig_P2P_TURN_UserList, config.turnUserList.c_str());
+			connectionConfigs[10].SetString(k_ESteamNetworkingConfig_P2P_TURN_PassList, config.turnPassList.c_str());
 			if (config.rendezvousLogLevel > 0) {
 				connectionConfigs.emplace_back();
 				connectionConfigs.back().SetInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, config.rendezvousLogLevel);
@@ -758,6 +809,7 @@ namespace RTE {
 		bool m_HasGnsRef = false;
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
+		int m_P2PMode = -1;
 		bool m_HasLingeringClose = false;
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
@@ -836,10 +888,20 @@ namespace RTE {
 	}
 
 	bool GnsTransport::StartHost(uint16_t port, std::string* error) {
+		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+			m_Impl->Stop();
+			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			return false;
+		}
 		return m_Impl->StartHost(port, error);
 	}
 
 	bool GnsTransport::Connect(const std::string& address, uint16_t port, std::string* error) {
+		if (SettingsMan::IsConstructed() && g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly) {
+			m_Impl->Stop();
+			SetError(error, "Relay only refuses direct IP; choose Automatic or Direct only");
+			return false;
+		}
 		return m_Impl->Connect(address, port, error);
 	}
 
@@ -892,6 +954,26 @@ namespace RTE {
 		return true;
 #else
 		return false;
+#endif
+	}
+
+	void GnsTransport::UpdateListenerIceServers(const GnsP2PConfig& config) {
+#ifdef CCCP_WITH_GNS
+		m_Impl->UpdateListenerIceServers(config);
+#else
+		(void)config;
+#endif
+	}
+
+	void GnsTransport::ApplyIceServers(const GnsP2PConfig& config) {
+#ifdef CCCP_WITH_GNS
+		if (!SteamNetworkingUtils()) return;
+		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_STUN_ServerList, config.stunServerList.c_str());
+		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_TURN_ServerList, config.turnServerList.c_str());
+		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_TURN_UserList, config.turnUserList.c_str());
+		SteamNetworkingUtils()->SetGlobalConfigValueString(k_ESteamNetworkingConfig_P2P_TURN_PassList, config.turnPassList.c_str());
+#else
+		(void)config;
 #endif
 	}
 

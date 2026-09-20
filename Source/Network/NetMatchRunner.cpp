@@ -521,6 +521,7 @@ namespace RTE {
 			}
 		}
 		NetLobbySessionConfig lobbyConfig;
+		bool relayReady = !m_Config.host || !m_Config.relayOffer || m_Config.relayOffer(m_MatchConfig.relay);
 		lobbyConfig.pendingEvents = std::move(pendingEvents);
 		lobbyConfig.host = m_Config.host;
 		lobbyConfig.localPeerId = LocalLockstepPeerId(session);
@@ -530,7 +531,7 @@ namespace RTE {
 		lobbyConfig.displayName = m_Config.sessionConfig.displayName;
 		lobbyConfig.platform = m_Config.sessionConfig.localIdentity.platform;
 		lobbyConfig.autoReady = m_Config.autoReady;
-		lobbyConfig.autoStart = m_Config.autoStart;
+		lobbyConfig.autoStart = m_Config.autoStart && relayReady;
 		lobbyConfig.session = &session;
 		lobbyConfig.sessionNowMs = m_Config.nowMs;
 		lobbyConfig.autoInputDelay = m_Config.autoInputDelay;
@@ -576,7 +577,16 @@ namespace RTE {
 			if (m_Config.readyRequested && m_Config.readyRequested->load()) {
 				m_Lobby.SetLocalReady(true);
 			}
-			if (m_Config.startRequested && m_Config.startRequested->exchange(false)) {
+			if (m_Config.host && m_Config.relayOffer) {
+				NetRelayConfig offer;
+				const bool wasReady = relayReady;
+				relayReady = m_Config.relayOffer(offer);
+				if (relayReady) {
+					SetRelayOffer(offer);
+					if (!wasReady && m_Config.autoStart) m_Lobby.RequestStart();
+				}
+			}
+			if (relayReady && m_Config.startRequested && m_Config.startRequested->exchange(false)) {
 				m_Lobby.RequestStart();
 			}
 			// An accepted host-options draft becomes this round's next configuration revision here, on

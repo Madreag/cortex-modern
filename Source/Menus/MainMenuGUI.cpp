@@ -897,6 +897,10 @@ bool MainMenuGUI::HandleInputEvents() {
 				const int frames = std::clamp<int>(static_cast<int>(parsed), 0, NetMatchConfigUtil::c_MaxInputDelayFrames);
 				m_MultiplayerHostInputDelayPolicyLabel->SetText("(fixed, " + std::to_string(frames) + ")");
 			}
+		} else if (guiEvent.GetType() == GUIEvent::Notification && guiEvent.GetMsg() == GUITextBox::Changed &&
+		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
+		           std::find(m_HostRelayBoxes.begin(), m_HostRelayBoxes.end(), guiEvent.GetControl()) != m_HostRelayBoxes.end()) {
+			CommitHostRelay();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           (guiEvent.GetMsg() == GUITab::UnPushed || guiEvent.GetMsg() == GUIComboBox::Closed ||
@@ -1384,6 +1388,16 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
 	m_HostNetIceCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetIce"));
 	m_HostNetIceHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetIceHint"));
+	m_HostNetworkTabs = {dynamic_cast<GUITab*>(get("TabHostNetRouting")), dynamic_cast<GUITab*>(get("TabHostNetTuning"))};
+	m_HostNetworkPages = {dynamic_cast<GUICollectionBox*>(get("CollectionBoxHostNetworkRouting")), dynamic_cast<GUICollectionBox*>(get("CollectionBoxHostNetworkTuning"))};
+	m_HostRelayCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetRelay"));
+	m_HostRelayBoxes = {dynamic_cast<GUITextBox*>(get("TextHostRelayAddress")), dynamic_cast<GUITextBox*>(get("TextHostRelayUser")), dynamic_cast<GUITextBox*>(get("TextHostRelayPass"))};
+	m_HostRelayLabels = {dynamic_cast<GUILabel*>(get("LabelHostRelayAddress")), dynamic_cast<GUILabel*>(get("LabelHostRelayUser")), dynamic_cast<GUILabel*>(get("LabelHostRelayPass"))};
+	m_HostRelayHint = dynamic_cast<GUILabel*>(get("LabelHostRelayHint"));
+	for (auto* box : m_HostRelayBoxes) if (box) box->SetMaxTextLength(1024);
+	if (m_HostRelayBoxes[2]) m_HostRelayBoxes[2]->SetPasswordMask(true);
+	if (m_HostRelayHint) m_HostRelayHint->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	if (m_HostNetModeLabel) m_HostNetModeLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	}
@@ -1518,6 +1532,10 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPortBox->SetNumericOnly(true);
 		m_HostNetPortBox->SetMaxNumericValue(65535);
 		m_HostNetPortBox->SetMaxTextLength(5);
+	}
+	if (m_HostRelayCombo) {
+		m_HostRelayCombo->ClearList();
+		for (const char* state : {"Off", "Directory", "Fixed"}) m_HostRelayCombo->AddItem(state);
 	}
 	for (GUITextBox* box : m_HostNetPeerDelayBoxes) {
 		if (!box) continue;
@@ -1899,7 +1917,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
 		                            " - capacity " + std::to_string(adopted.peerCount) +
-		                            " - humans seated " + std::to_string(seated));
+		                            " - humans seated " + std::to_string(seated) + "\n" +
+		                            (m_HostOptionsSetupDraft ? NetHostNatModeText(g_SettingsMan) : g_NetMatchService.GetNatModeText()));
 	}
 	// The visibility combo mirrors the live lease's state; a pick applies through the setter.
 	HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
@@ -1911,6 +1930,25 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostNetIceCombo, editable);
 	if (m_HostNetIceHintLabel) {
 		m_HostNetIceHintLabel->SetText(NetHostNatTraversalHint(g_SettingsMan, m_HostOptionsSetupDraft, m_HostOptionsReadOnly, g_NetMatchService.GetIceRoute()));
+	}
+	HostOptSelectComboIndex(m_HostRelayCombo, static_cast<int>(g_SettingsMan.GetNetworkHostRelayModeSetting()));
+	HostOptSetEditable(m_HostRelayCombo, editable && m_HostOptionsSetupDraft);
+	const bool fixedRelay = g_SettingsMan.GetNetworkHostRelayModeSetting() == SettingsMan::NetworkHostRelayMode::Fixed;
+	const std::string relayValues[] = {g_SettingsMan.GetNetworkTurnServersSetting(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass()};
+	for (size_t i = 0; i < m_HostRelayBoxes.size(); ++i) {
+		if (auto* box = m_HostRelayBoxes[i]) {
+			box->SetVisible(fixedRelay);
+			HostOptSetEditable(box, editable && m_HostOptionsSetupDraft);
+			if (!HostOptBoxFocused(box)) box->SetText(relayValues[i]);
+		}
+		if (m_HostRelayLabels[i]) m_HostRelayLabels[i]->SetVisible(fixedRelay);
+	}
+	if (m_HostRelayHint) {
+		std::string hint = NetHostRelayHint(g_SettingsMan);
+		const std::string relayError = g_NetMatchService.GetRelayError();
+		if (!m_HostOptionsSetupDraft && !relayError.empty()) hint += "\n" + relayError;
+		if (m_HostOptionsReadOnly) hint = "This row shows your saved hosting preference; only the host sets up this match.\nCurrent match: " + g_NetMatchService.GetNatModeText() + ". Choose your route in Settings > Network > Connection.\n" + relayError;
+		m_HostRelayHint->SetText(hint);
 	}
 	// The port box stays pressable while hosted so the attempt can name the refusal.
 	HostOptSetEditable(m_HostNetPortBox, editable);
@@ -2200,6 +2238,7 @@ void MainMenuGUI::RederiveHostOptionsRoster() {
 
 void MainMenuGUI::ApplyHostOptions() {
 	if (m_HostOptionsReadOnly) return;
+	CommitHostRelay();
 	// The port row commits on the same click the rest of the page does; a refused edit names its
 	// reason before the draft's own status lands.
 	CommitHostNetPort();
@@ -2533,6 +2572,16 @@ void MainMenuGUI::CommitHostNetPort() {
 	m_HostOptionsStatusLabel->SetText("Port " + std::to_string(static_cast<int>(parsed)) + " applies to the next hosted session");
 }
 
+void MainMenuGUI::CommitHostRelay() {
+	if (m_HostOptionsReadOnly || !m_HostOptionsSetupDraft || !m_HostRelayBoxes[0]) return;
+	if (g_SettingsMan.GetNetworkTurnServersSetting() == m_HostRelayBoxes[0]->GetText() &&
+	    g_SettingsMan.GetNetworkTurnUser() == m_HostRelayBoxes[1]->GetText() && g_SettingsMan.GetNetworkTurnPass() == m_HostRelayBoxes[2]->GetText()) return;
+	g_SettingsMan.SetNetworkTurnServers(m_HostRelayBoxes[0]->GetText());
+	g_SettingsMan.SetNetworkTurnUser(m_HostRelayBoxes[1]->GetText());
+	g_SettingsMan.SetNetworkTurnPass(m_HostRelayBoxes[2]->GetText());
+	g_SettingsMan.UpdateSettingsFile();
+}
+
 void MainMenuGUI::ShowHostBannedDialog() {
 	// H11: the store's own rows - identity's public alias, the scope, the age; Remove unbans the
 	// picked row through the same host pump a queued kick drains on.
@@ -2545,8 +2594,29 @@ void MainMenuGUI::ShowHostBannedDialog() {
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	for (size_t i = 0; i < m_HostNetworkTabs.size(); ++i) {
+		if (guiEventControl != m_HostNetworkTabs[i]) continue;
+		CommitHostRelay();
+		for (size_t j = 0; j < m_HostNetworkTabs.size(); ++j) {
+			m_HostNetworkTabs[j]->SetCheck(i == j);
+			m_HostNetworkPages[j]->SetVisible(i == j);
+			m_HostNetworkPages[j]->SetEnabled(i == j);
+		}
+		return;
+	}
+	if (guiEventControl == m_HostRelayCombo) {
+		if (m_HostOptionsReadOnly || !m_HostOptionsSetupDraft) return;
+		CommitHostRelay();
+		g_SettingsMan.SetNetworkHostRelayMode(static_cast<SettingsMan::NetworkHostRelayMode>(std::clamp(m_HostRelayCombo->GetSelectedIndex(), 0, 2)));
+		g_SettingsMan.UpdateSettingsFile();
+		return;
+	}
+	for (auto* box : m_HostRelayBoxes) {
+		if (guiEventControl == box) { CommitHostRelay(); return; }
+	}
 	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
 		if (guiEventControl == m_HostOptionsTabs[i]) {
+			CommitHostRelay();
 			// The tab un-pushes after a pick; commit the page's text boxes before it hides.
 			DraftHostOptionsFromControls();
 			ShowHostOptionsPage(i);

@@ -2707,6 +2707,7 @@ namespace RTE {
 			return Fail("world-capacity-passed-validation: an over-bound respawn delay was accepted with reason \"" + reason + "\"");
 		}
 		NetMatchConfig legacy = ordinary;
+		legacy.version = 4;
 		legacy.worldMaxSpectators = 1;
 		if (NetMatchConfigUtil::ValidateLocalAlpha(legacy, &reason) || reason != "pre-world config cannot carry world capacity") {
 			return Fail("world-capacity-passed-validation: a pre-world config kept a world capacity with reason \"" + reason + "\"");

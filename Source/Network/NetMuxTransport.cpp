@@ -65,6 +65,7 @@ namespace RTE {
 				return false;
 			}
 		}
+		if (m_HostP2PArmed && m_HostP2PConfig.connectionMode == 2) return true;
 		if (!m_Ip->StartHost(port, error)) {
 			m_P2P->Stop();
 			return false;

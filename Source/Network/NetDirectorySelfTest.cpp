@@ -874,6 +874,32 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestRelayCredentialRequest(std::string* error) {
+				ScriptedClient s;
+				if (s.client.RequestIceServers("match:1", 3600)) { *error = "relay request lacked the host lease"; return false; }
+				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"host-token","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
+				s.client.Advertise(SampleRegisterRequest(), false);
+				s.client.Update(0);
+				s.client.Update(0);
+				const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+				NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "match:1", now + 3600);
+				s.replies->push_back({200, relay.ToJson(), ""});
+				if (!s.client.RequestIceServers("match:1", 3600) || !s.client.IceRequestPending()) { *error = "relay request did not start"; return false; }
+				const auto& request = s.sent->back();
+				if (!RequestIs(request, "POST", "/v1/sessions/7b8c9d2e-1111-4222-8333-444455556666/ice-servers", error) ||
+				    json::parse(request.body) != json{{"token", "host-token"}, {"match_id", "match:1"}, {"ttl", 3600}}) return false;
+				s.client.Update(1);
+				if (s.client.IceServers() != relay || s.client.IceReplies() != 1 || s.client.IceRequestPending()) { *error = "minted ICE list was not adopted"; return false; }
+				ScriptedClient joiner;
+				relay.expiresAt = now;
+				joiner.replies->push_back({200, relay.ToJson(), ""});
+				if (!joiner.client.FetchIceServers("7b8c9d2e-1111-4222-8333-444455556666")) return false;
+				joiner.client.Update(0);
+				if (!joiner.client.IceServers().Empty() || joiner.client.IceError().empty()) { *error = "expired directory credential was offered"; return false; }
+				if (s.client.BuildReportJson().find("temporary-password") != std::string::npos) { *error = "directory diagnostics exposed a credential"; return false; }
+				return true;
+			}
+
 			bool TestClientLifecycle(std::string* error) {
 				ScriptedClient s;
 				s.replies->push_back({200, R"({"session_id":"7b8c9d2e-1111-4222-8333-444455556666","token":"tok","expires_in_s":15,"heartbeat_s":5,"observed_ip":"127.0.0.1"})", ""});
@@ -2710,6 +2736,7 @@ namespace RTE {
 			if (!TestUnlistedVisibility(&error)) return fail(error);
 			if (!TestHttpClientReuse(&error)) return fail(error);
 			if (!TestClientLifecycle(&error)) return fail(error);
+			if (!TestRelayCredentialRequest(&error)) return fail(error);
 			if (!TestHeartbeat404Reregisters(&error)) return fail(error);
 			if (!TestHeartbeat429HonorsRetryAfter(&error)) return fail(error);
 			if (!TestTransportErrorBackoff(&error)) return fail(error);

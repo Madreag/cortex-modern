@@ -110,6 +110,7 @@ namespace RTE {
 		uint32_t GetRemotePingMs(uint8_t peerId) const;
 		bool IsStartRequested() const { return m_StartRequested; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
+		void SetRelayOffer(const NetRelayConfig& offer);
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		uint64_t GetStartFrame() const { return m_StartFrame; }
 		const std::string& GetFailureReason() const { return m_FailureReason; }
@@ -254,6 +255,7 @@ namespace RTE {
 
 		INetTransport* m_Transport = nullptr;
 		NetLobbySessionConfig m_Config;
+		bool m_RelaySendPending = false;
 		NetLobbyState m_State = NetLobbyState::Idle;
 		NetHash32 m_MatchConfigHash{};
 		uint64_t m_StartFrame = 0;

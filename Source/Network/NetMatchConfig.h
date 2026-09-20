@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NetIceServers.h"
+
 #include "NetProtocol.h"
 
 #include <array>
@@ -66,7 +68,7 @@ namespace RTE {
 
 	// Inherited rules retain the existing activity/mode member names without duplicate values.
 	struct NetMatchConfig : NetMatchStandardRules {
-		uint16_t version = 4;
+		uint16_t version = 6;
 		uint64_t sessionId = 0;
 		uint64_t roundId = 1;
 		uint64_t configRevision = 1;
@@ -97,6 +99,7 @@ namespace RTE {
 		std::vector<NetMatchPlayerSlot> players;
 		std::vector<uint8_t> successorOrder;
 		std::vector<NetMatchMigrationPeer> migrationPeers;
+		NetRelayConfig relay;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -106,11 +109,12 @@ namespace RTE {
 		static constexpr uint16_t c_MigrationVersion = 1;
 		static constexpr uint16_t c_MigrationConfigFlag = 16;
 		static constexpr size_t c_MaxMigrationAddresses = 8;
-		static constexpr uint16_t c_Version = 4; // Ordinary live layout. A persistent world speaks c_PersistentWorldVersion.
-		// The oldest layout a LIVE peer may speak. An ordinary match still speaks v4 byte for byte, so
-		// only a persistent world's config moves to v5 and only its hash takes the v5 domain.
-		static constexpr uint16_t c_LiveMinVersion = 4;
-		static constexpr uint16_t c_PersistentWorldVersion = 5;
+		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_LiveMinVersion = 6;
+		static constexpr uint16_t c_PersistentWorldVersion = 7;
+		static constexpr uint16_t c_WorldLayoutVersion = 5;
+		static constexpr uint16_t c_RelayLayoutVersion = 6;
+		static constexpr bool CarriesWorldLayout(uint16_t version) { return version == c_WorldLayoutVersion || version >= c_PersistentWorldVersion; }
 		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;

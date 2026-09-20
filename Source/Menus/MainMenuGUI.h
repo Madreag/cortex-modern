@@ -381,6 +381,12 @@ namespace RTE {
 		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
 		GUIComboBox* m_HostNetIceCombo = nullptr;
 		GUILabel* m_HostNetIceHintLabel = nullptr;
+		std::array<GUITab*, 2> m_HostNetworkTabs{};
+		std::array<GUICollectionBox*, 2> m_HostNetworkPages{};
+		GUIComboBox* m_HostRelayCombo = nullptr;
+		std::array<GUITextBox*, 3> m_HostRelayBoxes{};
+		std::array<GUILabel*, 3> m_HostRelayLabels{};
+		GUILabel* m_HostRelayHint = nullptr;
 		GUITextBox* m_HostNetPortBox = nullptr;          //!< H34: the next hosted session's game port (the setup draft's).
 		GUICheckbox* m_HostRecRepairCheck = nullptr;
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
@@ -615,6 +621,7 @@ namespace RTE {
 		/// H34: validates the port field against the setup draft - refused while a session is
 		/// hosted, out of range, or unchanged; a valid edit lands on the next hosted request.
 		void CommitHostNetPort();
+		void CommitHostRelay();
 		/// H03: applies one row's Open/Closed/CPU pick to the draft roster, refusing the illegal ones.
 		void ChangeHostSeatType(int row, int typeIndex);
 		/// H11: opens the banned-players list dialog.
