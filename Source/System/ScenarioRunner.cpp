@@ -912,6 +912,7 @@ namespace RTE {
 		}
 		// A resync builds a new coordinator; the retiring one's desync-check traffic still counts.
 		if (s_LockstepCoordinator && s_LockstepCoordinator != coordinator) {
+			s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 			const NetLockstepStats& retiring = s_LockstepCoordinator->GetStats();
 			s_RetiredChecksumCounters.submissions += retiring.checksumSubmissions;
 			s_RetiredChecksumCounters.sends += retiring.checksumSends;
