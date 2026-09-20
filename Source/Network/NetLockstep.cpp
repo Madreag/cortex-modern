@@ -3427,6 +3427,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleMigrationEvent(const NetTransportEvent& event, uint64_t nowMs) {
+		if (m_MigrationPhase == NetHostMigrationPhase::Complete &&
+		    !(event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes))) {
+			HandleEvent(event, nowMs);
+			return;
+		}
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
 		if (event.type == NetTransportEventType::PeerConnected) {
 			if (hosting && m_MigrationAdmissionEvents.size() < 128)
@@ -3493,7 +3498,7 @@ namespace RTE {
 				}
 				break;
 			case NetHostMigrationMessageType::Answer:
-				if (hosting && m_MigrationExpected.contains(message.senderPeerId) && m_MigrationPhase == NetHostMigrationPhase::Contacting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs <= m_Config.timeoutMs && message.appliedFrame != UINT64_MAX) {
+				if (hosting && m_MigrationExpected.contains(message.senderPeerId) && m_MigrationPhase == NetHostMigrationPhase::Contacting && nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs <= MigrationStepBudgetMs() && message.appliedFrame != UINT64_MAX) {
 					m_MigrationAnswers[message.senderPeerId] = message;
 					m_MigrationPeers[message.senderPeerId] = event.peerId;
 				} else if (hosting && m_MigrationAnswers.contains(message.senderPeerId) && !m_MigrationCommitQueued && message.appliedFrame > m_MigrationBoundary && message.appliedFrame != UINT64_MAX) {
@@ -3656,7 +3661,7 @@ namespace RTE {
 		if (!IsMigrating())
 			return;
 		const bool hosting = m_MigrationSuccessor == m_Config.localPeerId;
-		const uint64_t budget = std::max<uint32_t>(1, m_Config.timeoutMs);
+		const uint64_t budget = MigrationStepBudgetMs();
 		const bool expired = nowMs >= m_MigrationSinceMs && nowMs - m_MigrationSinceMs >= budget;
 		if (m_MigrationPhase == NetHostMigrationPhase::Contacting) {
 			if (!hosting && m_MigrationAuthoritySeen && nowMs >= m_MigrationStartedMs && nowMs - m_MigrationStartedMs >= 3 * budget) {
@@ -4570,7 +4575,13 @@ namespace RTE {
 				if (!frame.HasHatchIntent()) frame.hatchCommand = pending->second.hatchCommand;
 			}
 		}
-		if (!QueueInputAtTarget(target, merged, commands, error, observations, valueObservations)) return false;
+		if (!QueueInputAtTarget(target, merged, commands, error, observations, valueObservations)) {
+			if (m_Config.localPeerId != GetHostPeerId() && m_Transport) {
+				for (const auto& event: m_Transport->PollEvents()) HandleEvent(event, m_TimingNowMs);
+				if (m_LocalSeatHeld) { m_DeferredControllerFrames.clear(); if (error) error->clear(); return true; }
+			}
+			return false;
+		}
 		m_DeferredControllerFrames.clear();
 		return true;
 	}
@@ -4946,7 +4957,7 @@ namespace RTE {
 		const bool late = m_Stats.localProductionLateMs > 0;
 		if (late) { ++m_Stats.localLateInputs; ++m_Stats.consecutiveLateInputs; }
 		else m_Stats.consecutiveLateInputs = 0;
-		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8;
+		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8 && m_Stats.localComputeDebtMs >= m_Config.simTickMs;
 	}
 
 	void NetLockstepCoordinator::CommitTiming(uint64_t revision) {
@@ -8217,10 +8228,10 @@ namespace RTE {
 			m_Stats.longestStallMs = nowMs - m_WaitStartMs;
 			m_Stats.lastMissingPeers = DescribeMissingPeers();
 		}
+		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
+		const uint64_t hostSilenceMs = std::min<uint32_t>(500, m_Config.timeoutMs);
+		if (hostSilenceMs > 0 && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
-			const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
-			if (nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= m_Config.timeoutMs && BeginHostMigration(nowMs))
-				return;
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);
 		}

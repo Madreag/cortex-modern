@@ -5864,7 +5864,7 @@ namespace RTE {
 				B2SnapshotWriteLE(retagged, 8, 6, 2);
 				if (!B2SnapshotRefused(retagged, "other payload tagged as SeatSnapshot", error)) return false;
 			}
-			for (uint16_t reason: {13, 14, 15}) {
+			for (uint16_t reason: {14, 15, 16}) {
 				NetLockstepError failure;
 				if (NetLockstepCodec::Encode({NetLockstepStop{1, static_cast<NetLockstepStopReason>(reason), 0, "status"}}, reencoded, &failure)) {
 					return B2SnapshotFailure(error, "unknown stop reason still encodes as Stop");
@@ -15103,6 +15103,80 @@ namespace RTE {
 			NetHash32 Hash() const { return NetIdentity::HashCanonicalText("migration-sim", {{"state", Save()}}); }
 		};
 
+		bool TestSilentHostResumesWithinTwoSeconds(std::string* error) {
+			LoopbackTransport hostWire, aWire, bWire;
+			if (!hostWire.StartHost(49464, error) || !aWire.Connect("loopback", 49464, error) || !bWire.Connect("loopback", 49464, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x151);
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(49464 + peer), {"loopback"}});
+			auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
+				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15101 : 0; value.relayToOtherPeers = peer == 1;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+			};
+			NetLockstepCoordinator host, a, b;
+			if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error) || !b.Start(bWire, config(3), error)) return false;
+			for (auto* peer: {&host, &a, &b}) peer->DeferStopsToTickBoundary();
+			uint64_t now = 0; MigrationSimFixture worldA, worldB;
+			auto collect = [&](NetLockstepCoordinator& peer, MigrationSimFixture* world) {
+				NetLockstepReadyFrame ready; while (peer.PopReadyFrame(ready)) { if (world) world->Apply(ready); peer.FinishSimulationTick(ready.frame); }
+			};
+			for (int turn = 0; turn < 10; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); }
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 5; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); }
+				collect(host, nullptr); collect(a, &worldA); collect(b, &worldB);
+			}
+			if (worldA.applied != 5 || worldA.Hash() != worldB.Hash()) { *error = "silent-host fixture did not share frame 5"; return false; }
+			const uint64_t lastHostFrame = now;
+			for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(6, {}, {}, error)) return false;
+			// The dead process sends neither a close callback nor a final packet.
+			for (; now - lastHostFrame <= 2000; now += 5) {
+				a.Tick(now); b.Tick(now); collect(a, &worldA); collect(b, &worldB);
+				if (worldA.applied >= 6 && worldB.applied >= 6) break;
+			}
+			if (worldA.applied < 6 || worldB.applied < 6 || worldA.Hash() != worldB.Hash() || a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2 || a.IsFailed() || b.IsFailed()) {
+				*error = "silent host blocked survivors beyond 2000 ms: A=" + a.BuildReportJson() + " B=" + b.BuildReportJson(); return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS silent_host_bound wait_ms=" << now - lastHostFrame << " bound_ms=2000 survivors=2 hashes=equal" << std::endl;
+			return true;
+		}
+
+		bool TestSlowMachineWarningCadence(std::string* error) {
+			LoopbackTransport wire; wire.StartHost(49462, error); NetLockstepCoordinator peer;
+			NetLockstepConfig config; config.sessionId = 153; config.localPeerId = 1; config.peerCount = 1; config.roundId = 153;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(153); config.matchConfig.peerCount = 1;
+			config.matchConfig.players = {{1, 0, false, "Host"}}; config.simTickMs = 1000.0 / 60.0;
+			if (!peer.Start(wire, config, error)) return false;
+			for (uint64_t tick = 1; tick < 40; ++tick) { peer.NoteLocalTickCost(tick, 40); peer.NoteLocalInputProduced(tick, tick * 40000, 0); }
+			ScenarioRunner::SetLockstepCoordinator(&peer);
+			const bool first = ScenarioRunner::IsLockstepLocalMachineSlow(1000);
+			const bool expired = !ScenarioRunner::IsLockstepLocalMachineSlow(4000);
+			const bool quiet = !ScenarioRunner::IsLockstepLocalMachineSlow(30999);
+			const bool repeat = ScenarioRunner::IsLockstepLocalMachineSlow(31000);
+			for (uint64_t tick = 40; tick < 200; ++tick) { peer.NoteLocalTickCost(tick, 1); peer.NoteLocalInputProduced(tick, 1600000 + (tick - 40) * 1000, 0); }
+			const bool recovered = !ScenarioRunner::IsLockstepLocalMachineSlow(31001);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (!first || !expired || !quiet || !repeat || !recovered) { *error = "slow-machine banner is not transient with a 30-second cadence"; return false; }
+			std::cout << "[net-lockstep-selftest] PASS slow_machine_warning visible_ms=3000 interval_ms=30000 recovery=immediate" << std::endl; return true;
+		}
+
+		bool TestHoldArrivesBeforeFailedSend(std::string* error) {
+			LoopbackTransport hostWire, clientWire; NetLockstepCoordinator host, client;
+			auto hc = MakeCoordinatorConfig(1, 2, 49463, 0, NetTransportLane::ControlReliable);
+			auto cc = MakeCoordinatorConfig(2, 1, 49463, 0, NetTransportLane::ControlReliable);
+			hc.substituteSlowPeers = cc.substituteSlowPeers = true; hc.simTickMs = cc.simTickMs = 1000.0 / 60.0;
+			hc.relayToOtherPeers = true; hc.roundId = cc.roundId = 137;
+			if (!StartCoordinatorPair(49463, hostWire, clientWire, host, client, hc, cc, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { host.Tick(now); client.Tick(now); }
+			if (!host.ProposePeerHold(2, 20, error)) return false;
+			if (!client.QueueLocalInput(1, {MakeFrame(20, 1)}, {}, error) || !client.IsLocalSeatHeld() || client.IsFailed()) {
+				*error = "hold queued before a closed-link send was reported as controller failure: " + *error; return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS held_sender_drains_authority_before_reporting_send_failure" << std::endl; return true;
+		}
+
 		template <typename LobbyConfig>
 		bool TransferMigrationSnapshot(const NetMatchConfig& match, const std::vector<uint8_t>& envelope, bool delegated, std::vector<uint8_t>& received, std::string* error) {
 			NetHash32 credential{};
@@ -15725,7 +15799,10 @@ namespace RTE {
 		followupsPassed &= TestMidLeaveSaveAgreesAcrossPeers(&followupError);
 		if (!leavePassed) return fail(error);
 		if (!followupsPassed) return fail(followupError);
-		if (!TestRestoredControllerKeepsItsProductionBaseline(&error) ||
+		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
+		    !TestHoldArrivesBeforeFailedSend(&error) ||
+		    !TestSlowMachineWarningCadence(&error) ||
+		    !TestRestoredControllerKeepsItsProductionBaseline(&error) ||
 		    !TestProducingPassSurvivesAnOverride(&error) ||
 		    !TestSoundIdentityPinAgreesAcrossHistories(&error) ||
 		    !TestSoundRegistrySurvivesConcurrentRelease(&error) ||
