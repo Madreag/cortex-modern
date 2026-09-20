@@ -82,6 +82,8 @@ activate ButtonHostOptBack
 video_mark moderation-final-roster
 wait_ms 1200
 observe assert_visible LabelLobbyPlayer1 0
+observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
+observe assert_label LabelMultiplayerError A banned player was refused.
 dump_lobby
 wait_ms 1200
 exit

@@ -147,6 +147,14 @@
     },
     {
       "op": "menu",
+      "command": "assert_label LabelMatchRepairHint Every peer pauses and reloads the host's snapshot - press again"
+    },
+    {
+      "op": "menu",
+      "command": "dump_host_options"
+    },
+    {
+      "op": "menu",
       "command": "video_mark repair-request"
     },
     {

@@ -9,6 +9,8 @@
 #include "GUIButton.h"
 #include "GUICheckbox.h"
 #include "GUIComboBox.h"
+#include "GUICollectionBox.h"
+#include "GUIListBox.h"
 #include "GUIInputWrapper.h"
 #include "GUILabel.h"
 #include "GUIListPanel.h"
@@ -21,6 +23,8 @@
 #include "GameActivity.h"
 #include "NetLobbySnapshot.h"
 #include "NetMatchService.h"
+#include "NetIdentity.h"
+#include "ScenarioRunner.h"
 #include "PresetMan.h"
 #include "Scene.h"
 #include "SettingsMan.h"
@@ -144,6 +148,17 @@ namespace RTE::MenuAutomation {
 			child[0] + child[2] <= parent[0] + parent[2] && child[1] + child[3] <= parent[1] + parent[3];
 	}
 	bool TextFits(GUIControlManager* manager, GUIControl* control, std::string& observation) {
+		if (auto* list = dynamic_cast<GUIListBox*>(control); list && Visible(control)) {
+			bool fits = true;
+			for (auto* item: *list->GetItemList()) {
+				const std::string shown = list->RegularFittedName(item->m_Name, item->m_OffsetX);
+				const int room = list->RegularItemNameRoom(item->m_OffsetX);
+				const int width = list->GetFont()->CalculateWidth(shown);
+				observation += " row=" + Json(shown).dump() + " width=" + std::to_string(width) + " available=" + std::to_string(room);
+				fits &= width <= room;
+			}
+			return fits && !list->GetItemList()->empty();
+		}
 		std::string text;
 		const bool measureHiddenPreset = control && control->GetName() == "ComboPresetResolution";
 		if ((!Visible(control) && !measureHiddenPreset) || !Text(control, text)) return false;
@@ -198,9 +213,46 @@ namespace RTE::MenuAutomation {
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
-			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll";
+			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
+			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity";
+	}
+	Json PanelCoverage(GUIControl* control) {
+		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
+		BITMAP* bitmap = g_FrameMan.GetBackBuffer32();
+		int uncovered = 0;
+		for (int y = rect[1]; y < rect[1] + rect[3]; ++y) {
+			for (int x = rect[0]; x < rect[0] + rect[2]; ++x) {
+				if (x < 0 || y < 0 || x >= bitmap->w || y >= bitmap->h) { ++uncovered; continue; }
+				const int pixel = getpixel(bitmap, x, y);
+				uncovered += geta32(pixel) != 255 && getr32(pixel) == 0 && getg32(pixel) == 0 && getb32(pixel) == 0;
+			}
+		}
+		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "dump_match_identity") {
+			std::string path;
+			args >> std::quoted(path);
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			const auto config = g_NetMatchService.GetLobbyMatchConfig();
+			const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+			if (path.empty() || !FrameRecorder::Instance().Enabled() || snapshot.serviceState != "Running" || !round) return false;
+			const Json identity = {{"schema", 1}, {"match_id", g_NetMatchService.GetAutosaveMatchId()}, {"session_id", config.sessionId},
+				{"round", round}, {"config_hash", NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(config))}, {"peer_id", snapshot.localPeerId}, {"host", snapshot.isHost}};
+			std::ofstream output(path);
+			output << identity.dump(2) << '\n';
+			observation = identity.dump();
+			return output.good();
+		}
+		if (command == "dump_network_layout") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const auto& roster = panel->GetRosterRect();
+			const int fundsBottom = g_FrameMan.GetLargeFont()->GetFontHeight();
+			observation = Json{{"roster", {roster.x, roster.y, roster.width, roster.height}}, {"roster_visible", roster.visible},
+				{"funds_bottom", fundsBottom}, {"roster_below_funds", roster.y >= fundsBottom}, {"local_pause", g_MenuMan.IsLocalPauseMenuOpen()}}.dump();
+			return true;
+		}
 		if (command == "assert_vertical_scroll") {
 			std::string name;
 			args >> name;
@@ -219,6 +271,15 @@ namespace RTE::MenuAutomation {
 		}
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "assert_opaque_panel") {
+				std::string name;
+				args >> name;
+				auto* control = manager->GetControl(name);
+				if (!control || !Visible(control)) return false;
+				const Json coverage = PanelCoverage(control);
+				observation = coverage.dump();
+				return coverage["uncovered_pixels"] == 0;
+			}
 			if (command == "assert_checked") {
 				std::string name;
 				int expected = -1;
@@ -421,6 +482,15 @@ namespace RTE::MenuAutomation {
 						row["overflow_scroll"] = label->GetHorizontalOverflowScroll();
 						row["word_width"] = label->GetMaxWordWidth();
 						row["row_width"] = row["rect"][2];
+					}
+					if (item->GetName() == "MatchOptionsBox" || item->GetName() == "LeaveConfirmBox") row["coverage"] = PanelCoverage(item);
+					if (auto* list = dynamic_cast<GUIListBox*>(item)) {
+						row["items"] = Json::array();
+						for (auto* entry: *list->GetItemList()) {
+							const std::string shown = list->RegularFittedName(entry->m_Name, entry->m_OffsetX);
+							row["items"].push_back({{"text", entry->m_Name}, {"display", shown},
+								{"drawn_width", list->GetFont()->CalculateWidth(shown)}, {"name_room", list->RegularItemNameRoom(entry->m_OffsetX)}});
+						}
 					}
 					// The combo's open list is a panel, not a control, so its state rides its owner's row.
 					if (auto* combo = dynamic_cast<GUIComboBox*>(item)) {

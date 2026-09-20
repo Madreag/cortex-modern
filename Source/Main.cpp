@@ -2150,6 +2150,13 @@ void ProcessMenuScript() {
 		bool met = false;
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.starts_with("label:")) {
+			std::istringstream label(waitCond.substr(6));
+			std::string control, expected, actual;
+			label >> control;
+			std::getline(label >> std::ws, expected);
+			const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, actual) : g_MenuMan.GetMainMenu()->AutomationLabelText(control, actual);
+			met = found && actual.find(expected) != std::string::npos;
 		} else if (waitCond.rfind("members:", 0) == 0) {
 			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
 		} else if (waitCond.rfind("connected:", 0) == 0) {
@@ -2275,6 +2282,13 @@ void ProcessMenuScript() {
 		iss >> n;
 		waitCond = "members:" + std::to_string(n);
 		waitCondTimeout = 4000;
+	} else if (cmd == "wait_label") {
+		std::string control, expected;
+		iss >> control;
+		std::getline(iss >> std::ws, expected);
+		if (control.empty() || expected.empty()) return MenuScriptFail("wait_label requires a control and nonempty text");
+		waitCond = "label:" + control + " " + expected;
+		waitCondDeadlineMs = MenuScriptNowMs() + 60000;
 	} else if (cmd == "wait_state") {
 		std::string s;
 		int seconds = 0;
@@ -2935,6 +2949,14 @@ static std::string RecordedScreenName() {
 	return menu ? menu->AutomationActiveScreenName() : "game";
 }
 
+static void PollStallEventsForCapture() {
+	// The preceding stall presentation is complete when its next event poll begins.
+	if (FrameRecorder::Instance().Enabled()) {
+		g_FrameMan.RecordVideoFrame("LockstepWaitOverlay", g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
+	PollSDLEvents();
+}
+
 static void DrawFrameWithPreviews() {
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
@@ -2943,7 +2965,14 @@ static void DrawFrameWithPreviews() {
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
 	FrameMan::FeelBeginDraw();
+	std::array<bool, c_MaxScreenCount> hudDisabled;
+	const bool localPause = g_MenuMan.IsLocalPauseMenuOpen();
+	for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
+		hudDisabled[screen] = g_FrameMan.IsHudDisabled(screen);
+		if (localPause) g_FrameMan.SetHudDisabled(true, screen);
+	}
 	g_FrameMan.Draw();
+	for (int screen = 0; screen < c_MaxScreenCount; ++screen) g_FrameMan.SetHudDisabled(hudDisabled[screen], screen);
 	LocalPredictionHudSelfTest::SampleAfterDraw();
 	g_MenuMan.DrawNetworkUI();
 	ScenarioRunner::DrawNetUiToasts();
@@ -4613,7 +4642,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
-		if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted()) {
+		const bool observeTraceRecovery = !s_netMatchServiceE2E && s_recordTickHashes && error.find("ResyncRequested") != std::string::npos;
+		if (!s_netMatchServiceE2E && s_recordTickHashes && g_NetMatchService.WasEverStarted() && !observeTraceRecovery) {
 			const uint64_t cap = ScenarioRunner::GetArgs().maxTicks > 0 ? ScenarioRunner::GetArgs().maxTicks : 600;
 			if (g_MetricsCollector.GetTickHashCount() < cap || error.find("Complete:") == std::string::npos) {
 				s_menuMpTraceError = error;
@@ -4674,6 +4704,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running)) {
 			const bool heldRejoin = error.find("PeerHeld:") != std::string::npos;
+			static unsigned int traceRecoveryCount = 0;
+			const std::string traceGapKey = observeTraceRecovery ? "menu_trace_gap_" + std::to_string(++traceRecoveryCount) : std::string();
+			if (observeTraceRecovery) {
+				g_MetricsCollector.RecordString(traceGapKey, nlohmann::json{{"stopped_at", matchTick}, {"reason", error}}.dump());
+				System::PrintDiagnosticLine("[menu-mp] trace recovery gap frame=" + std::to_string(matchTick) + " reason=" + error);
+				FrameRecorder::Instance().RecordEvent("trace recovery gap frame=" + std::to_string(matchTick));
+				// Save the observed prefix before recovery can leave the gameplay loop.
+				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
+				if (!tracePath.empty() && !g_MetricsCollector.WriteReport(tracePath)) {
+					System::PrintDiagnosticErrorLine("[menu-mp] could not retain trace before recovery: " + tracePath);
+				}
+			}
 			if (heldRejoin) {
 				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
 				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
@@ -4729,6 +4771,11 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					System::PrintDiagnosticLine(line.str());
 				}
 				g_NetMatchService.NoteResyncRelaunched();
+				if (observeTraceRecovery) {
+					const uint64_t resumedAt = ScenarioRunner::GetLockstepResumeFrame();
+					g_MetricsCollector.RecordString(traceGapKey, nlohmann::json{{"stopped_at", matchTick}, {"reason", error}, {"resumed_at", resumedAt}}.dump());
+					System::PrintDiagnosticLine("[menu-mp] trace observation resumed frame=" + std::to_string(resumedAt));
+				}
 				// The relaunch drops the queue; the healed round has not applied a frame yet, so the
 				// toast names the frame it resumes on.
 				ScenarioRunner::ClearNetUiToasts();
@@ -8272,7 +8319,7 @@ int main(int argc, char** argv) {
 	TelemetryBundle::Initialize("unavailable");
 	ConfigureMenuScriptInput(argc, argv);
 	InitializeManagers();
-	ScenarioRunner::SetStallEventPoll(&PollSDLEvents);
+	ScenarioRunner::SetStallEventPoll(&PollStallEventsForCapture);
 	// Same arming condition as the probe itself, so only a probe run pumps the panel from a stall.
 	const char* netUiProbeScript = std::getenv("CC_TEST_NET_UI_SCRIPT");
 	ScenarioRunner::SetLockstepStallUIProbeArmed(netUiProbeScript != nullptr && *netUiProbeScript != '\0');

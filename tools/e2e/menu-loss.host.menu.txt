@@ -1,0 +1,16 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 300
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 300
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+activate ButtonMultiplayerCreate
+wait_ms 700
+video_mark loss-host-lobby
+dump_lobby
+dump_host_options
+wait_ms 65000
+exit
