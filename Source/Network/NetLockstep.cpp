@@ -4889,8 +4889,10 @@ namespace RTE {
 				// window is the budget that fill was agreed to take. The window is the few frames from its
 				// own start; after them it is judged like any other.
 				if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
+					// Our own longest park is the start work this machine did; a peer that has not produced
+					// yet is doing the same, so it is allowed as much before its silence means anything.
 					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
-					    peerStats.pingMs + peerStats.jitterMs;
+					    peerStats.pingMs + peerStats.jitterMs + m_Stats.longestOwnParkMs;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
 				} else if (peerStats.lastProgressMs >= firstMissingMs &&
 				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
@@ -6035,6 +6037,7 @@ namespace RTE {
 		for (auto& [peer, stats]: m_Stats.peers) { shift(stats.lastHeardMs); shift(stats.lastProgressMs); }
 		for (auto& [revision, decision]: m_TimingDecisions) shift(decision.proposedAtMs);
 		++m_Stats.ownParksExcluded;
+		m_Stats.longestOwnParkMs = std::max(m_Stats.longestOwnParkMs, gap);
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
