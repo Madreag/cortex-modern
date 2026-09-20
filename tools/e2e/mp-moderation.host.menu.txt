@@ -1,0 +1,81 @@
+wait_ms 1800
+activate ButtonMainToMultiplayer
+video_mark moderation-host-setup
+wait_ms 600
+assert_substate Landing
+settext TextMultiplayerName Host
+activate ButtonMultiplayerHostGame
+wait_ms 600
+assert_substate HostSetup
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+settext TextHostPort {PORT}
+settext TextHostPlayers 3
+wait_ms 600
+activate ButtonMultiplayerCreate
+wait_ms 900
+assert_substate Lobby
+video_mark moderation-host-listening
+wait_connected 3 90
+wait_ms 1200
+video_mark moderation-three-seats
+wait_ms 900
+observe assert_label LabelLobbyPlayer0 Host
+observe assert_label LabelLobbyPlayer1 ClientA
+observe assert_label LabelLobbyPlayer2 ClientB
+dump_lobby
+wait_ms 1200
+activate ButtonLobbyOptions
+wait_ms 600
+activate TabHostPageSeats
+wait_ms 600
+activate ButtonHostSeatDetails1
+video_mark moderation-kick
+wait_ms 900
+observe assert_label LabelHostSeatDlgName ClientA
+assert_enabled ButtonHostSeatDlgKick 1
+activate ButtonHostSeatDlgKick
+wait_ms 1200
+observe assert_visible HostSeatDialog 0
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 900
+video_mark moderation-kick-roster
+observe assert_substate Lobby
+observe assert_label LabelLobbyPlayer1 ClientB
+observe assert_visible LabelLobbyPlayer2 0
+dump_lobby
+wait_file {PROBE_DIR_clienta}/removed.json 40
+wait_ms 1200
+activate ButtonLobbyOptions
+wait_ms 600
+activate TabHostPageSeats
+wait_ms 600
+activate ButtonHostSeatDetails2
+video_mark moderation-ban
+wait_ms 900
+observe assert_label LabelHostSeatDlgName ClientB
+assert_enabled ButtonHostSeatDlgBan 1
+activate ButtonHostSeatDlgBan
+wait_ms 1200
+observe assert_visible HostSeatDialog 0
+dump_host_options
+activate TabHostPageSession
+wait_ms 900
+video_mark moderation-ban-list
+activate ButtonHostSessBanned
+wait_ms 1200
+observe assert_visible HostBannedDialog 1
+observe assert_label LabelHostBannedList ClientB
+observe assert_label LabelHostBannedList session
+dump_host_options
+wait_file {PROBE_DIR_clientb}/refused.json 60
+wait_ms 1800
+activate ButtonHostBannedClose
+wait_ms 600
+activate ButtonHostOptBack
+video_mark moderation-final-roster
+wait_ms 1200
+observe assert_visible LabelLobbyPlayer1 0
+dump_lobby
+wait_ms 1200
+exit

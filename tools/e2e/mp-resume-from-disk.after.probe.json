@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "timeout_ms": 150000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark resume-reloaded"
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "reloaded"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "elapsed_ms": 1500
+    },
+    {
+      "op": "menu",
+      "command": "video_mark resume-play-continued"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "elapsed_ms": 5000
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      }
+    },
+    {
+      "op": "screenshot",
+      "name": "continued"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

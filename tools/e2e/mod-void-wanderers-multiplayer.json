@@ -1,0 +1,323 @@
+{
+  "schema": 1,
+  "name": "mod-void-wanderers-multiplayer",
+  "port_base": 49472,
+  "title": "Void Wanderers through the real multiplayer activity picker, lobby and 600 ticks on both peers",
+  "size": "960x540",
+  "timeout_s": 170,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-module",
+        "VoidWanderers.rte"
+      ],
+      "menu_script": "mod-void-wanderers-multiplayer.host.menu.txt",
+      "input_script": "play-input.txt",
+      "probe": "mod-void-wanderers-multiplayer.host.probe.json",
+      "settings": {
+        "NetworkDisplayName": "Host"
+      },
+      "observe_after_failure": true
+    },
+    {
+      "name": "client",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-module",
+        "VoidWanderers.rte"
+      ],
+      "menu_script": "mod-void-wanderers-multiplayer.client.menu.txt",
+      "input_script": "play-input.txt",
+      "probe": "mod-void-wanderers-multiplayer.client.probe.json",
+      "settings": {
+        "NetworkDisplayName": "Joiner"
+      },
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark vw-mp-lobby-host",
+        "timeout_s": 80
+      },
+      "observe_after_failure": true
+    }
+  ],
+  "checklist": [
+    {
+      "id": "vw-mp-activity-picker",
+      "peer": "host",
+      "mark": "vw-mp-activity-picker",
+      "screen": "MultiplayerScreen",
+      "what": "The host selects the installed Void Wanderers activity in the real multiplayer picker.",
+      "events": [
+        "combo_select ComboHostActivity Void Wanderers - VoidWanderers.rte PASS",
+        "assert_label ComboHostActivity.*Void Wanderers.*PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-landing-host",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-landing-host",
+      "what": "The multiplayer landing opens before hosting or joining.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=Landing actual=Landing PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-host-setup",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-host-setup",
+      "what": "The activity, scene, player count and port are configured.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=HostSetup actual=HostSetup PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-seats",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-seats",
+      "what": "The host opens the Seats options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageSeats 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-rules",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-rules",
+      "what": "The host opens the Rules options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageRules 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-network",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-network",
+      "what": "The host opens the Network options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageNetwork 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-recovery",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-recovery",
+      "what": "The host opens the Recovery options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageRecovery 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-files",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-files",
+      "what": "The host opens the Files options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageFiles 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-options-session",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-options-session",
+      "what": "The host opens the Session options page.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_visible CollectionBoxHostPageSession 1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-lobby-host",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-lobby-host",
+      "what": "The lobby shows both connected peers.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "connected:2 -> OK",
+        "dump_lobby .*members=2"
+      ]
+    },
+    {
+      "id": "vw-mp-lobby-options",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-lobby-options",
+      "what": "The host reopens the live lobby options.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=HostOptions actual=HostOptions PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-ready-start",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-ready-start",
+      "what": "Start becomes enabled after the remote player readies, then launches the match.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_enabled ButtonMultiplayerStart expected=1 actual=1 PASS",
+        "activate ButtonMultiplayerStart ok=1"
+      ]
+    },
+    {
+      "id": "vw-mp-post-match-host",
+      "peer": "host",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-post-match-host",
+      "what": "The finished match returns to its live lobby.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=Lobby actual=Lobby PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-play-host",
+      "peer": "host",
+      "screen": "game",
+      "mark": "vw-mp-play-host",
+      "what": "The input script drives real gameplay for at least 600 simulation updates.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "sim_progress": 600
+    },
+    {
+      "id": "vw-mp-pause-host",
+      "peer": "host",
+      "screen": "Pause",
+      "mark": "vw-mp-pause-host",
+      "what": "Pause shows the multiplayer rows; End Match is available only to the host.",
+      "assert": "recorded menu/probe assertions in this marked interval"
+    },
+    {
+      "id": "vw-mp-match-options-host",
+      "peer": "host",
+      "screen": "PauseMatchOptions",
+      "mark": "vw-mp-match-options-host",
+      "what": "Match Options shows the rules and the host-only Repair action.",
+      "assert": "recorded menu/probe assertions in this marked interval"
+    },
+    {
+      "id": "vw-mp-landing-client",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-landing-client",
+      "what": "The multiplayer landing opens before hosting or joining.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=Landing actual=Landing PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-lobby-client",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-lobby-client",
+      "what": "The joiner connects and sees the shared lobby.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "connected:2 -> OK",
+        "assert_substate expected=Lobby actual=Lobby PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-details-read-only",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-details-read-only",
+      "what": "Match Details opens with Apply disabled on the client.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_enabled ButtonHostOptApply expected=0 actual=0 PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-lobby-leave",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-lobby-leave",
+      "what": "The client leaves the completed match lobby and returns to Landing.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=Landing actual=Landing PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-post-match-client",
+      "peer": "client",
+      "screen": "MultiplayerScreen",
+      "mark": "vw-mp-post-match-client",
+      "what": "The finished match returns to its live lobby.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "events": [
+        "assert_substate expected=Lobby actual=Lobby PASS"
+      ]
+    },
+    {
+      "id": "vw-mp-play-client",
+      "peer": "client",
+      "screen": "game",
+      "mark": "vw-mp-play-client",
+      "what": "The input script drives real gameplay for at least 600 simulation updates.",
+      "assert": "recorded menu/probe assertions in this marked interval",
+      "sim_progress": 600
+    },
+    {
+      "id": "vw-mp-pause-client",
+      "peer": "client",
+      "screen": "Pause",
+      "mark": "vw-mp-pause-client",
+      "what": "Pause shows the multiplayer rows; End Match is available only to the host.",
+      "assert": "recorded menu/probe assertions in this marked interval"
+    },
+    {
+      "id": "vw-mp-match-options-client",
+      "peer": "client",
+      "screen": "PauseMatchOptions",
+      "mark": "vw-mp-match-options-client",
+      "what": "Match Options shows the rules and the host-only Repair action.",
+      "assert": "recorded menu/probe assertions in this marked interval"
+    },
+    {
+      "id": "vw-mp-end-match",
+      "peer": "host",
+      "screen": "Pause",
+      "mark": "vw-mp-end-match",
+      "what": "The host presses End Match and both peers return to the lobby.",
+      "assert": "recorded menu/probe assertions in this marked interval"
+    },
+    {
+      "id": "vw-mp-adopted-activity",
+      "peer": "client",
+      "mark": "vw-mp-lobby-client",
+      "screen": "MultiplayerScreen",
+      "what": "The client lobby names the adopted Void Wanderers activity and its own scene.",
+      "events": [
+        "dump_lobby .*activity=\"Void Wanderers\" module=\"VoidWanderers.rte\""
+      ]
+    }
+  ],
+  "requires": [
+    "VoidWanderers.rte"
+  ],
+  "extends_scenario": "mod-void-wanderers",
+  "extension_note": "Keep both existing mod-void-wanderers runs unchanged. This separate one-run scenario adds the real-picker multiplayer leg without editing the owned scenario or exceeding its two-run limit."
+}

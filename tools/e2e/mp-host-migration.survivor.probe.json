@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "timeout_ms": 140000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark migration-play"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 550
+    },
+    {
+      "op": "menu",
+      "command": "video_mark migration-host-drop"
+    },
+    {
+      "op": "wait",
+      "control": "LabelNetMatchToastNewest",
+      "text_contains": "is now hosting"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark migration-new-host"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800
+    },
+    {
+      "op": "screenshot",
+      "name": "new-host"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark migration-continued"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 880
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 880
+    },
+    {
+      "op": "screenshot",
+      "name": "continued"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}
