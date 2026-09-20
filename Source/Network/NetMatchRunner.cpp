@@ -719,8 +719,14 @@ namespace RTE {
 		lockstepConfig.authorityPeerId = m_ActiveHostPeerId;
 		lockstepConfig.activePeerIds = m_ActivePeerIds;
 		if (lockstepConfig.activePeerIds.empty()) lockstepConfig.activePeerIds = m_MatchConfig.activePeerIds;
-		if (m_Config.configureMigration)
+		if (m_WorldJoinStarting) {
+			const auto& previous = m_PrivateJoinConfig ? *m_PrivateJoinConfig : coordinator.GetConfig();
+			lockstepConfig.migrationKey = previous.migrationKey;
+			lockstepConfig.migrationGeneration = previous.migrationGeneration;
+			lockstepConfig.migrationTransportFactory = previous.migrationTransportFactory;
+		} else if (m_Config.configureMigration) {
 			m_Config.configureMigration(lockstepConfig);
+		}
 		// The host tags each round so a late packet from the previous round cannot join this one.
 		if (config.host) {
 			std::random_device entropy;

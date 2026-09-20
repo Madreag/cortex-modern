@@ -2693,6 +2693,8 @@ static std::string ResyncSaveName() {
 			if (total != 0 && received >= total && host.Image().IsValid()) {
 				(void)host.NoteTransferComplete(connection, host.Image().bytes, nullptr);
 			}
+		} else if (report.kind == c_NetWorldReportActivationAck) {
+			host.AcknowledgeActivation(connection, report.value);
 		} else if (report.kind == c_NetWorldReportDecline) {
 			// A watcher that asked to stay one is skipped when a slot frees; it keeps its stream.
 			(void)host.NoteSpectatorPreference(connection, report.value != 0);
@@ -3103,11 +3105,10 @@ static std::string ResyncSaveName() {
 				}
 			}
 		}
-		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(nowFrame)) {
+		while (const NetWorldJoinSession* slow = m_WorldJoin.SlowActivation(g_TimerMan.GetSimUpdateCount())) {
 			uint64_t later = 0;
 			const uint64_t previous = slow->activationTick;
-			if (slow->activationReannounces < c_NetWorldActivationReannounceLimit &&
-			    m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
+			if (m_WorldJoin.ReannounceActivation(slow->connection, nowFrame, &later, nullptr)) {
 				// A re-announce moves this activation's restart; every other joiner's stays announced.
 				m_Coordinator->MoveObservationEpoch(previous, later);
 				if (m_Runner) {
@@ -3161,40 +3162,28 @@ static std::string ResyncSaveName() {
 			}
 		}
 		DriveWorldSeatRespawns(nowFrame);
-		const uint64_t nextFrame = m_Coordinator->GetStats().nextFrame;
-		// A streaming watcher costs the round nothing, so it never stands in front of a member that
-		// is due at the same frame. Each stream takes its bootstrap out of the due set, so this ends.
-		for (size_t walked = m_WorldJoin.Sessions().size() + 1; walked > 0; --walked) {
-			const NetWorldJoinSession* due = m_WorldJoin.DueActivation(nextFrame);
-			bool late = false;
-			if (due == nullptr) {
-				due = m_WorldJoin.LateActivation(nextFrame);
-				late = due != nullptr;
-			}
-			if (due == nullptr) {
-				break;
-			}
-			const NetWorldActivationPlan plan = PlanWorldActivation(*due, nextFrame, late);
-			if (!plan.admit) {
-				(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
-				std::cout << "[net-world] spectator stream at=" << plan.firstRequired << std::endl;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.phase != NetWorldJoinPhase::CatchingUp || session.activationTick == 0) continue;
+			if (session.spectator) {
+				if (session.acknowledgedThrough + 1 >= session.activationTick) m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
 				continue;
 			}
-			std::string admitError;
-			if (!m_Coordinator->AdmitWorldMember(due->assignedPeerId, due->connection, plan.firstRequired, &admitError)) {
-				std::cout << "[net-world] admission refused peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << " reason=" << admitError << std::endl;
-				m_WorldJoin.CancelJoin(due->connection, admitError);
-				return;
+			if (!session.activationProposed && session.acknowledgedActivation == session.activationTick && session.acknowledgedThrough + 6 >= g_TimerMan.GetSimUpdateCount()) {
+				NetPeerId holder = c_InvalidNetPeerId; uint32_t generation = 0, incarnation = 0;
+				if (!m_ReconnectHost.GetSeatHolder(session.stableSeat, holder, generation, incarnation) || holder != session.connection) continue;
+				const auto transition = BuildWorldActivateTransition(session, m_Runner->GetMatchConfig(), m_WorldJoin.Membership().Revision());
+				std::string error;
+				if (m_Coordinator->ProposeWorldAdmission(session.connection, incarnation, transition, &error)) m_WorldJoin.MarkActivationProposed(session.connection);
 			}
-			if (plan.submitTransition) {
-				NetGameWorldTransition transition = BuildWorldActivateTransition(*due, m_Runner ? m_Runner->GetMatchConfig() : m_MatchConfig, m_WorldJoin.Membership().Revision());
-				transition.activationFrame = plan.firstRequired;
-				(void)ScenarioRunner::SubmitWorldTransition(transition);
+			if (session.activationProposed && !session.activationCommitted && m_Coordinator->HasWorldAdmission(session.assignedPeerId, session.activationTick)) {
+				m_WorldJoin.MarkActivationCommitted(session.connection);
+				m_Runner->GetLobbySession().SendPayloadTo(WorldJoinLobbyPeer(session), MakeWorldJoinReport(c_NetWorldReportActivationCommit, session.activationTick), nullptr);
+				std::cout << "[net-world] activation agreed peer=" << static_cast<int>(session.assignedPeerId) << " at=" << session.activationTick << std::endl;
 			}
-			(void)m_WorldJoin.CompleteActivation(due->connection, plan.firstRequired, nullptr);
-			std::cout << "[net-world] activate peer=" << static_cast<int>(due->assignedPeerId) << " at=" << plan.firstRequired << std::endl;
-			// One member admission per pump, as before: two brains never enter at one tick.
-			break;
+			if (session.activationCommitted && session.acknowledgedThrough + 1 >= session.activationTick && g_TimerMan.GetSimUpdateCount() >= session.activationTick) {
+				m_WorldJoin.CompleteActivation(session.connection, session.activationTick, nullptr);
+				std::cout << "[net-world] activate peer=" << static_cast<int>(session.assignedPeerId) << " at=" << session.activationTick << std::endl;
+			}
 		}
 	}
 
@@ -3351,8 +3340,11 @@ static std::string ResyncSaveName() {
 		}
 		if (report.pending && report.kind == c_NetWorldReportActivate) {
 			catchUp.activationTick = report.value;
+			catchUp.activationCommitted = catchUp.privateMatch;
 			ScenarioRunner::SetWorldCatchUpActivation(report.value);
+			if (!catchUp.privateMatch) lobby.SendPayload(MakeWorldJoinReport(c_NetWorldReportActivationAck, report.value), nullptr);
 		}
+		if (report.pending && report.kind == c_NetWorldReportActivationCommit && report.value == catchUp.activationTick) catchUp.activationCommitted = true;
 		catchUp.appliedThrough = std::max(catchUp.appliedThrough, ScenarioRunner::WorldCatchUpAppliedThrough());
 		if (catchUp.appliedThrough > catchUp.snapshotTick) {
 			(void)lobby.SendPayload(MakeJoinerCatchUpReport(), nullptr);
@@ -3417,7 +3409,7 @@ static std::string ResyncSaveName() {
 			for (const NetTransportEvent& event: wire->PollEvents()) {
 				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 					lobby.HandleTransportEvent(event, nowMs);
-				} else if (event.type == NetTransportEventType::PacketReceived && m_WorldCatchUp.privateMatch && NetLockstepCodec::LooksLikePacket(event.bytes)) {
+				} else if (event.type == NetTransportEventType::PacketReceived && NetLockstepCodec::LooksLikePacket(event.bytes)) {
 					if (m_CatchUpWireBytes + event.bytes.size() > 16ULL * 1024 * 1024) {
 						m_PrivateJoinError = "private catch-up wire backlog exceeded its bound";
 						m_State = NetMatchServiceState::Failed; m_ErrorText = m_PrivateJoinError; return;
@@ -3434,7 +3426,7 @@ static std::string ResyncSaveName() {
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
+		if ((m_WorldCatchUp.privateMatch || m_WorldCatchUp.activationCommitted) && m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {
 			std::string error;
 			if (m_WorldCatchUp.privateMatch && !m_Runner->IsWorldJoinLockstepStarting() && m_CatchUpCoordinator) {
@@ -3505,6 +3497,20 @@ static std::string ResyncSaveName() {
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
 			std::cout << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << std::endl;
+		}
+		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {
+			for (const auto& event: m_CatchUpWirePackets) {
+				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
+					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
+					if (event.bytes.size() < offset + 8) continue;
+					uint64_t frame = 0; for (size_t i = 0; i < 8; ++i) frame |= uint64_t(event.bytes[offset + i]) << (8 * i);
+					if (frame < m_WorldCatchUp.activationTick) continue;
+				}
+				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
+			}
+			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+			std::cout << "[net-world] catch-up complete peer=" << static_cast<int>(m_Coordinator->GetConfig().localPeerId)
+			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame << std::endl;
 		}
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}

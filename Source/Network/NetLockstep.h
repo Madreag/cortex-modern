@@ -278,7 +278,7 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -301,6 +301,7 @@ namespace RTE {
 		uint64_t cutoffFrame = 0;
 		uint64_t neutralThroughFrame = 0;
 		std::array<uint32_t, 4> seatIncarnations{};
+		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetLockstepTiming&) const = default;
 	};
 
@@ -622,8 +623,9 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 26;
-		static constexpr uint16_t c_WorldVersion = 27;
+		static constexpr uint16_t c_Version = 28;
+		static constexpr uint16_t c_WorldVersion = 29;
+		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
@@ -786,6 +788,8 @@ namespace RTE {
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
+		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);

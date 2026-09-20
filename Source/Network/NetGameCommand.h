@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <array>
 #include <string>
 #include <variant>
@@ -377,6 +378,7 @@ namespace RTE {
 		uint64_t activationFrame = 0;
 		uint16_t delayFrames = 0;
 		uint64_t neutralThroughFrame = 0;
+		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetGameSeatReclaim&) const = default;
 	};
 
