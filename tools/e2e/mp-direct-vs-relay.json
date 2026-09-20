@@ -1,0 +1,245 @@
+{
+  "schema": 1,
+  "name": "mp-direct-vs-relay",
+  "port_base": 49474,
+  "size": "960x540",
+  "timeout_s": 190,
+  "title": "Definition only: Direct only versus Relay only, proven by the connected transport and visible diagnostics",
+  "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
+  "capture_policy": "No capture on this tip: direct lacks route evidence; relay also awaits the fixed coturn pair. The two log patterns are a proposed seam contract, not lines this build emits.",
+  "requires_tokens": [
+    "TURN_SERVER",
+    "TURN_USER",
+    "TURN_PASS"
+  ],
+  "runs": [
+    {
+      "name": "direct",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.direct.host.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-direct-vs-relay.direct.host.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.direct.client.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-direct-vs-relay.direct.client.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark direct-mp-lobby-host",
+            "timeout_s": 90
+          }
+        }
+      ]
+    },
+    {
+      "name": "relay",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens.",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.relay.host.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-direct-vs-relay.relay.host.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkTurnServers": "{TURN_SERVER}",
+            "NetworkTurnUser": "{TURN_USER}",
+            "NetworkTurnPass": "{TURN_PASS}",
+            "NetworkHostRelayMode": "Fixed"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "menu_script": "mp-direct-vs-relay.relay.client.menu.txt",
+          "input_script": "play-input.txt",
+          "probe": "mp-direct-vs-relay.relay.client.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkIceEnable": "1",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkTurnServers": "{TURN_SERVER}",
+            "NetworkTurnUser": "{TURN_USER}",
+            "NetworkTurnPass": "{TURN_PASS}",
+            "NetworkHostRelayMode": "Fixed"
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark relay-mp-lobby-host",
+            "timeout_s": 90
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "direct-connection-host",
+      "run": "direct",
+      "peer": "host",
+      "mark": "direct-connection-host",
+      "screen": "Settings:Network",
+      "what": "The player selects Connection = Direct only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Direct only.*PASS"
+      ]
+    },
+    {
+      "id": "direct-route-host",
+      "run": "direct",
+      "peer": "host",
+      "mark": "direct-mp-play-host",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected direct route while both players act.",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+    },
+    {
+      "id": "direct-candidate-host",
+      "run": "direct",
+      "peer": "host",
+      "mark": "direct-mp-play-host",
+      "screen": "game",
+      "what": "The playing view is backed by a selected direct ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
+        "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
+      ],
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg."
+    },
+    {
+      "id": "direct-connection-client",
+      "run": "direct",
+      "peer": "client",
+      "mark": "direct-connection-client",
+      "screen": "Settings:Network",
+      "what": "The player selects Connection = Direct only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Direct only.*PASS"
+      ]
+    },
+    {
+      "id": "direct-route-client",
+      "run": "direct",
+      "peer": "client",
+      "mark": "direct-mp-play-client",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected direct route while both players act.",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+    },
+    {
+      "id": "direct-candidate-client",
+      "run": "direct",
+      "peer": "client",
+      "mark": "direct-mp-play-client",
+      "screen": "game",
+      "what": "The playing view is backed by a selected direct ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
+        "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
+      ],
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg."
+    },
+    {
+      "id": "relay-connection-host",
+      "run": "relay",
+      "peer": "host",
+      "mark": "relay-connection-host",
+      "screen": "Settings:Network",
+      "what": "The player selects Connection = Relay only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Relay only.*PASS"
+      ]
+    },
+    {
+      "id": "relay-route-host",
+      "run": "relay",
+      "peer": "host",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected relay route while both players act.",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+    },
+    {
+      "id": "relay-candidate-host",
+      "run": "relay",
+      "peer": "host",
+      "mark": "relay-mp-play-host",
+      "screen": "game",
+      "what": "The playing view is backed by a selected relay ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens."
+    },
+    {
+      "id": "relay-connection-client",
+      "run": "relay",
+      "peer": "client",
+      "mark": "relay-connection-client",
+      "screen": "Settings:Network",
+      "what": "The player selects Connection = Relay only on the Network Connection page.",
+      "events": [
+        "assert_label ComboNetworkConnection.*Relay only.*PASS"
+      ]
+    },
+    {
+      "id": "relay-route-client",
+      "run": "relay",
+      "peer": "client",
+      "mark": "relay-mp-play-client",
+      "screen": "game",
+      "what": "The diagnostics overlay names the actual connected relay route while both players act.",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+    },
+    {
+      "id": "relay-candidate-client",
+      "run": "relay",
+      "peer": "client",
+      "mark": "relay-mp-play-client",
+      "screen": "game",
+      "what": "The playing view is backed by a selected relay ICE candidate and an allowed transport route.",
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens."
+    }
+  ]
+}
