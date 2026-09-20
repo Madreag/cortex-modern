@@ -1755,6 +1755,7 @@ namespace RTE {
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A32, 0, NetTransportLane::ControlReliable);
 			a.roundId = b.roundId = 32; a.relayToOtherPeers = true;
 			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
 			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
 			if (!StartCoordinatorPair(48895, hostWire, oldWire, host, oldClient, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); oldWire.AdvanceTimeMs(1); host.Tick(now); oldClient.Tick(now); }
