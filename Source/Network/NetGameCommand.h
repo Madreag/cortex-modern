@@ -31,6 +31,7 @@ namespace RTE {
 		WorldTransition = 17,
 		SeatHold = 18,
 		InputDelay = 19,
+		SeatReclaim = 20,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -369,7 +370,16 @@ namespace RTE {
 		bool operator==(const NetGameInputDelay&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay>;
+	struct NetGameSeatReclaim {
+		uint8_t peerId = 0;
+		uint64_t authorityGeneration = 0, eventSequence = 0;
+		uint32_t seatIncarnation = 0;
+		uint64_t activationFrame = 0;
+		uint16_t delayFrames = 0;
+		bool operator==(const NetGameSeatReclaim&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay, NetGameSeatReclaim>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

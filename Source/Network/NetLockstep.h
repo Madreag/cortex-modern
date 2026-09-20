@@ -278,8 +278,8 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2 };
-	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3 };
+	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
 	struct NetLockstepTiming {
@@ -462,6 +462,7 @@ namespace RTE {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
 		std::vector<uint8_t> aiHeldPeerIds;
+		std::vector<uint8_t> reclaimedPeerIds;
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
@@ -764,6 +765,8 @@ namespace RTE {
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
@@ -1108,6 +1111,7 @@ namespace RTE {
 		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
+		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
