@@ -327,11 +327,42 @@ void PauseMenuGUI::ShowMatchOptions(bool show) {
 
 void PauseMenuGUI::RefreshMatchOptions() {
 	m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), g_NetMatchService.GetLobbySnapshot()));
+	FitMatchOptionsBox();
 	const bool enabled = NetHostRepairEnabled(g_NetMatchService);
 	if (!enabled) m_MatchRepairArmed = false;
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetVisible(g_NetMatchService.IsHost());
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetEnabled(enabled);
 	m_MatchRepairHint->SetText(NetHostRepairHint(g_NetMatchService, m_MatchRepairArmed, m_MatchRepairRefusal));
+}
+
+// The match summary grows with the match's own rows, so the panel takes the height its text needs and
+// the rows below it move down; a screen too short for the whole summary scrolls it instead of clipping.
+void PauseMenuGUI::FitMatchOptionsBox() {
+	constexpr int c_LabelTop = 22;
+	constexpr int c_HintHeight = 34;
+	constexpr int c_RowGap = 6;
+	constexpr int c_ButtonHeight = 20;
+	constexpr int c_BottomMargin = 12;
+	const int screenHeight = g_FrameMan.GetBackBuffer32()->h;
+	const int chrome = c_LabelTop + c_RowGap + c_HintHeight + c_RowGap + c_ButtonHeight + c_BottomMargin;
+	const int room = std::max(120, screenHeight - 8 - chrome);
+	const int wanted = std::min(std::max(m_MatchOptionsLabel->GetTextHeight(), 225), room);
+	const bool scrolls = m_MatchOptionsLabel->GetTextHeight() > room;
+	if (m_MatchOptionsLabel->GetVerticalOverflowScroll() != scrolls) {
+		m_MatchOptionsLabel->SetVerticalOverflowScroll(scrolls);
+		m_MatchOptionsLabel->ActivateDeactivateOverflowScroll(scrolls);
+	}
+	if (m_MatchOptionsLabel->GetHeight() == wanted) {
+		return;
+	}
+	m_MatchOptionsLabel->Resize(m_MatchOptionsLabel->GetWidth(), wanted);
+	const int hintTop = c_LabelTop + wanted + c_RowGap;
+	m_MatchRepairHint->SetPositionRel(12, hintTop);
+	const int buttonTop = hintTop + c_HintHeight + c_RowGap;
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, buttonTop);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, buttonTop);
+	m_MatchOptionsBox->Resize(m_MatchOptionsBox->GetWidth(), buttonTop + c_ButtonHeight + c_BottomMargin);
+	m_MatchOptionsBox->CenterInParent(true, true);
 }
 
 void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playButtonPressSound) {
