@@ -10,6 +10,7 @@ a real capture are named at the bottom of the result and are the driver's own fi
 import argparse
 import contextlib
 import json
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -342,6 +343,26 @@ def check_completion(results, scratch):
     return ok
 
 
+def check_menu_commands(results):
+    repo = TOOLS.parent
+    source = (repo / "Source/Main.cpp").read_text() + (repo / "Source/Menus/MenuAutomation.cpp").read_text()
+    known = set(re.findall(r'(?:command|cmd|op)\s*==\s*"([a-z_]+)"', source))
+    unknown = []
+    for path in driver.SCENARIO_DIR.glob("*.txt"):
+        if ".menu." not in path.name and path.name not in ("sp-smoke.menus.txt", "wait-for-probe.txt"):
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            words = line.strip().split()
+            if not words or words[0].startswith("#"):
+                continue
+            verb = words[1] if words[0] == "observe" else words[0]
+            if verb not in known:
+                unknown.append(f"{path.name}:{number}: {verb}")
+    ok = row(results, "menu/verbs-exist-in-engine", not unknown, str(unknown))
+    ok &= row(results, "menu/rejects-misspelled-ready-wait", "wait_remote_ready" in known and "wait_remoteready" not in known)
+    return ok
+
+
 def check_resume_seams(results, scratch):
     import run_sim_test
     from compare_sim_traces import CORE
@@ -417,6 +438,7 @@ def main():
         ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)
         ok &= check_resume_seams(results, scratch)
+        ok &= check_menu_commands(results)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",
