@@ -1543,23 +1543,18 @@ namespace RTE {
 				*error = "a held seat reclaimed before its RTT-derived delay took effect"; return false;
 			}
 			uint64_t applyFrame = 0;
-			for (const auto& event: clientTransport.PollEvents()) {
-				if (event.type != NetTransportEventType::PacketReceived) continue;
-				const auto decoded = NetLockstepCodec::Decode(event.bytes);
-				const auto* timing = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
-				if (timing && timing->action == NetTimingAction::Delay && timing->phase == NetTimingPhase::Commit && timing->peerId == 2) {
-					if (timing->delayFrames < 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
-					applyFrame = timing->applyFrame;
-				}
-			}
-			if (applyFrame <= 5) { *error = "readmission did not declare its future delay boundary"; return false; }
-			for (uint64_t tick = 6; tick <= applyFrame; ++tick) {
+			for (uint64_t tick = 6; tick <= 80; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(500 + tick);
 				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+				for (const auto& command: ready.localCommands) if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload); delay && delay->peerId == 2) {
+					if (delay->frames < 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
+					applyFrame = tick;
+				}
 				(void)host.FinishSimulationTick(tick);
 			}
-			if (!host.PreparePeerRejoin(2, 401, 501 + applyFrame, &rejoinError) || host.PreparePeerRejoin(2, 4000, 502 + applyFrame, &rejoinError)) {
+			if (applyFrame <= 5) { *error = "readmission did not commit its future delay boundary"; return false; }
+			if (!host.PreparePeerRejoin(2, 401, 600, &rejoinError) || host.PreparePeerRejoin(2, 4000, 700, &rejoinError)) {
 				*error = "rejoin delay fit admitted an over-cap link or refused a fitted one"; return false;
 			}
 			return host.IsRunning();
