@@ -5624,6 +5624,13 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	const auto nativeStart = std::chrono::steady_clock::now();
+	struct FinishTiming {
+		lua_State* state;
+		std::optional<std::chrono::steady_clock::time_point> start;
+		~FinishTiming() {
+			if (start) CheckpointGraphIndex::Get().NoteWalkPart(state, "native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - *start).count(), false, {});
+		}
+	} finishTiming{m_State};
 	LuaCheckpointBarrierPause barrierPause;
 	// A capture is taken at a committed tick boundary with no preview window armed. Inside one, the
 	// window's rollback would undo writes the graph already recorded, so the archive would name a
@@ -5665,7 +5672,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 	} carriedScope{carried};
 	const auto serializeStart = std::chrono::steady_clock::now();
 	const int result = lua_pcall(m_State, 1, 2, 0);
-	const auto finishStart = std::chrono::steady_clock::now();
+	finishTiming.start = std::chrono::steady_clock::now();
 	CheckpointGraphIndex::Get().NoteWalkPart(m_State, "native_setup", 0, std::chrono::duration_cast<std::chrono::microseconds>(serializeStart - nativeStart).count(), false, {});
 	if (result != 0) {
 		if (s_SerialBeforeCapture.contains(m_State)) ScriptGraphEndCapture(m_State);
@@ -5696,7 +5703,6 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 		problems.push_back("a script-owned " + mo->GetClassName() + " (" + mo->GetPresetName() + ") that no script graph root reaches");
 	});
 	lua_settop(m_State, top);
-	CheckpointGraphIndex::Get().NoteWalkPart(m_State, "native_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - finishStart).count(), false, {});
 	return problems.size() == before;
 }
 

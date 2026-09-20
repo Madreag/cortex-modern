@@ -1,6 +1,7 @@
 #include "Writer.h"
 #include "System.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "Base64/base64.h"
 #include "SceneLayer.h"
 #include "Scene.h"
@@ -306,7 +307,11 @@ CheckpointText CheckpointBuffer::Finish() {
 }
 
 CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value) {
-	return Remember(owner, channel, std::move(value), 0);
+	if (channel != 16) return Remember(owner, channel, std::move(value), 0);
+	const auto start = std::chrono::steady_clock::now();
+	CheckpointText result = Remember(owner, channel, std::move(value), 0);
+	CheckpointGraphIndex::Get().NoteWalkPart(nullptr, "cache", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {});
+	return result;
 }
 
 CheckpointText CheckpointCache::Remember(const void* owner, unsigned channel, CheckpointText value, uint64_t stamp, uint64_t identity, const MovableObject* object) {

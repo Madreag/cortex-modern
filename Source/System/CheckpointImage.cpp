@@ -157,6 +157,7 @@ void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
 }
 
 void CheckpointGraphIndex::EndWalk() {
+	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
 	if (m_FullWalk) {
@@ -196,6 +197,7 @@ void CheckpointGraphIndex::EndWalk() {
 	m_Walk = false;
 	m_FullWalk = true;
 	m_Root = {};
+	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {}});
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
@@ -214,7 +216,7 @@ void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 
 void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched) {
 	std::lock_guard lock(m_Mutex);
-	const auto found = std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
+	const auto found = !state && !m_WalkStates.empty() ? std::prev(m_WalkStates.end()) : std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
 	const size_t index = found - m_WalkStates.begin();
 	if (found == m_WalkStates.end()) m_WalkStates.push_back(state);
 	m_WalkParts.push_back({index, std::move(part), root, elapsedUs, reused, std::move(unwatched)});
