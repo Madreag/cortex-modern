@@ -58,9 +58,14 @@ using namespace RTE;
 
 static std::string PlayerFacingStatus(const std::string& text) {
 	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
+	const bool refusal = text.starts_with("A player could not join:");
+	if (text.find("removed from this session") != std::string::npos) {
+		// The host's notice never speaks to the player it removed, and the player reads a whole sentence.
+		return refusal ? "A removed player was refused." : "The host removed you from this session";
+	}
 	if (wireReason || text.find("banned") != std::string::npos) {
 		// The host's notice wraps the refused player's own sentence, which is written to that player.
-		if (text.starts_with("A player could not join:")) return "A banned player was refused.";
+		if (refusal) return "A banned player was refused.";
 		return wireReason ? "You are banned from this session" : text;
 	}
 	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
@@ -3094,9 +3099,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	m_MultiplayerJoinRequest = request;
 	m_MultiplayerApplyOffered = !host;
 	if (g_NetMatchService.Start(request, &error)) {
-		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerLandingStatusLabel->SetText(host ? "" : "Joining the host's lobby...");
 		m_ReconnectStatusShown.clear();
-		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+		// A joining peer keeps the landing until the host admits it; the refresh switches the screen
+		// the moment the lobby snapshot says the seat is real.
+		m_MultiplayerSubScreen = host ? MultiplayerSubScreen::Lobby : MultiplayerSubScreen::Landing;
 	} else {
 		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
