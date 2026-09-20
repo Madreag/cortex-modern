@@ -58,7 +58,7 @@ namespace RTE {
 
 		/// Sets the name of the MetaPlayer.
 		/// @param newName The new name to set.
-		void SetName(std::string newName) { m_Name = std::move(newName); }
+		void SetName(std::string newName) { if (m_Name != newName) TouchCheckpoint(); m_Name = std::move(newName); }
 
 		/// Gets the Team of this MetaPlayer.
 		/// @return The Team of this player.
@@ -74,7 +74,7 @@ namespace RTE {
 
 		/// Sets whether this MetaPlayer is human controlled or not (AI).
 		/// @param human Whether this MetaPlayer is human controlled or not.
-		void SetHuman(bool human) { m_Human = human; }
+		void SetHuman(bool human) { if (m_Human != human) TouchCheckpoint(); m_Human = human; }
 
 		/// Shows which in-game player controls this MetaPlayer is mapped to.
 		/// @return The in-game player number this is mapped to.
@@ -90,7 +90,7 @@ namespace RTE {
 
 		/// Sets the normalized aggressiveness scalar of this player if an AI.
 		/// @param aggressiveness The new aggressiveness scalar, 0 min to 1.0 max.
-		void SetAggressiveness(float aggressiveness) { m_Aggressiveness = aggressiveness; }
+		void SetAggressiveness(float aggressiveness) { if (m_Aggressiveness != aggressiveness) TouchCheckpoint(); m_Aggressiveness = aggressiveness; }
 
 		/// Indicates which round this MetaPlayer made it to. If negative, he is still in the game.
 		/// @return Which round the MetaPlayer made it to.
@@ -98,7 +98,7 @@ namespace RTE {
 
 		/// Sets which round this MetaPlayer lost out on. If set to negative, it means he's still in the game.
 		/// @param gameOverRound The round the MetaPlayer lost out on.
-		void SetGameOverRound(int gameOverRound) { m_GameOverRound = gameOverRound; }
+		void SetGameOverRound(int gameOverRound) { if (m_GameOverRound != gameOverRound) TouchCheckpoint(); m_GameOverRound = gameOverRound; }
 
 		/// Tells whether this MetaPlayer is out of the game on or before a particular round of the current metagame.
 		/// @param whichRound Which round to check against.
@@ -111,7 +111,7 @@ namespace RTE {
 
 		/// Sets the name of the scene this MetaPlayer is targeting for offensive.
 		/// @param targetName The name of the Scene this MetaPlayer is targeting.
-		void SetOffensiveTargetName(std::string targetName) { m_OffensiveTarget = std::move(targetName); }
+		void SetOffensiveTargetName(std::string targetName) { if (m_OffensiveTarget != targetName) TouchCheckpoint(); m_OffensiveTarget = std::move(targetName); }
 #pragma endregion
 
 #pragma region Funds and Costs
@@ -121,7 +121,7 @@ namespace RTE {
 
 		/// Sets the amount of funds this MetaPlayer currently has in the game.
 		/// @param newFunds The new funds value for this MetaPlayer.
-		void SetFunds(float newFunds) { m_Funds = newFunds; }
+		void SetFunds(float newFunds) { if (m_Funds != newFunds) TouchCheckpoint(); m_Funds = newFunds; }
 
 		/// Changes this MetaPlayer's funds level by a certain amount.
 		/// @param howMuch The amount with which to change the funds balance.
@@ -144,7 +144,7 @@ namespace RTE {
 
 		/// Sets the offensive budget of this MetaPlayer for this round, in oz.
 		/// @param newBudget The new offensive budget, in oz.
-		void SetOffensiveBudget(float newBudget) { m_OffensiveBudget = newBudget; }
+		void SetOffensiveBudget(float newBudget) { if (m_OffensiveBudget != newBudget) TouchCheckpoint(); m_OffensiveBudget = newBudget; }
 
 		/// Gets the multiplier of costs of any Tech items foreign to this MetaPlayer.
 		/// @return The scalar multiplier of all costs of foreign tech items.
@@ -156,7 +156,7 @@ namespace RTE {
 
 		/// Sets the multiplier of costs of any Tech items native to this MetaPlayer.
 		/// @param newNativeCostMult The scalar multiplier of all costs of native tech items.
-		void SetNativeCostMultiplier(float newNativeCostMult) { m_NativeCostMult = newNativeCostMult; }
+		void SetNativeCostMultiplier(float newNativeCostMult) { if (m_NativeCostMult != newNativeCostMult) TouchCheckpoint(); m_NativeCostMult = newNativeCostMult; }
 #pragma endregion
 
 #pragma region Brain Pool
@@ -166,7 +166,7 @@ namespace RTE {
 
 		/// Sets the number of brains in this MetaPlayer's brain pool.
 		/// @param brainCount The number of brains that should be available for deployment.
-		void SetBrainPoolCount(int brainCount) { m_BrainPool = brainCount; }
+		void SetBrainPoolCount(int brainCount) { if (m_BrainPool != brainCount) TouchCheckpoint(); m_BrainPool = brainCount; }
 
 		/// Alters the number of brains in this MetaPlayer's brain pool.
 		/// @param change The number of brains to add or remove from the pool.
@@ -226,6 +226,8 @@ namespace RTE {
 		std::string m_OffensiveTarget; //!< Name of the Scene this player is targeting for its offensive this round.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this MetaPlayer, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};

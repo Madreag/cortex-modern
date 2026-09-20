@@ -515,7 +515,7 @@ namespace luabind { namespace detail
 		pointer_converter(): destructor(0) {}
 
 		template<class T>
-		typename make_pointer<T>::type apply(lua_State* L, by_pointer<T>, int index)
+		typename make_pointer<T>::type apply(lua_State* L, by_pointer<T>, int index, bool checkpoint_write = false)
 		{
 			// preconditions:
 			//	lua_isuserdata(L, index);
@@ -529,6 +529,7 @@ namespace luabind { namespace detail
 			const class_rep* crep = obj->crep();
 
 			T* ptr = reinterpret_cast<T*>(crep->convert_to(LUABIND_TYPEID(T), obj, target));
+			if (checkpoint_write) { checkpoint_object_mutated(obj); checkpoint_alias_mutated(obj); }
 
 			if ((void*)ptr == (char*)target) destructor = detail::destruct_only_s<T>::apply;
 			assert(!destructor || sizeof(T) <= 32);
@@ -845,7 +846,7 @@ namespace luabind { namespace detail
 		typename make_reference<T>::type apply(lua_State* L, by_reference<T>, int index)
 		{
 			assert(!lua_isnil(L, index));
-			return *pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index);
+			return *pointer_converter<lua_to_cpp>().apply(L, by_pointer<T>(), index, true);
 		}
 
 		template<class T>
@@ -1329,4 +1330,3 @@ namespace luabind { namespace
 }}
 
 #endif // LUABIND_POLICY_HPP_INCLUDED
-

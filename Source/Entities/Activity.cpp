@@ -49,6 +49,16 @@ Activity::~Activity() {
 }
 
 void Activity::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_ActivityState, m_AllowsUserSaving, m_BrainEvacuated, m_CheckpointActorIDs, m_CraftOrbitAtTheEdge, m_Description.empty(),
+			m_Difficulty, m_FundsChanged, m_FundsContribution, m_HadBrain, m_HasCheckpointActorIDs, m_InCampaignStage,
+			m_IsActive, m_IsHuman, m_IsTestActivity, m_MaxPlayerSupport, m_MinTeamsRequired, m_Paused,
+			m_PendingRuntimeCheckpoint.empty(), m_PlayerCount, m_PlayerScreen, m_SavedValues, m_SceneName.empty(), m_Team,
+			m_TeamAISkillLevels, m_TeamActive, m_TeamCount, m_TeamDeaths, m_TeamFunds, m_TeamFundsShare,
+			m_TeamNames, m_ViewState, m_DeathTimer, m_MessageTimer, m_PlayerController, m_TeamIcons);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PendingRuntimeCheckpoint.clear();
 	m_BrainRecordReconciled = false;
 	m_SharedPlayerSeats = false;
@@ -86,6 +96,7 @@ void Activity::Clear() {
 		m_ControlledActor[player] = 0;
 		m_RenderSubstituteActor[player] = nullptr;
 		m_PresentationView[player] = PresentationView{};
+		m_PlayerController[player].SetCheckpointOwner(this);
 		m_PlayerController[player].Reset();
 		m_MessageTimer[player].Reset();
 	}
@@ -404,6 +415,7 @@ void Activity::End() {
 }
 
 void Activity::SetupPlayers() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PlayerCount, m_PlayerScreen, m_TeamActive, m_TeamCount); });
 	if (!m_SharedPlayerSeats) ConfigureLockstepPlayers();
 	RefreshLockstepLocalPlayers();
 	m_TeamCount = 0;
@@ -612,6 +624,7 @@ bool Activity::DeactivatePlayer(int playerToDeactivate) {
 }
 
 int Activity::AddPlayer(int playerToAdd, bool isHuman, int team, float funds, const Icon* teamIcon) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FundsContribution, m_IsActive, m_IsHuman, m_PlayerCount, m_Team, m_TeamActive, m_TeamCount, m_TeamFunds, m_TeamFundsShare); });
 	if (playerToAdd < Players::PlayerOne || playerToAdd >= Players::MaxPlayerCount || team < Teams::TeamOne || team >= Teams::MaxTeamCount) {
 		return m_PlayerCount;
 	}
@@ -650,6 +663,7 @@ int Activity::AddPlayer(int playerToAdd, bool isHuman, int team, float funds, co
 }
 
 void Activity::ClearPlayers(bool resetFunds) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FundsContribution, m_IsActive, m_IsHuman, m_LockstepControlUID, m_PlayerCount, m_TeamActive, m_TeamCount, m_TeamFunds, m_TeamFundsShare); });
 	m_SharedPlayerSeats = false;
 	m_SharedSeatsEngaged = false;
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
@@ -685,6 +699,7 @@ uint8_t Activity::GetHumanCount() const {
 }
 
 void Activity::SetTeamOfPlayer(int player, int team) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_IsActive, m_Team, m_TeamActive); });
 	if (team < Teams::TeamOne || team >= Teams::MaxTeamCount || player < Players::PlayerOne || player >= Players::MaxPlayerCount) {
 		return;
 	}
@@ -910,6 +925,7 @@ float Activity::GetPlayerFundsShare(int player) const {
 }
 
 void Activity::SetPlayerBrain(Actor* newBrain, int player) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HadBrain); });
 	if (player < Players::PlayerOne || player >= Players::MaxPlayerCount) return;
 	if (newBrain) {
 		if (newBrain->GetTeam() != m_Team[player]) {
@@ -2044,6 +2060,7 @@ static bool HoldsNewerBrainBinding(const Actor* slot, const Actor* link) {
 
 void Activity::ClearNonOwnedActorSlots() {
 	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		if (m_Brain[player] || m_ControlledActor[player] || m_PlayerController[player].GetControlledActor()) TouchCheckpoint();
 		m_Brain[player] = nullptr;
 		m_ControlledActor[player] = nullptr;
 		m_PlayerController[player].SetControlledActor(nullptr);
@@ -2063,6 +2080,7 @@ void Activity::RebindNonOwnedActorSlots() {
 }
 
 void Activity::ClearCheckpointActorIDs() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HasCheckpointActorIDs); });
 	m_HasCheckpointActorIDs = false;
 }
 

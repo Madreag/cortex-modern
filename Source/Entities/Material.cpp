@@ -9,6 +9,14 @@ using namespace RTE;
 ConcreteClassInfo(Material, Entity, 0);
 
 void Material::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_BGTextureFile, m_Color, m_FGTextureFile, m_Friction, m_GibImpulseLimitPerLiter, m_GibWoundLimitPerLiter,
+			m_Index, m_Integrity, m_IsScrap, m_Piling, m_PixelDensity, m_Priority,
+			m_Restitution, m_SettleMaterialIndex, m_SpawnMaterialIndex, m_Stickiness, m_TerrainBGTexture, m_TerrainFGTexture,
+			m_UseOwnColor, m_VolumeDensity);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Index = 0;
 	m_Priority = -1;
 	m_Piling = 0;
@@ -195,8 +203,8 @@ bool Material::LoadCheckpoint(std::string_view text, bool validateOnly) {
         BITMAP* foregroundBitmap = texture(foreground);
         BITMAP* backgroundBitmap = texture(background);
         archive.OnCommit([this, foregroundBitmap, backgroundBitmap] {
-            m_TerrainFGTexture = foregroundBitmap;
-            m_TerrainBGTexture = backgroundBitmap;
+			m_TerrainFGTexture = foregroundBitmap;
+			m_TerrainBGTexture = backgroundBitmap;
         });
         archive.Finish();
         return true;

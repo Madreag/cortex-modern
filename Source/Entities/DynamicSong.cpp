@@ -23,6 +23,8 @@ DynamicSongSection::~DynamicSongSection() {
 }
 
 void DynamicSongSection::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_TransitionSoundContainers.empty(), m_LastTransitionSoundContainerIndex, m_TransitionShuffleUnplayedIndices.empty(), m_SoundContainers.empty(), m_LastSoundContainerIndex, m_ShuffleUnplayedIndices.empty(), m_SoundContainerSelectionCycleMode, m_SectionType); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_TransitionSoundContainers.clear();
 	m_LastTransitionSoundContainerIndex = -1;
 	m_TransitionShuffleUnplayedIndices.clear();
@@ -221,6 +223,8 @@ DynamicSong::~DynamicSong() {
 }
 
 void DynamicSong::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_DefaultSongSection, m_SongSections.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_DefaultSongSection.Destroy();
 	m_SongSections.clear();
 }

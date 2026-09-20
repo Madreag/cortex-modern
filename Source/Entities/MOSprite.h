@@ -228,7 +228,7 @@ namespace RTE {
 
 		/// Sets the animation mode.
 		/// @param animMode The animation mode we want to set. (default: NOANIM)
-		void SetSpriteAnimMode(int animMode = NOANIM) { m_SpriteAnimMode = (SpriteAnimMode)animMode; }
+		void SetSpriteAnimMode(int animMode = NOANIM) { if (m_SpriteAnimMode != static_cast<SpriteAnimMode>(animMode)) TouchCheckpoint(); m_SpriteAnimMode = (SpriteAnimMode)animMode; }
 
 		/// Gets the animation mode.
 		/// @return The animation mode currently in effect.
@@ -247,6 +247,7 @@ namespace RTE {
 		/// Sets forced flipped drawing along the vertical axis, preventing changing HFlipped elsewhere.
 		/// @param forceFlip A bool with the new value, int -1, 0, or 1.
 		void SetForcedHFlip(const int forceFlip) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_ForcedHFlip, m_HFlipped); });
 			if (forceFlip == -1 || forceFlip == 0 || forceFlip == 1) {
 				m_ForcedHFlip = forceFlip;
 				if (forceFlip == 0) {
@@ -263,7 +264,7 @@ namespace RTE {
 
 		/// Sets the current absolute angle of rotation of this MovableObject.
 		/// @param m_Rotation.SetRadAngle(newAngle The new absolute angle in radians.
-		void SetRotAngle(float newAngle) override { if (m_Rotation.GetRadAngle() != newAngle) TouchCheckpoint(); m_Rotation.SetRadAngle(newAngle); }
+		void SetRotAngle(float newAngle) override { if (m_Rotation.GetRadAngle() != newAngle || m_Rotation.m_ElementsUpdated) TouchCheckpoint(); m_Rotation.SetRadAngle(newAngle); }
 
 		/// Sets the current angular velocity of this MovableObject. Positive is
 		/// a counter clockwise rotation.
@@ -429,6 +430,8 @@ namespace RTE {
 		std::string m_PersistedMOSpriteRuntime;
 		std::string SaveMOSpriteRuntime() const;
 		bool LoadMOSpriteRuntime(std::string_view text, bool validateOnly = false);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this MOSprite, effectively
 		/// resetting the members of this abstraction level only.

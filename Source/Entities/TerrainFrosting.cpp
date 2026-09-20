@@ -1,11 +1,16 @@
 #include "TerrainFrosting.h"
+#include "CheckpointImage.h"
 #include "SLTerrain.h"
 
 using namespace RTE;
 
 const std::string TerrainFrosting::c_ClassName = "TerrainFrosting";
 
+void TerrainFrosting::TouchCheckpoint() { CheckpointValueWritten(this); }
+
 void TerrainFrosting::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FrostingMaterial, m_TargetMaterial, m_MinThickness, m_MaxThickness, m_InAirOnly); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_FrostingMaterial.Reset();
 	m_TargetMaterial.Reset();
 	m_MinThickness = 5;

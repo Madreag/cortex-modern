@@ -83,6 +83,7 @@ namespace RTE {
 			SerializableClassNameGetter;
 			SerializableOverrideMethods;
 			std::string SaveCheckpoint() const;
+			void TouchCheckpoint();
 			bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 
 			/// Constructor method used to instantiate a Area object in system
@@ -386,7 +387,7 @@ namespace RTE {
 
 		/// Adds area to the list if this scene's areas.
 		/// @param m_AreaList.push_back(newArea Area to add.
-		void AddArea(Scene::Area& newArea) { m_AreaList.push_back(new Scene::Area(newArea)); }
+		void AddArea(Scene::Area& newArea) { TouchCheckpoint(); m_AreaList.push_back(new Scene::Area(newArea)); }
 
 		/// Creates a new SceneLayer for a specific team and fills it with black
 		/// pixels that end up being a specific size on the screen.
@@ -600,7 +601,7 @@ namespace RTE {
 		/// Sets the global acceleration (in m/s^2) that is applied to all movable
 		/// objects' velocities during every frame. Typically models gravity.
 		/// @param newValue A Vector describing the global acceleration.
-		void SetGlobalAcc(Vector newValue) { m_GlobalAcc = newValue; }
+		void SetGlobalAcc(Vector newValue) { if (m_GlobalAcc != newValue) TouchCheckpoint(); m_GlobalAcc = newValue; }
 
 		/// Returns parent scene name of this metascene.
 		/// @return Name of a parent scene.
@@ -625,13 +626,13 @@ namespace RTE {
 		/// Sets how much gold this Scene is budgeted to be built for this round.
 		/// @param player The player whom is setting the budget.
 		/// @param budget The budget in oz that this is allocated to have built for this round.
-		void SetBuildBudget(int player, float budget) { m_BuildBudget[player] = budget; }
+		void SetBuildBudget(int player, float budget) { if (m_BuildBudget[player] != budget) TouchCheckpoint(); m_BuildBudget[player] = budget; }
 
 		/// Sets how much of a player's budget this Scene is budgeted to be build
 		/// for each turn.
 		/// @param player The player whom is setting the budget ratio.
 		/// @param budgetRatio The budget in normalized ratio that this is allocated of the total.
-		void SetBuildBudgetRatio(int player, float budgetRatio) { m_BuildBudgetRatio[player] = budgetRatio; }
+		void SetBuildBudgetRatio(int player, float budgetRatio) { if (m_BuildBudgetRatio[player] != budgetRatio) TouchCheckpoint(); m_BuildBudgetRatio[player] = budgetRatio; }
 
 		/// Figure out exactly how much of the build budget would be used if
 		/// as many blueprint objects as can be afforded and exists would be built.
@@ -681,7 +682,7 @@ namespace RTE {
 		/// Sets this to be orbitally scanned by a specific team on next load.
 		/// @param team The team to schedule the scan for.
 		/// @param scan Whether to actually schedule the scan or clear it. (default: true)
-		void SetScheduledScan(int team, bool scan = true) { m_ScanScheduled[team] = scan; }
+		void SetScheduledScan(int team, bool scan = true) { if (m_ScanScheduled[team] != scan) TouchCheckpoint(); m_ScanScheduled[team] = scan; }
 
 		/// Recalculates all of the pathfinding data. This is very expensive, so
 		/// do very rarely!
@@ -774,7 +775,7 @@ namespace RTE {
 
 		/// Sets whether this Scene is a saved game Scene copy and should not be used anywhere except for game saving and loading.
 		/// @param newValue Whether this Scene is a saved game Scene copy.
-		void SetSavedGameInternal(bool newValue) { m_IsSavedGameInternal = newValue; }
+		void SetSavedGameInternal(bool newValue) { if (m_IsSavedGameInternal != newValue) TouchCheckpoint(); m_IsSavedGameInternal = newValue; }
 
 		/// Returns preview bitmap pointer for this scene.
 		/// @return Pointer to preview bitmap.
@@ -870,6 +871,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Scene, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

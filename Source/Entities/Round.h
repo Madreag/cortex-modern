@@ -134,6 +134,8 @@ namespace RTE {
 		int m_AIPenetration; //!< For overriding the bullets ability to penetrate material when executing the AI shooting scripts.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Round, effectively resetting the members of this abstraction level only.
 		void Clear();
 

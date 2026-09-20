@@ -101,7 +101,7 @@ namespace RTE {
 
 		/// Sets the name of an assembly symmetric to this one.
 		/// @param newSymmetricAssembly Symmetric assembly name.
-		void SetSymmetricAssemblyName(std::string newSymmetricAssembly) { m_SymmetricAssembly = std::move(newSymmetricAssembly); };
+		void SetSymmetricAssemblyName(std::string newSymmetricAssembly) { if (m_SymmetricAssembly != newSymmetricAssembly) TouchCheckpoint(); m_SymmetricAssembly = std::move(newSymmetricAssembly); };
 
 		/// Draws this TerrainObject's current graphical representation to a
 		/// BITMAP of choice.
@@ -129,6 +129,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this BunkerAssembly, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

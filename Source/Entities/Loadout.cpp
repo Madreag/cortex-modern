@@ -8,6 +8,8 @@ using namespace RTE;
 ConcreteClassInfo(Loadout, Entity, 0);
 
 void Loadout::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pDeliveryCraft, m_CargoItems.empty()); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_Complete = true;
 	m_pDeliveryCraft = 0;
 	m_CargoItems.clear();

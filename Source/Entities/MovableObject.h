@@ -385,6 +385,7 @@ namespace RTE {
 		/// IgnoresAGHitsWhenSlowerThan property.
 		/// @param ignoreAG Whether this can hit or get hit by other MOs which use AGs. (default: true)
 		void SetIgnoresAtomGroupHits(bool ignoreAG = true) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_IgnoresAGHitsWhenSlowerThan, m_IgnoresAtomGroupHits); });
 			m_IgnoresAtomGroupHits = ignoreAG;
 			if (ignoreAG)
 				m_IgnoresAGHitsWhenSlowerThan = -1;
@@ -469,6 +470,7 @@ namespace RTE {
 		/// Gets the file path of this MovableObject's current screen effect.
 		/// @param pathToFile A string containing the file path of the new screen effect.
 		void SetScreenEffectPath(std::string& pathToFile) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_ScreenEffectFile.GetDataPath(), m_ScreenEffectHash, m_pScreenEffect); });
 			m_ScreenEffectFile.SetDataPath(pathToFile);
 			m_pScreenEffect = m_ScreenEffectFile.GetAsBitmap();
 			m_ScreenEffectHash = m_ScreenEffectFile.GetHash();
@@ -488,7 +490,7 @@ namespace RTE {
 
 		/// Sets the starting strength of this MovableObject's effect.
 		/// @param strength The new starting strength of the effect, 0.0-1.0.
-		void SetEffectStartStrengthFloat(float strength) { m_EffectStartStrength = std::floor(255.0F * strength); }
+		void SetEffectStartStrengthFloat(float strength) { const int value = std::floor(255.0F * strength); if (m_EffectStartStrength != value) TouchCheckpoint(); m_EffectStartStrength = value; }
 
 		/// Gets the stopping strength of this MovableObject's effect.
 		/// @return The stopping strength of the effect, 0-255.
@@ -500,11 +502,11 @@ namespace RTE {
 
 		/// Sets the stopping strength of this MovableObject's effect.
 		/// @param strength The new stopping strength of the effect, 0.0-1.0.
-		void SetEffectStopStrengthFloat(float strength) { m_EffectStopStrength = std::floor(255.0F * strength); }
+		void SetEffectStopStrengthFloat(float strength) { const int value = std::floor(255.0F * strength); if (m_EffectStopStrength != value) TouchCheckpoint(); m_EffectStopStrength = value; }
 
 		/// Sets both strengths of this MovableObject's effect.
 		/// @param strength The new strengths of the effect, 0.0-1.0.
-		void SetEffectStrength(float strength) { m_EffectStartStrength = m_EffectStopStrength = std::floor(255.0F * strength); }
+		void SetEffectStrength(float strength) { const int value = std::floor(255.0F * strength); if (m_EffectStartStrength != value || m_EffectStopStrength != value) TouchCheckpoint(); m_EffectStartStrength = m_EffectStopStrength = value; }
 
 		/// Gets whether or not this MovableObject's effect is drawn every frame.
 		/// @return Boolean indicating whether or not the effect is drawn.
@@ -544,11 +546,12 @@ namespace RTE {
 		}
 
 		/// Sets the MOID of this MovableObject to be g_NoMOID (255) for this frame.
-		virtual void SetAsNoID() { m_MOID = g_NoMOID; }
+		virtual void SetAsNoID() { if (m_MOID != g_NoMOID) TouchCheckpoint(); m_MOID = g_NoMOID; }
 
 		/// Sets this MovableObject as having been added to MovableMan. Should only really be done in MovableMan::Add/Remove Actor/Item/Particle.
 		/// @param addedToMovableMan Whether or not this MovableObject has been added to MovableMan.
 		void SetAsAddedToMovableMan(bool addedToMovableMan = true) {
+			CheckpointChange changed(*this, [this] { return m_HasEverBeenAddedToMovableMan; });
 			if (addedToMovableMan) {
 				m_HasEverBeenAddedToMovableMan = true;
 			}
@@ -584,6 +587,7 @@ namespace RTE {
 		/// @param moToNotHit A pointer to the MO to not be hitting. Null pointer means don't ignore anyhting. Ownership is NOT transferred!
 		/// @param forHowLong How long, in seconds, to ignore the specified MO. A negative number means forever.
 		virtual void SetWhichMOToNotHit(MovableObject* moToNotHit = nullptr, float forHowLong = -1) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_pMOToNotHit, m_MOToNotHitUID, m_MOIgnoreTimer); });
 			m_pMOToNotHit = moToNotHit;
 			m_MOToNotHitUID = moToNotHit ? moToNotHit->m_UniqueID : 0;
 			m_MOIgnoreTimer.Reset();
@@ -727,7 +731,7 @@ namespace RTE {
 		/// @param offset) A Vector with the offset, in METERS, of where the force is being
 		/// applied relative to the center of this MovableObject.
 		/// @return None.A
-		void AddForce(const Vector& force, const Vector& offset = Vector()) { m_Forces.push_back(std::make_pair(force, offset)); }
+		void AddForce(const Vector& force, const Vector& offset = Vector()) { TouchCheckpoint(); m_Forces.push_back(std::make_pair(force, offset)); }
 
 		/// Adds force to this MovableObject for the next time Update() is called.
 		/// @param force An Vector with the external force vector that will be added to this
@@ -752,6 +756,7 @@ namespace RTE {
 			RTEAssert(offset.MagnitudeIsLessThan(5000.0F), "HUGE IMPULSE FORCE OFFSET");
 #endif
 			TraceImpulseForTrackedMO(m_UniqueID, impulse, offset);
+			TouchCheckpoint();
 			m_ImpulseForces.push_back({impulse, offset});
 		}
 
@@ -764,10 +769,10 @@ namespace RTE {
 		void AddAbsImpulseForce(const Vector& impulse, const Vector& absPos);
 
 		/// Clears out all the forces this MO has accumulated during this frame.
-		void ClearForces() { m_Forces.clear(); }
+		void ClearForces() { if (!m_Forces.empty()) TouchCheckpoint(); m_Forces.clear(); }
 
 		/// Clears out all the impulses this MO has accumulated during this frame.
-		void ClearImpulseForces() { m_ImpulseForces.clear(); }
+		void ClearImpulseForces() { if (!m_ImpulseForces.empty()) TouchCheckpoint(); m_ImpulseForces.clear(); }
 
 		/// Gets the impulse force threshold which has to be exceeded to
 		/// 'shake loose' this from a 'pinned' state. Pinned MOs don't get moved
@@ -917,15 +922,19 @@ namespace RTE {
 		/// Sets force vector in newtons of the specified Force record.
 		/// @param n Force record index to get data from. New Vector force value in newtons.
 		void SetForceVector(size_t n, Vector v) {
-			if (n > 0 && n < m_Forces.size())
+			if (n > 0 && n < m_Forces.size()) {
+				if (m_Forces[n].first != v) TouchCheckpoint();
 				m_Forces[n].first = v;
+			}
 		}
 
 		/// Sets offset vector in METERS (not pixels) of the specified Force record.
 		/// @param n Force record index to get data from. New Vector offset value in meters.
 		void SetForceOffset(size_t n, Vector v) {
-			if (n > 0 && n < m_Forces.size())
+			if (n > 0 && n < m_Forces.size()) {
+				if (m_Forces[n].second != v) TouchCheckpoint();
 				m_Forces[n].second = v;
+			}
 		}
 
 		/// Gets the pairs of impulse forces and their offsets that have to be applied.
@@ -963,15 +972,19 @@ namespace RTE {
 		/// @param n Impulse record index to get data from.
 		/// @return Offset vector in meters of the specified Impulse record.
 		void SetImpulseVector(size_t n, Vector v) {
-			if (n > 0 && n < m_ImpulseForces.size())
+			if (n > 0 && n < m_ImpulseForces.size()) {
+				if (m_ImpulseForces[n].first != v) TouchCheckpoint();
 				m_ImpulseForces[n].first = v;
+			}
 		}
 
 		/// Sets offset vector in METERS (not pixels) of the specified Impulse record.
 		/// @param n Impulse record index to get data from. New Vector offset value in meters.
 		void SetImpulseOffset(size_t n, Vector v) {
-			if (n > 0 && n < m_ImpulseForces.size())
+			if (n > 0 && n < m_ImpulseForces.size()) {
+				if (m_ImpulseForces[n].second != v) TouchCheckpoint();
 				m_ImpulseForces[n].second = v;
+			}
 		}
 
 		/// Gets the number of Sim updates that run between each script update for this MovableObject.
@@ -980,7 +993,7 @@ namespace RTE {
 
 		/// Sets the number of Sim updates that run between each script update for this MovableObject.
 		/// @param newSimUpdatesBetweenScriptedUpdates The new number of Sim updates that run between each script update for this MovableObject.
-		void SetSimUpdatesBetweenScriptedUpdates(int newSimUpdatesBetweenScriptedUpdates) { m_SimUpdatesBetweenScriptedUpdates = std::max(1, newSimUpdatesBetweenScriptedUpdates); }
+		void SetSimUpdatesBetweenScriptedUpdates(int newSimUpdatesBetweenScriptedUpdates) { const int value = std::max(1, newSimUpdatesBetweenScriptedUpdates); if (m_SimUpdatesBetweenScriptedUpdates != value) TouchCheckpoint(); m_SimUpdatesBetweenScriptedUpdates = value; }
 
 		/// Does stuff that needs to be done before Travel(). Always call before
 		/// calling Travel.
@@ -1283,7 +1296,7 @@ namespace RTE {
 
 		/// Sets whether this MO's RootParent is currently traveling.
 		/// @param newValue Whether this MO's RootParent is currently traveling.
-		void SetTraveling(bool newValue) { GetRootParent()->m_IsTraveling = newValue; }
+		void SetTraveling(bool newValue) { MovableObject* root = GetRootParent(); if (root->m_IsTraveling != newValue) root->TouchCheckpoint(); root->m_IsTraveling = newValue; }
 
 		/// Draws this MovableObject's graphical and material representations to the specified SLTerrain's respective layers.
 		/// @param terrain The SLTerrain to draw this MovableObject to. Ownership is NOT transferred!
@@ -1299,10 +1312,10 @@ namespace RTE {
 		virtual void OnSave() { RunScriptedFunctionInAppropriateScripts("OnSave"); }
 
 		/// Requests a synced update for the MO this frame.
-		virtual void RequestSyncedUpdate() { m_RequestedSyncedUpdate = true; }
+		virtual void RequestSyncedUpdate() { if (!m_RequestedSyncedUpdate) TouchCheckpoint(); m_RequestedSyncedUpdate = true; }
 
 		/// Resets the requested update flag.
-		virtual void ResetRequestedSyncedUpdateFlag() { m_RequestedSyncedUpdate = false; }
+		virtual void ResetRequestedSyncedUpdateFlag() { if (m_RequestedSyncedUpdate) TouchCheckpoint(); m_RequestedSyncedUpdate = false; }
 
 		/// Returns whether this MO has requested a synced update this frame.
 		/// @return Whether this MO has requested a synced update this frame.
@@ -1562,6 +1575,8 @@ namespace RTE {
 		/// value in the archive and move the object's text every tick; an angle a script or a preset set
 		/// is the object's own state and is written as it stands.
 		float CheckpointEffectRotAngle() const { return m_RandomizeEffectRotAngleEveryFrame ? 0.0F : m_EffectRotAngle; }
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this MovableObject, effectively resetting the members of this abstraction level only.
 		void Clear();

@@ -26,6 +26,19 @@ HDFirearm::~HDFirearm() {
 }
 
 void HDFirearm::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AIBulletAccScalar, m_AIBulletLifeTime, m_AIFireVel, m_ActivationDelay, m_ActiveSound, m_AlreadyClicked,
+			m_BaseReloadTime, m_DeactivationDelay, m_DeactivationSound, m_DoneReloading, m_DualReloadable, m_EjectOff,
+			m_EmptySound, m_FireEchoSound, m_FireFrame, m_FireIgnoresThis, m_FireSound, m_FiredLastFrame,
+			m_FiredOnce, m_FullAuto, m_HasPlayedEndReloadSound, m_IsAnimatedManually, m_LastFireTmr, m_LegacyCompatibilityRoundsAlwaysFireUnflipped,
+			m_MagOff, m_MuzzleOff, m_NoSupportFactor, m_OneHandedReloadAngle, m_OneHandedReloadTimeMultiplier, m_ParticleSpreadRange,
+			m_PersistedHDFirearmRuntime.empty(), m_PreFireSound, m_RateOfFire, m_RecoilScreenShakeAmount, m_ReloadAngle, m_ReloadEndOffset,
+			m_ReloadEndSound, m_ReloadStartSound, m_ReloadTmr, m_Reloadable, m_Reloading, m_RoundsFired,
+			m_ShakeRange, m_SharpShakeRange, m_ShellAngVelRange, m_ShellEjectAngle, m_ShellSpreadRange, m_ShellVelVariation,
+			m_pFlash, m_pMagazine);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedHDFirearmRuntime.clear();
 	m_pMagazineReference = 0;
 	m_pMagazine = 0;
@@ -498,6 +511,7 @@ void HDFirearm::Destroy(bool notInherited) {
 }
 
 void HDFirearm::SetMagazine(Magazine* newMagazine) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pMagazine); });
 	if (m_pMagazine && m_pMagazine->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pMagazine);
 	}
@@ -521,6 +535,7 @@ void HDFirearm::SetMagazine(Magazine* newMagazine) {
 }
 
 void HDFirearm::SetFlash(Attachable* newFlash) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pFlash); });
 	if (m_pFlash && m_pFlash->IsAttached()) {
 		RemoveAndDeleteAttachable(m_pFlash);
 	}
@@ -548,6 +563,7 @@ std::string HDFirearm::GetNextMagazineName() const {
 }
 
 bool HDFirearm::SetNextMagazineName(const std::string& magName) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AIBulletAccScalar, m_AIBulletLifeTime, m_AIFireVel); });
 	const Magazine* pNewMag = dynamic_cast<const Magazine*>(g_PresetMan.GetEntityPreset("Magazine", magName));
 	if (pNewMag) {
 		m_pMagazineReference = pNewMag;

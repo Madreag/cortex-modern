@@ -5,7 +5,14 @@
 #include "MovableMan.h"
 #include "MovableObject.h"
 #include "Atom.h"
+#include "AtomGroup.h"
+#include "Gib.h"
+#include "MOSRotating.h"
 #include "Actor.h"
+#include "ACDropShip.h"
+#include "ADoor.h"
+#include "SoundSet.h"
+#include "SoundContainer.h"
 #include "AudioMan.h"
 #include "LuaMan.h"
 #include "RTETools.h"
@@ -25,6 +32,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iomanip>
 #include <iterator>
 #include <map>
 #include <stdexcept>
@@ -87,27 +95,50 @@ void CheckpointGraphIndex::BeginWalk(bool full) {
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
 	m_Walking.clear();
+	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
+	m_ReusedRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
 	m_RootsReused = 0;
 	m_RootsRewritten = 0;
-	m_Root = 0;
+	m_Root = {};
+	m_UncacheableRoots = 0;
 	m_WalkNoteUs = 0;
+	m_WalkStates.clear();
+	m_WalkParts.clear();
 }
 
-void CheckpointGraphIndex::BeginRoot(uint64_t root) {
+void CheckpointGraphIndex::BeginRoot(uint64_t root, const void* state, std::string part) {
 	std::lock_guard lock(m_Mutex);
-	m_Root = root;
-	if (m_Walk) m_WalkingRoots.insert(root);
+	m_Root = {state, root, std::move(part)};
+	if (m_Walk) m_WalkingRoots.insert(m_Root);
+}
+
+void CheckpointGraphIndex::ReuseRoot(uint64_t root, const void* state, const std::string& part) {
+	std::lock_guard lock(m_Mutex);
+	m_FullWalk = false;
+	m_ReusedRoots.insert({state, root, part});
+}
+
+void CheckpointGraphIndex::RestartStateWalk(const void* state) {
+	std::lock_guard lock(m_Mutex);
+	for (auto entry = m_Walking.begin(); entry != m_Walking.end();) {
+		std::erase_if(entry->second, [state](const Root& root) { return root.state == state; });
+		entry = entry->second.empty() ? m_Walking.erase(entry) : std::next(entry);
+	}
+	std::erase_if(m_WalkingValues, [state](const auto& entry) { return entry.second.state == state; });
+	std::erase_if(m_WalkingRoots, [state](const Root& root) { return root.state == state; });
+	std::erase_if(m_ReusedRoots, [state](const Root& root) { return root.state == state; });
 }
 
 void CheckpointGraphIndex::NoteTable(const void* table) {
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || !table) return;
-	// The first root to reach a shared table owns it; that root is dirty when the table is written.
-	m_Walking.emplace(table, m_Root);
+	// Path lookup and node ownership can depend on the same table.
+	auto& roots = m_Walking[table];
+	if (std::find(roots.begin(), roots.end(), m_Root) == roots.end()) roots.push_back(m_Root);
 	m_WalkNoteUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
 }
 
@@ -121,10 +152,11 @@ void CheckpointGraphIndex::NoteValue(const void* value) {
 
 void CheckpointGraphIndex::NoteUncacheableRoots(size_t roots) {
 	std::lock_guard lock(m_Mutex);
-	m_UncacheableRoots = roots;
+	m_UncacheableRoots += roots;
 }
 
 void CheckpointGraphIndex::EndWalk() {
+	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
 	if (m_FullWalk) {
@@ -139,27 +171,32 @@ void CheckpointGraphIndex::EndWalk() {
 		// reuse, so leaving the flag set would disable the cache for the rest of the process.
 		m_UnknownTable = false;
 		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
-			entry = m_WalkingRoots.count(entry->second) ? m_TableRoots.erase(entry) : std::next(entry);
+			std::erase_if(entry->second, [this](const Root& root) { return !m_ReusedRoots.contains(root); });
+			entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
 		}
 		for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
-			entry = m_WalkingRoots.count(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
+			entry = !m_ReusedRoots.contains(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
 		}
-		for (const auto& [table, root]: m_Walking) m_TableRoots[table] = root;
+		for (const auto& [table, roots]: m_Walking) {
+			auto& kept = m_TableRoots[table];
+			for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
+		}
 		for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
-		for (uint64_t root: m_WalkingRoots) {
-			m_Roots.insert(root);
-			m_DirtyRoots.erase(root);
-		}
+		m_Roots = std::move(m_ReusedRoots);
+		m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
+		m_DirtyRoots.clear();
 	}
 	m_Walking.clear();
 	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
+	m_ReusedRoots.clear();
 	m_DirtyTables = 0;
 	m_DirtyValues = 0;
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
 	m_FullWalk = true;
-	m_Root = 0;
+	m_Root = {};
+	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {}});
 }
 
 void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
@@ -176,9 +213,26 @@ void CheckpointGraphIndex::NoteRootReuse(size_t reused, size_t rewritten) {
 	m_FullWalk = m_FullWalk && m_RootsReused == 0;
 }
 
-std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots() const {
+void CheckpointGraphIndex::NoteWalkPart(const void* state, std::string part, uint64_t root, int64_t elapsedUs, bool reused, std::string unwatched) {
 	std::lock_guard lock(m_Mutex);
-	return m_DirtyRoots;
+	const auto found = !state && !m_WalkStates.empty() ? std::prev(m_WalkStates.end()) : std::find(m_WalkStates.begin(), m_WalkStates.end(), state);
+	const size_t index = found - m_WalkStates.begin();
+	if (found == m_WalkStates.end()) m_WalkStates.push_back(state);
+	m_WalkParts.push_back({index, std::move(part), root, elapsedUs, reused, std::move(unwatched)});
+}
+
+std::unordered_set<uint64_t> CheckpointGraphIndex::DirtyRoots(const void* state) const {
+	std::lock_guard lock(m_Mutex);
+	std::unordered_set<uint64_t> roots;
+	for (const Root& root: m_DirtyRoots) if (root.state == state) roots.insert(root.id);
+	return roots;
+}
+
+std::unordered_set<std::string> CheckpointGraphIndex::DirtyParts(const void* state, uint64_t root) const {
+	std::lock_guard lock(m_Mutex);
+	std::unordered_set<std::string> parts;
+	for (const Root& dirty: m_DirtyRoots) if (dirty.state == state && dirty.id == root) parts.insert(dirty.part);
+	return parts;
 }
 
 bool CheckpointGraphIndex::UnknownTableWritten() const {
@@ -191,11 +245,16 @@ bool CheckpointGraphIndex::HasWalked() const {
 	return !m_Roots.empty();
 }
 
+bool CheckpointGraphIndex::CanReuseWhole() const {
+	std::lock_guard lock(m_Mutex);
+	return !m_Roots.empty() && m_UncacheableRoots == 0 && m_DirtyRoots.empty();
+}
+
 void CheckpointGraphIndex::OnTableWritten(const void* table) {
 	std::lock_guard lock(m_Mutex);
 	if (m_Walk) return;  // The walk writes its own scratch tables.
 	if (const auto found = m_TableRoots.find(table); found != m_TableRoots.end()) {
-		m_DirtyRoots.insert(found->second);
+		for (const Root& root: found->second) m_DirtyRoots.insert(root);
 	} else if (!m_TableRoots.empty()) {
 		// A table the walk never recorded is in no chunk, so it stales none. The flag stays as the
 		// count of writes that named no root; the root cache no longer refuses itself over it.
@@ -216,9 +275,12 @@ void CheckpointGraphIndex::OnValueWritten(const void* value) {
 GraphDirt CheckpointGraphIndex::Sample() const {
 	std::lock_guard lock(m_Mutex);
 	GraphDirt dirt;
-	dirt.roots = m_Roots.size();
+	Roots roots, dirtyRoots;
+	for (const Root& root: m_Roots) roots.insert({root.state, root.id, {}});
+	for (const Root& root: m_DirtyRoots) dirtyRoots.insert({root.state, root.id, {}});
+	dirt.roots = roots.size();
 	dirt.tables = m_TableRoots.size();
-	dirt.dirtyRoots = m_DirtyRoots.size();
+	dirt.dirtyRoots = dirtyRoots.size();
 	dirt.dirtyTables = m_DirtyTables;
 	dirt.values = m_ValueRoots.size();
 	dirt.dirtyValues = m_DirtyValues;
@@ -227,6 +289,7 @@ GraphDirt CheckpointGraphIndex::Sample() const {
 	dirt.noteUs = m_NoteUs;
 	dirt.rootsReused = m_RootsReused;
 	dirt.rootsRewritten = m_RootsRewritten;
+	dirt.walkParts = m_WalkParts;
 	return dirt;
 }
 
@@ -248,12 +311,14 @@ void CheckpointCow::RememberLua(std::vector<CheckpointText> graphs, uint64_t wri
 }
 
 bool CheckpointCow::LuaUnchanged(uint64_t writeGeneration, size_t stateCount) const {
+	if (!CheckpointGraphIndex::Get().CanReuseWhole()) return false;
 	std::lock_guard lock(m_Mutex);
 	// A state added or dropped since the last capture changes the graph set whatever the write generation says.
 	return writeGeneration == m_LuaWriteGeneration && !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
 bool CheckpointCow::HasLua(size_t stateCount) const {
+	if (!CheckpointGraphIndex::Get().CanReuseWhole()) return false;
 	std::lock_guard lock(m_Mutex);
 	return !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
@@ -341,6 +406,14 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	std::cout << std::format("[autosave] tick={} graph_walk_us={} graph_text_us={} roots_reused={} roots_rewritten={} graph_state_serial={} graph_values={} graph_dirty_values={} graph_uncacheable_roots={}\n",
 	                         tick, records[2], graphTextUs, rootsReused, rootsRewritten, graphSerial,
 	                         graph.values, before.dirtyValues, graph.uncacheableRoots) << std::flush;
+	if (!luaReused) {
+		for (const auto& part: graph.walkParts) {
+			std::cout << std::format("[autosave] tick={} graph_vm={} graph_part={} graph_root={} graph_part_us={} graph_chunk_reused={} graph_unwatched=",
+			                         tick, part.state, part.part, part.root, part.elapsedUs, part.reused ? 1 : 0)
+			          << std::quoted(part.unwatched) << '\n';
+		}
+		std::cout << std::flush;
+	}
 }
 
 void CheckpointCow::WriteMetricsJson(const std::string& path) const {
@@ -563,6 +636,21 @@ bool RTE::RunCheckpointSceneRows() {
 		fail("image_ignores_writes_during_worker_traversal", "front actor is not a MovableObject");
 		return false;
 	}
+	{
+		const int result = g_LuaMan.GetMasterScriptState().RunScriptString(R"lua(
+local vector = Vector(1000000.25, 0)
+local roots = { ["62"] = { value = vector } }
+local before, problems = _ScriptGraph.serialize(roots)
+assert(#problems == 0, table.concat(problems, " | "))
+SceneMan:WrapPosition(vector)
+assert(vector.X ~= 1000000.25, "the scene did not wrap the argument")
+assert(_ScriptGraphDirtyRoots().roots["62"], "the wrapped argument left root 62 clean")
+local after = _ScriptGraph.serialize(roots)
+assert(before ~= after, "the wrapped value kept its old archive")
+)lua");
+		if (result == 0) pass("vector_out_argument_dirties_its_root", "WrapPosition marked the argument's root");
+		else fail("vector_out_argument_dirties_its_root", "script result " + std::to_string(result));
+	}
 	// A write to a field the archive carries has to move the object's stamp, or its shadow is served
 	// again with the old value. NotResting writes three saved fields and no travel stamps them.
 	{
@@ -591,8 +679,111 @@ bool RTE::RunCheckpointSceneRows() {
 			pass(row, "generation " + std::to_string(before) + " -> " + std::to_string(after));
 		}
 	}
-	// The scripted-update counter is saved and used to change every tick for every object, which no
-	// shadow survives. A tick that leaves it where it started must leave the stamp alone.
+	{
+		MOSRotating owner;
+		struct RotationProbe : MOSRotating { void Prime() { m_Rotation.m_ElementsUpdated = true; } } rotation;
+		rotation.Prime();
+		const uint64_t rotationBefore = rotation.CheckpointWriteGeneration();
+		rotation.SetRotAngle(rotation.GetRotAngle());
+		const uint64_t rotationAfter = rotation.CheckpointWriteGeneration();
+		rotation.SetRotAngle(rotation.GetRotAngle());
+		if (rotationAfter > rotationBefore && rotation.CheckpointWriteGeneration() == rotationAfter) pass("an_archived_matrix_cache_write_moves_the_stamp", "only the archived cache flag changed");
+		else fail("an_archived_matrix_cache_write_moves_the_stamp", "the matrix cache flag was not stamped once");
+		SceneObject::SOPlacer placer;
+		placer.SetCheckpointOwner(&owner);
+		const uint64_t placementBefore = owner.CheckpointWriteGeneration();
+		placer.SetOffset(Vector(3, 4));
+		const uint64_t placementAfter = owner.CheckpointWriteGeneration();
+		placer.SetOffset(Vector(3, 4));
+		if (placementAfter > placementBefore && owner.CheckpointWriteGeneration() == placementAfter) pass("a_placement_write_moves_its_owner_stamp", "equal writes kept the stamp");
+		else fail("a_placement_write_moves_its_owner_stamp", "the placement did not stamp its owner once");
+		AtomGroup group;
+		group.SetOwner(&owner);
+		const uint64_t before = owner.CheckpointWriteGeneration();
+		group.SetStoredMomentOfInertia(7.0F, 3.0F);
+		const uint64_t after = owner.CheckpointWriteGeneration();
+		group.SetStoredMomentOfInertia(7.0F, 3.0F);
+		if (after > before && owner.CheckpointWriteGeneration() == after) pass("an_atomgroup_write_moves_its_owner_stamp", "changed once, equal setter kept the stamp");
+		else fail("an_atomgroup_write_moves_its_owner_stamp", "before=" + std::to_string(before) + " after=" + std::to_string(after));
+		Gib gib;
+		gib.SetCheckpointOwner(&owner);
+		const uint64_t gibBefore = owner.CheckpointWriteGeneration();
+		gib.SetMinVelocity(3.0F);
+		const uint64_t gibAfter = owner.CheckpointWriteGeneration();
+		gib.SetMinVelocity(3.0F);
+		if (gibAfter > gibBefore && owner.CheckpointWriteGeneration() == gibAfter) pass("a_gib_write_moves_its_owner_stamp", "changed once, equal setter kept the stamp");
+		else fail("a_gib_write_moves_its_owner_stamp", "before=" + std::to_string(gibBefore) + " after=" + std::to_string(gibAfter));
+		Gib* boundGib = new Gib();
+		boundGib->SetCheckpointOwner(&owner);
+		owner.GetGibList()->push_back(boundGib);
+		auto& state = g_LuaMan.GetMasterScriptState();
+		Entity* previous = state.GetTempEntity();
+		state.SetTempEntity(&owner);
+		const uint64_t boundBefore = owner.CheckpointWriteGeneration();
+		const int changed = state.RunScriptString(R"lua(
+for gib in ToMOSRotating(LuaMan.TempEntity).Gibs do
+    gib.Count = 2; gib.Spread = 0.25; gib.LifeVariation = 0.2
+    gib.InheritsVel = 0.3; gib.InheritsAngularVel = 0.4; gib.IgnoresTeamHits = true
+    gib.Offset = Vector(3, 4)
+    local offset = gib.Offset; offset.X = 9
+end
+)lua");
+		const uint64_t boundAfter = owner.CheckpointWriteGeneration();
+		const int same = state.RunScriptString(R"lua(
+for gib in ToMOSRotating(LuaMan.TempEntity).Gibs do
+    local offset = gib.Offset
+    gib.Count = gib.Count; gib.Offset = Vector(9, 4); offset.X = offset.X
+    assert(offset.X == 9 and offset.Y == 4, "the Gib offset stopped being a live alias")
+end
+)lua");
+		state.SetTempEntity(previous);
+		if (changed == 0 && same == 0 && boundAfter >= boundBefore + 8 && owner.CheckpointWriteGeneration() == boundAfter && boundGib->GetOffset() == Vector(9, 4)) {
+			pass("gib_members_and_live_offsets_stamp_the_owner", "seven properties and the held offset changed, equal writes kept the stamp");
+		} else {
+			fail("gib_members_and_live_offsets_stamp_the_owner", "changed=" + std::to_string(changed) + " same=" + std::to_string(same) + " stamps=" + std::to_string(boundAfter - boundBefore));
+		}
+	}
+	{
+		ADoor owner;
+		ADSensor sensor;
+		sensor.SetCheckpointOwner(&owner);
+		const uint64_t before = owner.CheckpointWriteGeneration();
+		sensor.SetStartOffset(Vector(4, 5));
+		const uint64_t after = owner.CheckpointWriteGeneration();
+		sensor.SetStartOffset(Vector(4, 5));
+		if (after > before && owner.CheckpointWriteGeneration() == after) pass("a_sensor_write_moves_its_owner_stamp", "equal writes kept the stamp");
+		else fail("a_sensor_write_moves_its_owner_stamp", "the sensor did not stamp its door once");
+		owner.GetController()->SetControlledActor(nullptr);
+		const uint64_t controlBefore = owner.CheckpointWriteGeneration();
+		owner.GetController()->SetAnalogMove(Vector(0.25F, 0.5F));
+		const uint64_t controlAfter = owner.CheckpointWriteGeneration();
+		owner.GetController()->SetAnalogMove(Vector(0.25F, 0.5F));
+		if (controlAfter > controlBefore && owner.CheckpointWriteGeneration() == controlAfter) pass("a_controller_write_moves_its_owner_stamp", "the owning actor was stamped with no controlled actor");
+		else fail("a_controller_write_moves_its_owner_stamp", "the controller did not stamp its actor");
+	}
+	{
+		ACDropShip owner;
+		struct ExitProbe : ACraft::Exit { void Prime() { m_Offset = Vector(1, 2); } } exit;
+		exit.SetCheckpointOwner(&owner);
+		exit.Prime();
+		const uint64_t before = owner.CheckpointWriteGeneration();
+		exit.Reset();
+		const uint64_t after = owner.CheckpointWriteGeneration();
+		exit.Reset();
+		if (after > before && owner.CheckpointWriteGeneration() == after) pass("an_exit_reset_moves_its_owner_stamp", "equal resets kept the stamp");
+		else fail("an_exit_reset_moves_its_owner_stamp", "the exit did not stamp its craft once");
+	}
+	{
+		SoundContainer owner;
+		SoundSet sound;
+		sound.SetOwnerContainer(&owner);
+		const uint64_t before = owner.CheckpointWriteGeneration();
+		sound.SetSoundSelectionCycleModeNow(SoundSet::FORWARDS);
+		const uint64_t after = owner.CheckpointWriteGeneration();
+		sound.SetSoundSelectionCycleModeNow(SoundSet::FORWARDS);
+		if (after > before && owner.CheckpointWriteGeneration() == after) pass("a_soundset_write_moves_its_owner_stamp", "equal writes kept the stamp");
+		else fail("a_soundset_write_moves_its_owner_stamp", "the sound set did not stamp its container once");
+	}
 	{
 		live->UpdateScripts();
 		const uint64_t before = live->CheckpointWriteGeneration();
@@ -763,11 +954,57 @@ bool RTE::RunCheckpointImageSelfTest() {
 		// another state kept by reusing its chunk.
 		int stateOneTable = 0, stateTwoTable = 0;
 		CheckpointGraphIndex& index = CheckpointGraphIndex::Get();
+		{
+			Controller value;
+			CheckpointCow cow;
+			int state = 0;
+			index.BeginWalk();
+			index.BeginRoot(73, &state); index.NoteValue(&value);
+			index.EndWalk();
+			value.ArmCheckpointValueTrap();
+			const auto capture = [&] { return Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Controller", value.SaveCheckpoint()); }); };
+			const CheckpointText first = capture();
+			cow.RememberLua({first}, LuaCheckpointWriteGeneration());
+			value.SetAnalogMove(Vector(0.25F, 0.5F));
+			const GraphDirt dirt = index.Sample();
+			const bool cleanTables = dirt.roots > 0 && dirt.dirtyTables == 0 && !dirt.unknownTable;
+			const bool reuse = cow.LuaUnchanged(LuaCheckpointWriteGeneration(), 1) || (cleanTables && cow.HasLua(1));
+			const CheckpointText second = reuse ? cow.LastLua().front() : capture();
+			if (cleanTables && dirt.dirtyValues == 1 && !reuse && first.Text() != second.Text()) pass("a_native_only_write_prevents_whole_graph_reuse", "the second capture carries the changed controller");
+			else fail("a_native_only_write_prevents_whole_graph_reuse", "reused=" + std::to_string(reuse) + " dirty_values=" + std::to_string(dirt.dirtyValues));
+		}
+		{
+			int firstState = 0, secondState = 0, firstGlobal = 0, secondGlobal = 0;
+			index.BeginWalk();
+			index.BeginRoot(0, &firstState, "global"); index.NoteTable(&firstGlobal);
+			index.BeginRoot(0, &secondState, "global"); index.NoteTable(&secondGlobal);
+			index.NoteUncacheableRoots(1); index.NoteUncacheableRoots(2);
+			index.EndWalk();
+			if (!index.CanReuseWhole() && index.Sample().uncacheableRoots == 3) pass("unwatched_roots_prevent_whole_graph_reuse", "three unwatched roots across both states");
+			else fail("unwatched_roots_prevent_whole_graph_reuse", "an unwatched root was eligible for whole reuse");
+			index.OnTableWritten(&firstGlobal);
+			const bool isolated = index.DirtyRoots(&firstState).contains(0) && index.DirtyRoots(&secondState).empty();
+			index.BeginWalk();
+			index.BeginRoot(0, &firstState, "global"); index.NoteTable(&firstGlobal);
+			index.ReuseRoot(0, &secondState, "global");
+			index.EndWalk();
+			index.OnTableWritten(&secondGlobal);
+			const bool retained = index.DirtyRoots(&secondState).contains(0) && index.DirtyRoots(&firstState).empty();
+			if (isolated && retained) pass("globals_roots_are_separate_in_each_state", "both writes reached their own state");
+			else fail("globals_roots_are_separate_in_each_state", "isolated=" + std::to_string(isolated) + " retained=" + std::to_string(retained));
+			index.BeginWalk();
+			index.ReuseRoot(0, &firstState, "global");
+			index.EndWalk();
+			index.OnTableWritten(&secondGlobal);
+			if (index.Sample().roots == 1 && index.DirtyRoots(&secondState).empty()) pass("removed_roots_release_their_recorded_tables", "only the retained state remains indexed");
+			else fail("removed_roots_release_their_recorded_tables", "a removed root survived a partial walk");
+		}
 		index.BeginWalk();
 		index.BeginRoot(11); index.NoteTable(&stateOneTable); index.NoteRootReuse(0, 1);
 		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
 		index.EndWalk();
 		index.BeginWalk();
+		index.ReuseRoot(11, nullptr, "");
 		index.NoteRootReuse(1, 0);
 		index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
 		index.EndWalk();
@@ -791,6 +1028,7 @@ bool RTE::RunCheckpointImageSelfTest() {
 			index.OnTableWritten(&stranger);
 			const bool raised = index.UnknownTableWritten();
 			index.BeginWalk();
+			index.ReuseRoot(11, nullptr, "");
 			index.NoteRootReuse(1, 0);
 			index.BeginRoot(21); index.NoteTable(&stateTwoTable); index.NoteRootReuse(0, 1);
 			index.EndWalk();

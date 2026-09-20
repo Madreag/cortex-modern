@@ -19,6 +19,7 @@ namespace RTE {
 		SerializableOverrideMethods;
 		ClassInfoGetters;
 		std::string SaveCheckpoint() const;
+		auto CheckpointStampValue() const { return CheckpointFields(m_PresetName, m_CopiedFromPresetName, m_DefinedInModule, m_PresetDescription, m_Groups, m_RandomWeight, m_BitmapFile, m_FrameCount, m_BitmapsIndexed, m_BitmapsTrueColor); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		static std::string SaveCheckpointSet(std::span<const Icon> icons);
 		static bool LoadCheckpointSet(std::string_view text, std::span<Icon> icons, bool validateOnly = false);
@@ -95,6 +96,8 @@ namespace RTE {
 		std::vector<std::shared_ptr<BITMAP>> m_CheckpointBitmapOwners; //!< Keeps restored images alive across icon copies.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Icon, effectively resetting the members of this abstraction level only.
 		void Clear();
 		void SwapCheckpoint(Icon& other) noexcept;

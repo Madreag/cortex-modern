@@ -68,9 +68,22 @@ void Atom::Destroy() {
 
 void Atom::TouchCheckpoint() {
 	if (m_OwnerMO) m_OwnerMO->TouchCheckpoint();
+	if (m_CheckpointOwner && m_CheckpointOwner != m_OwnerMO) m_CheckpointOwner->TouchCheckpoint();
 }
 
 void Atom::Clear() {
+	if (m_OwnerMO || m_CheckpointOwner) TouchCheckpoint();
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_ChangedDir, m_CheckpointMaterialReferences, m_Delta, m_Delta2, m_Dom, m_DomSteps,
+			m_Error, m_HasCheckpointMaterials, m_HitPos, m_IgnoreMOID, m_IgnoreMOIDs.empty(), m_IgnoreMOIDsByGroup,
+			m_Increment, m_IntPos, m_LastHit, m_LastTrailPoints.empty(), m_MOHitsDisabled, m_MOIDHit,
+			m_Material, m_Normal, m_NumPenetrations, m_Offset, m_OriginalOffset, m_PrevError,
+			m_PrevIntPos, m_ResultWrapped, m_SegProgress, m_SegTraj, m_StepRatio, m_StepWasTaken,
+			m_Sub, m_SubStepped, m_SubSteps, m_SubgroupID, m_TerrainHitsDisabled, m_TerrainMatHit,
+			m_TrailColor, m_TrailLength, m_TrailLengthVariation, m_TrailPoints.empty(), m_TrailPos);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
     m_CheckpointMaterialReferences.fill({});
     m_HasCheckpointMaterials = false;
 	m_CheckpointLinkIDs.fill(0);
@@ -247,8 +260,8 @@ bool Atom::LoadCheckpoint(std::string_view text, bool validateOnly) {
         }
         for (long uid: links) if (uid < 0) return false;
         reader.OnCommit([this, materials, links, usesGroupIgnoreList] {
-            m_CheckpointMaterialReferences = materials; m_HasCheckpointMaterials = true;
-            m_CheckpointLinkIDs = links; m_HasCheckpointLinks = true;
+			m_CheckpointMaterialReferences = materials; m_HasCheckpointMaterials = true;
+			m_CheckpointLinkIDs = links; m_HasCheckpointLinks = true;
             if (!usesGroupIgnoreList) m_IgnoreMOIDsByGroup = nullptr;
         });
         reader.Finish();
@@ -627,6 +640,7 @@ HitData& Atom::TerrHitResponse() {
 }
 
 bool Atom::SetupPos(Vector startPos) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_IntPos, m_PrevIntPos, m_TerrainHitsDisabled, m_TerrainMatHit); });
 	RTEAssert(m_OwnerMO, "Stepping an Atom without a parent MO!");
 
 	// Only save the previous positions if they are in the scene
@@ -656,6 +670,7 @@ bool Atom::SetupPos(Vector startPos) {
 }
 
 int Atom::SetupSeg(Vector startPos, Vector trajectory, float stepRatio) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Delta, m_Delta2, m_Dom, m_DomSteps, m_Error, m_Increment, m_MOIDHit, m_SegProgress, m_SegTraj, m_StepRatio, m_StepWasTaken, m_Sub, m_SubStepped, m_SubSteps, m_TerrainMatHit); });
 	RTEAssert(m_OwnerMO, "Stepping an Atom without a parent MO!");
 	m_TerrainMatHit = g_MaterialAir;
 	m_MOIDHit = g_NoMOID;

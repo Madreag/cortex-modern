@@ -56,11 +56,11 @@ namespace RTE {
 #pragma region SoundContainer Addition
 		/// Adds a new TransitionSoundContainer to this DynamicSongSection.
 		/// @param soundContainerToAdd The new SoundContainer to add.
-		void AddTransitionSoundContainer(const SoundContainer& soundContainerToAdd) { m_TransitionSoundContainers.push_back(soundContainerToAdd); }
+		void AddTransitionSoundContainer(const SoundContainer& soundContainerToAdd) { TouchCheckpoint(); m_TransitionSoundContainers.push_back(soundContainerToAdd); }
 
 		/// Adds a new SoundContainer to this DynamicSongSection.
 		/// @param soundContainerToAdd The new SoundContainer to add.
-		void AddSoundContainer(const SoundContainer& soundContainerToAdd) { m_SoundContainers.push_back(soundContainerToAdd); }
+		void AddSoundContainer(const SoundContainer& soundContainerToAdd) { TouchCheckpoint(); m_SoundContainers.push_back(soundContainerToAdd); }
 #pragma endregion
 
 #pragma region INI Handling
@@ -86,6 +86,7 @@ namespace RTE {
 		/// Sets the SoundContainerSelectionCycleMode of this DynamicSongSection. Resets any current state of selection.
 		/// @param newSoundContainerSelectionCycleMode The new SoundContainerSelectionCycleMode for this DynamicSongSection.
 		void SetSoundContainerSelectionCycleMode(SoundContainerSelectionCycleMode newSoundContainerSelectionCycleMode) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_SoundContainerSelectionCycleMode, m_LastTransitionSoundContainerIndex, m_LastSoundContainerIndex, m_TransitionShuffleUnplayedIndices, m_ShuffleUnplayedIndices); });
 			m_SoundContainerSelectionCycleMode = newSoundContainerSelectionCycleMode;
 			m_LastTransitionSoundContainerIndex = -1;
 			m_TransitionShuffleUnplayedIndices.clear();
@@ -105,7 +106,15 @@ namespace RTE {
 
 		/// Sets the SectionType of this DynamicSongSection.
 		/// @param newSectionType The new SectionType for this DynamicSongSection.
-		void SetSectionType(const std::string& newSectionType) { m_SectionType = newSectionType; }
+		void SetSectionType(const std::string& newSectionType) { if (m_SectionType != newSectionType) TouchCheckpoint(); m_SectionType = newSectionType; }
+		auto CheckpointStampValue() const {
+			std::vector<decltype(std::declval<const SoundContainer&>().CheckpointStampValue())> sounds, transitions;
+			for (const auto& sound: m_SoundContainers) sounds.push_back(sound.CheckpointStampValue());
+			for (const auto& sound: m_TransitionSoundContainers) transitions.push_back(sound.CheckpointStampValue());
+			return CheckpointFields(GetPresetName(), GetModuleID(), sounds, transitions, m_LastSoundContainerIndex,
+				m_LastTransitionSoundContainerIndex, m_ShuffleUnplayedIndices, m_TransitionShuffleUnplayedIndices,
+				m_SoundContainerSelectionCycleMode, m_SectionType);
+		}
 
 		/// Selects a random transitional SoundContainer with no repeats.
 		/// @return The selected transitional SoundContainer.
@@ -129,6 +138,8 @@ namespace RTE {
 
 		SoundContainerSelectionCycleMode m_SoundContainerSelectionCycleMode; //!< The selection cycle mode to use when selecting the next SoundContainer.
 		std::string m_SectionType; //!< The name of the type of dynamic music this is.
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this DynamicSongSection, effectively resetting the members of this abstraction level only.
 		void Clear();
@@ -181,6 +192,7 @@ namespace RTE {
 		/// Adds a new DynamicSongSection to this DynamicSong. Will assert if this DynamicSong already has a song section with the given SectionType.
 		/// @param songSectionToAdd The new DynamicSongSection to add.
 		void AddSongSection(DynamicSongSection& songSectionToAdd) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_SongSections.size()); });
 			for (DynamicSongSection& songSection: GetSongSections()) {
 				if (songSection.GetSectionType() == songSectionToAdd.GetSectionType()) {
 					RTEAssert(false, "Tried to add a SongSection with SectionType " + songSection.GetSectionType() + ", which the DynamicSong already had in another SongSection!") break;
@@ -197,7 +209,10 @@ namespace RTE {
 
 		/// Sets the DefaultSongSection for this DynamicSong.
 		/// @param newDefaultSongSection The new default DynamicSongSection for this DynamicSong.
-		void SetDefaultSongSection(const DynamicSongSection& newDefaultSongSection) { m_DefaultSongSection = newDefaultSongSection; }
+		void SetDefaultSongSection(const DynamicSongSection& newDefaultSongSection) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_DefaultSongSection); });
+			m_DefaultSongSection = newDefaultSongSection;
+		}
 
 		/// Gets the vector of DynamicSongSections for this DynamicSong.
 		/// @return The vector of DynamicSongSections for this DynamicSong.
@@ -209,6 +224,8 @@ namespace RTE {
 
 		DynamicSongSection m_DefaultSongSection; //!< The fallback DynamicSongSection if one with the desired Type can't be found.
 		std::vector<DynamicSongSection> m_SongSections; //!< The DynamicSongSections making up this DynamicSong.
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this DynamicSong, effectively resetting the members of this abstraction level only.
 		void Clear();

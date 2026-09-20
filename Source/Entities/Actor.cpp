@@ -99,9 +99,27 @@ Actor::~Actor() {
 }
 
 void Actor::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_AIBaseDigStrength, m_AIMode, m_AimAngle, m_AimDistance, m_AimRange, m_AimState,
+			m_AimTmr, m_AlarmSound, m_AlarmTimer, m_BaseMass, m_BodyHitSound, m_CanRevealUnseen,
+			m_CanRun, m_CharHeight, m_CrouchWalkSpeedMultiplier, m_DamageMultiplier, m_DeathSound, m_DeathTmr,
+			m_DeploymentID, m_DeviceSwitchSound, m_DrawWaypoints, m_FaithfulWaypointUIDs.empty(), m_GoldCarried, m_GoldPicked,
+			m_HUDStack, m_HasOrderedWaypoint, m_Health, m_HeartBeat, m_HolsterOffset, m_HotkeyActivated,
+			m_Inventory.empty(), m_LastAlarmPos, m_LastOrderedWaypoint, m_LastOrderedWaypointUID, m_LastSecondPos, m_LastSecondTimer,
+			m_LimbPushForcesAndCollisionsDisabled, m_MaxHealth, m_MaxInventoryMass, m_Mechanical, m_MovePath.empty(), m_MoveProximityLimit,
+			m_MoveTarget, m_MoveVector, m_MovementState, m_NewControlTmr, m_Organic, m_PainSound,
+			m_PainThreshold, m_PassengerSlots, m_Perceptiveness, m_PersistedActorIconReferences, m_PersistedActorRuntime.empty(), m_PlayerControllable,
+			m_PointingTarget, m_PrevHealth, m_PrevPathTarget, m_RecentMovement, m_ReloadOffset, m_SeenTargetPos,
+			m_SharpAimDelay, m_SharpAimMaxedOut, m_SharpAimProgress, m_SharpAimTimer, m_SightDistance, m_StableRecoverDelay,
+			m_StableVel, m_Status, m_TravelImpulseDamage, m_UpdateMovePath, m_ViewPoint, m_WaypointCursor,
+			m_Waypoints.empty(), m_pControllerIcon, m_pTeamIcon, m_Controller);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_PersistedActorRuntime.clear();
 	m_PersistedActorIconReferences = {};
 	m_PersistedControllerCheckpoint.clear();
+	m_Controller.SetCheckpointOwner(this);
 	m_Controller.Reset();
 	m_PersistedControllerInputMode = -1;
 	m_PersistedControllerQuickDisabled = -1;
@@ -875,6 +893,7 @@ bool Actor::HasObjectInGroup(std::string groupName) const {
 }
 
 void Actor::SetTeam(int team) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_pTeamIcon); });
 	MovableObject::SetTeam(team);
 
 	// Change the Team Icon to display
@@ -965,6 +984,7 @@ bool Actor::Look(float FOVSpread, float range) {
 }
 
 void Actor::AddGold(float goldOz) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_GoldCarried, m_GoldPicked); });
 	bool isHumanTeam = g_ActivityMan.GetActivity()->IsHumanTeam(m_Team);
 	if (g_SettingsMan.GetAutomaticGoldDeposit() || !isHumanTeam) {
 		// TODO: Allow AI to reliably deliver gold via craft
@@ -1091,6 +1111,7 @@ void Actor::QueueAIModeOnRunning(AIMode newMode) {
 }
 
 void Actor::SetAIMode(AIMode newMode) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_AIMode); });
 	// The AI pass runs on the machine that owns the actor, so a mode written there would land on that
 	// peer alone while the hash and the checkpoint carry it; queue it for the synced request instead.
 	if (DeferAIPassMutation(this)) {
@@ -1154,6 +1175,7 @@ void Actor::QueueDeferredOnRunning(const DeferredWaypoint& waypoint) {
 }
 
 void Actor::AddAISceneWaypoint(const Vector& waypoint) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HasOrderedWaypoint, m_LastOrderedWaypoint, m_LastOrderedWaypointUID, m_Waypoints.size()); });
 	if (DeferAIPassMutation(this)) {
 		QueueDeferredOnRunning({Actor::DeferredWaypoint::Scene, waypoint.m_X, waypoint.m_Y, 0});
 		return;
@@ -1166,6 +1188,7 @@ void Actor::AddAISceneWaypoint(const Vector& waypoint) {
 }
 
 void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HasOrderedWaypoint, m_LastOrderedWaypoint, m_LastOrderedWaypointUID, m_Waypoints.size()); });
 	if (DeferAIPassMutation(this)) {
 		if (!g_MovableMan.ValidMO(pMOWaypoint)) {
 			return;
@@ -1188,6 +1211,7 @@ void Actor::AddAIMOWaypoint(const MovableObject* pMOWaypoint) {
 }
 
 void Actor::ClearAIWaypoints() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_HasOrderedWaypoint, m_LastOrderedWaypoint, m_LastOrderedWaypointUID, m_MovePath.empty(), m_MoveTarget, m_MoveVector, m_WaypointCursor, m_Waypoints.empty()); });
 	if (DeferAIPassMutation(this)) {
 		QueueDeferredOnRunning({DeferredWaypoint::Clear, 0.0F, 0.0F, 0});
 		return;
@@ -1712,6 +1736,7 @@ MovableObject* Actor::SwapNextInventory(MovableObject* pSwapIn, bool muteSound) 
 }
 
 void Actor::RemoveInventoryItem(const std::string& moduleName, const std::string& presetName) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	for (std::deque<MovableObject*>::iterator inventoryIterator = m_Inventory.begin(); inventoryIterator != m_Inventory.end(); ++inventoryIterator) {
 		if ((moduleName.empty() || (*inventoryIterator)->GetModuleName() == moduleName) && (*inventoryIterator)->GetPresetName() == presetName) {
 			(*inventoryIterator)->DestroyScriptState();
@@ -1723,6 +1748,7 @@ void Actor::RemoveInventoryItem(const std::string& moduleName, const std::string
 }
 
 MovableObject* Actor::RemoveInventoryItemAtIndex(int inventoryIndex) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	if (inventoryIndex >= 0 && inventoryIndex < m_Inventory.size()) {
 		MovableObject* itemAtIndex = m_Inventory[inventoryIndex];
 		m_Inventory.erase(m_Inventory.begin() + inventoryIndex);
@@ -1902,6 +1928,7 @@ void Actor::DropAllGold() {
 }
 
 bool Actor::AddToInventoryFront(MovableObject* itemToAdd) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	// This function is called often to add stuff we just removed from our hands, which may be set to delete so we need to guard against that lest we crash.
 	if (!itemToAdd || itemToAdd->IsSetToDelete()) {
 		return false;
@@ -1912,6 +1939,7 @@ bool Actor::AddToInventoryFront(MovableObject* itemToAdd) {
 }
 
 bool Actor::AddToInventoryBack(MovableObject* itemToAdd) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_Inventory.size()); });
 	// This function is called often to add stuff we just removed from our hands, which may be set to delete so we need to guard against that lest we crash.
 	if (!itemToAdd || itemToAdd->IsSetToDelete()) {
 		return false;
@@ -2164,6 +2192,7 @@ void Actor::VerifyMOIDs() {
 }
 
 void Actor::SetPieMenu(PieMenu* newPieMenu) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PieMenu); });
 	m_PieMenu = std::unique_ptr<PieMenu>(newPieMenu);
 	m_PieMenu->Create(this);
 	m_PieMenu->AddWhilePieMenuOpenListener(this, std::bind(&Actor::WhilePieMenuOpenListener, this, m_PieMenu.get()));

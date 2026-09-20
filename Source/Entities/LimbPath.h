@@ -23,6 +23,14 @@ namespace RTE {
 		/// Public member variable, method and friend function declarations
 	public:
 		std::string SaveCheckpoint() const;
+		auto CheckpointStampValue() const {
+			return CheckpointFields(m_Start, m_StartSegCount, m_FootCollisionsDisabledSegment, m_SegProgress,
+				m_TravelSpeed, m_SegmentEndedThreshold, m_BaseTravelSpeedMultiplier, m_CurrentTravelSpeedMultiplier,
+				m_BaseScaleMultiplier, m_CurrentScaleMultiplier, m_PushForce, m_JointPos, m_JointVel, m_Rotation,
+				m_RotationOffset, m_PositionOffset, m_TimeLeft, m_PathTimer, m_SegTimer, m_TotalLength,
+				m_RegularLength, m_SegmentDone, m_Ended, m_HFlipped, m_Segments,
+				m_Segments.empty() ? 0 : std::distance(m_Segments.cbegin(), std::deque<Vector>::const_iterator(m_CurrentSegment)));
+		}
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		/// Concrete allocation and cloning definitions
 		EntityAllocation(LimbPath);
@@ -299,6 +307,7 @@ namespace RTE {
 		/// anything along this path each frame.
 		/// @param rotation A Matrix with the updated rotation info.
 		void SetRotation(const Matrix& rotation) {
+			CheckpointChange changed(*this, [this] { return CheckpointFields(m_Rotation); });
 			m_Rotation = rotation;
 			m_Rotation.SetXFlipped(m_HFlipped);
 		}
@@ -440,6 +449,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this LimbPath, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

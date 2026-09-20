@@ -73,6 +73,8 @@ namespace RTE {
 		int m_SiteCount; //!< The site count of this game.
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this MetaSave, effectively resetting the members of this abstraction level only.
 		void Clear();
 

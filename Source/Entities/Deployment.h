@@ -214,6 +214,8 @@ namespace RTE {
 
 		/// Private member variable and method declarations
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Deployment, effectively
 		/// resetting the members of this abstraction level only.
 		void Clear();

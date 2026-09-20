@@ -74,7 +74,7 @@ namespace RTE {
 
 		/// Sets the amount of time this' jetpack can still fire until out, in ms.
 		/// @param newValue The amount of time this' jetpack can still fire before running out.
-		void SetJetTimeLeft(float newValue) { m_JetTimeLeft = newValue < m_JetTimeTotal ? newValue : m_JetTimeTotal; }
+		void SetJetTimeLeft(float newValue) { const float value = newValue < m_JetTimeTotal ? newValue : m_JetTimeTotal; if (m_JetTimeLeft != value) TouchCheckpoint(); m_JetTimeLeft = value; }
 
 		/// Gets the ratio of jetpack time that is left.
 		/// @return The ratio of jetpack time that is left.
@@ -164,6 +164,8 @@ namespace RTE {
 		/// The logic to run when recharging.
 		/// @param parentActor The parent actor using this jetpack.
 		void Recharge(Actor& parentActor);
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this AEJetpack, effectively resetting the members of this abstraction level only.
 		void Clear();

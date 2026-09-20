@@ -172,7 +172,7 @@ namespace RTE {
 
 		/// Set the depth this scenelayer will be drawn at.
 		/// @param z The depth to draw at, negative values are further to the front in the range c_NearDepth to c_FarDepth.
-		void SetZOrder(float z) { m_ZOrder = z; }
+		void SetZOrder(float z) { if (m_ZOrder != z) TouchCheckpoint(); m_ZOrder = z; }
 
 		/// Gets the scroll ratio that modifies the offset.
 		/// @return A copy of the ratio.
@@ -180,7 +180,7 @@ namespace RTE {
 
 		/// Sets the scroll ratio of this SceneLayer. This modifies the offset before any actual scrolling occurs.
 		/// @param newRatio The new scroll ratio vector.
-		void SetScrollRatio(const Vector& newRatio) { m_ScrollRatio = newRatio; }
+		void SetScrollRatio(const Vector& newRatio) { if (m_ScrollRatio != newRatio) TouchCheckpoint(); m_ScrollRatio = newRatio; }
 
 		/// Gets the scale factor that this is drawn in.
 		/// @return The scale factor of this to the target it is drawn to. (2x if this is half the res, etc.)
@@ -210,7 +210,7 @@ namespace RTE {
 		/// @param materialID The color index to set the pixel to.
 		void SetPixel(int pixelX, int pixelY, int materialID);
 
-		void SetUpdated() { m_MainBitmapUpdated = true; m_BitmapSnapshotAllDirty = true; }
+		void SetUpdated() { TouchCheckpoint(); m_MainBitmapUpdated = true; m_BitmapSnapshotAllDirty = true; }
 
 		/// Returns whether the integer coordinates passed in are within the bounds of this SceneLayer.
 		/// @param pixelX The X coordinates of the pixel.
@@ -341,6 +341,8 @@ namespace RTE {
 		/// Clears any tracked and drawn-to areas.
 		/// @param clearTo Color to clear to.
 		void ClearDrawings(BITMAP* bitmap, const std::vector<IntRect>& drawings, ColorKeys clearTo) const;
+
+		bool m_CheckpointInitialized = false;
 
 		/// Clears all the member variables of this SceneLayer, effectively resetting the members of this abstraction level only.
 		void Clear();

@@ -1,5 +1,6 @@
 #include "Scene.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "BitmapCheckpoint.h"
 #include "TerrainLayerSnapshot.h"
 
@@ -228,8 +229,13 @@ Scene::~Scene() {
 }
 
 void Scene::Area::Clear() {
+	if (!m_BoxList.empty() || !m_Name.empty()) TouchCheckpoint();
 	m_BoxList.clear();
 	m_Name.clear();
+}
+
+void Scene::Area::TouchCheckpoint() {
+	CheckpointValueWritten(this);
 }
 
 int Scene::Area::Create(const Area& reference) {
@@ -311,6 +317,7 @@ bool Scene::Area::AddBox(const Box& newBox) {
 
 	std::unique_lock<std::shared_mutex> guard(g_sceneAreaMutex);
 	m_BoxList.push_back(new Box(newBox));
+	TouchCheckpoint();
 	return true;
 }
 
@@ -320,6 +327,7 @@ bool Scene::Area::RemoveBox(const Box& boxToRemove) {
 	std::vector<Box*>::iterator boxToRemoveIterator = std::find(m_BoxList.begin(), m_BoxList.end(), &boxToRemove);
 	if (boxToRemoveIterator != m_BoxList.end()) {
 		m_BoxList.erase(boxToRemoveIterator);
+		TouchCheckpoint();
 		return true;
 	}
 	return false;
@@ -485,6 +493,7 @@ Box Scene::Area::RemoveBoxInside(const Vector& point) {
 				// Remove the BoxList box, not the inconsequential wrapped copy
 				returnBox = (**aItr);
 				m_BoxList.erase(aItr);
+				TouchCheckpoint();
 				return returnBox;
 			}
 		}
@@ -533,6 +542,13 @@ void Scene::TestInstallHorizonPathFinders(int width, int height, int nodeDimensi
 }
 
 void Scene::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(m_Location, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
+			m_ResidentBrains, m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_pTerrain,
+			m_PlacedObjects, m_BackLayerList.empty(), m_apUnseenLayer, m_UnseenPixelSize, m_ScanScheduled,
+			m_AreaList.empty(), m_GlobalAcc, m_MetasceneParent, m_IsMetagameInternal, m_IsSavedGameInternal);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	BlockUntilAllPathingRequestsComplete();
 	m_Location.Reset();
 	m_LocationOffset.Reset();
@@ -2113,6 +2129,7 @@ void Scene::FillUnseenLayer(Vector pixelSize, int team, bool createNow) {
 void Scene::SetUnseenLayer(SceneLayer* pNewLayer, int team) {
 	if (team == Activity::NoTeam || !pNewLayer)
 		return;
+	if (m_apUnseenLayer[team] != pNewLayer) TouchCheckpoint();
 
 	// Replace any old unseen layer with the new one that is generated
 	delete m_apUnseenLayer[team];
@@ -2333,6 +2350,7 @@ int Scene::RetrieveSceneObjects(bool transferOwnership, int onlyTeam, bool noBra
 void Scene::AddPlacedObject(int whichSet, SceneObject* pObjectToAdd, int listOrder) {
 	if (!pObjectToAdd)
 		return;
+	TouchCheckpoint();
 
 	// Create unique ID for this deployment
 	Deployment* pDeployment = dynamic_cast<Deployment*>(pObjectToAdd);
@@ -2355,6 +2373,7 @@ void Scene::AddPlacedObject(int whichSet, SceneObject* pObjectToAdd, int listOrd
 void Scene::RemovePlacedObject(int whichSet, int whichToRemove) {
 	if (m_PlacedObjects[whichSet].empty())
 		return;
+	TouchCheckpoint();
 
 	if (whichToRemove < 0 || whichToRemove >= m_PlacedObjects[whichSet].size()) {
 		delete (m_PlacedObjects[whichSet].back());
@@ -2425,6 +2444,7 @@ void Scene::UpdatePlacedObjects(int whichSet) {
 }
 
 int Scene::ClearPlacedObjectSet(int whichSet, bool weHaveOwnership) {
+	if (!m_PlacedObjects[whichSet].empty()) TouchCheckpoint();
 	if (weHaveOwnership) {
 		for (std::list<SceneObject*>::iterator itr = m_PlacedObjects[whichSet].begin(); itr != m_PlacedObjects[whichSet].end(); ++itr) {
 			delete *itr;
@@ -2447,6 +2467,7 @@ SceneObject* Scene::GetResidentBrain(int player) const {
 }
 
 void Scene::SetResidentBrain(int player, SceneObject* pNewBrain) {
+	if (m_ResidentBrains[player] != pNewBrain) TouchCheckpoint();
 	if (MovableObject* asMo = dynamic_cast<MovableObject*>(m_ResidentBrains[player])) {
 		asMo->DestroyScriptState();
 	}
@@ -2502,6 +2523,7 @@ bool Scene::SetArea(Area& newArea) {
 	for (Area* area: m_AreaList) {
 		// Try to find an existing area of the same name
 		if (area->GetName() == newArea.GetName()) {
+			if (area->SaveCheckpoint() != newArea.SaveCheckpoint()) TouchCheckpoint();
 			// Deep copy into the existing area
 			area->Reset();
 			area->Create(newArea);
@@ -2509,6 +2531,7 @@ bool Scene::SetArea(Area& newArea) {
 		}
 	}
 	// Couldn't find one, so just add the new Area
+	TouchCheckpoint();
 	m_AreaList.push_back(new Area(newArea));
 
 	return false;
@@ -2536,6 +2559,7 @@ Scene::Area* Scene::GetArea(const std::string& areaName) {
 bool Scene::RemoveArea(const std::string& areaName) {
 	for (std::list<Area*>::iterator aItr = m_AreaList.begin(); aItr != m_AreaList.end(); ++aItr) {
 		if ((*aItr)->GetName() == areaName) {
+			TouchCheckpoint();
 			m_AreaList.erase(aItr);
 			return true;
 		}
@@ -2556,6 +2580,7 @@ bool Scene::WithinArea(const std::string& areaName, const Vector& point) const {
 }
 
 void Scene::SetTeamOwnership(int newTeam) {
+	if (m_OwnedByTeam != newTeam) TouchCheckpoint();
 	m_OwnedByTeam = newTeam;
 
 	// Go through all the things placed and make sure they are all set to the new owner team
@@ -2944,6 +2969,7 @@ float Scene::ApplyBuildBudget(int player, int* pObjectsBuilt) {
 }
 
 int Scene::RemoveAllPlacedActors(int exceptTeam) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PlacedObjects[PLACEONLOAD].size(), m_PlacedObjects[BLUEPRINT].size()); });
 	int removedCount = 0;
 
 	bool remove = false;

@@ -20,6 +20,8 @@ BunkerAssembly::~BunkerAssembly() {
 }
 
 void BunkerAssembly::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_FGColorFile, m_BGColorFile, m_MaterialFile, m_BitmapOffset, m_OffsetDefined, m_ChildObjects.empty(), m_PlacedObjects.empty(), m_ParentAssemblyScheme, m_SymmetricAssembly, m_ParentSchemeGroup); }, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_FGColorFile.Reset();
 	m_MaterialFile.Reset();
 	m_BGColorFile.Reset();
@@ -44,6 +46,7 @@ int BunkerAssembly::Create() {
 }
 
 void BunkerAssembly::AddPlacedObject(SceneObject* pSO) {
+	TouchCheckpoint();
 	m_PlacedObjects.push_back(pSO);
 
 	// Increase gold value for every bunker module if it's not a deployment
@@ -75,6 +78,7 @@ void BunkerAssembly::AddPlacedObject(SceneObject* pSO) {
 
 		for (const SceneObject::SOPlacer& childObject: pTObject->GetChildObjects()) {
 			SceneObject::SOPlacer newPlacer = childObject;
+			newPlacer.SetCheckpointOwner(this);
 			newPlacer.SetTeam(pTObject->GetTeam());
 			// Explicitly set child object's offset, because it will be a part of a bigger 'terrain object'
 			newPlacer.SetOffset(newPlacer.GetOffset() + pTObject->GetPos() + m_BitmapOffset);

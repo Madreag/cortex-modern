@@ -8,6 +8,7 @@
 #include "PieMenu.h"
 #include "ScenarioRunner.h"
 #include "CheckpointArchive.h"
+#include "CheckpointImage.h"
 #include "ActivityMan.h"
 #include "FrameMan.h"
 
@@ -26,10 +27,21 @@ void Controller::SetState(ControlState controlState, bool setting) {
 	RTEAssert(controlState >= 0 && controlState < ControlState::CONTROLSTATECOUNT, "Control state out of whack");
 	if (m_ControlStates[controlState] == setting) return;
 	m_ControlStates[controlState] = setting;
-	if (m_ControlledActor) m_ControlledActor->TouchCheckpoint();
+	TouchCheckpoint();
 }
 
 void Controller::Clear() {
+	if (m_CheckpointInitialized && m_ControlledActor) m_ControlledActor->TouchCheckpoint();
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(m_ControlledActor, m_ControlStates, m_AnalogMove, m_AnalogAim, m_AnalogCursor,
+			m_InputMode, m_SeatMode, m_Team, m_Player, m_SeatPlayer, m_Disabled, m_SyncedOrderDisableTick,
+			m_WireApplyTick, m_WireSchemeValid, m_WireDeviceClass, m_WireDigitalAimSpeed, m_NextIgnore, m_PrevIgnore,
+			m_WeaponChangeNextIgnore, m_WeaponChangePrevIgnore, m_WeaponPickupIgnore, m_WeaponDropIgnore,
+			m_WeaponReloadIgnore, m_WeaponPrimaryHotkeyIgnore, m_MouseMovement, m_AnalogCursorAngleLimits,
+			m_ReleaseTimer, m_JoyAccelTimer, m_KeyAccelTimer, m_LocalProduction, m_LocalProductionSeatMode,
+			m_LocalProductionSeatPlayer, m_LocalProductionValid);
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_ControlStates.fill(false);
 	m_AnalogMove.Reset();
 	m_AnalogAim.Reset();
@@ -65,6 +77,15 @@ void Controller::Clear() {
 	m_LocalProductionSeatPlayer = 0;
 	m_LocalProductionValid = false;
 	// m_CommittedInput and m_ProducingLocalInput belong to the producing pass, which outlives a Clear.
+}
+
+void Controller::TouchCheckpoint() {
+	if (m_CheckpointOwner && m_CheckpointOwner != m_ControlledActor) m_CheckpointOwner->TouchCheckpoint();
+	if (m_ControlledActor) m_ControlledActor->TouchCheckpoint();
+	if (m_CheckpointValueTrap) {
+		m_CheckpointValueTrap = false;
+		CheckpointValueWritten(this);
+	}
 }
 
 int Controller::Create(InputMode mode, Actor* controlledActor) {
@@ -321,6 +342,7 @@ int Controller::GetTeam() const {
 }
 
 void Controller::SetTeam(short team) {
+	if (m_Team != team) TouchCheckpoint();
 	if (m_ControlledActor) {
 		m_ControlledActor->SetTeam(team);
 	}
@@ -394,6 +416,7 @@ void Controller::RenderUpdate() {
 }
 
 void Controller::ResetCommandState() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_ControlStates, m_AnalogAim, m_AnalogMove, m_AnalogCursor, m_MouseMovement); });
 	// Reset all command states.
 	m_ControlStates.fill(false);
 	m_AnalogMove.Reset();

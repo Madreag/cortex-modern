@@ -134,6 +134,8 @@ namespace RTE {
 	protected:
 
 	private:
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this MOSParticle, effectively resetting the members of this abstraction level only.
 		void Clear();
 

@@ -16,6 +16,11 @@ Turret::~Turret() {
 }
 
 void Turret::Clear() {
+	CheckpointChange changed(*this, [this] {
+		return CheckpointFields(
+			m_MountedDeviceRotationOffset, m_MountedDevices.empty());
+	}, m_CheckpointInitialized);
+	m_CheckpointInitialized = true;
 	m_MountedDevices.clear();
 	m_MountedDeviceRotationOffset = 0;
 }
@@ -73,6 +78,7 @@ int Turret::Save(Writer& writer) const {
 }
 
 void Turret::SetFirstMountedDevice(HeldDevice* newMountedDevice) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_MountedDevices); });
 	if (HasMountedDevice()) {
 		RemoveAndDeleteAttachable(m_MountedDevices[0]);
 	}
@@ -97,6 +103,7 @@ void Turret::SetFirstMountedDevice(HeldDevice* newMountedDevice) {
 }
 
 void Turret::AddMountedDevice(HeldDevice* newMountedDevice) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_MountedDevices.size()); });
 	if (newMountedDevice == nullptr) {
 		return;
 	}
@@ -146,6 +153,7 @@ void Turret::SetParent(MOSRotating* newParent) {
 }
 
 void Turret::RemoveMountedDevice(const HeldDevice* mountedDeviceToRemove) {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_MountedDevices.size()); });
 	std::vector<HeldDevice*>::iterator mountedDeviceIterator = std::find_if(m_MountedDevices.begin(), m_MountedDevices.end(), [&mountedDeviceToRemove](const HeldDevice* mountedDevice) {
 		return mountedDevice == mountedDeviceToRemove;
 	});

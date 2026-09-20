@@ -2,6 +2,7 @@
 #include "PresetMan.h"
 #include "MovableObject.h"
 #include "MovableMan.h"
+#include "MOSRotating.h"
 
 using namespace RTE;
 
@@ -15,7 +16,12 @@ Gib::~Gib() {
 	Destroy();
 }
 
+void Gib::TouchCheckpoint() {
+	if (m_CheckpointOwner) m_CheckpointOwner->TouchCheckpoint();
+}
+
 void Gib::Clear() {
+	CheckpointChange changed(*this, [this] { return CheckpointFields(m_GibParticle, m_PersistedParticleUniqueID, m_Offset, m_Count, m_Spread, m_MinVelocity, m_MaxVelocity, m_LifeVariation, m_InheritsVel, m_InheritsAngularVel, m_IgnoresTeamHits, m_SpreadMode); }, m_CheckpointOwner != nullptr);
 	m_GibParticle = nullptr;
 	m_PersistedParticleUniqueID = 0;
 	m_Offset.Reset();

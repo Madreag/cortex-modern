@@ -16,6 +16,12 @@ namespace RTE {
 	public:
 		EntityAllocation(Material);
 		std::string SaveCheckpoint() const;
+		auto CheckpointStampValue() const {
+			return CheckpointFields(CheckpointFieldText([this] { return Entity::SaveCheckpoint(); }), m_Index, m_Priority, m_Piling, m_Integrity,
+				m_Restitution, m_Friction, m_Stickiness, m_VolumeDensity, m_PixelDensity, m_GibImpulseLimitPerLiter,
+				m_GibWoundLimitPerLiter, m_SettleMaterialIndex, m_SpawnMaterialIndex, m_IsScrap, m_Color,
+				m_UseOwnColor, m_FGTextureFile, m_BGTextureFile, m_TerrainFGTexture, m_TerrainBGTexture);
+		}
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		void SwapCheckpoint(Material& other) noexcept;
 		SerializableOverrideMethods;
@@ -174,6 +180,8 @@ namespace RTE {
                 self.m_SpawnMaterialIndex, self.m_IsScrap, self.m_Color, self.m_UseOwnColor,
                 self.m_FGTextureFile, self.m_BGTextureFile);
         }
+		bool m_CheckpointInitialized = false;
+
 		/// Clears all the member variables of this Material, effectively resetting the members of this abstraction level only.
 		void Clear();
 	};
