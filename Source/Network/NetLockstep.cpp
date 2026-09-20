@@ -5128,6 +5128,10 @@ namespace RTE {
 			if (error) *error = m_Stats.timeoutReason.empty() ? "lockstep coordinator is not running" : m_Stats.timeoutReason;
 			return false;
 		}
+		if (targetFrame < EffectiveStartOf(m_Config.localPeerId)) {
+			if (error) *error = "local input precedes the sender's admission delay";
+			return false;
+		}
 		static const auto holdBeforeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_HOLD_BEFORE_TARGET");
 		if (holdBeforeTarget && targetFrame == *holdBeforeTarget) {
 			// The crash fixture waits for the host to receive the preceding frame, then kills this
@@ -5467,7 +5471,8 @@ namespace RTE {
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
 			// A member admitted mid-round reads the window copies of the ticks before its own start.
 			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
-			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId)) {
+			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) ||
+			    (IsPersistentWorldRound() && m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
 				return;
@@ -7242,6 +7247,10 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
+		const auto hostTransport = m_RemoteTransports.find(GetHostPeerId());
+		const bool worldRosterMessage = IsPersistentWorldRound() && !m_RelayHost && hostTransport != m_RemoteTransports.end() &&
+		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&
+		    start.localPeerId > 0 && start.localPeerId <= m_Config.peerCount;
 		if (!SenderOwnsTransport(start.localPeerId, fromTransport)) {
 			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
 			return;
@@ -7256,7 +7265,7 @@ namespace RTE {
 		                                IsRoundAuthority(start.localPeerId, fromTransport);
 		// Another round's start (a late one from before a resync) is not this round's handshake; before this
 		// peer knows its round, a start for a different frame is that straggler too.
-		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame))) {
+		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame && !worldRosterMessage))) {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
@@ -7264,19 +7273,15 @@ namespace RTE {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
-		const auto hostTransport = m_RemoteTransports.find(GetHostPeerId());
-		const bool introducedByHost = IsPersistentWorldRound() && !m_RelayHost && hostTransport != m_RemoteTransports.end() &&
-		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&
-		    start.localPeerId > 0 && start.localPeerId <= m_Config.peerCount &&
-		    (!IsKnownRemotePeer(start.localPeerId) || IsPeerGoneAtFrame(start.localPeerId, start.startFrame));
+		const bool introducedByHost = worldRosterMessage && (!IsKnownRemotePeer(start.localPeerId) || IsPeerGoneAtFrame(start.localPeerId, start.startFrame) ||
+		    (m_Config.joinsRunningRound && m_State == NetLockstepState::WaitingForStart && !m_RemoteStartsReceived.contains(start.localPeerId)));
 		if (introducedByHost) {
-			if (start.inputDelayFrames != InputDelayAt(start.localPeerId, start.startFrame) ||
-			    start.startFrame > UINT64_MAX - start.inputDelayFrames || start.startFrame + start.inputDelayFrames < m_Stats.nextFrame) {
+			if (start.startFrame > UINT64_MAX - start.inputDelayFrames ||
+			    std::max(m_Config.startFrame, start.startFrame + start.inputDelayFrames) < m_Stats.nextFrame) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "world admission precedes committed input"); return;
 			}
 			m_PeerAdmissions[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
-			m_PeerEffectiveStart[start.localPeerId] = m_Config.joinsRunningRound && start.startFrame == m_Config.startFrame ?
-			    m_Config.startFrame : start.startFrame + start.inputDelayFrames;
+			m_PeerEffectiveStart[start.localPeerId] = std::max(m_Config.startFrame, start.startFrame + start.inputDelayFrames);
 			m_PeerLeaveFrames.erase(start.localPeerId);
 			m_RemoteStartsReceived.erase(start.localPeerId);
 			m_RemoteStarts.erase(start.localPeerId);
@@ -7306,6 +7311,11 @@ namespace RTE {
 				if (peer == start.localPeerId || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
 				NetLockstepStart member = start; member.localPeerId = peer; member.inputDelayFrames = InputDelayAt(peer, start.startFrame);
 				member.roundId = m_RoundId;
+				if (IsPersistentWorldRound() && peer != m_Config.localPeerId) {
+					const auto admission = m_PeerAdmissions.find(peer);
+					member.startFrame = admission == m_PeerAdmissions.end() ? m_Config.startFrame : admission->second.frame;
+					member.inputDelayFrames = admission == m_PeerAdmissions.end() ? PeerInputDelay(peer) : admission->second.delay;
+				}
 				SendPacket({member}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 			}
 			ReplaySentFramesTo(start.localPeerId, start.startFrame);
