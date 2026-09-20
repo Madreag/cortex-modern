@@ -590,6 +590,9 @@ def run_one(options, scenario, run, run_index, out):
                 killers.append(watcher)
         next_size_check = time.monotonic()
         while any(thread.is_alive() for thread in threads):
+            request = Path(out) / "stop-request.json"
+            if request.is_file():
+                raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
             for name in runs:
                 signal = Path(staged[name]["gameplay_signal"])
                 if not signal.exists():
@@ -640,9 +643,11 @@ def run_one(options, scenario, run, run_index, out):
 
 
 def render(capture_run, fps, every):
-    """Encodes and tiles every peer of one run; safe to repeat over an existing capture."""
+    """Encodes missing media while preserving a completed peer's retained output."""
     ffmpeg = find_ffmpeg()
     for peer in capture_run["peers"]:
+        if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
+            continue
         root = Path(peer["root"])
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
         sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
@@ -671,6 +676,63 @@ def review_only(options):
             complete &= item.get("frames") is not None and not item.get("blocked_by")
             complete &= not item.get("finding") and item.get("probe") not in ("fail", "not-reached", "unreadable")
     return 0 if complete else 1
+
+
+def finalize_only(options):
+    out = options.finalize_only.resolve()
+    capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
+    scenario = capture["scenario_definition"]
+    existing = {run["name"]: run for run in capture["runs"]}
+    recovered = []
+    for index, definition in enumerate(scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]):
+        name = definition.get("name", f"run{index}")
+        root = out / name
+        definitions = definition.get("peers") or scenario.get("peers", [])
+        if not any((root / peer["name"] / "launch.json").is_file() for peer in definitions):
+            continue
+        run = existing.get(name, {"name": name, "root": str(root), "size": capture.get("size") or definition.get("size") or scenario.get("size") or DEFAULT_SIZE, "peers": []})
+        prior = {peer["peer"]: peer for peer in run["peers"]}
+        peers = []
+        for definition_peer in definitions:
+            peer_name = definition_peer["name"]
+            peer_root = root / peer_name
+            launch_path = peer_root / "launch.json"
+            launch = json.loads(launch_path.read_text(encoding="utf-8")) if launch_path.is_file() else {}
+            video = peer_root / "video"
+            peer = prior.get(peer_name, {"peer": peer_name, "root": str(peer_root), "video_dir": str(video),
+                                        "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
+                                        "args": launch.get("argv"), "env": launch.get("env_set"),
+                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick"))})
+            peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
+                              "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
+            peer["manifest"] = read_manifest(video)
+            peer["index"] = read_index(video)
+            peer["menu_script_failures"] = menu_script_failures(peer_root)
+            if launch.get("exit_code") is None:
+                peer["error"] = "The recorder owner ended before the runner saved an exit record"
+                run["interrupted"] = peer["error"]
+            peers.append(peer)
+        run["peers"] = peers
+        recovered.append(run)
+    capture["runs"] = recovered
+    capture["interrupted"] = capture.get("interrupted") or "Finalized after the capture owner ended; unstarted runs remain findings"
+    capture["finalized"] = stamp()
+    budget = options.scratch_root or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
+    metadata_only = options.metadata_only or scratch_bytes(budget) >= SCRATCH_LIMIT
+    for run in recovered:
+        if not metadata_only:
+            render(run, capture["fps"], options.sheet_every)
+        review(scenario, run, Path(run["root"]))
+    start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
+    end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
+    scenario_manifest(capture, out, (end - start).total_seconds())
+    aggregate_review(capture, out)
+    for run in recovered:
+        for peer in run["peers"]:
+            peer.pop("index", None)
+    write_json(out / "capture.json", capture)
+    print(f"Finalized retained evidence: {out}; metadata_only={metadata_only}")
+    return 1
 
 
 def scenario_manifest(capture, out, elapsed):
@@ -759,6 +821,8 @@ def main():
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
+    parser.add_argument("--finalize-only", type=Path)
+    parser.add_argument("--metadata-only", action="store_true")
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
@@ -770,6 +834,8 @@ def main():
                 continue
             print(f"{scenario.get('name', path.stem):<22} {scenario.get('title', '')}")
         return 0
+    if options.finalize_only:
+        return finalize_only(options)
     if options.review_only:
         options.port = options.port or PORT_LO
         return review_only(options)

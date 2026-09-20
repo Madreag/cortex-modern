@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+from types import SimpleNamespace
 
 TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
@@ -256,6 +258,69 @@ def check_item_assertions(results, scratch):
     return ok
 
 
+def check_stop_request(results, scratch):
+    out = scratch / "stop-request"
+    out.mkdir()
+    (out / "stop-request.json").write_text('{"reason":"unit stop"}', encoding="utf-8")
+    handles = []
+
+    class Handle:
+        def __init__(self, root):
+            self.out = self.cwd = Path(root)
+            self.out.mkdir()
+            self.stopped = threading.Event()
+            self.closed = False
+            handles.append(self)
+
+        def start(self):
+            return self
+
+        def finish(self):
+            if not self.stopped.wait(5):
+                return {"exit_code": 124, "timed_out": True}
+            return {"exit_code": 137, "injected_termination": self.reason}
+
+        def terminate(self, reason):
+            self.reason = reason
+            self.stopped.set()
+
+        def close(self):
+            self.closed = True
+
+    original_make, original_seed = driver.make_run, driver.seed_settings
+    try:
+        driver.make_run = lambda repo, args, root, timeout, env: Handle(root)
+        driver.seed_settings = lambda handle, seed: None
+        options = SimpleNamespace(repo=scratch, size="640x360", fps=3, port=49478, scratch_root=scratch)
+        scenario = {"name": "stop", "path": "synthetic", "peers": [{"name": "host", "args": []}]}
+        captured = driver.run_one(options, scenario, {"name": "first"}, 0, out)
+    finally:
+        driver.make_run, driver.seed_settings = original_make, original_seed
+    return row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
+               "unit stop" in captured["interrupted"] and captured["peers"][0]["record"]["exit_code"] == 137)
+
+
+def check_finalizer(results, scratch):
+    out = scratch / "finalize"
+    peer = out / "first/host"
+    (peer / "video").mkdir(parents=True)
+    (peer / "launch.json").write_text(json.dumps({"started": True, "exe_sha256": "retained-exe"}), encoding="utf-8")
+    (peer / "video/frames.jsonl").write_text(json.dumps({"frame": 0, "wall_ms": 100, "sim_tick": 1, "screen": "game"}) + "\n", encoding="utf-8")
+    scenario = {"name": "finalize", "peers": [{"name": "host"}], "runs": [{"name": "first"}, {"name": "second"}],
+                "checklist": [{"id": "game", "what": "Game is drawn.", "screen": "game"}]}
+    capture = {"scenario": "finalize", "scenario_definition": scenario, "runs": [], "source": {"tip": "retained-tip"},
+               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": []}
+    (out / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+    code = driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
+    manifest = json.loads((out / "manifest.json").read_text())
+    review = json.loads((out / "review.json").read_text())
+    saved = json.loads((out / "capture.json").read_text())
+    ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
+    ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
+    ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    return ok
+
+
 def check_completion(results, scratch):
     probe = scratch / "completion-probe"
     probe.mkdir()
@@ -295,6 +360,8 @@ def main():
         ok &= check_review(results, scratch)
         ok &= check_interruption(results, scratch)
         ok &= check_item_assertions(results, scratch)
+        ok &= check_stop_request(results, scratch)
+        ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
