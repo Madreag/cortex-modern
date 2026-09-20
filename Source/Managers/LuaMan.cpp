@@ -5428,7 +5428,10 @@ struct ScriptCallbackRootScope {
 		lua_pushliteral(state, "_ScriptGraphCallbacks");
 		lua_pushnil(state);
 		lua_rawset(state, LUA_GLOBALSINDEX);
-		luaJIT_arm_tab_write(state, LUA_GLOBALSINDEX);
+		// The arm takes a stack index, never a pseudo-index.
+		lua_pushvalue(state, LUA_GLOBALSINDEX);
+		luaJIT_arm_tab_write(state, -1);
+		lua_pop(state, 1);
 	}
 };
 
