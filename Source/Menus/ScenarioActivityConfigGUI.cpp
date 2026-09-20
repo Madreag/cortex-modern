@@ -360,6 +360,21 @@ void ScenarioActivityConfigGUI::UpdatePlayerTeamSetupCell(int mouseX, int mouseY
 	}
 }
 
+bool ScenarioActivityConfigGUI::AutomationActivateCell(const std::string& controlName) {
+	if (!IsEnabled() || !m_SelectedActivity) return false;
+	for (int player = 0; player < PlayerColumns::PlayerColumnCount; ++player) {
+		for (int team = 0; team < TeamRows::TeamRowCount; ++team) {
+			GUICollectionBox* cell = m_PlayerBoxes.at(player).at(team);
+			if (cell->GetName() != controlName || !cell->GetVisible()) continue;
+			if ((!m_SelectedActivity->TeamActive(team) && team != TeamRows::DisabledTeam) || team == m_LockedCPUTeam ||
+			    (m_LockedCPUTeam != Activity::Teams::NoTeam && player == PlayerColumns::PlayerCPU)) return false;
+			if (cell->GetDrawType() != GUICollectionBox::Image) HandleClickOnPlayerTeamSetupCell(player, team);
+			return true;
+		}
+	}
+	return false;
+}
+
 void ScenarioActivityConfigGUI::HandleClickOnPlayerTeamSetupCell(int clickedPlayer, int clickedTeam) {
 	m_PlayerBoxes.at(clickedPlayer).at(clickedTeam)->SetDrawType(GUICollectionBox::Image);
 	const Icon* playerIcon = (clickedPlayer != PlayerColumns::PlayerCPU) ? g_UInputMan.GetSchemeIcon(clickedPlayer) : dynamic_cast<const Icon*>(g_PresetMan.GetEntityPreset("Icon", "Device CPU"));

@@ -65,6 +65,7 @@
 #include "RTETools.h"
 #include "RotatePrimitiveSelfTest.h"
 #include "FrameRecorder.h"
+#include "ScenarioGUI.h"
 #include "FloatTextSelfTest.h"
 #include "CheckpointImage.h"
 #include "PrimitiveMan.h"
@@ -2002,11 +2003,13 @@ static void ConfigureMenuScriptInput(int argc, char** argv) {
 
 // One write per diagnostic line: a worker thread's own line can never land inside a menu-script line.
 static void MenuScriptPrint(const std::string& line) {
+	FrameRecorder::Instance().RecordEvent(line);
 	System::PrintDiagnosticLine("[menu-script] " + line);
 }
 
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
+	FrameRecorder::Instance().RecordEvent("FAILED: " + reason);
 	GUIInputWrapper::SetAutomationDriving(false);
 	System::PrintDiagnosticErrorLine("[menu-script] FAILED: " + reason);
 	s_menuScriptFailed = true;
@@ -2036,6 +2039,12 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
+	ScenarioGUI* scenarioMenu = ScenarioGUI::AutomationActive();
+	if (FrameRecorder::Instance().Enabled()) {
+		PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu();
+		g_FrameMan.RecordVideoFrame(pause ? pause->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : g_MenuMan.GetMainMenu()->AutomationActiveScreenName(),
+		                           g_NetMatchService.GetLobbySnapshot().serviceState);
+	}
 	NetModerationGUIProbe::AfterMenuDraw();
 	static std::vector<std::string> steps;
 	static size_t stepIndex = 0;
@@ -2066,7 +2075,7 @@ void ProcessMenuScript() {
 	static bool introSkipped = false;
 	static uint64_t awaySinceMs = 0;
 	PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
-	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu) {
+	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
 		if (awaySinceMs == 0) {
 			awaySinceMs = MenuScriptNowMs();
 		}
@@ -2136,8 +2145,8 @@ void ProcessMenuScript() {
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	if (MenuAutomation::Handles(cmd)) {
 		std::string observation;
-		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : menu->AutomationManager(),
-			pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName(), cmd, iss, observation);
+		const bool pass = MenuAutomation::Execute(pauseMenu ? pauseMenu->AutomationManager() : scenarioMenu ? scenarioMenu->AutomationManager() : menu->AutomationManager(),
+			pauseMenu ? pauseMenu->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : menu->AutomationActiveScreenName(), cmd, iss, observation);
 		MenuScriptPrint(cmd + " " + observation + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) return MenuScriptFail(cmd + " " + observation);
 	} else if (cmd == "net_panel") {
@@ -2189,6 +2198,12 @@ void ProcessMenuScript() {
 		if (path.empty() || (!iss.eof() && !(iss >> seconds)) || seconds <= 0) return MenuScriptFail("wait_file requires a path and positive timeout");
 		waitCond = "file:" + path;
 		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(seconds) * 1000ULL;
+	} else if (cmd == "select_scene") {
+		std::string name;
+		std::getline(iss >> std::ws, name);
+		const bool pass = scenarioMenu && scenarioMenu->AutomationSelectScene(name);
+		MenuScriptPrint("select_scene " + name + " " + (pass ? "PASS" : "FAIL"));
+		if (!pass) return MenuScriptFail("select_scene " + name);
 	} else if (cmd == "host_world_lobby") {
 		unsigned port = 0;
 		if (!(iss >> port) || port == 0 || port > UINT16_MAX) return MenuScriptFail("host_world_lobby requires a port");
@@ -2231,12 +2246,16 @@ void ProcessMenuScript() {
 		waitCondTimeout = 4000;
 	} else if (cmd == "wait_remote_ready") {
 		waitCond = "remoteready";
-		waitCondTimeout = 4000;
+		int seconds = 60;
+		iss >> seconds;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(std::max(1, seconds)) * 1000ULL;
 	} else if (cmd == "wait_connected") {
 		int n = 0;
 		iss >> n;
 		waitCond = "connected:" + std::to_string(n);
-		waitCondTimeout = 4000;
+		int seconds = 60;
+		iss >> seconds;
+		waitCondDeadlineMs = MenuScriptNowMs() + static_cast<uint64_t>(std::max(1, seconds)) * 1000ULL;
 	} else if (cmd == "wait_activity") {
 		std::string text;
 		std::getline(iss >> std::ws, text);
@@ -2264,13 +2283,13 @@ void ProcessMenuScript() {
 	} else if (cmd == "activate") {
 		std::string control;
 		iss >> control;
-		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
+		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationActivateControl(control);
 		MenuScriptPrint("activate " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("activate failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "post_command") {
 		std::string control;
 		iss >> control;
-		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
+		const bool ok = pauseMenu ? pauseMenu->AutomationPostCommand(control) : scenarioMenu ? scenarioMenu->AutomationPostCommand(control) : menu->AutomationPostCommand(control);
 		MenuScriptPrint("post_command " + control + " ok=" + std::to_string(static_cast<int>(ok)));
 		if (!ok) { return MenuScriptFail("post_command failed (control missing, disabled, or hidden): " + control); }
 	} else if (cmd == "assert_control") {
@@ -2317,7 +2336,7 @@ void ProcessMenuScript() {
 	} else if (cmd == "assert_screen") {
 		std::string expected;
 		iss >> expected;
-		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : menu->AutomationActiveScreenName();
+		const std::string actual = pauseMenu ? pauseMenu->AutomationActiveScreenName() : scenarioMenu ? scenarioMenu->AutomationScreen() : menu->AutomationActiveScreenName();
 		const bool pass = actual == expected;
 		MenuScriptPrint("assert_screen expected=" + expected + " actual=" + actual + " " + (pass ? "PASS" : "FAIL"));
 		if (!pass) { return MenuScriptFail("assert_screen expected " + expected + " got " + actual); }
@@ -2847,6 +2866,7 @@ static bool NetMatchScreenshotDue() {
 /// The screen name a recorded frame is stamped with, read from the seam the menu probes read.
 static std::string RecordedScreenName() {
 	if (PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu()) return pause->AutomationActiveScreenName();
+	if (!g_MenuMan.GetIsInMenuScreen()) return "game";
 	if (!g_MenuMan.IsMainMenuInteractive()) return "game";
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	return menu ? menu->AutomationActiveScreenName() : "game";
