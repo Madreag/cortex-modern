@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -24,6 +25,52 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log=''):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            run = Path(folder)
+            (run / 'host').mkdir()
+            (run / 'manifest.json').write_text(json.dumps({'silent_tick': 600} if silent else {}), encoding='utf-8')
+            (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
+            if silent:
+                (run / 'survivor').mkdir()
+                (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
+            (run / 'host_report.json').write_text(json.dumps({'runner': {'lockstep': {
+                'next_frame': 1201, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing}}}), encoding='utf-8')
+            rows = [dict(type='committed', tick=300, wall_ms=5000)]
+            if complete:
+                rows.append(dict(type='committed', tick=1200, wall_ms=5000 + wall_ms))
+            return report.item9a_gates(run, rows=rows)
+
+    def test_item9a_steady_rate_and_wait_boundaries(self):
+        self.assertTrue(self.item9a()['pass_check'])
+        self.assertEqual(self.item9a(wall_ms=16000)['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'MISS')
+        waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
+        self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'MISS')
+
+    def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
+        result = self.item9a(wall_ms=15700)
+        self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
+        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'MISS')
+
+    def test_item9a_missing_transport_or_end_evidence_never_passes(self):
+        self.assertFalse(self.item9a(missing=1)['pass_check'])
+        self.assertFalse(self.item9a(missing=None)['pass_check'])
+        self.assertFalse(self.item9a(complete=False)['pass_check'])
+
+    def test_item9a_rejoin_requires_committed_live_reclaim_on_both_survivors(self):
+        request = '[net-match] hold peer=2 frame=603 AI in control\n[net-match] rejoin: player reconnected - resyncing the match\n'
+        applied = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
+        def status(host, survivor):
+            return self.item9a(silent=True, waits=request + host, survivor_log=survivor)['pins']['item9a_rejoin']['status']
+        self.assertEqual(status('', request), 'MISS')
+        self.assertEqual(status(applied, ''), 'MISS')
+        self.assertEqual(status(applied, applied.replace('700', '701')), 'MISS')
+        self.assertEqual(status(applied, applied), 'PASS')
+        for refused in (applied.replace('700', '500'), applied.replace('700', '1201'), applied.replace('actors=2', 'actors=0'), applied.replace('peer=2', 'peer=3')):
+            self.assertEqual(status(refused, refused), 'MISS')
+
     def test_latency_uses_present_return_and_counts_frames(self):
         edge = dict(_line=1, tick=10, wall_ms=100, actor=actor(), last_presented_frame=1,
                     changes=[dict(action='AIM_VECTOR', held=True, x=1, y=1)])

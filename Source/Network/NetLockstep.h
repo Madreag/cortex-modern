@@ -38,6 +38,7 @@ namespace RTE {
 		Checksum = 5,
 		SeatSnapshot = 6,
 		RecoveryChunk = 7,
+		Timing = 8,
 	};
 
 	enum class NetLockstepStopReason : uint16_t {
@@ -277,6 +278,28 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2 };
+	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4 };
+
+	/// A round-scoped timing decision and the peers that must acknowledge its boundary.
+	struct NetLockstepTiming {
+		uint8_t senderPeerId = 0;
+		uint8_t peerId = 0;
+		NetTimingAction action = NetTimingAction::Delay;
+		NetTimingPhase phase = NetTimingPhase::Propose;
+		uint64_t sessionId = 0;
+		uint64_t roundId = 0;
+		uint64_t revision = 0;
+		uint64_t applyFrame = 0;
+		uint64_t nextFrame = 0;
+		uint16_t delayFrames = 0;
+		uint8_t requiredPeers = 0;
+		uint8_t heldPeers = 0;
+		uint32_t pingMs = 0;
+		uint32_t jitterMs = 0;
+		bool operator==(const NetLockstepTiming&) const = default;
+	};
+
 	struct NetLockstepRecoveryChunk {
 		uint8_t senderPeerId = 0;
 		uint64_t sessionId = 0;
@@ -309,7 +332,7 @@ namespace RTE {
 		bool operator==(const NetLockstepChecksum&) const = default;
 	};
 
-	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk>;
+	using NetLockstepPayload = std::variant<NetLockstepStart, NetLockstepFrame, NetLockstepAck, NetLockstepStop, NetLockstepChecksum, NetLockstepSeatSnapshot, NetLockstepRecoveryChunk, NetLockstepTiming>;
 
 	struct NetLockstepPacket {
 		NetLockstepPayload payload;
@@ -359,6 +382,12 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 4;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		bool adaptiveInputDelay = false;
+		double simTickMs = 0;
+		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;
+		std::function<void(const NetMatchConfig&)> publishLiveConfig;
+		bool substituteSlowPeers = false;
+		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 	};
 
 	enum class NetHostMigrationPhase : uint8_t {
@@ -427,6 +456,7 @@ namespace RTE {
 	struct NetLockstepReadyFrame {
 		uint64_t frame = 0;
 		std::vector<uint8_t> departedPeerIds;
+		std::vector<uint8_t> aiHeldPeerIds;
 		std::map<uint8_t, uint64_t> committedPeerLeaves;
 		std::map<uint8_t, uint64_t> committedFrameWaivers;
 		bool hasLocalInput = false;
@@ -476,6 +506,15 @@ namespace RTE {
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
+		uint32_t pingMs = 0;
+		uint32_t jitterMs = 0;
+		uint16_t delayFrames = 0;
+		uint64_t reportedNextFrame = 0;
+		uint64_t longestWaitMs = 0;
+		uint32_t waits = 0;
+		uint32_t holds = 0;
+		uint32_t substitutions = 0;
+		uint32_t rejoins = 0;
 	};
 
 	struct NetLockstepStats {
@@ -512,6 +551,19 @@ namespace RTE {
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t blockingFrameWaits = 0;
+		uint64_t localTickOverruns = 0;
+		uint64_t localLateInputs = 0;
+		uint32_t consecutiveLateInputs = 0;
+		double localComputeDebtMs = 0;
+		double localProductionLateMs = 0;
+		bool localMachineSlow = false;
+		std::optional<uint32_t> measuredMissingFrameBase;
+		std::optional<uint32_t> measuredBlockingWaitBase;
+		uint32_t delayChangesProposed = 0;
+		uint32_t delayChangesCommitted = 0;
+		uint32_t delayPaddingFrames = 0;
+		uint32_t delayDeferredSamples = 0;
 		uint32_t relayPacketsSent = 0; //!< Host-star: forwards this peer made on behalf of another.
 		uint32_t relaySendFailures = 0; //!< Forwards the transport refused; on a reliable lane the receiver never recovers them.
 		uint32_t relayResends = 0; //!< Refused forwards a later retry did deliver.
@@ -545,7 +597,9 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 22;
+		static constexpr uint16_t c_Version = 24;
+		static constexpr uint16_t c_WorldVersion = 25;
+		static constexpr uint16_t c_TimingVersion = 24;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
@@ -563,7 +617,7 @@ namespace RTE {
 		// Version 21 appends writerUID on AIOrder; v<=20 still decodes with writerUID 0.
 		// Version 22 carries the AI pass's script messages and gibs as commands, and the AIOrder op that
 		// sets a move target; a peer below it never sent them, so it refuses them instead of guessing.
-		// A persistent world's membership/spawn/binding transition is encoded only at this version.
+		// Recordings introduce world transitions at this version.
 		static constexpr uint16_t c_WorldTransitionVersion = 23;
 		static constexpr uint16_t c_HoldResolutionVersion = 19;
 		static constexpr uint16_t c_PlayerBindingsVersion = 18;
@@ -699,6 +753,21 @@ namespace RTE {
 		bool PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const;
 		/// The in-flight commands this coordinator still holds for one seat at a frame.
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
+		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
+		bool TimingDecisionPendingAt(uint64_t frame) const;
+		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
+		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
+		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
+		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
+		void FinishFrameWait(uint64_t nowMs);
+		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
+		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
+		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
+		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
+		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
+		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
@@ -716,6 +785,7 @@ namespace RTE {
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
+		const NetHash32& GetRoundConfigHash() const { return m_RoundConfigHash; }
 		uint8_t GetHostPeerId() const { return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
 		bool IsMigrating() const { return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
 		bool IsMigrationCatchUp() const { return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
@@ -1004,9 +1074,43 @@ namespace RTE {
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
+		void HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport);
+		void TickTiming(uint64_t nowMs);
+		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
+		void FlushTimingOutgoing();
+		void CommitTiming(uint64_t revision);
+		void ApplyTiming(const NetLockstepTiming& timing);
+		uint64_t FutureTimingFrame() const;
+		struct TimingDecision {
+			NetLockstepTiming proposal;
+			uint8_t acknowledgedPeers = 0;
+			bool committed = false;
+			uint64_t proposedAtMs = 0;
+		};
+		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
+		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
+		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
+		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
+		uint64_t m_NextTimingRevision = 1;
+		uint64_t m_LastTimingSampleMs = UINT64_MAX;
+		uint64_t m_LastTimingStatusMs = UINT64_MAX;
+		uint64_t m_TimingNowMs = 0;
+		std::optional<uint64_t> m_ProductionBaseFrame;
+		uint64_t m_ProductionBaseUs = 0;
+		uint64_t m_ProductionWaitBaseUs = 0;
+		std::map<uint8_t, uint64_t> m_AiHeldSeats;
+		std::optional<uint64_t> m_ConsumerWaitingFrame;
+		std::optional<uint64_t> m_LastDeliveredFrame;
+		uint64_t m_ConsumerWaitStartMs = 0;
+		bool m_ConsumerWaitCounted = false;
+		bool m_LocalSeatHeld = false;
+		bool m_Playback = false;
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;
+		NetMatchConfig m_OpeningMatchConfig;
+		NetHash32 m_RoundConfigHash{};
 		NetLockstepState m_State = NetLockstepState::Idle;
 		NetLockstepStats m_Stats;
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every peer except local; derived at Start.
@@ -1017,7 +1121,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
-		std::set<uint8_t> m_DroppedSeats;   //!< Unresolved dropped seats; the round commits nothing while this is non-empty.
+		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
 		std::map<uint8_t, uint64_t> m_DroppedAtMs;
 		uint64_t m_LastHoldHeartbeatMs = 0;

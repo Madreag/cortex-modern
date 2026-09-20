@@ -104,6 +104,9 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetWorldJoinSelfTest.h"
+#ifdef CCCP_WITH_GNS
+#include <steam/isteamnetworkingutils.h>
+#endif
 #include "SimChecksum.h"
 #include "NetA7Journal.h"
 #include "ScenarioRunner.h"
@@ -2918,7 +2921,7 @@ static void DrawFrameWithPreviews() {
 	NetModerationGUIProbe::AfterDraw();
 }
 
-static void UpdateResyncUI(uint32_t elapsedSeconds) {
+static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	PollSDLEvents();
 	g_UInputMan.Update(false);
 	if (g_UInputMan.KeyPressed(SDLK_F6) || (g_MenuMan.IsNetworkPanelOpen() && g_UInputMan.AnyStartPress(false))) {
@@ -2931,7 +2934,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, "Resyncing the match...", GUIFont::Centre);
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - Rejoining..." : "Resyncing the match...", GUIFont::Centre);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
@@ -4579,10 +4582,12 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			} else {
 				returnToMenuAfterNetworkEnd = true;
 			}
-		} else if ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
+		} else if ((error.find("PeerHeld:") != std::string::npos && g_SettingsMan.GetNetworkAutoReconnect()) ||
+		          ((error.find("Desync") != std::string::npos || error.find("ResyncRequested") != std::string::npos) &&
 		           g_NetMatchService.IsResyncOnDesyncEnabled() &&
 		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
-		           g_NetMatchService.GetState() == NetMatchServiceState::Running) {
+		           g_NetMatchService.GetState() == NetMatchServiceState::Running)) {
+			const bool heldRejoin = error.find("PeerHeld:") != std::string::npos;
 			// A desync (or a host-requested resync, e.g. a rejoin) heals in place: the host
 			// snapshots its state, every peer reloads the identical file, the match plays on.
 			s_netMatchHeals.Note(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond());
@@ -4595,12 +4600,17 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			ScenarioRunner::PushNetUiToast("resync_start", "Resyncing the match...");
 			ScenarioRunner::ClearControllerReplayError();
 			std::string resyncError;
-			bool resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
+			bool resyncOk = false;
+			if (heldRejoin) {
+				g_NetMatchService.ReportRuntimeError(error);
+				ScenarioRunner::DiscardHeldLocalInputs();
+				resyncOk = g_NetMatchService.BeginTicketRejoin(&resyncError);
+			} else resyncOk = g_NetMatchService.ResyncMatch(&resyncError);
 			if (resyncOk) {
 				std::string launchPreset;
 				const auto resyncWaitStart = std::chrono::steady_clock::now();
 				while (!g_NetMatchService.ConsumeReadyToLaunch(launchPreset)) {
-					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()));
+					UpdateResyncUI(static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - resyncWaitStart).count()), heldRejoin);
 					if (System::IsSetToQuit()) {
 						resyncError = "quit requested during resync";
 						resyncOk = false;
@@ -4835,6 +4845,24 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		static uint64_t lossArmRound = UINT64_MAX;
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && lossArmRound != ScenarioRunner::GetLockstepRoundId()) {
+			lossArmRound = ScenarioRunner::GetLockstepRoundId();
+			const char* lossText = std::getenv("CC_TEST_GNS_LOSS_PERCENT");
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (lossText && headless && std::strcmp(headless, "1") == 0) {
+				char* end = nullptr;
+				const float percent = std::strtof(lossText, &end);
+				bool applied = false;
+#ifdef CCCP_WITH_GNS
+				if (end != lossText && *end == '\0' && percent >= 0 && percent <= 100) {
+					applied = SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, percent) &&
+					    SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, percent);
+				}
+#endif
+				std::cout << "[net-transport-loss] percent=" << percent << " send_recv_armed=" << applied << " round=" << lossArmRound << std::endl;
+			}
+		}
 		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
@@ -4905,6 +4933,7 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
+			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
@@ -5613,7 +5642,10 @@ void RunGameLoop() {
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
-				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				s_paceSimUs += elapsedUs;
+				if (!lockstepPausedTick) ScenarioRunner::NoteLockstepLocalTickCost(simTick,
+				    std::max(0LL, elapsedUs - (ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs)) / 1000.0);
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.

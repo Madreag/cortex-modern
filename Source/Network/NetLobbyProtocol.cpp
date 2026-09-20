@@ -329,7 +329,7 @@ namespace RTE {
 				if (NetMatchConfigUtil::CarriesWorldLayout(config.version)) {
 					if (!AppendString(out, config.worldId, NetMatchConfigUtil::c_WorldIdBytes, "world_id", error)) return false;
 					AppendU64LE(out, config.worldBoot);
-					// The world block grows at its end, so a v4 config's bytes never move.
+					// The world block keeps its recorded layout.
 					for (const uint8_t capacity: config.worldTeamCapacity) {
 						AppendU8(out, capacity);
 					}
@@ -356,6 +356,12 @@ namespace RTE {
 							return false;
 				}
 			}
+			if (config.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				AppendU16LE(out, config.slowPlayerBoundTicks);
+				AppendU8(out, static_cast<uint8_t>(config.slowPlayerPolicy));
+				AppendU8(out, static_cast<uint8_t>(config.activePeerIds.size()));
+				for (uint8_t peer: config.activePeerIds) AppendU8(out, peer);
+			}
 			if (config.version >= NetMatchConfigUtil::c_RelayLayoutVersion &&
 			    !AppendString(out, config.relay.ToJson(), 32768, "relay", error)) return false;
 			return true;
@@ -365,7 +371,7 @@ namespace RTE {
 			uint16_t reserved = 0;
 			uint8_t playerCount = 0;
 			if (!ReadOrTruncated(reader.ReadU16LE(out.version), reader, error, "config.version")) return false;
-			// Live ordinary/world configs use v6/v7; older layouts remain recording-only.
+			// Live ordinary/world configs use v6/v7 and share the timing layout; older layouts remain recording-only.
 			if (out.version == 0 || out.version > NetMatchConfigUtil::c_PersistentWorldVersion || (out.version < NetMatchConfigUtil::c_LiveMinVersion && !allowRecordedVersions)) {
 				SetError(error, NetLobbyErrorCode::UnsupportedVersion, reader.Offset() - 2, "unsupported match config version " + std::to_string(out.version));
 				return false;
@@ -515,6 +521,21 @@ namespace RTE {
 						peer.listenAddrs.push_back(std::move(address));
 					}
 					out.migrationPeers.push_back(std::move(peer));
+				}
+			}
+			out.slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+			out.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			out.activePeerIds.clear();
+			if (out.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				uint8_t policy = 0;
+				if (!ReadOrTruncated(reader.ReadU16LE(out.slowPlayerBoundTicks) && reader.ReadU8(policy), reader, error, "slow player policy")) return false;
+				out.slowPlayerPolicy = static_cast<NetSlowPlayerPolicy>(policy);
+				uint8_t count = 0;
+				if (!ReadOrTruncated(reader.ReadU8(count) && count <= NetMatchConfigUtil::c_MaxPeerCount, reader, error, "active peer count")) return false;
+				for (uint8_t index = 0; index < count; ++index) {
+					uint8_t peer = 0;
+					if (!ReadOrTruncated(reader.ReadU8(peer), reader, error, "active peer")) return false;
+					out.activePeerIds.push_back(peer);
 				}
 			}
 			out.relay = {};

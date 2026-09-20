@@ -33,7 +33,7 @@ NETWORK_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetwo
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
                 "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
                 "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
-                "CheckboxNetworkToasts", "CheckboxNetworkPrediction",
+                "CheckboxNetworkToasts", "CheckboxNetworkPrediction", "CheckboxNetworkDiagnostics",
                 "LabelMatchStatusWidget", "ComboMatchStatusWidget")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
@@ -41,11 +41,11 @@ MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which 
 NETWORK_SEED = {"NetworkDisplayName": "ScoutLead", "NetworkHostDelayPolicy": "Auto",
                 "NetworkHostIdleWaitMinutes": "10", "NetworkHostAutoRepair": "1", "NetworkInputDelayFrames": "0",
                 "NetworkPathHorizonTicks": "30",
-                "NetworkToastsEnabled": "0", "LocalPrediction": "0", "NetworkMatchStatusMode": "Auto"}
+                "NetworkToastsEnabled": "0", "LocalPrediction": "0", "NetworkShowDiagnostics": "0", "NetworkMatchStatusMode": "Auto"}
 NETWORK_SAVED = {"NetworkDisplayName": "WingCmd", "NetworkHostDelayPolicy": "Fixed",
                  "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0", "NetworkInputDelayFrames": "7",
                  "NetworkPathHorizonTicks": "45",
-                 "NetworkToastsEnabled": "1", "LocalPrediction": "1"}
+                 "NetworkToastsEnabled": "1", "LocalPrediction": "1", "NetworkShowDiagnostics": "1"}
 # The Misc page's own rows; the match-status combo moved to the player page, so a dump of this box
 # must not name it - the absence is asserted against the whole capture, not a missing-control assert.
 MISC_ROWS = ("CheckboxSkipIntro", "CheckboxShowToolTips", "CheckboxShowLoadingScreenProgressReport",
@@ -110,7 +110,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -172,11 +172,12 @@ INTERNET_REASON = "Connection sets your route. Host Options > Network sets the m
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
-HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
+HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "Pause", "NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
                 "NetworkPathHorizonTicks": "45"}
-CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
+CLIENT_OPTIONS = {"NetworkSlowPlayerBoundTicks": "3", "NetworkSlowPlayerPolicy": "Substitute", "NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
                   "NetworkPathHorizonTicks": "15"}
-MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45}
+MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45,
+               "slow_player_bound_ticks": 7, "slow_player_policy": 2}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
@@ -551,13 +552,20 @@ def scripts(case, port, root):
         text += (f"settext TextHostPort {port}\nactivate ButtonHostOptions\nwait 5\n"
                  "activate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 6 ticks\n"
+                 "assert_label TextHostNetSlowBound 3\n"
+                 "assert_label ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\n"
                  "activate ButtonHostOptApply\nwait 3\nassert_enabled ButtonHostOptApply 0\n"
                  "combo_select ComboHostNetRedundancy 7 ticks\nwait 3\n"
+                 "set_text TextHostNetSlowBound 7\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 1\nactivate ButtonHostOptApply\nwait 3\n"
                  "assert_enabled ButtonHostOptApply 0\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
                  "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageNetwork\nwait 3\nactivate TabHostNetTuning\nwait 3\n"
-                 "assert_label ComboHostNetRedundancy 7 ticks\ndump_host_options\nexit\n")
+                 "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
+                 "combo_select ComboHostNetSlowPolicy Pause for them (up to 20 s)\nwait 3\n"
+                 "assert_enabled TextHostNetSlowBound 0\n"
+                 "combo_select ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\nwait 3\n"
+                 "assert_enabled TextHostNetSlowBound 1\ndump_host_options\nexit\n")
     elif case == "landing":
         text = LANDING + "assert_label LabelMultiplayerNamePrompt Multiplayer name:\n"
         text += checks("ButtonMultiplayerHostGame", "MultiplayerLandingPanel")
@@ -646,7 +654,7 @@ def scripts(case, port, root):
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
                  "set_text TextNetworkPathHorizon " + NETWORK_SAVED["NetworkPathHorizonTicks"] + "\n"
                  "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
-                 "post_command CheckboxNetworkPrediction\nwait 3\ndump_player_options\n"
+                 "post_command CheckboxNetworkPrediction\npost_command CheckboxNetworkDiagnostics\nwait 3\ndump_player_options\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
         text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
@@ -1014,6 +1022,10 @@ def scripts(case, port, root):
         text += checks("ComboHostNetRedundancy", "CollectionBoxHostPageNetwork")
         text += "assert_label ComboHostNetRedundancy 6 ticks\n"
         text += checks("TextHostNetMinDelay", "CollectionBoxHostPageNetwork")
+        for control in ("LabelHostNetSlowBound", "TextHostNetSlowBound", "LabelHostNetSlowBoundHint", "LabelHostNetSlowPolicy", "ComboHostNetSlowPolicy"):
+            text += checks(control, "CollectionBoxHostPageNetwork")
+        text += "assert_label TextHostNetSlowBound 3\n"
+        text += "assert_label ComboHostNetSlowPolicy Hand the seat to the AI and let them rejoin\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageNetwork")
         text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageNetwork")
         # H34: the host row names mode/capacity/seated humans off the adopted config; the three
@@ -1328,6 +1340,28 @@ def host_options_geometry(images):
     return measured
 
 
+def timing_options_geometry(images):
+    measured = []
+    # Rows sit in the Tuning box, 24 px below the page's tab strip.
+    expected = {'LabelHostNetSlowBound': (8, 68, 104, 18), 'TextHostNetSlowBound': (120, 68, 44, 18),
+                'LabelHostNetSlowBoundHint': (172, 68, 100, 18), 'LabelHostNetSlowPolicy': (8, 88, 172, 18),
+                'ComboHostNetSlowPolicy': (184, 88, 329, 18)}
+    for capture in images:
+        rows = {row['name']: row for row in capture['controls']}
+        if 'CollectionBoxHostPageNetwork' not in rows:
+            continue
+        page = rows['CollectionBoxHostPageNetwork']['rect']
+        for name, rectangle in expected.items():
+            row = rows[name]
+            actual = (row['rect'][0] - page[0], row['rect'][1] - page[1], *row['rect'][2:])
+            assert actual == rectangle and row['text_fits'], (name, actual, rectangle, row)
+        combo = rows['ComboHostNetSlowPolicy']['rect']
+        assert combo[1] + combo[3] + 40 <= page[1] + page[3], combo
+        measured.append({'page': page, 'bound': rows['TextHostNetSlowBound']['rect'], 'policy': combo})
+    assert measured, 'timing option rows were never read back'
+    return measured
+
+
 def run_case(options, case, root, failing=None):
     root.mkdir(parents=True, exist_ok=False)
     texts, probes = scripts(case, options.port, root)
@@ -1371,7 +1405,7 @@ def run_case(options, case, root, failing=None):
             set_visual_resolution(runs[who], *map(int, options.size.split("x")))
             if case in ("lobby", "host-defaults"):
                 (runs[who].cwd / "Userdata/NetworkHostDefaults.ini").write_text(
-                    "Version = 1\nFrameRedundancyTicks = 6\n", encoding="utf-8")
+                    "Version = 2\nFrameRedundancyTicks = 6\nSlowPlayerBoundTicks = 3\nSlowPlayerPolicy = substitute\n", encoding="utf-8")
             if case in ("host-stun", "host-stun-empty", "host-relay", "net-connection"):
                 settings_path = runs[who].cwd / "Userdata/Settings.ini"
                 settings = settings_path.read_text(encoding="utf-8-sig")
@@ -1613,12 +1647,12 @@ def run_case(options, case, root, failing=None):
             # the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDisplayName", "LabelNetworkDelayPolicy", "LabelNetworkFixedDelay",
                      "LabelNetworkIdleWait", "LabelNetworkPathHorizon", "CheckboxNetworkAutoRepair",
-                     "CheckboxNetworkToasts", "LabelMatchStatusWidget")
+                     "CheckboxNetworkToasts", "LabelMatchStatusWidget", "CheckboxNetworkDiagnostics")
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 7, deltas
+            assert deltas == [20] * 8, deltas
             without_fixed = pitch[:2] + pitch[3:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 6, closed
+            assert closed == [20] * 7, closed
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
@@ -1770,6 +1804,7 @@ def run_case(options, case, root, failing=None):
             drawn = {c["name"]: c for c in images[-1]["controls"]}
             if case == "lobby":
                 result["host_options_geometry"] = host_options_geometry(images)
+                result["timing_options_geometry"] = timing_options_geometry(images)
             leave, seats, panel = (drawn[name] for name in
                                    ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
             assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
@@ -1796,7 +1831,7 @@ def run_case(options, case, root, failing=None):
             assert result["saved"] == {"NetworkDisplayName": "Recon7"}, result["saved"]
             # The seeded policy is automatic, so the lobby row must not call the delay fixed.
             result["lobby_row"] = next(c["text"] for c in images[-1]["controls"] if c["name"] == "LabelLobbyPlayer0")
-            assert "(auto" in result["lobby_row"] and "(fixed)" not in result["lobby_row"], result["lobby_row"]
+            assert re.search(r'Ping \d+ ms - delay \d+ frames', result["lobby_row"]), result["lobby_row"]
             # The host screen under the seeded policy: the box says auto, and is not an editable count.
             host_setup = {c["name"]: c for c in images[-3]["controls"]}
             assert host_setup["TextHostInputDelay"]["text"] == "auto", host_setup["TextHostInputDelay"]
@@ -1828,6 +1863,8 @@ def run_case(options, case, root, failing=None):
                 assert 0 <= bottom - top <= 1, (screen_rect, res_y)
             else:
                 assert top == 0, (screen_rect, res_y)
+        if case == "host-defaults":
+            result["timing_options_geometry"] = timing_options_geometry(images)
         if case == "net-options":
             # Both peers' rosters carry the host's saved options; the client's own copy differs and loses.
             result["match_rules"] = {}

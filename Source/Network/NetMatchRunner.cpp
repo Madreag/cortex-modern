@@ -2,6 +2,7 @@
 
 #include "NetIdentity.h"
 #include "NetWorldJoin.h"
+#include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
 
@@ -32,6 +33,7 @@ namespace RTE {
 	std::map<uint8_t, NetPeerId> NetMatchRunner::BuildRemoteTransportMap(const NetSession& session) const {
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
+			if (!m_ActivePeerIds.empty() && std::find(m_ActivePeerIds.begin(), m_ActivePeerIds.end(), LockstepPeerId(peer.assignedPeerId)) == m_ActivePeerIds.end()) continue;
 			transports[LockstepPeerId(peer.assignedPeerId)] = peer.transportPeerId;
 		}
 		return transports;
@@ -48,6 +50,7 @@ namespace RTE {
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
 		m_ResyncRound = !m_StateToStream.empty();
 		m_MatchConfig = config.matchConfig;
+		m_ActivePeerIds = m_MatchConfig.activePeerIds;
 		m_MatchConfigHash = NetMatchConfigUtil::HashConfig(m_MatchConfig);
 		m_SetupError.clear();
 		m_WorldJoinImage = false;
@@ -82,17 +85,17 @@ namespace RTE {
 			return false;
 		}
 		m_MatchConfig.sessionId = session.GetSessionId();
-		// High ping self-pays: each sender's delay covers its OWN round trip to the host (the
-		// receive side settles by running that leg behind), so one slow link no longer delays
-		// every player's input. The manual setting stays the floor for every peer.
+		// Each sender covers its round trip through the active transport.
 		if (config.host && config.autoInputDelay) {
-			const double tickMs = 1000.0 / 30.0;
+			const double tickMs = g_TimerMan.GetDeltaTimeMS();
 			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
 			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
+				NetInputDelayEstimator estimate;
+				estimate.Observe(0, rttMs);
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
-				    static_cast<uint32_t>(std::ceil(rttMs / tickMs)) + 1U, NetMatchConfigUtil::c_MaxInputDelayFrames));
+				    estimate.RequiredFrames(tickMs, floorDelay), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
 				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
 				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
@@ -373,6 +376,10 @@ namespace RTE {
 		m_HostOptionsRefused = false;
 		m_SetupError.clear();
 		m_ResyncRound = !stateToStream.empty() || m_SnapshotProviderPeerId != 0;
+		if (m_ResyncRound && coordinator.UsesBoundedWait() && !m_MatchConfig.persistentWorld) {
+			m_ActivePeerIds = coordinator.ResumePeerIds();
+			m_MatchConfig.activePeerIds = m_ActivePeerIds;
+		}
 		m_RematchRound = false;
 		m_RematchDerivedPeerId = 0;
 		// A rematch re-forms the roster on the peers still here; a resync must keep the one its snapshot
@@ -549,7 +556,7 @@ namespace RTE {
 		lobbyConfig.resumeSideStateHash = m_Config.resumeSideStateHash;
 		lobbyConfig.resumeHeld = m_Config.resumeHeld;
 		if (!m_ActivePeerIds.empty())
-			lobbyConfig.activePeerCount = static_cast<uint8_t>(session.GetReadyPeerCount() + 1);
+			lobbyConfig.activePeerCount = static_cast<uint8_t>(m_ActivePeerIds.size());
 		// A client's lobby hears nothing until the last peer arrives and the host starts its round —
 		// silence is not death here. Transport disconnects still abort it immediately. This is the
 		// technical message-hearing deadline; the host's seating policy is the budget below.
@@ -673,6 +680,15 @@ namespace RTE {
 		lockstepConfig.startFrame = m_UseLobbyProtocol ? m_Lobby.GetStartFrame() : config.startFrame;
 		lockstepConfig.localPeerId = LocalLockstepPeerId(session);
 		lockstepConfig.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, lockstepConfig.localPeerId);
+		lockstepConfig.adaptiveInputDelay = m_UseLobbyProtocol ? m_MatchConfig.delayPolicy == NetMatchDelayPolicy::Auto : config.autoInputDelay;
+		lockstepConfig.simTickMs = g_TimerMan.GetDeltaTimeMS();
+		lockstepConfig.initialDelaySamples = m_Lobby.GetInputDelaySamples();
+		lockstepConfig.publishLiveConfig = [this](const NetMatchConfig& live) {
+			m_MatchConfig = live;
+			m_MatchConfigHash = NetMatchConfigUtil::HashConfig(live);
+		};
+		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
+		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
 		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
@@ -696,6 +712,7 @@ namespace RTE {
 		lockstepConfig.matchConfig = m_MatchConfig;
 		lockstepConfig.authorityPeerId = m_ActiveHostPeerId;
 		lockstepConfig.activePeerIds = m_ActivePeerIds;
+		if (lockstepConfig.activePeerIds.empty()) lockstepConfig.activePeerIds = m_MatchConfig.activePeerIds;
 		if (m_Config.configureMigration)
 			m_Config.configureMigration(lockstepConfig);
 		// The host tags each round so a late packet from the previous round cannot join this one.
@@ -747,7 +764,7 @@ namespace RTE {
 	NetLobbySnapshot NetMatchRunner::BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const {
 		// A client adopts the host's roster mid-round; read it from the live lobby so the member
 		// list grows to the real player count instead of the local placeholder config's.
-		const NetMatchConfig& rosterConfig = m_Lobby.GetState() != NetLobbyState::Idle ? m_Lobby.GetMatchConfig() : m_MatchConfig;
+		const NetMatchConfig& rosterConfig = m_State == NetMatchRuntimeState::Running || m_Lobby.GetState() == NetLobbyState::Idle ? m_MatchConfig : m_Lobby.GetMatchConfig();
 		NetLobbySnapshot snapshot;
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		snapshot.lobbyPhase = StateName(m_State);
@@ -800,6 +817,7 @@ namespace RTE {
 			} else {
 				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
 			}
+			member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(rosterConfig, slot.peerId);
 			snapshot.members.push_back(member);
 		}
 		return snapshot;

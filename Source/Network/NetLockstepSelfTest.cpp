@@ -1092,7 +1092,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x16, 0x00,
+				0x18, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1283,6 +1283,282 @@ namespace RTE {
 			config.scenario = "LockstepSelfTest";
 			config.ownershipPolicy = "unique-id-split";
 			return config;
+		}
+
+		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error);
+
+		bool TestTimingDecisionCodec(std::string* error) {
+			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold}) {
+				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status}) {
+					NetLockstepTiming timing;
+					timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
+					timing.sessionId = 88; timing.roundId = 99; timing.applyFrame = 120; timing.nextFrame = 50;
+					timing.delayFrames = 26; timing.pingMs = 401; timing.jitterMs = 17;
+					timing.revision = phase == NetTimingPhase::Status ? 0 : 4;
+					timing.requiredPeers = phase == NetTimingPhase::Status ? 0 : 3;
+					if (action == NetTimingAction::Hold && phase != NetTimingPhase::Status) { timing.heldPeers = 2; timing.requiredPeers = 1; }
+					if (!RoundTrip({timing}, error)) return false;
+					std::vector<uint8_t> bytes;
+					if (!EncodePacket({timing}, bytes, error)) return false;
+					bytes[4] = static_cast<uint8_t>(NetLockstepCodec::c_TimingVersion - 1);
+					if (!ExpectDecodeError(bytes, NetLockstepErrorCode::UnsupportedVersion, error)) return false;
+				}
+			}
+			NetLockstepFrame frame;
+			frame.senderPeerId = 1; frame.targetFrame = 40;
+			frame.commands = {{1, NetGameSeatHold{2}}, {1, NetGameInputDelay{2, 26}}};
+			std::vector<uint8_t> recovery;
+			NetLockstepFrame decoded;
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 2 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
+				*error = "recovery v2 lost a committed timing command"; return false;
+			}
+			recovery[4] = 1;
+			if (NetLockstepCodec::DecodeRecoveryInput(recovery, decoded)) { *error = "recovery v1 reinterpreted a new timing command"; return false; }
+			frame.commands.clear();
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery)) return false;
+			recovery[4] = 1;
+			if (!NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) { *error = "historical recovery input no longer reads"; return false; }
+			return true;
+		}
+
+		bool TestLiveDelayChangesAtOneFrame(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A01, 2, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A01, 2, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 17;
+			hostConfig.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(48891, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto pump = [&] {
+				++now;
+				hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			};
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (!host.IsRunning() || !client.IsRunning()) { *error = "live delay fixture did not start"; return false; }
+			const NetHash32 opening = host.GetRoundConfigHash();
+			if (!host.ProposeInputDelay(2, 5, 20, error)) return false;
+			if (!host.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 20) != 2) {
+				*error = "delay changed before the remote acknowledged its frame"; return false;
+			}
+			for (int pass = 0; pass < 10; ++pass) pump();
+			if (host.TimingDecisionPendingAt(20) || client.TimingDecisionPendingAt(20) || host.InputDelayAt(2, 19) != 2 ||
+			    client.InputDelayAt(2, 19) != 2 || host.InputDelayAt(2, 20) != 5 || client.InputDelayAt(2, 20) != 5) {
+				*error = "the peers installed different live delay boundaries"; return false;
+			}
+			for (uint64_t tick = 0; tick <= 24; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error) || !client.QueueLocalInput(tick, {MakeFrame(200, uint64_t{1} << PRESS_PRIMARY)}, {}, error)) return false;
+				pump(); pump();
+			}
+			NetLockstepReadyFrame first, second;
+			for (uint64_t frame = 2; frame <= 26; ++frame) {
+				if (!host.PopReadyFrame(first) || !client.PopReadyFrame(second) || first.frame != frame || second.frame != frame) {
+					*error = "raising the delay left a hole in the committed stream"; return false;
+				}
+				if (first.remoteFrames.empty() || second.localFrames.empty()) { *error = "live delay lost a sender's controllers"; return false; }
+				if (frame >= 22 && frame <= 24 && (first.remoteFrames.front().stateMask & (uint64_t{1} << PRESS_PRIMARY)) != 0) {
+					*error = "delay padding repeated a controller press"; return false;
+				}
+			}
+			if (client.GetStats().delayPaddingFrames != 3 || host.GetStats().delayChangesCommitted != 1 || client.GetStats().delayChangesCommitted != 1) {
+				*error = "the live delay counters did not count one boundary and its three padding frames"; return false;
+			}
+			if (host.GetRoundConfigHash() != opening || host.GetConfig().matchConfig.peerInputDelayFrames != std::vector<uint16_t>{2, 5}) {
+				*error = "live delay did not publish its config independently of round identity"; return false;
+			}
+			if (!host.ProposeInputDelay(2, 2, 50, error)) return false;
+			for (int pass = 0; pass < 10; ++pass) pump();
+			std::vector<NetGameCommand> pending;
+			for (uint64_t tick = 25; tick <= 54; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, 0)}, {}, error)) return false;
+				const ControllerFrame input = MakeFrame(200, tick == 50 ? uint64_t{1} << PRESS_PRIMARY : 0);
+				if (tick == 50) pending.push_back({2, NetGamePlayerBindings{}});
+				if (!client.DeferLocalInput(tick, {input})) {
+					if (!client.QueueLocalInput(tick, {input}, pending, error)) return false;
+					pending.clear();
+				}
+				pump(); pump();
+			}
+			NetLockstepFrame retained;
+			if (client.GetStats().delayDeferredSamples != 3 || !client.PeekLocalInput(55, retained) || retained.commands.size() != 1 ||
+			    retained.frames.empty() || (retained.frames.front().stateMask & (uint64_t{1} << PRESS_PRIMARY)) == 0) {
+				*error = "lowering the delay lost a deferred edge or command"; return false;
+			}
+			return true;
+		}
+
+		bool TestBoundedHoldKeepsCommitting(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A02, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A02, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 18;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(48892, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
+			NetLockstepReadyFrame ready;
+			for (uint64_t now = 10; now < 60; ++now) {
+				host.Tick(now);
+				host.NoteFrameWait(0, now);
+				if (host.PopReadyFrame(ready)) { *error = "the held peer lost its input before the configured wait bound"; return false; }
+			}
+			if (!host.NoteFrameWait(0, 60) || !host.PopReadyFrame(ready) || ready.frame != 0 || !host.AnyDroppedSeatHeld() ||
+			    !host.IsSeatUnderAI(2, 0) || host.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || host.GetStats().longestStallMs > 50) {
+				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
+			}
+			host.FinishFrameWait(60);
+			for (uint64_t tick = 0; tick < 16; ++tick) {
+				host.NoteLocalTickCost(tick, 40.0);
+				host.NoteLocalInputProduced(tick, tick * 40000, 0);
+			}
+			if (!host.GetStats().localMachineSlow || host.GetStats().consecutiveLateInputs < 8 || host.GetStats().localLateInputs == 0) {
+				*error = "local compute exceeding the sender delay did not diagnose a slow machine"; return false;
+			}
+			for (uint64_t tick = 16; tick < 60; ++tick) {
+				host.NoteLocalTickCost(tick, 1.0);
+				host.NoteLocalInputProduced(tick, 600000 + (tick - 15) * 1000, 0);
+			}
+			if (host.GetStats().localMachineSlow || host.GetStats().localComputeDebtMs != 0) {
+				*error = "a recovered local producer kept the slow-machine warning"; return false;
+			}
+			for (uint64_t tick = 60; tick < 76; ++tick) host.NoteLocalInputProduced(tick, tick * 100000, tick * 90000);
+			if (host.GetStats().localMachineSlow) { *error = "remote waits were diagnosed as a slow local machine"; return false; }
+			const std::string report = host.BuildReportJson();
+			if (report.find("\"holds\":1") == std::string::npos || report.find("\"substitutions\":1") == std::string::npos ||
+			    report.find("\"longest_wait_ms\":50") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {
+				*error = "a held peer's report omitted its hold, AI handoff or wait"; return false;
+			}
+			for (uint64_t tick = 1; tick <= 5; ++tick) {
+				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
+				host.Tick(60 + tick);
+				if (!host.PopReadyFrame(ready) || ready.frame != tick || !ready.remoteFrames.empty()) {
+					*error = "an unresolved held seat paused a survivor or supplied late input"; return false;
+				}
+			}
+			std::string rejoinError;
+			if (host.PreparePeerRejoin(2, 401, 500, &rejoinError) || rejoinError.find("agreed input delay") == std::string::npos) {
+				*error = "a held seat reclaimed before its RTT-derived delay took effect"; return false;
+			}
+			for (uint64_t tick = 6; tick <= 80; ++tick) {
+				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
+				host.Tick(500 + tick);
+				if (!host.PopReadyFrame(ready)) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+			}
+			if (!host.PreparePeerRejoin(2, 401, 600, &rejoinError) || host.PreparePeerRejoin(2, 4000, 700, &rejoinError)) {
+				*error = "rejoin delay fit admitted an over-cap link or refused a fitted one"; return false;
+			}
+			return host.IsRunning();
+		}
+
+		bool TestHoldWaitsForSurvivorDecision(std::string* error, bool bothSilent = false, bool lostAck = false) {
+			LoopbackTransport hostTransport, slowTransport, survivorTransport;
+			if (!hostTransport.StartHost(48893, error) || !slowTransport.Connect("loopback", 48893, error) || !survivorTransport.Connect("loopback", 48893, error)) return false;
+			const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
+				NetLockstepConfig value;
+				value.sessionId = 0x9A03; value.roundId = 19; value.localPeerId = local; value.peerCount = 3;
+				value.timeoutMs = 20000; value.substituteSlowPeers = true; value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = std::move(remotes); value.relayToOtherPeers = local == 1;
+				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
+				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
+				value.ownershipPolicy = "team-owner";
+				return value;
+			};
+			NetLockstepCoordinator host, slow, survivor;
+			if (!host.Start(hostTransport, config(1, {{2, 1}, {3, 2}}), error) || !slow.Start(slowTransport, config(2, {{1, 1}}), error) ||
+			    !survivor.Start(survivorTransport, config(3, {{1, 1}}), error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) {
+				hostTransport.AdvanceTimeMs(1); slowTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); slow.Tick(now); survivor.Tick(now);
+			}
+			if (!host.QueueLocalInput(0, {}, {}, error) || (!bothSilent && !survivor.QueueLocalInput(0, {}, {}, error))) return false;
+			host.Tick(20);
+			host.NoteFrameWait(0, 100);
+			host.NoteFrameWait(0, 150);
+			host.Tick(150);
+			NetLockstepReadyFrame hostFrame, survivorFrame;
+			if (bothSilent) {
+				if (!host.PopReadyFrame(hostFrame) || hostFrame.aiHeldPeerIds != std::vector<uint8_t>({2, 3}) ||
+				    host.GetStats().peers.at(2).holds != 1 || host.GetStats().peers.at(3).holds != 1) {
+					*error = "simultaneously silent seats waited for each other's acknowledgement"; return false;
+				}
+				return true;
+			}
+			if (host.PopReadyFrame(hostFrame) || !host.TimingDecisionPendingAt(0)) {
+				*error = "a hold committed before the surviving peer acknowledged the decision"; return false;
+			}
+			if (lostAck) {
+				host.Tick(201);
+				if (!host.PopReadyFrame(hostFrame) || hostFrame.aiHeldPeerIds != std::vector<uint8_t>({2, 3})) {
+					*error = "a peer that vanished before its hold acknowledgement blocked the survivor"; return false;
+				}
+				return true;
+			}
+			for (uint64_t now = 151; now < 165; ++now) {
+				hostTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); survivor.Tick(now);
+			}
+			if (!host.PopReadyFrame(hostFrame) || !survivor.PopReadyFrame(survivorFrame) || hostFrame.frame != 0 || survivorFrame.frame != 0 ||
+			    hostFrame.aiHeldPeerIds != std::vector<uint8_t>{2} || survivorFrame.aiHeldPeerIds != hostFrame.aiHeldPeerIds ||
+			    host.ResolveActorOwner(987654321, 1, false) != 1 || survivor.ResolveActorOwner(987654321, 1, false) != 1 ||
+			    hostFrame.localCommands != survivorFrame.remoteCommands) {
+				*error = "survivors did not commit the same hold event and AI producer"; return false;
+			}
+			return VerifyHeldSeatControllerState(host, hostFrame, survivor, survivorFrame, error);
+		}
+
+		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A05, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A05, 0, NetTransportLane::ControlReliable);
+			a.substituteSlowPeers = b.substituteSlowPeers = true; a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 20000; a.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(48894, hostWire, clientWire, host, client, a, b, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!host.ProposeInputDelay(2, 4, 20, error)) return false;
+			NetLockstepReadyFrame ready;
+			for (uint64_t frame = 0; frame <= 20; ++frame) {
+				if (!host.QueueLocalInput(frame, {}, {}, error) || !client.QueueLocalInput(frame, {}, {}, error)) return false;
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(20 + frame);
+				if (frame < 20 && (!host.PopReadyFrame(ready) || ready.frame != frame)) return false;
+			}
+			host.NoteFrameWait(20, 100, true);
+			host.NoteFrameWait(20, 150, true);
+			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
+			    host.IsPeerGoneAtFrame(2, 20) || !host.IsPeerGoneAtFrame(2, 21) || host.InputDelayAt(2, 20) != 4) {
+				*error = "an unacknowledged delay blocked the survivor or contradicted buffered input"; return false;
+			}
+			return true;
+		}
+
+		bool TestRecordedHoldReplaysAtItsFrame(std::string* error) {
+			NetLockstepFrame record;
+			record.senderPeerId = 1; record.targetFrame = 40;
+			record.commands = {{1, NetGameSeatHold{2}}, {1, NetGameInputDelay{2, 26}}};
+			if (!RoundTrip({record}, error)) return false;
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 1; config.startFrame = 40; config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A04);
+			if (!replay.StartReplay(transport, config, error) || !replay.QueueReplayFrame(40, {}, record.commands, error)) return false;
+			replay.Tick(0);
+			NetLockstepReadyFrame ready;
+			if (!replay.PopReadyFrame(ready) || ready.aiHeldPeerIds != std::vector<uint8_t>{2} || replay.IsSeatUnderAI(2, 39) ||
+			    !replay.IsSeatUnderAI(2, 40) || replay.ResolveActorOwner(987654321, 1, false) != 1 ||
+			    NetMatchConfigUtil::PeerInputDelay(replay.GetConfig().matchConfig, 2) != 26) {
+				*error = "recorded hold did not restore its frame and AI producer"; return false;
+			}
+			if (!replay.RewindReplay(40, error) || replay.IsSeatUnderAI(2, 40) || !replay.QueueReplayFrame(40, {}, record.commands, error)) return false;
+			replay.Tick(1);
+			if (!replay.PopReadyFrame(ready) || ready.aiHeldPeerIds != std::vector<uint8_t>{2}) {
+				*error = "the replay rewind retained a future hold"; return false;
+			}
+			return true;
 		}
 
 		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
@@ -5154,7 +5430,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x16, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x18, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -11564,6 +11840,42 @@ namespace RTE {
 			return actor;
 		}
 
+		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error) {
+			EnsureSwitchTestManagers();
+			std::unique_ptr<Actor> actor(MakeSwitchTestActor(Activity::TeamTwo));
+			if (!actor) { *error = "held-seat fixture could not create its actor"; return false; }
+			Controller& controller = *actor->GetController();
+			bool valid = true;
+			for (const auto [initialMode, disabled]: {std::pair{Controller::CIM_PLAYER, false}, std::pair{Controller::CIM_PLAYER, true}, std::pair{Controller::CIM_AI, true}, std::pair{Controller::CIM_DISABLED, true}}) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				const int player = initialMode == Controller::CIM_PLAYER ? Players::PlayerTwo : Players::NoPlayer;
+				controller.ResetLocalInputState(initialMode, player);
+				controller.ApplyWireMode(initialMode, player);
+				controller.SetDisabled(disabled);
+				const std::string baseline = controller.SaveCheckpoint();
+				std::array<NetHash32, 2> hashes;
+				for (size_t index = 0; index < 2; ++index) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					ScenarioRunner::SetLockstepCoordinator(index == 0 ? &host : &survivor);
+					NetActorOwnership::SeedOwner(actor->GetUniqueID(), 2, Activity::TeamTwo);
+					valid &= controller.LoadCheckpoint(baseline);
+					controller.ApplyWireNeutral();
+					ApplyLockstepLeaveHandoffs(index == 0 ? hostFrame : survivorFrame, {actor.get()}, false);
+					const auto owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
+					const auto claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
+					const auto expectedMode = initialMode == Controller::CIM_PLAYER ? Controller::CIM_AI : initialMode;
+					valid &= owner == 1 && claimant == 2 && controller.GetInputMode() == expectedMode && controller.IsQuickDisabled() == disabled;
+					hashes[index] = NetIdentity::HashCanonicalText("HeldSeatController/v1", {{"controller", controller.SaveCheckpoint()}, {"owner", std::to_string(owner)}, {"claimant", std::to_string(claimant)}});
+				}
+				valid &= hashes[0] == hashes[1];
+				std::cout << "[net-lockstep-selftest] held_controller_hash=" << NetIdentity::HashHex(hashes[0]) << " mode=" << initialMode << " disabled=" << disabled << std::endl;
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			NetActorOwnership::ClearSeededOwners();
+			if (!valid) { *error = "held seat did not preserve scripted disable state and equal AI ownership on both survivors"; return false; }
+			return true;
+		}
+
 		void AddSwitchTestActor(Actor* actor) {
 			g_MovableMan.SetRestoringSnapshot(true);
 			g_MovableMan.AddActor(actor);
@@ -15032,6 +15344,14 @@ namespace RTE {
 		    !TestSoundRegistrySurvivesConcurrentRegistration(&error) ||
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
+		    !TestTimingDecisionCodec(&error) ||
+		    !TestLiveDelayChangesAtOneFrame(&error) ||
+		    !TestBoundedHoldKeepsCommitting(&error) ||
+		    !TestTimingAcknowledgementLossIsBounded(&error) ||
+		    !TestHoldWaitsForSurvivorDecision(&error) ||
+		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
+		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
+		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||

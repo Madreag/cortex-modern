@@ -6,6 +6,8 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <set>
 #include <regex>
 
@@ -133,6 +135,52 @@ namespace RTE {
 		}
 	}
 
+	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
+		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
+			m_Samples.clear();
+			m_BelowSince.reset();
+		}
+		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
+		m_Samples.emplace_back(nowMs, rttMs);
+		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+	}
+
+	uint32_t NetInputDelayEstimator::Percentile(unsigned percent) const {
+		if (m_Samples.empty()) return 0;
+		std::vector<uint32_t> values;
+		values.reserve(m_Samples.size());
+		for (const auto& [when, rtt]: m_Samples) values.push_back(rtt);
+		std::sort(values.begin(), values.end());
+		return values[(values.size() * percent + 99) / 100 - 1];
+	}
+
+	void NetInputDelayEstimator::Rebase(uint64_t nowMs) {
+		if (m_Samples.empty()) return;
+		const uint64_t last = m_Samples.back().first;
+		for (auto& [when, rtt]: m_Samples) when = nowMs >= last - when ? nowMs - (last - when) : 0;
+		m_BelowSince.reset();
+	}
+
+	uint32_t NetInputDelayEstimator::P95Ms() const { return Percentile(95); }
+	uint32_t NetInputDelayEstimator::JitterMs() const { return P95Ms() - Percentile(50); }
+
+	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
+		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
+		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
+		const double frames = std::ceil(rtt / tickMs) + 1 + std::ceil(JitterMs() / tickMs);
+		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
+	}
+
+	std::optional<uint16_t> NetInputDelayEstimator::Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor) {
+		const uint16_t needed = static_cast<uint16_t>(std::min<uint32_t>(RequiredFrames(tickMs, floor), NetMatchConfigUtil::c_MaxInputDelayFrames));
+		if (needed >= current) {
+			m_BelowSince.reset();
+			return needed > current ? std::optional<uint16_t>{needed} : std::nullopt;
+		}
+		if (!m_BelowSince || nowMs < *m_BelowSince) m_BelowSince = nowMs;
+		return nowMs - *m_BelowSince >= c_WindowMs ? std::optional<uint16_t>{needed} : std::nullopt;
+	}
+
 	namespace {
 		using json = nlohmann::json;
 
@@ -221,6 +269,8 @@ namespace RTE {
 			        {"idle_wait_minutes", config.idleWaitMinutes}, {"automatic_repair", config.automaticRepair},
 			        {"path_horizon_ticks", config.pathHorizonTicks},
 			        {"delay_policy", static_cast<uint8_t>(config.delayPolicy)},
+			        {"slow_player_bound_ticks", config.slowPlayerBoundTicks}, {"slow_player_policy", static_cast<uint8_t>(config.slowPlayerPolicy)},
+			        {"active_peer_ids", config.activePeerIds},
 			        {"frame_redundancy_ticks", config.frameRedundancyTicks}};
 		}
 
@@ -243,6 +293,13 @@ namespace RTE {
 				{"delay_policy", std::to_string(static_cast<uint8_t>(config.delayPolicy))},
 			};
 			fields.insert(fields.end(), tail.begin(), tail.end());
+			if (config.version >= NetMatchConfigUtil::c_TimingOptionsVersion) {
+				fields.emplace_back("slow_player_bound_ticks", std::to_string(config.slowPlayerBoundTicks));
+				fields.emplace_back("slow_player_policy", std::to_string(static_cast<uint8_t>(config.slowPlayerPolicy)));
+				std::string active;
+				for (uint8_t peer: config.activePeerIds) active += (active.empty() ? "" : ",") + std::to_string(peer);
+				fields.emplace_back("active_peer_ids", active);
+			}
 			if (config.pathHorizonTicks != 0) {
 				fields.emplace_back("path_horizon_ticks", std::to_string(config.pathHorizonTicks));
 			}
@@ -281,6 +338,8 @@ namespace RTE {
 
 	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
+		config.slowPlayerBoundTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkSlowPlayerBoundTicks());
+		config.slowPlayerPolicy = g_SettingsMan.GetNetworkSlowPlayerPolicy() == SettingsMan::NetworkSlowPlayerPolicy::Pause ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());
@@ -314,6 +373,7 @@ namespace RTE {
 			seatMap[survivors[index]] = static_cast<uint8_t>(index + 1);
 		}
 		NetMatchConfig config = previous;
+		config.activePeerIds.clear();
 		config.peerCount = static_cast<uint8_t>(survivors.size());
 		config.hostPeerId = seatMap.at(previous.hostPeerId);
 		config.players.clear();
@@ -381,6 +441,23 @@ namespace RTE {
 		}
 		auto refuse = [&](const char* reason) { if (error) *error = reason; return false; };
 		if (!config.relay.Valid() || (config.version < c_RelayLayoutVersion && !config.relay.Empty())) return refuse("relay offer is invalid for this config");
+		if (config.version < c_TimingOptionsVersion &&
+		    (config.slowPlayerBoundTicks != c_DefaultSlowPlayerBoundTicks || config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause))
+			return refuse("legacy config cannot carry timing options");
+		if (config.version >= c_TimingOptionsVersion &&
+		    (config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > c_MaxSlowPlayerBoundTicks ||
+		     (config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute && config.slowPlayerPolicy != NetSlowPlayerPolicy::Pause)))
+			return refuse("invalid slow player bound or policy");
+		if (!config.activePeerIds.empty()) {
+			const bool hasAuthority = std::find(config.activePeerIds.begin(), config.activePeerIds.end(), config.hostPeerId) != config.activePeerIds.end() ||
+			    std::any_of(config.successorOrder.begin(), config.successorOrder.end(), [&](uint8_t peer) { return std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) != config.activePeerIds.end(); });
+			if (config.version < c_TimingOptionsVersion || config.persistentWorld ||
+			    !std::is_sorted(config.activePeerIds.begin(), config.activePeerIds.end()) ||
+			    std::adjacent_find(config.activePeerIds.begin(), config.activePeerIds.end()) != config.activePeerIds.end() ||
+			    config.activePeerIds.front() == 0 || config.activePeerIds.back() > config.peerCount ||
+			    !hasAuthority)
+				return refuse("invalid active resync roster");
+		}
 		if (config.version == 2) {
 			// A v2 config predates the rules block, so it carries the pre-rules end rule too.
 			NetMatchConfig legacyDefaults;

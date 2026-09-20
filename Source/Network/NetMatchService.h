@@ -193,6 +193,8 @@ namespace RTE {
 		std::optional<bool> brainlessHumansSpectate; // Host rule: the round survives the last human brain. Unset takes the host's Gameplay setting.
 		// The host's saved session options. Unset keeps the config default; NetMatchService::SeatSavedOptions fills them from the settings.
 		std::optional<NetMatchDelayPolicy> delayPolicy;
+		std::optional<uint16_t> slowPlayerBoundTicks;
+		std::optional<NetSlowPlayerPolicy> slowPlayerPolicy;
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
 		std::optional<uint16_t> pathHorizonTicks;
@@ -299,11 +301,13 @@ namespace RTE {
 			bool cpu = false;
 			uint16_t delayFrames = 0;
 		};
-		uint16_t version = 1;
+		uint16_t version = 2;
 		NetMatchStandardRules rules; //!< Activity, site, mode, the original rule values and the team rules.
 		uint8_t peerCount = 2;
 		bool dedicated = false;
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
+		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		uint16_t inputDelayFrames = 0;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
@@ -318,7 +322,7 @@ namespace RTE {
 	/// newer build wrote is refused with its version named instead of being half-read.
 	class NetHostDefaults {
 	public:
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 
 		/// The template a host's current draft would be saved as.
 		static NetHostDefaultsTemplate FromConfig(const NetMatchConfig& config);
@@ -340,6 +344,10 @@ namespace RTE {
 			int team = -1;
 			uint16_t seat = 0;
 			uint16_t inputDelayFrames = 0;
+			uint32_t holds = 0;
+			uint32_t substitutions = 0;
+			uint32_t rejoins = 0;
+			uint64_t longestWaitMs = 0;
 		};
 		std::string result;
 		int winnerTeam = -1;
@@ -760,6 +768,7 @@ namespace RTE {
 		static const char* StateName(NetMatchServiceState state);
 
 	private:
+		std::string LiveInputDelayTextLocked() const;
 		/// A match's transports, moved as one into a rematch or resync worker and back.
 		struct TransportLink {
 			// Defined in the .cpp, where the dispatcher type is complete.
@@ -986,6 +995,9 @@ namespace RTE {
 		void RecordModerationAction(uint16_t stableSeat, NetModerationAction action);
 		/// Runs the §11 automatic-retry schedule from the service's own state. Game thread only.
 		void DriveReconnectUx(uint64_t nowMs);
+		bool PrepareHeldPeerRejoinLocked(uint8_t peerId);
+		std::vector<NetGameReseat> m_PendingHeldReseats;
+		std::vector<NetHoldResolutionNotice> m_PendingHeldResolutions;
 		/// Destroys a rematch lobby whose peers did not all come back inside c_CompletedLobbyExpiryMs.
 		/// Game thread only, from Update(): it takes the lock and then destroys without it.
 		void UpdateCompletedLobbyExpiry(uint64_t nowMs);
@@ -1223,6 +1235,7 @@ namespace RTE {
 			uint64_t peerFramesWaived = 0;
 			uint64_t peersDroppedSilent = 0;
 			uint64_t connectionsClosedOnEviction = 0;
+			std::map<uint8_t, NetLockstepPeerStats> peers;
 		};
 		LockstepTotals m_LockstepTotals;
 		uint32_t m_SessionEventsDrained = 0;   //!< Handover events delivered by a teardown instead of the pump.

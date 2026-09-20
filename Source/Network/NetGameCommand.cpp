@@ -41,13 +41,17 @@ namespace RTE {
 				return NetGameCommandType::PlaceBrain;
 			} else if constexpr (std::is_same_v<T, NetGameWorldTransition>) {
 				return NetGameCommandType::WorldTransition;
+			} else if constexpr (std::is_same_v<T, NetGameSeatHold>) {
+				return NetGameCommandType::SeatHold;
+			} else if constexpr (std::is_same_v<T, NetGameInputDelay>) {
+				return NetGameCommandType::InputDelay;
 			}
 		}, payload);
 	}
 
 	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
 		return std::visit([](const auto& specific) -> int32_t {
-			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings>) return -1;
+			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatHold> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameInputDelay>) return -1;
 			else return specific.team;
 		}, payload);
 	}
@@ -88,6 +92,10 @@ namespace RTE {
 				return "PlaceBrain";
 			case NetGameCommandType::WorldTransition:
 				return "WorldTransition";
+			case NetGameCommandType::SeatHold:
+				return "SeatHold";
+			case NetGameCommandType::InputDelay:
+				return "InputDelay";
 		}
 		return "Unknown";
 	}

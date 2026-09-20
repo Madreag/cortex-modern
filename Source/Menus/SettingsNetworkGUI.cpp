@@ -163,6 +163,8 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
+	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 172, 320, 20));
+	m_DiagnosticsCheckbox->SetText("Show network diagnostics");
 
 	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
 	m_StatusModeCombo->AddItem("Off");
@@ -239,7 +241,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	};
 	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel),
 	                         rowTop(m_PathHorizonLabel), rowTop(m_PathHorizonTextbox), rowTop(m_PathHorizonHintLabel), rowTop(m_AutoRepairCheckbox),
-	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo)};
+	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_GUIControlManager->GetControl("LabelMatchStatusWidget")), rowTop(m_StatusModeCombo), rowTop(m_DiagnosticsCheckbox)};
 
 	ShowSavedValues();
 	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
@@ -269,6 +271,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_AutoRepairCheckbox->SetCheck(g_SettingsMan.GetNetworkHostAutoRepair());
 	m_ToastsCheckbox->SetCheck(g_SettingsMan.GetNetworkToastsEnabled());
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
+	m_DiagnosticsCheckbox->SetCheck(g_SettingsMan.GetNetworkShowDiagnostics());
 	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
 	m_ChatVisibleCheckbox->SetCheck(g_SettingsMan.GetNetworkChatVisible());
 	m_ChatSoundCheckbox->SetCheck(g_SettingsMan.GetNetworkChatSound());
@@ -490,6 +493,8 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkConnectionMode(static_cast<SettingsMan::NetworkConnectionMode>(std::clamp(m_ConnectionCombo->GetSelectedIndex(), 0, 2)));
 		ApplyTextboxes();
 		g_SettingsMan.UpdateSettingsFile();
+	} else if (guiEvent.GetControl() == m_DiagnosticsCheckbox) {
+		g_SettingsMan.SetNetworkShowDiagnostics(m_DiagnosticsCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
 	} else if (guiEvent.GetControl() == m_ChatVisibleCheckbox) {

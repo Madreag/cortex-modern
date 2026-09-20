@@ -104,7 +104,7 @@ namespace RTE {
 		}
 		Clear();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
-		const int depth = std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
+		const int depth = ScenarioRunner::UsesBoundedLockstepWait() ? delay : std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
 		if (depth <= 0) {
 			return;
 		}

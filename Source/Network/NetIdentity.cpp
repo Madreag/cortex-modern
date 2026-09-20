@@ -408,7 +408,7 @@ namespace RTE {
 	void NetIdentity::StampOptionsForTarget(NetIdentityBuildOptions& options, bool world) {
 		if (world) {
 			options.matchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
-			options.lockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+			options.lockstepCodecVersion = NetLockstepCodec::c_WorldVersion;
 		} else {
 			options.matchConfigVersion = NetMatchConfigUtil::c_Version;
 			options.lockstepCodecVersion = NetLockstepCodec::c_Version;
@@ -441,7 +441,7 @@ namespace RTE {
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
 		manifest.deterministicConfig.matchConfigVersion = options.matchConfigVersion;
 		manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_Version;
-		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldTransitionVersion;
+		manifest.deterministicConfig.supportedWorldLockstepCodecVersion = NetLockstepCodec::c_WorldVersion;
 		manifest.deterministicConfig.supportedMatchConfigVersion = NetMatchConfigUtil::c_Version;
 		manifest.deterministicConfig.supportedWorldMatchConfigVersion = NetMatchConfigUtil::c_PersistentWorldVersion;
 		manifest.deterministicConfig.lobbyProtocolVersion = NetLobbyProtocol::c_Version;
