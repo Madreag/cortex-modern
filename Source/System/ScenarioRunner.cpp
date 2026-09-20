@@ -1781,6 +1781,10 @@ namespace RTE {
 		return true;
 	}
 
+	bool ScenarioRunner::UsesBoundedLockstepWait() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->UsesBoundedWait();
+	}
+
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
