@@ -15130,16 +15130,91 @@ namespace RTE {
 			}
 			if (worldA.applied != 5 || worldA.Hash() != worldB.Hash()) { *error = "silent-host fixture did not share frame 5"; return false; }
 			const uint64_t lastHostFrame = now;
+			const auto noSnapshotAdmission = [&] {
+				for (const auto* peer: {&a, &b}) {
+					if (peer->GetMigrationPhase() == NetHostMigrationPhase::ResyncAdmission || peer->IsFailed() ||
+					    peer->IsStopped() || !peer->GetMigrationResult().resyncPeers.empty()) {
+						*error = "a handover survivor requested a snapshot: " + peer->BuildReportJson();
+						return false;
+					}
+				}
+				return true;
+			};
 			for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(6, {}, {}, error)) return false;
 			// The dead process sends neither a close callback nor a final packet.
 			for (; now - lastHostFrame <= 2000; now += 5) {
 				a.Tick(now); b.Tick(now); collect(a, &worldA); collect(b, &worldB);
+				if (!noSnapshotAdmission()) return false;
 				if (worldA.applied >= 6 && worldB.applied >= 6) break;
 			}
 			if (worldA.applied < 6 || worldB.applied < 6 || worldA.Hash() != worldB.Hash() || a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2 || a.IsFailed() || b.IsFailed()) {
 				*error = "silent host blocked survivors beyond 2000 ms: A=" + a.BuildReportJson() + " B=" + b.BuildReportJson(); return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS silent_host_bound wait_ms=" << now - lastHostFrame << " bound_ms=2000 survivors=2 hashes=equal" << std::endl;
+			const uint64_t waitMs = now - lastHostFrame;
+			if (a.GetMigrationResult().boundary != 5 || b.GetMigrationResult().boundary != 5) {
+				*error = "the survivors did not agree on the last shared frame"; return false;
+			}
+			for (uint64_t frame = 7; frame <= 65; ++frame) {
+				for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 5; ++turn, now += 5) {
+					a.Tick(now); b.Tick(now); collect(a, &worldA); collect(b, &worldB);
+					if (!noSnapshotAdmission()) return false;
+				}
+				if (worldA.applied != frame || worldB.applied != frame || worldA.Hash() != worldB.Hash() ||
+				    a.GetHostPeerId() != 2 || b.GetHostPeerId() != 2) {
+					*error = "handover survivors diverged after the boundary at frame " + std::to_string(frame); return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS silent_host_bound wait_ms=" << waitMs << " bound_ms=2000 survivors=2 hashes=equal continued_frames=60 snapshot_admissions=0" << std::endl;
+			return true;
+		}
+
+		bool TestLoadingHostKeepsItsAuthority(std::string* error) {
+			LoopbackTransport hostWire, aWire, bWire;
+			if (!hostWire.StartHost(49458, error) || !aWire.Connect("loopback", 49458, error) || !bWire.Connect("loopback", 49458, error)) return false;
+			auto match = NetMatchConfigUtil::MakeDefault(0x151);
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(49458 + peer), {"loopback"}});
+			auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
+				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15101 : 0; value.relayToOtherPeers = peer == 1;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+			};
+			NetLockstepCoordinator host, a, b;
+			if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error) || !b.Start(bWire, config(3), error)) return false;
+			for (auto* peer: {&host, &a, &b}) peer->DeferStopsToTickBoundary();
+			uint64_t now = 0; MigrationSimFixture worldA, worldB;
+			auto collect = [&](NetLockstepCoordinator& peer, MigrationSimFixture* world) {
+				NetLockstepReadyFrame ready; while (peer.PopReadyFrame(ready)) { if (world) world->Apply(ready); peer.FinishSimulationTick(ready.frame); }
+			};
+			for (int turn = 0; turn < 10; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); }
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 5; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); }
+				collect(host, nullptr); collect(a, &worldA); collect(b, &worldB);
+			}
+			if (worldA.applied != 5 || worldA.Hash() != worldB.Hash()) { *error = "silent-host fixture did not share frame 5"; return false; }
+			for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(6, {}, {}, error)) return false;
+			const uint64_t loadStart = now;
+			for (; now - loadStart < 1500; now += 50) {
+				std::vector<uint8_t> heartbeat;
+				NetProtocolError protocolError;
+				if (!NetProtocol::Encode({1, 0, NetHeartbeat{now, 0, 3}}, heartbeat, &protocolError) ||
+				    !hostWire.Send(1, NetTransportLane::ControlReliable, heartbeat, error) ||
+				    !hostWire.Send(2, NetTransportLane::ControlReliable, heartbeat, error)) return false;
+				a.Tick(now); b.Tick(now); collect(a, &worldA); collect(b, &worldB);
+				if (a.IsMigrating() || b.IsMigrating() || a.GetHostPeerId() != 1 || b.GetHostPeerId() != 1 ||
+				    a.IsFailed() || b.IsFailed() || a.GetMigrationResult().generation != 0 || b.GetMigrationResult().generation != 0) {
+					*error = "loading host was elected away despite its session heartbeats"; return false;
+				}
+			}
+			if (!host.QueueLocalInput(6, {}, {}, error)) return false;
+			for (int turn = 0; turn < 5; ++turn, now += 5) { host.Tick(now); a.Tick(now); b.Tick(now); collect(host, nullptr); collect(a, &worldA); collect(b, &worldB); }
+			if (worldA.applied != 6 || worldB.applied != 6 || worldA.Hash() != worldB.Hash()) {
+				*error = "loading host did not resume its shared frame"; return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS loading_host_heartbeat waited_ms=1500 snapshot_admissions=0 hashes=equal" << std::endl;
 			return true;
 		}
 
@@ -15800,6 +15875,7 @@ namespace RTE {
 		if (!leavePassed) return fail(error);
 		if (!followupsPassed) return fail(followupError);
 		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
+		    !TestLoadingHostKeepsItsAuthority(&error) ||
 		    !TestHoldArrivesBeforeFailedSend(&error) ||
 		    !TestSlowMachineWarningCadence(&error) ||
 		    !TestRestoredControllerKeepsItsProductionBaseline(&error) ||
