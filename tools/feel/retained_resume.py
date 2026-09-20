@@ -35,6 +35,8 @@ MIN_SHARED_TICKS = 30
 
 
 def read_live_hashes(path: Path) -> list[dict]:
+    if not path.is_file():
+        return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
