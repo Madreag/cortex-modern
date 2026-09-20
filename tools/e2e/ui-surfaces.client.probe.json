@@ -155,7 +155,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 100
+      "elapsed_ms": 600
     },
     {
       "op": "menu",
@@ -260,7 +260,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 300
+      "elapsed_ms": 600
     },
     {
       "op": "menu",
