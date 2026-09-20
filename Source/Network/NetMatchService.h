@@ -1309,6 +1309,8 @@ namespace RTE {
 		};
 		std::future<PrivateJoinImage> m_PrivateImageTask;
 		uint64_t m_PrivateImageRound = 0;
+		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
+		bool m_PrivateImageSeatHeld = false;
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
 		std::string m_WorldJoinImageDigest;         //!< Its digest, so a stale cache is refused without a re-hash.
