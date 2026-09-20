@@ -200,6 +200,10 @@ namespace RTE {
 		if (m_Writer.joinable()) m_Writer.join();
 		m_EndedWallMS = SteadyNowMS();
 		m_EndedUnixMS = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		if (m_FinishAction) {
+			auto action = std::move(m_FinishAction);
+			action();
+		}
 		m_Index.flush();
 		WriteManifest();
 		m_Index.close();

@@ -5,9 +5,11 @@
 #include <cstdint>
 #include <deque>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace RTE {
@@ -66,6 +68,7 @@ namespace RTE {
 
 		/// Drains the queue, writes the manifest and stops the writer. Safe to call twice.
 		void Finish();
+		void SetFinishAction(std::function<void()> action) { m_FinishAction = std::move(action); }
 
 		std::size_t FramesSaved() const;
 		std::size_t FramesDropped() const;
@@ -86,6 +89,7 @@ namespace RTE {
 
 		bool m_Enabled = false;
 		bool m_Finished = false;
+		std::function<void()> m_FinishAction;
 		int m_Fps = c_DefaultFps;
 		std::size_t m_QueueBound = c_DefaultQueueBound;
 		std::string m_Directory;

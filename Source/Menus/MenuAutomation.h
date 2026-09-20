@@ -20,7 +20,6 @@ namespace RTE {
 		/// Raises the queued page's tab notification, which the settings menu answers in the same pass.
 		void ApplyQueuedPage(GUIControlManager* manager);
 		bool Handles(const std::string& command);
-		bool FinishTickHashes(std::string& observation);
 		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
 		void Click(GUIControlManager* manager, const std::string& control);
 		void BindSettingsOwner(GUIControlManager* manager, SettingsGUI* owner);
