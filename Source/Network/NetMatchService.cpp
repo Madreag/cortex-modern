@@ -729,11 +729,13 @@ static std::string ResyncSaveName() {
 				if (error) *error = m_ErrorText;
 				return false;
 			}
+			DrainPendingSessionEventsLocked(false);
 			if (!m_Session->IsReady()) {
 				// Session lost (the other player quit); settle so the UI stops offering a rematch.
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Rematch unavailable";
-				m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the other player left";
+				std::cout << "[net-match] rematch unavailable: " << m_Session->BuildRejectText() << std::endl;
+				m_ErrorText = m_IsHost ? "The other players left the match" : "The host left the match";
 				if (error) *error = m_ErrorText;
 				return false;
 			}
@@ -1435,7 +1437,10 @@ static std::string ResyncSaveName() {
 			} else {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = "Rematch setup failed";
-				m_ErrorText = error;
+				std::cout << "[net-match] rematch setup failed: " << error << std::endl;
+				m_ErrorText = m_Runner->DidLoseHostDuringSetup() ? "The host left the match" :
+				              error == "rematch roster: not enough players for a rematch" ? "The other players left the match" :
+				              error.starts_with("rematch roster") ? "The match could not return to the lobby" : error;
 			}
 			m_WorkerDone = true;
 		}

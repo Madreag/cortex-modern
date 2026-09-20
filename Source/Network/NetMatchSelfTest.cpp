@@ -9004,6 +9004,41 @@ namespace RTE {
 
 	// NetMatchService::ReturnToLobby forms the next roster itself, on a client's own played round.
 	// ReturnToLobby discards the round it derived from, so every case plays its own.
+	bool TestRematchAfterHostDeparture(std::string* error) {
+		NetMatchConfig solo;
+		std::string rosterRefusal;
+		const bool rosterAccepted = NetMatchConfigUtil::DeriveRematchConfig(MakeConfig(), {1}, solo, nullptr, &rosterRefusal);
+		LoopbackTransport hostWire, clientWire;
+		NetSession hostSession;
+		NetMatchService service;
+		service.m_IsHost = false;
+		service.m_Transport = std::make_unique<GnsTransport>();
+		service.m_Session = std::make_unique<NetSession>();
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!StartServiceRematchSession(48914, hostWire, clientWire, hostSession, *service.m_Session, error)) return false;
+		const uint8_t local = service.m_Session->GetLocalPeerId();
+		hostSession.Close("host left");
+		hostWire.AdvanceTimeMs(10);
+		clientWire.AdvanceTimeMs(10);
+		service.m_PendingSessionEvents = clientWire.PollEvents();
+		if (service.m_PendingSessionEvents.empty() || !service.m_Session->IsReady()) {
+			*error = "host departure was not retained in the round's handover queue";
+			return false;
+		}
+		NetMatchConfig unused;
+		std::string refusal;
+		const bool opened = ServiceRematchRoster(service, MakeConfig(), local, unused, &refusal);
+		const auto snapshot = service.GetLobbySnapshot();
+		if (rosterAccepted || rosterRefusal != "not enough players for a rematch" || opened ||
+		    snapshot.errorText != "The host left the match" || service.GetState() != NetMatchServiceState::Failed) {
+			*error = "host departure roster='" + rosterRefusal + "' opened rematch=" + std::to_string(opened) + " player error='" + snapshot.errorText + "' refusal='" + refusal + "'";
+			return false;
+		}
+		std::cout << "PASS rematch_host_departure message=The host left the match" << std::endl;
+		return true;
+	}
+
 	bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error) {
 		struct Case {
 			const char* name;
@@ -11658,6 +11693,7 @@ namespace RTE {
 		if (!seatingWaitError.empty()) return fail(seatingWaitError);
 		if (!hostDefaultsError.empty()) return fail(hostDefaultsError);
 		if (!stagedRematchError.empty()) return fail(stagedRematchError);
+		if (!TestRematchAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
