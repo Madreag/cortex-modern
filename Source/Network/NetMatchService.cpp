@@ -2500,6 +2500,7 @@ static std::string ResyncSaveName() {
 			// A watcher that asked to stay one is skipped when a slot frees; it keeps its stream.
 			(void)host.NoteSpectatorPreference(connection, report.value != 0);
 		} else if (report.kind == c_NetWorldReportCatchUp) {
+			if (host.IsPrivateMatch() && !host.NoteRejoinCapacity(connection, report.workTicks, report.workUs, report.sentThrough)) return 0;
 			uint64_t activation = 0;
 			const NetWorldJoinSession* prior = host.FindSession(connection);
 			const uint64_t previous = prior ? prior->acknowledgedThrough : 0;

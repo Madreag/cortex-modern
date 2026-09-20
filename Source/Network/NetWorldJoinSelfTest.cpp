@@ -2617,6 +2617,34 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestPrivateRejoinHeadroom() {
+		NetCatchUpHeadroom capacity;
+		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
+		if (!capacity.Observe(240, 3000000, 1000.0 / 60.0) || !capacity.Ready()) return Fail("sustained 120 tps did not establish catch-up headroom");
+		if (!capacity.Observe(360, 5000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("lost headroom remained admitted");
+		if (capacity.Observe(359, 5000000, 1000.0 / 60.0)) return Fail("catch-up work counters went backwards");
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A20);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state";
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		uint64_t activation = 0;
+		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 600, 120, 2000, 610, &activation, &error) || activation != 0)
+			return Fail("a peer without compute headroom scheduled a reclaim");
+		host.NoteRejoinLinkFit(42, false);
+		if (!host.NoteRejoinCapacity(42, 240, 3000000, 900) || !host.NoteCatchUpProgress(42, 620, 20, 1000, 630, &activation, &error) || activation != 0)
+			return Fail("a peer whose delay does not fit scheduled a reclaim");
+		host.NoteRejoinLinkFit(42, true);
+		if (!host.NoteCatchUpProgress(42, 621, 1, 5, 631, &activation, &error) || activation <= 900)
+			return Fail("reclaim did not wait beyond every old input after proving capacity");
+		return 0;
+	}
+
 	// The world's configured capacity: the v5 block's own fields, the hash domain and the slot table.
 	int TestWorldCapacityRidesTheV5Config() {
 		const auto roundTrip = [](const NetMatchConfig& config, NetMatchConfig& out, std::vector<uint8_t>& wire) {
@@ -5688,6 +5716,7 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
+		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
 			s_FailTag = "net-world-restart-selftest";
 			std::string error;
@@ -5898,6 +5927,7 @@ namespace RTE {
 		if (const int result = TestReadyFramePackIncludesRemotes(); result != 0) {
 			return result;
 		}
+		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		{
 			std::string error;
 			if (!TestWorldRestartOpensOnCheckpoint(&error)) return Fail(error);
