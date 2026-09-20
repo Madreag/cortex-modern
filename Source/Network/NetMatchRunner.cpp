@@ -754,7 +754,7 @@ namespace RTE {
 	NetLobbySnapshot NetMatchRunner::BuildLobbySnapshot(const INetTransport& transport, const NetSession& session) const {
 		// A client adopts the host's roster mid-round; read it from the live lobby so the member
 		// list grows to the real player count instead of the local placeholder config's.
-		const NetMatchConfig& rosterConfig = m_Lobby.GetState() != NetLobbyState::Idle ? m_Lobby.GetMatchConfig() : m_MatchConfig;
+		const NetMatchConfig& rosterConfig = m_State == NetMatchRuntimeState::Running || m_Lobby.GetState() == NetLobbyState::Idle ? m_MatchConfig : m_Lobby.GetMatchConfig();
 		NetLobbySnapshot snapshot;
 		snapshot.hostPeerId = m_ActiveHostPeerId != 0 ? m_ActiveHostPeerId : rosterConfig.hostPeerId;
 		snapshot.lobbyPhase = StateName(m_State);
