@@ -1407,6 +1407,7 @@ namespace RTE {
 				if (frame >= 22 && frame <= 24 && (first.remoteFrames.front().stateMask & (uint64_t{1} << PRESS_PRIMARY)) != 0) {
 					*error = "delay padding repeated a controller press"; return false;
 				}
+				if (!host.FinishSimulationTick(frame) || !client.FinishSimulationTick(frame)) return false;
 			}
 			if (client.GetStats().delayPaddingFrames != 3 || host.GetStats().delayChangesCommitted != 1 || client.GetStats().delayChangesCommitted != 1) {
 				*error = "the live delay counters did not count one boundary and its three padding frames"; return false;
