@@ -1,0 +1,21 @@
+wait_ms 1200
+activate ButtonMainToMultiplayer
+wait_ms 400
+settext TextMultiplayerName Joiner
+activate ButtonMultiplayerJoinGame
+wait_ms 400
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 90
+wait_ms 600
+activate ButtonMultiplayerReady
+wait_file {PROBE_DIR}/first-round-done.json 90
+video_mark rematch-lobby
+assert_substate Lobby
+dump_lobby
+wait_ms 1200
+activate ButtonMultiplayerReady
+wait_file {PROBE_DIR}/done.json 90
+wait_ms 1200
+exit

@@ -1,0 +1,892 @@
+{
+  "schema": 1,
+  "name": "mp-rollback-lag",
+  "title": "V1 feel gate at 100 and 200 ms with five percent loss, a silent seat and a ticket rejoin",
+  "port_base": 49464,
+  "size": "960x540",
+  "timeout_s": 150,
+  "runs": [
+    {
+      "name": "lag-100",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host_report.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "0",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client_report.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "200",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-selftest-frame-stall",
+            "600:1500"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1",
+            "CC_TEST_GNS_LOSS_PERCENT": "5"
+          },
+          "observe_after_failure": true
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor_report.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "0",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/survivor.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1"
+          }
+        },
+        {
+          "name": "client-rejoined",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-rejoined_report.json",
+            "-out",
+            "{OUT}/client-rejoined_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "200",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1",
+            "CC_TEST_GNS_LOSS_PERCENT": "5"
+          },
+          "observe_after_failure": true,
+          "start_when": {
+            "peer": "client",
+            "ended": true,
+            "timeout_s": 100
+          },
+          "after_gate_delay_s": 1
+        }
+      ],
+      "feel_gate": {
+        "lag_ms": 100,
+        "loss_percent": 5,
+        "silent_tick": 600
+      }
+    },
+    {
+      "name": "lag-200",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host_report.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "0",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client_report.json",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "400",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-selftest-frame-stall",
+            "600:1500"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1",
+            "CC_TEST_GNS_LOSS_PERCENT": "5"
+          },
+          "observe_after_failure": true
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor_report.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "0",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/survivor.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1"
+          }
+        },
+        {
+          "name": "client-rejoined",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-rejoined_report.json",
+            "-out",
+            "{OUT}/client-rejoined_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "client",
+            "-net-join",
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte",
+            "-net-fake-lag",
+            "400",
+            "-net-local-prediction",
+            "on",
+            "-feel-measure",
+            "{VIDEO}/../feel",
+            "-feel-render-settings",
+            "{VIDEO}/../runtime/Userdata/FeelRender.ini",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket"
+          ],
+          "input_script": "play-input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "output_dirs": [
+            "feel"
+          ],
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            },
+            {
+              "to": "Userdata/FeelRender.ini",
+              "write": "RenderCapHz = 60\n"
+            }
+          ],
+          "env": {
+            "CCCP_HEADLESS": "1",
+            "CC_TRACE_PREVIEW_EVENT": "1",
+            "CC_TEST_GNS_LOSS_PERCENT": "5"
+          },
+          "observe_after_failure": true,
+          "start_when": {
+            "peer": "client",
+            "ended": true,
+            "timeout_s": 100
+          },
+          "after_gate_delay_s": 1
+        }
+      ],
+      "feel_gate": {
+        "lag_ms": 200,
+        "loss_percent": 5,
+        "silent_tick": 600
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "lag-100-item9a_wall_tps",
+      "what": "The fast peer sustains the existing feel gate throughput.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_wall_tps"
+    },
+    {
+      "id": "lag-100-item9a_net_wait",
+      "what": "The fast peer spends less than one percent of steady wall time waiting.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_net_wait"
+    },
+    {
+      "id": "lag-100-item9a_longest_wait",
+      "what": "No individual wait exceeds the existing 50 ms bound.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_longest_wait"
+    },
+    {
+      "id": "lag-100-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero steady missing-frame stalls.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-100-item9a_loss_armed",
+      "what": "Five percent send/receive loss is armed on the slow peer.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_loss_armed"
+    },
+    {
+      "id": "lag-100-item9a_hold",
+      "what": "The peer silent at tick 600 is held to the AI.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_hold"
+    },
+    {
+      "id": "lag-100-item9a_ai_takeover_hash",
+      "what": "Both surviving peers agree after the AI takeover.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_ai_takeover_hash"
+    },
+    {
+      "id": "lag-100-item9a_reclaim",
+      "what": "The held seat is reclaimed and its live actors are restored.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-100",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_rejoin"
+    },
+    {
+      "id": "lag-100-rejoin",
+      "what": "The relaunched peer returns to the same running world.",
+      "screen": "game",
+      "assert": "rejoin report and gameplay frames",
+      "peer": "client-rejoined",
+      "run": "lag-100"
+    },
+    {
+      "id": "lag-200-item9a_wall_tps",
+      "what": "The fast peer sustains the existing feel gate throughput.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_wall_tps"
+    },
+    {
+      "id": "lag-200-item9a_net_wait",
+      "what": "The fast peer spends less than one percent of steady wall time waiting.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_net_wait"
+    },
+    {
+      "id": "lag-200-item9a_longest_wait",
+      "what": "No individual wait exceeds the existing 50 ms bound.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_longest_wait"
+    },
+    {
+      "id": "lag-200-item9a_missing_frame_stalls",
+      "what": "The fast peer has zero steady missing-frame stalls.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_missing_frame_stalls"
+    },
+    {
+      "id": "lag-200-item9a_loss_armed",
+      "what": "Five percent send/receive loss is armed on the slow peer.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_loss_armed"
+    },
+    {
+      "id": "lag-200-item9a_hold",
+      "what": "The peer silent at tick 600 is held to the AI.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_hold"
+    },
+    {
+      "id": "lag-200-item9a_ai_takeover_hash",
+      "what": "Both surviving peers agree after the AI takeover.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_ai_takeover_hash"
+    },
+    {
+      "id": "lag-200-item9a_reclaim",
+      "what": "The held seat is reclaimed and its live actors are restored.",
+      "screen": "game",
+      "assert": "unchanged tools/feel/report.py item9a_gates",
+      "peer": "host",
+      "run": "lag-200",
+      "sim_ticks": [
+        300,
+        1200
+      ],
+      "gate": "item9a_rejoin"
+    },
+    {
+      "id": "lag-200-rejoin",
+      "what": "The relaunched peer returns to the same running world.",
+      "screen": "game",
+      "assert": "rejoin report and gameplay frames",
+      "peer": "client-rejoined",
+      "run": "lag-200"
+    }
+  ]
+}
