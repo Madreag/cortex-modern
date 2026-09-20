@@ -214,7 +214,8 @@ namespace RTE {
 		/// Refuses a WorldTransition whose generation or membership revision is already stale.
 		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
 		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
-		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr);
+		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr, bool initialSnapshot = false);
+		static bool RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error = nullptr);
 		/// Later catch-up bytes land here after the image is already installed.
 		static void AppendWorldCatchUp(std::vector<NetLockstepFrame> frames);
 		static void SetWorldCatchUpActivation(uint64_t activationTick);

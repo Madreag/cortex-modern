@@ -1286,6 +1286,7 @@ namespace RTE {
 		}
 
 		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error);
+		void EnsureSwitchTestManagers();
 
 		bool ExpectEncodeError(const NetLockstepPacket& packet, NetLockstepErrorCode expected, std::string* error) {
 			std::vector<uint8_t> bytes;
@@ -1583,6 +1584,39 @@ namespace RTE {
 				*error = "the replay rewind retained a future hold"; return false;
 			}
 			return true;
+		}
+
+		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
+			EnsureSwitchTestManagers();
+			LoopbackTransport transport;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A31; config.roundId = 21; config.localPeerId = 2; config.peerCount = 2; config.startFrame = 41;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			if (!replay.StartReplay(transport, config, error)) return false;
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			const auto finish = [&](bool result) { ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr); return result; };
+			NetResyncState state;
+			state.sessionId = config.sessionId; state.sourceRound = 21; state.savedTick = 40;
+			state.controlOwners[987654321] = 1; state.droppedControlOwners[987654321] = 2; state.appliedCommands[2] = 17;
+			NetLockstepFrame record;
+			record.targetFrame = 41; record.commands = {{1, NetGameSeatHold{2, 0, 1, 3, 41}}, {1, NetGameInputDelay{2, 26}}};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {record}, error) || !ScenarioRunner::RestoreCommittedCatchUpState(state, error)) return finish(false);
+			const NetGameCommand old{2, NetGameSetTeamFunds{1, 50}, 17};
+			ScenarioRunner::EnqueueLocalGameCommand(old);
+			if (!ScenarioRunner::DrainLocalGameCommands().empty() || ScenarioRunner::ConsumeLockstepGameCommand(old) ||
+			    ScenarioRunner::IsLockstepLocalActor(987654321, 1, false) || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+			    ScenarioRunner::GetLockstepControlOverrideOwner(987654321) != 1) {
+				*error = "catch-up produced local input or lost its shared ownership and command watermark";
+				return finish(false);
+			}
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, error) || ready.aiHeldPeerIds != std::vector<uint8_t>{2} ||
+			    NetMatchConfigUtil::PeerInputDelay(replay.GetConfig().matchConfig, 2) != 26) {
+				*error = "the catch-up tail bypassed committed hold or delay application";
+				return finish(false);
+			}
+			return finish(true);
 		}
 
 		bool TestSenderDropsUncontrolledTeamCommands(std::string* error) {
@@ -15376,6 +15410,7 @@ namespace RTE {
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
+		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||

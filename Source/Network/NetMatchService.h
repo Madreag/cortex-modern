@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -39,6 +40,7 @@
 namespace RTE {
 
 	class Activity;
+	class LoopbackTransport;
 	class GnsDirectorySignalDispatcher;
 	class GnsTransport;
 
@@ -561,6 +563,7 @@ namespace RTE {
 		void WaitForPendingWork();
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
+		void PreparePrivateRejoinCheckpoint();
 
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
@@ -788,7 +791,7 @@ namespace RTE {
 		/// never start, so the caller ends it instead of retrying it every tick.
 		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable = nullptr);
 		void PumpWorldJoinLobby(uint64_t nowMs);
-		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, std::string& pendingLoad, std::string* error);
+		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
@@ -1221,6 +1224,17 @@ namespace RTE {
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
+		std::unique_ptr<LoopbackTransport> m_CatchUpTransport;
+		std::unique_ptr<NetLockstepCoordinator> m_CatchUpCoordinator;
+		std::function<bool(Activity&)> m_ActivateCatchUpLocalSeat;
+		struct PrivateJoinImage {
+			NetWorldCheckpointImage image;
+			std::shared_ptr<const std::vector<uint8_t>> archive;
+			std::string error;
+		};
+		std::future<PrivateJoinImage> m_PrivateImageTask;
+		uint64_t m_PrivateImageRound = 0;
+		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.
 		std::string m_WorldJoinImageDigest;         //!< Its digest, so a stale cache is refused without a re-hash.
 	};

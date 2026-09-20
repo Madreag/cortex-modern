@@ -4837,6 +4837,8 @@ void RunGameLoop() {
 		}
 	}
 
+	g_NetMatchService.PreparePrivateRejoinCheckpoint();
+
 	long long updateStartTime = 0;
 	long long updateTotalTime = 0;
 	long long updateEndAndDrawStartTime = 0;
