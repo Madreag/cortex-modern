@@ -351,6 +351,8 @@ def check_resume_seams(results, scratch):
     missing = driver.run_preflight(scenario, {}, [], {})
     ok &= row(results, "tokens/unresolved-prevents-launch", missing["class"] == "harness" and missing["tokens"] == ["TURN_SERVER"])
     ok &= row(results, "tokens/resolved", driver.run_preflight(scenario, {}, [], {"TURN_SERVER": "turn:example"}) is None)
+    scenario["peers"][0]["args"] = ["{DIRECTORY_ROOT}/listed.json"]
+    ok &= row(results, "tokens/directory-service-root", driver.run_preflight(scenario, {}, [], {}) is None)
     runtime = scratch / "retained/runtime"
     (runtime / "Userdata").mkdir(parents=True)
     (runtime / "Autosaves").mkdir()
