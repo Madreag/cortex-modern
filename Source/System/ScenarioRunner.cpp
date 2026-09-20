@@ -1349,8 +1349,9 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
-		if (!s_LockstepCoordinator || !MovableMan::IsConstructed() || s_LockstepCoordinator->GetConfig().matchConfig.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) return;
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) || !MovableMan::IsConstructed()) return;
 		const auto suppressed = [&](const ControllerFrame& input) {
+			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
 			const auto* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(input.actorUniqueID)));
 			if (!actor) return false;
 			const uint8_t owner = GetLockstepDropTimeActorOwner(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled());

@@ -1342,6 +1342,30 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestTimingBeforeStartIsRetained(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(48901, error) || !clientWire.Connect("loopback", 48901, error)) return false;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A36, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A36, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 36; a.relayToOtherPeers = true;
+			if (!host.Start(hostWire, a, error) || !client.Start(clientWire, b, error)) return false;
+			NetLockstepTiming timing;
+			timing.senderPeerId = 1; timing.peerId = 2; timing.sessionId = a.sessionId; timing.roundId = 36;
+			timing.revision = 1; timing.applyFrame = 20; timing.delayFrames = 4; timing.requiredPeers = 3;
+			NetTransportEvent event; event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			for (const auto phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+				timing.phase = phase;
+				if (!NetLockstepCodec::Encode({timing}, event.bytes)) return false;
+				client.InjectEvent(event, 0);
+			}
+			for (uint64_t now = 1; now <= 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!client.IsRunning() || client.TimingDecisionPendingAt(20) || client.InputDelayAt(2, 19) != 0 || client.InputDelayAt(2, 20) != 4) {
+				*error = "a delay agreement arriving before the private start was discarded"; return false;
+			}
+			return true;
+		}
+
 		bool TestLiveDelayChangesAtOneFrame(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -1697,8 +1721,9 @@ namespace RTE {
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 3;
 			config.matchConfig.players.push_back({3, 2, false, "Successor"});
 			config.initialPeerLeaves = {{1, 39}, {2, 40}};
+			config.initialDelayChanges[2][50] = 9;
 			config.initialSeatHolds[2] = NetGameSeatHold{2, 1, 1, 1, 40};
-			if (!replay.StartReplay(wire, config, error) || replay.GetHostPeerId() != 3 || !replay.IsPeerGoneAtFrame(1, 41)) return false;
+			if (!replay.StartReplay(wire, config, error) || replay.GetHostPeerId() != 3 || !replay.IsPeerGoneAtFrame(1, 41) || replay.InputDelayAt(2, 50) != 9) return false;
 			const NetGameCommand reclaim{3, NetGameSeatReclaim{2, 1, 2, 2, 41, 4, 45}};
 			if (!replay.QueueReplayFrame(41, {}, {reclaim}, error)) return false;
 			replay.Tick(0); NetLockstepReadyFrame ready;
@@ -15566,6 +15591,7 @@ namespace RTE {
 		    !TestRoundTrips(&error) ||
 		    !TestSnapshotConstructionKeepsPendingCommands(&error) ||
 		    !TestTimingDecisionCodec(&error) ||
+		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
