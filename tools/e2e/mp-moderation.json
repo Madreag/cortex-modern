@@ -157,9 +157,9 @@
       "peer": "clientb",
       "mark": "moderation-clientb-refused",
       "screen": "MultiplayerScreen",
-      "what": "ClientB is refused and Landing reads You are banned from this session, without internal admission details.",
+      "what": "ClientB is refused and Landing reads The host banned you from this session, without internal admission details.",
       "events": [
-        "assert_label LabelMultiplayerLandingStatus.*You are banned from this session.*PASS"
+        "assert_label LabelMultiplayerLandingStatus.*The host banned you from this session.*PASS"
       ]
     },
     {
