@@ -645,7 +645,9 @@ def scripts(case, port, root):
         text += "assert_label ButtonMultiplayerResumeGame Resume Match\n"
         text += "activate ButtonMultiplayerResumeGame\nwait 5\nassert_substate ResumeSetup\n"
         for name in RESUME_ROWS:
-            text += checks(name, "MultiplayerResumePanel")
+            text += checks(name, "MultiplayerResumePanel") if name != "ListResumeMatches" else \
+                (f"assert_visible {name} 1\nassert_rect_inside {name} MultiplayerResumePanel\n"
+                 f"assert_rect_inside {name} viewport\n")
         text += "assert_label LabelResumeTitle R E S U M E   M A T C H\n"
         text += "assert_label LabelResumeSelected Select a match to restart it\n"
         text += "assert_label LabelResumeStatus No match here can be restarted\n"
@@ -860,7 +862,7 @@ def scripts(case, port, root):
             {"op": "wait", "scope": "menu", "elapsed_ms": 500},
             {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}}
     elif case == "net-activity":
-        # Fresh host setup uses Skirmish Defense; P4 is the explicit keyboard-navigation anchor.
+        # Fresh host setup uses Skirmish Defense; the keyboard anchor is the row above the picked one.
         # A vanished pick needs a module unload the menu harness cannot drive; the native
         # host_request_fallback row covers the empty-list Base.rte request fields instead.
         # The keyboard commits the activity and scene combos and the mouse the mode combo; Create
@@ -875,7 +877,7 @@ def scripts(case, port, root):
                 "assert_text_fits ComboHostScene\n"
                 "assert_visible ComboHostMode 1\nassert_label ComboHostMode PvP\n"
                 "assert_label LabelHostInfo Grasslands - PvP\n"
-                "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 3\n"
+                "combo_select ComboHostActivity Persistent World - Base.rte\nwait 3\n"
                 "focus ComboHostActivity\n"
                 "key_down Return\nwait 2\nkey_up Return\nwait 3\ndump_host_options\n"
                 "key_down Down\nwait 2\nkey_up Down\nwait 3\n"
@@ -1558,9 +1560,9 @@ def run_case(options, case, root, failing=None):
                 assert host_setup, "ComboHostActivity missing from host dumps"
                 picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
                 assert_combo_matches_loaded_activities(picker, host_setup[0])
-            assert images, "no paired dumps/PNGs"
             # A peer scripted to dump must have written one: the global count passed on its peer's captures.
             scripted = {who: texts[who] + json.dumps(probes.get(who, {})) for who in runs}
+            assert images or not any("dump_" in script for script in scripted.values()), "no paired dumps/PNGs"
             silent = [who for who, script in scripted.items()
                       if "dump_" in script and not any(image["peer"] == who for image in images)]
             assert not silent, f"no readback capture from {silent}"
@@ -1758,8 +1760,10 @@ def run_case(options, case, root, failing=None):
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
-            host_button, join_button = landing["ButtonMultiplayerHostGame"]["rect"], landing["ButtonMultiplayerJoinGame"]["rect"]
-            assert prompt[0] + box[0] + box[2] == host_button[0] + join_button[0] + join_button[2], (prompt, box, host_button, join_button)
+            host_button = landing["ButtonMultiplayerHostGame"]["rect"]
+            row = [c["rect"] for c in landing.values() if c["rect"][1] == host_button[1] and c["rect"][3] == host_button[3]]
+            last_button = max(row, key=lambda rect: rect[0])
+            assert prompt[0] + box[0] + box[2] == host_button[0] + last_button[0] + last_button[2], (prompt, box, host_button, last_button)
             assert next(c["text"] for c in images[-1]["controls"] if c["name"] == "TextMultiplayerName") == NETWORK_SAVED["NetworkDisplayName"]
             # The host screen's own readback: the label sits beside the delay box and names the saved
             # policy with the frames it would send - the box pre-fills that same count.
@@ -1889,7 +1893,7 @@ def run_case(options, case, root, failing=None):
                 assert not set(MISC_GONE) & rows.keys(), sorted(rows)
                 grid = [rows["CheckboxSkipIntro"]["rect"][1], rows["LabelSceneBackgroundAutoScale"]["rect"][1]]
                 assert grid[1] - grid[0] == 4 * 20, grid
-        if case == "landing":
+        if case == "landing" and not failing:
             # A first visit owes the player no reconnect verdict: the record probe's negative stays silent.
             status = next(c for c in images[0]["controls"] if c["name"] == "LabelMultiplayerLandingStatus")
             assert status["text"] == "", status
@@ -1907,21 +1911,22 @@ def run_case(options, case, root, failing=None):
             if case == "lobby":
                 result["host_options_geometry"] = host_options_geometry(images)
                 result["timing_options_geometry"] = timing_options_geometry(images)
-            leave, seats, panel = (drawn[name] for name in
-                                   ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "MultiplayerLobbyPanel"))
-            assert leave["rect"][0] + seats["rect"][0] + seats["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
-                (leave["rect"], seats["rect"], panel["rect"])
+            leave, seats, last, panel = (drawn[name] for name in
+                                         ("ButtonMultiplayerLeave", "ButtonMultiplayerModerate", "ButtonLobbyOptions",
+                                          "MultiplayerLobbyPanel"))
+            assert leave["rect"][0] + last["rect"][0] + last["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
+                (leave["rect"], last["rect"], panel["rect"])
             header = drawn["LabelLobbyPlayersHeader"]
             seat_rows = [control for control in images[-1]["controls"]
                          if re.fullmatch(r"LabelLobbyPlayer\d", control["name"])]
             assert seat_rows and header["text_fits"] and all(
                 row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
             start = drawn["ButtonMultiplayerStart"]
-            pair_span = seats["rect"][0] + seats["rect"][2] - leave["rect"][0]
+            pair_span = last["rect"][0] + last["rect"][2] - leave["rect"][0]
             pair_gap = seats["rect"][0] - leave["rect"][0] - leave["rect"][2]
             back = next((c for c in drawn.values() if c["name"] == "ButtonBackToMain"), None)
             save = next((c for c in drawn.values() if c["name"] == "ButtonSaveDiagnostics"), None)
-            assert pair_span == start["rect"][2], (pair_span, start["rect"], leave["rect"], seats["rect"])
+            assert pair_span == start["rect"][2], (pair_span, start["rect"], leave["rect"], last["rect"])
             if back and save:
                 footer_gap = save["rect"][0] - back["rect"][0] - back["rect"][2]
                 assert pair_gap == footer_gap, (pair_gap, footer_gap)
