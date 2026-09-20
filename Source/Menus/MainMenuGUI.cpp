@@ -1942,7 +1942,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		                            (m_HostOptionsSetupDraft ? NetHostNatModeText(g_SettingsMan) : g_NetMatchService.GetNatModeText()));
 	}
 	// The setup choice stays local until the hosted lease supplies the live state.
-	if (!m_HostOptionsSetupDraft) HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
+	if (!m_HostOptionsSetupDraft || (m_HostNetVisibilityCombo && m_HostNetVisibilityCombo->GetSelectedIndex() < 0)) {
+		HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
+	}
 	if (m_HostNetPortBox && m_MultiplayerHostPortTextBox && !HostOptBoxFocused(m_HostNetPortBox)) {
 		m_HostNetPortBox->SetText(m_MultiplayerHostPortTextBox->GetText());
 	}
