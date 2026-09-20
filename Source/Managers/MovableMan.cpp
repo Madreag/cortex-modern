@@ -965,15 +965,14 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
 		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
-		if (aiTakeover || (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end())) {
+		const bool playerControlled = actor->IsPlayerControlled();
+		if (aiTakeover || (playerControlled && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end())) {
 			if (aiTakeover) {
 				ScenarioRunner::HandLockstepActorToAI(uid, claimant);
-				actor->GetController()->SetInputMode(Controller::CIM_AI);
-				actor->GetController()->SetPlayer(Players::NoPlayer);
-				actor->GetController()->SetDisabled(false);
+				if (!playerControlled) actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 				actor->TouchCheckpoint();
 			}
-			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+			if (playerControlled) MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
 			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}
 		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
