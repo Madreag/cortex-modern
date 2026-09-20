@@ -612,7 +612,10 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
 		if (member.cpu) continue;
-		text += "\n" + (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
+		// Every row names its player first: a state word never stands in for the name.
+		const std::string name = DisplayName(member.displayName);
+		const std::string state = member.statusLine.empty() ? std::string("Connected") : DisplayName(member.statusLine);
+		text += "\n" + (state.rfind(name, 0) == 0 ? state : name + "  /  " + state);
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;
@@ -876,8 +879,12 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		// them lifts above it.
 		int panelX, panelTop, panelWidth, panelHeight;
 		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		if (y < panelTop + panelHeight && y + height > panelTop) {
-			y = std::max(0, panelTop - height);
+		const int panelBottom = panelTop + panelHeight;
+		if (y < panelBottom && y + height > panelTop) {
+			// Above the panel when that band holds the box, below it when the lower band does.
+			if (panelTop >= height) y = panelTop - height;
+			else if (backbuffer->h - panelBottom >= height) y = panelBottom;
+			else y = std::max(0, panelTop - height);
 		}
 	}
 	m_NetStatusBox->Move(x, y);
