@@ -328,6 +328,10 @@ namespace RTE {
 			int team = -1;
 			uint16_t seat = 0;
 			uint16_t inputDelayFrames = 0;
+			uint32_t holds = 0;
+			uint32_t substitutions = 0;
+			uint32_t rejoins = 0;
+			uint64_t longestWaitMs = 0;
 		};
 		std::string result;
 		int winnerTeam = -1;
@@ -1170,6 +1174,7 @@ namespace RTE {
 			uint64_t peerFramesWaived = 0;
 			uint64_t peersDroppedSilent = 0;
 			uint64_t connectionsClosedOnEviction = 0;
+			std::map<uint8_t, NetLockstepPeerStats> peers;
 		};
 		LockstepTotals m_LockstepTotals;
 		uint32_t m_SessionEventsDrained = 0;   //!< Handover events delivered by a teardown instead of the pump.

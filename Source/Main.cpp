@@ -4905,6 +4905,7 @@ void RunGameLoop() {
 			NetModerationGUIProbe::OnSimTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
+			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
 			g_PerformanceMan.NewPerformanceSample();
 			g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
@@ -5613,7 +5614,10 @@ void RunGameLoop() {
 
 			if (ScenarioRunner::IsLockstepControllerSyncActive()) {
 				++s_paceSimTicks;
-				s_paceSimUs += g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				const long long elapsedUs = g_TimerMan.GetAbsoluteTime() - paceTickStartUs;
+				s_paceSimUs += elapsedUs;
+				if (!lockstepPausedTick) ScenarioRunner::NoteLockstepLocalTickCost(simTick,
+				    std::max(0LL, elapsedUs - (ScenarioRunner::GetLockstepWaitUs() - paceWaitStartUs)) / 1000.0);
 			}
 
 			// Capture both peers after the complete tick, including global callbacks and worker joins.

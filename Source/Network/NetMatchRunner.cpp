@@ -807,6 +807,7 @@ namespace RTE {
 			} else {
 				member.pingMs = m_Lobby.GetRemotePingMs(slot.peerId);
 			}
+			member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(rosterConfig, slot.peerId);
 			snapshot.members.push_back(member);
 		}
 		return snapshot;
