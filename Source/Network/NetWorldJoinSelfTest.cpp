@@ -2376,7 +2376,7 @@ namespace RTE {
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
 		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 28) {
-			return Fail("ordinary lockstep frame did not stamp version 26");
+			return Fail("ordinary lockstep frame did not stamp version 28");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
