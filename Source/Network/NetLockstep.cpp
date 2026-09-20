@@ -6109,7 +6109,7 @@ namespace RTE {
 		out << "\"input_delay_frames\":" << m_Stats.inputDelayFrames << ",";
 		out << "\"peer_input_delays\":{";
 		for (uint8_t peerId = 1; peerId <= m_Config.peerCount; ++peerId) {
-			out << (peerId == 1 ? "" : ",") << "\"" << static_cast<int>(peerId) << "\":" << PeerInputDelay(peerId);
+			out << (peerId == 1 ? "" : ",") << "\"" << static_cast<int>(peerId) << "\":" << InputDelayAt(peerId, m_LastDeliveredFrame.value_or(m_Config.startFrame));
 		}
 		out << "},";
 		out << "\"next_frame\":" << m_Stats.nextFrame << ",";

@@ -125,6 +125,7 @@ def item9a_gates(run, peer='host', rows=None):
                 found.extend(locksteps(value))
         return found
     rounds = locksteps(report)
+    latest = max(rounds, key=lambda value: value.get('next_frame', 0), default={})
     measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
     missing = sum(measured) if measured else None
     evidence = [raw, log_path, report_path]
@@ -164,7 +165,8 @@ def item9a_gates(run, peer='host', rows=None):
     return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
-                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=TICKS if TICKS in by_tick else None))
+                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=TICKS if TICKS in by_tick else None,
+                             sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
 
 
 def input_latencies(inputs, frames):
@@ -458,8 +460,11 @@ def reduce_peer(run, peer, baseline=None):
             if match:
                 auto_picks.append(dict(peer=int(match[1]), rtt_ms=int(match[2]), delay=int(match[3]), floor=int(match[4]), raw_line=line_no))
     local_picks = [pick for pick in auto_picks if pick['peer'] == frames[-1]['peer']]
-    if local_picks:
-        expected_delay = max(math.ceil(pick['rtt_ms'] / SIM_MS) + 1 for pick in local_picks)
+    network = item9a_gates(run, peer, rows) if peer != 'sp' else None
+    measured_tick = network['metrics']['sim_tick_ms'] if network else SIM_MS
+    delay_math = measured_tick is not None and measured_tick > 0 and all(
+        pick['delay'] >= max(pick['floor'], math.ceil(pick['rtt_ms'] / measured_tick) + 1) for pick in local_picks)
+    live_delay = network['metrics']['peer_input_delays'].get(str(frames[-1]['peer'])) if network else 0
     metrics = dict(cpu_ms=cpu_ms, draw_ms=draw, present_ms=present, frame_interval_ms=interval,
                    cpu_window=dict(first_iteration_tick=all_iterations[0]['tick'], last_iteration_tick=all_iterations[-1]['tick'],
                                    includes_match_stop_drain=True),
@@ -484,8 +489,9 @@ def reduce_peer(run, peer, baseline=None):
     pins = {}
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
-    pins['auto_delay'] = pin(delays, f'D >= ceil(measured RTT / sim tick) + 1 = {expected_delay}, plus measured jitter',
-                             bool(delays) and min(delays) >= expected_delay and (peer == 'sp' or '(auto' in frames[-1]['input_delay_text']), [raw, host_log])
+    pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
+                             delay_math and frames[-1]['delay'] == live_delay and (peer == 'sp' or '(auto' in frames[-1]['input_delay_text']),
+                             [raw, host_log, run / f'{peer}_report.json'] if network else [raw])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
     pins['input_to_photon'] = pin(latency_value, '<= 34 ms at 60 Hz; <= one 60 Hz sim tick + one actual frame when uncapped',
@@ -521,8 +527,8 @@ def reduce_peer(run, peer, baseline=None):
     if peer == 'sp':
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
-    else:
-        pins.update(item9a_gates(run, peer, rows)['pins'])
+    elif peer == 'host':
+        pins.update(network['pins'])
     result = dict(peer=peer, raw_path=str(raw), metrics=metrics, pins=pins, measurement_complete=measured,
                   trace_1200_ticks=coverage, orderly_end_record=ended, analysis={key: str(value) for key, value in paths.items()})
     write_json(destination / 'metrics.json', result)

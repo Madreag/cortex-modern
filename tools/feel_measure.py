@@ -56,6 +56,7 @@ def private_settings(run, cap):
     path = Path(run.cwd) / 'Userdata/Settings.ini'
     text = path.read_text(encoding='utf-8-sig')
     values = {'EnableVSync': '0', 'LocalPrediction': '1', 'LocalPredictionMaxTicks': '20',
+              'NetworkHostDelayPolicy': 'Auto', 'NetworkInputDelayFrames': '0',
               'NetworkSlowPlayerBoundTicks': '3', 'NetworkSlowPlayerPolicy': 'Substitute', 'NetworkShowDiagnostics': '1'}
     for name, value in values.items():
         text, count = re.subn(rf'(?m)^(\s*{name}\s*=\s*)[^\r\n]*', lambda match: match[1] + value, text)
