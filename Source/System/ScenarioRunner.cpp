@@ -8,6 +8,7 @@
 #include "ConsoleMan.h"
 #include "ControllerLog.h"
 #include "FrameMan.h"
+#include "GameActivity.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
 #include "MovableObject.h"
