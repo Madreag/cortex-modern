@@ -8023,6 +8023,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-ordering-selftest") {
 			return NetLockstepSelfTest::RunOrdering();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-hold-heartbeat-selftest") {
+			return NetLockstepSelfTest::RunHoldHeartbeat();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
 			netMatchSelfTest = true;

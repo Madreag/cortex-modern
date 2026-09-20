@@ -15653,6 +15653,14 @@ namespace RTE {
 		return passed ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunHoldHeartbeat() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		std::string error;
+		const bool passed = TestFrameWindowHoldHeartbeatKeepsTicksOne(&error);
+		std::cout << "[net-lockstep-hold-heartbeat-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::Run() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (!LuaMan::IsConstructed()) LuaMan::Construct();
