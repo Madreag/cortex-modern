@@ -24,6 +24,9 @@ namespace RTE {
 		/// Constructs this Singleton.
 		inline static void Construct() { s_Instance = new Type(); }
 
+		/// Destroys the sole instance and clears its registration.
+		inline static void Destruct() { delete s_Instance; s_Instance = nullptr; }
+
 		/// Whether the sole instance exists yet; selftests run engine paths before the managers are built.
 		inline static bool IsConstructed() { return s_Instance != nullptr; }
 
