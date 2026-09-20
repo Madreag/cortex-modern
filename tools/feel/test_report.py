@@ -25,13 +25,16 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
-    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True):
+    def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log=''):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
             run = Path(folder)
             (run / 'host').mkdir()
-            (run / 'manifest.json').write_text('{}', encoding='utf-8')
+            (run / 'manifest.json').write_text(json.dumps({'silent_tick': 600} if silent else {}), encoding='utf-8')
             (run / 'host/stdout.log').write_text(waits, encoding='utf-8')
+            if silent:
+                (run / 'survivor').mkdir()
+                (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
             (run / 'host_report.json').write_text(json.dumps({'runner': {'lockstep': {
                 'next_frame': 1201, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing}}}), encoding='utf-8')
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
@@ -55,6 +58,18 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(self.item9a(missing=1)['pass_check'])
         self.assertFalse(self.item9a(missing=None)['pass_check'])
         self.assertFalse(self.item9a(complete=False)['pass_check'])
+
+    def test_item9a_rejoin_requires_committed_live_reclaim_on_both_survivors(self):
+        request = '[net-match] hold peer=2 frame=603 AI in control\n[net-match] rejoin: player reconnected - resyncing the match\n'
+        applied = '[net-match] seat-reclaimed peer=2 frame=700 live_actors=2\n'
+        def status(host, survivor):
+            return self.item9a(silent=True, waits=request + host, survivor_log=survivor)['pins']['item9a_rejoin']['status']
+        self.assertEqual(status('', request), 'MISS')
+        self.assertEqual(status(applied, ''), 'MISS')
+        self.assertEqual(status(applied, applied.replace('700', '701')), 'MISS')
+        self.assertEqual(status(applied, applied), 'PASS')
+        for refused in (applied.replace('700', '500'), applied.replace('700', '1201'), applied.replace('actors=2', 'actors=0'), applied.replace('peer=2', 'peer=3')):
+            self.assertEqual(status(refused, refused), 'MISS')
 
     def test_latency_uses_present_return_and_counts_frames(self):
         edge = dict(_line=1, tick=10, wall_ms=100, actor=actor(), last_presented_frame=1,

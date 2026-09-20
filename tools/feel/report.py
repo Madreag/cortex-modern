@@ -145,8 +145,17 @@ def item9a_gates(run, peer='host', rows=None):
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
         held = next((tick for seat, tick in holds if seat == 2 and tick >= manifest['silent_tick']), None)
         pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
-        rejoined = '[net-match] rejoin:' in log and 'reconnected - resyncing the match' in log
-        pins['item9a_rejoin'] = pin(rejoined, 'the held seat reclaimed through recovery', rejoined, [log_path])
+        def reclaims(name):
+            path = run / name / 'stdout.log'
+            text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+            found = re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', text)
+            return [(int(tick), int(live)) for seat, tick, live in found
+                    if held is not None and int(seat) == 2 and held < int(tick) <= TICKS and int(live) > 0], path
+        host_reclaims, host_reclaim_path = reclaims('host')
+        survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
+        rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims
+        pins['item9a_rejoin'] = pin(rejoined, 'both survivors applied the same committed reclaim of live actors after the hold',
+            rejoined, [host_reclaim_path, survivor_reclaim_path], dict(host=host_reclaims, survivor=survivor_reclaims))
         def hashes(name):
             path = run / f'{name}_trace.json'
             if not path.is_file():

@@ -677,6 +677,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			// Like SwitchControl, the override lands even for an actor that is already gone so every
 			// peer's map stays identical; a live actor that left the team is not reseated.
 			int reseated = 0;
+			int liveReseated = 0;
 			for (const int64_t actorUID: reseat->actorUIDs) {
 				const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUID)));
 				if (actor && actor->GetTeam() != reseat->team) {
@@ -684,8 +685,10 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 				}
 				ScenarioRunner::ReclaimLockstepActor(actorUID, reseat->newOwnerPeerId);
 				++reseated;
+				if (actor) ++liveReseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
+			std::cout << "[net-match] seat-reclaimed peer=" << static_cast<int>(reseat->newOwnerPeerId) << " frame=" << readyFrame.frame << " live_actors=" << liveReseated << std::endl;
 		} else if (const NetGameWorldTransition* transition = std::get_if<NetGameWorldTransition>(&command.payload)) {
 			if (transition->team < Activity::Teams::TeamOne || transition->team >= Activity::Teams::MaxTeamCount ||
 			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {

@@ -5149,7 +5149,8 @@ static std::string ResyncSaveName() {
 			const auto& summary = *m_LastMatchSummary;
 			json peers = json::array();
 			for (const auto& peer : summary.peers) {
-				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames}});
+				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames},
+				    {"holds", peer.holds}, {"substitutions", peer.substitutions}, {"rejoins", peer.rejoins}, {"longest_wait_ms", peer.longestWaitMs}});
 			}
 			report["last_match"] = {{"result", summary.result}, {"winner_team", summary.winnerTeam}, {"running_ticks", summary.runningTicks},
 			    {"duration", summary.DurationText()}, {"peers", peers}, {"resyncs", summary.resyncs}, {"drops", summary.drops},
