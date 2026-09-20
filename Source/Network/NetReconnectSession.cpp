@@ -1323,7 +1323,7 @@ namespace RTE {
 			return false;
 		}
 		// Either the holder dropped and has not come back, or it left cleanly and the seat sits empty.
-		return (seat.committed && seat.activeConnection == c_InvalidNetPeerId) || seat.closed;
+		return (seat.committed && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId) || seat.closed;
 	}
 
 	void NetReconnectHost::BumpSeatGeneration(SeatState& seat) {
@@ -1506,7 +1506,7 @@ namespace RTE {
 			entry.cpu = seat.seat.cpu;
 			entry.team = seat.seat.team;
 			entry.committed = seat.committed;
-			entry.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
+			entry.dropped = seat.committed && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
 			entry.closed = seat.closed;
 			entry.heldForReclaim = seat.committed && !seat.closed && !seat.holdExpired;
 			entry.substitutable = IsSeatSubstitutable(seat);
@@ -1572,7 +1572,7 @@ namespace RTE {
 			     (seat.dropped ? 8u : 0u) | (seat.holdExpired ? 16u : 0u) | (IsSeatSubstitutable(seat) ? 32u : 0u));
 			fold(seat.droppedAtMs);
 			foldText(seat.substituteName);
-			anyDropped = anyDropped || (seat.committed && seat.activeConnection == c_InvalidNetPeerId);
+			anyDropped = anyDropped || (seat.committed && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId);
 		}
 		for (const Substitution& pending : m_Substitutions) {
 			fold(pending.stableSeat);
@@ -2086,7 +2086,7 @@ namespace RTE {
 			status.lockstepPeerId = seat.seat.lockstepPeerId;
 			status.committed = seat.committed;
 			status.closed = seat.closed;
-			status.dropped = seat.committed && seat.activeConnection == c_InvalidNetPeerId;
+			status.dropped = seat.committed && !seat.seat.local && !seat.seat.cpu && seat.activeConnection == c_InvalidNetPeerId;
 			status.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});
