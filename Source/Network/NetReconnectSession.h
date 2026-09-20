@@ -470,6 +470,7 @@ namespace RTE {
 			uint32_t retiredGeneration = 0; //!< A generation a substitute superseded, kept only to answer it.
 			uint64_t retiredUntilMs = 0;
 			std::string substituteName;
+			std::string holderName;
 			NetAuthBytes32 participantId{};
 			bool hasParticipantId = false;
 		};
@@ -509,6 +510,7 @@ namespace RTE {
 		};
 
 		struct Provisional {
+			std::string holderName;
 			uint16_t stableSeat = 0;
 			NetAuthBytes16 txId{};
 			NetPeerId connection = c_InvalidNetPeerId;
@@ -521,6 +523,7 @@ namespace RTE {
 		};
 
 		struct PendingReclaim {
+			std::string holderName;
 			NetPeerId connection = c_InvalidNetPeerId;
 			NetAuthBytes16 txId{};
 			uint16_t stableSeat = 0;
@@ -641,6 +644,7 @@ namespace RTE {
 		bool m_HasRemovalTx = false;
 		NetPeerId m_LastRemovedConnection = c_InvalidNetPeerId;
 		NetHostBanStore* m_BanStore = nullptr;
+		std::set<NetAuthBytes32> m_RemovedParticipants;
 		bool m_ProofRequired = false;
 		std::vector<std::pair<NetPeerId, NetAuthBytes32>> m_ConnectionIds;
 	};

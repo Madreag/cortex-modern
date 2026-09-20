@@ -31,7 +31,7 @@ namespace RTE {
 		using json = nlohmann::json;
 		json seats = json::array();
 		for (const auto& state: m_Seats) {
-			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
+			json row{{"seat", state.seat.stableSeat}, {"holder", state.holderGeneration}, {"incarnation", state.incarnation}, {"committed", state.committed}, {"closed", state.closed}, {"dropped", state.dropped}, {"expired", state.holdExpired}, {"generation", state.seatGeneration}, {"name", state.substituteName}, {"display", state.holderName}, {"slot", {state.seat.peerId, state.seat.lockstepPeerId, state.seat.team, state.seat.cpu}}, {"saturated", state.saturated}, {"retired_generation", state.retiredGeneration}, {"retired_remaining", state.retiredUntilMs > m_NowMs ? state.retiredUntilMs - m_NowMs : 0}};
 			if (state.hasParticipantId) {
 				row["participant_id"] = state.participantId;
 			}
@@ -48,7 +48,7 @@ namespace RTE {
 				}
 			}
 		}
-		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
+		return json::to_cbor(json{{"version", 1}, {"session", m_HostSessionId}, {"registry", m_Registry->ExportMigrationState()}, {"seats", seats}, {"bans", bans}, {"removed", m_RemovedParticipants}, {"identity", {identity.controllerFrameVersion, identity.controllerFrameEncodedSize, identity.gameVersion, identity.buildId, identity.deterministicConfigHash, identity.moduleManifestHash, identity.sessionRulesHash, identity.sessionIdentityHash}}});
 	}
 
 	int64_t NetReconnectHost::CountExportedOpenSeats(const std::vector<uint8_t>& bytes, uint8_t localPeerId) {
@@ -135,6 +135,7 @@ namespace RTE {
 				state->holdExpired = row.at("expired").get<bool>();
 				state->seatGeneration = row.at("generation").get<uint32_t>();
 				state->substituteName = row.at("name").get<std::string>();
+				state->holderName = row.value("display", state->substituteName);
 				state->saturated = row.at("saturated").get<bool>();
 				state->retiredGeneration = row.at("retired_generation").get<uint32_t>();
 				const uint64_t retiredRemaining = row.at("retired_remaining").get<uint64_t>();
@@ -186,6 +187,7 @@ namespace RTE {
 				if (!next.m_BanStore || !next.m_BanStore->ImportSessionBan(ban.identity, ban.displayAlias, ban.reason, config.sessionId, ban.createdUnixMs))
 					return false;
 			}
+			if (object.contains("removed")) next.m_RemovedParticipants = object.at("removed").get<std::set<NetAuthBytes32>>();
 			registry = std::move(nextRegistry);
 			next.m_Registry = &registry;
 			next.m_DropOwnershipSource = m_DropOwnershipSource;
@@ -359,6 +361,7 @@ namespace RTE {
 			m_Provisionals.clear();
 			m_PendingReclaims.clear();
 			m_Fences.clear();
+			m_RemovedParticipants.clear();
 			m_Outbound.clear();
 			m_PendingReseats.clear();
 			m_Commits.clear();
@@ -711,6 +714,7 @@ namespace RTE {
 		}
 
 		Provisional pending;
+		pending.holderName = message.displayName;
 		pending.stableSeat = seat->seat.stableSeat;
 		pending.txId = message.txId;
 		pending.connection = connection;
@@ -776,6 +780,7 @@ namespace RTE {
 			return;
 		}
 		seat->identity = pending->key.identity;
+		seat->holderName = pending->holderName;
 		seat->holderGeneration = pending->holderGeneration;
 		seat->committed = true;
 		seat->closed = false;
@@ -843,6 +848,7 @@ namespace RTE {
 			return;
 		}
 		PendingReclaim reclaim;
+		reclaim.holderName = message.displayName;
 		reclaim.connection = connection;
 		reclaim.txId = message.txId;
 		reclaim.stableSeat = message.stableSeat;
@@ -928,6 +934,7 @@ namespace RTE {
 		const NetH4JoinCommitted committed{c_NetH4Version, message.txId, seat->seat.stableSeat, seat->holderGeneration, seat->incarnation, seat->seat.peerId};
 		const NetH4TxKey key = pending != m_PendingReclaims.end() ? pending->key : MakeKey(NetMessageType::Reclaim, message.stableSeat, message.holderGeneration, seat->identity);
 		seat->identity = key.identity;
+		if (pending != m_PendingReclaims.end()) seat->holderName = pending->holderName;
 		m_TxCache.Store(message.txId, key, committed, nowMs);
 		if (pending != m_PendingReclaims.end()) {
 			m_PendingReclaims.erase(pending);
@@ -1107,10 +1114,17 @@ namespace RTE {
 			++m_Stats.identityRejections;
 			return true;
 		}
+		if (bound && m_RemovedParticipants.contains(id)) {
+			std::cout << "[net-reconnect] admission refused reason=ParticipantBanned action=Kick peer=" << connection << std::endl;
+			Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host removed you from this session", "participant_removed", "", ""});
+			++m_Stats.identityRejections;
+			return true;
+		}
 		if (m_BanStore == nullptr || !bound || !m_BanStore->IsBanned(id, m_HostSessionId)) {
 			return false;
 		}
-		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "this identity is not admitted", "participant_identity", "", ""});
+		std::cout << "[net-reconnect] admission refused reason=ParticipantBanned peer=" << connection << std::endl;
+		Send(connection, NetJoinRejected{NetRejectReason::ParticipantBanned, "The host banned you from this session", "participant_identity", "", ""});
 		++m_Stats.identityRejections;
 		return true;
 	}
@@ -1185,10 +1199,11 @@ namespace RTE {
 			const NetHostBanScope scope = action == NetParticipantRemovalAction::BanUntilRemoved ? NetHostBanScope::UntilRemoved : NetHostBanScope::Session;
 			std::string persistError;
 			NoteStateChanged();
-			if (!m_BanStore->Ban(issued.participantId, scope, "", "host ban", m_HostSessionId, unixNowMs, &persistError)) {
+			if (!m_BanStore->Ban(issued.participantId, scope, seat->holderName, "host ban", m_HostSessionId, unixNowMs, &persistError)) {
 				return NetKickBanResult::PersistenceFailed;
 			}
 		}
+		if (action == NetParticipantRemovalAction::Kick && issued.hasParticipantId) m_RemovedParticipants.insert(issued.participantId);
 		if (issued.connection != c_InvalidNetPeerId) {
 			m_Admission.DropConnection(issued.connection);
 		}
@@ -1198,13 +1213,8 @@ namespace RTE {
 			// leaves is what keeps anyone else out of it.
 			CloseSeatWithoutHold(*seat);
 		} else {
-			// Nothing has been played yet, so the seat goes back to the pool exactly as a leave leaves
-			// it and the lobby can seat a replacement. The removal is held by the identity instead: a
-			// kick refuses this participant for the session the host is running.
-			if (action == NetParticipantRemovalAction::Kick && m_BanStore != nullptr && issued.hasParticipantId) {
-				NoteStateChanged();
-				(void)m_BanStore->Ban(issued.participantId, NetHostBanScope::Session, "", "host kick", m_HostSessionId, unixNowMs, nullptr);
-			}
+			// A lobby removal releases the seat without banning its holder.
+
 			ReleaseSeat(*seat);
 		}
 		m_LastRemovalTx = issued.notice.txId;
@@ -1228,6 +1238,7 @@ namespace RTE {
 		seat.dropped = false;
 		seat.holdExpired = false;
 		seat.identity = {};
+		seat.holderName.clear();
 		seat.participantId = {};
 		seat.hasParticipantId = false;
 		seat.retiredGeneration = 0;
@@ -1522,6 +1533,7 @@ namespace RTE {
 			entry.epoch = m_ConfiguredEpoch;
 			entry.holdUntilMs = entry.dropped && entry.heldForReclaim ? seat.droppedAtMs + c_ProvisionalExpiryMs : 0;
 			entry.substituteName = seat.substituteName;
+			entry.displayName = seat.holderName;
 			entry.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});
@@ -1807,6 +1819,7 @@ namespace RTE {
 		++m_Stats.substitutionsCommitted;
 		m_Commits.push_back({connection, seat->seat.stableSeat, seat->seat.peerId, seat->incarnation, c_InvalidNetPeerId, false, true});
 		seat->substituteName = pending->displayName;
+		seat->holderName = pending->displayName;
 		if (NetH4GetFault() == NetH4Fault::CommitDrop) {
 			// The gate's commit-result-lost fault: the transaction is committed and cached, and the
 			// answer is thrown away exactly once. The substitute's own retry has to recover it.
