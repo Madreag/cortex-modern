@@ -437,6 +437,7 @@ namespace RTE {
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
 		static bool UsesBoundedLockstepWait();
+		static bool IsLockstepPeerGone(uint8_t peerId, uint64_t frame);
 		static void DiscardHeldLocalInputs();
 
 		/// A queued buy order this peer has issued but the wire has not applied yet.

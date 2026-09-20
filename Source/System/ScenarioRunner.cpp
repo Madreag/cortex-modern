@@ -1794,6 +1794,10 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->UsesBoundedWait();
 	}
 
+	bool ScenarioRunner::IsLockstepPeerGone(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsPeerGoneAtFrame(peerId, frame);
+	}
+
 	void ScenarioRunner::DiscardHeldLocalInputs() {
 		s_PendingLocalGameCommands.clear();
 		s_LocalCommandOutbox.clear();

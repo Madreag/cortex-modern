@@ -4265,7 +4265,7 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
-			if (m_Coordinator) {
+			if (m_Coordinator && m_State == NetMatchServiceState::Running) {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
 				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
 					member.pingMs = stats->second.pingMs;

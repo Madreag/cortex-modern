@@ -417,7 +417,7 @@ void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame)
 	for (const auto& seat: config->players) {
 		if (seat.cpu || seat.peerId != peerId) continue;
 		const bool remainingHuman = std::any_of(config->players.begin(), config->players.end(), [&](const auto& other) {
-			return !other.cpu && other.team == seat.team && other.peerId != peerId && !ScenarioRunner::IsLockstepSeatUnderAI(other.peerId, frame);
+			return !other.cpu && other.team == seat.team && other.peerId != peerId && !ScenarioRunner::IsLockstepPeerGone(other.peerId, frame);
 		});
 		const bool configuredCPU = std::any_of(config->players.begin(), config->players.end(), [&](const auto& other) { return other.cpu && other.team == seat.team; });
 		cpuTeams[seat.team] = configuredCPU || (held && !remainingHuman);

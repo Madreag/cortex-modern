@@ -4354,8 +4354,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::QueueLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, std::string* error, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations) {
 		if (IsMigrating()) {
-			if (producedFrame > m_MigrationBoundary && producedFrame <= UINT64_MAX - m_Config.inputDelayFrames) {
-				NetLockstepFrame input{m_Config.localPeerId, producedFrame + m_Config.inputDelayFrames, frames, commands, m_RoundId, observations, valueObservations};
+			const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
+			if (producedFrame > m_MigrationBoundary && producedFrame <= UINT64_MAX - delay) {
+				NetLockstepFrame input{m_Config.localPeerId, producedFrame + delay, frames, commands, m_RoundId, observations, valueObservations};
 				for (auto& command: input.commands)
 					command.senderPeerId = m_Config.localPeerId;
 				for (auto& observation: input.observations)
