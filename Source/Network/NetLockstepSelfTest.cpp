@@ -1412,14 +1412,22 @@ namespace RTE {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
 			host.FinishFrameWait(60);
-			for (uint64_t tick = 0; tick < 16; ++tick) host.NoteLocalTickCost(tick, 40.0);
+			for (uint64_t tick = 0; tick < 16; ++tick) {
+				host.NoteLocalTickCost(tick, 40.0);
+				host.NoteLocalInputProduced(tick, tick * 40000, 0);
+			}
 			if (!host.GetStats().localMachineSlow || host.GetStats().consecutiveLateInputs < 8 || host.GetStats().localLateInputs == 0) {
 				*error = "local compute exceeding the sender delay did not diagnose a slow machine"; return false;
 			}
-			for (uint64_t tick = 16; tick < 60; ++tick) host.NoteLocalTickCost(tick, 1.0);
+			for (uint64_t tick = 16; tick < 60; ++tick) {
+				host.NoteLocalTickCost(tick, 1.0);
+				host.NoteLocalInputProduced(tick, 600000 + (tick - 15) * 1000, 0);
+			}
 			if (host.GetStats().localMachineSlow || host.GetStats().localComputeDebtMs != 0) {
 				*error = "a recovered local producer kept the slow-machine warning"; return false;
 			}
+			for (uint64_t tick = 60; tick < 76; ++tick) host.NoteLocalInputProduced(tick, tick * 100000, tick * 90000);
+			if (host.GetStats().localMachineSlow) { *error = "remote waits were diagnosed as a slow local machine"; return false; }
 			const std::string report = host.BuildReportJson();
 			if (report.find("\"holds\":1") == std::string::npos || report.find("\"substitutions\":1") == std::string::npos ||
 			    report.find("\"longest_wait_ms\":50") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {

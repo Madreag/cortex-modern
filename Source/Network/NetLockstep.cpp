@@ -3999,6 +3999,8 @@ namespace RTE {
 		m_LocalSeatHeld = false;
 		m_Playback = false;
 		m_TimingNowMs = 0;
+		m_ProductionBaseFrame.reset();
+		m_ProductionBaseUs = m_ProductionWaitBaseUs = 0;
 		m_TimingDecisions.clear();
 		m_DelayChanges.clear();
 		m_DelayEstimators.clear();
@@ -4643,8 +4645,20 @@ namespace RTE {
 		const bool overrun = computeMs > m_Config.simTickMs;
 		if (overrun) ++m_Stats.localTickOverruns;
 		m_Stats.localComputeDebtMs = std::max(0.0, m_Stats.localComputeDebtMs + computeMs - m_Config.simTickMs);
-		const double budget = std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, producedFrame)) * m_Config.simTickMs;
-		const bool late = overrun && m_Stats.localComputeDebtMs > budget;
+	}
+
+	void NetLockstepCoordinator::NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs) {
+		if (m_Playback || m_Config.simTickMs <= 0) return;
+		if (!m_ProductionBaseFrame || producedFrame < *m_ProductionBaseFrame || nowUs < m_ProductionBaseUs || networkWaitUs < m_ProductionWaitBaseUs) {
+			m_ProductionBaseFrame = producedFrame;
+			m_ProductionBaseUs = nowUs;
+			m_ProductionWaitBaseUs = networkWaitUs;
+		}
+		const uint64_t elapsed = nowUs - m_ProductionBaseUs, waited = networkWaitUs - m_ProductionWaitBaseUs;
+		const double localElapsedMs = (elapsed > waited ? elapsed - waited : 0) / 1000.0;
+		const double deadlineMs = (producedFrame - *m_ProductionBaseFrame + std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, producedFrame))) * m_Config.simTickMs;
+		m_Stats.localProductionLateMs = std::max(0.0, localElapsedMs - deadlineMs);
+		const bool late = m_Stats.localProductionLateMs > 0;
 		if (late) { ++m_Stats.localLateInputs; ++m_Stats.consecutiveLateInputs; }
 		else m_Stats.consecutiveLateInputs = 0;
 		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8;
@@ -6118,6 +6132,7 @@ namespace RTE {
 		out << "\"local_late_inputs\":" << m_Stats.localLateInputs << ",";
 		out << "\"local_consecutive_late_inputs\":" << m_Stats.consecutiveLateInputs << ",";
 		out << "\"local_compute_debt_ms\":" << m_Stats.localComputeDebtMs << ",";
+		out << "\"local_production_late_ms\":" << m_Stats.localProductionLateMs << ",";
 		out << "\"local_machine_slow\":" << (m_Stats.localMachineSlow ? "true" : "false") << ",";
 		out << "\"slow_player_bound_ticks\":" << m_Config.slowPlayerBoundTicks << ",";
 		out << "\"sim_tick_ms\":" << m_Config.simTickMs << ",";

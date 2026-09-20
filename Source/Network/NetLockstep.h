@@ -556,6 +556,7 @@ namespace RTE {
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;
 		double localComputeDebtMs = 0;
+		double localProductionLateMs = 0;
 		bool localMachineSlow = false;
 		std::optional<uint32_t> measuredMissingFrameBase;
 		std::optional<uint32_t> measuredBlockingWaitBase;
@@ -759,6 +760,7 @@ namespace RTE {
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
+		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
@@ -1092,6 +1094,9 @@ namespace RTE {
 		uint64_t m_LastTimingSampleMs = UINT64_MAX;
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;
 		uint64_t m_TimingNowMs = 0;
+		std::optional<uint64_t> m_ProductionBaseFrame;
+		uint64_t m_ProductionBaseUs = 0;
+		uint64_t m_ProductionWaitBaseUs = 0;
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
