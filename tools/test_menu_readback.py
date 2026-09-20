@@ -380,15 +380,16 @@ def host_activity_label(row):
     return row["preset"] + (f" - {module}" if module else "")
 
 
-def repair_probe(who, root):
+def repair_probe(who, root, roomy=True):
     steps = [{"op": "wait", "service": "Running", "sim_at_least": 150},
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": True},
              {"op": "mouse_down", "control": "NetworkSeatsOptions"},
              {"op": "mouse_up", "control": "NetworkSeatsOptions"},
              {"op": "wait", "control": "NetworkSeatsOptionsText", "equals": {"visible": True}},
-             {"op": "assert_control", "control": "NetworkSeatsOptionsText", "fits": True,
+             {"op": "assert_control", "control": "NetworkSeatsOptionsText", **({"fits": True} if roomy else {}),
               "text_contains": "Repair match: Ready - pause menu > Match Options" if who == "host" else "Frame redundancy:"},
+             *([] if roomy else [menu_step("assert_vertical_scroll NetworkSeatsOptionsText")]),
              {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
              {"op": "wait", "panel_open": False},
              {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
@@ -600,7 +601,7 @@ def scripts(case, port, root):
         return {"host": text + "exit\n"}, {}
     if case == "repair":
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
-                {who: repair_probe(who, root) for who in ("host", "client")})
+                {who: repair_probe(who, root, options.size != "640x360") for who in ("host", "client")})
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
         # Both peers wait for the leaver's own signal: a peer that quits on its checks records the
