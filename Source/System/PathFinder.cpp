@@ -2199,7 +2199,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		const float carveAirCost = sceneCost(carveScene);
 		// One sand pixel on the ray between two nodes, boxed and committed the ordinary way.
 		const int carveX = 80;
-		const int carveY = 50;
+		const int carveY = 53;
 		carveTerrain.SetMaterialPixel(carveX, carveY, MaterialColorKeys::g_MaterialSand);
 		carveTerrain.AddUpdatedMaterialArea(Box(Vector(static_cast<float>(carveX), static_cast<float>(carveY)), 1.0F, 1.0F));
 		carveFinder.RecalculateAreaCosts(carveTerrain.GetUpdatedMaterialAreas(), nodeLimit);
@@ -2458,7 +2458,7 @@ int PathFinder::RunHorizonGridSelfTest() {
 		}
 		// Move both halves of the state the fence has to put back.
 		specTerrain.AddUpdatedMaterialArea(specBox);
-		specFinder.QueueHorizonDelta(44, 1, specFinder.TestNodeIdAt(5, 2), blocked);
+		specFinder.QueueHorizonDelta(44, 1, specFinder.TestNodeIdAt(0, 0), blocked);
 		specFinder.CommitHorizonThrough(45);
 		const size_t boxesBeforeRestore = specScene.TestHorizonBoxCount();
 		const size_t overlayBeforeRestore = specFinder.TestHorizonOverlayCount();
