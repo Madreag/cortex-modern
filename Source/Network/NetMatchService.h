@@ -590,6 +590,7 @@ namespace RTE {
 		void NoteJoinTargetPersistentWorld(bool world) { m_LastJoinTargetPersistentWorld = world; }
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
+		bool BeginHeldRejoin(std::string* error = nullptr);
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -775,6 +776,7 @@ namespace RTE {
 
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
 		void DriveWorldJoins(uint64_t nowMs);
+		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
 		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
 		/// row the world re-registers under on its next boot.
@@ -1224,6 +1226,9 @@ namespace RTE {
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
+		std::set<NetPeerId> m_PrivateActivations;
+		std::deque<NetTransportEvent> m_CatchUpWirePackets;
+		size_t m_CatchUpWireBytes = 0;
 		std::unique_ptr<LoopbackTransport> m_CatchUpTransport;
 		std::unique_ptr<NetLockstepCoordinator> m_CatchUpCoordinator;
 		std::function<bool(Activity&)> m_ActivateCatchUpLocalSeat;

@@ -364,6 +364,7 @@ namespace RTE {
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
 		std::map<uint8_t, uint32_t> peerIncarnations;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
+		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -387,6 +388,7 @@ namespace RTE {
 		uint8_t frameRedundancyTicks = 4;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
+		std::optional<NetHash32> originalRoundConfigHash;
 		bool adaptiveInputDelay = false;
 		double simTickMs = 0;
 		std::map<uint8_t, NetInputDelayEstimator> initialDelaySamples;

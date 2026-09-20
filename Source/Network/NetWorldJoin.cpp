@@ -1843,7 +1843,8 @@ namespace RTE {
 			    session.spectator || session.openedAtMs == 0) {
 				continue;
 			}
-			if (nowMs > session.openedAtMs && nowMs - session.openedAtMs > c_NetWorldJoinDeadlineMs) {
+			const uint64_t progress = IsPrivateMatch() ? std::max(session.openedAtMs, session.lastCatchUpReportMs) : session.openedAtMs;
+			if (nowMs > progress && nowMs - progress > c_NetWorldJoinDeadlineMs) {
 				stale.push_back(session.connection);
 			}
 		}
