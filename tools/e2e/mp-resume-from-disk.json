@@ -224,7 +224,8 @@
         600,
         650
       ],
-      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
     },
     {
       "id": "resume-reloaded-host",
@@ -278,7 +279,8 @@
         600,
         650
       ],
-      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained."
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
     },
     {
       "id": "resume-reloaded-client",

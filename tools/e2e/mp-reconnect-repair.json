@@ -207,7 +207,8 @@
       "peer": "client-dropped",
       "what": "the killed peer's own video still ends at the frame it was killed on, with its index intact",
       "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected",
-      "run": "reconnect"
+      "run": "reconnect",
+      "drop_tick": 900
     },
     {
       "id": "rp-f6-overlay",

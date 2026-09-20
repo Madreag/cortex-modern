@@ -116,7 +116,8 @@
         600,
         650
       ],
-      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame."
+      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame.",
+      "drop_tick": 601
     },
     {
       "id": "migration-before-clienta",
