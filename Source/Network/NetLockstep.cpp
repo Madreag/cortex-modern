@@ -7252,7 +7252,11 @@ namespace RTE {
 					uint16_t peekedType = 0;
 					const bool chatTyped = NetProtocol::PeekMessageType(event.bytes.data(), event.bytes.size(), peekedType) &&
 					                       peekedType == static_cast<uint16_t>(NetMessageType::Chat);
-					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (NetProtocol::Decode(event.bytes).ok || chatTyped)) {
+					const auto sessionPacket = decoded.error.code == NetLockstepErrorCode::BadMagic ? NetProtocol::Decode(event.bytes) : NetDecodeResult{};
+					if (decoded.error.code == NetLockstepErrorCode::BadMagic && (sessionPacket.ok || chatTyped)) {
+						// A loading authority keeps its authenticated connection alive through session heartbeats.
+						if (sessionPacket.ok && std::holds_alternative<NetHeartbeat>(sessionPacket.message.payload) &&
+						    !m_RelayHost && LockstepPeerOfTransport(event.peerId) == GetHostPeerId()) m_AuthorityLastHeardMs = nowMs;
 						// Session-protocol traffic mid-match is a reconnect handshake; hand it over.
 						if (m_SessionEventSink) {
 							m_SessionEventSink(event);

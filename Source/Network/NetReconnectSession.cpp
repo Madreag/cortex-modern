@@ -5,6 +5,7 @@
 
 #include "NetAuthCrypto.h"
 #include "NetHostBanStore.h"
+#include "NetIdentity.h"
 #include "NetReconnectTranscript.h"
 #include "NetSeatAuth.h"
 #include "NetWorldJoin.h"
@@ -558,9 +559,9 @@ namespace RTE {
 	}
 
 	bool NetReconnectHost::ValidateIdentity(NetPeerId connection, const NetH4Identity& identity) {
-		const auto reject = [&](NetRejectReason reason, const std::string& key, const std::string& summary) {
+		const auto reject = [&](NetRejectReason reason, const std::string& key, const std::string& summary, const std::string& expected = "", const std::string& actual = "") {
 			++m_Stats.identityRejections;
-			Send(connection, NetJoinRejected{reason, summary, key, "", ""});
+			Send(connection, NetJoinRejected{reason, summary, key, expected, actual});
 			return false;
 		};
 		if (identity.controllerFrameVersion != m_LocalIdentity.controllerFrameVersion) {
@@ -576,16 +577,16 @@ namespace RTE {
 			return reject(NetRejectReason::BuildMismatch, "build_id", "build id does not match");
 		}
 		if (identity.deterministicConfigHash != m_LocalIdentity.deterministicConfigHash) {
-			return reject(NetRejectReason::DeterministicConfigMismatch, "deterministic_config_hash", "deterministic config hash does not match");
+			return reject(NetRejectReason::DeterministicConfigMismatch, "deterministic_config_hash", "deterministic config hash does not match", NetIdentity::HashHex(m_LocalIdentity.deterministicConfigHash), NetIdentity::HashHex(identity.deterministicConfigHash));
 		}
 		if (identity.moduleManifestHash != m_LocalIdentity.moduleManifestHash) {
-			return reject(NetRejectReason::ModuleManifestMismatch, "module_manifest_hash", "module manifest hash does not match");
+			return reject(NetRejectReason::ModuleManifestMismatch, "module_manifest_hash", "module manifest hash does not match", NetIdentity::HashHex(m_LocalIdentity.moduleManifestHash), NetIdentity::HashHex(identity.moduleManifestHash));
 		}
 		if (identity.sessionRulesHash != m_LocalIdentity.sessionRulesHash) {
-			return reject(NetRejectReason::SessionRulesMismatch, "session_rules_hash", "session rules hash does not match");
+			return reject(NetRejectReason::SessionRulesMismatch, "session_rules_hash", "session rules hash does not match", NetIdentity::HashHex(m_LocalIdentity.sessionRulesHash), NetIdentity::HashHex(identity.sessionRulesHash));
 		}
 		if (identity.sessionIdentityHash != m_LocalIdentity.sessionIdentityHash) {
-			return reject(NetRejectReason::BuildMismatch, "session_identity_hash", "session identity hash does not match");
+			return reject(NetRejectReason::BuildMismatch, "session_identity_hash", "session identity hash does not match", NetIdentity::HashHex(m_LocalIdentity.sessionIdentityHash), NetIdentity::HashHex(identity.sessionIdentityHash));
 		}
 		return true;
 	}
