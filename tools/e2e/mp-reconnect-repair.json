@@ -135,7 +135,7 @@
             "{INPUT_SCRIPT}",
             "-net-host"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.host.probe.json"
         },
@@ -161,7 +161,7 @@
             "-net-join",
             "127.0.0.1"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.client.probe.json",
           "start_delay_s": 3.0
@@ -242,8 +242,12 @@
       "id": "rp-repair-applied",
       "screen": "game",
       "what": "the second press repairs the match: both peers pause, reload the host's snapshot and keep playing",
-      "assert": "host log: one [net-match] resync snapshot line and one relaunch line per peer",
-      "run": "repair"
+      "assert": "Each peer logs snapshot reload and relaunch; an accepted button press alone is insufficient.",
+      "run": "repair",
+      "log_regex": [
+        "\\[net-match\\] resync: reloading from the host snapshot",
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ]
     }
   ]
 }
