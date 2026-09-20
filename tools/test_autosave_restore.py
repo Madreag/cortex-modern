@@ -30,8 +30,8 @@ Three rows, each with the statement that is red without the engine change:
               RED before the change: a world boot resolves no resume, so the restarted host opens the
               scene and prints no `[autosave] resuming` line; -net-world-fresh does not parse.
 
-Ports: this driver owns 48720-48739; the first three arms take consecutive ports from its base, the
-resume arm takes 48725-48728 and the world-restart arm 48730-48735 (three rounds of two peers), so it never
+Ports: the default range is 48720-48739; the first three arms take consecutive ports from its base, the
+resume arm starts at base + 5 and world-restart at base + 10 (three rounds of two peers), so the default never
 overlaps tools/test_autosave.py (48211-48219, 48500-48519), tools/test_post_match_report.py or
 tools/test_post_match_combined.py (48215) or tools/test_match_chat.py (48700-48705) and can run beside them.
 
@@ -778,8 +778,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=48720)
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
     args = parser.parse_args()
-    if not 48720 <= args.port <= 48724:
-        parser.error("this detector owns 48720-48739; its arms' ports must fit inside it")
+    if not 1024 <= args.port <= 65516:
+        parser.error("the base port must leave room for twenty unprivileged ports")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -794,7 +794,7 @@ def main() -> int:
         details = {}
         result["arms"][arm] = details
         # The resume and world-restart arms run several rounds of two peers, each on its own ports.
-        armPort = {"resume": 48725, "world-restart": 48730}.get(arm, args.port + index)
+        armPort = {"resume": args.port + 5, "world-restart": args.port + 10}.get(arm, args.port + index)
         try:
             details.update(run(repo, root / arm, armPort), passed=True)
             print(f"PASS {arm}", flush=True)
