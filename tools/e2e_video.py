@@ -715,6 +715,16 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")
                 return
 
+    def kill_when(name, gate):
+        while not stop_watchers.wait(.05):
+            if name in records:
+                return
+            if gate_met(gate):
+                rows = read_index(shared[f"VIDEO_{name}"])
+                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None})
+                drop_peer(runs[name], "scenario drop after peer event " + gate["event"])
+                return
+
     interrupted = None
     try:
         for peer in peers:
@@ -750,6 +760,10 @@ def run_one(options, scenario, run, run_index, out):
                 killers.append(timer)
             if peer.get("kill_at_tick"):
                 watcher = threading.Thread(target=kill_at_tick, args=(name, int(peer["kill_at_tick"])), daemon=True)
+                watcher.start()
+                killers.append(watcher)
+            if peer.get("kill_when"):
+                watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
                 watcher.start()
                 killers.append(watcher)
         next_size_check = time.monotonic()
@@ -797,7 +811,7 @@ def run_one(options, scenario, run, run_index, out):
         if console.is_file() and not (peer_root / "console.log").is_file():
             (peer_root / "console.log").write_bytes(console.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
-                          "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick")),
+                          "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
                                      ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
                                       "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")},
@@ -874,7 +888,7 @@ def finalize_only(options):
             peer = prior.get(peer_name, {"peer": peer_name, "root": str(peer_root), "video_dir": str(video),
                                         "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
                                         "args": launch.get("argv"), "env": launch.get("env_set"),
-                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick"))})
+                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick") or definition_peer.get("kill_when"))})
             peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
                               "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
             peer["manifest"] = read_manifest(video)
