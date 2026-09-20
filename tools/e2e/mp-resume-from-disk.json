@@ -179,7 +179,7 @@
       "screen": "MultiplayerScreen",
       "what": "Recovery visibly keeps Autosave on at the shortest valid interval, one simulation second.",
       "events": [
-        "assert_checked CheckHostRecAutosave 1 actual=1 PASS",
+        "assert_checked CheckHostRecAutosave expected=1 actual=1 PASS",
         "assert_label TextHostRecAutosaveInterval.*1.*PASS"
       ]
     },
