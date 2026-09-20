@@ -1370,6 +1370,8 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRulesSkillSlider = dynamic_cast<GUISlider*>(get("SliderHostRulesSkill"));
 	m_HostRulesSkillValue = dynamic_cast<GUILabel*>(get("LabelHostRulesSkillValue"));
 	m_HostNetPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetPolicy"));
+	m_HostNetSlowPolicyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetSlowPolicy"));
+	m_HostNetSlowBoundBox = dynamic_cast<GUITextBox*>(get("TextHostNetSlowBound"));
 	m_HostNetRedundancyCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetRedundancy"));
 	m_HostNetMinDelayBox = dynamic_cast<GUITextBox*>(get("TextHostNetMinDelay"));
 	m_HostNetEffectiveLabel = dynamic_cast<GUILabel*>(get("LabelHostNetEffective"));
@@ -1474,6 +1476,16 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPolicyCombo->AddItem("Automatic");
 		m_HostNetPolicyCombo->AddItem("Fixed");
 	}
+	if (m_HostNetSlowPolicyCombo) {
+		m_HostNetSlowPolicyCombo->ClearList();
+		m_HostNetSlowPolicyCombo->AddItem("Hand the seat to the AI and let them rejoin");
+		m_HostNetSlowPolicyCombo->AddItem("Pause for them (up to 20 s)");
+	}
+	if (m_HostNetSlowBoundBox) {
+		m_HostNetSlowBoundBox->SetNumericOnly(true);
+		m_HostNetSlowBoundBox->SetMaxNumericValue(NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks);
+		m_HostNetSlowBoundBox->SetMaxTextLength(3);
+	}
 	if (m_HostNetRedundancyCombo) {
 		m_HostNetRedundancyCombo->ClearList();
 		for (int ticks = 1; ticks <= NetMatchConfigUtil::c_MaxFrameRedundancyTicks; ++ticks) {
@@ -1564,6 +1576,8 @@ NetMatchServiceRequest MainMenuGUI::HostRequestDraft() const {
 		// BuildMatchConfig reads the mode off the request, not the rules block it carries inside.
 		request.mode = m_HostSetupOptions->mode;
 		request.delayPolicy = m_HostSetupOptions->delayPolicy;
+		request.slowPlayerBoundTicks = m_HostSetupOptions->slowPlayerBoundTicks;
+		request.slowPlayerPolicy = m_HostSetupOptions->slowPlayerPolicy;
 		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
 		request.automaticRepair = m_HostSetupOptions->automaticRepair;
 		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
@@ -1835,6 +1849,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 
 	// Network page.
 	HostOptSelectComboIndex(m_HostNetPolicyCombo, m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed ? 1 : 0);
+	HostOptSelectComboIndex(m_HostNetSlowPolicyCombo, m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? 1 : 0);
+	if (m_HostNetSlowBoundBox && !HostOptBoxFocused(m_HostNetSlowBoundBox)) m_HostNetSlowBoundBox->SetText(std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks));
 	HostOptSelectComboIndex(m_HostNetRedundancyCombo, m_HostOptionsDraft.frameRedundancyTicks - 1);
 	if (m_HostNetMinDelayBox && !HostOptBoxFocused(m_HostNetMinDelayBox)) {
 		m_HostNetMinDelayBox->SetText(std::to_string(m_HostOptionsDraft.inputDelayFrames));
@@ -1842,8 +1858,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostNetEffectiveLabel) {
 		// H22: the floor in ticks and in milliseconds, then the announced per-sender figure.
 		std::string effective = "Effective delay: " + std::to_string(m_HostOptionsDraft.inputDelayFrames) + " ticks (" +
-		                        std::to_string(m_HostOptionsDraft.inputDelayFrames * 1000 / 60) + " ms)";
-		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (auto, follows ping)";
+		                        std::to_string(static_cast<int>(m_HostOptionsDraft.inputDelayFrames * g_TimerMan.GetDeltaTimeMS())) + " ms)";
+		if (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto) effective += " (auto, re-sized live from ping)";
 		if (!snapshot.inputDelayText.empty()) effective += " - " + snapshot.inputDelayText;
 		m_HostNetEffectiveLabel->SetText(effective);
 	}
@@ -1866,6 +1882,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	HostOptSetEditable(m_HostNetPolicyCombo, editable);
+	HostOptSetEditable(m_HostNetSlowPolicyCombo, editable);
+	HostOptSetEditable(m_HostNetSlowBoundBox, editable && m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute);
 	HostOptSetEditable(m_HostNetRedundancyCombo, editable);
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
@@ -1889,7 +1907,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
 		                            " - capacity " + std::to_string(adopted.peerCount) +
-		                            " - humans seated " + std::to_string(seated));
+		                            " - humans seated " + std::to_string(seated) +
+		                            " - " + (m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Auto ? "Auto" : "Fixed") +
+		                            (m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? " / pause <=20s" : " / wait " + std::to_string(m_HostOptionsDraft.slowPlayerBoundTicks) + " ticks / AI"));
 	}
 	// The visibility combo mirrors the live lease's state; a pick applies through the setter.
 	HostOptSelectComboIndex(m_HostNetVisibilityCombo, g_NetMatchService.GetDirectoryVisibility());
@@ -2118,6 +2138,8 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostNetPolicyCombo) {
 		m_HostOptionsDraft.delayPolicy = m_HostNetPolicyCombo->GetSelectedIndex() == 1 ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
 	}
+	if (m_HostNetSlowPolicyCombo) m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+	if (m_HostNetSlowBoundBox) m_HostOptionsDraft.slowPlayerBoundTicks = static_cast<uint16_t>(std::clamp<long>(std::strtol(m_HostNetSlowBoundBox->GetText().c_str(), nullptr, 10), 1, NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks));
 	if (m_HostNetRedundancyCombo) {
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 	}
@@ -2218,6 +2240,8 @@ void MainMenuGUI::SaveHostOptionsDefaults() {
 	g_SettingsMan.SetNetworkHostDelayPolicy(m_HostOptionsDraft.delayPolicy == NetMatchDelayPolicy::Fixed
 	                                          ? SettingsMan::NetworkHostDelayPolicy::Fixed : SettingsMan::NetworkHostDelayPolicy::Auto);
 	g_SettingsMan.SetNetworkInputDelayFrames(m_HostOptionsDraft.inputDelayFrames);
+	g_SettingsMan.SetNetworkSlowPlayerBoundTicks(m_HostOptionsDraft.slowPlayerBoundTicks);
+	g_SettingsMan.SetNetworkSlowPlayerPolicy(m_HostOptionsDraft.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? SettingsMan::NetworkSlowPlayerPolicy::Pause : SettingsMan::NetworkSlowPlayerPolicy::Substitute);
 	g_SettingsMan.SetNetworkHostIdleWaitMinutes(m_HostOptionsDraft.idleWaitMinutes);
 	g_SettingsMan.SetNetworkHostAutoRepair(m_HostOptionsDraft.automaticRepair);
 	g_SettingsMan.SetAutosaveSeconds(m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds : 0);
@@ -2723,6 +2747,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 		return;
 	}
+	if (guiEventControl == m_HostNetSlowPolicyCombo) {
+		m_HostOptionsDraft.slowPlayerPolicy = m_HostNetSlowPolicyCombo->GetSelectedIndex() == 1 ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
+		return;
+	}
 	if (guiEventControl == m_HostNetRecalcButton) {
 		// The auto policy already re-derives each sender's figure from the live link; the button is
 		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
@@ -3206,16 +3234,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 			tail += seat;
-			if (withDelay && member.isLocal && !snapshot.inputDelayText.empty()) {
-				tail += " - " + snapshot.inputDelayText;
-			}
-			if (!member.isLocal && member.connected) {
-				tail += " - ";
-				tail += NetConnectionQualityName(ClassifyConnectionQuality(member.pingMs));
-				if (member.pingMs > 0) {
-					tail += " (" + std::to_string(member.pingMs) + "ms)";
-				}
-			}
+			if (!member.cpu) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
+			(void)withDelay;
 			return tail;
 		};
 		lobbyRowName[i] = member.displayName;

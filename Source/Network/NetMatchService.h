@@ -750,6 +750,7 @@ namespace RTE {
 
 	private:
 		/// A match's transports, moved as one into a rematch or resync worker and back.
+		std::string LiveInputDelayTextLocked() const;
 		struct TransportLink {
 			// Defined in the .cpp, where the dispatcher type is complete.
 			TransportLink();

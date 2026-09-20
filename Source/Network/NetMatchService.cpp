@@ -4219,7 +4219,7 @@ static std::string ResyncSaveName() {
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
-		snapshot.inputDelayText = m_InputDelayText;
+		snapshot.inputDelayText = LiveInputDelayTextLocked();
 		if (snapshot.isHost && snapshot.active) {
 			const PortMapStatus portMap = GetPortMapStatus();
 			if (portMap.enabled) {
@@ -4280,6 +4280,7 @@ static std::string ResyncSaveName() {
 
 	NetMatchConfig NetMatchService::GetLobbyMatchConfig() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_Coordinator && m_State == NetMatchServiceState::Running) return m_Coordinator->GetConfig().matchConfig;
 		// A lobby publish names the agreed config on every peer; before one arrives the request's
 		// own build stands in, which is what a client still shows while its lobby starts.
 		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
@@ -4691,6 +4692,15 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetInputDelayText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		return LiveInputDelayTextLocked();
+	}
+
+	std::string NetMatchService::LiveInputDelayTextLocked() const {
+		if (m_Coordinator && m_State == NetMatchServiceState::Running) {
+			const auto& config = m_Coordinator->GetConfig().matchConfig;
+			return "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, m_Coordinator->GetConfig().localPeerId)) +
+			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto, re-sized live)");
+		}
 		return m_InputDelayText;
 	}
 
@@ -5472,7 +5482,7 @@ static std::string ResyncSaveName() {
 			m_LobbySnapshot = snapshot;
 			// The announced delay comes from the lobby's exchanged config (host-authored, already
 			// auto-adjusted) — never recomputed here, so every peer renders the same value.
-			const NetMatchConfig& config = runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
+			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
 			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
 			                                   : runnerRaw->GetMatchConfig();
 			// The options view reads the same agreed config on every peer; the mirror sits under the
