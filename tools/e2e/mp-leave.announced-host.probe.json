@@ -12,6 +12,10 @@
       "command": "video_mark survivor-after-leave"
     },
     {
+      "op": "assert_control",
+      "control": "LabelNetMatchToastNewest"
+    },
+    {
       "op": "key_down",
       "key": "F6"
     },
