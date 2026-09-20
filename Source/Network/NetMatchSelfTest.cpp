@@ -3275,6 +3275,15 @@ namespace RTE {
 						*error = "the host streamed " + std::to_string(tap.chunks.size()) + " chunk(s) to a peer that holds the checkpoint";
 						return false;
 					}
+					// Being spared the stream leaves this peer with no received bytes; its round is still a
+					// resumed one, and a start that says otherwise is refused by the host's own start.
+					const bool hostResumes = NetMatchRunner::RoundResumesASnapshot(true, false, false);
+					const bool clientResumes = NetMatchRunner::RoundResumesASnapshot(false, client.HasCompleteStateTransfer(), client.AnsweredResumeHeld());
+					std::cout << "[net-match-selftest] held_resume_round host=" << hostResumes << " client=" << clientResumes << std::endl;
+					if (hostResumes != clientResumes) {
+						*error = "a peer that holds the checkpoint starts a round that does not resume, against a host that does";
+						return false;
+					}
 				} else {
 					if (host.IsResumeHeldBy(2) || client.AnsweredResumeHeld()) {
 						*error = armName + " peer answered that it holds the offered checkpoint";
