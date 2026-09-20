@@ -1446,6 +1446,7 @@ namespace RTE {
 				auto config = MakeCoordinatorConfig(static_cast<uint8_t>(i + 1), i == 0 ? 2 : 1, 0x9A39, 0, NetTransportLane::ControlReliable);
 				config.startFrame = 1; config.roundId = 39; config.peerCount = 4; config.timeoutMs = 30000;
 				config.adaptiveInputDelay = true; config.relayToOtherPeers = i == 0;
+				config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
 				config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
 				config.matchConfig.peerCount = 4; config.matchConfig.inputDelayFrames = 0;
 				config.remoteTransportPeerIds = i == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}};
