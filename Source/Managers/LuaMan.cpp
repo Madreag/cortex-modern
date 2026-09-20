@@ -6262,6 +6262,7 @@ static void PrintCollectorMode(bool deterministic) {
 
 void LuaMan::SetCheckpointAllocationSinking(bool sinking) {
 	if (s_AllocationSinking.exchange(sinking) == sinking) return;
+	if (!LuaMan::IsConstructed()) return;
 	const auto apply = [sinking](LuaStateWrapper& state) {
 		if (lua_State* luaState = state.GetLuaState()) luaJIT_set_alloc_sinking(luaState, sinking ? 1 : 0);
 	};
