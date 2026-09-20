@@ -436,6 +436,7 @@ namespace RTE {
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
+		static bool UsesBoundedLockstepWait();
 
 		/// A queued buy order this peer has issued but the wire has not applied yet.
 		struct PendingQueuedPurchase {
