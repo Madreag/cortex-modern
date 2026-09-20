@@ -326,7 +326,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
                 "-net-match-ticks", "1200", "-net-match-input-delay", "3",
-                "-net-autosave-seconds", "1", "-net-match-resync-on-desync",
+                "-net-autosave-seconds", "1", "-net-match-e2e-resync",
                 "-tick-hashes", "-max-ticks", "1200", "-out", str(first / f"{who}_trace.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
@@ -376,7 +376,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port + 2), "-net-match-peers", "2",
                 "-net-match-ticks", str(resume_ticks), "-net-match-input-delay", "3",
-                "-net-autosave-seconds", "1", "-net-match-resync-on-desync",
+                "-net-autosave-seconds", "1", "-net-match-e2e-resync",
                 "-tick-hashes", "-max-ticks", str(resume_ticks), "-out", str(second / f"{who}_trace.json")]
         args += ["-net-host", "-net-resume-match", match_id, "-net-resume-tick", str(resume_tick)] if who == "host" else ["-net-join", "127.0.0.1"]
         resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
