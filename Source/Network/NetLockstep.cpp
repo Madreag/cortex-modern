@@ -422,8 +422,12 @@ namespace RTE {
 			AppendU8(out, payload.peerCount);
 			AppendU64LE(out, payload.roundId);
 			AppendU8(out, payload.resumeFromSnapshot ? 1 : 0);
-			return AppendString(out, payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) &&
-			       AppendString(out, payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error);
+			if (!AppendString(out, payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) ||
+			    !AppendString(out, payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error)) {
+				return false;
+			}
+			AppendU32LE(out, payload.activityRestartMs);
+			return true;
 		}
 
 		// One observation is a slot number and a reading; the first time a sender sends a key it spells it
@@ -1430,6 +1434,7 @@ namespace RTE {
 			    (version >= NetLockstepCodec::c_PlayerBindingsVersion && !ReadOrTruncated(reader.ReadU8(resume), reader, error, "resume_from_snapshot")) || resume > 1 ||
 			    !reader.ReadString(payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) ||
 			    !reader.ReadString(payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error) ||
+			    (version >= NetLockstepCodec::c_StartParkVersion && !ReadOrTruncated(reader.ReadU32LE(payload.activityRestartMs), reader, error, "activity_restart_ms")) ||
 			    !ValidateStart(payload, error)) {
 				return false;
 			}
@@ -4098,6 +4103,7 @@ namespace RTE {
 		start.ownershipPolicy = m_Config.ownershipPolicy;
 		start.roundId = m_RoundId;
 		start.resumeFromSnapshot = m_Config.resumeFromSnapshot;
+		start.activityRestartMs = m_LocalStartParkMs;
 		if (const auto admission = m_PeerAdmissions.find(onlyPeerId); admission != m_PeerAdmissions.end()) {
 			start.startFrame = admission->second.frame;
 			start.inputDelayFrames = InputDelayAt(m_Config.localPeerId, start.startFrame);
@@ -4891,9 +4897,14 @@ namespace RTE {
 				if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
 					// Our own longest park is the start work this machine did; a peer that has not produced
 					// yet is doing the same, so it is allowed as much before its silence means anything.
+					const uint64_t park = std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
 					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
-					    peerStats.pingMs + peerStats.jitterMs + m_Stats.longestOwnParkMs;
+					    peerStats.pingMs + peerStats.jitterMs + park;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+					std::cout << "[net-lockstep] bound judged peer " << static_cast<int>(peer) << " at frame " << frame
+					          << " starting: since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
+					          << "ms ramp=" << ramp << "ms own_park=" << m_Stats.longestOwnParkMs
+					          << "ms peer_park=" << peerStats.startParkMs << "ms played=" << m_PeersPlayedThisRound.contains(peer) << std::endl;
 				} else if (peerStats.lastProgressMs >= firstMissingMs &&
 				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
 					// A sender still feeding the round every tick is not stalled, it is behind: the round
@@ -6038,6 +6049,19 @@ namespace RTE {
 		for (auto& [revision, decision]: m_TimingDecisions) shift(decision.proposedAtMs);
 		++m_Stats.ownParksExcluded;
 		m_Stats.longestOwnParkMs = std::max(m_Stats.longestOwnParkMs, gap);
+	}
+
+	void NetLockstepCoordinator::NoteLocalStartPark(uint32_t restartMs) {
+		if (restartMs == 0 || restartMs == m_LocalStartParkMs) {
+			return;
+		}
+		// The round's own restart runs before our first Tick, so the tick-gap detector never sees it.
+		m_LocalStartParkMs = restartMs;
+		m_Stats.longestOwnParkMs = std::max<uint64_t>(m_Stats.longestOwnParkMs, restartMs);
+		if (m_State != NetLockstepState::Idle && !m_RemotePeerIds.empty()) {
+			std::string ignored;
+			(void)SendStart(&ignored);
+		}
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
@@ -7459,6 +7483,11 @@ namespace RTE {
 					SendPacket({proposal}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 				}
 			}
+		}
+		// A peer republishes its start once it has measured its own restart, so the allowance we give it
+		// before the bound judges it is the start work ITS machine did, not ours.
+		if (start.activityRestartMs > 0) {
+			m_Stats.peers[start.localPeerId].startParkMs = start.activityRestartMs;
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
 		if (firstFromThisPeer) {

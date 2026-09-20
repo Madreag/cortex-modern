@@ -1650,7 +1650,8 @@ bool ActivityMan::RestartActivityCandidate() {
 	}
 	if (!restoresSnapshot) g_TimerMan.PauseSim(false);
 
-	std::cout << "[snapbench] restart_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count() << std::endl;
+	m_LastRestartMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count());
+	std::cout << "[snapbench] restart_ms=" << m_LastRestartMs << std::endl;
 	if (activityStarted >= 0) {
 		m_InActivity = true;
 		return true;
