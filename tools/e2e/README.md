@@ -188,3 +188,8 @@ a working native display/GL context is still required. The engine requests an SD
 Windows private-desktop isolation has no POSIX equivalent in this driver. The Mac lane must verify its own display
 isolation, GL frame readback, encoding and runtime dependencies. No Mac execution is implied by these definitions.
 Reading the scripts and runtime setup reveals no additional Mac-specific change needed by `sp-smoke`.
+
+A UI-only readback may end a peer with `kill_when: {"peer": "survivor", "probe_complete": true}`. The driver waits
+for a complete, successful native probe, then terminates through the runner and retains the drop receipt. A failed or
+partially written probe never satisfies that gate. `menu-host-loss` uses this to retain the larger-size status readbacks
+without extending them into a second migration acceptance run.

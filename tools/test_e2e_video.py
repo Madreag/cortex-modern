@@ -581,6 +581,15 @@ def check_cross_capture(results, scratch):
     ok &= row(results, 'cross/transferred-media-tamper-fails', not merge_halves(roots, scratch / 'cross-tampered'))
     bad = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'absent', 'event': 'ready'}}]}
     ok &= row(results, 'drop/unknown-event-peer-skips-before-launch', driver.run_preflight({'peers': bad['peers']}, bad, [], {})['class'] == 'harness')
+    good = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'host', 'probe_complete': True}}]}
+    ok &= row(results, 'drop/completed-probe-gate', driver.run_preflight({'peers': good['peers']}, good, [], {}) is None)
+    result = scratch / 'completed-probe.json'
+    result.write_text('{"complete":true,"pass":false}')
+    ok &= row(results, 'drop/failed-probe-is-not-planned-completion', not driver.completed_probe(result))
+    result.write_text('{"complete":true,')
+    ok &= row(results, 'drop/partial-write-keeps-observing', not driver.completed_probe(result))
+    result.write_text('{"complete":true,"pass":true}')
+    ok &= row(results, 'drop/successful-probe-completes', driver.completed_probe(result))
     return ok
 
 
