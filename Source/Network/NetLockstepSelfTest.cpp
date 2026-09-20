@@ -1642,6 +1642,55 @@ namespace RTE {
 			return VerifyHeldSeatControllerState(host, hostFrame, survivor, survivorFrame, error);
 		}
 
+		// The host's frame pump runs a lagged sender's whole input delay ahead of the round, so it finds
+		// that sender's first required frame missing long before the round is waiting for it. The bounded
+		// wait belongs to the round, not to the pump's lookahead: a peer whose first input is still in
+		// flight has not fallen behind, and a peer that goes silent once the round waits on it still does.
+		bool TestBoundedWaitFollowsTheRoundNotThePump(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A07, 1, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A07, 10, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 21;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			a.timeoutMs = b.timeoutMs = 20000;
+			a.relayToOtherPeers = true;
+			a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 10}};
+			a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A07);
+			if (!StartCoordinatorPair(48896, hostWire, clientWire, host, client, a, b, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			// The joiner's first input is ten frames late once: its activity restart and the start message's
+			// own trip put its lockstep clock behind the host's. The host plays on meanwhile.
+			for (uint64_t frame = 1; frame < 14; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+			for (uint64_t now = 10; now < 400; ++now) { hostWire.AdvanceTimeMs(1); host.Tick(now); }
+			if (host.GetStats().peers.at(2).holds != 0 || host.IsSeatUnderAI(2, 10)) {
+				*error = "the host gave a peer's seat to the AI while its first input was still in flight";
+				return false;
+			}
+			for (uint64_t frame = 10; frame < 14; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+			for (uint64_t now = 400; now < 460; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			NetLockstepReadyFrame ready;
+			if (!host.PopReadyFrame(ready) || ready.frame != 1 || host.GetStats().peers.at(2).holds != 0) {
+				*error = "the round did not commit its first frames once the late peer arrived";
+				return false;
+			}
+			while (host.PopReadyFrame(ready) && ready.frame < 13) {}
+			if (ready.frame != 13) {
+				*error = "the round stopped short of the frames the late peer had already sent";
+				return false;
+			}
+			// Negative control: the same peer goes silent in steady state and the round waits on it.
+			host.NoteFrameWait(14, 500);
+			host.NoteFrameWait(14, 560);
+			host.Tick(560);
+			if (host.GetStats().peers.at(2).holds != 1 || !host.IsSeatUnderAI(2, 14)) {
+				*error = "the bounded wait no longer holds a peer that went silent while the round waited";
+				return false;
+			}
+			return true;
+		}
+
 		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -15815,6 +15864,7 @@ namespace RTE {
 		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
+		    !TestBoundedWaitFollowsTheRoundNotThePump(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||

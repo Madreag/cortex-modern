@@ -15,6 +15,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <type_traits>
 #include <utility>
 
@@ -227,8 +228,11 @@ namespace RTE {
 			GiveUpWaitingForResumeAnswers(nowMs);
 			SendQueuedStateChunks();
 			SendStartIfReady();
-		} else if (m_Config.snapshotProviderPeerId == m_Config.localPeerId) {
-			SendQueuedStateChunks();
+		} else {
+			if (m_Config.snapshotProviderPeerId == m_Config.localPeerId) {
+				SendQueuedStateChunks();
+			}
+			ReportStartWait();
 		}
 		if (!m_Config.host && m_Config.timeoutMs > 0 && nowMs >= m_LastReceiveMs && nowMs - m_LastReceiveMs > m_Config.timeoutMs) {
 			m_HostLost = true;
@@ -1077,11 +1081,42 @@ namespace RTE {
 		}
 	}
 
+	void NetLobbySession::ReportStartWait() {
+		if (IsTerminal(m_State) || m_State == NetLobbyState::Idle) {
+			return;
+		}
+		// The first call only starts the clock: a lobby that starts promptly says nothing.
+		if (m_LastStartWaitLogMs == 0 || m_TimingClockMs < m_LastStartWaitLogMs + 2000) {
+			if (m_LastStartWaitLogMs == 0) m_LastStartWaitLogMs = m_TimingClockMs == 0 ? 1 : m_TimingClockMs;
+			return;
+		}
+		m_LastStartWaitLogMs = m_TimingClockMs == 0 ? 1 : m_TimingClockMs;
+		std::ostringstream line;
+		line << "[net-lobby] waiting at " << StateName(m_State) << " role=" << (m_Config.host ? "host" : "client")
+		     << " hash=" << HashText(m_MatchConfigHash) << " revision=" << m_Config.matchConfig.configRevision
+		     << " republishes=" << m_Stats.configRepublishes << " config_sent=" << m_Stats.configPacketsSent
+		     << " acks=" << m_Stats.configAcksReceived;
+		if (m_Config.host) {
+			line << " occupancy=" << (HasRequiredOccupancy() ? 1 : 0) << " start_requested=" << (m_StartRequested ? 1 : 0)
+			     << " chunks_pending=" << (HasPendingStateChunks() ? 1 : 0);
+			for (uint8_t peerId: m_RemotePeerIds) {
+				line << " peer" << static_cast<int>(peerId) << "=[acked=" << (m_ConfigAckedByPeer.count(peerId) && m_ConfigAckedByPeer.at(peerId) ? 1 : 0)
+				     << " ready=" << (IsRemoteReady(peerId) ? 1 : 0) << " lobby_up=" << (IsRemoteLobbyUp(peerId) ? 1 : 0)
+				     << " delay=" << NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId) << "]";
+			}
+		} else {
+			line << " ready_sent=" << (m_ReadySent ? 1 : 0) << " local_ready=" << (m_LocalReady ? 1 : 0)
+			     << " seat_assigned=" << (m_SeatAssigned ? 1 : 0) << " starts_seen=" << m_Stats.startPacketsReceived;
+		}
+		std::cout << line.str() << std::endl;
+	}
+
 	void NetLobbySession::SendStartIfReady() {
 		if (m_Config.host && m_Config.snapshotProviderPeerId != 0 && !m_IncomingStateComplete)
 			return;
 		// The Start rides the same ordered lane as the state chunks, so it must queue behind them.
 		if (!m_Config.host || !AllConfigAcked() || !AllRemoteReady() || !m_StartRequested || HasPendingStateChunks() || IsTerminal(m_State)) {
+			ReportStartWait();
 			return;
 		}
 		NetLobbyStart start;
