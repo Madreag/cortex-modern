@@ -286,6 +286,14 @@ def check_item_assertions(results, scratch):
     ok &= row(results, "review/console-errors-retained", checks[0]["matches"][0]["line"] == 1 and checks[1]["matches"][0]["line"] == 2 and checks[1]["forbidden"])
     _, evidence = driver.item_evidence(record, {"log_regex": ["parked brains"], "forbidden_log_regex": ["^ERROR:"]})
     ok &= row(results, "review/positive-log-cannot-hide-lua-error", evidence["probe"] == "fail")
+    observed['steps'][0]['observed']['control'] = {'text': 'Host connection lost / RTT -- ms'}
+    path.write_text(json.dumps(observed), encoding='utf-8')
+    item = {'readback': [{'step': 0, 'path': ['control', 'text'], 'not_contains': 'LIVE'}]}
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, 'review/forbidden-control-text', evidence['readback_assertions'][0]['pass'])
+    item['readback'][0]['step'] = 2
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, 'review/missing-control-is-not-negative-proof', evidence['probe'] == 'fail')
     return ok
 
 
