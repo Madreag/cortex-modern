@@ -367,7 +367,8 @@ def pause_probe(who, root):
                   *row_checks("ButtonLeaveCancel", "LeaveConfirmBox"),
                   {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
                    "equals": {}, "text_contains": "Leave the match"},
-                  menu_step("dump_host_options"), menu_step("activate ButtonLeaveConfirm")]
+                  menu_step("dump_host_options"), menu_step("activate ButtonLeaveConfirm"),
+                  {"op": "wait", "elapsed_ms": 1500}, {"op": "signal", "name": "left"}]
     else:
         steps += [{"op": "signal", "name": "done"}]
     steps += [{"op": "finish"}]
@@ -602,7 +603,10 @@ def scripts(case, port, root):
                 {who: repair_probe(who, root) for who in ("host", "client")})
     if case == "pause":
         # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
-        return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
+        # Both peers wait for the leaver's own signal: a peer that quits on its checks records the
+        # e2e completion instead of the leave, on its own side and on its peer's.
+        return ({who: f"wait_file {probe_root(root, 'client') / 'left.json'} 90\nwait_ms 2000\nexit\n"
+                 for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
     if case == "host-relay":
@@ -1020,8 +1024,8 @@ def scripts(case, port, root):
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
         # match end quits e2e peers outright, so the host's own pause-menu leave is what pauses the
         # activity and lets its menu loop run the dump while the roster is still up.
-        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'left.json'} 90\nexit\n",
-                 "client": f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"},
+        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'left.json'} 90\nwait_ms 2000\nexit\n",
+                 "client": f"wait_file {probe_root(root, 'host') / 'left.json'} 90\nwait_ms 2000\nexit\n"},
                 {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
                     {"op": "wait", "sim_at_least": 150},
                     {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150},
