@@ -14,9 +14,12 @@
           "name": "host",
           "menu_script": "menu-loss.host.menu.txt",
           "args": [],
-          "kill_after_s": 30,
           "settings": {
             "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
           }
         },
         {
@@ -42,9 +45,12 @@
           "name": "host",
           "menu_script": "menu-loss.host.menu.txt",
           "args": [],
-          "kill_after_s": 30,
           "settings": {
             "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
           }
         },
         {
@@ -70,9 +76,12 @@
           "name": "host",
           "menu_script": "menu-loss.host.menu.txt",
           "args": [],
-          "kill_after_s": 30,
           "settings": {
             "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
           }
         },
         {
