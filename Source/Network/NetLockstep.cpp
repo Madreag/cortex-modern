@@ -3600,6 +3600,8 @@ namespace RTE {
 			return;
 		for (const auto& event: m_MigrationTransport->PollEvents())
 			HandleMigrationEvent(event, nowMs);
+		if (m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission)
+			return;
 		for (auto& [peer, pending]: m_MigrationOutbox) {
 			while (!pending.empty() && m_MigrationTransport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
 				pending.pop_front();
@@ -4066,6 +4068,11 @@ namespace RTE {
 		start.ownershipPolicy = m_Config.ownershipPolicy;
 		start.roundId = m_RoundId;
 		start.resumeFromSnapshot = m_Config.resumeFromSnapshot;
+		if (const auto admission = m_PeerAdmissions.find(onlyPeerId); admission != m_PeerAdmissions.end()) {
+			start.startFrame = admission->second.frame;
+			start.inputDelayFrames = InputDelayAt(m_Config.localPeerId, start.startFrame);
+			start.resumeFromSnapshot = false;
+		}
 		if (!SendPacket({start}, NetTransportLane::ControlReliable, error, nullptr, nullptr, onlyPeerId)) {
 			return false;
 		}
@@ -4078,15 +4085,17 @@ namespace RTE {
 	// start a formed peer receives reads as a repeat though, and the answer is itself a start, so an
 	// unconditional answer answers the answer: pace it by the ladder the repeats come from.
 	bool NetLockstepCoordinator::StartMatchesConfig(const NetLockstepStart& start) const {
+		const auto admission = m_PeerAdmissions.find(start.localPeerId);
+		const bool admitted = admission != m_PeerAdmissions.end();
 		return start.sessionId == m_Config.sessionId &&
-		       start.startFrame == m_Config.startFrame &&
-		       start.inputDelayFrames == PeerInputDelay(start.localPeerId) &&
+		       start.startFrame == (admitted ? admission->second.frame : m_Config.startFrame) &&
+		       start.inputDelayFrames == (admitted ? admission->second.delay : PeerInputDelay(start.localPeerId)) &&
 		       start.controllerFrameVersion == ControllerFrame::c_Version &&
 		       start.controllerFrameEncodedSize == ControllerFrame::c_EncodedSize &&
 		       IsKnownRemotePeer(start.localPeerId) &&
 		       start.peerCount == m_Config.peerCount &&
 		       start.scenario == m_Config.scenario &&
-		       start.ownershipPolicy == m_Config.ownershipPolicy && start.resumeFromSnapshot == m_Config.resumeFromSnapshot;
+		       start.ownershipPolicy == m_Config.ownershipPolicy && start.resumeFromSnapshot == (admitted ? false : m_Config.resumeFromSnapshot);
 	}
 
 	bool NetLockstepCoordinator::IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const {
@@ -4101,6 +4110,7 @@ namespace RTE {
 	// field a round carries cannot be reset in two of the three and forgotten in the last. What stays
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
 	void NetLockstepCoordinator::ResetRoundState() {
+		m_PeerAdmissions.clear();
 		m_AiHeldSeats.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
@@ -4184,6 +4194,7 @@ namespace RTE {
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
+		for (const auto& [peer, reclaim]: m_ReclaimTransactions) m_PeerAdmissions[peer] = {reclaim.activationFrame, reclaim.delayFrames};
 	}
 
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
@@ -4326,7 +4337,14 @@ namespace RTE {
 			if (otherPeerId == peerId) {
 				continue;
 			}
-			(void)SendPacket({otherStart}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, peerId);
+			auto answer = otherStart;
+			if (const auto admission = m_PeerAdmissions.find(peerId); admission != m_PeerAdmissions.end() && !IsPersistentWorldRound()) {
+				answer.startFrame = admission->second.frame;
+				answer.inputDelayFrames = InputDelayAt(otherPeerId, answer.startFrame);
+				answer.roundId = m_RoundId;
+				answer.resumeFromSnapshot = false;
+			}
+			(void)SendPacket({answer}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, peerId);
 			++m_Stats.startsRelayedOnRepeat;
 		}
 	}
@@ -4637,6 +4655,7 @@ namespace RTE {
 			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame};
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
+			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
 			m_RemoteStartsReceived.erase(timing.peerId);
 			m_RemoteStarts.erase(timing.peerId);
 			SetObservationEpoch(timing.applyFrame);
@@ -4805,6 +4824,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision) {
 		if (!UsesBoundedWait()) return false;
+		if (frame < m_Stats.nextFrame) return true;
 		if (m_ConsumerWaitingFrame != frame) {
 			m_ConsumerWaitingFrame = frame;
 			m_ConsumerWaitStartMs = nowMs;
@@ -5107,6 +5127,10 @@ namespace RTE {
 			// Carry the stop reason so the caller can route it (a resync request must not read as a
 			// generic failure).
 			if (error) *error = m_Stats.timeoutReason.empty() ? "lockstep coordinator is not running" : m_Stats.timeoutReason;
+			return false;
+		}
+		if (targetFrame < EffectiveStartOf(m_Config.localPeerId)) {
+			if (error) *error = "local input precedes the sender's admission delay";
 			return false;
 		}
 		static const auto holdBeforeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_HOLD_BEFORE_TARGET");
@@ -5448,7 +5472,8 @@ namespace RTE {
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
 			// A member admitted mid-round reads the window copies of the ticks before its own start.
 			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
-			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId)) {
+			if (windowCopy || m_ReclaimTransactions.contains(frame.senderPeerId) ||
+			    (IsPersistentWorldRound() && m_Config.joinsRunningRound && frame.targetFrame < m_Config.startFrame)) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
 				return;
@@ -6173,6 +6198,7 @@ namespace RTE {
 				m_DroppedSeats.erase(reclaim->peerId); m_LeftSeatsHeld.erase(reclaim->peerId); m_DroppedAtMs.erase(reclaim->peerId);
 				m_DroppedSeatResolutions[reclaim->peerId] = NetLockstepHoldResolution::Reclaimed;
 				m_PeerEffectiveStart[reclaim->peerId] = outFrame.frame + reclaim->delayFrames;
+				m_PeerAdmissions[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
 				outFrame.reclaimedPeerIds.push_back(reclaim->peerId);
 				++m_Stats.peers[reclaim->peerId].rejoins;
 			}
@@ -6631,6 +6657,8 @@ namespace RTE {
 			if (error) *error = "a world member's first required frame must be announced ahead of the committed frame";
 			return false;
 		}
+		const uint16_t delay = InputDelayAt(peerId, firstRequiredFrame);
+		if (firstRequiredFrame > UINT64_MAX - delay) { if (error) *error = "world admission input target overflow"; return false; }
 		// A fresh member is not a returning seat: it enters the required set at its announced frame and
 		// never through the dropped-seat hold, so nothing about it can pause the world.
 		m_PeerLeaveFrames.erase(peerId);
@@ -6641,7 +6669,12 @@ namespace RTE {
 		// The member's round starts at E, so its own first produced target is E plus its input delay.
 		// The frames before that are the ones this admission replays; the round must not wait on the
 		// member for frames it was never in a position to produce.
-		m_PeerEffectiveStart[peerId] = firstRequiredFrame + NetMatchConfigUtil::PeerInputDelay(m_Config.matchConfig, peerId);
+		m_PeerAdmissions[peerId] = {firstRequiredFrame, delay};
+		m_PeerEffectiveStart[peerId] = firstRequiredFrame + delay;
+		m_RemoteStartsReceived.erase(peerId);
+		m_RemoteStarts.erase(peerId);
+		m_PeersPlayedThisRound.erase(peerId);
+		m_LastStartAnswerMs.erase(peerId);
 		m_RemoteTransports[peerId] = transportPeerId;
 		if (!alreadyListed) {
 			m_RemotePeerIds.push_back(peerId);
@@ -6651,6 +6684,15 @@ namespace RTE {
 		// The epoch was set when this activation was announced, ahead of every frame the round has
 		// sent, so the live stream has already restarted at it for the members that were here.
 		// Everything already on the wire for its first required frames went out before it was a peer.
+		NetLockstepStart admitted;
+		admitted.sessionId = m_Config.sessionId; admitted.roundId = m_RoundId;
+		admitted.startFrame = firstRequiredFrame; admitted.inputDelayFrames = delay;
+		admitted.localPeerId = peerId; admitted.peerCount = m_Config.peerCount;
+		admitted.controllerFrameVersion = ControllerFrame::c_Version;
+		admitted.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		admitted.scenario = m_Config.scenario; admitted.ownershipPolicy = m_Config.ownershipPolicy;
+		for (uint8_t survivor: m_RemotePeerIds) if (survivor != peerId && !IsPeerGoneAtFrame(survivor, firstRequiredFrame))
+			SendPacket({admitted}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, survivor);
 		m_LastAdmissionReplayFrames = ReplaySentFramesTo(peerId, firstRequiredFrame);
 		return true;
 	}
@@ -7215,6 +7257,10 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
+		const auto hostTransport = m_RemoteTransports.find(GetHostPeerId());
+		const bool worldRosterMessage = IsPersistentWorldRound() && !m_RelayHost && hostTransport != m_RemoteTransports.end() &&
+		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&
+		    start.localPeerId > 0 && start.localPeerId <= m_Config.peerCount;
 		if (!SenderOwnsTransport(start.localPeerId, fromTransport)) {
 			std::cout << "[lockstep] dropped a start claiming peer " << static_cast<int>(start.localPeerId) << " from the wrong transport" << std::endl;
 			return;
@@ -7229,17 +7275,29 @@ namespace RTE {
 		                                IsRoundAuthority(start.localPeerId, fromTransport);
 		// Another round's start (a late one from before a resync) is not this round's handshake; before this
 		// peer knows its round, a start for a different frame is that straggler too.
-		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame))) {
+		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame && !worldRosterMessage))) {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
-		const auto reclaim = m_ReclaimTransactions.find(start.localPeerId);
-		const bool privateReclaim = reclaim != m_ReclaimTransactions.end() && start.startFrame == reclaim->second.activationFrame &&
-		    start.roundId == m_RoundId && start.sessionId == m_Config.sessionId && start.peerCount == m_Config.peerCount &&
-		    start.scenario == m_Config.scenario && start.ownershipPolicy == m_Config.ownershipPolicy && !start.resumeFromSnapshot &&
-		    start.inputDelayFrames == reclaim->second.delayFrames && start.controllerFrameVersion == ControllerFrame::c_Version &&
-		    start.controllerFrameEncodedSize == ControllerFrame::c_EncodedSize;
-		if (!privateReclaim && !StartMatchesConfig(start)) {
+		if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && start.startFrame < admission->second.frame) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
+		const bool introducedByHost = worldRosterMessage && (!IsKnownRemotePeer(start.localPeerId) || IsPeerGoneAtFrame(start.localPeerId, start.startFrame) ||
+		    (m_Config.joinsRunningRound && m_State == NetLockstepState::WaitingForStart && !m_RemoteStartsReceived.contains(start.localPeerId)));
+		if (introducedByHost) {
+			if (start.startFrame > UINT64_MAX - start.inputDelayFrames ||
+			    std::max(m_Config.startFrame, start.startFrame + start.inputDelayFrames) < m_Stats.nextFrame) {
+				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "world admission precedes committed input"); return;
+			}
+			m_PeerAdmissions[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
+			m_PeerEffectiveStart[start.localPeerId] = std::max(m_Config.startFrame, start.startFrame + start.inputDelayFrames);
+			m_PeerLeaveFrames.erase(start.localPeerId);
+			m_RemoteStartsReceived.erase(start.localPeerId);
+			m_RemoteStarts.erase(start.localPeerId);
+			if (!IsKnownRemotePeer(start.localPeerId)) { m_RemotePeerIds.push_back(start.localPeerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
+		}
+		if (!StartMatchesConfig(start)) {
 			// A start we would only have taken by following its round belongs to another round after all,
 			// and another round's start is ignored here - it was never this round's handshake to fail on.
 			if (followTheAuthority) {
@@ -7256,10 +7314,18 @@ namespace RTE {
 		} else if (followTheAuthority) {
 			ReadoptRound(start.roundId, nowMs);
 		}
-		if (privateReclaim && m_RelayHost) {
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+		if (m_PeerAdmissions.contains(start.localPeerId) && m_RelayHost) {
+			auto members = m_RemotePeerIds;
+			members.push_back(m_Config.localPeerId);
+			for (uint8_t peer: members) {
 				if (peer == start.localPeerId || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
 				NetLockstepStart member = start; member.localPeerId = peer; member.inputDelayFrames = InputDelayAt(peer, start.startFrame);
+				member.roundId = m_RoundId;
+				if (IsPersistentWorldRound() && peer != m_Config.localPeerId) {
+					const auto admission = m_PeerAdmissions.find(peer);
+					member.startFrame = admission == m_PeerAdmissions.end() ? m_Config.startFrame : admission->second.frame;
+					member.inputDelayFrames = admission == m_PeerAdmissions.end() ? PeerInputDelay(peer) : admission->second.delay;
+				}
 				SendPacket({member}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 			}
 			ReplaySentFramesTo(start.localPeerId, start.startFrame);
@@ -7365,7 +7431,11 @@ namespace RTE {
 			++peerStats.staleRoundPackets;
 			return;
 		}
-		if (!IsKnownRemotePeer(frame.senderPeerId)) {
+		const auto authority = m_RemoteTransports.find(GetHostPeerId());
+		const bool awaitingWorldRoster = IsPersistentWorldRound() && m_Config.joinsRunningRound && !m_RelayHost &&
+		    m_State == NetLockstepState::WaitingForStart && authority != m_RemoteTransports.end() && authority->second == fromTransport &&
+		    frame.senderPeerId > 0 && frame.senderPeerId <= m_Config.peerCount && frame.senderPeerId != m_Config.localPeerId;
+		if (!IsKnownRemotePeer(frame.senderPeerId) && !awaitingWorldRoster) {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
 			return;
 		}

@@ -989,13 +989,17 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
 		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
 		const bool playerControlled = actor->IsPlayerControlled();
+		const bool disabled = actor->GetController()->IsQuickDisabled();
 		if (aiTakeover || (playerControlled && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end())) {
 			if (aiTakeover) {
 				ScenarioRunner::HandLockstepActorToAI(uid, claimant);
 				if (!playerControlled) actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 				actor->TouchCheckpoint();
 			}
-			if (playerControlled) MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+			if (playerControlled) {
+				MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+				if (aiTakeover && disabled) actor->GetController()->SetDisabled(true);
+			}
 			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}
 		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
