@@ -292,7 +292,7 @@ def check_item_assertions(results, scratch):
 def check_stop_request(results, scratch):
     out = scratch / "stop-request"
     out.mkdir()
-    (out / "stop-request.json").write_text('{"reason":"unit stop"}', encoding="utf-8")
+    (out / "stop-request.json").write_text('{"class":"engine","reason":"unit stop"}', encoding="utf-8")
     handles = []
 
     class Handle:
@@ -327,8 +327,12 @@ def check_stop_request(results, scratch):
         captured = driver.run_one(options, scenario, {"name": "first"}, 0, out)
     finally:
         driver.make_run, driver.seed_settings = original_make, original_seed
-    return row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
+    ok = row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
                "unit stop" in captured["interrupted"] and captured["peers"][0]["record"]["exit_code"] == 137)
+    scenario['checklist'] = [{'id': 'play', 'what': 'The match continues.', 'screen': 'game'}]
+    report = driver.review(scenario, captured, out)
+    ok &= row(results, 'interruption/engine-stop-keeps-its-class', report['run_findings'][0]['class'] == 'engine' and report['checklist'][0]['finding']['class'] == 'engine')
+    return ok
 
 
 def check_finalizer(results, scratch):

@@ -539,7 +539,7 @@ def review(scenario, capture, out):
                           "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
             if not video_frames or item.get("blocked_by") or assertions.get("probe") in ("fail", "not-reached"):
-                resolved["finding"] = {"class": "harness" if capture.get("interrupted") else "unclassified", "reason": capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
+                resolved["finding"] = {"class": (capture.get("stop_finding") or {}).get("class", "harness" if capture.get("interrupted") else "unclassified"), "reason": (capture.get("stop_finding") or {}).get("reason") or capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
@@ -548,8 +548,8 @@ def review(scenario, capture, out):
         record = peer.get("record", {})
         planned = peer.get("expected_termination") and str(record.get("injected_termination", "")).startswith("scenario drop")
         if peer.get("error") or record.get("timed_out") or record.get("exit_code") not in (0, None) and not planned:
-            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"],
-                                 "reason": peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
+            run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
+                                 "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
@@ -737,7 +737,7 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], "scenario drop after peer event " + gate["event"])
                 return
 
-    interrupted = None
+    interrupted, stop_finding = None, None
     try:
         for peer in peers:
             name = peer["name"]
@@ -782,7 +782,14 @@ def run_one(options, scenario, run, run_index, out):
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
-                raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
+                reason = request.read_text(encoding="utf-8").strip()
+                try:
+                    finding = json.loads(reason)
+                    if finding.get("class") in ("engine", "harness", "data") and finding.get("reason"):
+                        stop_finding = finding
+                except (ValueError, AttributeError):
+                    pass
+                raise RuntimeError("capture stop requested: " + reason)
             for name in runs:
                 signal = Path(staged[name]["gameplay_signal"])
                 epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
@@ -831,7 +838,7 @@ def run_one(options, scenario, run, run_index, out):
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
                           "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
-    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted}
+    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding}
 
 
 def render(capture_run, fps, every):
@@ -1236,7 +1243,7 @@ def main():
             write_json(out / "capture.json", capture)
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
-            else:
+            if scratch_bytes(options.scratch_root) < SCRATCH_LIMIT:
                 feel_probes({**scenario, **run}, captured, source)
                 render(captured, options.fps, options.sheet_every)
             review(scenario, captured, Path(captured["root"]))
