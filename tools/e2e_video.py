@@ -197,7 +197,7 @@ def run_preflight(scenario, run, captures, tokens):
         reference = node.get("retain_runtime_from")
         if reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
             return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
-    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT"}
     builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
     body = json.dumps(peers)
     for peer in peers:
