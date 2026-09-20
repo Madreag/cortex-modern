@@ -53,6 +53,7 @@ namespace RTE {
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
 		Reclaimed = 10, // Host: the held seat's player was admitted back; resume through the rejoin path at this frame.
 		Substituted = 11, // Host: a moderator reseat takes the held seat; resume through the reseat path at this frame.
+		PeerRemoved = 13,
 		Expired = 12, // Host: the admission hold timed out; the seat is gone and commits resume without it.
 	};
 
@@ -278,7 +279,7 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -301,6 +302,7 @@ namespace RTE {
 		uint64_t cutoffFrame = 0;
 		uint64_t neutralThroughFrame = 0;
 		std::array<uint32_t, 4> seatIncarnations{};
+		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetLockstepTiming&) const = default;
 	};
 
@@ -388,7 +390,7 @@ namespace RTE {
 		std::array<uint8_t, 32> migrationKey{};
 		std::function<std::unique_ptr<INetTransport>()> migrationTransportFactory;
 		/// How many ticks a negotiated window packet repeats. 1 keeps the classic one-tick send; 0 uses 4.
-		uint8_t frameRedundancyTicks = 4;
+		uint8_t frameRedundancyTicks = 1;
 		// An active world's joiner owes every remote's input from startFrame without delay ramp-in.
 		bool joinsRunningRound = false;
 		std::optional<NetHash32> originalRoundConfigHash;
@@ -622,8 +624,9 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 26;
-		static constexpr uint16_t c_WorldVersion = 27;
+		static constexpr uint16_t c_Version = 30;
+		static constexpr uint16_t c_WorldVersion = 31;
+		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
@@ -786,6 +789,8 @@ namespace RTE {
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr);
+		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
+		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
@@ -793,6 +798,8 @@ namespace RTE {
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
+		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
+		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
@@ -937,6 +944,7 @@ namespace RTE {
 		bool ContactMigrationSuccessor(uint64_t nowMs);
 		bool RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs);
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
+		uint64_t MigrationStepBudgetMs() const { return std::clamp<uint32_t>(m_Config.timeoutMs, 1, 1000); }
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
@@ -1046,7 +1054,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);

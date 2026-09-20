@@ -324,7 +324,7 @@ namespace RTE {
 		static void NoteNetUiToastsDrawn(size_t first, size_t count);
 		/// Names of peers whose next input frame is missing, for the stalled render path.
 		static std::string GetLockstepMissingPeers();
-		static bool IsLockstepLocalMachineSlow();
+		static bool IsLockstepLocalMachineSlow(uint64_t nowMs = UINT64_MAX);
 		static void NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs);
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();

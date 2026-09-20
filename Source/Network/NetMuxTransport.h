@@ -69,6 +69,7 @@ namespace RTE {
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
 		uint32_t GetPeerPingMs(NetPeerId peerId) const override;
+		std::string GetConnectedRoute(NetPeerId peerId) const override;
 
 		/// How many events each half has produced, for the report.
 		uint64_t IpEvents() const { return m_IpEvents; }

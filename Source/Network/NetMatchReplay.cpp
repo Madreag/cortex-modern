@@ -308,9 +308,8 @@ namespace RTE {
 
 	void NetMatchReplayWriter::Close() {
 		if (m_Out.is_open()) {
-			// A recording with frames gets an end marker so playback tells a clean finish from a
-			// truncation; a header-only or already-failed stream is left as is.
-			if (m_FramesWritten > 0 && m_Out.good()) {
+			// A successful close seals even an empty segment.
+			if (m_Out.good()) {
 				std::vector<uint8_t> endMarker;
 				AppendU32(endMarker, c_EndMarker);
 				m_Out.write(reinterpret_cast<const char*>(endMarker.data()), static_cast<std::streamsize>(endMarker.size()));
@@ -409,6 +408,7 @@ namespace RTE {
 		// The lookahead pins the start frame, so playback aligns to the recording's first tick.
 		bool eof = false;
 		if (!ReadFrameFromFile(m_Lookahead, eof, error)) {
+			if (eof && m_HasSegment) { m_StartFrame = m_Segment.tick + 1; return true; }
 			if (error && eof) *error = "replay file has no frames";
 			Close();
 			return false;
@@ -419,6 +419,7 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayReader::ReadFrame(NetLockstepFrame& outFrame, bool& outEof, std::string* error) {
+		if (m_LastStatus == NetReplayReadStatus::CleanEnd) { outEof = true; return false; }
 		if (m_HasLookahead) {
 			outEof = false;
 			outFrame = std::move(m_Lookahead);

@@ -136,6 +136,10 @@ namespace RTE {
 		return events;
 	}
 
+	std::string NetMuxTransport::GetConnectedRoute(NetPeerId peerId) const {
+		return IsP2P(peerId) ? m_P2P->GetConnectedRoute(Untag(peerId)) : m_Ip->GetConnectedRoute(peerId);
+	}
+
 	uint32_t NetMuxTransport::GetPeerPingMs(NetPeerId peerId) const {
 		return IsP2P(peerId) ? m_P2P->GetPeerPingMs(Untag(peerId)) : m_Ip->GetPeerPingMs(peerId);
 	}

@@ -1371,8 +1371,7 @@ local function visitUserdata(value, ctx)
 		end
 		return userdataNode(value, ctx, header .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]) .. stringToken(ini))
 	elseif kind == "invalid" then
-		problem(ctx, "a reference to a " .. tostring(native[2]) .. " that no longer exists")
-		return "z;"
+		return userdataNode(value, ctx, "D" .. stringToken(native[2]))
 	elseif kind == "vector-ref-unresolved" or kind == "timer-ref" then
 		local propertyOwner, property, isConst = _ScriptGraphPropertyOwner(value)
 		if propertyOwner then
@@ -1579,10 +1578,10 @@ local function samePaths(left, right)
 end
 
 local serializeGraph
-serializeGraph = function(roots, rebuildEverything)
+serializeGraph = function(roots, rebuildEverything, captureSerial)
 	local phaseStart = _ScriptGraphClock()
-	_ScriptGraphBeginCapture(rebuildEverything)
-	local base = _ScriptGraphStateSerial()
+	local base = captureSerial or _ScriptGraphStateSerial()
+	_ScriptGraphBeginCapture(rebuildEverything, base)
 	local function phase(name, uid, reused, unwatched)
 		local now = _ScriptGraphClock()
 		_ScriptGraphWalkPart(name, uid or "0", now - phaseStart, reused or false, unwatched or "")
@@ -1770,7 +1769,7 @@ serializeGraph = function(roots, rebuildEverything)
 	for id in pairs(ctx.refs) do if not ctx.defined[id] then missing = true end end
 	if missing and not rebuildEverything then
 		_ScriptGraphEndCapture()
-		return serializeGraph(roots, true)
+		return serializeGraph(roots, true, base)
 	end
 	local out = { "SG6;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for _, text in ipairs(ctx.chunks) do out[#out + 1] = text end
@@ -1803,9 +1802,10 @@ function Graph.cacheState(uid, part)
 end
 
 function Graph.serialize(roots)
+	local captureSerial = _ScriptGraphStateSerial()
 	local previous = capturing
 	capturing = captureNative.active()
-	local ok, text, problems = xpcall(function() return serializeGraph(roots) end, debug.traceback)
+	local ok, text, problems = xpcall(function() return serializeGraph(roots, false, captureSerial) end, debug.traceback)
 	capturing = previous
 	if not ok then
 		if _ScriptGraphEndCapture then _ScriptGraphEndCapture() end
@@ -1871,6 +1871,7 @@ local function newReader(text)
 		elseif c == "t" or c == "f" then self:expect(";") return { t = "bool", v = c == "t" }
 		elseif c == "n" then return { t = "num", v = self:number(self:readUntil(";")) }
 		elseif c == "s" then return { t = "str", v = self:readString(true) }
+		elseif c == "D" then return { t = "dead-entity", class = self:readString() }
 		elseif c == "M" then return { t = "material", index = self:integer(self:readUntil(";"), 0, 255) }
 		elseif c == "#" then
 			local token = { t = "ref", id = self:integer(self:readUntil(";"), 1) }
@@ -2247,6 +2248,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			if value == nil then value = wipedPath(token.segments) end
 			if value == nil then note("the named value " .. pathText(token.segments) .. " is missing") end
 			return value
+		elseif t == "dead-entity" then return held or _ScriptGraphDeadReference(token.class)
 		elseif t == "entity" then
 			local mo = MovableMan:FindObjectByUniqueID(token.uid)
 			if mo == nil then note("the object " .. token.uid .. " (" .. token.class .. ") is not in the world") return nil end
@@ -3826,7 +3828,7 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 	CheckpointGraphIndex::Get().BeginWalk();
 	if (lua_toboolean(L, 1)) CheckpointGraphIndex::Get().RestartStateWalk(L);
 	s_GraphBarrierPauses[L] = std::make_unique<LuaCheckpointBarrierPause>();
-	s_SerialBeforeCapture[L] = luaJIT_state_serial(L);
+	s_SerialBeforeCapture[L] = static_cast<uint64_t>(luaL_optnumber(L, 2, static_cast<lua_Number>(luaJIT_state_serial(L))));
 	s_VectorFields.clear();
 	s_ControllerOwners.clear();
 	for (MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
@@ -5367,10 +5369,24 @@ static int ScriptGraphNativeRelease(lua_State* L) {
 	return 0;
 }
 
+static int ScriptGraphDeadReference(lua_State* L) {
+	const char* name = luaL_checkstring(L, 1);
+	lua_getglobal(L, name);
+	if (!luabind::detail::is_class_rep(L, -1)) return luaL_error(L, "unknown dead reference class %s", name);
+	auto* type = static_cast<luabind::detail::class_rep*>(lua_touserdata(L, -1));
+	if (!ClassDerivesFrom(type, "MovableObject")) return luaL_error(L, "dead reference class is not a MovableObject");
+	lua_pop(L, 1);
+	void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
+	new (storage) luabind::detail::object_rep(nullptr, type, 0, nullptr);
+	luabind::detail::getref(L, type->metatable_ref());
+	lua_setmetatable(L, -2);
+	return 1;
+}
+
 static int ScriptGraphNativeResolve(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	bool complete = true;
-	if (rep && rep->crep() && ClassDerivesFrom(rep->crep(), "MovableObject")) {
+	if (rep && rep->ptr() && rep->crep() && ClassDerivesFrom(rep->crep(), "MovableObject")) {
 		static_cast<MovableObject*>(rep->ptr())->ResolveFaithfulLinks();
 	} else if (rep && rep->crep() && ClassDerivesFrom(rep->crep(), "Activity")) {
 		complete = static_cast<Activity*>(rep->ptr())->ResolveCheckpointReferences();
@@ -5533,6 +5549,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphNativeLoad");
 		lua_pushcfunction(m_State, ScriptGraphNativeRelease);
 		lua_setglobal(m_State, "_ScriptGraphNativeRelease");
+		lua_pushcfunction(m_State, ScriptGraphDeadReference);
+		lua_setglobal(m_State, "_ScriptGraphDeadReference");
 		lua_pushcfunction(m_State, ScriptGraphNativeResolve);
 		lua_setglobal(m_State, "_ScriptGraphNativeResolve");
 		lua_pushlightuserdata(m_State, this);
@@ -6890,6 +6908,34 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
+	{
+		auto* actor = new Actor();
+		actor->Create();
+		luabind::object(m_State, static_cast<MovableObject*>(actor)).push(m_State);
+		lua_setglobal(m_State, "_ScriptGraphDeadFixture");
+		delete actor;
+		const bool deadReference = RunScriptString(R"lua(
+local dead = _ScriptGraphDeadFixture
+assert(dead ~= nil and not MovableMan:ValidMO(dead), "the actor reference is not dead")
+local roots = { dead = { AI = { Enemies = { dead } }, alias = dead } }
+local before, problems = _ScriptGraph.serialize(roots)
+assert(#problems == 0, table.concat(problems, "; "))
+local restored, failures = _ScriptGraph.deserialize(before)
+local after, repeated = _ScriptGraph.serialize(restored)
+assert(restored and #failures == 0, table.concat(failures, "; "))
+local reference = restored.dead.AI.Enemies[1]
+assert(reference ~= nil and not MovableMan:ValidMO(reference), "dead reference changed its resolution")
+assert(rawequal(reference, restored.dead.alias), "dead reference lost its alias")
+if #repeated ~= 0 or after ~= before then
+ local at = 1; while at <= #before and at <= #after and string.byte(before, at) == string.byte(after, at) do at = at + 1 end
+ error("dead reference graph changed at " .. at .. " before=" .. string.sub(before, math.max(1, at-40), at+120) .. " after=" .. string.sub(after, math.max(1, at-40), at+120))
+end
+)lua") == 0;
+		RunScriptString("_ScriptGraphDeadFixture = nil");
+		std::cout << "[script-graph-selftest] " << (deadReference ? "PASS" : "FAIL") << " dead_actor_reference_same_tick_capture_restore" << std::endl;
+		checkpointValues = deadReference && checkpointValues;
+	}
+
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
 	// a birth number an identity every peer agrees on.
 	const auto birthSequence = [](std::vector<uint64_t>& numbers) {

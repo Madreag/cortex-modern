@@ -155,6 +155,10 @@ namespace RTE {
 		bool spectator = false;
 		uint64_t snapshotTick = 0;        //!< B.
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
+		uint64_t acknowledgedActivation = 0;
+		bool activationProposed = false;
+		bool activationCommitted = false;
+		uint64_t lastReannounceProgress = 0;
 		std::vector<uint8_t> pendingTail;
 		size_t pendingTailOffset = 0;
 		uint64_t pendingTailThrough = 0;
@@ -375,6 +379,7 @@ namespace RTE {
 		uint64_t snapshotTick = 0;        //!< B, the tick the restored image froze at.
 		uint64_t appliedThrough = 0;      //!< The last committed tail frame the sim has applied.
 		uint64_t activationTick = 0;      //!< E, once the host has announced it.
+		bool activationCommitted = false;
 		std::string digest;
 		std::vector<NetLockstepFrame> tail;
 		std::vector<uint8_t> partialTail;
@@ -393,6 +398,8 @@ namespace RTE {
 	inline constexpr uint8_t c_NetWorldReportActivate = 3;
 	inline constexpr uint8_t c_NetWorldReportRefused = 4;
 	inline constexpr uint8_t c_NetWorldReportDecline = 5; //!< A watcher's own choice: 1 declines a seat.
+	inline constexpr uint8_t c_NetWorldReportActivationAck = 6;
+	inline constexpr uint8_t c_NetWorldReportActivationCommit = 7;
 
 	/// Why a world turned a connection away, as a code the joiner turns into the line it shows.
 	enum class NetWorldJoinRefusal : uint64_t {
@@ -538,6 +545,9 @@ namespace RTE {
 		bool ReannounceActivation(NetPeerId connection, uint64_t nowFrame, uint64_t* outActivationTick, std::string* error = nullptr);
 		/// Marks the bootstrap active once its transition has been committed.
 		bool CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error = nullptr);
+		void AcknowledgeActivation(NetPeerId connection, uint64_t frame);
+		void MarkActivationProposed(NetPeerId connection);
+		void MarkActivationCommitted(NetPeerId connection);
 		/// Ends a bootstrap without a seat drop: a failed or slow fresh join is not a departure.
 		void CancelJoin(NetPeerId connection, const std::string& reason);
 		/// Cancels every bootstrap past its deadline. Returns how many it ended.
