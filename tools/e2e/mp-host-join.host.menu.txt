@@ -1,76 +1,90 @@
 # The host's own path: landing, host setup, every host options page, create, lobby, ready, start.
 # The match itself is driven by this peer's probe; the script picks the lobby up again afterwards
 # for the rematch round.
-wait 60
+wait_ms 1980
 activate ButtonMainToMultiplayer
-wait 15
+video_mark mp-landing-host
+wait_ms 495
 assert_substate Landing
 settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
-wait 12
+video_mark mp-host-setup
+wait_ms 396
 assert_substate HostSetup
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 500
 settext TextHostPort {PORT}
 settext TextHostPlayers 2
-wait 15
+wait_ms 495
 activate ButtonHostOptions
-wait 12
+wait_ms 396
+video_mark mp-options-seats
 activate TabHostPageSeats
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageSeats 1
 dump_host_options
+video_mark mp-options-rules
 activate TabHostPageRules
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageRules 1
 dump_host_options
+video_mark mp-options-network
 activate TabHostPageNetwork
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageNetwork 1
 dump_host_options
+video_mark mp-options-recovery
 activate TabHostPageRecovery
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageRecovery 1
 dump_host_options
+video_mark mp-options-files
 activate TabHostPageFiles
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageFiles 1
 dump_host_options
+video_mark mp-options-session
 activate TabHostPageSession
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageSession 1
 dump_host_options
 activate ButtonHostOptBack
-wait 12
+wait_ms 396
 assert_substate HostSetup
 activate ButtonMultiplayerCreate
-wait 25
+video_mark mp-lobby-host
+wait_ms 825
 assert_substate Lobby
-wait_connected 2
-wait 25
+wait_connected 2 90
+wait_ms 825
 dump_lobby
+video_mark mp-lobby-options
 activate ButtonLobbyOptions
-wait 15
+wait_ms 495
 assert_substate HostOptions
 activate TabHostPageSeats
-wait 20
+wait_ms 660
 assert_visible CollectionBoxHostPageSeats 1
 dump_host_options
 activate ButtonHostOptBack
-wait 15
+wait_ms 495
 assert_substate Lobby
-activate ButtonMultiplayerReady
-wait 15
-wait_all_ready 90
+wait_ms 495
+wait_remote_ready 90
 dump_lobby
+video_mark mp-ready-start
+assert_enabled ButtonMultiplayerStart 1
+wait_ms 500
 activate ButtonMultiplayerStart
-wait_file {PROBE_DIR}/done.json 240
-wait 40
+wait_file {PROBE_DIR}/done.json 90
+video_mark mp-post-match-host
+wait_ms 1320
 assert_substate Lobby
 dump_lobby
-wait 30
-activate ButtonMultiplayerReady
-wait 30
+wait_ms 990
+wait_ms 990
 dump_lobby
 # The client leaves on its own script; the lobby row it vacates is what this last stretch records.
-wait 200
+wait_ms 6600
 dump_lobby
 exit
