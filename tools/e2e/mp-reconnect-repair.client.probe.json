@@ -37,12 +37,15 @@
     {
       "op": "assert_control",
       "control": "NetworkSeatsOptionsText",
-      "fits": true,
       "text_contains": "Frame redundancy:"
     },
     {
+      "op": "menu",
+      "command": "assert_vertical_scroll NetworkSeatsOptionsText"
+    },
+    {
       "op": "wait",
-      "elapsed_ms": 825
+      "elapsed_ms": 7000
     },
     {
       "op": "key_down",

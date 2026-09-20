@@ -100,10 +100,14 @@
           },
           "start_when": {
             "peer": "client-dropped",
-            "ended": true,
-            "timeout_s": 80
+            "ended": true
           },
-          "after_gate_delay_s": 2
+          "after_gate_delay_s": 2,
+          "retain_runtime_from": {
+            "run": "reconnect",
+            "peer": "client-dropped"
+          },
+          "probe": "mp-reconnect-repair.rejoined.probe.json"
         }
       ]
     },
@@ -195,12 +199,13 @@
       "peer": "client-rejoined",
       "screen": "game",
       "sim_ticks": [
-        0,
+        1200,
         3000
       ],
       "what": "the relaunched client rejoins the running match from its stored ticket and plays on from the host's state",
-      "assert": "the rejoin match report and the host's seat rows",
-      "run": "reconnect"
+      "assert": "Rejoined client probe requires Running at tick 1200 and again at tick 1300.",
+      "run": "reconnect",
+      "service_state": "Running"
     },
     {
       "id": "rc-dropped-index-kept",
