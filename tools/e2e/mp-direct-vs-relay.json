@@ -61,7 +61,7 @@
     },
     {
       "name": "relay",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens.",
+      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip; supplied TURN tokens are supported and validated by the driver.",
       "peers": [
         {
           "name": "host",
@@ -214,7 +214,7 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens."
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip."
     },
     {
       "id": "relay-connection-client",
@@ -247,7 +247,7 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. The lead supplies the fixed coturn {TURN_SERVER}/{TURN_USER}/{TURN_PASS} pair later. The video driver does not substitute these tokens or skip blocked runs; this full two-run definition must not be executed with unresolved tokens."
+      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip."
     }
   ],
   "directory_port": 49478
