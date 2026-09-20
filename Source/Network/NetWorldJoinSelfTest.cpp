@@ -2223,7 +2223,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 31},
+			{"lockstep_codec_version", 33},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2334,7 +2334,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 31");
+			return Fail("WorldTransition frame did not stamp lockstep version 33");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2375,8 +2375,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 30) {
-			return Fail("ordinary lockstep frame did not stamp version 30");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 32) {
+			return Fail("ordinary lockstep frame did not stamp version 32");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;

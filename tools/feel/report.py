@@ -92,6 +92,20 @@ def pin(value, rule, passed, evidence, detail=None):
                 evidence=[str(path) for path in evidence], detail=detail)
 
 
+def peer_id_of(report_path):
+    """The lockstep seat a peer's own match report says it played."""
+    path = Path(report_path)
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding='utf-8-sig'))
+    except (OSError, ValueError):
+        return None
+    service = document.get('service') if isinstance(document, dict) else None
+    value = service.get('local_peer_id') if isinstance(service, dict) else None
+    return int(value) if isinstance(value, int) and value > 0 else None
+
+
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
     raw = run / peer / 'feel/raw.jsonl'
@@ -147,15 +161,17 @@ def item9a_gates(run, peer='host', rows=None):
         accepted = bool(armed) and all(float(percent) == manifest['loss_percent'] and status == '1' for percent, status, _ in armed)
         pins['item9a_loss_armed'] = pin(armed, 'GNS accepted 5 percent packet loss on client send and receive for every observed arm', accepted, [loss_log])
     if manifest.get('silent_tick'):
+        # The seat the silent peer got is whatever the lobby gave it; read it instead of assuming 2.
+        silent_seat = peer_id_of(run / 'client_report.json') or 2
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
-        held = next((tick for seat, tick in holds if seat == 2 and tick >= manifest['silent_tick']), None)
+        held = next((tick for seat, tick in holds if seat == silent_seat and tick >= manifest['silent_tick']), None)
         pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
         def reclaims(name):
             path = run / name / 'stdout.log'
             text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
             found = re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', text)
             return [(int(tick), int(live)) for seat, tick, live in found
-                    if held is not None and int(seat) == 2 and held < int(tick) <= final_tick and int(live) > 0], path
+                    if held is not None and int(seat) == silent_seat and held < int(tick) <= final_tick and int(live) > 0], path
         host_reclaims, host_reclaim_path = reclaims('host')
         survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
         client_path = run / 'client/stdout.log'

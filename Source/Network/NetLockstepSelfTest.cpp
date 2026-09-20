@@ -69,6 +69,8 @@
 
 namespace RTE {
 
+	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
 			const NetGameCommand pending{2, NetGameSwitchControl{4242, 0, 2}};
@@ -1093,7 +1095,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x1E, 0x00,
+				0x20, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1708,6 +1710,85 @@ namespace RTE {
 				return describe("the bounded wait no longer holds a peer that went silent while the round waited");
 			}
 			return true;
+		}
+
+		bool TestASlowStartingPeerIsJudgedByItsOwnRestart(std::string* error) {
+			// Two peers at delay 1 and ping 0: the allowance before the bound judges a sender that has not
+			// produced yet is the start work its machine does, published with its start, or ours as the floor.
+			const auto play = [&](uint16_t port, uint64_t sessionId, uint32_t hostParkMs, uint32_t clientParkMs,
+			                      uint64_t clientStartsAtMs, std::string* failure) {
+				LoopbackTransport hostWire, clientWire;
+				NetLockstepCoordinator host, client;
+				auto a = MakeCoordinatorConfig(1, 2, sessionId, 1, NetTransportLane::ControlReliable);
+				auto b = MakeCoordinatorConfig(2, 1, sessionId, 8, NetTransportLane::ControlReliable);
+				a.startFrame = b.startFrame = 1;
+				a.roundId = b.roundId = 27;
+				a.substituteSlowPeers = b.substituteSlowPeers = true;
+				a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+				a.timeoutMs = b.timeoutMs = 30000;
+				a.relayToOtherPeers = true;
+				a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 8}};
+				a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
+				if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, a, b, failure)) return false;
+				host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+				host.NoteLocalStartPark(hostParkMs);
+				client.NoteLocalStartPark(clientParkMs);
+				uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 9, clientApplied = 0;
+				std::string queueError;
+				const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
+					for (uint64_t now = from; now < to; ++now) {
+						while (host.IsRunning() && hostProduced <= hostApplied + 2 &&
+						       host.QueueLocalInput(hostProduced, {MakeFrame(100, hostProduced)}, {}, &queueError)) ++hostProduced;
+						if (clientPlays) {
+							while (client.IsRunning() && clientProduced <= clientApplied + 10 &&
+							       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
+						}
+						host.Tick(now); client.Tick(now);
+						NetLockstepReadyFrame ready;
+						while (host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
+						while (client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
+						if (host.IsRunning() && hostApplied < host.GetStats().nextFrame) host.NoteFrameWait(host.GetStats().nextFrame, now, true);
+						hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+					}
+				};
+				const auto describe = [&](const char* what) {
+					*failure = std::string(what) + "; host_park=" + std::to_string(hostParkMs) +
+					           " published_peer_park=" + std::to_string(host.GetStats().peers.at(2).startParkMs) +
+					           " state=" + NetLockstepCoordinator::StateName(host.GetState()) +
+					           " applied=" + std::to_string(hostApplied) + " next_frame=" + std::to_string(host.GetStats().nextFrame) +
+					           " holds=" + std::to_string(host.GetStats().peers.at(2).holds) +
+					           " peer2_frames=" + std::to_string(host.GetStats().peers.at(2).framePacketsReceived) +
+					           " queue=" + queueError + " client=" + NetLockstepCoordinator::StateName(client.GetState()) +
+					           " client_reason=" + client.GetStats().timeoutReason;
+					return false;
+				};
+				// The joiner's machine is still restarting; nothing of its has reached the round yet.
+				pump(0, clientStartsAtMs, false);
+				if (host.GetStats().peers.at(2).holds != 0 || host.IsSeatUnderAI(2, 9)) {
+					return describe("the host gave a starting peer's seat to the AI before its machine had started");
+				}
+				if (clientParkMs > 0 && host.GetStats().peers.at(2).startParkMs != clientParkMs) {
+					return describe("the peer's published start park never reached the host");
+				}
+				// It starts producing; the round takes the skew once and plays on.
+				pump(clientStartsAtMs, clientStartsAtMs + 120, true);
+				if (host.GetStats().peers.at(2).framePacketsReceived == 0 || host.GetStats().peers.at(2).holds != 0) {
+					return describe("the started peer's frames did not reach the round, or it was held on arrival");
+				}
+				// Negative control: the same peer stops sending while the round waits, and is held at the bound.
+				const uint64_t silentFrame = host.GetStats().nextFrame;
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 400);
+				host.NoteFrameWait(silentFrame, clientStartsAtMs + 460);
+				host.Tick(clientStartsAtMs + 460);
+				if (host.GetStats().peers.at(2).holds != 1 || !host.IsSeatUnderAI(2, silentFrame)) {
+					return describe("the bounded wait no longer holds a peer that went silent while the round waited");
+				}
+				return true;
+			};
+			// A peer whose own machine measured 200 ms of start work is allowed it, though ours cost nothing.
+			if (!play(48897, 0x9A0B, 0, 200, 260, error)) return false;
+			// A peer that published nothing gets our own measured start work as its floor.
+			return play(48898, 0x9A0C, 250, 0, 300, error);
 		}
 
 		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
@@ -5833,7 +5914,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x1E, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x20, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -15862,6 +15943,52 @@ namespace RTE {
 		}
 	} // namespace
 
+	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
+		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
+		// notice than the whole bound, and the seat must still be declared only after the bound of
+		// missing input - never the instant a frame is late.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A0D, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 3;
+		config.startFrame = 1;
+		config.roundId = 31;
+		config.substituteSlowPeers = true;
+		config.simTickMs = 1000.0 / 60.0;
+		config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 1}, {2, 1}, {3, 14}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0D);
+		if (!wire.StartHost(48899, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {2, 3};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_PeerEffectiveStart[3] = 15;
+		host.m_Stats.peers[2].pingMs = 0;
+		host.m_Stats.peers[3].pingMs = 200;
+		host.m_Stats.nextFrame = 6;
+		const auto describe = [&](const char* what, uint64_t elapsed) {
+			*error = std::string(what) + "; elapsed=" + std::to_string(elapsed) + "ms notice=" +
+			         std::to_string(host.GetStats().holdNoticeBudgetMs) + "ms bound_ticks=" +
+			         std::to_string(config.slowPlayerBoundTicks) + " holds=" + std::to_string(host.GetStats().peers.at(2).holds) +
+			         " feasible=" + std::to_string(host.GetStats().holdDeadlineFeasible ? 1 : 0);
+			return false;
+		};
+		if (host.DeclareOverdueInputs(6, 500, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			return describe("a survivor's long link held a peer the instant its frame was late", 0);
+		}
+		if (host.DeclareOverdueInputs(6, 530, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			return describe("a peer was held before the slow-player bound elapsed", 30);
+		}
+		// Negative control: past the bound the seat is still declared.
+		if (!host.DeclareOverdueInputs(6, 560, 500, {2})) {
+			return describe("the bound no longer declares a peer that stopped sending", 60);
+		}
+		return true;
+	}
+
 	int NetLockstepSelfTest::RunOrdering() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
@@ -15960,6 +16087,8 @@ namespace RTE {
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
+		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
+		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||

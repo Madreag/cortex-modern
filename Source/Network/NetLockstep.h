@@ -141,6 +141,7 @@ namespace RTE {
 		std::string ownershipPolicy;
 		uint64_t roundId = 0; //!< The host's tag for this lockstep round; a client adopts it from the host's start.
 		bool resumeFromSnapshot = false;
+		uint32_t activityRestartMs = 0; //!< This peer's own measured activity restart; 0 until it has one.
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -531,6 +532,7 @@ namespace RTE {
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
+		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
 		uint16_t delayFrames = 0;
@@ -627,8 +629,8 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 30;
-		static constexpr uint16_t c_WorldVersion = 31;
+		static constexpr uint16_t c_Version = 32;
+		static constexpr uint16_t c_WorldVersion = 33;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
@@ -660,6 +662,7 @@ namespace RTE {
 		static constexpr uint16_t c_SeatSnapshotVersion = 17;
 		static constexpr uint16_t c_MinVersion = 8;
 		static constexpr uint16_t c_RoundVersion = 11;
+		static constexpr uint16_t c_StartParkVersion = 32;
 		static constexpr uint16_t c_ObservationSlotVersion = 14;
 		static constexpr uint16_t c_ObservationBindingSequenceVersion = 15;
 		static constexpr size_t c_MaxObservationsPerPacket = NetSoundObservationDictionary::c_MaxSlots;
@@ -752,6 +755,9 @@ namespace RTE {
 		std::vector<NetResyncPendingCommand> CapturePendingCommands(uint64_t afterFrame) const;
 		std::vector<NetResyncPendingCommand> CapturePendingPlayerBindings(uint64_t afterFrame) const;
 		void Tick(uint64_t nowMs);
+
+		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
+		void NoteLocalStartPark(uint32_t restartMs);
 		void Complete(const std::string& message = "complete");
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
@@ -937,6 +943,7 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
+		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1043,6 +1050,8 @@ namespace RTE {
 		bool IsRoundAuthority(uint8_t peerId, NetPeerId fromTransport) const;
 		/// Whether a start describes the round this peer is configured for, field by field.
 		bool StartMatchesConfig(const NetLockstepStart& start) const;
+		/// Names the fields a refused start disagreed on, so a protocol error says what it saw.
+		std::string DescribeStartMismatch(const NetLockstepStart& start) const;
 		/// Leaves the round we formed for the one the host is in, keeping our own production.
 		void ReadoptRound(uint64_t roundId, uint64_t nowMs);
 		/// Delivers the frames and checksums a peer sent before its start reached us.
@@ -1157,6 +1166,7 @@ namespace RTE {
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
+		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
