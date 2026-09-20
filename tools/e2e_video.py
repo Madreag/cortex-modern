@@ -486,7 +486,10 @@ def item_evidence(record, item):
             value = steps.get(check["step"])
             for key in check["path"]:
                 value = value.get(key) if isinstance(value, dict) else None
-            passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
+            if "not_contains" in check:
+                passed = isinstance(value, str) and check["not_contains"] not in value
+            else:
+                passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
             checks.append({**check, "actual": value, "pass": passed})
         evidence["readback_assertions"] = checks
         if not all(check["pass"] for check in checks):

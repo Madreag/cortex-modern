@@ -148,7 +148,7 @@
       ],
       "readback": [
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "text"
@@ -156,7 +156,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "text"
@@ -164,7 +164,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "visible"
@@ -240,7 +240,7 @@
       ],
       "readback": [
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "text"
@@ -248,7 +248,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "text"
@@ -256,7 +256,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 7,
+          "step": 12,
           "path": [
             "control",
             "visible"
@@ -302,6 +302,72 @@
         "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
       ],
       "gate": "migration-hashes"
+    },
+    {
+      "id": "migration-loss-overlay-clienta",
+      "peer": "clienta",
+      "mark": "migration-loss-overlay",
+      "screen": "game",
+      "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
+      "readback": [
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        }
+      ]
+    },
+    {
+      "id": "migration-loss-overlay-clientb",
+      "peer": "clientb",
+      "mark": "migration-loss-overlay",
+      "screen": "game",
+      "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
+      "readback": [
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 6,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        }
+      ]
     }
   ],
   "migration_gate": {
