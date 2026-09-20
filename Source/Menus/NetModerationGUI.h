@@ -50,6 +50,7 @@ namespace RTE {
 		const OverlayRect& GetToastRect() const { return m_ToastRect; }
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
 		const OverlayRect& GetRosterRect() const { return m_RosterRect; }
+		const OverlayRect& GetSeatsPanelRect() const { return m_SeatsPanelRect; }
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
 
 		/// What the chat band laid out on the last frame, so a check can hold the rows it drew against the heights it used.
@@ -127,6 +128,7 @@ namespace RTE {
 		OverlayRect m_ToastRect;
 		OverlayRect m_ChatRect;
 		OverlayRect m_RosterRect;
+		OverlayRect m_SeatsPanelRect; //!< Where the open seats panel sat when the toast band was laid out.
 		long long m_StatusWaitStartedUs = 0;
 		long long m_LastStatusObservationMs = 0;
 		bool m_LastSlowNotice = false;

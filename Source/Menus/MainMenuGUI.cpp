@@ -179,6 +179,20 @@ static std::string SavedMultiplayerName() {
 	return g_SettingsMan.GetNetworkDisplayName().empty() ? "Player" : g_SettingsMan.GetNetworkDisplayName();
 }
 
+/// A host on this machine beacons from loopback as well as its LAN interface.
+static bool IsLoopbackAddress(const std::string& address) {
+	return address == "::1" || address.starts_with("127.");
+}
+
+/// A seat the roster has not named yet shows the local player their own name, never the internal default.
+static std::string LobbyRowName(const NetLobbyMember& member, const std::string& localName) {
+	if (!member.isLocal || localName.empty()) {
+		return member.displayName;
+	}
+	const bool unnamed = member.displayName.empty() || member.displayName == "Client " + std::to_string(member.peerId);
+	return unnamed ? localName : member.displayName;
+}
+
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
 
 static std::string s_ShareAddress;
@@ -505,6 +519,7 @@ void MainMenuGUI::CreateMultiplayerScreen() {
 	RefreshHostInputDelayControls();
 	m_MultiplayerHostPortMapCheckbox->SetCheck(g_SettingsMan.GetNetworkPortMapEnable() ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	m_MultiplayerJoinPortTextBox->SetText("41010");
+	m_JoinPortAutoValue = "41010";
 	m_MultiplayerJoinPortTextBox->SetNumericOnly(true);
 	m_MultiplayerJoinPortTextBox->SetMaxNumericValue(65535);
 	m_MultiplayerJoinPortTextBox->SetMaxTextLength(5);
@@ -1154,6 +1169,7 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 			} else {
 				m_MultiplayerJoinAddressTextBox->SetText(NetIceMenuJoinAddress(row));
 				m_MultiplayerJoinPortTextBox->SetText(std::to_string(row.port == 0 ? 41010 : row.port));
+				m_JoinPortAutoValue = m_MultiplayerJoinPortTextBox->GetText();
 				m_JoinTargetPersistentWorld = row.persistentWorld || row.activity == "Persistent World";
 				m_JoinTargetActivity = row.activity;
 				if (m_JoinTargetPersistentWorld) {
@@ -1261,6 +1277,42 @@ void MainMenuGUI::RefreshMultiplayerHostScenes() {
 	ApplyMultiplayerHostActivity();
 }
 
+void MainMenuGUI::FitClosedComboText(GUIComboBox* combo) {
+	GUISkin* skin = m_SubMenuScreenGUIControlManager ? m_SubMenuScreenGUIControlManager->GetSkin() : nullptr;
+	std::string fontName;
+	if (!combo || !skin || !skin->GetValue("TextBox", "Font", &fontName)) {
+		return;
+	}
+	GUIFont* font = skin->GetFont(fontName);
+	if (!font) {
+		return;
+	}
+	int kerning = 0, margin = 3;
+	skin->GetValue("TextBox", "FontKerning", &kerning);
+	skin->GetValue("TextBox", "WidthMargin", &margin);
+	const int savedKerning = font->GetKerning();
+	font->SetKerning(kerning);
+	// The drop-down button covers 17 pixels of the panel the selected item reads in.
+	const int room = combo->GetWidth() - 2 * margin - 17;
+	const GUIListPanel::Item* item = combo->GetItem(combo->GetSelectedIndex());
+	std::string text = item ? item->m_Name : combo->GetText();
+	if (font->CalculateWidth(text) > room) {
+		const size_t suffix = text.rfind(" - ");
+		if (suffix != std::string::npos && font->CalculateWidth(text.substr(0, suffix)) <= room) {
+			text = text.substr(0, suffix);
+		} else {
+			while (!text.empty() && font->CalculateWidth(text + "...") > room) {
+				text.pop_back();
+			}
+			if (!text.empty()) {
+				text += "...";
+			}
+		}
+	}
+	font->SetKerning(savedKerning);
+	combo->SetText(text);
+}
+
 void MainMenuGUI::FitHostActivityCombo() {
 	if (!m_MultiplayerHostActivityCombo || !m_MultiplayerHostPortTextBox || !m_MultiplayerHostPanel) {
 		return;
@@ -1305,8 +1357,10 @@ void MainMenuGUI::FitHostActivityCombo() {
 		return width;
 	};
 	const int activityWidth = fit(m_MultiplayerHostActivityCombo);
+	FitClosedComboText(m_MultiplayerHostActivityCombo);
 	if (m_MultiplayerHostSceneCombo) {
 		fit(m_MultiplayerHostSceneCombo);
+		FitClosedComboText(m_MultiplayerHostSceneCombo);
 	}
 	// The mode rows are short words, so the mode picker follows the activity picker's width.
 	if (m_MultiplayerHostModeCombo) {
@@ -1706,7 +1760,7 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 void MainMenuGUI::ShowHostOptionsPage(int page) {
 	m_HostOptionsPage = std::clamp(page, 0, c_HostOptionsPageCount - 1);
 	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
-		if (m_HostOptionsPages[i]) m_HostOptionsPages[i]->SetVisible(i == m_HostOptionsPage);
+		if (m_HostOptionsPages[i]) m_PanelVisibility.SetPresent(m_HostOptionsPages[i], i == m_HostOptionsPage);
 		if (m_HostOptionsTabs[i]) m_HostOptionsTabs[i]->SetCheck(i == m_HostOptionsPage);
 	}
 }
@@ -2904,6 +2958,10 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
 		return;
 	}
+	// A port this machine has hosted on is the one its own join field should offer next.
+	if (host) {
+		SetJoinPortAuto(static_cast<uint16_t>(parsedPort));
+	}
 	NetMatchServiceRequest request;
 	request.host = host;
 	if (!host) {
@@ -3243,15 +3301,16 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetEnabled(summary.has_value());
 	if (!summary) m_LastMatchDetailsLabel->SetText("");
-	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
-	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
-	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
-	if (m_MultiplayerResumePanel) m_MultiplayerResumePanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup);
-	m_MultiplayerLobbyPanel->SetVisible(lobby);
+	// One sub-screen is present at a time: the panel that goes away takes its own controls with it.
+	m_PanelVisibility.SetPresent(m_MultiplayerLandingPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
+	m_PanelVisibility.SetPresent(m_MultiplayerHostPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
+	m_PanelVisibility.SetPresent(m_MultiplayerJoinPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
+	if (m_MultiplayerResumePanel) m_PanelVisibility.SetPresent(m_MultiplayerResumePanel, m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup);
+	m_PanelVisibility.SetPresent(m_MultiplayerLobbyPanel, lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
-	m_MultiplayerModerationPanel->SetVisible(moderating);
-	m_ReplayBrowserPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
-	m_HostOptionsPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions);
+	m_PanelVisibility.SetPresent(m_MultiplayerModerationPanel, moderating);
+	m_PanelVisibility.SetPresent(m_ReplayBrowserPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
+	m_PanelVisibility.SetPresent(m_HostOptionsPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions);
 	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
@@ -3370,7 +3429,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
-		lobbyRowName[i] = member.displayName;
+		lobbyRowName[i] = LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
+		                                           ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
 		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
 		// The row drops connection metrics before shortening the seat state.
@@ -4293,6 +4353,22 @@ void MainMenuGUI::RefreshGamesList() {
 			}
 		}
 	}
+	// One row per session: a host beaconing on several interfaces is one game, listed at its best
+	// address - loopback when the host is this machine, else the address the beacon came in on.
+	std::vector<NetDirectoryClient::GameRow> listed;
+	listed.reserve(rows.size());
+	for (NetDirectoryClient::GameRow& row: rows) {
+		const auto same = std::find_if(listed.begin(), listed.end(), [&row](const NetDirectoryClient::GameRow& kept) {
+			return kept.source == row.source && kept.port == row.port && kept.name == row.name &&
+			       kept.activity == row.activity && kept.mode == row.mode && kept.sessionId == row.sessionId;
+		});
+		if (same == listed.end()) {
+			listed.push_back(std::move(row));
+		} else if (IsLoopbackAddress(row.address) && !IsLoopbackAddress(same->address)) {
+			same->address = row.address;
+		}
+	}
+	rows = std::move(listed);
 	const auto describe = [this](const NetDirectoryClient::GameRow& row) {
 		return FitDiscoveredGameRow(row, m_MultiplayerLanGamesList->GetFont(), std::max(1, m_MultiplayerLanGamesList->GetWidth() - 29));
 	};
@@ -4309,6 +4385,21 @@ void MainMenuGUI::RefreshGamesList() {
 	for (const NetDirectoryClient::GameRow& row: m_GameRows) {
 		m_MultiplayerLanGamesList->AddItem(describe(row));
 	}
+	// The Port field follows what is listed rather than the stock default nobody is hosting on.
+	const auto listedPort = std::find_if(m_GameRows.begin(), m_GameRows.end(), [](const NetDirectoryClient::GameRow& row) {
+		return row.joinable && row.port != 0;
+	});
+	if (listedPort != m_GameRows.end()) {
+		SetJoinPortAuto(listedPort->port);
+	}
+}
+
+void MainMenuGUI::SetJoinPortAuto(uint16_t port) {
+	if (!m_MultiplayerJoinPortTextBox || port == 0 || m_MultiplayerJoinPortTextBox->GetText() != m_JoinPortAutoValue) {
+		return;
+	}
+	m_JoinPortAutoValue = std::to_string(port);
+	m_MultiplayerJoinPortTextBox->SetText(m_JoinPortAutoValue);
 }
 
 void MainMenuGUI::MaybeLaunchMultiplayerActivity() {
