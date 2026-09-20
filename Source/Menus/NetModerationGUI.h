@@ -160,6 +160,8 @@ namespace RTE {
 		std::optional<Press> m_Press;
 		NetModerationUx m_Model;
 		std::optional<NetH4ModerationResult> m_ActionResult;
+		std::vector<uint8_t> m_AnnouncedAISeats;
+		uint64_t m_DepartureFrame = 0;
 		bool m_Open = false;
 	};
 }
