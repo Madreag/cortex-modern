@@ -4606,13 +4606,20 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::FinishFrameWait(uint64_t nowMs) {
-		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs)
+		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
+			if (nowMs > m_ConsumerWaitStartMs)
+				std::cout << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << std::endl;
+		}
 		m_ConsumerWaitingFrame.reset();
 	}
 
 	void NetLockstepCoordinator::NoteLocalTickCost(uint64_t producedFrame, double computeMs) {
 		if (m_Playback || m_Config.simTickMs <= 0 || !std::isfinite(computeMs) || computeMs < 0) return;
+		if (!m_Stats.measuredMissingFrameBase && producedFrame >= m_Config.startFrame + 300) {
+			m_Stats.measuredMissingFrameBase = m_Stats.missingFrameStalls;
+			m_Stats.measuredBlockingWaitBase = m_Stats.blockingFrameWaits;
+		}
 		const bool overrun = computeMs > m_Config.simTickMs;
 		if (overrun) ++m_Stats.localTickOverruns;
 		m_Stats.localComputeDebtMs = std::max(0.0, m_Stats.localComputeDebtMs + computeMs - m_Config.simTickMs);
@@ -6081,6 +6088,8 @@ namespace RTE {
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
+		out << "\"steady_missing_frame_stalls\":" << (m_Stats.measuredMissingFrameBase ? std::to_string(m_Stats.missingFrameStalls - *m_Stats.measuredMissingFrameBase) : "null") << ",";
+		out << "\"steady_blocking_frame_waits\":" << (m_Stats.measuredBlockingWaitBase ? std::to_string(m_Stats.blockingFrameWaits - *m_Stats.measuredBlockingWaitBase) : "null") << ",";
 		out << "\"delay_changes_proposed\":" << m_Stats.delayChangesProposed << ",";
 		out << "\"delay_changes_committed\":" << m_Stats.delayChangesCommitted << ",";
 		out << "\"delay_padding_frames\":" << m_Stats.delayPaddingFrames << ",";
@@ -6203,6 +6212,17 @@ namespace RTE {
 				continue;
 			}
 			const std::vector<uint8_t>& bytes = bytesFor(peerId);
+			static const auto testLossPercent = TestFrameFromEnvironment("CC_TEST_FRAME_PACKET_LOSS_PERCENT");
+			if (frame && testLossPercent && *testLossPercent <= 100 && std::getenv("CCCP_HEADLESS")) {
+				uint64_t sample = frame->targetFrame + 0x9e3779b97f4a7c15ULL * (peerId + 8ULL * m_Config.localPeerId);
+				sample = (sample ^ (sample >> 30)) * 0xbf58476d1ce4e5b9ULL;
+				sample = (sample ^ (sample >> 27)) * 0x94d049bb133111ebULL;
+				sample ^= sample >> 31;
+				if (sample % 100 < *testLossPercent) {
+					std::cout << "[net-frame-loss] frame=" << frame->targetFrame << " to=" << static_cast<int>(peerId) << " percent=" << *testLossPercent << std::endl;
+					continue;
+				}
+			}
 			// Only a frame has a reserved byte there; another payload's byte 1 means something else.
 			if (frame && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
