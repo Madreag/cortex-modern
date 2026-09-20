@@ -447,7 +447,6 @@ def reduce_peer(run, peer, baseline=None):
     expected_inputs = {(row['tick'], row['action'], row['held']) for row in schedule['probes']}
     actual_inputs = {(row['tick'], change['action'], change['held']) for row in inputs for change in row['changes']}
     missing_inputs = sorted(expected_inputs - actual_inputs)
-    expected_delay = 0 if peer == 'sp' else 1
     over_50 = [frame['frame'] for frame in frames if max(frame['draw_ms'], frame['present_ms'], frame['interval_ms'] or 0) > 50]
     captures = [row for row in rows if row['type'] == 'capture']
     capture_missing = sorted(set(range(60, TICKS + 1, 60)) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
