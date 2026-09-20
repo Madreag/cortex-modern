@@ -6368,6 +6368,9 @@ static std::string ResyncSaveName() {
 					NetResyncState state;
 					started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
 					if (started) pendingState = std::move(state);
+					// Staging the snapshot parked this thread, and the game thread cannot reach a session
+					// the worker owns: the silence windows start again here, as they do for a catch-up.
+					session->NotePumpParked();
 				}
 			}
 		}
