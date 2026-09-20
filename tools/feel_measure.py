@@ -213,10 +213,13 @@ def summarize_case(report, out):
     lines = [f'Measured {stamp()}', '', report['mode'], '',
              '| Pinned number | Host value / result | Client value / result |', '|---|---|---|']
     peers = report['peers']
-    for key in peers['client']['pins']:
+    for key in dict.fromkeys(key for value in peers.values() for key in value['pins']):
         cells = []
         for peer in ('host', 'client'):
-            row = peers[peer]['pins'][key]
+            row = peers[peer]['pins'].get(key)
+            if row is None:
+                cells.append('n/a')
+                continue
             value = row['value']
             if isinstance(value, dict) and 'max' in value:
                 value = value['max']
@@ -251,11 +254,21 @@ def reduce_or_fail(run, peer, baseline=None):
         raise
 
 
+def reduce_timing_case(run):
+    manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
+    silent = bool(manifest.get('silent_tick'))
+    peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'))
+    return dict(name=run.name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
+                proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
+
+
 def analyze(root):
     root = Path(root)
     peer = single_case_peer(root)
     if peer:
-        result = reduce_or_fail(root, peer)
+        manifest = json.loads((root / 'manifest.json').read_text(encoding='utf-8'))
+        result = reduce_timing_case(root) if manifest.get('loss_percent') or manifest.get('silent_tick') else reduce_or_fail(root, peer)
         write_json(root / 'feel-report.json', result)
         return [result]
     baselines = {}
@@ -297,18 +310,17 @@ def analyze(root):
     for name in ('200ms-loss5', '200ms-silent600'):
         run = root / name
         if not run.is_dir():
+            results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
             continue
-        peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if name.endswith('silent600') else ('host',))}
-        proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if name.endswith('silent600') else 'client_trace.json'))
-        report = dict(name=name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
-                      proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
+        report = reduce_timing_case(run)
         write_json(run / 'feel-report.json', report)
         results.append(report)
     write_json(root / 'matrix-report.json', results)
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
-        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({report["name"]}-on/summary.md) |')
+        link = f'{report["name"]}/feel-report.json' if report['name'] in ('200ms-loss5', '200ms-silent600') else f'{report["name"]}-on/summary.md'
+        lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a adds the 59.5 tps, 50 ms and one-percent wait gates. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
@@ -416,16 +428,17 @@ def main(argv=None):
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
-    item9a_pass = all(pin['status'] == 'PASS' for row in results for peer in row.get('peers', {}).values()
-                     for name, pin in peer['pins'].items() if name.startswith('item9a_'))
+    item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
+                  for name, pin in peer['pins'].items() if name.startswith('item9a_')]
+    item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, gates_pass=gate_pass,
+    completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
     print(json.dumps(completion, indent=2), flush=True)
-    return 0 if complete and item9a_pass and (gate_pass or skip_gates) else 1
+    return 0 if complete and item9a_pass is not False and (gate_pass or skip_gates) else 1
 
 
 if __name__ == '__main__':
