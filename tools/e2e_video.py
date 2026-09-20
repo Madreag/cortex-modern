@@ -1047,6 +1047,7 @@ def compare_hash_range(first, second, start, cap, out):
 
 
 def migration_probes(config, capture):
+    from e2e.timing import migration_timing
     root = Path(capture["root"])
     names = config["peers"]
     peers = [next(peer for peer in capture["peers"] if peer["peer"] == name) for name in names]
@@ -1067,6 +1068,9 @@ def migration_probes(config, capture):
     except (OSError, ValueError, KeyError, IndexError) as error:
         result["reason"] = str(error)
     result["evidence"] = str(root / "migration-hashes.json")
+    timing = migration_timing(capture, names)
+    write_json(root / "migration-timing.json", timing)
+    result["timing"] = str(root / "migration-timing.json")
     write_json(root / "migration-hashes.json", result)
     for peer in peers:
         peer.setdefault("gates", {})["migration-hashes"] = result

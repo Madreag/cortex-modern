@@ -565,6 +565,28 @@ def check_cross_capture(results, scratch):
     return ok
 
 
+def check_migration_timing(results, scratch):
+    from e2e.timing import migration_timing
+    root = scratch / 'timing'
+    root.mkdir()
+    events = [
+        {'wall_ms': 2000, 'message': 'net_status peer=2 host_lost=1 local_slow=1'},
+        {'wall_ms': 4600, 'message': 'net_status peer=2 host_lost=0 local_slow=1'},
+        {'wall_ms': 4700, 'message': 'handover_toast peer=2 longest_ms=2700 text=Host left - ClientA is now hosting'},
+        {'wall_ms': 5000, 'message': 'net_status peer=2 host_lost=0 local_slow=0'},
+        {'wall_ms': 5500, 'message': 'net_status peer=2 host_lost=0 local_slow=1'}]
+    (root / 'events.jsonl').write_text('\n'.join(json.dumps(event) for event in events))
+    capture = {'peers': [{'peer': 'host', 'index': [{'frame': 1, 'screen': 'game', 'wall_ms': 1900}]},
+                         {'peer': 'clienta', 'video_dir': str(root), 'index': [{'frame': 2, 'wall_ms': 4750}, {'frame': 3, 'wall_ms': 6000}]}]}
+    item = migration_timing(capture, ['clienta'])['survivors'][0]
+    ok = row(results, 'migration/timing-from-host-last-frame', item['seconds_from_host_last_frame'] == 2.8 and item['overlay_longest_ms_at_toast'] == 2700 and item['toast_nearest_frame']['frame'] == 2)
+    ok &= row(results, 'migration/complete-and-truncated-slow-banners', item['local_slow_intervals'] == [{'start_ms': 2000, 'end_ms': 5000, 'seconds': 3.0, 'complete': True}, {'start_ms': 5500, 'end_ms': 6000, 'seconds': .5, 'complete': False}])
+    capture['peers'][0]['index'] = []
+    item = migration_timing(capture, ['clienta'])['survivors'][0]
+    ok &= row(results, 'migration/no-invented-loss-time', not item['timing_complete'] and item['seconds_from_host_last_frame'] is None)
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -594,6 +616,7 @@ def main():
         ok &= check_drop_receipts(results, scratch)
         ok &= check_gameplay_epochs(results, scratch)
         ok &= check_cross_capture(results, scratch)
+        ok &= check_migration_timing(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",
