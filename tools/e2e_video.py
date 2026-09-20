@@ -1037,7 +1037,7 @@ def main():
                                   "finding": {"class": "data", "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
                                  for item in scenario["checklist"]]})
         scenario_manifest(capture, out, time.monotonic() - started)
-        print(f"{scenario['name']}: requires-missing: {missing}")
+        print(f"{scenario['name']}: requires-blocked: {missing}")
         return 2
     complete = True
     write_json(out / "capture.json", capture)
