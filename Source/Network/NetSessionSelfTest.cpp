@@ -954,13 +954,25 @@ namespace RTE {
 				*error = "replacement lost state-transfer bytes or retained an obsolete Start request";
 				return false;
 			}
+			const uint64_t revisionBeforeForgery = hostLobby.GetMatchConfig().configRevision;
 			if (!NetLobbyProtocol::Encode({NetLobbyReady{2, false}}, bytes) || !transports[1].Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;
 			active[1] = false;
 			phase = "forged readiness";
 			if (!pump()) return false;
 			sessions[1].Tick(now);
-			if (!sessions[1].IsClosed() || hostSession.GetReadyPeerCount() != 1 || !hostLobby.IsRemoteReady(2)) {
-				*error = "forged readiness was not isolated to its sending connection";
+			if (!sessions[1].IsClosed() || hostSession.GetReadyPeerCount() != 1 || !sessions[0].IsReady() || !lobbies[0].IsLocalReady() ||
+			    hostLobby.IsRemoteReady(2) || hostLobby.GetState() != NetLobbyState::WaitingForConfigAck ||
+			    hostLobby.GetMatchConfig().configRevision != revisionBeforeForgery + 1) {
+				*error = "forged readiness was not isolated to its sending connection: closed=" + std::to_string(sessions[1].IsClosed()) +
+				         " peers=" + std::to_string(hostSession.GetReadyPeerCount()) + " host_ready=" + std::to_string(hostLobby.IsRemoteReady(2)) +
+				         " local_ready=" + std::to_string(lobbies[0].IsLocalReady()) + " lobby=" + NetLobbySession::StateName(hostLobby.GetState());
+				return false;
+			}
+			// The surviving peer's acknowledgement belongs to the opened seat's new revision.
+			if (!pump()) return false;
+			if (!hostLobby.IsRemoteReady(2) || !lobbies[0].IsLocalReady() ||
+			    hostLobby.GetMatchConfigHash() != lobbies[0].GetMatchConfigHash()) {
+				*error = "the surviving peer did not acknowledge the opened roster with its readiness intact";
 				return false;
 			}
 			phase = "replacement after rejection";
@@ -1444,8 +1456,9 @@ namespace RTE {
 		public:
 			bool IsRealCrypto() const override { return false; }
 			bool GenerateKey(uint8_t (&priv)[32], uint8_t (&pub)[32]) override {
+				++m_Counter;
 				for (int i = 0; i < 32; ++i) {
-					priv[i] = static_cast<uint8_t>(++m_Counter);
+					priv[i] = static_cast<uint8_t>((m_Counter >> ((i % 8) * 8)) ^ i);
 					pub[i] = static_cast<uint8_t>(~priv[i]);
 				}
 				return true;
@@ -1467,7 +1480,7 @@ namespace RTE {
 				return Sign(priv, message, messageCount, expected) && std::memcmp(expected, signature, 64) == 0;
 			}
 		private:
-			uint8_t m_Counter = 11;
+			uint64_t m_Counter = 11;
 		};
 
 		bool TestIdentityProof(std::string* error) {
@@ -1771,12 +1784,18 @@ namespace RTE {
 				return done(false);
 			}
 			// Thirty-two later joins: one more than the count the list used to keep.
+			std::vector<NetParticipantId> identities{first.PublicId()};
 			for (int index = 0; index < 32; ++index) {
 				NetParticipantIdentityStore filler;
 				filler.SetPath((lane / ("filler" + std::to_string(index) + ".key")).string());
 				if (!filler.LoadOrCreate(error)) {
 					return done(false);
 				}
+				if (std::find(identities.begin(), identities.end(), filler.PublicId()) != identities.end()) {
+					*error = "scripted identity repeated at join " + std::to_string(index);
+					return done(false);
+				}
+				identities.push_back(filler.PublicId());
 				NetParticipantProof fillerProof;
 				const NetPeerId connection = static_cast<NetPeerId>(301 + index);
 				if (!prove(connection, 7300 + static_cast<uint64_t>(index), filler, fillerProof, false)) {
