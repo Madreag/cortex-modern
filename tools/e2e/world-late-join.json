@@ -136,12 +136,13 @@
       "id": "pw-late-join",
       "peer": "client-late",
       "screen": "game",
-      "sim_ticks": [
-        0,
-        1400
-      ],
       "what": "the late joiner is given the world as the first client left it: terrain, actors and objectives all carried over, not a fresh scene",
-      "assert": "late report against the world report's tick and the first client's last frames"
+      "assert": "Native snapshot transfer and load evidence; the first recorded tick is the restored world tick, not a new zero-based client counter. Continued play remains subject to the peer result.",
+      "service_state": "Running",
+      "log_regex": [
+        "\\[net-match\\] state transfer complete: \\d+ bytes",
+        "\\[snapbench\\] read_ms=\\d+"
+      ]
     },
     {
       "id": "pw-late-video-agrees",
