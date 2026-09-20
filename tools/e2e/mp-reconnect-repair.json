@@ -247,7 +247,19 @@
       "log_regex": [
         "\\[net-match\\] resync: reloading from the host snapshot",
         "\\[net-match\\] resync: match relaunched from the snapshot"
-      ]
+      ],
+      "mark": "repair-post-play",
+      "service_state": "Running"
+    },
+    {
+      "id": "rp-reload-overlay",
+      "run": "repair",
+      "screen": "ResyncOverlay",
+      "what": "The snapshot reload overlay appears on each peer during Repair Match.",
+      "log_regex": [
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "assert": "A recorded ResyncOverlay frame and the peer snapshot-reload log line."
     }
   ]
 }

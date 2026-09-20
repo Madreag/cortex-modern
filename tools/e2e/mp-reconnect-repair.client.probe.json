@@ -116,6 +116,31 @@
       "elapsed_ms": 1320
     },
     {
+      "op": "menu",
+      "command": "activate ButtonMatchOptionsClose"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonResume"
+    },
+    {
+      "op": "wait",
+      "screen": "Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "video_mark repair-post-play"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 990
+    },
+    {
       "op": "signal",
       "name": "done"
     },
