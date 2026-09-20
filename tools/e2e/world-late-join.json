@@ -8,54 +8,154 @@
   "peers": [
     {
       "name": "world",
-      "args": ["-net-dedicated", "-net-port", "{PORT}", "-net-match-peers", "3",
-               "-net-match-input-delay", "3", "-net-autosave-seconds", "1",
-               "-net-match-ticks", "4200", "-max-ticks", "4200",
-               "-net-match-report", "{OUT}/world-report.json"],
-      "settings": {"NetworkDisplayName": "World"}
+      "args": [
+        "-net-dedicated",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-input-delay",
+        "3",
+        "-net-autosave-seconds",
+        "1",
+        "-net-match-ticks",
+        "4200",
+        "-max-ticks",
+        "4200",
+        "-net-match-report",
+        "{OUT}/world-report.json",
+        "-net-persistent-world",
+        "-net-world-fresh"
+      ],
+      "settings": {
+        "NetworkDisplayName": "World"
+      }
     },
     {
       "name": "client-first",
-      "args": ["-net-match-service-e2e", "-net-join", "127.0.0.1", "-net-port", "{PORT}",
-               "-net-match-peers", "3", "-net-match-input-delay", "3", "-net-autosave-seconds", "1",
-               "-net-match-ticks", "1400", "-max-ticks", "1400", "-input-script", "{INPUT_SCRIPT}",
-               "-net-reconnect-ticket", "{OUT}/first.ticket",
-               "-net-match-report", "{OUT}/first-report.json"],
+      "args": [
+        "-net-match-service-e2e",
+        "-net-join",
+        "127.0.0.1",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-input-delay",
+        "3",
+        "-net-autosave-seconds",
+        "1",
+        "-net-match-ticks",
+        "1400",
+        "-max-ticks",
+        "1400",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-reconnect-ticket",
+        "{OUT}/first.ticket",
+        "-net-match-report",
+        "{OUT}/first-report.json"
+      ],
       "input_script": "play-input.txt",
-      "settings": {"NetworkDisplayName": "Settler"},
+      "settings": {
+        "NetworkDisplayName": "Settler"
+      },
       "start_delay_s": 6.0
     },
     {
       "name": "client-late",
-      "args": ["-net-match-service-e2e", "-net-join", "127.0.0.1", "-net-port", "{PORT}",
-               "-net-match-peers", "3", "-net-match-input-delay", "3", "-net-autosave-seconds", "1",
-               "-net-match-ticks", "1400", "-max-ticks", "1400", "-input-script", "{INPUT_SCRIPT}",
-               "-net-reconnect-ticket", "{OUT}/late.ticket",
-               "-net-match-report", "{OUT}/late-report.json"],
+      "args": [
+        "-net-match-service-e2e",
+        "-net-join",
+        "127.0.0.1",
+        "-net-port",
+        "{PORT}",
+        "-net-match-peers",
+        "3",
+        "-net-match-input-delay",
+        "3",
+        "-net-autosave-seconds",
+        "1",
+        "-net-match-ticks",
+        "1400",
+        "-max-ticks",
+        "1400",
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-net-reconnect-ticket",
+        "{OUT}/late.ticket",
+        "-net-match-report",
+        "{OUT}/late-report.json"
+      ],
       "input_script": "play-input.txt",
-      "settings": {"NetworkDisplayName": "Latecomer"},
-      "start_delay_s": 70.0
+      "settings": {
+        "NetworkDisplayName": "Latecomer"
+      },
+      "start_when": {
+        "peer": "world",
+        "sim_tick": 1800,
+        "timeout_s": 100
+      }
     }
   ],
   "checklist": [
-    {"id": "pw-world-up", "peer": "world", "screen": "game", "sim_ticks": [0, 4200],
-     "what": "the dedicated world host runs without a menu and keeps ticking across both clients' visits",
-     "assert": "world report: the match runs to its tick cap"},
-    {"id": "pw-first-join", "peer": "client-first", "screen": "game", "sim_ticks": [30, 1400],
-     "what": "the first client joins the running world and plays in it",
-     "assert": "first report plus the world's seat rows"},
-    {"id": "pw-first-leave", "peer": "world", "screen": "game", "sim_ticks": [1400, 2600],
-     "what": "the first client leaves and the world keeps its state, with the seat freed and no error",
-     "assert": "world report between the two visits"},
-    {"id": "pw-late-join", "peer": "client-late", "screen": "game", "sim_ticks": [0, 1400],
-     "what": "the late joiner is given the world as the first client left it: terrain, actors and objectives all carried over, not a fresh scene",
-     "assert": "late report against the world report's tick and the first client's last frames"},
-    {"id": "pw-late-video-agrees", "peer": "client-late", "screen": "game",
-     "what": "the late joiner's first frames show the same world the host's video shows at that tick",
-     "assert": "compare the two contact sheets at the same sim tick"},
-    {"id": "pw-fresh-world-flag",
-     "what": "a run that starts the world from scratch (-net-world-fresh) is part of this scenario",
-     "assert": "not scripted",
-     "blocked_by": "F111: -net-persistent-world and -net-world-fresh continue the argument loop without advancing it (Source/Main.cpp:1160 and :1165), so any run carrying either flag spins before the engine starts. This scenario uses -net-dedicated alone, which reaches the same persistent-world preset. Add the fresh-world run once F111 lands."}
+    {
+      "id": "pw-world-up",
+      "peer": "world",
+      "screen": "game",
+      "sim_ticks": [
+        0,
+        4200
+      ],
+      "what": "the dedicated world host runs without a menu and keeps ticking across both clients' visits",
+      "assert": "world report: the match runs to its tick cap"
+    },
+    {
+      "id": "pw-first-join",
+      "peer": "client-first",
+      "screen": "game",
+      "sim_ticks": [
+        30,
+        1400
+      ],
+      "what": "the first client joins the running world and plays in it",
+      "assert": "first report plus the world's seat rows"
+    },
+    {
+      "id": "pw-first-leave",
+      "peer": "world",
+      "screen": "game",
+      "sim_ticks": [
+        1400,
+        2600
+      ],
+      "what": "the first client leaves and the world keeps its state, with the seat freed and no error",
+      "assert": "world report between the two visits"
+    },
+    {
+      "id": "pw-late-join",
+      "peer": "client-late",
+      "screen": "game",
+      "sim_ticks": [
+        0,
+        1400
+      ],
+      "what": "the late joiner is given the world as the first client left it: terrain, actors and objectives all carried over, not a fresh scene",
+      "assert": "late report against the world report's tick and the first client's last frames"
+    },
+    {
+      "id": "pw-late-video-agrees",
+      "peer": "client-late",
+      "screen": "game",
+      "what": "the late joiner's first frames show the same world the host's video shows at that tick",
+      "assert": "compare the two contact sheets at the same sim tick"
+    },
+    {
+      "id": "pw-fresh-world-flag",
+      "what": "a run that starts the world from scratch (-net-world-fresh) is part of this scenario",
+      "assert": "launch.json carries -net-persistent-world and -net-world-fresh; frames show the fresh world",
+      "peer": "world",
+      "screen": "game"
+    }
   ]
 }
