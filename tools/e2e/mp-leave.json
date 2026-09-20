@@ -49,7 +49,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 0,
-          "probe": "mp-leave.survivor.probe.json"
+          "probe": "mp-leave.announced-host.probe.json"
         },
         {
           "name": "leaver",
@@ -137,7 +137,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 5,
-          "probe": "mp-leave.survivor.probe.json"
+          "probe": "mp-leave.announced-survivor.probe.json"
         }
       ]
     },
@@ -361,6 +361,17 @@
       ],
       "log_regex": [
         "\\[net-match\\] hold peer=2 frame=\\d+ AI in control"
+      ]
+    },
+    {
+      "id": "announced-ai-label",
+      "peer": "host",
+      "run": "announced",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departed seat reads Left - AI in control, without drop or hold timers.",
+      "probe_steps": [
+        7
       ]
     }
   ]
