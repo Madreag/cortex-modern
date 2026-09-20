@@ -58,9 +58,29 @@ using namespace RTE;
 
 static std::string PlayerFacingStatus(const std::string& text) {
 	if (text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos) {
-		return text.starts_with("A player could not join:") ? "A banned player could not join this session" : "You are banned from this session";
+		return text.starts_with("A player could not join:") ? "A banned player was refused." : "You are banned from this session";
 	}
+	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
 	return text;
+}
+
+static std::string FitDiscoveredGameRow(const NetDirectoryClient::GameRow& row, GUIFont* font, int width) {
+	if (!font || row.persistentWorld) return NetDirectoryClient::DescribeGameRow(row);
+	std::string name = row.name, activity = row.activity;
+	const std::string address = row.address + ":" + std::to_string(row.port);
+	const std::string suffix = " (" + row.players + ") " + address + (row.joinable ? "" : " [unavailable]");
+	const auto compose = [&] { return "[" + row.source + "] " + name + " - " + activity + suffix; };
+	const auto shorten = [](std::string& value) {
+		const size_t dots = value.find("...");
+		if (dots == std::string::npos) {
+			if (value.size() <= 3) { value.clear(); return; }
+			value.replace((value.size() - 3) / 2, 3, "...");
+		} else if (value.size() <= 4) value.clear();
+		else value.erase(dots > 0 ? dots - 1 : dots + 3, 1);
+	};
+	while (!activity.empty() && font->CalculateWidth(compose()) > width) shorten(activity);
+	while (!name.empty() && font->CalculateWidth(compose()) > width) shorten(name);
+	return compose();
 }
 
 // Windows-1252 for one Unicode codepoint; 0xA0-0xFF match Latin-1.
@@ -3369,16 +3389,18 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 				++connectedCount;
 			}
 		}
-		if (connectedCount < 2) {
+		const size_t openSeats = std::count_if(snapshot.members.begin(), snapshot.members.end(), [](const auto& member) { return !member.connected && !member.cpu; });
+		const std::string waiting = "Waiting for " + std::to_string(openSeats) + (openSeats == 1 ? " player to join..." : " players to join...");
+		if (openSeats > 0 && connectedCount < 2) {
 			if (!s_ShareResolved) {
 				s_ShareAddress = NetLanDiscovery::GetPrimaryLocalAddress();
 				s_ShareResolved = true;
 			}
 			if (s_ShareAddress.empty()) {
-				m_MultiplayerStatusLabel->SetText("Waiting for a player to join...");
+				m_MultiplayerStatusLabel->SetText(waiting);
 			} else {
 				const std::string address = s_ShareAddress + ":" + m_MultiplayerHostPortTextBox->GetText();
-				std::string prose = "Waiting for a player to join... share";
+				std::string prose = waiting + " LAN address:";
 				// The status label's skin font is FontLarge; draw and measure the share row in FontSmall.
 				if (m_MultiplayerLobbyPlayerRowFallbackFont) {
 					m_MultiplayerStatusLabel->EnsureDrawableTextFont("FontSmall.png");
@@ -3400,8 +3422,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			}
 		} else {
 			s_ShareResolved = false;
-			if (connectedCount < snapshot.members.size()) {
-				m_MultiplayerStatusLabel->SetText("Waiting for players to join... (" + std::to_string(connectedCount) + "/" + std::to_string(snapshot.members.size()) + ")");
+			if (openSeats > 0) {
+				m_MultiplayerStatusLabel->SetText(waiting);
 			} else {
 				m_MultiplayerStatusLabel->SetText("Waiting for everyone to ready up...");
 			}
@@ -4271,7 +4293,9 @@ void MainMenuGUI::RefreshGamesList() {
 			}
 		}
 	}
-	const auto describe = [](const NetDirectoryClient::GameRow& row) { return NetDirectoryClient::DescribeGameRow(row); };
+	const auto describe = [this](const NetDirectoryClient::GameRow& row) {
+		return FitDiscoveredGameRow(row, m_MultiplayerLanGamesList->GetFont(), std::max(1, m_MultiplayerLanGamesList->GetWidth() - 29));
+	};
 	bool changed = rows.size() != m_GameRows.size();
 	for (size_t i = 0; !changed && i < rows.size(); ++i) {
 		changed = describe(rows[i]) != describe(m_GameRows[i]);
@@ -4281,6 +4305,7 @@ void MainMenuGUI::RefreshGamesList() {
 	}
 	m_GameRows = std::move(rows);
 	m_MultiplayerLanGamesList->ClearList();
+	m_MultiplayerLanGamesList->EnableScrollbars(false, true);
 	for (const NetDirectoryClient::GameRow& row: m_GameRows) {
 		m_MultiplayerLanGamesList->AddItem(describe(row));
 	}
