@@ -4338,7 +4338,7 @@ namespace RTE {
 				continue;
 			}
 			auto answer = otherStart;
-			if (const auto admission = m_PeerAdmissions.find(peerId); admission != m_PeerAdmissions.end()) {
+			if (const auto admission = m_PeerAdmissions.find(peerId); admission != m_PeerAdmissions.end() && !IsPersistentWorldRound()) {
 				answer.startFrame = admission->second.frame;
 				answer.inputDelayFrames = InputDelayAt(otherPeerId, answer.startFrame);
 				answer.roundId = m_RoundId;
