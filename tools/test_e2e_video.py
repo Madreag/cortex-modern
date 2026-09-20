@@ -321,6 +321,16 @@ def check_finalizer(results, scratch):
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
     ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    saved["scenario_definition"]["runs"] = [{"name": "first"}]
+    saved.pop("interrupted", None)
+    saved["runs"][0].pop("interrupted", None)
+    (peer / "launch.json").write_text(json.dumps({"started": True, "exit_code": 0, "elapsed_seconds": 7.5}), encoding="utf-8")
+    (out / "capture.json").write_text(json.dumps(saved), encoding="utf-8")
+    (out / "manifest.json").write_text(json.dumps({"wall_seconds": 7.5}), encoding="utf-8")
+    driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
+    complete = json.loads((out / "capture.json").read_text())
+    measured = json.loads((out / "manifest.json").read_text())
+    ok &= row(results, "finalize/preserves-completed-run-and-wall-time", not complete.get("interrupted") and measured["wall_seconds"] == 7.5)
     return ok
 
 
