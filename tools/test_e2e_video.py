@@ -538,6 +538,12 @@ def check_resume_seams(results, scratch):
     driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:-1]}]})
     result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-missing")
     ok &= row(results, "migration/missing-cap-fails", result["status"] == "FAIL" and not result["full_rows_equal"])
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:2]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-prefix-only")
+    ok &= row(results, 'migration/prefix-names-first-missing-tick', result['status'] == 'FAIL' and result['first_missing_tick'] == 3)
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:2] + rows[3:]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-gap")
+    ok &= row(results, 'migration/gap-keeps-strict-failure-and-missing-tick', result['status'] == 'FAIL' and result['first_missing_tick'] == 3 and bool(result['validation_errors']))
     return ok
 
 

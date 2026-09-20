@@ -4664,6 +4664,11 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				g_MetricsCollector.RecordString(traceGapKey, nlohmann::json{{"stopped_at", matchTick}, {"reason", error}}.dump());
 				System::PrintDiagnosticLine("[menu-mp] trace recovery gap frame=" + std::to_string(matchTick) + " reason=" + error);
 				FrameRecorder::Instance().RecordEvent("trace recovery gap frame=" + std::to_string(matchTick));
+				// Save the observed prefix before recovery can leave the gameplay loop.
+				const std::string& tracePath = ScenarioRunner::GetArgs().outPath;
+				if (!tracePath.empty() && !g_MetricsCollector.WriteReport(tracePath)) {
+					System::PrintDiagnosticErrorLine("[menu-mp] could not retain trace before recovery: " + tracePath);
+				}
 			}
 			if (heldRejoin) {
 				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
