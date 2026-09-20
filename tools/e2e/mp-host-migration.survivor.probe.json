@@ -46,7 +46,7 @@
     },
     {
       "op": "wait",
-      "control": "LabelNetMatchToastNewest",
+      "control": "LabelNetMatchHandoverToast",
       "text_contains": "Host left - ClientA is now hosting",
       "equals": {
         "visible": true
@@ -62,7 +62,7 @@
     },
     {
       "op": "assert_control",
-      "control": "LabelNetMatchToastNewest",
+      "control": "LabelNetMatchHandoverToast",
       "text_contains": "Host left - ClientA is now hosting"
     },
     {

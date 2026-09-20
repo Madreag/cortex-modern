@@ -134,8 +134,7 @@
       "id": "migration-drop-clienta",
       "peer": "clienta",
       "mark": "migration-host-drop",
-      "screen": "game",
-      "what": "The survivor video spans the original host loss and handover toast."
+      "what": "The survivor video spans the recorded host drop until the host-loss status appears."
     },
     {
       "id": "migration-named-clienta",
@@ -226,8 +225,7 @@
       "id": "migration-drop-clientb",
       "peer": "clientb",
       "mark": "migration-host-drop",
-      "screen": "game",
-      "what": "The survivor video spans the original host loss and handover toast."
+      "what": "The survivor video spans the recorded host drop until the host-loss status appears."
     },
     {
       "id": "migration-named-clientb",
@@ -307,7 +305,7 @@
       "id": "migration-loss-overlay-clienta",
       "peer": "clienta",
       "mark": "migration-loss-overlay",
-      "screen": "game",
+      "screen": "LockstepWaitOverlay",
       "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
       "readback": [
         {
@@ -340,7 +338,7 @@
       "id": "migration-loss-overlay-clientb",
       "peer": "clientb",
       "mark": "migration-loss-overlay",
-      "screen": "game",
+      "screen": "LockstepWaitOverlay",
       "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
       "readback": [
         {
