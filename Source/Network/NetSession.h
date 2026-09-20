@@ -132,6 +132,7 @@ namespace RTE {
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.
 		void SetSilenceSuspended(bool suspended) { m_SilenceSuspended = suspended; }
 		bool IsSilenceSuspended() const { return m_SilenceSuspended; }
+		bool IsPumpParked() const { return m_PumpParked; }
 		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.

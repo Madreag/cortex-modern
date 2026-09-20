@@ -6171,6 +6171,11 @@ namespace RTE {
 		// The worker takes the session exactly as StartResync does, and the catch-up keeps replaying.
 		std::unique_ptr<NetSession> owned = std::move(service.m_Session);
 		service.m_WorkerSession = owned.get();
+		service.NoteSessionHandedToWorker(*owned);
+		if (!owned->IsPumpParked()) {
+			*error = "a session handed to a worker kept the silence window the finished round never evaluated";
+			return false;
+		}
 		owned->SetSilenceSuspended(false);
 		service.DriveWorldJoinClient(1);
 		if (!owned->IsSilenceSuspended()) {
