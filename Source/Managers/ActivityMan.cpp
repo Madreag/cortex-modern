@@ -178,6 +178,22 @@ namespace {
 		return record;
 	}
 
+	struct CaptureAllocationState {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		int cursor = g_LuaMan.GetScriptStateCursor();
+		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+		~CaptureAllocationState() {
+			RestoreCounters();
+			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	};
+
 	class AutosaveArchiveWriter {
 	public:
 		AutosaveArchiveWriter() : m_Worker([this] {
@@ -429,9 +445,13 @@ bool ActivityMan::WaitForSaveGameTask() const {
 }
 
 bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
+	const auto captureStart = std::chrono::steady_clock::now();
 	WaitForSaveGameTask();
 	const std::string path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + fileName + ".ccsave";
-	return QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
+	const bool saved = QueueSaveSnapshot(fileName, path, compression, m_SaveGameTask);
+	System::PrintDiagnosticLine(std::format("[checkpoint-capture] name={} tick={} sim_block_ms={:.3f} queued={}\n", fileName,
+	    g_TimerMan.GetSimUpdateCount(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count(), saved));
+	return saved;
 }
 
 std::optional<ActivityMan::CompletedAutosave> ActivityMan::LastCompletedAutosave() const {
@@ -518,21 +538,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto freezeStart = std::chrono::steady_clock::now();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
-	struct CaptureAllocationState {
-		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
-		long uid = MovableObject::GetUniqueIDCounter();
-		int cursor = g_LuaMan.GetScriptStateCursor();
-		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
-		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
-		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
-		~CaptureAllocationState() {
-			RestoreCounters();
-			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
-			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
-		}
-	} allocation;
+	CaptureAllocationState allocation;
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	auto& cow = CheckpointCow::Get();
@@ -596,18 +602,34 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Compiled table stores only mark while the trap is armed, so every freeze re-arms it.
 	g_LuaMan.ArmCheckpointWriteTrap();
 	const auto sceneStart = std::chrono::steady_clock::now();
-	image->scene = scene->CaptureSavedScene(fileName);
+	auto sceneCache = std::make_shared<CheckpointCache>();
+	sceneCache->Begin();
+	{
+		// Elapsed timer fields change even when their object's write stamp holds.
+		CheckpointWriter::CacheScope sceneValues(sceneCache.get());
+		if (std::getenv("CCCP_CHECKPOINT_SPLIT")) {
+			std::list<SceneObject*> objects;
+			g_MovableMan.GetAllActors(false, objects);
+			g_MovableMan.GetAllItems(false, objects);
+			g_MovableMan.GetAllParticles(false, objects);
+			for (const SceneObject* object: objects) {
+				Writer::Capture([object](Writer& writer) { Scene::SaveSceneObject(writer, object, false, true); }, 1);
+			}
+			image->movableUs = since(sceneStart);
+		}
+		image->scene = scene->CaptureSavedScene(fileName);
+	}
 	image->sceneUs = since(sceneStart);
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
 	const auto structureStart = std::chrono::steady_clock::now();
-	image->structure = CheckpointWriter::Native([] { return g_MovableMan.SaveWorldStructure(); });
+	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
 	const auto sceneRuntimeStart = std::chrono::steady_clock::now();
-	image->sceneRuntime = CheckpointWriter::Native([scene] { return scene->SaveRuntimeCheckpoint(); });
+	image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 	image->sceneRuntimeUs = since(sceneRuntimeStart);
 	const auto globalsStart = std::chrono::steady_clock::now();
-	image->globals = CheckpointWriter::Native([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false); });
+	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts); });
 	image->globalsUs = since(globalsStart);
 	image->activityName = activity->GetPresetName();
 	image->originalScenePresetName = scene->GetPresetName();
@@ -636,7 +658,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->dirtyRatio = image->imageBytes ? static_cast<double>(dirtyBytes) / static_cast<double>(image->imageBytes) : 0;
 	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
 	bytes = image->imageBytes;
-	cow.FinishImage(image);
+	auto previousImage = cow.FinishImage(image);
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
 	const auto simThread = std::this_thread::get_id();
@@ -680,11 +702,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.peerNames = identity->peerNames;
 		manifest.sideState = identity->sideState;
 	}
-	// The world text is hashed on the archive thread, so the capture never pays for the digest.
-	const auto checkpointWorld = std::make_shared<const std::string>(automatic ? image->structure.Text() : std::string());
 	// Nothing writes the image once it is published, so the worker keeps its own buffers.
 	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel,
-	                                automatic, descriptor, manifest, pinnedCheckpointSource, checkpointWorld,
+	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
 	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)]() mutable {
 		const auto start = std::chrono::steady_clock::now();
 		const auto sinceStart = [&start] {
@@ -694,11 +714,14 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			if (std::this_thread::get_id() == simThread) throw std::logic_error("autosave serializer missing a worker thread");
 			retired.clear();
 			retiredLayers.clear();
+			previousImage.reset();
+			sceneCache.reset();
 			const CheckpointText main = AssembleOwnedSave(*image);
 			const CheckpointText index = AssembleOwnedIndex(*image);
 			const auto images = ReuseAutosaveImages(matchId, image->layers, palette);
+			const auto archiveStart = std::chrono::steady_clock::now();
 			if (automatic) {
-				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", *checkpointWorld}}));
+				descriptor.worldStructureHash = NetIdentity::HashHex(NetIdentity::HashCanonicalText("autosave-world", {{"structure", image->structure.Text()}}));
 			}
 			WriteCheckpointArchive(fileName, path, zipLevel, matchId, main.Text(), index.Text(), layerNames,
 			    [&](size_t i, std::vector<unsigned char>& png) {
@@ -706,19 +729,28 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				    return true;
 			    },
 			    automatic ? &descriptor : nullptr, pinnedCheckpointSource, automatic ? &manifest : nullptr);
+			System::PrintDiagnosticLine(std::format("[autosave-split] tick={} serialize_scene_ms={:.3f} serialize_mos_ms={:.3f} lua_graph_ms={:.3f} compress_write_ms={:.3f} freeze_ms={:.3f} bytes={}\n",
+			    tick, (image->sceneUs - image->movableUs) / 1000.0, image->movableUs / 1000.0, image->graphUs / 1000.0,
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - archiveStart).count(), image->freezeUs / 1000.0, image->imageBytes));
+			for (const auto& [part, micros]: image->globalParts) {
+				System::PrintDiagnosticLine(std::format("[autosave-globals] tick={} part={} capture_us={}\n", tick, part, micros));
+			}
 			// The archive exists only now. What a world publishes is this output, never a guess at the file.
 			if (automatic) PublishCompletedAutosave(tick, path);
 			if (matchId.empty()) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
 			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
 			// Timed after the last of the work, so the number is the whole task.
-			CheckpointCow::Get().RecordWorker(sinceStart());
-			CheckpointCow::Get().PublishLog(tick);
+			const int64_t workerUs = sinceStart();
+			CheckpointCow::Get().RecordWorker(workerUs);
+			CheckpointCow::Get().PublishLog(*image, workerUs);
 			CheckpointCow::Get().WriteMetricsJson(metricsPath);
+			image.reset();
 			return true;
 		} catch (const std::exception& error) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n");
+			image.reset();
 			return false;
 		}
 	});
@@ -727,6 +759,94 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 
 void ActivityMan::WaitForAutosaveTasks() const {
 	for (const auto& task: m_AutosaveTasks) task.wait();
+}
+
+bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
+	try {
+		AudioCheckpoint::MixerLock mixer(g_AudioMan.IsAudioEnabled() ? g_AudioMan.GetAudioSystem() : nullptr);
+		Scene* scene = g_SceneMan.GetScene();
+		Activity* activity = GetActivity();
+		if (!scene || !activity) throw std::runtime_error("no live world");
+		const std::string fileName = "capture-" + std::to_string(tick);
+		const auto root = std::filesystem::path(AutosaveStore::Directory()) / fileName;
+		std::filesystem::create_directories(root);
+		std::shared_future<bool> task;
+		size_t bytes = 0;
+		if (!QueueIncrementalAutosave(fileName, (root / "image.ccsave").string(), "", tick, task, bytes, SaveCompression::Fast, nullptr))
+			throw std::runtime_error("image capture refused");
+		const auto captured = CheckpointCow::Get().Last();
+		if (!captured || captured->tick != tick) throw std::runtime_error("image tick differs");
+		CheckpointImage synchronous;
+		CaptureAllocationState allocation;
+		AudioMan::SoundCheckpointSaveScope carriedSounds;
+		const RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		const long uid = MovableObject::GetUniqueIDCounter();
+		const int cursor = g_LuaMan.GetScriptStateCursor();
+		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		const auto write = [](const std::function<void(Writer&)>& visit) {
+			auto stream = std::make_unique<std::ostringstream>();
+			auto* output = stream.get();
+			Writer writer(std::move(stream));
+			Writer::SnapshotScope scope(writer);
+			visit(writer);
+			return CheckpointText(output->str());
+		};
+		synchronous.activity = write([&](Writer& writer) {
+			writer.NewPropertyWithValue("Activity", activity);
+			writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
+			if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
+		});
+		std::vector<std::string> graphs, problems;
+		if (!g_MovableMan.SerializeScriptGraphs(graphs, problems)) throw std::runtime_error(problems.empty() ? "synchronous graph refused" : problems.front());
+		for (auto& graph: graphs) synchronous.graphs.emplace_back(std::move(graph));
+		synchronous.scene = write([&](Writer& writer) { scene->SaveSavedScene(writer, fileName); });
+		g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+		g_SimRNG = sim; g_RenderRNG = render;
+		MovableObject::PinUniqueIDCounter(uid);
+		g_LuaMan.SetScriptStateCursor(cursor);
+		synchronous.structure = CheckpointText(g_MovableMan.SaveWorldStructure());
+		synchronous.sceneRuntime = CheckpointText(scene->SaveRuntimeCheckpoint());
+		synchronous.globals = CheckpointText(CaptureRuntimeGlobals(carriedSounds.Carried(), false));
+		synchronous.activityName = activity->GetPresetName();
+		synchronous.originalScenePresetName = scene->GetPresetName();
+		synchronous.simUpdateCount = g_TimerMan.GetSimUpdateCount();
+		synchronous.simTimeTicks = g_TimerMan.GetSimTimeTicks();
+		synchronous.uniqueIDCounter = MovableObject::GetUniqueIDCounter();
+		synchronous.luaStateCursor = g_LuaMan.GetScriptStateCursor();
+		synchronous.quarantine = g_MovableMan.GetLockstepJoinQuarantine();
+		synchronous.placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
+		synchronous.placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
+		const auto main = AssembleOwnedSave(synchronous);
+		const auto index = AssembleOwnedIndex(synchronous);
+		std::vector<std::string> names;
+		std::vector<SceneLayer*> layers;
+		const auto layer = [&](const std::string& name, SceneLayer* value) { if (value) { names.push_back(name); layers.push_back(value); } };
+		layer("Mat", scene->GetTerrain());
+		layer("FG", scene->GetTerrain()->GetFGSceneLayer());
+		layer("BG", scene->GetTerrain()->GetBGSceneLayer());
+		for (int team = 0; team < Activity::MaxTeamCount; ++team) layer("UST" + std::to_string(team), scene->GetUnseenLayer(team));
+		const auto palette = CaptureCheckpointPalette();
+		WriteCheckpointArchive(fileName, root / "sync.ccsave", ZipLevelFor(SaveCompression::Fast), "", main.Text(), index.Text(), names,
+		    [&](size_t i, std::vector<unsigned char>& png) {
+			    const auto bitmap = layers[i]->CopyBitmap();
+			    return ContentFile::EncodeIndexedPNG(bitmap.get(), png, palette);
+		    });
+		if (!task.get()) throw std::runtime_error("image writer failed");
+		const auto read = [](const std::filesystem::path& path) {
+			std::ifstream input(path, std::ios::binary);
+			if (!input) throw std::runtime_error("archive missing");
+			return std::vector<char>(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+		};
+		const auto imageBytes = read(root / "image.ccsave");
+		const auto syncBytes = read(root / "sync.ccsave");
+		const bool same = imageBytes == syncBytes && !imageBytes.empty();
+		System::PrintDiagnosticLine(std::format("[checkpoint-capture-selftest] {} tick={} image_bytes={} sync_bytes={} freeze_us={}\n",
+		    same ? "PASS" : "FAIL", tick, imageBytes.size(), syncBytes.size(), captured->freezeUs));
+		return same;
+	} catch (const std::exception& error) {
+		System::PrintDiagnosticLine(std::format("[checkpoint-capture-selftest] FAIL tick={} reason={}\n", tick, error.what()));
+		return false;
+	}
 }
 
 bool ActivityMan::QueueSaveSnapshot(const std::string& fileName, const std::string& path, SaveCompression compression,
@@ -1761,34 +1881,44 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	return CaptureRuntimeGlobals(worldCarried, true);
 }
 
-std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage) const {
+std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
+                                              std::vector<std::pair<std::string, int64_t>>* timings) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
 	CheckpointWriter writer("RuntimeGlobals9");
-	writer(g_SimRNG.SerializeCheckpoint(), g_RenderRNG.SerializeCheckpoint(), g_TimerMan,
-		g_MovableMan, g_SceneMan, g_CameraMan, g_FrameMan);
+	const auto record = [&](const char* name, const std::function<void()>& capture) {
+		const auto start = std::chrono::steady_clock::now();
+		capture();
+		if (timings) timings->emplace_back(name, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
+	};
+	record("rng", [&] { writer(CheckpointWriter::Native([] { return g_SimRNG.SerializeCheckpoint(); }), CheckpointWriter::Native([] { return g_RenderRNG.SerializeCheckpoint(); })); });
+	record("timer", [&] { writer(g_TimerMan); });
+	record("movable", [&] { writer(g_MovableMan); });
+	record("scene", [&] { writer(g_SceneMan); });
+	record("camera", [&] { writer(g_CameraMan); });
+	record("frame", [&] { writer(g_FrameMan); });
 	writer(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
 		m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
-	writer(CheckpointWriter::Native([] { return GUIInput::SaveSharedCheckpoint(); }));
-	writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCheckpoint(); }));
-	writer(CheckpointWriter::Native([] { return g_PostProcessMan.SaveCheckpoint(); }));
-	writer(CheckpointWriter::Native([] { return g_PrimitiveMan.SaveCheckpoint(); }));
-	const CheckpointText gui = CheckpointWriter::Native([] { return g_GUISound.SaveCheckpoint(); });
-	const CheckpointText music = CheckpointWriter::Native([] { return g_MusicMan.SaveCheckpoint(); });
-	writer(gui);
-	writer(music);
-	if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
-		writer(CheckpointWriter::Native([] { return g_AudioMan.SaveCheckpoint(); }));
-	} else {
-		std::unordered_set<uint64_t> managers;
-		g_AudioMan.CollectManagerSoundIdentities(managers);
-		writer(CheckpointWriter::Native([&worldCarried, &managers] {
-			return g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
-				return !identity || worldCarried.contains(identity) || managers.contains(identity);
-			});
-		}));
-	}
+	record("gui_input", [&] { writer(CheckpointWriter::Native([] { return GUIInput::SaveSharedCheckpoint(); })); });
+	record("input", [&] { writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCheckpoint(); })); });
+	record("post_process", [&] { writer(CheckpointWriter::Native([] { return g_PostProcessMan.SaveCheckpoint(); })); });
+	record("primitives", [&] { writer(CheckpointWriter::Native([] { return g_PrimitiveMan.SaveCheckpoint(); })); });
+	record("gui_sound", [&] { writer(CheckpointWriter::Native([] { return g_GUISound.SaveCheckpoint(); })); });
+	record("music", [&] { writer(CheckpointWriter::Native([] { return g_MusicMan.SaveCheckpoint(); })); });
+	record("audio", [&] {
+		if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
+			writer(CheckpointWriter::Native([] { return g_AudioMan.SaveCheckpoint(); }));
+		} else {
+			std::unordered_set<uint64_t> managers;
+			g_AudioMan.CollectManagerSoundIdentities(managers);
+			writer(CheckpointWriter::Native([&worldCarried, &managers] {
+				return g_AudioMan.SaveCheckpoint([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
+					return !identity || worldCarried.contains(identity) || managers.contains(identity);
+				});
+			}));
+		}
+	});
 	return writer.Text();
 }
 

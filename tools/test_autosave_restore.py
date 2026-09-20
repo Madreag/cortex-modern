@@ -30,8 +30,8 @@ Three rows, each with the statement that is red without the engine change:
               RED before the change: a world boot resolves no resume, so the restarted host opens the
               scene and prints no `[autosave] resuming` line; -net-world-fresh does not parse.
 
-Ports: this driver owns 48720-48739; the first three arms take consecutive ports from its base, the
-resume arm takes 48725-48728 and the world-restart arm 48730-48735 (three rounds of two peers), so it never
+Ports: the default range is 48720-48739; the first three arms take consecutive ports from its base, the
+resume arm starts at base + 5 and world-restart at base + 10 (three rounds of two peers), so the default never
 overlaps tools/test_autosave.py (48211-48219, 48500-48519), tools/test_post_match_report.py or
 tools/test_post_match_combined.py (48215) or tools/test_match_chat.py (48700-48705) and can run beside them.
 
@@ -124,6 +124,20 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
 def peer_log(root: Path, who: str) -> str:
     return "\n".join((root / who / name).read_text(encoding="utf-8", errors="replace")
                      for name in ("stdout.log", "stderr.log") if (root / who / name).exists())
+
+
+def carry_store_files(source: Path, target: Path) -> None:
+    """Carry regular store files without traversing directories or reparse points."""
+    if source.is_symlink() or getattr(source, "is_junction", lambda: False)():
+        raise RuntimeError(f"store is a reparse point: {source}")
+    target.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise RuntimeError(f"store entry is a reparse point: {path}")
+        if path.is_file():
+            shutil.copy2(path, target / path.name)
+        elif path.is_dir():
+            raise RuntimeError(f"unexpected directory in store: {path}")
 
 
 def descriptor(path: Path) -> dict:
@@ -312,7 +326,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
                 "-net-match-ticks", "1200", "-net-match-input-delay", "3",
-                "-net-autosave-seconds", "1", "-net-match-resync-on-desync",
+                "-net-autosave-seconds", "1", "-net-match-e2e-resync",
                 "-tick-hashes", "-max-ticks", "1200", "-out", str(first / f"{who}_trace.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
@@ -362,7 +376,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
     for who in ("host", "client"):
         args = ["-net-match-service-e2e", "-net-port", str(port + 2), "-net-match-peers", "2",
                 "-net-match-ticks", str(resume_ticks), "-net-match-input-delay", "3",
-                "-net-autosave-seconds", "1", "-net-match-resync-on-desync",
+                "-net-autosave-seconds", "1", "-net-match-e2e-resync",
                 "-tick-hashes", "-max-ticks", str(resume_ticks), "-out", str(second / f"{who}_trace.json")]
         args += ["-net-host", "-net-resume-match", match_id, "-net-resume-tick", str(resume_tick)] if who == "host" else ["-net-join", "127.0.0.1"]
         resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
@@ -371,7 +385,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         source = first / who / "runtime/Autosaves"
         target = second / who / "runtime/Autosaves"
         if source.exists():
-            shutil.copytree(source, target, dirs_exist_ok=True)
+            carry_store_files(source, target)
         if who == "client":
             # ONE peer holds the checkpoint and ONE is streamed it: the host keeps its copy, the client
             # loses the archive the host will resume on, so the round is played across both paths. Two
@@ -452,7 +466,7 @@ def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
     for relative in ("Autosaves", "Worlds"):
         held = source / who / "runtime" / relative
         if held.exists():
-            shutil.copytree(held, runtime / relative, dirs_exist_ok=True)
+            carry_store_files(held, runtime / relative)
     for name in ("reconnect.ticket", "NetworkIdentity.key", "ParticipantIdentity.key"):
         carried = source / who / "runtime/Userdata" / name
         if carried.exists():
@@ -764,8 +778,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=48720)
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
     args = parser.parse_args()
-    if not 48720 <= args.port <= 48724:
-        parser.error("this detector owns 48720-48739; its arms' ports must fit inside it")
+    if not 1024 <= args.port <= 65516:
+        parser.error("the base port must leave room for twenty unprivileged ports")
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
@@ -780,7 +794,7 @@ def main() -> int:
         details = {}
         result["arms"][arm] = details
         # The resume and world-restart arms run several rounds of two peers, each on its own ports.
-        armPort = {"resume": 48725, "world-restart": 48730}.get(arm, args.port + index)
+        armPort = {"resume": args.port + 5, "world-restart": args.port + 10}.get(arm, args.port + index)
         try:
             details.update(run(repo, root / arm, armPort), passed=True)
             print(f"PASS {arm}", flush=True)

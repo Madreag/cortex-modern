@@ -324,8 +324,8 @@ bool CheckpointCow::HasLua(size_t stateCount) const {
 	return !m_LuaGraphs.empty() && m_LuaGraphs.size() == stateCount;
 }
 
-void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
-	if (!image) return;
+std::shared_ptr<const CheckpointImage> CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
+	if (!image) return {};
 	image->generation = m_Cache.Generation();
 	image->objectsReused = m_Cache.Reused();
 	image->objectsCaptured = m_Cache.Touched() > m_Cache.Reused() ? m_Cache.Touched() - m_Cache.Reused() : 0;
@@ -344,7 +344,7 @@ void CheckpointCow::FinishImage(std::shared_ptr<CheckpointImage> image) {
 	m_LastReused = image->objectsReused;
 	m_LastCaptured = image->objectsCaptured;
 	m_LastLuaReused = image->luaReused;
-	m_Last = std::move(image);
+	return std::exchange(m_Last, std::move(image));
 }
 
 void CheckpointCow::RecordWorker(int64_t workerUs) {
@@ -358,9 +358,9 @@ void CheckpointCow::RecordGraphText(int64_t graphTextUs) {
 	m_LastGraphTextUs = graphTextUs;
 }
 
-void CheckpointCow::PublishLog(uint64_t tick) const {
+void CheckpointCow::PublishLog(const CheckpointImage& image, int64_t workerUs) const {
+	const uint64_t tick = image.tick;
 	int64_t freezeUs = 0;
-	int64_t workerUs = 0;
 	size_t imageBytes = 0;
 	double dirtyRatio = 0;
 	int64_t p99 = 0;
@@ -377,21 +377,20 @@ void CheckpointCow::PublishLog(uint64_t tick) const {
 	size_t rootsRewritten = 0;
 	{
 		std::lock_guard lock(m_Mutex);
-		freezeUs = m_LastFreezeUs;
-		workerUs = m_LastWorkerUs;
-		imageBytes = m_LastImageBytes;
-		dirtyRatio = m_LastDirtyRatio;
+		freezeUs = image.freezeUs;
+		imageBytes = image.imageBytes;
+		dirtyRatio = image.dirtyRatio;
 		samples = m_FreezeSamples;
-		records = m_LastRecords;
-		graph = m_LastGraph;
-		before = m_LastGraphBeforeWalk;
-		reused = m_LastReused;
-		captured = m_LastCaptured;
-		luaReused = m_LastLuaReused;
+		records = {image.layersUs, image.activityUs, image.graphUs, image.sceneUs, image.structureUs, image.sceneRuntimeUs, image.globalsUs};
+		graph = image.graph;
+		before = image.graphBeforeWalk;
+		reused = image.objectsReused;
+		captured = image.objectsCaptured;
+		luaReused = image.luaReused;
 		graphTextUs = m_LastGraphTextUs;
-		graphSerial = m_LastGraphSerial;
-		rootsReused = m_LastRootsReused;
-		rootsRewritten = m_LastRootsRewritten;
+		graphSerial = image.graphSerial;
+		rootsReused = image.graphRootsReused;
+		rootsRewritten = image.graphRootsRewritten;
 	}
 	p99 = Percentile99(std::move(samples));
 	std::cout << std::format("[autosave] tick={} freeze_us={} worker_us={} image_bytes={} dirty_ratio={:.6f} p99_freeze_us={}\n",

@@ -2371,7 +2371,6 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 	const auto capture = [&](LuaStateWrapper& state) {
 		CheckpointText text;
 		const bool complete = state.CaptureScriptGraph(text, problems);
-		if (complete && CheckpointWriter::CurrentCache()) text = CheckpointWriter::CurrentCache()->Remember(&state, 16, std::move(text));
 		graphs.push_back(std::move(text));
 		return complete;
 	};
