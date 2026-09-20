@@ -1092,7 +1092,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x16, 0x00,
+				0x18, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1396,6 +1396,19 @@ namespace RTE {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
 			host.FinishFrameWait(60);
+			for (uint64_t tick = 0; tick < 16; ++tick) host.NoteLocalTickCost(tick, 40.0);
+			if (!host.GetStats().localMachineSlow || host.GetStats().consecutiveLateInputs < 8 || host.GetStats().localLateInputs == 0) {
+				*error = "local compute exceeding the sender delay did not diagnose a slow machine"; return false;
+			}
+			for (uint64_t tick = 16; tick < 60; ++tick) host.NoteLocalTickCost(tick, 1.0);
+			if (host.GetStats().localMachineSlow || host.GetStats().localComputeDebtMs != 0) {
+				*error = "a recovered local producer kept the slow-machine warning"; return false;
+			}
+			const std::string report = host.BuildReportJson();
+			if (report.find("\"holds\":1") == std::string::npos || report.find("\"substitutions\":1") == std::string::npos ||
+			    report.find("\"longest_wait_ms\":50") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {
+				*error = "a held peer's report omitted its hold, AI handoff or wait"; return false;
+			}
 			for (uint64_t tick = 1; tick <= 5; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(60 + tick);
@@ -5349,7 +5362,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x16, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x18, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,

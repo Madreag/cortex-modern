@@ -136,6 +136,7 @@ namespace RTE {
 		NetMatchConfig MakeConfig() {
 			NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
 			config.activityPreset = "Skirmish Defense";
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 			config.sceneName = "Grasslands";
 			config.modePreset = "PvP";
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -330,10 +331,10 @@ namespace RTE {
 					return false;
 				}
 				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
-				const size_t migrationOffset = windowBytes.size();
+				const size_t migrationOffset = windowBytes.size() - 4;
 				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
-				    windowBytes[migrationOffset - 2] != 2 || windowBytes.back() != 0 ||
-				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end(), bytes.begin() + reservedOffset + 2) ||
+				    windowBytes[migrationOffset - 2] != 2 || windowBytes[migrationOffset - 1] != 0 ||
+				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.begin() + migrationOffset, bytes.begin() + reservedOffset + 2) ||
 				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
 					*error = "migration payload does not follow the redundancy U16 after the path horizon";
 					return false;
@@ -999,6 +1000,9 @@ namespace RTE {
 				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
 				{"path_horizon", [](auto& c) { ++c.pathHorizonTicks; }},
+				{"slow_bound", [](auto& c) { ++c.slowPlayerBoundTicks; }},
+				{"slow_policy", [](auto& c) { c.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute; }},
+				{"active_seats", [](auto& c) { c.activePeerIds = {1}; }},
 				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
 				// The redundancy window rides reserved bit 0x8 and a trailing word, so its round trip
 				// proves the bit and the hash sensitivity proves peers cannot disagree about it.
@@ -1059,6 +1063,10 @@ namespace RTE {
 				{"AI low", [](auto& c) { c.teamRules[0].aiSkill = 0; }}, {"AI high", [](auto& c) { c.teamRules[0].aiSkill = 101; }},
 				{"autosave interval", [](auto& c) { c.autosaveIntervalSeconds = 0; }}, {"idle wait", [](auto& c) { c.idleWaitMinutes = 61; }},
 				{"path horizon", [](auto& c) { c.pathHorizonTicks = 121; }},
+				{"slow bound zero", [](auto& c) { c.slowPlayerBoundTicks = 0; }},
+				{"slow bound high", [](auto& c) { c.slowPlayerBoundTicks = 121; }},
+				{"slow policy", [](auto& c) { c.slowPlayerPolicy = static_cast<NetSlowPlayerPolicy>(3); }},
+				{"active host absent", [](auto& c) { c.activePeerIds = {2}; }},
 				{"policy", [](auto& c) { c.delayPolicy = static_cast<NetMatchDelayPolicy>(3); }},
 				{"mode", [](auto& c) { c.mode = static_cast<NetMatchMode>(4); }},
 				{"delay count", [](auto& c) { c.peerInputDelayFrames.pop_back(); }},
@@ -1086,7 +1094,7 @@ namespace RTE {
 			std::vector<uint8_t> prefixBytes;
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
-			const size_t horizonTail = config.pathHorizonTicks != 0 ? 2 : 0;
+			const size_t horizonTail = (config.pathHorizonTicks != 0 ? 2 : 0) + 17 + 4;
 			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {bytes.size() - 9 - horizonTail, 0}, {bytes.size() - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
@@ -1167,7 +1175,7 @@ namespace RTE {
 			atCurrentVersion.version = NetMatchConfigUtil::c_Version;
 			atCurrentVersion.pathHorizonTicks = 0;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
-			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
+			if (currentHash != "22c638af51c5e30a12381e3ac10e8953cde5e32e7674c63f1e6c299d24b96b42") {
 				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
 				return false;
 			}
@@ -1182,7 +1190,7 @@ namespace RTE {
 			NetMatchConfig withHorizon = atCurrentVersion;
 			withHorizon.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
 			const std::string horizonHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(withHorizon));
-			if (horizonHash != "ec4103aa07c0661a0a5951518b5572bcd7d509d1a44b8f7d71d7489849fd100f") {
+			if (horizonHash != "4770c3f864c40148244b02fc83dcb11ae777acfdb2b464ea4d3429c5a2473b11") {
 				*error = "a reserved-bit path horizon no longer hashes as pinned: " + horizonHash;
 				return false;
 			}
@@ -1450,7 +1458,7 @@ namespace RTE {
 			std::vector<uint8_t> windowedBytes;
 			if (!NetLobbyProtocol::Encode(message, windowedBytes, &encodeError) || windowedBytes.size() != plainSize + 2 ||
 			    windowedBytes[reservedOffset] != 8 || windowedBytes[reservedOffset + 1] != 0 ||
-			    windowedBytes[windowedBytes.size() - 2] != 2 || windowedBytes.back() != 0) {
+			    windowedBytes[windowedBytes.size() - 6] != 2 || windowedBytes[windowedBytes.size() - 5] != 0) {
 				*error = "a non-default redundancy window did not encode reserved bit 0x8 and its trailing word";
 				return false;
 			}
@@ -1462,7 +1470,7 @@ namespace RTE {
 			}
 			for (const uint8_t outOfRange : {0, NetMatchConfigUtil::c_MaxFrameRedundancyTicks + 1}) {
 				std::vector<uint8_t> broken = windowedBytes;
-				broken[broken.size() - 2] = outOfRange;
+				broken[broken.size() - 6] = outOfRange;
 				const NetLobbyDecodeResult refusedWindow = NetLobbyProtocol::Decode(broken);
 				if (refusedWindow.ok || refusedWindow.error.code != NetLobbyErrorCode::InvalidValue) {
 					*error = "a redundancy window outside its range was accepted";
@@ -10262,13 +10270,13 @@ namespace RTE {
 			       " completed_lockstep=" + std::to_string(observed.completedLockstep) +
 			       " config_hash=" + observed.configHash.substr(0, 16) + "}";
 		};
-		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		if (persistent.capturedLockstep != NetLockstepCodec::c_Version ||
 		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
-		    persistent.completedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		    persistent.completedLockstep != NetLockstepCodec::c_Version ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 22}, {"supported_world_lockstep_codec_version", 23},
-		        {"supported_match_config_version", 4}, {"supported_world_match_config_version", 5}} ||
+		        {"supported_lockstep_codec_version", 24}, {"supported_world_lockstep_codec_version", 24},
+		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 6}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
 			return false;
