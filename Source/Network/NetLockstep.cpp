@@ -4729,6 +4729,10 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error) {
 		m_TimingNowMs = nowMs;
+		std::cout << "[net-lockstep] propose hold peer=" << static_cast<int>(peerId) << " next_frame=" << m_Stats.nextFrame
+		          << " played=" << m_PeersPlayedThisRound.contains(peerId) << " first_missing_ms=" << m_FirstMissingMs
+		          << " now=" << nowMs << " own_park=" << m_Stats.longestOwnParkMs
+		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << std::endl;
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || peerId == GetHostPeerId() ||
 		    !IsKnownRemotePeer(peerId) || m_PeerLeaveFrames.contains(peerId) || m_NextTimingRevision == UINT64_MAX) {
 			if (error) *error = "invalid held peer or authority";
@@ -4884,7 +4888,10 @@ namespace RTE {
 		}
 		m_Stats.holdNoticeBudgetMs = noticeMs;
 		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
-		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : 0;
+		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
+		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
+		// the seat is still only declared after the bound of missing input, never the instant one is late.
+		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : boundMs;
 		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
@@ -8014,6 +8021,8 @@ namespace RTE {
 	// frame without processing this, so every peer drops the requirement at the same tick.
 	void NetLockstepCoordinator::ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport, bool agreedBoundary, bool removed) {
 		if (UsesBoundedWait() && !agreedBoundary && !removed && m_Config.localPeerId == GetHostPeerId()) {
+			std::cout << "[net-lockstep] a leave becomes a hold for peer " << static_cast<int>(peerId)
+			          << " at frame " << firstFrameWithout << ": " << message << std::endl;
 			ProposePeerHold(peerId, nowMs);
 			return;
 		}

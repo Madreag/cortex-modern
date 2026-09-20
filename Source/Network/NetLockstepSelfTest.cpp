@@ -69,6 +69,8 @@
 
 namespace RTE {
 
+	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
 			const NetGameCommand pending{2, NetGameSwitchControl{4242, 0, 2}};
@@ -15866,6 +15868,52 @@ namespace RTE {
 		}
 	} // namespace
 
+	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
+		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
+		// notice than the whole bound, and the seat must still be declared only after the bound of
+		// missing input - never the instant a frame is late.
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A0D, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 3;
+		config.startFrame = 1;
+		config.roundId = 31;
+		config.substituteSlowPeers = true;
+		config.simTickMs = 1000.0 / 60.0;
+		config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 1}, {2, 1}, {3, 14}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0D);
+		if (!wire.StartHost(48899, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {2, 3};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_PeerEffectiveStart[3] = 15;
+		host.m_Stats.peers[2].pingMs = 0;
+		host.m_Stats.peers[3].pingMs = 200;
+		host.m_Stats.nextFrame = 6;
+		const auto describe = [&](const char* what, uint64_t elapsed) {
+			*error = std::string(what) + "; elapsed=" + std::to_string(elapsed) + "ms notice=" +
+			         std::to_string(host.GetStats().holdNoticeBudgetMs) + "ms bound_ticks=" +
+			         std::to_string(config.slowPlayerBoundTicks) + " holds=" + std::to_string(host.GetStats().peers.at(2).holds) +
+			         " feasible=" + std::to_string(host.GetStats().holdDeadlineFeasible ? 1 : 0);
+			return false;
+		};
+		if (host.DeclareOverdueInputs(6, 500, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			return describe("a survivor's long link held a peer the instant its frame was late", 0);
+		}
+		if (host.DeclareOverdueInputs(6, 530, 500, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			return describe("a peer was held before the slow-player bound elapsed", 30);
+		}
+		// Negative control: past the bound the seat is still declared.
+		if (!host.DeclareOverdueInputs(6, 560, 500, {2})) {
+			return describe("the bound no longer declares a peer that stopped sending", 60);
+		}
+		return true;
+	}
+
 	int NetLockstepSelfTest::RunOrdering() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
@@ -15964,6 +16012,7 @@ namespace RTE {
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
 		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
+		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
