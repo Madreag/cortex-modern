@@ -2640,6 +2640,28 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestPrivateNeutralPrelude() {
+		LoopbackTransport transport;
+		NetLockstepCoordinator coordinator;
+		NetLockstepConfig config;
+		config.sessionId = 0x9A38; config.roundId = 38; config.localPeerId = 1; config.peerCount = 1; config.inputDelayFrames = 5;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 1;
+		config.matchConfig.players = {{1, 0, false, "Host"}};
+		std::string error;
+		if (!coordinator.Start(transport, config, &error)) return Fail(error);
+		NetWorldFrameLog tail;
+		for (uint64_t tick = 1; tick < 5; ++tick) {
+			NetLockstepReadyFrame ready;
+			if (!NetMatchService::ReadCommittedJoinFrame(coordinator, tick, ready) || ready.frame != tick || !ready.localFrames.empty() || !ready.remoteFrames.empty())
+				return Fail("the initial private checkpoint omitted a neutral input-delay tick");
+			auto frame = PackWorldJoinReadyFrame(ready); frame.roundId = coordinator.GetRoundId();
+			if (!tail.Append(frame, &error)) return Fail(error);
+		}
+		NetLockstepReadyFrame missing;
+		if (NetMatchService::ReadCommittedJoinFrame(coordinator, 5, missing)) return Fail("a required missing input became a neutral prefix tick");
+		return tail.Count() == 4 && tail.Covers(1) ? 0 : Fail("the neutral catch-up prefix has a gap");
+	}
+
 	int TestLargePrivateTailChunks() {
 		std::string error;
 		NetWorldJoinHost host;
@@ -2659,7 +2681,7 @@ namespace RTE {
 		if (!host.Tail().Append(frame, &error)) return Fail(error);
 		WorldLobbyPair pair;
 		if (!pair.Open(47139, &error) || !pair.host.BindLateRemote(2, pair.hostRemote, &error) || !ScenarioRunner::InstallWorldCatchUp(40, {}, &error)) return Fail(error);
-		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.snapshotTick = client.appliedThrough = 40;
+		NetWorldCatchUpClient client; client.active = true; client.privateMatch = true; client.roundId = 1; client.snapshotTick = client.appliedThrough = 40;
 		size_t chunks = 0;
 		while (host.FindSession(42)->deliveredThrough < 41 && chunks++ < 32) {
 			NetMatchService::SendWorldJoinTailTo(pair.host, host, *host.FindSession(42));
@@ -5778,6 +5800,7 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
+		if (std::strcmp(name, "private-neutral-prelude") == 0) return TestPrivateNeutralPrelude();
 		if (std::strcmp(name, "private-large-tail") == 0) return TestLargePrivateTailChunks();
 		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
@@ -5992,6 +6015,7 @@ namespace RTE {
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
+		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
 		{
 			std::string error;
