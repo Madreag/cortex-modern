@@ -188,6 +188,8 @@ static std::string s_menuMpTraceError;
 static bool s_cowCheckpointAutosave = false;
 static bool s_checkpointAudioEffects = false;
 static bool s_checkpointAudioEffectsPassed = false;
+static bool s_checkpointWorldAudio = false;
+static bool s_checkpointWorldAudioPassed = false;
 static bool s_checkpointCaptureSelfTest = false;
 static unsigned s_checkpointCapturePasses = 0;
 static int s_cowCheckpointCaptures = 0;
@@ -681,6 +683,7 @@ int ShutDown(int exitCode) {
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_checkpointAudioEffects && !s_checkpointAudioEffectsPassed) exitCode = EXIT_FAILURE;
+	if (s_checkpointWorldAudio && !s_checkpointWorldAudioPassed) exitCode = EXIT_FAILURE;
 	if (s_checkpointCaptureSelfTest && s_checkpointCapturePasses != 2) exitCode = EXIT_FAILURE;
 	if (s_bitmapSaveSelfTest && s_bitmapSaveSelfTestResult != 0) exitCode = EXIT_FAILURE;
 	if (!s_snapshotRoundtripSelfTestName.empty() && !s_snapshotRoundtripSelfTestPassed) exitCode = EXIT_FAILURE;
@@ -781,6 +784,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		}
 		if (currentArg == "-checkpoint-capture-selftest") {
 			s_checkpointCaptureSelfTest = true;
+			++i;
+			continue;
+		}
+		if (currentArg == "-checkpoint-audio-world-selftest") {
+			s_checkpointWorldAudio = true;
 			++i;
 			continue;
 		}
@@ -5593,11 +5601,20 @@ void RunGameLoop() {
 			if (probeTickResult) RollbackProbeOnHashedTick(simTick, *probeTickResult);
 			if (s_checkpointAudioEffects && simTick == 1) {
 				s_checkpointAudioEffectsPassed = g_AudioMan.RunCheckpointEffectsSelfTest();
+				g_MetricsCollector.SetResult(s_checkpointAudioEffectsPassed);
+				System::SetQuit(true);
+			}
+			if (s_checkpointWorldAudio && simTick == 60) {
+				s_checkpointWorldAudioPassed = g_AudioMan.RunCheckpointWorldEffectsSelfTest();
+				g_MetricsCollector.SetResult(s_checkpointWorldAudioPassed);
 				System::SetQuit(true);
 			}
 			if (s_checkpointCaptureSelfTest && (simTick == 60 || simTick == 120)) {
 				if (g_ActivityMan.RunCheckpointCaptureSelfTest(simTick)) ++s_checkpointCapturePasses;
-				if (simTick == 120) System::SetQuit(true);
+				if (simTick == 120) {
+					g_MetricsCollector.SetResult(s_checkpointCapturePasses == 2);
+					System::SetQuit(true);
+				}
 			}
 			// The self-test's capture rides the same tick boundary the live autosave uses, after the
 			// census above: a capture taken at the top of the frame describes a different instant.

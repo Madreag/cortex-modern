@@ -43,6 +43,7 @@ namespace RTE {
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
 		bool RunCheckpointSelfTest();
 		bool RunCheckpointEffectsSelfTest();
+		bool RunCheckpointWorldEffectsSelfTest();
 		/// Test accessor: deferred voices and pending sample archives still held.
 		std::pair<int, int> PendingAudioCount() const;
 		void SetCheckpointTraceEnabled(bool enabled);
