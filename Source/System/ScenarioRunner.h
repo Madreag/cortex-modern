@@ -225,6 +225,11 @@ namespace RTE {
 		static void ReleaseWorldCatchUp();
 		static uint64_t WorldCatchUpAppliedThrough();
 		static uint64_t WorldCatchUpActivationTick();
+		static void NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs);
+		static uint64_t WorldCatchUpWorkTicks();
+		static uint64_t WorldCatchUpWorkUs();
+		static uint64_t WorldCatchUpPriorInputThrough();
+		static void SetWorldCatchUpPriorInputThrough(uint64_t frame);
 		/// Whether the tail still holds a committed frame for this tick.
 		static bool WorldCatchUpHasFrame(uint64_t simTick);
 		/// Builds the ready frame whose targetFrame equals simTick.

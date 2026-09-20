@@ -91,6 +91,11 @@ namespace RTE {
 			{"capture_ms", image.captureMs},
 			{"activation_lead", c_NetWorldActivationLeadFrames},
 		};
+		if (image.privateSessionId != 0) {
+			offer["private_session_id"] = image.privateSessionId;
+			offer["checkpoint_config"] = image.checkpointConfig;
+			offer["side_state"] = image.sideState;
+		}
 		return offer.dump();
 	}
 
@@ -105,6 +110,9 @@ namespace RTE {
 			return false;
 		}
 		NetWorldCheckpointImage image;
+		image.privateSessionId = parsed.value("private_session_id", uint64_t{0});
+		image.checkpointConfig = parsed.value("checkpoint_config", std::string());
+		image.sideState = parsed.value("side_state", std::string());
 		image.worldId = parsed.value("world_id", std::string());
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});
@@ -519,7 +527,7 @@ namespace RTE {
 		}
 		const uint32_t magic = static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
 		                       (static_cast<uint32_t>(bytes[2]) << 16) | (static_cast<uint32_t>(bytes[3]) << 24);
-		return magic == c_NetWorldImageMagic && bytes[4] == c_NetWorldImageVersion;
+		return magic == c_NetWorldImageMagic && bytes[4] >= 1 && bytes[4] <= c_NetWorldImageVersion;
 	}
 
 	bool EncodeWorldJoinImageBlob(const NetWorldCheckpointImage& image, const std::vector<uint8_t>& archive,
@@ -617,7 +625,12 @@ namespace RTE {
 	}
 
 	NetLobbyStateChunk MakeJoinerCatchUpReport() {
-		return MakeWorldJoinReport(c_NetWorldReportCatchUp, ScenarioRunner::WorldCatchUpAppliedThrough());
+		auto report = MakeWorldJoinReport(c_NetWorldReportCatchUp, ScenarioRunner::WorldCatchUpAppliedThrough());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkTicks());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpWorkUs());
+		AppendU64LE(report.bytes, ScenarioRunner::WorldCatchUpPriorInputThrough());
+		report.totalBytes = report.bytes.size();
+		return report;
 	}
 
 	NetLobbyStateChunk MakeWorldJoinReport(uint8_t kind, uint64_t value) {
@@ -643,8 +656,11 @@ namespace RTE {
 		return "the world refused the join";
 	}
 
-	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value) {
-		if (chunk.transferId != c_NetWorldReportTransferId || chunk.bytes.size() != 9 || chunk.totalBytes != 9 ||
+	bool ParseWorldJoinReport(const NetLobbyStateChunk& chunk, uint8_t& kind, uint64_t& value, uint64_t* workTicks, uint64_t* workUs, uint64_t* sentThrough) {
+		if (workTicks) *workTicks = 0;
+		if (workUs) *workUs = 0;
+		if (sentThrough) *sentThrough = 0;
+		if (chunk.transferId != c_NetWorldReportTransferId || (chunk.bytes.size() != 9 && chunk.bytes.size() != 33) || chunk.totalBytes != chunk.bytes.size() ||
 		    chunk.chunkCount != 1 || chunk.chunkIndex != 0) {
 			return false;
 		}
@@ -656,6 +672,16 @@ namespace RTE {
 		value = 0;
 		for (int i = 0; i < 8; ++i) {
 			value |= static_cast<uint64_t>(chunk.bytes[static_cast<size_t>(i + 1)]) << (8 * i);
+		}
+		if (chunk.bytes.size() == 33) {
+			if (kind != c_NetWorldReportCatchUp) return false;
+			const uint8_t* cursor = chunk.bytes.data() + 9;
+			const uint8_t* end = chunk.bytes.data() + chunk.bytes.size();
+			bool ok = true;
+			const uint64_t ticks = ReadU64LE(cursor, end, ok), us = ReadU64LE(cursor, end, ok), sent = ReadU64LE(cursor, end, ok);
+			if (workTicks) *workTicks = ticks;
+			if (workUs) *workUs = us;
+			if (sentThrough) *sentThrough = sent;
 		}
 		return true;
 	}
@@ -937,8 +963,8 @@ namespace RTE {
 
 #pragma region Membership
 
-	bool NetWorldMembership::Configure(const NetMatchConfig& config, std::string* error) {
-		if (!config.persistentWorld) {
+	bool NetWorldMembership::Configure(const NetMatchConfig& config, std::string* error, bool privateMatch) {
+		if (!config.persistentWorld && !privateMatch) {
 			if (error) *error = "only a persistent world has world slots";
 			return false;
 		}
@@ -1188,6 +1214,7 @@ namespace RTE {
 #pragma region Join host
 
 	bool NetWorldJoinHost::Configure(const NetMatchConfig& config, const NetWorldIdentity& identity, std::string* error) {
+		m_PrivateRound = 0;
 		if (!identity.IsValid()) {
 			if (error) *error = "the world identity is incomplete";
 			return false;
@@ -1205,6 +1232,49 @@ namespace RTE {
 		m_Image = NetWorldCheckpointImage{};
 		m_Tail.Clear();
 		return true;
+	}
+
+	bool NetCatchUpHeadroom::Observe(uint64_t ticks, uint64_t workUs, double tickMs) {
+		if (!std::isfinite(tickMs) || tickMs <= 0 || ticks < m_Samples.back().first || workUs < m_Samples.back().second) return false;
+		if (ticks == m_Samples.back().first) return workUs == m_Samples.back().second;
+		if (workUs == m_Samples.back().second) return false;
+		m_Samples.emplace_back(ticks, workUs);
+		while (m_Samples.size() > 2 && ticks - m_Samples[1].first >= 120) m_Samples.pop_front();
+		const auto [firstTicks, firstUs] = m_Samples.front();
+		m_Ratio = (ticks - firstTicks) * tickMs * 1000.0 / (workUs - firstUs);
+		if (m_Ratio < 1.1) m_Ready = false;
+		else if (ticks - firstTicks >= 120 && m_Ratio >= 1.2) m_Ready = true;
+		return true;
+	}
+
+	bool NetWorldJoinHost::ConfigureMatchRejoins(const NetMatchConfig& config, uint64_t roundId, double tickMs, std::string* error) {
+		if (config.persistentWorld || config.sessionId == 0 || roundId == 0 || config.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute ||
+		    !std::isfinite(tickMs) || tickMs <= 0 || !m_Membership.Configure(config, error, true)) return false;
+		m_Config = config; m_PrivateRound = roundId; m_SimTickMs = tickMs;
+		m_Identity = {}; m_Sessions.clear(); m_Image = {}; m_Tail.Clear();
+		return true;
+	}
+
+	bool NetWorldJoinHost::BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error) {
+		if (!IsPrivateMatch() || incarnation == 0 || peerId == m_Config.hostPeerId) return false;
+		const auto* slot = m_Membership.SlotOfSeat(stableSeat);
+		if (slot && slot->peerId != peerId) return false;
+		if (!slot && !m_Membership.Hold(peerId, stableSeat, name, error)) return false;
+		m_Membership.SetReclaimHold(peerId, true);
+		if (!BeginJoin(connection, stableSeat, name, nowMs, error, true)) return false;
+		Find(connection)->incarnation = incarnation;
+		return Find(connection)->assignedPeerId == peerId;
+	}
+
+	bool NetWorldJoinHost::NoteRejoinCapacity(NetPeerId connection, uint64_t workTicks, uint64_t workUs, uint64_t sentThrough) {
+		auto* session = Find(connection);
+		if (!session || !IsPrivateMatch()) return false;
+		session->priorInputThrough = std::max(session->priorInputThrough, sentThrough);
+		return session->headroom.Observe(workTicks, workUs, m_SimTickMs);
+	}
+
+	void NetWorldJoinHost::NoteRejoinLinkFit(NetPeerId connection, bool fits) {
+		if (auto* session = Find(connection)) session->linkFits = fits;
 	}
 
 	uint8_t NetWorldJoinHost::AllocateSpectatorLobbyPeer() const {
@@ -1270,6 +1340,7 @@ namespace RTE {
 	}
 
 	bool NetWorldJoinHost::BeginJoin(NetPeerId connection, uint16_t stableSeat, const std::string& holderName, uint64_t nowMs, std::string* error, bool credentialedHolder) {
+		if (IsPrivateMatch() && !credentialedHolder) { if (error) *error = "a running match only readmits its authenticated holder"; return false; }
 		if (!IsConfigured()) {
 			if (error) *error = "the world join plane is not configured";
 			return false;
@@ -1425,7 +1496,7 @@ namespace RTE {
 		m_Image = image;
 		m_Metrics.NoteCapture(image.captureMs, image.bytes);
 		for (NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.snapshotTick == 0) {
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && session.snapshotTick == 0) {
 				session.snapshotTick = image.tick;
 				session.deliveredThrough = image.tick;
 				session.acknowledgedThrough = image.tick;
@@ -1481,7 +1552,7 @@ namespace RTE {
 			if (error) *error = "no world bootstrap for that connection";
 			return false;
 		}
-		if (session->snapshotTick == 0) {
+		if (session->snapshotTick == 0 && !IsPrivateMatch()) {
 			if (error) *error = "the bootstrap has no checkpoint image yet";
 			return false;
 		}
@@ -1510,6 +1581,7 @@ namespace RTE {
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
+		if (IsPrivateMatch() && (!session->linkFits || !session->headroom.Ready())) return true;
 		if (session->activationTick != 0) {
 			return true;
 		}
@@ -1518,7 +1590,7 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
-		session->activationTick = ChooseActivationTick(nowFrame);
+		session->activationTick = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
@@ -1694,7 +1766,9 @@ namespace RTE {
 			                    {"peer_id", static_cast<int>(session.assignedPeerId)}, {"team", static_cast<int>(session.team)},
 			                    {"spectator", session.spectator}, {"snapshot_tick", session.snapshotTick},
 			                    {"activation_tick", session.activationTick}, {"applied_through", session.acknowledgedThrough},
-			                    {"transfer_bytes", session.transferBytes}});
+			                    {"transfer_bytes", session.transferBytes}, {"incarnation", session.incarnation},
+			                    {"catchup_capacity_ratio", session.headroom.Ratio()}, {"readmission_headroom", session.headroom.Ready()},
+			                    {"delay_fits", session.linkFits}, {"prior_input_through", session.priorInputThrough}});
 		}
 		json report = {
 			{"world_id", m_Identity.worldId},
@@ -1714,6 +1788,8 @@ namespace RTE {
 	}
 
 	void NetWorldJoinHost::Reset() {
+		m_PrivateRound = 0;
+		m_SimTickMs = 0;
 		m_Identity = NetWorldIdentity{};
 		m_Config = NetMatchConfig{};
 		m_Sessions.clear();

@@ -1125,6 +1125,20 @@ namespace RTE {
 		return true;
 	}
 
+	static uint64_t s_CatchUpWorkTicks = 0, s_CatchUpWorkUs = 0, s_CatchUpLastMeasured = 0, s_CatchUpPriorInputThrough = 0;
+
+	void ScenarioRunner::NoteWorldCatchUpTickCost(uint64_t tick, uint64_t workUs) {
+		if (!s_WorldCatchUpActive || tick <= s_CatchUpLastMeasured) return;
+		s_CatchUpLastMeasured = tick;
+		++s_CatchUpWorkTicks;
+		s_CatchUpWorkUs += workUs;
+	}
+
+	uint64_t ScenarioRunner::WorldCatchUpWorkTicks() { return s_CatchUpWorkTicks; }
+	uint64_t ScenarioRunner::WorldCatchUpWorkUs() { return s_CatchUpWorkUs; }
+	uint64_t ScenarioRunner::WorldCatchUpPriorInputThrough() { return s_CatchUpPriorInputThrough; }
+	void ScenarioRunner::SetWorldCatchUpPriorInputThrough(uint64_t frame) { s_CatchUpPriorInputThrough = frame; }
+
 	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error) {
 		if (snapshotTick == 0) {
 			if (error) *error = "world catch-up has no snapshot tick";
@@ -1135,6 +1149,8 @@ namespace RTE {
 			s_WorldCatchUpTail.push_back(std::move(frame));
 		}
 		s_WorldCatchUpAppliedThrough = snapshotTick;
+		s_CatchUpWorkTicks = s_CatchUpWorkUs = 0;
+		s_CatchUpLastMeasured = snapshotTick;
 		s_WorldCatchUpActivationTick = 0;
 		s_WorldCatchUpActive = true;
 		s_WorldCatchUpHeld = false;
