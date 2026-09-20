@@ -1350,6 +1350,7 @@ namespace RTE {
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A36, 0, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A36, 0, NetTransportLane::ControlReliable);
 			a.roundId = b.roundId = 36; a.relayToOtherPeers = true;
+			a.remoteTransportPeerId = b.remoteTransportPeerId = 1;
 			if (!host.Start(hostWire, a, error) || !client.Start(clientWire, b, error)) return false;
 			NetLockstepTiming timing;
 			timing.senderPeerId = 1; timing.peerId = 2; timing.sessionId = a.sessionId; timing.roundId = 36;
@@ -1375,6 +1376,7 @@ namespace RTE {
 			hostConfig.roundId = clientConfig.roundId = 17;
 			hostConfig.relayToOtherPeers = true;
 			if (!StartCoordinatorPair(48891, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			uint64_t now = 0;
 			const auto pump = [&] {
 				++now;
@@ -1406,6 +1408,7 @@ namespace RTE {
 				if (frame >= 22 && frame <= 24 && (first.remoteFrames.front().stateMask & (uint64_t{1} << PRESS_PRIMARY)) != 0) {
 					*error = "delay padding repeated a controller press"; return false;
 				}
+				(void)host.FinishSimulationTick(frame); (void)client.FinishSimulationTick(frame);
 			}
 			if (client.GetStats().delayPaddingFrames != 3 || host.GetStats().delayChangesCommitted != 1 || client.GetStats().delayChangesCommitted != 1) {
 				*error = "the live delay counters did not count one boundary and its three padding frames"; return false;
@@ -1434,6 +1437,52 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestAutomaticDelayKeepsFourPeersCommitting(std::string* error) {
+			std::array<LoopbackTransport, 4> wires;
+			std::array<NetLockstepCoordinator, 4> peers;
+			if (!wires[0].StartHost(48911, error)) return false;
+			for (size_t i = 1; i < wires.size(); ++i) if (!wires[i].Connect("loopback", 48911, error)) return false;
+			for (size_t i = 0; i < peers.size(); ++i) {
+				auto config = MakeCoordinatorConfig(static_cast<uint8_t>(i + 1), i == 0 ? 2 : 1, 0x9A39, 0, NetTransportLane::ControlReliable);
+				config.startFrame = 1; config.roundId = 39; config.peerCount = 4; config.timeoutMs = 30000;
+				config.adaptiveInputDelay = true; config.relayToOtherPeers = i == 0;
+				config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+				config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+				config.matchConfig.peerCount = 4; config.matchConfig.inputDelayFrames = 0;
+				config.remoteTransportPeerIds = i == 0 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}, {4, 3}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				if (!peers[i].Start(wires[i], config, error)) return false;
+				peers[i].DeferStopsToTickBoundary();
+			}
+			std::array<uint64_t, 4> produced{1, 1, 1, 1}, applied{};
+			std::array<std::string, 4> queueError;
+			std::array<std::map<uint64_t, std::map<int64_t, uint64_t>>, 4> traces;
+			for (uint64_t now = 0; now < 1000; ++now) {
+				for (size_t i = 0; i < peers.size(); ++i) {
+					auto& peer = peers[i];
+					while (peer.IsRunning() && produced[i] <= applied[i] + 2 && peer.QueueLocalInput(produced[i], {MakeFrame(100 + i, produced[i])}, {}, &queueError[i])) ++produced[i];
+					peer.Tick(now);
+					NetLockstepReadyFrame ready;
+					while (peer.PopReadyFrame(ready)) {
+						applied[i] = ready.frame;
+						for (const auto* frames: {&ready.localFrames, &ready.remoteFrames}) for (const auto& frame: *frames) traces[i][ready.frame][frame.actorUniqueID] = frame.stateMask;
+						(void)peer.FinishSimulationTick(ready.frame);
+					}
+				}
+				for (auto& wire: wires) wire.AdvanceTimeMs(1);
+				if (std::all_of(applied.begin(), applied.end(), [](uint64_t frame) { return frame >= 12; })) {
+					for (size_t i = 1; i < peers.size(); ++i) for (uint64_t frame = 1; frame <= 12; ++frame)
+						if (traces[i][frame] != traces[0][frame]) { *error = "automatic four-peer delay changed the committed controller trace"; return false; }
+					if (peers[0].GetStats().delayChangesCommitted != 3) { *error = "automatic four-peer delay did not resize all three zero-RTT peers"; return false; }
+					std::cout << "[net-lockstep-selftest] PASS automatic_four_peer_delay commits=12 changes=3" << std::endl;
+					return true;
+				}
+			}
+			*error = "automatic four-peer delay stopped committing";
+			for (size_t i = 0; i < peers.size(); ++i) *error += " peer=" + std::to_string(i + 1) + " applied=" + std::to_string(applied[i]) +
+			    " produced=" + std::to_string(produced[i]) + " queue=" + queueError[i] + " state=" + peers[i].BuildReportJson();
+			return false;
+		}
+
 		bool TestBoundedHoldKeepsCommitting(std::string* error) {
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
@@ -1445,6 +1494,7 @@ namespace RTE {
 			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
 			hostConfig.relayToOtherPeers = true;
 			if (!StartCoordinatorPair(48892, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
@@ -1458,6 +1508,7 @@ namespace RTE {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
 			host.FinishFrameWait(58);
+			(void)host.FinishSimulationTick(0);
 			for (uint64_t tick = 0; tick < 16; ++tick) {
 				host.NoteLocalTickCost(tick, 40.0);
 				host.NoteLocalInputProduced(tick, tick * 40000, 0);
@@ -1485,16 +1536,24 @@ namespace RTE {
 				if (!host.PopReadyFrame(ready) || ready.frame != tick || !ready.remoteFrames.empty()) {
 					*error = "an unresolved held seat paused a survivor or supplied late input"; return false;
 				}
+				(void)host.FinishSimulationTick(tick);
 			}
 			std::string rejoinError;
 			if (host.PreparePeerRejoin(2, 401, 500, &rejoinError) || rejoinError.find("agreed input delay") == std::string::npos) {
 				*error = "a held seat reclaimed before its RTT-derived delay took effect"; return false;
 			}
+			uint64_t applyFrame = 0;
 			for (uint64_t tick = 6; tick <= 80; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(500 + tick);
-				if (!host.PopReadyFrame(ready)) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+				for (const auto& command: ready.localCommands) if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload); delay && delay->peerId == 2) {
+					if (delay->frames < 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
+					applyFrame = tick;
+				}
+				(void)host.FinishSimulationTick(tick);
 			}
+			if (applyFrame <= 5) { *error = "readmission did not commit its future delay boundary"; return false; }
 			if (!host.PreparePeerRejoin(2, 401, 600, &rejoinError) || host.PreparePeerRejoin(2, 4000, 700, &rejoinError)) {
 				*error = "rejoin delay fit admitted an over-cap link or refused a fitted one"; return false;
 			}
@@ -1588,19 +1647,28 @@ namespace RTE {
 			NetLockstepCoordinator host, client;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A05, 0, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A05, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 20;
 			a.substituteSlowPeers = b.substituteSlowPeers = true; a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 			a.timeoutMs = b.timeoutMs = 20000; a.relayToOtherPeers = true;
 			if (!StartCoordinatorPair(48894, hostWire, clientWire, host, client, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			if (!host.ProposeInputDelay(2, 4, 20, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t frame = 0; frame <= 20; ++frame) {
+			for (uint64_t frame = 0; frame < 20; ++frame) {
 				if (!host.QueueLocalInput(frame, {}, {}, error) || !client.QueueLocalInput(frame, {}, {}, error)) return false;
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(20 + frame);
-				if (frame < 20 && (!host.PopReadyFrame(ready) || ready.frame != frame)) return false;
+				if (!host.PopReadyFrame(ready) || ready.frame != frame) { *error = "the acknowledgement fixture lost an input before its timing boundary"; return false; }
+			}
+			if (!client.QueueLocalInput(20, {}, {}, error)) return false;
+			hostWire.AdvanceTimeMs(1); host.Tick(40);
+			std::string pending;
+			if (host.QueueLocalInput(20, {}, {}, &pending) || pending != "input is waiting for a timing decision") {
+				*error = "local production crossed an unacknowledged timing boundary"; return false;
 			}
 			host.NoteFrameWait(20, 100, true);
 			host.NoteFrameWait(20, 150, true);
+			if (!host.QueueLocalInput(20, {}, {}, error)) return false;
+			host.Tick(151);
 			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
 			    host.IsPeerGoneAtFrame(2, 20) || !host.IsPeerGoneAtFrame(2, 21) || host.InputDelayAt(2, 20) != 4) {
 				*error = "an unacknowledged delay blocked the survivor or contradicted buffered input"; return false;
@@ -1687,6 +1755,7 @@ namespace RTE {
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A32, 0, NetTransportLane::ControlReliable);
 			a.roundId = b.roundId = 32; a.relayToOtherPeers = true;
 			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
 			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
 			if (!StartCoordinatorPair(48895, hostWire, oldWire, host, oldClient, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); oldWire.AdvanceTimeMs(1); host.Tick(now); oldClient.Tick(now); }
@@ -1707,6 +1776,7 @@ namespace RTE {
 			returnWire.PollEvents();
 			b.startFrame = 10; b.joinsRunningRound = true; b.initialSeatHolds = held;
 			b.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 2, 2, 10, 0, 10};
+			b.remoteTransportPeerId = 1;
 			if (!returning.Start(returnWire, b, error)) return false;
 			for (uint64_t now = 30; now < 50; ++now) { hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now); }
 			if (!host.IsRunning() || !returning.IsRunning() || host.GetRoundId() != returning.GetRoundId()) {
@@ -15643,6 +15713,7 @@ namespace RTE {
 		    !TestTimingDecisionCodec(&error) ||
 		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
+		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||

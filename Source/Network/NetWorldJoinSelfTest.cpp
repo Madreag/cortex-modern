@@ -2253,6 +2253,70 @@ namespace RTE {
 		return 0;
 	}
 
+	int TestLateWorldStartBoundary() {
+		std::array<LoopbackTransport, 3> links;
+		std::array<NetLockstepCoordinator, 3> peers;
+		std::string error;
+		if (!links[0].StartHost(48912, &error) || !links[1].Connect("loopback", 48912, &error) || !links[2].Connect("loopback", 48912, &error)) return Fail(error);
+		const auto configuration = [](uint8_t peer, uint64_t frame) {
+			NetLockstepConfig config;
+			config.sessionId = 0x9A40; config.roundId = peer == 1 ? 40 : 0; config.localPeerId = peer; config.peerCount = 3;
+			config.startFrame = frame; config.inputDelayFrames = 4; config.timeoutMs = 1000000;
+			config.relayToOtherPeers = peer == 1; config.joinsRunningRound = peer != 1;
+			config.frameLane = NetTransportLane::ControlReliable;
+			config.matchConfig = MakeWorldConfig(); config.matchConfig.sessionId = config.sessionId;
+			config.matchConfig.peerCount = 3; config.matchConfig.inputDelayFrames = 4;
+			config.matchConfig.players = {{0, 2, true, "World"}, {2, 0, false, "Resident"}, {3, 1, false, "Joiner"}};
+			if (peer != 1) config.remoteTransportPeerIds = {{1, 1}};
+			return config;
+		};
+		if (!peers[0].Start(links[0], configuration(1, 0), &error) || !peers[0].AdmitWorldMember(2, 1, 6, &error) ||
+		    !peers[1].Start(links[1], configuration(2, 6), &error)) return Fail(error);
+		for (auto& peer: peers) peer.DeferStopsToTickBoundary();
+		std::array<std::map<uint64_t, std::map<int64_t, uint64_t>>, 3> traces;
+		uint64_t now = 0;
+		const auto pump = [&](int passes) {
+			for (int pass = 0; pass < passes; ++pass) {
+				for (size_t i = 0; i < peers.size(); ++i) {
+					peers[i].Tick(now);
+					NetLockstepReadyFrame ready;
+					while (peers[i].PopReadyFrame(ready)) {
+						for (const auto* frames: {&ready.localFrames, &ready.remoteFrames}) for (const auto& frame: *frames) traces[i][ready.frame][frame.actorUniqueID] = frame.stateMask;
+						(void)peers[i].FinishSimulationTick(ready.frame);
+					}
+				}
+				for (auto& link: links) link.AdvanceTimeMs(5);
+				now += 5;
+			}
+		};
+		const auto queue = [&](size_t peer, uint64_t first, uint64_t last) {
+			for (uint64_t frame = first; frame <= last; ++frame) {
+				ControllerFrame input; input.actorUniqueID = 100 + peer; input.stateMask = frame;
+				if (!peers[peer].QueueLocalInput(frame, {input}, {}, &error)) return false;
+			}
+			return true;
+		};
+		pump(10);
+		if (!peers[1].IsRunning() || peers[1].GetRoundId() != 40 || !queue(0, 0, 15) || !queue(1, 6, 15)) return Fail("resident admission: " + error);
+		pump(10);
+		if (!traces[0].contains(19) || !traces[1].contains(19) || !peers[0].AdmitWorldMember(3, 2, 22, &error) ||
+		    !peers[2].Start(links[2], configuration(3, 22), &error)) return Fail("late admission: " + error);
+		peers[2].DeferStopsToTickBoundary();
+		if (!queue(0, 16, 27) || !queue(1, 16, 27)) return Fail(error);
+		pump(10);
+		if (!peers[0].IsRunning() || !peers[1].IsRunning() || !peers[2].IsRunning() || peers[2].GetRoundId() != 40 || peers[0].GetConfig().startFrame != 0)
+			return Fail("late admission stopped a resident, changed the original start, or lost the host round");
+		if (peers[2].QueueLocalInput(21, {}, {}, &error)) return Fail("late member produced before its admission delay");
+		if (!queue(2, 22, 27)) return Fail(error);
+		pump(20);
+		for (size_t peer = 0; peer < peers.size(); ++peer) for (uint64_t frame = 22; frame <= 31; ++frame) {
+			if (!peers[peer].IsRunning() || !traces[peer].contains(frame) || traces[peer][frame] != traces[0][frame] ||
+			    traces[peer][frame].contains(102) != (frame >= 26)) return Fail("late admission changed or stopped the common controller stream");
+		}
+		std::cout << "[net-world-join-selftest] PASS late_world_start boundaries=6,22 round=40 common_frames=10" << std::endl;
+		return 0;
+	}
+
 	int TestDueActivationAdmits() {
 		LoopbackTransport transport;
 		std::string error;
@@ -5747,6 +5811,10 @@ namespace RTE {
 			s_FailTag = "net-world-admit-selftest";
 			return TestDueActivationAdmits();
 		}
+		if (std::strcmp(name, "-net-world-late-admission-selftest") == 0) {
+			s_FailTag = "net-world-late-admission-selftest";
+			return TestLateWorldStartBoundary();
+		}
 		if (std::strcmp(name, "ordinary-start") == 0 || std::strcmp(name, "-net-world-ordinary-start-selftest") == 0) {
 			s_FailTag = "net-world-ordinary-start-selftest";
 			return TestOrdinaryStartStillRefusesEmptyRemotes();
@@ -5831,9 +5899,10 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
-		if (std::strcmp(name, "private-neutral-prelude") == 0) return TestPrivateNeutralPrelude();
-		if (std::strcmp(name, "private-large-tail") == 0) return TestLargePrivateTailChunks();
-		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
+		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
+		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
+		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
+		if (std::strcmp(name, "-net-world-private-journal-selftest") == 0) return TestCommittedTailJournal();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
 			s_FailTag = "net-world-restart-selftest";
 			std::string error;
@@ -5894,7 +5963,6 @@ namespace RTE {
 
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
-		// The runner's lockstep start reads the engine timestep.
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
@@ -5995,6 +6063,7 @@ namespace RTE {
 		if (const int result = TestH4LeaveThenNewJoinSameHolder(); result != 0) {
 			return result;
 		}
+		if (const int result = TestLateWorldStartBoundary(); result != 0) return result;
 		if (const int result = TestDueActivationAdmits(); result != 0) {
 			return result;
 		}
@@ -6068,6 +6137,7 @@ namespace RTE {
 	}
 
 	int NetWorldJoinSelfTest::RunCase(const char* name) {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (name == nullptr || name[0] == '\0') {
 			return Run();
 		}
