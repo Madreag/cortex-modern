@@ -472,7 +472,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
-		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload)) continue;
+		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload) || std::holds_alternative<NetGameSeatReclaim>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;
@@ -953,6 +953,21 @@ void RTE::ResetLockstepPausedFrames() {
 	s_LockstepPausedFrames = 0;
 }
 
+static void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
+	for (uint8_t peer: ready.reclaimedPeerIds) {
+		size_t reclaimed = 0;
+		for (Actor* actor: actors) {
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			if (ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()) != peer) continue;
+			ScenarioRunner::ReclaimLockstepActor(uid, peer);
+			actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+			actor->TouchCheckpoint(); ++reclaimed;
+		}
+		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peer, false, ready.frame);
+		std::cout << "[net-match] seat-reclaimed peer=" << static_cast<int>(peer) << " frame=" << ready.frame << " live_actors=" << reclaimed << std::endl;
+	}
+}
+
 void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused) {
 	// A round that restarts its frame numbering restarts the count with it.
 	if (readyFrame.frame <= ScenarioRunner::GetLockstepAppliedFrame()) {
@@ -1199,6 +1214,7 @@ bool MovableMan::RunLockstepPausedTick() {
 		ScenarioRunner::SetControllerReplayError("tick " + std::to_string(simTick) + " paused wait: " + error);
 		return false;
 	}
+	ApplyLockstepSeatReclaims(readyFrame, m_Actors);
 	ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, true);
 	// Only the game commands apply on a paused tick; the sim itself holds still.
 	g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
@@ -5523,6 +5539,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		std::unordered_set<int64_t> applied;
+		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
 		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error) ||
 		    !ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.remoteFrames, false, applied, error)) {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " world catch-up apply: " + error);
@@ -5564,6 +5581,7 @@ void MovableMan::UpdateControllers() {
 			return;
 		}
 		std::unordered_set<int64_t> applied;
+		ApplyLockstepSeatReclaims(readyFrame, m_Actors);
 		if (!ApplyControllerFramesToLockstepActors(m_Actors, readyFrame.localFrames, true, applied, error)) {
 			DumpControllerDebugSnapshot("lockstep_local_apply_error", simTick, m_Actors, &readyFrame.localFrames, &error);
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep local apply: " + error);

@@ -45,13 +45,15 @@ namespace RTE {
 				return NetGameCommandType::SeatHold;
 			} else if constexpr (std::is_same_v<T, NetGameInputDelay>) {
 				return NetGameCommandType::InputDelay;
+			} else if constexpr (std::is_same_v<T, NetGameSeatReclaim>) {
+				return NetGameCommandType::SeatReclaim;
 			}
 		}, payload);
 	}
 
 	int32_t NetGameCommandTeam(const NetGameCommandPayload& payload) {
 		return std::visit([](const auto& specific) -> int32_t {
-			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatHold> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameInputDelay>) return -1;
+			if constexpr (std::is_same_v<std::decay_t<decltype(specific)>, NetGamePlayerBindings> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatHold> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameInputDelay> || std::is_same_v<std::decay_t<decltype(specific)>, NetGameSeatReclaim>) return -1;
 			else return specific.team;
 		}, payload);
 	}
@@ -94,6 +96,7 @@ namespace RTE {
 				return "WorldTransition";
 			case NetGameCommandType::SeatHold:
 				return "SeatHold";
+			case NetGameCommandType::SeatReclaim: return "SeatReclaim";
 			case NetGameCommandType::InputDelay:
 				return "InputDelay";
 		}
