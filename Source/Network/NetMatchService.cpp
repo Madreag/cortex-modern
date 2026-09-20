@@ -2445,14 +2445,23 @@ static std::string ResyncSaveName() {
 		});
 	}
 
+	bool NetMatchService::ReadCommittedJoinFrame(const NetLockstepCoordinator& coordinator, uint64_t tick, NetLockstepReadyFrame& ready) {
+		if (coordinator.PeekReadyFrame(tick, ready)) return true;
+		if (tick < coordinator.GetConfig().startFrame || tick >= coordinator.GetStats().effectiveStartFrame) return false;
+		ready = {}; ready.frame = tick;
+		return true;
+	}
+
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
-			if (m_Coordinator->PeekReadyFrame(tick, ready)) {
-				(void)m_WorldJoin.Tail().Append(PackWorldJoinReadyFrame(ready), nullptr);
-			}
+			if (ReadCommittedJoinFrame(*m_Coordinator, tick, ready)) {
+				auto frame = PackWorldJoinReadyFrame(ready); frame.roundId = m_Coordinator->GetRoundId();
+				std::string error;
+				if (!m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
+			} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
 		}
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
 		const uint32_t seconds = m_MatchAutosaveSeconds;
@@ -2666,6 +2675,11 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable) {
 		if (outUnstartable) *outUnstartable = false;
+		if (m_WorldJoin.IsPrivateMatch() && !m_PrivateJoinError.empty()) {
+			if (error) *error = m_PrivateJoinError;
+			if (outUnstartable) *outUnstartable = true;
+			return false;
+		}
 		if (!m_Runner || !m_WorldJoin.Image().IsValid()) {
 			if (error) *error = "the joiner has no image yet";
 			return false;
@@ -3199,6 +3213,7 @@ static std::string ResyncSaveName() {
 			if (!DecodeCommittedJoinFrame(encoded, frame, error)) {
 				return false;
 			}
+			if (m_WorldCatchUp.privateMatch && frame.roundId != image.round) { if (error) *error = "private tail belongs to another round"; return false; }
 			m_WorldCatchUp.tail.push_back(std::move(frame));
 		}
 		pendingLoad = name;
@@ -3228,6 +3243,7 @@ static std::string ResyncSaveName() {
 			if (!DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + size), frame, &error)) {
 				ScenarioRunner::SetControllerReplayError("invalid committed tail: " + error); return;
 			}
+			if (catchUp.privateMatch && frame.roundId != catchUp.roundId) { ScenarioRunner::SetControllerReplayError("private tail belongs to another round"); return; }
 			later.push_back(std::move(frame)); offset += size;
 		}
 		catchUp.partialTail.erase(catchUp.partialTail.begin(), catchUp.partialTail.begin() + offset);
