@@ -32,6 +32,10 @@
       "elapsed_ms": 1000
     },
     {
+      "op": "menu",
+      "command": "assert_toast_band"
+    },
+    {
       "op": "wait",
       "sim_at_least": 800
     },

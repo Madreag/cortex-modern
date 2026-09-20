@@ -30,11 +30,11 @@
     },
     {
       "op": "menu",
-      "command": "net_panel assert_label LabelNetMatchStatus PACE"
+      "command": "assert_net_label LabelNetMatchStatus PACE"
     },
     {
       "op": "menu",
-      "command": "net_panel assert_label_absent LabelNetMatchStatus Your machine cannot keep up"
+      "command": "assert_net_label_absent LabelNetMatchStatus Your machine cannot keep up"
     },
     {
       "op": "key_down",

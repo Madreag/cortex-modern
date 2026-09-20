@@ -228,7 +228,8 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows";
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
+			command == "assert_net_label" || command == "assert_net_label_absent";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -266,6 +267,16 @@ namespace RTE::MenuAutomation {
 			observation = Json{{"roster", {roster.x, roster.y, roster.width, roster.height}}, {"roster_visible", roster.visible},
 				{"funds_bottom", fundsBottom}, {"roster_below_funds", roster.y >= fundsBottom}, {"local_pause", g_MenuMan.IsLocalPauseMenuOpen()}}.dump();
 			return true;
+		}
+		if (command == "assert_net_label" || command == "assert_net_label_absent") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			std::string name, expected, text;
+			args >> name;
+			std::getline(args >> std::ws, expected);
+			const bool found = panel && panel->AutomationLabelText(name, text);
+			const bool carries = found && text.find(expected) != std::string::npos;
+			observation = name + " \"" + expected + "\" text=" + Json(text).dump();
+			return found && carries == (command == "assert_net_label");
 		}
 		if (command == "assert_toast_band") {
 			auto* panel = g_MenuMan.GetNetworkPanel();
