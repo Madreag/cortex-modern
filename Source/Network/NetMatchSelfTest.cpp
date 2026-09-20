@@ -11192,6 +11192,25 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestHandoverSnapshotStatus(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		if (!hostWire.StartHost(49461, error) || !clientWire.Connect("loopback", 49461, error)) return false;
+		NetLockstepConfig hc; hc.sessionId = 152; hc.localPeerId = 1; hc.remotePeerId = 2; hc.remoteTransportPeerId = 1; hc.roundId = 152;
+		hc.matchConfig = NetMatchConfigUtil::MakeDefault(152); hc.matchConfig.successorOrder = {2};
+		hc.matchConfig.migrationPeers = {{2, 49460, {"loopback"}}}; hc.migrationKey.fill(0x39);
+		hc.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+		auto cc = hc; cc.localPeerId = 2; cc.remotePeerId = 1; cc.roundId = 0;
+		NetLockstepCoordinator host; NetMatchService service;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>(); service.m_State = NetMatchServiceState::Running;
+		if (!host.Start(hostWire, hc, error) || !service.m_Coordinator->Start(clientWire, cc, error)) return false;
+		for (uint64_t now = 0; now < 10; ++now) { host.Tick(now); service.m_Coordinator->Tick(now); }
+		if (!service.m_Coordinator->BeginHostMigrationAfterHeal(10)) { *error = "status fixture could not begin handover"; return false; }
+		const auto snapshot = service.GetLobbySnapshot();
+		if (!snapshot.running || !snapshot.hostLost || !snapshot.migrating || snapshot.serviceState != "HostLost" || snapshot.statusText.find("Host lost") == std::string::npos ||
+		    service.GetHostHandoverState() != NetHostHandoverState::HostLost) { *error = "host handover was not exposed to the running overlay"; return false; }
+		std::cout << "[net-match-selftest] PASS handover_service_status running=1 host_lost=1 migrating=1" << std::endl; return true;
+	}
+
 	bool TestConnectedRouteEvidence(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
 		GnsTransport host, client;
@@ -11601,6 +11620,9 @@ namespace RTE {
 				return false;
 			}
 			const bool retry = arm < 3 || arm == 7 || arm == 10;
+			if (arm == 4 && (session.BuildRejectText() != "The host banned you from this session" || service.SetupFailureStatus(&session, false, false) != "The host banned you from this session")) {
+				*error = "the banned player's status exposed an internal rejection"; return false;
+			}
 			if (arm == 4 && (!session.IsRejected() || session.GetRejectReason() != NetRejectReason::ParticipantBanned)) {
 				*error = "ice refusal fixture: the connected host's ban was not retained";
 				return false;
@@ -11786,6 +11808,7 @@ namespace RTE {
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);
 		if (!menuInputs || !routeEvidence) return fail(menuError + "; " + routeError);
+		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);

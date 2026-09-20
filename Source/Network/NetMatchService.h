@@ -151,6 +151,8 @@ namespace RTE {
 	/// be joined, else the join list's own refusal label for it.
 	std::string NetIceResolveSessionRow(const std::vector<NetDirectorySessionRow>& rows, const NetDirectoryLocalIdentity& local, const std::string& sessionId, NetIceJoinTarget* out, const NetDirectoryLocalIdentity* worldLocal = nullptr, bool reservedSeat = false);
 
+	enum class NetHostHandoverState { Live, HostLost, Migrating };
+
 	enum class NetMatchServiceState {
 		Idle,
 		Starting,
@@ -677,6 +679,7 @@ namespace RTE {
 		bool BeginSubstituteApplication(const NetMatchServiceRequest& request, std::string* error = nullptr);
 
 		NetMatchServiceState GetState() const;
+		NetHostHandoverState GetHostHandoverState() const;
 		bool IsHost() const { std::lock_guard<std::mutex> lock(m_Mutex); return m_IsHost; }
 		bool WasEverStarted() const { return m_EverStarted.load(); }
 		/// The host's router port-mapping state, for the lobby's status line. Game-thread only.
@@ -962,6 +965,7 @@ namespace RTE {
 		friend bool TestRelayOfferAndPolicy(std::string* error);
 		friend bool TestRelayOfferRefresh(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
+		friend bool TestHandoverSnapshotStatus(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
