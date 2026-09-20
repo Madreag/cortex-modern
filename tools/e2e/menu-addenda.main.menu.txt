@@ -104,6 +104,8 @@ screenshot transition-host-first
 dump_host_options
 observe assert_no_overlap CheckHostPortMap ButtonHostOptions
 observe assert_text_fits CheckHostPortMap
+observe assert_text_fits ComboHostActivity
+observe assert_not_drawn MultiplayerLandingPanel
 observe assert_label ComboHostActivity Skirmish Defense
 wait_ms 400
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
@@ -120,9 +122,11 @@ dump_host_options
 activate ButtonLobbyOptions
 wait_ms 350
 observe assert_text_fits LabelHostSeatHeader
+observe assert_not_drawn MultiplayerLobbyPanel
 dump_host_options
 activate ButtonHostOptBack
 wait_ms 300
+observe assert_not_drawn MultiplayerHostOptionsPanel
 activate ButtonMultiplayerLeave
 wait_ms 400
 exit

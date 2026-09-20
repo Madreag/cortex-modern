@@ -1,10 +1,13 @@
 wait_ms 1500
 activate ButtonMainToMultiplayer
 wait_ms 300
+settext TextMultiplayerName Joiner
 activate ButtonMultiplayerJoinGame
 wait_ms 3500
 video_mark loss-lan-list
 observe assert_text_fits ListLanGames
+observe assert_list_rows ListLanGames 1
+observe assert_label TextJoinPort {PORT}
 dump_host_options
 screenshot loss-lan-list
 settext TextJoinAddress 127.0.0.1
@@ -12,6 +15,8 @@ settext TextJoinPort {PORT}
 activate ButtonMultiplayerConnect
 wait_connected 2 30
 video_mark loss-client-lobby
+wait_ms 400
+observe assert_label LabelLobbyPlayer1 Joiner
 dump_lobby
 wait_state Failed 45
 video_mark loss-client-landing

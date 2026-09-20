@@ -173,6 +173,8 @@ namespace RTE::MenuAutomation {
 		std::string text;
 		const bool measureHiddenPreset = control && control->GetName() == "ComboPresetResolution";
 		if ((!Visible(control) && !measureHiddenPreset) || !Text(control, text)) return false;
+		// A closed picker is measured on the line it draws, which is not always the whole item name.
+		if (auto* combo = dynamic_cast<GUIComboBox*>(control)) text = combo->GetText();
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(text).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
@@ -226,7 +228,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band";
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -299,6 +301,15 @@ namespace RTE::MenuAutomation {
 		}
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "assert_list_rows") {
+				std::string name;
+				int expected = -1;
+				args >> name >> expected;
+				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(name));
+				const int actual = list && list->GetItemList() ? static_cast<int>(list->GetItemList()->size()) : -1;
+				observation = name + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual);
+				return list != nullptr && actual == expected;
+			}
 			if (command == "assert_not_drawn") {
 				std::string name;
 				args >> name;
