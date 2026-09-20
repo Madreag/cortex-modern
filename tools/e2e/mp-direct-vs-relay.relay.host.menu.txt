@@ -51,6 +51,8 @@ activate TabHostPageNetwork
 wait_ms 600
 activate TabHostNetRouting
 wait_ms 600
+activate TabHostNetTuning
+wait_ms 600
 combo_select ComboHostNetVisibility Internet: Listed
 wait_ms 900
 assert_label ComboHostNetVisibility Listed
