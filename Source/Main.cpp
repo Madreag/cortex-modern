@@ -7939,6 +7939,7 @@ int RunNetPortMapProbe() {
 /// Implementation of the main function.
 /// </summary>
 int main(int argc, char** argv) {
+	bool netMatchSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
@@ -7974,7 +7975,7 @@ int main(int argc, char** argv) {
 			return NetLockstepSelfTest::Run();
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
-			return NetMatchSelfTest::Run();
+			netMatchSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-auth-selftest") {
 			return NetAuthSelfTest::Run();
@@ -8234,6 +8235,12 @@ int main(int argc, char** argv) {
 
 	g_PresetMan.LoadAllDataModules();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
+	if (netMatchSelfTest) {
+		NetMatchService::Destruct();
+		const int result = NetMatchSelfTest::Run();
+		NetMatchService::Construct();
+		return ShutDown(result);
+	}
 
 	if (!s_netIdentityDumpPath.empty()) {
 		NetIdentityManifest manifest;
