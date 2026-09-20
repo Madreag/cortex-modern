@@ -138,8 +138,9 @@ def item9a_gates(run, peer='host', rows=None):
     }
     if manifest.get('loss_percent'):
         loss_log = run / 'client/stdout.log'
-        losses = sum(1 for _ in re.finditer(r'\[net-frame-loss\]', loss_log.read_text(encoding='utf-8-sig', errors='replace'))) if loss_log.is_file() else 0
-        pins['item9a_loss_armed'] = pin(losses, '5 percent controller-packet loss arm actually dropped packets', losses > 0, [run / 'client/stdout.log'])
+        armed = re.findall(r'\[net-transport-loss\] percent=(\S+) send_recv_armed=(\d+) round=(\d+)', loss_log.read_text(encoding='utf-8-sig', errors='replace')) if loss_log.is_file() else []
+        accepted = bool(armed) and all(float(percent) == manifest['loss_percent'] and status == '1' for percent, status, _ in armed)
+        pins['item9a_loss_armed'] = pin(armed, 'GNS accepted 5 percent packet loss on client send and receive for every observed arm', accepted, [loss_log])
     if manifest.get('silent_tick'):
         holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
         held = next((tick for seat, tick in holds if seat == 2 and tick >= manifest['silent_tick']), None)

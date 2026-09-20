@@ -104,6 +104,9 @@
 #include "NetSession.h"
 #include "NetSessionSelfTest.h"
 #include "NetWorldJoinSelfTest.h"
+#ifdef CCCP_WITH_GNS
+#include <steam/isteamnetworkingutils.h>
+#endif
 #include "SimChecksum.h"
 #include "NetA7Journal.h"
 #include "ScenarioRunner.h"
@@ -4842,6 +4845,24 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		static uint64_t lossArmRound = UINT64_MAX;
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && lossArmRound != ScenarioRunner::GetLockstepRoundId()) {
+			lossArmRound = ScenarioRunner::GetLockstepRoundId();
+			const char* lossText = std::getenv("CC_TEST_GNS_LOSS_PERCENT");
+			const char* headless = std::getenv("CCCP_HEADLESS");
+			if (lossText && headless && std::strcmp(headless, "1") == 0) {
+				char* end = nullptr;
+				const float percent = std::strtof(lossText, &end);
+				bool applied = false;
+#ifdef CCCP_WITH_GNS
+				if (end != lossText && *end == '\0' && percent >= 0 && percent <= 100) {
+					applied = SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, percent) &&
+					    SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, percent);
+				}
+#endif
+				std::cout << "[net-transport-loss] percent=" << percent << " send_recv_armed=" << applied << " round=" << lossArmRound << std::endl;
+			}
+		}
 		FrameMan::FeelBeginIteration();
 		updateStartTime = g_TimerMan.GetAbsoluteTime();
 
