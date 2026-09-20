@@ -128,7 +128,7 @@ Both peers with recording on, both peers with recording off, and each peer's
 on/off run are compared. Auto-delay changes between runs are findings; the driver
 does not impose a floor to force the pinned D or weaken a comparator.
 
-The default gates are the 13-row selftest suite, the script graph selftest with
+The default gates are every entry in `run_selftests.SELFTESTS`, the script graph selftest with
 four Lua states, and the SP pie-close control comparison using the unchanged
 comparator recorded in the driver. The SP fixture and Index.ini are copied as
 individual files from the retained control runtime; no directory tree is copied.
@@ -144,5 +144,5 @@ existing run trees are never deleted, moved or replaced. `--analyze-only` is for
 completed launch matrix whose analysis directories do not yet exist.
 
 Detector checks are `python -B tools/feel/test_report.py`. They use synthetic
-records only and do not establish engine correctness. They are deferred during
-Phase 1 along with all builds, engine gates and drivers.
+records only and do not establish engine correctness. They remain unrun in the
+compile-only lane; the review runs them with the engine gates and drivers.
