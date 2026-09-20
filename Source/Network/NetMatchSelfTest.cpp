@@ -3858,6 +3858,8 @@ namespace RTE {
 			config.idleWaitMinutes = 0;
 			config.automaticRepair = false;
 			config.frameRedundancyTicks = 6;
+			config.slowPlayerBoundTicks = 7;
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 			config.teamRules[1].technologyIntent = "-Random-";
 			config.teamRules[1].technologyModule = "Coalition.rte";
 			config.teamRules[1].aiSkill = 90;
@@ -3884,7 +3886,8 @@ namespace RTE {
 			    read.rules.teamRules[1].technologyIntent != "-Random-" || read.rules.teamRules[1].technologyModule != "Coalition.rte" ||
 			    read.rules.teamRules[1].aiSkill != 90 || read.peerCount != 3 || read.delayPolicy != NetMatchDelayPolicy::Fixed ||
 			    read.inputDelayFrames != 2 || !read.autosaveEnabled || read.autosaveIntervalSeconds != 120 || read.idleWaitMinutes != 0 ||
-			    read.automaticRepair || read.frameRedundancyTicks != 6 || read.seats.size() != 4) {
+			    read.automaticRepair || read.frameRedundancyTicks != 6 || read.seats.size() != 4 ||
+			    read.slowPlayerBoundTicks != 7 || read.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) {
 				*error = "the host defaults template did not round-trip every host option";
 				return false;
 			}
@@ -3916,7 +3919,7 @@ namespace RTE {
 			if (!NetHostDefaults::ApplyTo(read, fresh, error)) return false;
 			if (fresh.difficulty != 81 || fresh.startingGold != 12345 || fresh.mode != NetMatchMode::CoopPvE || fresh.frameRedundancyTicks != 6 ||
 			    fresh.idleWaitMinutes != 0 || fresh.autosaveIntervalSeconds != 120 || fresh.players.size() != MakeConfig().players.size() ||
-			    fresh.sessionId != MakeConfig().sessionId) {
+			    fresh.sessionId != MakeConfig().sessionId || fresh.slowPlayerBoundTicks != 7 || fresh.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) {
 				*error = "the host defaults template did not seed a new draft";
 				return false;
 			}

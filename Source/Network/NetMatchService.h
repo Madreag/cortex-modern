@@ -188,6 +188,8 @@ namespace RTE {
 		std::optional<bool> brainlessHumansSpectate; // Host rule: the round survives the last human brain. Unset takes the host's Gameplay setting.
 		// The host's saved session options. Unset keeps the config default; NetMatchService::SeatSavedOptions fills them from the settings.
 		std::optional<NetMatchDelayPolicy> delayPolicy;
+		std::optional<uint16_t> slowPlayerBoundTicks;
+		std::optional<NetSlowPlayerPolicy> slowPlayerPolicy;
 		std::optional<uint8_t> idleWaitMinutes;
 		std::optional<bool> automaticRepair;
 		std::optional<uint16_t> pathHorizonTicks;
@@ -287,11 +289,13 @@ namespace RTE {
 			bool cpu = false;
 			uint16_t delayFrames = 0;
 		};
-		uint16_t version = 1;
+		uint16_t version = 2;
 		NetMatchStandardRules rules; //!< Activity, site, mode, the original rule values and the team rules.
 		uint8_t peerCount = 2;
 		bool dedicated = false;
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
+		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		uint16_t inputDelayFrames = 0;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
@@ -306,7 +310,7 @@ namespace RTE {
 	/// newer build wrote is refused with its version named instead of being half-read.
 	class NetHostDefaults {
 	public:
-		static constexpr uint16_t c_Version = 1;
+		static constexpr uint16_t c_Version = 2;
 
 		/// The template a host's current draft would be saved as.
 		static NetHostDefaultsTemplate FromConfig(const NetMatchConfig& config);

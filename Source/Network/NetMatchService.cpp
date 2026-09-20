@@ -4353,6 +4353,8 @@ static std::string ResyncSaveName() {
 		saved.peerCount = config.peerCount;
 		saved.dedicated = config.dedicated;
 		saved.delayPolicy = config.delayPolicy;
+		saved.slowPlayerBoundTicks = config.slowPlayerBoundTicks;
+		saved.slowPlayerPolicy = config.slowPlayerPolicy;
 		saved.inputDelayFrames = config.inputDelayFrames;
 		saved.autosaveEnabled = config.autosaveEnabled;
 		saved.autosaveIntervalSeconds = config.autosaveIntervalSeconds;
@@ -4372,6 +4374,8 @@ static std::string ResyncSaveName() {
 		static_cast<NetMatchStandardRules&>(seeded) = saved.rules;
 		seeded.modePreset = NetMatchConfigUtil::ModeName(saved.rules.mode);
 		seeded.delayPolicy = saved.delayPolicy;
+		seeded.slowPlayerBoundTicks = saved.slowPlayerBoundTicks;
+		seeded.slowPlayerPolicy = saved.slowPlayerPolicy;
 		seeded.inputDelayFrames = saved.inputDelayFrames;
 		seeded.autosaveEnabled = saved.autosaveEnabled;
 		seeded.autosaveIntervalSeconds = saved.autosaveIntervalSeconds;
@@ -4441,6 +4445,8 @@ static std::string ResyncSaveName() {
 			text += number(prefix + "AISkill", saved.rules.teamRules[team].aiSkill);
 		}
 		text += line("DelayPolicy", saved.delayPolicy == NetMatchDelayPolicy::Fixed ? "fixed" : "auto");
+		text += number("SlowPlayerBoundTicks", saved.slowPlayerBoundTicks);
+		text += line("SlowPlayerPolicy", saved.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? "pause" : "substitute");
 		text += number("InputDelayFrames", saved.inputDelayFrames);
 		text += flag("AutosaveEnabled", saved.autosaveEnabled);
 		text += number("AutosaveIntervalSeconds", saved.autosaveIntervalSeconds);
@@ -4521,6 +4527,7 @@ static std::string ResyncSaveName() {
 					              "; this build reads version " + std::to_string(c_Version));
 				}
 				parsed.version = static_cast<uint16_t>(asNumber);
+				if (parsed.version < 2) parsed.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 				sawVersion = true;
 				continue;
 			}
@@ -4604,6 +4611,12 @@ static std::string ResyncSaveName() {
 			} else if (key == "DelayPolicy") {
 				if (value != "auto" && value != "fixed") return refuse("host defaults names an unknown delay policy");
 				parsed.delayPolicy = value == "fixed" ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+			} else if (key == "SlowPlayerBoundTicks") {
+				if (!readNumber(asNumber, "slow player bound") || asNumber < 1 || asNumber > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks) return refuse("host defaults slow player bound is out of range");
+				parsed.slowPlayerBoundTicks = static_cast<uint16_t>(asNumber);
+			} else if (key == "SlowPlayerPolicy") {
+				if (value != "substitute" && value != "pause") return refuse("host defaults names an unknown slow player policy");
+				parsed.slowPlayerPolicy = value == "pause" ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
 			} else if (key == "InputDelayFrames") {
 				if (!readNumber(asNumber, "input delay")) return false;
 				parsed.inputDelayFrames = static_cast<uint16_t>(std::min<uint32_t>(asNumber, NetMatchConfigUtil::c_MaxInputDelayFrames));
@@ -6209,6 +6222,8 @@ static std::string ResyncSaveName() {
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
+			config.slowPlayerBoundTicks = request.slowPlayerBoundTicks.value_or(config.slowPlayerBoundTicks);
+			config.slowPlayerPolicy = request.slowPlayerPolicy.value_or(config.slowPlayerPolicy);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
@@ -6418,6 +6433,8 @@ static std::string ResyncSaveName() {
 		NetMatchConfig saved;
 		NetMatchConfigUtil::ApplySavedHostOptions(saved);
 		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
+		if (!request.slowPlayerBoundTicks) request.slowPlayerBoundTicks = saved.slowPlayerBoundTicks;
+		if (!request.slowPlayerPolicy) request.slowPlayerPolicy = saved.slowPlayerPolicy;
 		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
 		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
 		if (!request.pathHorizonTicks) request.pathHorizonTicks = saved.pathHorizonTicks;
