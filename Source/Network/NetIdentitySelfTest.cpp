@@ -1,6 +1,11 @@
 #include "NetIdentitySelfTest.h"
 
 #include "NetIdentity.h"
+#include "LuaMan.h"
+#include "MovableMan.h"
+#include "PresetMan.h"
+#include "SettingsMan.h"
+#include "TimerMan.h"
 
 #include <iostream>
 #include <string>
@@ -380,6 +385,11 @@ namespace RTE {
 		}
 
 		bool TestPresetIndependentAdmissionIdentity(std::string* error) {
+			if (!TimerMan::IsConstructed()) TimerMan::Construct();
+			if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+			if (!MovableMan::IsConstructed()) MovableMan::Construct();
+			if (!LuaMan::IsConstructed()) LuaMan::Construct();
+			if (!PresetMan::IsConstructed()) PresetMan::Construct();
 			NetIdentityBuildOptions worldOptions, defaultOptions;
 			NetIdentity::StampOptionsForTarget(worldOptions, true);
 			NetIdentity::StampOptionsForTarget(defaultOptions, false);
