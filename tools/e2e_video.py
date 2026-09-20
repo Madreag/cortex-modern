@@ -140,6 +140,77 @@ def substitute(value, tokens):
     return value
 
 
+def supplied_tokens(arguments=(), environment=None):
+    environment = os.environ if environment is None else environment
+    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS") if environment.get(name)}
+    for argument in arguments:
+        name, separator, value = argument.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not value:
+            raise ValueError("tokens require a nonempty NAME=VALUE")
+        result[name] = value
+    return result
+
+
+def prior_run(captures, name):
+    return next((run for run in captures if run["name"] == name), None)
+
+
+def prior_peer(captures, reference):
+    run = prior_run(captures, reference["run"])
+    return next((peer for peer in run["peers"] if peer["peer"] == reference["peer"]), None) if run else None
+
+
+def cross_run_ready(captures, condition):
+    names = condition.get("peers", [condition.get("peer")])
+    run = prior_run(captures, condition["run"])
+    if not run or not condition.get("ended"):
+        return False
+    return all(any(peer["peer"] == name and peer["record"].get("exit_code") is not None for peer in run["peers"]) for name in names)
+
+
+def checkpoint_tokens(peer):
+    runtime = Path(peer.get("runtime", Path(peer["root"]) / "runtime"))
+    store = runtime / "Autosaves"
+    candidates = []
+    for manifest in store.glob("*.ccmanifest"):
+        fields = dict(re.findall(r"(?m)^([A-Za-z]+)\s*=\s*([^\r\n]+)", manifest.read_text(encoding="utf-8")))
+        match, tick_text = manifest.stem.rsplit("-", 1)
+        tick = int(tick_text)
+        if fields.get("SavedTick") != str(tick) or not manifest.with_suffix(".ccsave").is_file() or not (store / f"{match}.admission").is_file():
+            continue
+        if fields.get("MatchId", match) != match:
+            continue
+        candidates.append((tick, match, manifest))
+    if not candidates:
+        raise ValueError(f"No retained checkpoint and restart manifest in {store}")
+    tick, match, manifest = max(candidates)
+    evidence = [file_evidence(path) for path in (manifest, manifest.with_suffix(".ccsave"), store / f"{match}.admission", runtime / "Userdata/NetworkIdentity.key")]
+    return {"RESUME_MATCH": match, "RESUME_TICK": tick}, evidence
+
+
+def run_preflight(scenario, run, captures, tokens):
+    peers = run.get("peers") or scenario.get("peers", [])
+    for node in [run, *peers]:
+        condition = node.get("start_when", {})
+        if condition.get("run") and not cross_run_ready(captures, condition):
+            return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
+        reference = node.get("retain_runtime_from")
+        if reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
+            return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN"}
+    builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
+    body = json.dumps(peers)
+    for peer in peers:
+        for key in ("menu_script", "probe", "input_script"):
+            if peer.get(key):
+                body += scenario_text(scenario, peer[key])
+    needed = set(re.findall(r"\{([A-Z][A-Za-z0-9_]*)\}", body)) - builtins
+    missing = sorted(name for name in needed if name not in tokens)
+    if missing:
+        return {"class": "harness", "reason": "Unresolved tokens: " + ", ".join(missing), "tokens": missing}
+    return {"class": run.get("blocker_class", "engine"), "reason": run["blocked_by"]} if run.get("blocked_by") else None
+
+
 def port_for(run_index, base):
     """One port per run; every peer of a run shares the host's. Kept inside this driver's own block."""
     port = base + run_index
@@ -385,11 +456,13 @@ def review(scenario, capture, out):
         if scope and capture["name"] not in ([scope] if isinstance(scope, str) else scope):
             continue
         peer = item.get("peer")
-        peers = [peer] if peer else [row["peer"] for row in capture["peers"]]
+        declared = next((run for run in scenario.get("runs", []) if run.get("name") == capture["name"]), scenario)
+        peers = [peer] if peer else [row["peer"] for row in capture["peers"]] or [row["name"] for row in declared.get("peers", scenario.get("peers", []))]
         for name in peers:
             record = next((row for row in capture["peers"] if row["peer"] == name), None)
             if record is None:
-                items.append({**item, "peer": name, "frames": None, "state": "no such peer in this capture"})
+                items.append({**item, "peer": name, "run": capture["name"], "frames": None, "probe": "not-run", "state": "skipped",
+                              "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
             found, assertions = item_evidence(record, item)
             video_frames = found if record.get("video") else None
@@ -478,7 +551,8 @@ def run_one(options, scenario, run, run_index, out):
 
     # Every peer's staging paths are known before any script is written, so a paired script can name
     # the other peer's probe directory and done file.
-    shared = {"REPO": Path(options.repo).resolve(), "PORT": port, "OUT": root, "SIZE": size,
+    shared = {**getattr(options, "tokens", {}), **getattr(options, "resume_tokens", {}),
+              "REPO": Path(options.repo).resolve(), "PORT": port, "OUT": root, "SIZE": size,
               "WIDTH": width, "HEIGHT": height, "FPS": options.fps, **getattr(options, "service_tokens", {})}
     for peer in peers:
         stage = root / f"{peer['name']}-stage"
@@ -497,7 +571,17 @@ def run_one(options, scenario, run, run_index, out):
                   "VIDEO": peer_root / "video"}
         environment = stage_peer(scenario, peer, stage, tokens)
         args = peer_arguments(peer, tokens, options.fps)
-        run_handle = make_run(options.repo, args, peer_root, timeout, env=environment)
+        reference = peer.get("retain_runtime_from")
+        retained = None
+        if reference:
+            previous = prior_peer(getattr(options, "completed_runs", []), reference)
+            retained = Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+            if not retained.is_relative_to(Path(out).resolve()):
+                raise ValueError(f"Retained runtime leaves this capture: {retained}")
+            console = retained / "LogConsole.txt"
+            if console.is_file():
+                (Path(previous["root"]) / "console-before-restore.log").write_bytes(console.read_bytes())
+        run_handle = make_run(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
@@ -514,6 +598,7 @@ def run_one(options, scenario, run, run_index, out):
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
         staged[name] = {"args": args, "env": {k: str(v) for k, v in environment.items()},
+                        "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
@@ -530,6 +615,8 @@ def run_one(options, scenario, run, run_index, out):
 
     threads, killers = [], []
     def gate_met(gate):
+        if gate.get("run"):
+            return cross_run_ready(getattr(options, "completed_runs", []), gate)
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
@@ -749,7 +836,9 @@ def scenario_manifest(capture, out, elapsed):
     manifest = {"schema": 1, "scenario": capture["scenario"], "source": capture["source"],
                 "exe": capture["exe"], "started": capture["started"], "finished": stamp(),
                 "wall_seconds": round(elapsed, 3), "fps": capture["fps"], "interrupted": capture.get("interrupted"),
-                "frame_count": sum(peer["frames"] for peer in peers), "peers": peers}
+                "frame_count": sum(peer["frames"] for peer in peers), "peers": peers,
+                "skipped_runs": [{"run": run["name"], **run["skip_finding"]} for run in capture["runs"] if run.get("skip_finding")],
+                "requires_findings": capture.get("requires_findings", [])}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
 
@@ -780,6 +869,8 @@ def aggregate_review(capture, out):
 
 
 def feel_probes(run, capture, source):
+    if run.get("migration_gate"):
+        migration_probes(run["migration_gate"], capture)
     if not run.get("feel_gate"):
         return
     from feel.report import item9a_gates
@@ -796,6 +887,68 @@ def feel_probes(run, capture, source):
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
             peer["gates"] = {}
     write_json(root / "feel-gates.json", result)
+
+
+def compare_hash_range(first, second, start, cap, out):
+    from compare_sim_traces import load_trace, strict_compare
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    rows, paths = [], []
+    for index, source in enumerate((Path(first), Path(second))):
+        load_trace(source)
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
+        selected = [row for row in data["runs"][0]["tick_hashes"] if start <= row["tick"] <= cap]
+        data["runs"][0]["tick_hashes"] = selected
+        path = out / f"range-{index}.json"
+        write_json(path, data)
+        rows.append(selected)
+        paths.append(path)
+    passed, strict = strict_compare(*paths, expected_ticks=cap - start + 1, first_tick=start)
+    coverage = all([row["tick"] for row in trace] == list(range(start, cap + 1)) for trace in rows)
+    first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
+    exact = coverage and rows[0] == rows[1]
+    return {"status": "PASS" if passed and exact else "FAIL", "first_tick": start, "last_tick": cap,
+            "first_difference": first_difference, "full_rows_equal": exact, "strict": strict,
+            "traces": [file_evidence(first), file_evidence(second)], "exclusions": []}
+
+
+def migration_probes(config, capture):
+    root = Path(capture["root"])
+    names = config["peers"]
+    peers = [next(peer for peer in capture["peers"] if peer["peer"] == name) for name in names]
+    result = {"status": "FAIL", "exclusions": []}
+    try:
+        declarations = [re.findall(r"(?m)^\[net-match\] Host left - (.+) is now hosting; boundary=(\d+) round=(\d+)",
+                        (Path(peer["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace")) for peer in peers]
+        result["declarations"] = declarations
+        if any(len(lines) != 1 for lines in declarations) or declarations[0] != declarations[1]:
+            raise ValueError("Survivors did not declare the same single host, boundary and round")
+        boundary = int(declarations[0][0][1])
+        result.update(compare_hash_range(*(root / f"{name}_trace.json" for name in names), boundary + 1, config["cap"], root / "migration-hashes"))
+        result["boundary"] = boundary
+    except (OSError, ValueError, KeyError, IndexError) as error:
+        result["reason"] = str(error)
+    result["evidence"] = str(root / "migration-hashes.json")
+    write_json(root / "migration-hashes.json", result)
+    for peer in peers:
+        peer.setdefault("gates", {})["migration-hashes"] = result
+
+
+def requirement_findings(repo, scenario):
+    findings = []
+    for name in scenario.get("requires", []):
+        path = Path(repo) / "Data" / name
+        if not path.is_dir():
+            findings.append({"class": "data", "reason": "Required module absent", "path": str(path)})
+    for requirement in scenario.get("requires_version", []):
+        path = Path(repo) / "Data" / requirement["module"] / "Index.ini"
+        if not path.is_file():
+            continue
+        declared = re.search(r"(?m)^\s*SupportedGameVersion\s*=\s*([^\r\n]+)", path.read_text(encoding="utf-8-sig"))
+        if declared and declared[1].strip() != requirement["version"]:
+            findings.append({"class": "data", "reason": requirement["reason"], "index": file_evidence(path),
+                             "declared": declared[1].strip(), "required": requirement["version"], "log": requirement.get("log")})
+    return findings
 
 
 def peer_completed(peer):
@@ -816,6 +969,8 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
+    parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
+    parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
@@ -851,6 +1006,7 @@ def main():
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
 
     scenario = load_scenario(options.scenario)
+    options.tokens = supplied_tokens(options.token)
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
         options.port = int(scenario.get("port_base", PORT_LO))
@@ -867,17 +1023,18 @@ def main():
     source = source_evidence(options.repo)
     exe = file_evidence(Path(options.repo) / ("Cortex Command.exe" if sys.platform == "win32" else "build-gns/CortexCommand"))
     runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
+    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
+        parser.error("--run names an unknown run")
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()),
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
-    missing = [str(Path(options.repo) / "Data" / name) for name in scenario.get("requires", [])
-               if not (Path(options.repo) / "Data" / name).is_dir()]
+    missing = requirement_findings(options.repo, scenario)
     if missing:
-        capture["requires_missing"] = missing
+        capture["requires_findings"] = missing
         write_json(out / "capture.json", capture)
         write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-missing",
-                   "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-missing",
-                                  "finding": {"class": "data", "reason": "Required module absent", "paths": missing}}
+                   "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-blocked",
+                                  "finding": {"class": "data", "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
                                  for item in scenario["checklist"]]})
         scenario_manifest(capture, out, time.monotonic() - started)
         print(f"{scenario['name']}: requires-missing: {missing}")
@@ -886,10 +1043,36 @@ def main():
     write_json(out / "capture.json", capture)
     try:
         for index, run in enumerate(runs):
+            name = run.get("name", f"run{index}")
+            options.completed_runs = capture["runs"]
+            options.resume_tokens = {}
+            skip = None
+            if options.run and name not in options.run:
+                skip = {"class": "harness", "reason": "Outside the explicitly selected named runs"}
+            if not skip and run.get("resume_from"):
+                try:
+                    previous = prior_peer(capture["runs"], run["resume_from"])
+                    if not previous:
+                        raise ValueError("Checkpoint source peer is absent")
+                    options.resume_tokens, run["checkpoint_evidence"] = checkpoint_tokens(previous)
+                except (OSError, ValueError) as error:
+                    skip = {"class": "harness", "reason": str(error)}
+            skip = skip or run_preflight(scenario, run, capture["runs"], {**options.tokens, **options.resume_tokens})
+            if skip:
+                root = out / name
+                root.mkdir(parents=True, exist_ok=False)
+                captured = {"name": name, "root": str(root), "size": options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE,
+                            "peers": [], "skip_finding": skip}
+                capture["runs"].append(captured)
+                review(scenario, captured, root)
+                write_json(out / "capture.json", capture)
+                complete = False
+                continue
             service = nullcontext({})
-            if scenario.get("directory_port"):
+            directory_port = run.get("directory_port", scenario.get("directory_port"))
+            if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{run.get('name', f'run{index}')}-directory", scenario["directory_port"])
+                service = serve(out / f"{name}-directory", directory_port)
             with service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
@@ -899,7 +1082,7 @@ def main():
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
             else:
-                feel_probes(run, captured, source)
+                feel_probes({**scenario, **run}, captured, source)
                 render(captured, options.fps, options.sheet_every)
             review(scenario, captured, Path(captured["root"]))
             for peer in captured["peers"]:
