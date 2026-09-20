@@ -2027,7 +2027,14 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const NetMatchConfig& adopted = g_NetMatchService.GetLobbyMatchConfig();
 		int seated = 0;
 		for (const NetMatchPlayerSlot& slot : adopted.players) {
-			if (!slot.cpu && slot.peerId != 0) ++seated;
+			if (slot.cpu || slot.peerId == 0) continue;
+			// A seat reserved for a peer that has never arrived is not a seated human; a held one is.
+			for (const NetLobbyMember& member : snapshot.members) {
+				if (member.peerId == slot.peerId && (member.connected || member.dropped || member.reclaiming)) {
+					++seated;
+					break;
+				}
+			}
 		}
 		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
 		                            " - capacity " + std::to_string(adopted.peerCount) +
