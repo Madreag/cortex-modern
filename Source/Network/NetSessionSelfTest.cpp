@@ -1,5 +1,7 @@
 #include "NetSessionSelfTest.h"
 
+#include "TimerMan.h"
+
 #include "ControllerFrame.h"
 #include "LoopbackTransport.h"
 #include "NetAuthCrypto.h"
@@ -1895,6 +1897,8 @@ namespace RTE {
 	}
 
 	int NetSessionSelfTest::Run() {
+		// The lobby's delay sampler reads the engine timestep.
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		auto fail = [](const std::string& message) {
 			std::cerr << "[net-session-selftest] FAIL: " << message << std::endl;
 			return 1;
