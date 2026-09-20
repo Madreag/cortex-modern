@@ -8,6 +8,7 @@ a real capture are named at the bottom of the result and are the driver's own fi
 """
 
 import argparse
+import contextlib
 import json
 from pathlib import Path
 import sys
@@ -87,6 +88,25 @@ def check_substitution(results):
     return ok
 
 
+def check_launch_contract(results, scratch):
+    stage = scratch / "launch"
+    stage.mkdir()
+    scenario = {"scripts": {"probe.json": json.dumps({"schema": 1, "steps": [
+        {"op": "wait_file", "path": "{PROBE_DIR_client}/done.json"}]}), "menu.txt": "exit\n"}}
+    peer = {"probe": "probe.json", "menu_script": "menu.txt", "args": ["-net-port", "{PORT}"]}
+    tokens = {"PROBE_DIR_client": r"D:\mx\client-stage\probe", "VIDEO": stage / "video",
+              "MENU_SCRIPT": stage / "menu.txt", "PORT": 49400}
+    env = driver.stage_peer(scenario, peer, stage, tokens)
+    probe = json.loads(Path(env["CC_TEST_NET_UI_SCRIPT"]).read_text(encoding="utf-8"))
+    ok = row(results, "launch/windows-probe-path",
+             probe["steps"][0]["path"] == r"D:\mx\client-stage\probe/done.json")
+    args = driver.peer_arguments(peer, tokens, 30)
+    ok &= row(results, "launch/menu-script-passed",
+              args[args.index("-menu-script") + 1] == str(stage / "menu.txt"), str(args))
+    ok &= row(results, "launch/headless", env["CCCP_HEADLESS"] == "1")
+    return ok
+
+
 def check_index_and_checklist(results, scratch):
     """A synthetic capture: the checklist resolves to the frames that carry each screen and tick."""
     video = scratch / "video"
@@ -130,6 +150,9 @@ def check_encode(results, scratch):
     sheet = driver.contact_sheet(empty, [], scratch / "sheet.png", 15, "ffmpeg")
     ok &= row(results, "sheet/no-frames", sheet["written"] is False)
     missing = driver.encode(None, scratch / "video", 30, scratch / "out.mp4")
+    ok &= row(results, "encode/no-ffmpeg-empty-capture", missing["encoded"] is False and "no frames" in missing["reason"])
+    (scratch / "video/frames/frame-000000.png").write_bytes(b"frame")
+    missing = driver.encode(None, scratch / "video", 30, scratch / "out.mp4")
     ok &= row(results, "encode/no-ffmpeg", missing["encoded"] is False and "ffmpeg" in missing["reason"])
     located = driver.find_ffmpeg()
     row(results, "encode/ffmpeg-located", True, str(located))
@@ -167,10 +190,15 @@ def main():
     parser.add_argument("--out", type=Path)
     options = parser.parse_args()
     results = []
-    with tempfile.TemporaryDirectory() as temporary:
+    if options.out:
+        options.out.mkdir(parents=True, exist_ok=True)
+        retained = options.out / "scratch"
+        retained.mkdir()
+    with contextlib.nullcontext(retained) if options.out else tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         ok = check_scenarios(results)
         ok &= check_substitution(results)
+        ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)
         ok &= check_review(results, scratch)
