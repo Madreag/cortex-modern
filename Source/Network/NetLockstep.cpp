@@ -31,7 +31,7 @@ namespace RTE {
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 3;
+		constexpr uint16_t c_RecoveryInputVersion = 4;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -621,7 +621,69 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true) {
+		bool EncodeWorldTransition(const NetGameWorldTransition& transition, std::vector<uint8_t>& out, NetLockstepError* error) {
+			AppendU16LE(out, transition.schema);
+			AppendU8(out, transition.kind);
+			AppendU8(out, transition.peerId);
+			AppendU32LE(out, transition.holderGeneration);
+			AppendU64LE(out, transition.membershipRevision);
+			AppendU64LE(out, transition.activationFrame);
+			AppendU32LE(out, static_cast<uint32_t>(transition.team));
+			AppendU32LE(out, static_cast<uint32_t>(transition.player));
+			AppendU32LE(out, FloatToBitsLE(transition.posX));
+			AppendU32LE(out, FloatToBitsLE(transition.posY));
+			AppendU32LE(out, static_cast<uint32_t>(transition.aiMode));
+			AppendU8(out, transition.bindBrain ? 1 : 0);
+			if (!AppendString(out, transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
+			    !AppendString(out, transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
+			    !AppendString(out, transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
+				return false;
+			}
+			return true;
+		}
+
+		bool DecodeWorldTransition(ByteReader& reader, NetGameWorldTransition& transition, NetLockstepError* error) {
+			uint32_t team = 0;
+			uint32_t player = 0;
+			uint32_t xBits = 0;
+			uint32_t yBits = 0;
+			uint32_t aiMode = 0;
+			uint8_t bindBrain = 0;
+			if (!ReadOrTruncated(reader.ReadU16LE(transition.schema), reader, error, "world_transition_schema") ||
+			    !ReadOrTruncated(reader.ReadU8(transition.kind), reader, error, "world_transition_kind") ||
+			    !ReadOrTruncated(reader.ReadU8(transition.peerId), reader, error, "world_transition_peer_id") ||
+			    !ReadOrTruncated(reader.ReadU32LE(transition.holderGeneration), reader, error, "world_transition_generation") ||
+			    !ReadOrTruncated(reader.ReadU64LE(transition.membershipRevision), reader, error, "world_transition_revision") ||
+			    !ReadOrTruncated(reader.ReadU64LE(transition.activationFrame), reader, error, "world_transition_activation_frame") ||
+			    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "world_transition_team") ||
+			    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "world_transition_player") ||
+			    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "world_transition_pos_x") ||
+			    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "world_transition_pos_y") ||
+			    !ReadOrTruncated(reader.ReadU32LE(aiMode), reader, error, "world_transition_ai_mode") ||
+			    !ReadOrTruncated(reader.ReadU8(bindBrain), reader, error, "world_transition_bind_brain") ||
+			    !reader.ReadString(transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
+			    !reader.ReadString(transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
+			    !reader.ReadString(transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
+				return false;
+			}
+			if (transition.schema != c_NetWorldJoinSchema) {
+				SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
+				return false;
+			}
+			if (transition.kind > NetGameWorldTransition::SeatRespawn) {
+				SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_kind is not a known transition");
+				return false;
+			}
+			transition.team = static_cast<int32_t>(team);
+			transition.player = static_cast<int32_t>(player);
+			transition.posX = FloatFromBitsLE(xBits);
+			transition.posY = FloatFromBitsLE(yBits);
+			transition.aiMode = static_cast<int32_t>(aiMode);
+			transition.bindBrain = bindBrain != 0;
+			return true;
+		}
+
+		bool EncodeCommandList(const std::vector<NetGameCommand>& commands, uint8_t senderPeerId, std::vector<uint8_t>& out, NetLockstepError* error, bool recovery, bool holdIdentity = true, bool admissionIdentity = true) {
 			AppendU16LE(out, static_cast<uint16_t>(commands.size()));
 			for (const NetGameCommand& command : commands) {
 				if (recovery && command.senderPeerId != senderPeerId) {
@@ -650,6 +712,10 @@ namespace RTE {
 						    reclaim.seatIncarnation == 0 || reclaim.eventSequence == 0 || reclaim.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames) return false;
 						AppendU8(out, reclaim.peerId); AppendU64LE(out, reclaim.authorityGeneration); AppendU64LE(out, reclaim.eventSequence);
 						AppendU32LE(out, reclaim.seatIncarnation); AppendU64LE(out, reclaim.activationFrame); AppendU16LE(out, reclaim.delayFrames); AppendU64LE(out, reclaim.neutralThroughFrame);
+						if (admissionIdentity) {
+							AppendU8(out, reclaim.worldTransition.has_value());
+							if (reclaim.worldTransition && !EncodeWorldTransition(*reclaim.worldTransition, out, error)) return false;
+						}
 						break;
 					}
 					case NetGameCommandType::SeatHold: {
@@ -879,24 +945,7 @@ namespace RTE {
 						break;
 					}
 					case NetGameCommandType::WorldTransition: {
-						const NetGameWorldTransition& transition = std::get<NetGameWorldTransition>(command.payload);
-						AppendU16LE(out, transition.schema);
-						AppendU8(out, transition.kind);
-						AppendU8(out, transition.peerId);
-						AppendU32LE(out, transition.holderGeneration);
-						AppendU64LE(out, transition.membershipRevision);
-						AppendU64LE(out, transition.activationFrame);
-						AppendU32LE(out, static_cast<uint32_t>(transition.team));
-						AppendU32LE(out, static_cast<uint32_t>(transition.player));
-						AppendU32LE(out, FloatToBitsLE(transition.posX));
-						AppendU32LE(out, FloatToBitsLE(transition.posY));
-						AppendU32LE(out, static_cast<uint32_t>(transition.aiMode));
-						AppendU8(out, transition.bindBrain ? 1 : 0);
-						if (!AppendString(out, transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
-						    !AppendString(out, transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
-						    !AppendString(out, transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
-							return false;
-						}
+						if (!EncodeWorldTransition(std::get<NetGameWorldTransition>(command.payload), out, error)) return false;
 						break;
 					}
 				}
@@ -972,7 +1021,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr, bool holdIdentity = true) {
+		bool EncodePayload(const NetLockstepFrame& payload, std::vector<uint8_t>& out, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, bool recovery = false, size_t* outValueObservationsEncoded = nullptr, NetLockstepObservationBlocks* blocks = nullptr, bool holdIdentity = true, bool admissionIdentity = true) {
 			if (!ValidatePeerId(payload.senderPeerId, error, "sender_peer_id") || !ValidateSortedFrames(payload.frames, error)) {
 				return false;
 			}
@@ -1013,7 +1062,7 @@ namespace RTE {
 				std::vector<ControllerFrame> previousFrames;
 				auto encodeTick = [&](const NetLockstepFrame& tick) {
 					if (!EncodeTickFrames(tick.targetFrame, tick.frames, previousTick, out, error) ||
-					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery, holdIdentity) ||
+					    !EncodeCommandList(tick.commands, tick.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity) ||
 					    !AppendTickObservations(tick, out, dictionary, blocks, true, outObservationsEncoded, outValueObservationsEncoded, error)) {
 						return false;
 					}
@@ -1029,7 +1078,7 @@ namespace RTE {
 				return encodeTick(payload);
 			}
 			if (!EncodeTickFrames(payload.targetFrame, payload.frames, nullptr, out, error) ||
-			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity)) {
+			    !EncodeCommandList(payload.commands, payload.senderPeerId, out, error, recovery, holdIdentity, admissionIdentity)) {
 				return false;
 			}
 			AppendU64LE(out, payload.roundId);
@@ -1114,8 +1163,8 @@ namespace RTE {
 			const auto action = static_cast<uint8_t>(timing.action);
 			const auto phase = static_cast<uint8_t>(timing.phase);
 			if (!ValidatePeerId(timing.senderPeerId, error, "timing sender") || !ValidatePeerId(timing.peerId, error, "timing subject")) return false;
-			if (action < 1 || action > 3 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
-			    (action == 1 && phase > 4) || (action == 2 && phase > 6) || (action == 3 && phase != 7) ||
+			if (action < 1 || action > 4 || phase < 1 || phase > 7 || timing.sessionId == 0 || timing.roundId == 0 ||
+			    (action == 1 && phase > 4) || (action == 2 && phase > 6) || (action == 3 && phase != 7) || (action == 4 && (phase > 3 || !timing.worldTransition)) ||
 			    timing.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || (timing.requiredPeers & 0xF0U) != 0 ||
 			    (timing.heldPeers & 0xF0U) != 0 || (timing.heldPeers & timing.requiredPeers) != 0 ||
 			    (timing.phase != NetTimingPhase::Status && timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) ||
@@ -1124,6 +1173,8 @@ namespace RTE {
 				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "invalid timing decision");
 				return false;
 			}
+			if (timing.worldTransition && (timing.action != NetTimingAction::WorldAdmission || timing.worldTransition->kind != NetGameWorldTransition::Activate ||
+			    timing.worldTransition->peerId != timing.peerId || timing.worldTransition->activationFrame != timing.applyFrame || timing.seatIncarnations[timing.peerId - 1] == 0)) return false;
 			if (phase >= 5) {
 				if (timing.peerId > 4 || (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) return false;
 				if (timing.cutoffFrame != timing.applyFrame) {
@@ -1160,6 +1211,8 @@ namespace RTE {
 			AppendU64LE(out, timing.cutoffFrame);
 			for (uint32_t incarnation: timing.seatIncarnations) AppendU32LE(out, incarnation);
 			AppendU64LE(out, timing.neutralThroughFrame);
+			AppendU8(out, timing.worldTransition.has_value());
+			if (timing.worldTransition && !EncodeWorldTransition(*timing.worldTransition, out, error)) return false;
 			return true;
 		}
 
@@ -1184,6 +1237,11 @@ namespace RTE {
 			} else if (phase > 4) {
 				SetError(error, NetLockstepErrorCode::UnsupportedVersion, 0, "hold transactions require the current wire");
 				return false;
+			}
+			if (version >= NetLockstepCodec::c_WorldAdmissionVersion) {
+				uint8_t present = 0;
+				if (!reader.ReadU8(present) || present > 1) return false;
+				if (present) { timing.worldTransition.emplace(); if (!DecodeWorldTransition(reader, *timing.worldTransition, error)) return false; }
 			}
 			if (!ValidateTiming(timing, error)) return false;
 			out = timing;
@@ -1616,6 +1674,11 @@ namespace RTE {
 						    reader.ReadU32LE(reclaim.seatIncarnation) && reader.ReadU64LE(reclaim.activationFrame) && reader.ReadU16LE(reclaim.delayFrames) && reader.ReadU64LE(reclaim.neutralThroughFrame), reader, error, "seat reclaim") ||
 						    !ValidatePeerId(reclaim.peerId, error, "reclaimed peer") || reclaim.seatIncarnation == 0 || reclaim.eventSequence == 0 ||
 						    reclaim.delayFrames > NetLockstepCodec::c_MaxInputDelayFrames) return false;
+						if (version >= NetLockstepCodec::c_WorldAdmissionVersion) {
+							uint8_t present = 0;
+							if (!reader.ReadU8(present) || present > 1) return false;
+							if (present) { reclaim.worldTransition.emplace(); if (!DecodeWorldTransition(reader, *reclaim.worldTransition, error)) return false; }
+						}
 						command.payload = reclaim;
 						break;
 					}
@@ -2094,48 +2157,8 @@ namespace RTE {
 						break;
 					}
 					case NetGameCommandType::WorldTransition: {
-						if (version < NetLockstepCodec::c_WorldTransitionVersion) {
-							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world transition needs a newer frame version");
-							return false;
-						}
 						NetGameWorldTransition transition;
-						uint32_t team = 0;
-						uint32_t player = 0;
-						uint32_t xBits = 0;
-						uint32_t yBits = 0;
-						uint32_t aiMode = 0;
-						uint8_t bindBrain = 0;
-						if (!ReadOrTruncated(reader.ReadU16LE(transition.schema), reader, error, "world_transition_schema") ||
-						    !ReadOrTruncated(reader.ReadU8(transition.kind), reader, error, "world_transition_kind") ||
-						    !ReadOrTruncated(reader.ReadU8(transition.peerId), reader, error, "world_transition_peer_id") ||
-						    !ReadOrTruncated(reader.ReadU32LE(transition.holderGeneration), reader, error, "world_transition_generation") ||
-						    !ReadOrTruncated(reader.ReadU64LE(transition.membershipRevision), reader, error, "world_transition_revision") ||
-						    !ReadOrTruncated(reader.ReadU64LE(transition.activationFrame), reader, error, "world_transition_activation_frame") ||
-						    !ReadOrTruncated(reader.ReadU32LE(team), reader, error, "world_transition_team") ||
-						    !ReadOrTruncated(reader.ReadU32LE(player), reader, error, "world_transition_player") ||
-						    !ReadOrTruncated(reader.ReadU32LE(xBits), reader, error, "world_transition_pos_x") ||
-						    !ReadOrTruncated(reader.ReadU32LE(yBits), reader, error, "world_transition_pos_y") ||
-						    !ReadOrTruncated(reader.ReadU32LE(aiMode), reader, error, "world_transition_ai_mode") ||
-						    !ReadOrTruncated(reader.ReadU8(bindBrain), reader, error, "world_transition_bind_brain") ||
-						    !reader.ReadString(transition.className, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_class_name", error) ||
-						    !reader.ReadString(transition.preset, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_preset", error) ||
-						    !reader.ReadString(transition.module, NetLockstepCodec::c_MaxScenarioBytes, "world_transition_module", error)) {
-							return false;
-						}
-						if (transition.schema != c_NetWorldJoinSchema) {
-							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_schema is not a known schema");
-							return false;
-						}
-						if (transition.kind > NetGameWorldTransition::SeatRespawn) {
-							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "world_transition_kind is not a known transition");
-							return false;
-						}
-						transition.team = static_cast<int32_t>(team);
-						transition.player = static_cast<int32_t>(player);
-						transition.posX = FloatFromBitsLE(xBits);
-						transition.posY = FloatFromBitsLE(yBits);
-						transition.aiMode = static_cast<int32_t>(aiMode);
-						transition.bindBrain = bindBrain != 0;
+						if (version < NetLockstepCodec::c_WorldTransitionVersion || !DecodeWorldTransition(reader, transition, error)) return false;
 						command.payload = std::move(transition);
 						break;
 					}
@@ -2625,13 +2648,13 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : c_WorldVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : c_WorldVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);
 		AppendU16LE(canonical, version);
 		AppendU16LE(canonical, ControllerFrame::c_Version);
-		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3)) return false;
+		if (!EncodePayload(frame, canonical, error, nullptr, nullptr, true, nullptr, nullptr, version >= 3, version >= 4)) return false;
 		if (canonical != bytes) {
 			SetError(error, NetLockstepErrorCode::InvalidValue, 0, "noncanonical recovery input");
 			return false;
@@ -3770,7 +3793,7 @@ namespace RTE {
 		m_Config.initialDelayChanges.clear(); m_Config.initialPeerLeaves.clear(); m_Config.initialSeatHolds.clear(); m_Config.initialSeatReclaims.clear();
 		ResetRoundState();
 		for (const auto& decision: m_MigrationFutureDelays) m_DelayChanges[decision.peerId][decision.applyFrame] = decision.delayFrames;
-		for (const auto& [peer, reclaim]: reclaimTransactions) if (reclaim.activationFrame <= m_MigrationBoundary) m_ReclaimTransactions[peer] = reclaim;
+		m_ReclaimTransactions = reclaimTransactions;
 		m_LastCompletedSimulationTick = completed;
 		m_LastDeliveredFrame = m_MigrationBoundary;
 		for (const auto& [peer, frame]: heldSeats) {
@@ -4511,6 +4534,7 @@ namespace RTE {
 		const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
 		if (producedFrame > UINT64_MAX - delay) { if (error) *error = "input target overflow"; return false; }
 		const uint64_t target = producedFrame + delay;
+		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
 		if (TimingDecisionPendingAt(producedFrame)) { if (error) *error = "input is waiting for a timing decision"; return false; }
 		if (!m_DelayChanges.empty() && m_LastQueuedTargetFrame != UINT64_MAX && target <= m_LastQueuedTargetFrame) {
 			if (error) *error = "input sample must be deferred while the delay shrinks";
@@ -4649,10 +4673,10 @@ namespace RTE {
 			++m_Stats.delayChangesCommitted;
 			std::cout << "[net-match] delay change peer=" << static_cast<int>(timing.peerId) << " frame=" << timing.applyFrame
 			          << " delay=" << timing.delayFrames << " revision=" << timing.revision << std::endl;
-		} else if (timing.action == NetTimingAction::Reclaim) {
+		} else if (timing.action == NetTimingAction::Reclaim || timing.action == NetTimingAction::WorldAdmission) {
 			if (timing.peerId != m_Config.localPeerId && !IsKnownRemotePeer(timing.peerId)) { m_RemotePeerIds.push_back(timing.peerId); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
 			m_ReclaimTransactions[timing.peerId] = {timing.peerId, timing.authorityGeneration, timing.revision,
-			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame};
+			    timing.seatIncarnations[timing.peerId - 1], timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
 			m_Config.peerIncarnations[timing.peerId] = timing.seatIncarnations[timing.peerId - 1];
 			m_PeerEffectiveStart[timing.peerId] = timing.applyFrame + timing.delayFrames;
 			m_PeerAdmissions[timing.peerId] = {timing.applyFrame, timing.delayFrames};
@@ -4727,6 +4751,35 @@ namespace RTE {
 		std::vector<uint64_t> pending;
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
+		return true;
+	}
+
+	bool NetLockstepCoordinator::ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error) {
+		const uint8_t peer = transition.peerId;
+		if (!IsPersistentWorldRound() || !IsRunning() || m_RoundId == 0 || m_Config.localPeerId != GetHostPeerId() || peer == 0 || peer > m_Config.peerCount ||
+		    peer == GetHostPeerId() || transport == c_InvalidNetPeerId || incarnation == 0 || transition.activationFrame < FutureTimingFrame()) {
+			if (error) *error = "world admission is not ahead of the agreed input horizon";
+			return false;
+		}
+		for (const auto& [revision, decision]: m_TimingDecisions)
+			if (decision.proposal.action == NetTimingAction::WorldAdmission && decision.proposal.peerId == peer && decision.proposal.applyFrame == transition.activationFrame) return true;
+		NetLockstepTiming timing;
+		timing.action = NetTimingAction::WorldAdmission;
+		timing.senderPeerId = GetHostPeerId(); timing.peerId = peer;
+		timing.sessionId = m_Config.sessionId; timing.roundId = m_RoundId;
+		timing.revision = m_NextTimingRevision++; timing.authorityGeneration = m_Config.migrationGeneration;
+		timing.applyFrame = transition.activationFrame; timing.nextFrame = m_Stats.nextFrame;
+		timing.delayFrames = InputDelayAt(peer, timing.applyFrame);
+		timing.seatIncarnations[peer - 1] = incarnation;
+		timing.worldTransition = transition;
+		timing.neutralThroughFrame = timing.applyFrame + timing.delayFrames;
+		timing.requiredPeers = static_cast<uint8_t>(1U << (GetHostPeerId() - 1));
+		for (uint8_t survivor: m_RemotePeerIds) if (survivor != peer && m_RemoteStartsReceived.contains(survivor) && !IsPeerGoneAtFrame(survivor, timing.applyFrame))
+			timing.requiredPeers |= static_cast<uint8_t>(1U << (survivor - 1));
+		m_RemoteTransports[peer] = transport;
+		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (GetHostPeerId() - 1)), false, m_TimingNowMs};
+		QueueTiming(timing);
+		CommitTiming(timing.revision);
 		return true;
 	}
 
@@ -6399,7 +6452,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::IsRemoteRequiredForFrame(uint8_t peerId, uint64_t frame) const {
 		// Ramp-in: a sender contributes nothing before its own first delayed frame.
-		if (frame < EffectiveStartOf(peerId)) {
+		if (frame < EffectiveStartOf(peerId) || IsSeatReclaimGap(peerId, frame)) {
 			return false;
 		}
 		const auto waiverIt = m_PeerFrameWaivers.find(peerId);
@@ -7333,7 +7386,7 @@ namespace RTE {
 				if (decision.proposal.applyFrame < start.startFrame) continue;
 				auto proposal = decision.proposal;
 				SendPacket({proposal}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
-				if (proposal.action == NetTimingAction::Delay && decision.committed) {
+				if ((proposal.action == NetTimingAction::Delay || proposal.action == NetTimingAction::WorldAdmission) && decision.committed) {
 					proposal.phase = NetTimingPhase::Commit;
 					SendPacket({proposal}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 				}
@@ -8024,7 +8077,7 @@ namespace RTE {
 			// so earlier committed frames legitimately carry no local entry.
 			if (TimingDecisionPendingAt(m_Stats.nextFrame)) break;
 			const auto localIt = m_LocalFrames.find(m_Stats.nextFrame);
-			if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId)) {
+			if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) {
 				break;
 			}
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
@@ -8055,43 +8108,47 @@ namespace RTE {
 			ready.frame = m_Stats.nextFrame;
 			if (localIt != m_LocalFrames.end()) {
 				ready.hasLocalInput = true;
-				ready.localFrames = std::move(localIt->second);
+				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);
 			}
 			// Merge every remote peer's frames in ascending peerId order (std::map iteration) so every
 			// peer builds the byte-identical apply set. This is the one N-peer determinism-sensitive spot.
 			if (remoteIt != m_RemoteFrames.end()) {
 				for (auto& [peerId, frames]: remoteIt->second) {
+					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteFrameCounts.emplace(peerId, frames.size());
 					++m_Stats.peers[peerId].framesContributed;
 					ready.remoteFrames.insert(ready.remoteFrames.end(), std::make_move_iterator(frames.begin()), std::make_move_iterator(frames.end()));
 				}
 			}
 			if (auto localCmdIt = m_LocalCommands.find(ready.frame); localCmdIt != m_LocalCommands.end()) {
-				ready.localCommands = std::move(localCmdIt->second);
+				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localCommands = std::move(localCmdIt->second);
 				m_LocalCommands.erase(localCmdIt);
 			}
 			if (auto remoteCmdIt = m_RemoteCommands.find(ready.frame); remoteCmdIt != m_RemoteCommands.end()) {
 				for (auto& [peerId, cmds]: remoteCmdIt->second) {
+					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteCommands.insert(ready.remoteCommands.end(), std::make_move_iterator(cmds.begin()), std::make_move_iterator(cmds.end()));
 				}
 				m_RemoteCommands.erase(remoteCmdIt);
 			}
 			if (auto localObsIt = m_LocalObservations.find(ready.frame); localObsIt != m_LocalObservations.end()) {
-				ready.localObservations = std::move(localObsIt->second);
+				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localObservations = std::move(localObsIt->second);
 				m_LocalObservations.erase(localObsIt);
 			}
 			if (auto remoteObsIt = m_RemoteObservations.find(ready.frame); remoteObsIt != m_RemoteObservations.end()) {
 				for (auto& [peerId, observations]: remoteObsIt->second) {
+					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteObservations.insert(ready.remoteObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteObservations.erase(remoteObsIt);
 			}
 			if (auto localValueIt = m_LocalValueObservations.find(ready.frame); localValueIt != m_LocalValueObservations.end()) {
-				ready.localValueObservations = std::move(localValueIt->second);
+				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localValueObservations = std::move(localValueIt->second);
 				m_LocalValueObservations.erase(localValueIt);
 			}
 			if (auto remoteValueIt = m_RemoteValueObservations.find(ready.frame); remoteValueIt != m_RemoteValueObservations.end()) {
 				for (auto& [peerId, observations]: remoteValueIt->second) {
+					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteValueObservations.insert(ready.remoteValueObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteValueObservations.erase(remoteValueIt);
@@ -8120,6 +8177,7 @@ namespace RTE {
 			if (!m_Playback) for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame == ready.frame) {
 				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
 				commands.push_back(NetGameCommand{GetHostPeerId(), reclaim});
+				if (reclaim.worldTransition) commands.push_back(NetGameCommand{GetHostPeerId(), *reclaim.worldTransition});
 			}
 			m_ReadyHistory[ready.frame] = ready;
 			while (m_ReadyHistory.size() > 180) {
