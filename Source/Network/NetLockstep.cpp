@@ -4883,15 +4883,20 @@ namespace RTE {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
 			for (uint8_t peer: missing) {
-				// A sender whose first frame of the round has not arrived is still filling its pipeline:
-				// the round starts skewed by the start message's own trip and each peer's activity
-				// restart, and its delay window is the budget that fill was agreed to take. The bound
-				// measures lateness, so it counts that window once, then judges the peer like any other.
-				if (!m_PeersPlayedThisRound.contains(peer)) {
-					const auto& rampStats = m_Stats.peers[peer];
+				const auto& peerStats = m_Stats.peers[peer];
+				// A sender's first frames of the round are its pipeline filling: the round starts skewed by
+				// the start message's own trip and each peer's activity restart, and the sender's delay
+				// window is the budget that fill was agreed to take. The window is the few frames from its
+				// own start; after them it is judged like any other.
+				if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
 					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
-					    rampStats.pingMs + rampStats.jitterMs;
+					    peerStats.pingMs + peerStats.jitterMs;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+				} else if (peerStats.lastProgressMs >= firstMissingMs &&
+				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
+					// A sender still feeding the round every tick is not stalled, it is behind: the round
+					// absorbs the skew once by waiting. The bound catches a stream that STOPPED.
+					continue;
 				}
 				held = ProposePeerHold(peer, nowMs) || held;
 			}
@@ -5555,7 +5560,7 @@ namespace RTE {
 	void NetLockstepCoordinator::AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy) {
 		if (IsPeerGoneAtFrame(frame.senderPeerId, frame.targetFrame)) return;
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
-		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
+		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
 			// A member admitted mid-round reads the window copies of the ticks before its own start.
 			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
@@ -6010,10 +6015,33 @@ namespace RTE {
 		m_RemoteChecksums.erase(m_RemoteChecksums.begin(), m_RemoteChecksums.upper_bound(frame));
 	}
 
+	void NetLockstepCoordinator::ShiftDeadlinesPastOurOwnPark(uint64_t nowMs) {
+		const uint64_t previous = m_LastTickMs;
+		m_LastTickMs = nowMs;
+		// The wait loop ticks us every millisecond, so a gap of several sim ticks is OUR park - a
+		// checkpoint capture, an activity restart - and not a peer's silence. Time nobody was listening
+		// through is not lateness: every running deadline moves with it instead of being spent.
+		const uint64_t park = static_cast<uint64_t>(std::max(50.0, 4 * m_Config.simTickMs));
+		if (previous == 0 || nowMs <= previous || nowMs - previous < park) {
+			return;
+		}
+		const uint64_t gap = nowMs - previous;
+		const auto shift = [&](uint64_t& stamp) { if (stamp != 0) stamp = std::min(nowMs, stamp + gap); };
+		shift(m_FirstMissingMs);
+		shift(m_ConsumerWaitStartMs);
+		shift(m_WaitStartMs);
+		shift(m_AuthorityLastHeardMs);
+		for (auto& [peer, heard]: m_PeerLastHeardMs) shift(heard);
+		for (auto& [peer, stats]: m_Stats.peers) { shift(stats.lastHeardMs); shift(stats.lastProgressMs); }
+		for (auto& [revision, decision]: m_TimingDecisions) shift(decision.proposedAtMs);
+		++m_Stats.ownParksExcluded;
+	}
+
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		ShiftDeadlinesPastOurOwnPark(nowMs);
 		m_TimingNowMs = nowMs;
 		TickMigrationRollCallLinks(nowMs);
 		if (IsMigrating()) {
@@ -6557,6 +6585,7 @@ namespace RTE {
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
 		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
 		out << "\"last_hold_declaration_ms\":" << m_Stats.lastHoldDeclarationMs << ",";
+		out << "\"own_parks_excluded\":" << m_Stats.ownParksExcluded << ",";
 		out << "\"hold_deadline_feasible\":" << (m_Stats.holdDeadlineFeasible ? "true" : "false") << ",";
 		out << "\"steady_missing_frame_stalls\":" << (m_Stats.measuredMissingFrameBase ? std::to_string(m_Stats.missingFrameStalls - *m_Stats.measuredMissingFrameBase) : "null") << ",";
 		out << "\"steady_blocking_frame_waits\":" << (m_Stats.measuredBlockingWaitBase ? std::to_string(m_Stats.blockingFrameWaits - *m_Stats.measuredBlockingWaitBase) : "null") << ",";
