@@ -1624,10 +1624,12 @@ namespace RTE {
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
 		while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
 			producing->Tick(NetLockstepNowMs());
+			producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
 			if (s_SessionPump) s_SessionPump();
 			if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
 			if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
+		producing->FinishFrameWait(NetLockstepNowMs());
 		const auto& config = producing->GetConfig();
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {

@@ -4498,7 +4498,7 @@ namespace RTE {
 				std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << timing.applyFrame << " AI in control" << std::endl;
 			}
 			for (auto& [revision, pending]: m_TimingDecisions)
-				if (!pending.committed && pending.proposal.applyFrame >= timing.applyFrame)
+				if (!pending.committed)
 					pending.acknowledgedPeers |= timing.heldPeers;
 		}
 	}
@@ -4568,7 +4568,7 @@ namespace RTE {
 		return peers;
 	}
 
-	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs) {
+	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision) {
 		if (!UsesBoundedWait()) return false;
 		if (m_ConsumerWaitingFrame != frame) {
 			m_ConsumerWaitingFrame = frame;
@@ -4582,7 +4582,15 @@ namespace RTE {
 		const auto remote = m_RemoteFrames.find(frame);
 		std::vector<uint8_t> missing;
 		for (uint8_t peer: m_RemotePeerIds) {
-			if (!IsRemoteRequiredForFrame(peer, frame) || (remote != m_RemoteFrames.end() && remote->second.contains(peer))) continue;
+			bool awaitingAck = false;
+			if (waitingForDecision && m_Config.localPeerId == GetHostPeerId()) {
+				for (const auto& [revision, decision]: m_TimingDecisions) {
+					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
+					awaitingAck |= !decision.committed && decision.proposal.applyFrame <= frame &&
+					    (decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0;
+				}
+			}
+			if (!awaitingAck && (!IsRemoteRequiredForFrame(peer, frame) || (remote != m_RemoteFrames.end() && remote->second.contains(peer)))) continue;
 			missing.push_back(peer);
 			auto& stats = m_Stats.peers[peer];
 			if (first) ++stats.waits;

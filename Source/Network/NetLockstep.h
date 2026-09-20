@@ -748,7 +748,7 @@ namespace RTE {
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
-		bool NoteFrameWait(uint64_t frame, uint64_t nowMs);
+		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
@@ -1105,7 +1105,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::map<uint8_t, uint64_t> m_PeerFrameWaivers; //!< Fenced peers -> the first frame the round stopped requiring.
 		std::set<uint8_t> m_LeftSeatsHeld;  //!< Left peers whose seat is still reclaimable, resolved once a tick.
-		std::set<uint8_t> m_DroppedSeats;   //!< Unresolved dropped seats; the round commits nothing while this is non-empty.
+		std::set<uint8_t> m_DroppedSeats;   //!< Classic holds pause; bounded holds commit empty input from their agreed frame.
 		std::map<uint8_t, NetLockstepHoldResolution> m_DroppedSeatResolutions;
 		std::map<uint8_t, uint64_t> m_DroppedAtMs;
 		uint64_t m_LastHoldHeartbeatMs = 0;
