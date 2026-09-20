@@ -8,6 +8,7 @@
 #include "HeldDevice.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
+#include "MetricsCollector.h"
 #include "NetLockstep.h"
 #include "NetTransport.h"
 #include "PieSlice.h"
@@ -1037,10 +1038,10 @@ namespace RTE {
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 		}
 
-		// The scripted input a fixture drives a Controller with: EndFrame and the element reads need both
-		// managers, and this selftest runs before manager init.
+		// The input fixture runs before manager initialization.
 		if (!UInputMan::IsConstructed()) { UInputMan::Construct(); }
 		if (!ActivityMan::IsConstructed()) { ActivityMan::Construct(); }
+		if (!MetricsCollector::IsConstructed()) { MetricsCollector::Construct(); }
 		if (!g_UInputMan.RunScriptedInputEdgeSelfTest()) {
 			return fail("a scripted input element did not edge once per press");
 		}
