@@ -517,7 +517,7 @@ void NetModerationGUI::Refresh() {
 			if (!member.cpu) {
 				roster += (roster.empty() ? "" : "\n\n") +
 				    (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
-				if (!member.dropped && !member.reclaiming && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
+				if (!member.dropped && !member.reclaiming && !member.aiHeld && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
 			}
 		}
 		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));

@@ -458,6 +458,31 @@
           "equals": true
         }
       ]
+    },
+    {
+      "id": "announced-ai-roster-once",
+      "run": "announced",
+      "peer": "survivor",
+      "mark": "survivor-after-leave",
+      "what": "The remote roster names AI control once for the departed seat.",
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "AI in control"
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "AI in control - AI in control"
+        }
+      ]
     }
   ]
 }
