@@ -176,12 +176,11 @@ namespace RTE {
 		std::vector<NetTransportEvent> events;
 		events.swap(m_Config.pendingEvents);
 		for (NetTransportEvent& event : m_Transport->PollEvents()) events.push_back(std::move(event));
+		const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 		if (m_Config.session) {
-			const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 			for (const NetTransportEvent& event: events) {
 				m_Config.session->InjectEvent(event, sessionNowMs);
 			}
-			m_Config.session->Tick(sessionNowMs, false);
 			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
 				const std::string reason = m_Config.session->BuildRejectText();
 				Fail(reason.empty() ? "session closed" : reason);
@@ -197,6 +196,15 @@ namespace RTE {
 		}
 		if (IsTerminal(m_State)) {
 			return;
+		}
+		if (m_Config.session) {
+			// Valid phase traffic is counted before the session evaluates silence.
+			m_Config.session->Tick(sessionNowMs, false);
+			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
+				const std::string reason = m_Config.session->BuildRejectText();
+				Fail(reason.empty() ? "session closed" : reason);
+				return;
+			}
 		}
 		SampleInputDelays(nowMs);
 		SendReadyIfNeeded();
@@ -1170,6 +1178,7 @@ namespace RTE {
 					return;
 				}
 				++m_Stats.messagesReceived;
+				if (m_Config.session) m_Config.session->NotePeerTraffic(event.peerId, m_Config.session->GetClockMs());
 				m_RemoteLobbyUp.insert(sender->first);
 				// A bootstrap's session identity and world slot share one authenticated connection.
 				if (worldSender) std::visit([&](auto& payload) {

@@ -7967,6 +7967,7 @@ int RunNetPortMapProbe() {
 /// </summary>
 int main(int argc, char** argv) {
 	bool netMatchSelfTest = false;
+	bool netMatchLobbyLifecycleSelfTest = false;
 	for (int i = 1; i < argc; ++i) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-rotate-primitive-selftest") {
 			return RotatePrimitiveSelfTest::Run();
@@ -8007,6 +8008,10 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-selftest") {
 			if (NetMatchSelfTest::RunBeforeInitialization() != 0) return EXIT_FAILURE;
 			netMatchSelfTest = true;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-match-lobby-lifecycle-selftest") {
+			netMatchSelfTest = true;
+			netMatchLobbyLifecycleSelfTest = true;
 		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-auth-selftest") {
 			return NetAuthSelfTest::Run();
@@ -8268,7 +8273,7 @@ int main(int argc, char** argv) {
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
-		const int result = NetMatchSelfTest::Run();
+		const int result = netMatchLobbyLifecycleSelfTest ? NetMatchSelfTest::RunLobbyLifecycle() : NetMatchSelfTest::Run();
 		NetMatchService::Construct();
 		return ShutDown(result);
 	}
