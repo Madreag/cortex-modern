@@ -195,7 +195,12 @@ def run_preflight(scenario, run, captures, tokens):
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
         reference = node.get("retain_runtime_from")
-        if reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
+        same_run = reference and reference["run"] == run.get("name", "run0")
+        if same_run:
+            names = [peer["name"] for peer in peers]
+            if reference["peer"] not in names or node.get("name") not in names or names.index(reference["peer"]) >= names.index(node["name"]) or node.get("start_when") != {"peer": reference["peer"], "ended": True}:
+                return {"class": "harness", "reason": "A same-run runtime may be reused only after its earlier owner ends"}
+        elif reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
             return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
     builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT"}
     builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
@@ -341,6 +346,8 @@ def frame_range(rows, item):
         if not row.get("saved", True):
             continue
         if screen and row.get("screen") != screen:
+            continue
+        if item.get("service_state") and row.get("service_state") != item["service_state"]:
             continue
         tick = row.get("sim_tick")
         if low is not None and (tick is None or tick < low):
@@ -612,11 +619,11 @@ def run_one(options, scenario, run, run_index, out):
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
-            retained = Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+            retained = Path(runs[reference["peer"]].cwd).resolve() if reference["run"] == root.name else Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
             if not retained.is_relative_to(Path(out).resolve()):
                 raise ValueError(f"Retained runtime leaves this capture: {retained}")
             console = retained / "LogConsole.txt"
-            if console.is_file():
+            if previous and console.is_file():
                 (Path(previous["root"]) / "console-before-restore.log").write_bytes(console.read_bytes())
         run_handle = make_run(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
@@ -642,7 +649,11 @@ def run_one(options, scenario, run, run_index, out):
 
     def drive(name):
         try:
-            records[name] = runs[name].start().finish()
+            record = runs[name].start().finish()
+            console = Path(runs[name].cwd) / "LogConsole.txt"
+            if console.is_file():
+                (Path(runs[name].out) / "console.log").write_bytes(console.read_bytes())
+            records[name] = record
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": repr(error)}
         observe = next(peer.get("observe_after_failure", False) for peer in peers if peer["name"] == name)
@@ -754,7 +765,7 @@ def run_one(options, scenario, run, run_index, out):
         peer_root = root / name
         video_dir = peer_root / "video"
         console = Path(runs[name].cwd) / "LogConsole.txt"
-        if console.is_file():
+        if console.is_file() and not (peer_root / "console.log").is_file():
             (peer_root / "console.log").write_bytes(console.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick")),

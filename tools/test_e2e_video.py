@@ -438,6 +438,12 @@ def check_resume_seams(results, scratch):
     ok &= row(results, "tokens/resolved", driver.run_preflight(scenario, {}, [], {"TURN_SERVER": "turn:example"}) is None)
     scenario["peers"][0]["args"] = ["{DIRECTORY_ROOT}/listed.json"]
     ok &= row(results, "tokens/directory-service-root", driver.run_preflight(scenario, {}, [], {}) is None)
+    same = {"name": "same", "peers": [{"name": "first", "args": []}, {"name": "second", "args": [], "retain_runtime_from": {"run": "same", "peer": "first"}, "start_when": {"peer": "first", "ended": True}}]}
+    ok &= row(results, "resume/same-run-owner-must-end", driver.run_preflight({"path": "unit"}, same, [], {}) is None)
+    same["peers"][1]["start_when"] = {"peer": "first", "sim_tick": 10}
+    ok &= row(results, "resume/rejects-concurrent-runtime-use", driver.run_preflight({"path": "unit"}, same, [], {})["class"] == "harness")
+    indexed = [{"frame": 0, "screen": "game", "sim_tick": 100, "service_state": "Starting"}, {"frame": 1, "screen": "game", "sim_tick": 1200, "service_state": "Running"}]
+    ok &= row(results, "frames/rejoin-requires-running-service", driver.frame_range(indexed, {"screen": "game", "service_state": "Running"}) == [1, 1])
     runtime = scratch / "retained/runtime"
     (runtime / "Userdata").mkdir(parents=True)
     (runtime / "Autosaves").mkdir()
