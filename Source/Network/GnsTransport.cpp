@@ -608,6 +608,7 @@ namespace RTE {
 		}
 
 		void ForgetConnection(HSteamNetConnection connection) {
+			m_RouteLogged.erase(connection);
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt != m_PeersByConnection.end()) {
 				m_ConnectionsByPeer.erase(peerIt->second);
