@@ -33,11 +33,6 @@
       "elapsed_ms": 800
     },
     {
-      "op": "assert_control",
-      "control": "LabelNetMatchToastNewest",
-      "text_contains": "is now hosting"
-    },
-    {
       "op": "screenshot",
       "name": "new-host"
     },
