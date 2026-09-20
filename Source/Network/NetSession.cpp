@@ -1338,6 +1338,21 @@ namespace RTE {
 		const uint64_t a7EvaluationGap = m_NowMs >= m_LastTimeoutCheckMs ? m_NowMs - m_LastTimeoutCheckMs : 0;
 		m_TimeoutsEvaluated = true;
 		m_LastTimeoutCheckMs = m_NowMs;
+		// A park the engine declared is not silence from anyone: the round held this peer's own pump. The
+		// windows start again here, and the next full budget without a word still ends the peer.
+		if (m_PumpParked || m_SilenceSuspended) {
+			m_PumpParked = false;
+			m_LastReceiveMs = m_NowMs;
+			m_ResumedWithoutTraffic = false;
+			for (PeerState& peer : m_Peers) {
+				if (IsActive(peer.state) && peer.state != NetSessionState::Handshake) {
+					peer.lastReceiveMs = m_NowMs;
+					peer.resumedWithoutTraffic = false;
+				}
+			}
+			++m_Stats.timeoutResumptions;
+			return;
+		}
 		if (resumed) {
 			// One restart per silence, and no more: without a floor a caller that always evaluated more
 			// slowly than the budget would resume forever and evict nobody. Once a window has been
