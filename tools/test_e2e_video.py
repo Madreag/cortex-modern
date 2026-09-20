@@ -27,7 +27,7 @@ import e2e_video as driver  # noqa: E402
 SCENARIOS = ("sp-smoke", "mp-host-join", "mp-reconnect-repair", "world-late-join", "ui-surfaces",
              "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag",
              "mp-moderation", "mp-host-migration", "mp-resume-from-disk", "mp-direct-vs-relay",
-             "mod-void-wanderers-multiplayer")
+             "mod-void-wanderers-multiplayer", "mp-host-join-cross")
 
 
 def row(results, name, ok, detail=""):
@@ -529,6 +529,42 @@ def check_resume_seams(results, scratch):
     return ok
 
 
+def check_cross_capture(results, scratch):
+    from e2e.cross import select_peer, identity_agrees, merge_halves
+    scenario = driver.load_scenario('mp-host-join-cross')
+    host = select_peer(scenario, 'host')
+    client = select_peer(scenario, 'client')
+    ok = row(results, 'cross/one-local-peer', [peer['name'] for peer in host['peers']] == ['host'] and [peer['name'] for peer in client['peers']] == ['client'])
+    ok &= row(results, 'cross/no-remote-file-rendezvous', all('{PROBE_DIR_' not in driver.scenario_text(value, value['peers'][0]['probe']) for value in (host, client)))
+    ok &= row(results, 'cross/missing-address-skips-client', driver.run_preflight(client, {'name': 'run0', 'peers': client['peers']}, [], {})['tokens'] == ['HOST_ADDRESS'])
+    ok &= row(results, 'cross/host-needs-no-address-token', driver.run_preflight(host, {'name': 'run0', 'peers': host['peers']}, [], {}) is None)
+    ok &= row(results, 'cross/address-token-from-environment', driver.supplied_tokens([], {'HOST_ADDRESS': '192.0.2.1'}) == {'HOST_ADDRESS': '192.0.2.1'})
+    identity = {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 1, 'host': True}
+    remote = {**identity, 'peer_id': 2, 'host': False}
+    ok &= row(results, 'cross/shared-native-identity', identity_agrees([identity, remote]))
+    ok &= row(results, 'cross/reject-different-round', not identity_agrees([identity, {**remote, 'round': 8}]))
+    ok &= row(results, 'cross/reject-same-peer', not identity_agrees([identity, {**remote, 'peer_id': 1}]))
+    roots = []
+    for name, definition, ident, platform in [('host', host, identity, 'win32'), ('client', client, remote, 'darwin')]:
+        root = scratch / ('cross-' + name)
+        root.mkdir()
+        roots.append(root)
+        video, sheet = root / (name + '.mp4'), root / (name + '-sheet.png')
+        video.write_bytes(b'synthetic contract video')
+        sheet.write_bytes(b'synthetic contract sheet')
+        driver.write_json(root / 'capture.json', {'synthetic': True, 'scenario': scenario['name'], 'scenario_definition': definition, 'out': str(root)})
+        driver.write_json(root / 'manifest.json', {'synthetic': True, 'platform': platform, 'source': {'tip': 'synthetic'}, 'frame_count': 1, 'peers': [{'peer': name, 'match_identity': ident, 'video': driver.file_evidence(video), 'contact_sheet': driver.file_evidence(sheet)}]})
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'checklist': [{'id': name, 'peer': name, 'frames': [0, 0], 'probe': 'pass'}]})
+    ok &= row(results, 'cross/merged-media-and-contract', merge_halves(roots, scratch / 'cross-merged'))
+    merged = json.loads((scratch / 'cross-merged/manifest.json').read_text())
+    ok &= row(results, 'cross/shared-key-and-platforms', merged['match_identity_gate']['match_id'] == '0000000000000005-0000000000000007' and merged['match_identity_gate']['cross_platform'])
+    (roots[1] / 'client.mp4').write_bytes(b'changed synthetic video')
+    ok &= row(results, 'cross/transferred-media-tamper-fails', not merge_halves(roots, scratch / 'cross-tampered'))
+    bad = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'absent', 'event': 'ready'}}]}
+    ok &= row(results, 'drop/unknown-event-peer-skips-before-launch', driver.run_preflight({'peers': bad['peers']}, bad, [], {})['class'] == 'harness')
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -557,6 +593,7 @@ def main():
         ok &= check_menu_commands(results)
         ok &= check_drop_receipts(results, scratch)
         ok &= check_gameplay_epochs(results, scratch)
+        ok &= check_cross_capture(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

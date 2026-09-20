@@ -1,0 +1,159 @@
+{
+  "schema": 1,
+  "name": "mp-host-join-cross",
+  "cross_machine": true,
+  "title": "Independent host and client captures joined by the live session and round",
+  "port_base": 49412,
+  "size": "960x540",
+  "timeout_s": 180,
+  "peers": [
+    {
+      "name": "host",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-tick-hashes",
+        "-max-ticks",
+        "900",
+        "-num-lua-states",
+        "4",
+        "-seed",
+        "42",
+        "-out",
+        "{OUT}/host_trace.json"
+      ],
+      "menu_script": "mp-host-join-cross.host.menu.txt",
+      "input_script": "ui-surfaces.input.txt",
+      "probe": "mp-host-join-cross.host.probe.json",
+      "settings": {
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always"
+      }
+    },
+    {
+      "name": "client",
+      "args": [
+        "-input-script",
+        "{INPUT_SCRIPT}",
+        "-tick-hashes",
+        "-max-ticks",
+        "900",
+        "-num-lua-states",
+        "4",
+        "-seed",
+        "42",
+        "-out",
+        "{OUT}/client_trace.json"
+      ],
+      "menu_script": "mp-host-join-cross.client.menu.txt",
+      "input_script": "ui-surfaces.input.txt",
+      "probe": "mp-host-join-cross.client.probe.json",
+      "settings": {
+        "NetworkIceEnable": "0",
+        "NetworkShowDiagnostics": "1",
+        "NetworkMatchStatusMode": "Always"
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "cross-landing-host",
+      "peer": "host",
+      "mark": "cross-landing-host",
+      "screen": "MultiplayerScreen",
+      "what": "The host uses the real landing screen; both full names remain readable in the lobby.",
+      "assert": "Recorded menu assertions and both-peer admission/ready state."
+    },
+    {
+      "id": "cross-lobby-host",
+      "peer": "host",
+      "mark": "cross-lobby-host",
+      "screen": "MultiplayerScreen",
+      "what": "The host uses the real lobby screen; both full names remain readable in the lobby.",
+      "assert": "Recorded menu assertions and both-peer admission/ready state."
+    },
+    {
+      "id": "cross-play-host",
+      "peer": "host",
+      "mark": "cross-play-host",
+      "screen": "game",
+      "service_state": "Running",
+      "probe_steps": [
+        1,
+        4,
+        5
+      ],
+      "sim_progress": 600,
+      "what": "The host plays at least 600 simulation updates in the same running round.",
+      "assert": "Running before and after the play leg with at least 600 updates."
+    },
+    {
+      "id": "cross-identity-host",
+      "peer": "host",
+      "mark": "cross-play-host",
+      "screen": "game",
+      "match_identity": true,
+      "probe_steps": [
+        3
+      ],
+      "what": "The running match supplies its actual session, round and adopted configuration identity for merging the two videos.",
+      "assert": "Nonzero native session and round; matching config hash and complementary peers in the merged contract."
+    },
+    {
+      "id": "cross-landing-client",
+      "peer": "client",
+      "mark": "cross-landing-client",
+      "screen": "MultiplayerScreen",
+      "what": "The client uses the real landing screen; both full names remain readable in the lobby.",
+      "assert": "Recorded menu assertions and both-peer admission/ready state."
+    },
+    {
+      "id": "cross-lobby-client",
+      "peer": "client",
+      "mark": "cross-lobby-client",
+      "screen": "MultiplayerScreen",
+      "what": "The client uses the real lobby screen; both full names remain readable in the lobby.",
+      "assert": "Recorded menu assertions and both-peer admission/ready state."
+    },
+    {
+      "id": "cross-play-client",
+      "peer": "client",
+      "mark": "cross-play-client",
+      "screen": "game",
+      "service_state": "Running",
+      "probe_steps": [
+        1,
+        4,
+        5
+      ],
+      "sim_progress": 600,
+      "what": "The client plays at least 600 simulation updates in the same running round.",
+      "assert": "Running before and after the play leg with at least 600 updates."
+    },
+    {
+      "id": "cross-identity-client",
+      "peer": "client",
+      "mark": "cross-play-client",
+      "screen": "game",
+      "match_identity": true,
+      "probe_steps": [
+        3
+      ],
+      "what": "The running match supplies its actual session, round and adopted configuration identity for merging the two videos.",
+      "assert": "Nonzero native session and round; matching config hash and complementary peers in the merged contract."
+    },
+    {
+      "id": "cross-address-client",
+      "peer": "client",
+      "mark": "cross-address-client",
+      "screen": "MultiplayerScreen",
+      "events": [
+        "assert_label TextJoinAddress.*PASS",
+        "assert_label TextJoinPort.*PASS"
+      ],
+      "what": "The client dials HOST_ADDRESS:PORT through the address and port fields.",
+      "assert": "The actual host address and port remain in the live join controls."
+    }
+  ]
+}

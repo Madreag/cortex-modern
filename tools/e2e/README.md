@@ -148,3 +148,34 @@ record comparison as the migration gate. The command does not alter a wire flag,
 
 An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
 both exact visibility and text without blocking all later capture steps when the expected toast is absent.
+
+## One peer per machine
+
+`mp-host-join-cross` launches only the selected local peer. Start the Windows host first, then the Mac client with
+the Windows machine's reachable address. The scripts dial the address and port through the separate join fields;
+neither peer waits for a file on the other machine. Both halves record their live session, round and configuration hash.
+
+```text
+python tools/e2e_video.py --repo <windows-tree> --scenario mp-host-join-cross --peer host --out <host-capture> --fps 6
+python tools/e2e_video.py --repo <mac-tree> --scenario mp-host-join-cross --peer client --token HOST_ADDRESS=<windows-address> --out <client-capture> --fps 6
+```
+
+`HOST_ADDRESS` may also come from the environment. This definition uses a plain address on port 49412; it does not
+depend on a directory listing. The address must be reachable from the client and the two binaries must be compatible.
+After transferring the complete Mac capture through the lead's approved evidence workflow, join its contract with
+the host's retained capture:
+
+```text
+python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> --out <merged-contract>
+```
+
+The merge reads both halves and writes metadata only. It requires the same checklist, live session, round and
+configuration hash, complementary host/client roles, distinct peer ids, and unchanged MP4/contact-sheet hashes.
+It preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
+`local-pair-validation-only`; it is not a Mac capture. Picture review remains pending after a successful merge.
+
+On the Mac, both this definition and `sp-smoke` need Python with Pillow, ffmpeg on PATH (or a listed Unix path),
+the matching data modules, and a built executable selected by `CCCP_TEST_BINARY` or `build-gns/CortexCommand`.
+The POSIX runner supplies the runtime and `CCCP_HEADLESS=1`; a working native display/GL context is still required.
+Windows private-desktop isolation has no POSIX equivalent in this driver. The Mac lane must verify its own display
+isolation, GL frame readback, encoding and runtime dependencies. No Mac execution is implied by these definitions.
