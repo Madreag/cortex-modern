@@ -915,6 +915,18 @@ def aggregate_review(capture, out):
 def feel_probes(run, capture, source):
     if run.get("migration_gate"):
         migration_probes(run["migration_gate"], capture)
+    if run.get("hash_gate"):
+        config = run["hash_gate"]
+        root = Path(capture["root"])
+        try:
+            result = compare_hash_range(*(root / f"{name}_trace.json" for name in config["peers"]), config["first_tick"], config["cap"], root / config["name"])
+        except (OSError, ValueError, KeyError, IndexError) as error:
+            result = {"status": "FAIL", "reason": str(error), "exclusions": []}
+        result["evidence"] = str(root / (config["name"] + ".json"))
+        write_json(result["evidence"], result)
+        for peer in capture["peers"]:
+            if peer["peer"] in config["peers"]:
+                peer.setdefault("gates", {})[config["name"]] = result
     if not run.get("feel_gate"):
         return
     from feel.report import item9a_gates
