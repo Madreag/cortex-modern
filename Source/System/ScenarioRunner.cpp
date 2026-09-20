@@ -1177,6 +1177,7 @@ namespace RTE {
 
 	void ScenarioRunner::SetWorldCatchUpActivation(uint64_t activationTick) {
 		s_WorldCatchUpActivationTick = activationTick;
+		s_WorldCatchUpHeld = activationTick != 0 && s_WorldCatchUpAppliedThrough >= activationTick - 1;
 	}
 
 	bool ScenarioRunner::WorldCatchUpActive() {

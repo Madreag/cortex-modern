@@ -643,6 +643,29 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestMovedActivationReleasesCatchUp() {
+			struct Clear { ~Clear() { ScenarioRunner::ReleaseWorldCatchUp(); } } clear;
+			std::string error;
+			std::vector<NetLockstepFrame> tail;
+			for (uint64_t tick = 41; tick <= 45; ++tick) tail.push_back(MakeCommittedFrame(tick));
+			if (!ScenarioRunner::InstallWorldCatchUp(40, std::move(tail), &error)) return Fail(error);
+			ScenarioRunner::SetWorldCatchUpActivation(42);
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			NetLockstepReadyFrame frame;
+			if (!ScenarioRunner::TakeWorldCatchUpGrant(41) || !ScenarioRunner::TakeWorldCatchUpReadyFrame(41, frame, &error) ||
+			    !ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::TakeWorldCatchUpGrant(42)) return Fail("catch-up did not stop before its first activation");
+			ScenarioRunner::SetWorldCatchUpActivation(45);
+			ScenarioRunner::BeginWorldCatchUpFrame();
+			for (uint64_t tick = 42; tick < 45; ++tick) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(tick) || !ScenarioRunner::TakeWorldCatchUpReadyFrame(tick, frame, &error) || frame.frame != tick)
+					return Fail("catch-up stayed held at the old activation after the host moved it forward");
+			}
+			ScenarioRunner::SetWorldCatchUpActivation(45);
+			if (!ScenarioRunner::WorldCatchUpHolding() || ScenarioRunner::TakeWorldCatchUpGrant(45) || ScenarioRunner::WorldCatchUpAppliedThrough() != 44)
+				return Fail("catch-up crossed the replacement activation boundary");
+			return 0;
+		}
+
 		int TestOrdinaryLobbyAcknowledgesJoinImage() {
 			std::string error;
 			LoopbackTransport hostWire, clientWire;
@@ -5920,6 +5943,10 @@ namespace RTE {
 			s_FailTag = "net-world-rejoin-selftest";
 			return TestH4LeaveThenNewJoinSameHolder();
 		}
+		if (std::strcmp(name, "-net-world-moved-activation-selftest") == 0) {
+			s_FailTag = "net-world-moved-activation-selftest";
+			return TestMovedActivationReleasesCatchUp();
+		}
 		if (std::strcmp(name, "-net-world-private-progress-selftest") == 0) {
 			s_FailTag = "net-world-private-progress-selftest";
 			return TestOrdinaryLobbyAcknowledgesJoinImage();
@@ -6187,6 +6214,7 @@ namespace RTE {
 		if (const int result = TestImageBlobRoundTrip(); result != 0) {
 			return result;
 		}
+		if (const int result = TestMovedActivationReleasesCatchUp(); result != 0) return result;
 		if (const int result = TestOrdinaryLobbyAcknowledgesJoinImage(); result != 0) return result;
 		if (const int result = TestJoinerTransferPump(); result != 0) {
 			return result;
