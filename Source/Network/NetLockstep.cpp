@@ -637,6 +637,13 @@ namespace RTE {
 				}
 				AppendVarU64(out, command.sequence);
 				switch (type) {
+					case NetGameCommandType::InputDelay: {
+						const auto& delay = std::get<NetGameInputDelay>(command.payload);
+						if (command.sequence != 0 || !ValidatePeerId(delay.peerId, error, "delay peer") || delay.frames > NetLockstepCodec::c_MaxInputDelayFrames) return false;
+						AppendU8(out, delay.peerId);
+						AppendU16LE(out, delay.frames);
+						break;
+					}
 					case NetGameCommandType::SeatHold: {
 						const auto& hold = std::get<NetGameSeatHold>(command.payload);
 						if (command.sequence != 0 || !ValidatePeerId(hold.peerId, error, "held peer")) return false;
@@ -1551,6 +1558,16 @@ namespace RTE {
 					}
 				}
 				switch (static_cast<NetGameCommandType>(rawType)) {
+					case NetGameCommandType::InputDelay: {
+						NetGameInputDelay delay;
+						if (version < NetLockstepCodec::c_TimingVersion || command.sequence != 0) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "input delay requires the timing wire and a system sequence");
+							return false;
+						}
+						if (!ReadOrTruncated(reader.ReadU8(delay.peerId) && reader.ReadU16LE(delay.frames) && delay.frames <= NetLockstepCodec::c_MaxInputDelayFrames, reader, error, "input delay") || !ValidatePeerId(delay.peerId, error, "delay peer")) return false;
+						command.payload = delay;
+						break;
+					}
 					case NetGameCommandType::SeatHold: {
 						NetGameSeatHold hold;
 						if (version < NetLockstepCodec::c_TimingVersion || command.sequence != 0) {
@@ -2555,7 +2572,7 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Recovery frames may carry WorldTransition; decode them at the world-plane version.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, c_WorldTransitionVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, c_Version, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		if (!EncodeRecoveryInput(frame, canonical, error)) return false;
@@ -2926,7 +2943,7 @@ namespace RTE {
 		message.frame = type == NetHostMigrationMessageType::Plan || type == NetHostMigrationMessageType::Commit || type == NetHostMigrationMessageType::Rejoin ? m_MigrationWireRound : m_RoundId;
 		message.senderPeerId = m_Config.localPeerId;
 		message.successorPeerId = m_MigrationSuccessor;
-		message.configHash = NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
+		message.configHash = m_RoundConfigHash;
 		message.appliedFrame = GetResumeFrame() > 0 ? GetResumeFrame() - 1 : 0;
 		message.completeFrom = message.appliedFrame + 1;
 		while (message.completeFrom > 0 && m_MigrationHistory.contains(message.completeFrom - 1))
@@ -3121,7 +3138,7 @@ namespace RTE {
 	void NetLockstepCoordinator::TickMigrationRollCallLinks(uint64_t nowMs) {
 		const auto authenticated = [&](const NetTransportEvent& event, NetHostMigrationMessage& message) {
 			return event.type == NetTransportEventType::PacketReceived && event.lane == NetTransportLane::ControlReliable && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
-			       message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == NetMatchConfigUtil::HashConfig(m_Config.matchConfig);
+			       message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == m_RoundConfigHash;
 		};
 		if (m_MigrationListener) {
 			INetTransport* listener = m_MigrationListener.get();
@@ -3320,13 +3337,13 @@ namespace RTE {
 			return;
 		}
 		if (m_MigrationPhase == NetHostMigrationPhase::Complete && hosting && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&
-		    message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == NetMatchConfigUtil::HashConfig(m_Config.matchConfig) &&
+		    message.sessionId == m_Config.sessionId && message.roundId == m_Config.matchConfig.roundId && message.configHash == m_RoundConfigHash &&
 		    (message.type == NetHostMigrationMessageType::RollCall || message.type == NetHostMigrationMessageType::Hello || message.type == NetHostMigrationMessageType::Answer) && message.generation <= m_MigrationGeneration) {
 			(void)SendMigration(event.peerId, MigrationMessage(NetHostMigrationMessageType::Rejoin));
 			return;
 		}
 		if (event.lane != NetTransportLane::ControlReliable || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) || message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId ||
-		    message.generation != m_MigrationGeneration || message.successorPeerId != m_MigrationSuccessor || message.configHash != NetMatchConfigUtil::HashConfig(m_Config.matchConfig) ||
+		    message.generation != m_MigrationGeneration || message.successorPeerId != m_MigrationSuccessor || message.configHash != m_RoundConfigHash ||
 		    message.senderPeerId > m_Config.peerCount || message.senderPeerId == m_Config.localPeerId || message.senderPeerId == GetHostPeerId())
 			return;
 		if (!hosting && (message.senderPeerId != m_MigrationSuccessor || event.peerId != m_MigrationHostTransport))
@@ -3699,6 +3716,11 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::Start(INetTransport& transport, const NetLockstepConfig& config, std::string* error) {
+		if ((config.adaptiveInputDelay || config.substituteSlowPeers) &&
+		    (!std::isfinite(config.simTickMs) || config.simTickMs <= 0 || config.slowPlayerBoundTicks == 0 || config.slowPlayerBoundTicks > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks)) {
+			if (error) *error = "invalid simulation tick or slow player bound";
+			return false;
+		}
 		// One peer is a round whose only producer is here (an AI-only dedicated host); two or more
 		// still need the remotes below.
 		if (config.peerCount == 0 || config.peerCount > NetLockstepCodec::c_MaxPeerCount ||
@@ -3818,6 +3840,8 @@ namespace RTE {
 
 		m_Transport = &transport;
 		m_Config = config;
+		m_OpeningMatchConfig = config.matchConfig;
+		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(config.matchConfig);
 		m_MigrationPhase = NetHostMigrationPhase::None;
 		m_MigrationHistory.clear();
 		m_MigrationHistoryBytes = 0;
@@ -4196,6 +4220,8 @@ namespace RTE {
 		}
 		m_Transport = &transport;
 		m_Config = config;
+		m_OpeningMatchConfig = config.matchConfig;
+		m_RoundConfigHash = NetMatchConfigUtil::HashConfig(config.matchConfig);
 		m_Config.inputDelayFrames = 0;
 		m_Config.peerInputDelayFrames.clear();
 		m_RemotePeerIds.clear();
@@ -4272,6 +4298,16 @@ namespace RTE {
 			} else ++seat;
 		}
 		m_LastDeliveredFrame = firstFrame > 0 ? std::optional<uint64_t>{firstFrame - 1} : std::nullopt;
+		m_Config.matchConfig = m_OpeningMatchConfig;
+		std::set<uint64_t> retainedChanges;
+		for (auto& [peer, changes]: m_DelayChanges) {
+			changes.erase(changes.lower_bound(firstFrame), changes.end());
+			if (changes.empty()) continue;
+			if (m_Config.matchConfig.peerInputDelayFrames.empty()) m_Config.matchConfig.peerInputDelayFrames.resize(m_Config.peerCount, m_OpeningMatchConfig.inputDelayFrames);
+			m_Config.matchConfig.peerInputDelayFrames[peer - 1] = changes.rbegin()->second;
+			for (const auto& [frame, delay]: changes) retainedChanges.insert(frame);
+		}
+		m_Config.matchConfig.configRevision += retainedChanges.size();
 		m_LocalFrames.clear();
 		m_RemoteFrames.clear();
 		m_LocalCommands.clear();
@@ -4391,6 +4427,8 @@ namespace RTE {
 			if (IsPeerGoneAtFrame(peer, m_Stats.nextFrame)) continue;
 			if (const auto stats = m_Stats.peers.find(peer); stats != m_Stats.peers.end()) horizon = std::max(horizon, stats->second.reportedNextFrame);
 			delay = std::max(delay, InputDelayAt(peer, m_Stats.nextFrame));
+			if (const auto estimate = m_DelayEstimators.find(peer); m_Config.simTickMs > 0 && estimate != m_DelayEstimators.end())
+				delay = std::max(delay, static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxInputDelayFrames, estimate->second.RequiredFrames(m_Config.simTickMs))));
 		}
 		return horizon + 2ULL * std::max<uint16_t>(delay, 1) + 2;
 	}
@@ -4409,7 +4447,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error) {
 		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peerId == 0 || peerId > m_Config.peerCount ||
 		    delayFrames > NetLockstepCodec::c_MaxInputDelayFrames || applyFrame < FutureTimingFrame() ||
-		    applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || m_NextTimingRevision == UINT64_MAX) {
+		    applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || m_NextTimingRevision == UINT64_MAX || m_Config.matchConfig.configRevision == UINT64_MAX) {
 			if (error) *error = "invalid live delay boundary or authority";
 			return false;
 		}
@@ -4643,7 +4681,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
-		if (!IsRunning()) return;
+		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
 		if (m_LastTimingSampleMs == UINT64_MAX || nowMs - m_LastTimingSampleMs >= NetInputDelayEstimator::c_SampleMs) {
 			m_LastTimingSampleMs = nowMs;
@@ -5285,6 +5323,14 @@ namespace RTE {
 				if (error) *error = "invalid authoritative recovery input: " + validation.message;
 				return false;
 			}
+			for (const auto& command: input.commands) {
+				const auto* delay = std::get_if<NetGameInputDelay>(&command.payload);
+				const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
+				if ((delay || hold) && (input.senderPeerId != GetHostPeerId() || (delay ? delay->peerId : hold->peerId) > m_Config.peerCount)) {
+					if (error) *error = "recovered timing event has invalid authority";
+					return false;
+				}
+			}
 			if (const auto existing = m_RemoteFrames.find(input.targetFrame); existing != m_RemoteFrames.end() && existing->second.contains(input.senderPeerId)) {
 				NetLockstepFrame prior;
 				prior.senderPeerId = input.senderPeerId; prior.roundId = m_RoundId; prior.targetFrame = input.targetFrame;
@@ -5300,6 +5346,15 @@ namespace RTE {
 			}
 		}
 		for (const auto& input: authoritativeInputs) {
+			for (const auto& command: input.commands) {
+				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) m_DelayChanges[delay->peerId][input.targetFrame] = delay->frames;
+				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
+					m_AiHeldSeats[hold->peerId] = input.targetFrame;
+					m_PeerLeaveFrames[hold->peerId] = input.targetFrame;
+					m_DroppedSeats.insert(hold->peerId);
+					m_DroppedSeatResolutions[hold->peerId] = NetLockstepHoldResolution::Substituted;
+				}
+			}
 			if (input.senderPeerId == m_Config.localPeerId) {
 				RememberLocalInput(input);
 				m_LocalFrames[input.targetFrame] = input.frames;
@@ -5709,15 +5764,34 @@ namespace RTE {
 		outFrame = std::move(m_ReadyFrames.front());
 		m_ReadyFrames.pop_front();
 		m_LastDeliveredFrame = outFrame.frame;
+		if (m_Playback || IsMigrationCatchUp() || m_Config.resumeFromSnapshot) {
+			for (const auto* commands: {&outFrame.localCommands, &outFrame.remoteCommands}) for (const auto& command: *commands) {
+				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) {
+					if (command.senderPeerId != GetHostPeerId() || delay->peerId == 0 || delay->peerId > m_Config.peerCount) {
+						Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded delay has invalid authority");
+						return false;
+					}
+					m_DelayChanges[delay->peerId][outFrame.frame] = delay->frames;
+				}
+			}
+		}
 		bool changedDelay = false;
 		for (const auto& [peer, changes]: m_DelayChanges) changedDelay = changedDelay || changes.contains(outFrame.frame);
 		if (changedDelay) {
+			if (m_Config.matchConfig.configRevision == UINT64_MAX) { Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "live configuration revision exhausted"); return false; }
 			m_Config.matchConfig.peerInputDelayFrames.resize(m_Config.peerCount);
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) m_Config.matchConfig.peerInputDelayFrames[peer - 1] = InputDelayAt(peer, outFrame.frame);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				uint16_t delay = m_Playback ? NetMatchConfigUtil::PeerInputDelay(m_OpeningMatchConfig, peer) : InputDelayAt(peer, outFrame.frame);
+				if (m_Playback) if (const auto changes = m_DelayChanges.find(peer); changes != m_DelayChanges.end()) {
+					auto at = changes->second.upper_bound(outFrame.frame);
+					if (at != changes->second.begin()) delay = std::prev(at)->second;
+				}
+				m_Config.matchConfig.peerInputDelayFrames[peer - 1] = delay;
+			}
 			++m_Config.matchConfig.configRevision;
 			if (m_Config.publishLiveConfig) m_Config.publishLiveConfig(m_Config.matchConfig);
 		}
-		if (m_Playback) {
+		if (m_Playback || IsMigrationCatchUp() || m_Config.resumeFromSnapshot) {
 			for (const auto* commands: {&outFrame.localCommands, &outFrame.remoteCommands}) {
 				for (const NetGameCommand& command: *commands) {
 					if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
@@ -5747,6 +5821,11 @@ namespace RTE {
 			m_DroppedSeats.clear();
 			m_LeftSeatsHeld.clear();
 			m_DroppedSeatResolutions.clear();
+			for (const auto& [peer, frame]: m_AiHeldSeats) {
+				m_DroppedSeats.insert(peer);
+				m_LeftSeatsHeld.insert(peer);
+				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+			}
 		} else {
 			outFrame.committedPeerLeaves = m_PeerLeaveFrames;
 			outFrame.committedFrameWaivers = m_PeerFrameWaivers;
@@ -6848,7 +6927,8 @@ namespace RTE {
 			std::cout << "[lockstep] dropped a frame claiming peer " << static_cast<int>(frame.senderPeerId) << " from the wrong transport" << std::endl;
 			return;
 		}
-		if (std::any_of(frame.commands.begin(), frame.commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload); })) {
+		if (std::any_of(frame.commands.begin(), frame.commands.end(), [](const auto& command) { return std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload); }) &&
+		    !(recovered && m_Config.resumeFromSnapshot && m_InstalledResyncTargets.contains({frame.targetFrame, frame.senderPeerId}))) {
 			if (m_Config.localPeerId == GetHostPeerId()) ApplyPeerLeave(frame.senderPeerId, FirstFrameWithout(frame.senderPeerId), "unacknowledged seat hold", nowMs, false, true);
 			else Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "seat holds must use the acknowledged decision lane");
 			return;
@@ -7517,11 +7597,19 @@ namespace RTE {
 			if (remoteIt != m_RemoteFrames.end()) {
 				m_RemoteFrames.erase(remoteIt);
 			}
+			if (!m_Playback) for (const auto& [peer, changes]: m_DelayChanges) {
+				if (const auto delay = changes.find(ready.frame); delay != changes.end()) {
+					auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
+					const NetGameCommand event{GetHostPeerId(), NetGameInputDelay{peer, delay->second}};
+					if (std::find(commands.begin(), commands.end(), event) == commands.end()) commands.push_back(event);
+				}
+			}
 			for (const auto& [peer, frame]: m_AiHeldSeats) {
 				if (frame != ready.frame || m_Playback) continue;
 				ready.aiHeldPeerIds.push_back(peer);
 				auto& commands = m_Config.localPeerId == GetHostPeerId() ? ready.localCommands : ready.remoteCommands;
-				commands.push_back({GetHostPeerId(), NetGameSeatHold{peer}});
+				const NetGameCommand event{GetHostPeerId(), NetGameSeatHold{peer}};
+				if (std::find(commands.begin(), commands.end(), event) == commands.end()) commands.push_back(event);
 			}
 			m_ReadyHistory[ready.frame] = ready;
 			while (m_ReadyHistory.size() > 180) {

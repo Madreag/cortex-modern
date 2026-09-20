@@ -75,6 +75,25 @@ namespace RTE {
 		}
 
 		bool EncodeSenderPacket(const NetLockstepFrame& record, std::vector<uint8_t>& out, std::string* error) {
+			auto firstTiming = record.commands.end();
+			while (firstTiming != record.commands.begin()) {
+				const auto& command = *std::prev(firstTiming);
+				if (!std::holds_alternative<NetGameSeatHold>(command.payload) && !std::holds_alternative<NetGameInputDelay>(command.payload)) break;
+				--firstTiming;
+			}
+			if (firstTiming != record.commands.end()) {
+				NetLockstepFrame inputs = record;
+				inputs.commands.erase(inputs.commands.begin() + std::distance(record.commands.begin(), firstTiming), inputs.commands.end());
+				if (!EncodeSenderPacket(inputs, out, error)) return false;
+				NetLockstepFrame timing;
+				timing.senderPeerId = record.senderPeerId; timing.targetFrame = record.targetFrame; timing.roundId = record.roundId;
+				timing.commands.assign(firstTiming, record.commands.end());
+				std::vector<uint8_t> bytes;
+				NetLockstepError failure;
+				if (!NetLockstepCodec::Encode({timing}, bytes, &failure)) { if (error) *error = failure.message; return false; }
+				out.insert(out.end(), bytes.begin(), bytes.end());
+				return true;
+			}
 			NetLockstepError codecError;
 			size_t observationsEncoded = record.observations.size();
 			size_t valueObservationsEncoded = record.valueObservations.size();

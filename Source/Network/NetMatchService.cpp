@@ -3698,7 +3698,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule) {
 		if (!m_ReconnectClient.HasRecord())
 			return false;
-		if (m_Coordinator && (capsule.peerId != m_LocalPeerId || capsule.configHash != NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig)))
+		if (m_Coordinator && (capsule.peerId != m_LocalPeerId || capsule.configHash != m_Coordinator->GetRoundConfigHash()))
 			return false;
 		std::vector<uint8_t> context(capsule.configHash.begin(), capsule.configHash.end());
 		context.push_back(capsule.peerId);
@@ -3758,7 +3758,7 @@ static std::string ResyncSaveName() {
 		const auto state = m_ReconnectHost.ExportMigrationState();
 		if (state == m_LastMigrationAdmissionState && m_MigrationDirectorySession == m_DirectorySessionId && m_MigrationDirectoryToken == m_DirectoryToken)
 			return;
-		const auto hash = NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig);
+		const auto hash = m_Coordinator->GetRoundConfigHash();
 		for (const auto& peer: m_Session->GetReadyPeers()) {
 			NetLobbyMigration capsule;
 			capsule.kind = 2;

@@ -773,6 +773,7 @@ namespace RTE {
 		const NetLockstepConfig& GetConfig() const { return m_Config; }
 		/// The round every accepted packet carries; 0 on a client until the host's start arrives.
 		uint64_t GetRoundId() const { return m_RoundId; }
+		const NetHash32& GetRoundConfigHash() const { return m_RoundConfigHash; }
 		uint8_t GetHostPeerId() const { return m_Config.authorityPeerId != 0 ? m_Config.authorityPeerId : m_Config.matchConfig.hostPeerId; }
 		bool IsMigrating() const { return m_MigrationPhase == NetHostMigrationPhase::Contacting || m_MigrationPhase == NetHostMigrationPhase::Recovering || m_MigrationPhase == NetHostMigrationPhase::WaitingForReady || m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission; }
 		bool IsMigrationCatchUp() const { return IsMigrating() && GetResumeFrame() <= m_MigrationBoundary; }
@@ -1092,6 +1093,8 @@ namespace RTE {
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;
+		NetMatchConfig m_OpeningMatchConfig;
+		NetHash32 m_RoundConfigHash{};
 		NetLockstepState m_State = NetLockstepState::Idle;
 		NetLockstepStats m_Stats;
 		std::vector<uint8_t> m_RemotePeerIds; //!< Every peer except local; derived at Start.
