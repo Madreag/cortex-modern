@@ -1010,7 +1010,7 @@ def scripts(case, port, root):
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
         # match end quits e2e peers outright, so the host's own pause-menu leave is what pauses the
         # activity and lets its menu loop run the dump while the roster is still up.
-        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n",
+        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'left.json'} 90\nexit\n",
                  "client": f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"},
                 {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
                     {"op": "wait", "sim_at_least": 150},
@@ -1019,7 +1019,8 @@ def scripts(case, port, root):
                     {"op": "wait", "screen": "Pause"}, menu_step("dump_host_options"),
                     {"op": "signal", "name": "done"},
                     menu_step("activate ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
-                    menu_step("activate ButtonLeaveConfirm"), {"op": "finish"}]}})
+                    menu_step("activate ButtonLeaveConfirm"), {"op": "wait", "elapsed_ms": 1500},
+                    {"op": "signal", "name": "left"}, {"op": "finish"}]}})
     elif case == "combo-fit":
         # Reached by the tab control so the measurement runs on a build that has no page op yet.
         text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
@@ -1066,7 +1067,7 @@ def scripts(case, port, root):
         # is refused with the reason in the status line instead of silently dropping the seat.
         text += "assert_enabled ComboHostSeatType0 0\n"
         text += ("combo_select ComboHostSeatType1 CPU\nwait 3\n"
-                 "assert_label LabelHostOptStatus stays open for its peer\n")
+                 "assert_label LabelHostOptStatus A seated player is never dropped by an options edit\n")
         # H03: a two-peer lobby has no free peer id, so the closed tail refuses a human seat with
         # the reason in the status line, then accepts the peerless CPU seat the same row offers.
         text += ("combo_select ComboHostSeatType2 Open\nwait 3\n"
@@ -1569,8 +1570,9 @@ def run_case(options, case, root, failing=None):
         if case == "live":
             # The host's own option records the round under its session and round, in the directory
             # the replay browser lists; a client records nothing.
-            recorded = sorted((runs["host"].cwd / "Userdata/Replays").glob("match-*-r1.ccreplay"))
+            recorded = sorted((runs["host"].cwd / "Userdata/Replays").glob("match-*-r*.ccreplay"))
             assert len(recorded) == 1 and recorded[0].stat().st_size > 0, recorded
+            assert recorded[0].name in logs["host"], recorded[0].name
             assert not list((runs["client"].cwd / "Userdata/Replays").glob("*.ccreplay")) if (runs["client"].cwd / "Userdata/Replays").exists() else True
             result["replay_recorded"] = recorded[0].name
         for who in probes:
