@@ -363,6 +363,7 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::map<uint8_t, uint16_t> peerInputDelayFrames; // Per-sender delay by peerId; empty = every peer uses inputDelayFrames.
 		std::map<uint8_t, uint32_t> peerIncarnations;
+		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -768,6 +769,7 @@ namespace RTE {
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
+		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }

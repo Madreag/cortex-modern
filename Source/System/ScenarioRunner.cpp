@@ -984,7 +984,7 @@ namespace RTE {
 
 	bool ScenarioRunner::IsLockstepLocalActor(int64_t actorUniqueID, int actorTeam, bool cpuControlled) {
 		// Playback owns no actor: the file drives everything through the remote apply.
-		if (s_ReplayReader.IsOpen()) {
+		if (s_ReplayReader.IsOpen() || s_WorldCatchUpActive) {
 			return false;
 		}
 		if (!s_LockstepCoordinator) {
@@ -1139,8 +1139,8 @@ namespace RTE {
 	uint64_t ScenarioRunner::WorldCatchUpPriorInputThrough() { return s_CatchUpPriorInputThrough; }
 	void ScenarioRunner::SetWorldCatchUpPriorInputThrough(uint64_t frame) { s_CatchUpPriorInputThrough = frame; }
 
-	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error) {
-		if (snapshotTick == 0) {
+	bool ScenarioRunner::InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error, bool initialSnapshot) {
+		if (snapshotTick == 0 && !initialSnapshot) {
 			if (error) *error = "world catch-up has no snapshot tick";
 			return false;
 		}
@@ -1179,6 +1179,7 @@ namespace RTE {
 		s_WorldCatchUpActive = false;
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpTail.clear();
+		s_CatchUpPriorInputThrough = 0;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
@@ -1245,6 +1246,12 @@ namespace RTE {
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
+		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning()) {
+			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
+			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
+			s_LockstepCoordinator->Tick(0);
+			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
+		}
 		s_WorldCatchUpAppliedThrough = simTick;
 		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
 		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and
@@ -1870,6 +1877,7 @@ namespace RTE {
 	}
 
 	void ScenarioRunner::EnqueueLocalGameCommand(const NetGameCommand& command) {
+		if (s_WorldCatchUpActive) return;
 		if (g_MovableMan.IsRestoringSnapshot()) {
 			return;
 		}
@@ -2074,6 +2082,32 @@ namespace RTE {
 			if (command.sequence == 0 && command.senderPeerId == GetLockstepHostPeerId() && std::holds_alternative<NetGameReseat>(command.payload)) captured.admittedReseats.push_back(command);
 		}
 		state = std::move(captured);
+		return true;
+	}
+
+	bool ScenarioRunner::RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error) {
+		if (!s_LockstepCoordinator || state.sessionId != s_LockstepCoordinator->GetConfig().sessionId || state.savedTick == UINT64_MAX ||
+		    state.savedTick + 1 != s_LockstepCoordinator->GetConfig().startFrame || !state.pendingInputs.empty() || !state.pendingCommands.empty() ||
+		    !state.pendingPlayerBindings.empty() || !state.admittedReseats.empty()) {
+			if (error) *error = "catch-up state is not a committed boundary";
+			return false;
+		}
+		std::vector<uint8_t> validation;
+		if (!NetResyncCodec::Encode(state, {0}, validation, error)) return false;
+		const auto member = [&](uint8_t peer) { return peer > 0 && peer <= s_LockstepCoordinator->GetConfig().peerCount; };
+		for (const auto& [uid, peer]: state.controlOwners) if (!member(peer)) return false;
+		for (const auto& [uid, peer]: state.droppedControlOwners) if (!member(peer)) return false;
+		for (const auto& [peer, binding]: state.playerBindings) if (!member(peer)) return false;
+		for (const auto& [peer, sequence]: state.appliedCommands) if (!member(peer)) return false;
+		DiscardHeldLocalInputs();
+		s_LockstepControlOverrides = state.controlOwners;
+		s_LockstepDroppedControlOverrides = state.droppedControlOwners;
+		s_PeerPlayerBindings = state.playerBindings;
+		s_AppliedCommandSequences = state.appliedCommands;
+		s_LockstepAppliedFrame = state.savedTick;
+		s_E2eFirstTransferUid = state.e2eFirstTransferUid;
+		const auto applied = state.appliedCommands.find(GetLockstepLocalPeerId());
+		s_NextLocalCommandSequence = applied == state.appliedCommands.end() ? 1 : applied->second + 1;
 		return true;
 	}
 

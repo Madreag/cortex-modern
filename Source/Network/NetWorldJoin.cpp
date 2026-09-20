@@ -101,6 +101,9 @@ namespace RTE {
 			offer["private_session_id"] = image.privateSessionId;
 			offer["checkpoint_config"] = image.checkpointConfig;
 			offer["side_state"] = image.sideState;
+			offer["held_state"] = image.heldState;
+			offer["round_config_hash"] = image.roundConfigHash;
+			offer["authority_generation"] = image.authorityGeneration;
 		}
 		return offer.dump();
 	}
@@ -119,6 +122,9 @@ namespace RTE {
 		image.privateSessionId = parsed.value("private_session_id", uint64_t{0});
 		image.checkpointConfig = parsed.value("checkpoint_config", std::string());
 		image.sideState = parsed.value("side_state", std::string());
+		image.heldState = parsed.value("held_state", std::string());
+		image.roundConfigHash = parsed.value("round_config_hash", std::string());
+		image.authorityGeneration = parsed.value("authority_generation", uint64_t{0});
 		image.worldId = parsed.value("world_id", std::string());
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});

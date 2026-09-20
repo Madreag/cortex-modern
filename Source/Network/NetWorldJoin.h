@@ -97,6 +97,9 @@ namespace RTE {
 		uint64_t privateSessionId = 0;
 		std::string checkpointConfig;
 		std::string sideState;
+		std::string heldState;
+		std::string roundConfigHash;
+		uint64_t authorityGeneration = 0;
 		std::string worldId;
 		uint64_t boot = 0;
 		uint64_t round = 0;
@@ -357,6 +360,9 @@ namespace RTE {
 		bool privateMatch = false;
 		NetMatchConfig checkpointConfig;
 		std::string sideState;
+		std::map<uint8_t, NetGameSeatHold> initialHolds;
+		uint64_t roundId = 0, authorityGeneration = 0;
+		NetHash32 roundConfigHash{};
 		uint64_t snapshotTick = 0;        //!< B, the tick the restored image froze at.
 		uint64_t appliedThrough = 0;      //!< The last committed tail frame the sim has applied.
 		uint64_t activationTick = 0;      //!< E, once the host has announced it.

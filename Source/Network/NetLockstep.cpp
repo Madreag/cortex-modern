@@ -4100,6 +4100,10 @@ namespace RTE {
 		m_PreStartChecksums.clear();
 		m_LastStartSentMs = UINT64_MAX;
 		m_RemoteFrameWindow.clear();
+		for (const auto& [peer, hold]: m_Config.initialSeatHolds) {
+			m_HoldTransactions[peer] = hold; m_AiHeldSeats[peer] = hold.cutoffFrame; m_PeerLeaveFrames[peer] = hold.cutoffFrame;
+			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
+		}
 	}
 
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
@@ -4296,7 +4300,7 @@ namespace RTE {
 		m_LocalValueObservations.clear();
 		m_LastQueuedTargetFrame = std::numeric_limits<uint64_t>::max();
 		m_PeerEffectiveStart.clear();
-		m_RoundId = 0;
+		m_RoundId = config.roundId;
 		m_Stats = {};
 		m_Stats.sessionId = config.sessionId;
 		m_Stats.configuredStartFrame = config.startFrame;
@@ -6129,7 +6133,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::IsPeerGoneAtFrame(uint8_t peerId, uint64_t frame) const {
-		if (peerId == m_Config.localPeerId && !m_Playback && !m_LocalSeatHeld) {
+		if (peerId == m_Config.localPeerId && !m_Playback && !m_LocalSeatHeld && !m_AiHeldSeats.contains(peerId)) {
 			return false;
 		}
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
