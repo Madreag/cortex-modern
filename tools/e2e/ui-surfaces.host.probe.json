@@ -229,10 +229,6 @@
       "elapsed_ms": 1000
     },
     {
-      "op": "wait_file",
-      "path": "{PROBE_DIR_client}/done.json"
-    },
-    {
       "op": "key_down",
       "key": "Escape"
     },
@@ -268,7 +264,13 @@
     },
     {
       "op": "menu",
-      "command": "activate ButtonLeaveConfirm"
+      "command": "activate ButtonLeaveCancel"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause",
+      "elapsed_ms": 400,
+      "scope": "menu"
     },
     {
       "op": "wait",
