@@ -595,6 +595,7 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
+	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow()) return true;
 	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
 		case SettingsMan::NetworkMatchStatusMode::Off: return false;
 		case SettingsMan::NetworkMatchStatusMode::Always: return true;
@@ -633,7 +634,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
 	}
 	char metrics[128];
-	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), static_cast<double>(m_MatchDelayFrames) * 1000.0 / 60.0);
+	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
 	const auto ping = g_NetMatchService.GetMatchPingMs();
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
@@ -669,7 +670,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
-	if (backbuffer->h < c_CompactMaxHeight) {
+	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics() && !ScenarioRunner::IsLockstepLocalMachineSlow()) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
 		const int fullHeight = font->GetFontHeight() + 7;
@@ -799,6 +800,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
 	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
+	if (ScenarioRunner::IsLockstepLocalMachineSlow()) text += "\nYour machine cannot keep up with this match";
+	if (g_SettingsMan.GetNetworkShowDiagnostics()) {
+		for (const auto& member: snapshot.members) {
+			if (member.cpu) continue;
+			text += "\nP" + std::to_string(member.peerId) + ": Ping " + std::to_string(member.pingMs) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
+			text += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
+			if (member.reclaiming || member.aiHeld) text += member.reclaiming ? " / Rejoining..." : " / held - AI in control";
+		}
+	}
 	if (resyncing) {
 		text += "\nRESYNCING MATCH";
 	} else if (placing) {

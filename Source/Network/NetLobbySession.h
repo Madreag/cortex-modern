@@ -111,6 +111,7 @@ namespace RTE {
 		bool IsStartRequested() const { return m_StartRequested; }
 		const NetMatchConfig& GetMatchConfig() const { return m_Config.matchConfig; }
 		void SetRelayOffer(const NetRelayConfig& offer);
+		const std::map<uint8_t, NetInputDelayEstimator>& GetInputDelaySamples() const { return m_InputDelaySamples; }
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		uint64_t GetStartFrame() const { return m_StartFrame; }
 		const std::string& GetFailureReason() const { return m_FailureReason; }
@@ -256,6 +257,9 @@ namespace RTE {
 		INetTransport* m_Transport = nullptr;
 		NetLobbySessionConfig m_Config;
 		bool m_RelaySendPending = false;
+		std::map<uint8_t, NetInputDelayEstimator> m_InputDelaySamples;
+		uint64_t m_TimingClockMs = 0;
+		void SampleInputDelays(uint64_t nowMs);
 		NetLobbyState m_State = NetLobbyState::Idle;
 		NetHash32 m_MatchConfigHash{};
 		uint64_t m_StartFrame = 0;

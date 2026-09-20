@@ -245,6 +245,7 @@ namespace RTE {
 		enum class NetworkChatDefaultScope { All, Team };
 		enum class NetworkChatTextSize { Small, Large };
 		enum class NetworkHostDelayPolicy { Auto, Fixed };
+		enum class NetworkSlowPlayerPolicy { Substitute, Pause };
 		enum class NetworkHostVisibility { LAN, Listed, Unlisted };
 
 		/// Persisted multiplayer display name. Default Player; invalid input is ignored.
@@ -253,6 +254,8 @@ namespace RTE {
 		/// Match-status widget. Default Auto.
 		NetworkMatchStatusMode GetNetworkMatchStatusMode() const { return m_NetworkMatchStatusMode; }
 		void SetNetworkMatchStatusMode(NetworkMatchStatusMode mode) { m_NetworkMatchStatusMode = mode; }
+		bool GetNetworkShowDiagnostics() const { return m_NetworkShowDiagnostics; }
+		void SetNetworkShowDiagnostics(bool enabled) { m_NetworkShowDiagnostics = enabled; }
 		/// Informational multiplayer toasts. Default on.
 		bool GetNetworkToastsEnabled() const { return m_NetworkToastsEnabled; } void SetNetworkToastsEnabled(bool enabled) { m_NetworkToastsEnabled = enabled; }
 		/// Chat history visibility. Default on.
@@ -282,6 +285,10 @@ namespace RTE {
 		/// New-session host delay policy. Default Auto.
 		NetworkHostDelayPolicy GetNetworkHostDelayPolicy() const { return m_NetworkHostDelayPolicy; }
 		void SetNetworkHostDelayPolicy(NetworkHostDelayPolicy policy) { m_NetworkHostDelayPolicy = policy; }
+		int GetNetworkSlowPlayerBoundTicks() const { return m_NetworkSlowPlayerBoundTicks; }
+		void SetNetworkSlowPlayerBoundTicks(int ticks) { if (ticks >= 1 && ticks <= 120) m_NetworkSlowPlayerBoundTicks = ticks; }
+		NetworkSlowPlayerPolicy GetNetworkSlowPlayerPolicy() const { return m_NetworkSlowPlayerPolicy; }
+		void SetNetworkSlowPlayerPolicy(NetworkSlowPlayerPolicy policy) { m_NetworkSlowPlayerPolicy = policy; }
 		/// New-session automatic match repair. Default on.
 		bool GetNetworkHostAutoRepair() const { return m_NetworkHostAutoRepair; } void SetNetworkHostAutoRepair(bool enabled) { m_NetworkHostAutoRepair = enabled; }
 		/// Idle-lobby wait in minutes. 0 means Never; default 10. Out of 0-60 is ignored.
@@ -644,6 +651,9 @@ namespace RTE {
 		std::string m_NetworkDisplayName;
 		std::string m_NetworkDiagnosticsDirectory;
 		NetworkMatchStatusMode m_NetworkMatchStatusMode;
+		bool m_NetworkShowDiagnostics;
+		int m_NetworkSlowPlayerBoundTicks;
+		NetworkSlowPlayerPolicy m_NetworkSlowPlayerPolicy;
 		NetworkChatDefaultScope m_NetworkChatDefaultScope;
 		NetworkChatTextSize m_NetworkChatTextSize;
 		std::string m_NetworkChatKey;

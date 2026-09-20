@@ -92,6 +92,93 @@ def pin(value, rule, passed, evidence, detail=None):
                 evidence=[str(path) for path in evidence], detail=detail)
 
 
+def item9a_gates(run, peer='host', rows=None):
+    run = Path(run)
+    raw = run / peer / 'feel/raw.jsonl'
+    manifest_path = run / 'manifest.json'
+    manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+    rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
+    committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= TICKS]
+    by_tick = defaultdict(list)
+    for row in committed:
+        by_tick[row['tick']].append(row['wall_ms'])
+    first_tick = min(by_tick, default=None)
+    wall_ms = (max(by_tick[TICKS]) - min(by_tick[first_tick])) if TICKS in by_tick and first_tick is not None and first_tick < TICKS else None
+    tps = (TICKS - first_tick) * 1000 / wall_ms if wall_ms and wall_ms > 0 else None
+    log_path = run / peer / 'stdout.log'
+    log = log_path.read_text(encoding='utf-8-sig', errors='replace') if log_path.is_file() else ''
+    waits = [(int(tick), int(ms)) for tick, ms in re.findall(r'\[net-frame-wait\] frame=(\d+) wait_ms=(\d+)', log) if 300 < int(tick) <= TICKS]
+    wait_ms = sum(ms for _, ms in waits)
+    wait_fraction = wait_ms / wall_ms if wall_ms else None
+    longest = max((ms for _, ms in waits), default=0) if wall_ms else None
+    report_path = run / f'{peer}_report.json'
+    report = json.loads(report_path.read_text(encoding='utf-8-sig')) if report_path.is_file() else {}
+    def locksteps(node):
+        found = []
+        if isinstance(node, dict):
+            if 'missing_frame_stalls' in node and 'next_frame' in node:
+                found.append(node)
+            for value in node.values():
+                found.extend(locksteps(value))
+        elif isinstance(node, list):
+            for value in node:
+                found.extend(locksteps(value))
+        return found
+    rounds = locksteps(report)
+    latest = max(rounds, key=lambda value: value.get('next_frame', 0), default={})
+    measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
+    missing = sum(measured) if measured else None
+    evidence = [raw, log_path, report_path]
+    pins = {
+        'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
+        'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
+        'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
+        'item9a_missing_frame_stalls': pin(missing, '= 0 after tick 300', missing == 0, evidence,
+            'Transport observations retain their original meaning, including prefetch; the separate wait gates measure actual blocking.'),
+    }
+    if manifest.get('loss_percent'):
+        loss_log = run / 'client/stdout.log'
+        armed = re.findall(r'\[net-transport-loss\] percent=(\S+) send_recv_armed=(\d+) round=(\d+)', loss_log.read_text(encoding='utf-8-sig', errors='replace')) if loss_log.is_file() else []
+        accepted = bool(armed) and all(float(percent) == manifest['loss_percent'] and status == '1' for percent, status, _ in armed)
+        pins['item9a_loss_armed'] = pin(armed, 'GNS accepted 5 percent packet loss on client send and receive for every observed arm', accepted, [loss_log])
+    if manifest.get('silent_tick'):
+        holds = [(int(seat), int(tick)) for seat, tick in re.findall(r'\[net-match\] hold peer=(\d+) frame=(\d+) AI in control', log)]
+        held = next((tick for seat, tick in holds if seat == 2 and tick >= manifest['silent_tick']), None)
+        pins['item9a_hold'] = pin(held, 'silent seat 2 is held from its agreed frame', held is not None, [log_path])
+        def reclaims(name):
+            path = run / name / 'stdout.log'
+            text = path.read_text(encoding='utf-8-sig', errors='replace') if path.is_file() else ''
+            found = re.findall(r'\[net-match\] seat-reclaimed peer=(\d+) frame=(\d+) live_actors=(\d+)', text)
+            return [(int(tick), int(live)) for seat, tick, live in found
+                    if held is not None and int(seat) == 2 and held < int(tick) <= TICKS and int(live) > 0], path
+        host_reclaims, host_reclaim_path = reclaims('host')
+        survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
+        rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims
+        pins['item9a_rejoin'] = pin(rejoined, 'both survivors applied the same committed reclaim of live actors after the hold',
+            rejoined, [host_reclaim_path, survivor_reclaim_path], dict(host=host_reclaims, survivor=survivor_reclaims))
+        def hashes(name):
+            path = run / f'{name}_trace.json'
+            if not path.is_file():
+                return {}, path
+            document = json.loads(path.read_text(encoding='utf-8-sig'))
+            values = {}
+            for segment in document.get('runs', []):
+                for value in segment.get('tick_hashes', []):
+                    if value['tick'] in values and values[value['tick']] != value:
+                        return {}, path
+                    values[value['tick']] = value
+            return values, path
+        host_hashes, host_path = hashes('host')
+        survivor_hashes, survivor_path = hashes('survivor')
+        same = held is not None and all(tick in host_hashes and host_hashes.get(tick) == survivor_hashes.get(tick) for tick in range(held, TICKS + 1))
+        pins['item9a_ai_takeover_hash'] = pin(same, 'every committed hash from hold through rejoin equals on both survivors', same, [host_path, survivor_path])
+    return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
+                pass_check=all(value['status'] == 'PASS' for value in pins.values()),
+                metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
+                             steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=TICKS if TICKS in by_tick else None,
+                             sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
+
+
 def input_latencies(inputs, frames):
     results = []
     by_actor = defaultdict(list)
@@ -370,7 +457,6 @@ def reduce_peer(run, peer, baseline=None):
     expected_inputs = {(row['tick'], row['action'], row['held']) for row in schedule['probes']}
     actual_inputs = {(row['tick'], change['action'], change['held']) for row in inputs for change in row['changes']}
     missing_inputs = sorted(expected_inputs - actual_inputs)
-    expected_delay = {0: 0, 100: 4, 200: 7}[lag]
     over_50 = [frame['frame'] for frame in frames if max(frame['draw_ms'], frame['present_ms'], frame['interval_ms'] or 0) > 50]
     captures = [row for row in rows if row['type'] == 'capture']
     capture_missing = sorted(set(range(60, TICKS + 1, 60)) - {row['requested_tick'] for row in captures if row['saved'] and Path(row['path']).is_file()})
@@ -382,6 +468,12 @@ def reduce_peer(run, peer, baseline=None):
             match = AUTO_DELAY.match(text)
             if match:
                 auto_picks.append(dict(peer=int(match[1]), rtt_ms=int(match[2]), delay=int(match[3]), floor=int(match[4]), raw_line=line_no))
+    local_picks = [pick for pick in auto_picks if pick['peer'] == frames[-1]['peer']]
+    network = item9a_gates(run, peer, rows) if peer != 'sp' else None
+    measured_tick = network['metrics']['sim_tick_ms'] if network else SIM_MS
+    delay_math = measured_tick is not None and measured_tick > 0 and all(
+        pick['delay'] >= max(pick['floor'], math.ceil(pick['rtt_ms'] / measured_tick) + 1) for pick in local_picks)
+    live_delay = network['metrics']['peer_input_delays'].get(str(frames[-1]['peer'])) if network else 0
     metrics = dict(cpu_ms=cpu_ms, draw_ms=draw, present_ms=present, frame_interval_ms=interval,
                    cpu_window=dict(first_iteration_tick=all_iterations[0]['tick'], last_iteration_tick=all_iterations[-1]['tick'],
                                    includes_match_stop_drain=True),
@@ -404,15 +496,17 @@ def reduce_peer(run, peer, baseline=None):
                     and (auto_picks or peer == 'sp')
                     and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
     pins = {}
-    pins['wall_tps'] = pin(pace_tps, '>= 59.0', pace_tps is not None and pace_tps >= 59, [raw])
+    pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
-    pins['auto_delay'] = pin(delays, f'D = {expected_delay}', delays == [expected_delay] and (peer == 'sp' or '(auto,' in frames[-1]['input_delay_text']), [raw, host_log])
+    pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
+                             delay_math and frames[-1]['delay'] == live_delay and (peer == 'sp' or '(auto' in frames[-1]['input_delay_text']),
+                             [raw, host_log, run / f'{peer}_report.json'] if network else [raw])
     latency_value = dict(observed_ms=latency_ms, observed_frames=latency_frames,
                          lower_bounds_ms=metrics['latency_lower_bounds_ms'], unreflected=metrics['latency_unreflected'])
     pins['input_to_photon'] = pin(latency_value, '<= 34 ms at 60 Hz; <= one 60 Hz sim tick + one actual frame when uncapped',
                                   bool(latency) and all(row['pass_check'] for row in latency), [raw, paths['latencies']],
                                   'First submitted render copy with aim closer to the scripted aim, or velocity changed in the requested direction; swap-return boundary.')
-    pins['preview_ms'] = pin(lp_cost, 'ms_total / previews <= 2 ms at D <= 7', lp_cost is not None and max(delays) <= 7 and lp_cost <= 2, [raw])
+    pins['preview_ms'] = pin(lp_cost, 'ms_total / previews <= 2 ms over the full negotiated delay', lp_cost is not None and lp_cost <= 2, [raw])
     pins['violations'] = pin(max(frame['local_prediction']['violations'] for frame in frames), '= 0 always',
                              all(frame['local_prediction']['violations'] == 0 for frame in frames), [raw])
     pins['correction_remote_only'] = pin(len(large), '> 4 px only on a remote-caused event',
@@ -442,6 +536,8 @@ def reduce_peer(run, peer, baseline=None):
     if peer == 'sp':
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
+    elif peer == 'host':
+        pins.update(network['pins'])
     result = dict(peer=peer, raw_path=str(raw), metrics=metrics, pins=pins, measurement_complete=measured,
                   trace_1200_ticks=coverage, orderly_end_record=ended, analysis={key: str(value) for key, value in paths.items()})
     write_json(destination / 'metrics.json', result)

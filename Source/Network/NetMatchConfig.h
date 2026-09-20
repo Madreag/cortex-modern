@@ -7,7 +7,9 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -35,6 +37,24 @@ namespace RTE {
 	};
 
 	enum class NetMatchDelayPolicy : uint8_t { Auto = 1, Fixed = 2 };
+	enum class NetSlowPlayerPolicy : uint8_t { Substitute = 1, Pause = 2 };
+
+	/// Samples the active transport's RTT and delays decreases until the link settles.
+	class NetInputDelayEstimator {
+	public:
+		static constexpr uint64_t c_WindowMs = 5000;
+		static constexpr uint64_t c_SampleMs = 100;
+		void Observe(uint64_t nowMs, uint32_t rttMs);
+		void Rebase(uint64_t nowMs);
+		uint32_t RequiredFrames(double tickMs, uint16_t floor = 0) const;
+		uint32_t P95Ms() const;
+		uint32_t JitterMs() const;
+		std::optional<uint16_t> Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor = 0);
+	private:
+		uint32_t Percentile(unsigned percent) const;
+		std::deque<std::pair<uint64_t, uint32_t>> m_Samples;
+		std::optional<uint64_t> m_BelowSince;
+	};
 	struct NetMatchMigrationPeer {
 		uint8_t peerId = 0;
 		uint16_t listenPort = 0;
@@ -86,6 +106,8 @@ namespace RTE {
 		uint16_t inputDelayFrames = 0;
 		std::vector<uint16_t> peerInputDelayFrames; // Per-sender delay by peerId-1 (size 0 or peerCount); empty = uniform inputDelayFrames.
 		NetMatchDelayPolicy delayPolicy = NetMatchDelayPolicy::Auto;
+		uint16_t slowPlayerBoundTicks = 3;
+		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		bool autosaveEnabled = false;
 		uint32_t autosaveIntervalSeconds = 0;
 		uint8_t idleWaitMinutes = 10;
@@ -98,6 +120,7 @@ namespace RTE {
 		std::string modePreset = "PvP";
 		std::vector<NetMatchPlayerSlot> players;
 		std::vector<uint8_t> successorOrder;
+		std::vector<uint8_t> activePeerIds;
 		std::vector<NetMatchMigrationPeer> migrationPeers;
 		NetRelayConfig relay;
 
@@ -115,6 +138,9 @@ namespace RTE {
 		static constexpr uint16_t c_WorldLayoutVersion = 5;
 		static constexpr uint16_t c_RelayLayoutVersion = 6;
 		static constexpr bool CarriesWorldLayout(uint16_t version) { return version == c_WorldLayoutVersion || version >= c_PersistentWorldVersion; }
+		static constexpr uint16_t c_TimingOptionsVersion = 6;
+		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;
+		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
 		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy and 16 migration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;

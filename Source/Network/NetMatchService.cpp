@@ -79,6 +79,8 @@ namespace RTE {
 		text << "\nDuration: " << DurationText() << " (" << runningTicks << " ticks at 60 tps)\n\nPeers";
 		for (const Peer& peer : peers) {
 			text << '\n' << peer.name << " | team " << peer.team + 1 << " | seat " << peer.seat << " | delay " << peer.inputDelayFrames;
+			text << "\nHolds " << peer.holds << " | AI substitutions " << peer.substitutions << " | Rejoins " << peer.rejoins
+			     << " | Longest wait " << peer.longestWaitMs << " ms";
 		}
 		text << "\n\nResyncs: " << resyncs << " | Drops: " << drops << " | Reclaims: " << reclaims << " | Substitutions: " << substitutions;
 		const auto pace = nlohmann::json::parse(paceJson, nullptr, false);
@@ -125,6 +127,18 @@ namespace RTE {
 		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
 		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
 		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
+		for (auto& peer: m_CurrentMatchSummary.peers) {
+			NetLockstepPeerStats totals;
+			if (const auto past = m_LockstepTotals.peers.find(peer.peerId); past != m_LockstepTotals.peers.end()) totals = past->second;
+			if (m_Coordinator) {
+				if (const auto live = m_Coordinator->GetStats().peers.find(peer.peerId); live != m_Coordinator->GetStats().peers.end()) {
+					totals.holds += live->second.holds; totals.substitutions += live->second.substitutions; totals.rejoins += live->second.rejoins;
+					totals.longestWaitMs = std::max(totals.longestWaitMs, live->second.longestWaitMs);
+				}
+				peer.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, peer.peerId);
+			}
+			peer.holds = totals.holds; peer.substitutions = totals.substitutions; peer.rejoins = totals.rejoins; peer.longestWaitMs = totals.longestWaitMs;
+		}
 		m_LastMatchSummary = m_CurrentMatchSummary;
 	}
 
@@ -1577,6 +1591,8 @@ static std::string ResyncSaveName() {
 			m_HostRepairPending = false;
 			m_ResyncHealStartMs = 0;
 			m_LastResync = {};
+			m_PendingHeldReseats.clear();
+			m_PendingHeldResolutions.clear();
 			m_PendingResyncLoad.clear();
 			m_PendingResyncState.reset();
 			m_ResyncRetainsLocalState = false;
@@ -3750,7 +3766,7 @@ static std::string ResyncSaveName() {
 	bool NetMatchService::OpenMigrationCapsuleLocked(const NetLobbyMigration& capsule) {
 		if (!m_ReconnectClient.HasRecord())
 			return false;
-		if (m_Coordinator && (capsule.peerId != m_LocalPeerId || capsule.configHash != NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig)))
+		if (m_Coordinator && (capsule.peerId != m_LocalPeerId || capsule.configHash != m_Coordinator->GetRoundConfigHash()))
 			return false;
 		std::vector<uint8_t> context(capsule.configHash.begin(), capsule.configHash.end());
 		context.push_back(capsule.peerId);
@@ -3810,7 +3826,7 @@ static std::string ResyncSaveName() {
 		const auto state = m_ReconnectHost.ExportMigrationState();
 		if (state == m_LastMigrationAdmissionState && m_MigrationDirectorySession == m_DirectorySessionId && m_MigrationDirectoryToken == m_DirectoryToken)
 			return;
-		const auto hash = NetMatchConfigUtil::HashConfig(m_Coordinator->GetConfig().matchConfig);
+		const auto hash = m_Coordinator->GetRoundConfigHash();
 		for (const auto& peer: m_Session->GetReadyPeers()) {
 			NetLobbyMigration capsule;
 			capsule.kind = 2;
@@ -4007,6 +4023,11 @@ static std::string ResyncSaveName() {
 		m_LockstepTotals.peerFramesWaived += stats.peerFramesWaived;
 		m_LockstepTotals.peersDroppedSilent += stats.peersDroppedSilent;
 		m_LockstepTotals.connectionsClosedOnEviction += stats.connectionsClosedOnEviction;
+		for (const auto& [peer, current]: stats.peers) {
+			auto& total = m_LockstepTotals.peers[peer];
+			total.holds += current.holds; total.substitutions += current.substitutions; total.rejoins += current.rejoins;
+			total.longestWaitMs = std::max(total.longestWaitMs, current.longestWaitMs);
+		}
 	}
 
 	void NetMatchService::QueueLobbyEvent(const NetTransportEvent& event) {
@@ -4141,12 +4162,25 @@ static std::string ResyncSaveName() {
 			// on the host is exactly the id MovableMan's reseat gate requires.
 			DriveAutoSubstitution(nowMs);
 			for (const NetGameReseat& reseat: m_ReconnectHost.TakePendingReseats()) {
+				std::erase_if(m_PendingHeldReseats, [&](const auto& pending) { return pending.newOwnerPeerId == reseat.newOwnerPeerId && pending.team == reseat.team; });
+				m_PendingHeldReseats.push_back(reseat);
+			}
+			for (auto it = m_PendingHeldReseats.begin(); it != m_PendingHeldReseats.end();) {
+				const NetGameReseat& reseat = *it;
+				if (!PrepareHeldPeerRejoinLocked(reseat.newOwnerPeerId)) { ++it; continue; }
 				std::cout << "[net-reconnect] reseating team " << reseat.team << " onto peer "
 				          << static_cast<int>(reseat.newOwnerPeerId) << " (" << reseat.actorUIDs.size() << " actors)" << std::endl;
 				ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{ScenarioRunner::GetLockstepHostPeerId(), reseat});
+				it = m_PendingHeldReseats.erase(it);
 			}
 			if (m_Coordinator) {
 				for (const NetHoldResolutionNotice& notice: m_ReconnectHost.TakePendingHoldResolutions()) {
+					std::erase_if(m_PendingHeldResolutions, [&](const auto& pending) { return pending.lockstepPeerId == notice.lockstepPeerId; });
+					m_PendingHeldResolutions.push_back(notice);
+				}
+				for (auto it = m_PendingHeldResolutions.begin(); it != m_PendingHeldResolutions.end();) {
+					const NetHoldResolutionNotice& notice = *it;
+					if (notice.resolution == NetHoldResolution::Reclaimed && !PrepareHeldPeerRejoinLocked(notice.lockstepPeerId)) { ++it; continue; }
 					NetLockstepHoldResolution resolution = NetLockstepHoldResolution::None;
 					switch (notice.resolution) {
 						case NetHoldResolution::Expired: resolution = NetLockstepHoldResolution::Expired; break;
@@ -4154,6 +4188,9 @@ static std::string ResyncSaveName() {
 						case NetHoldResolution::Substituted: resolution = NetLockstepHoldResolution::Substituted; break;
 					}
 					m_Coordinator->ResolveHeldSeat(notice.lockstepPeerId, resolution, nowMs);
+					if (notice.resolution == NetHoldResolution::Expired)
+						std::erase_if(m_PendingHeldReseats, [&](const auto& reseat) { return reseat.newOwnerPeerId == notice.lockstepPeerId; });
+					it = m_PendingHeldResolutions.erase(it);
 				}
 			}
 			m_SeatStatuses = m_ReconnectHost.GetSeatStatuses();
@@ -4174,6 +4211,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost && m_ResyncOnDesync && m_Coordinator && m_Coordinator->IsRunning() && !m_Coordinator->IsPersistentWorldRound()) {
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+					if (!PrepareHeldPeerRejoinLocked(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
 					rejoinName = peer.displayName.empty() ? "a player" : peer.displayName;
 					if (ClassifyRejoin(g_ActivityMan.GetActivity()) == NetRejoinAnswer::MatchOver) {
 						answerMatchOver = true;
@@ -4190,6 +4228,22 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-match] rejoin: " << rejoinName << " reconnected - match is over" << std::endl;
 			AnswerMatchOverRejoin("match over");
 		}
+	}
+
+	bool NetMatchService::PrepareHeldPeerRejoinLocked(uint8_t peerId) {
+		if (!m_Coordinator || !m_Coordinator->UsesBoundedWait() || !m_Coordinator->HasHeldAISeat(peerId)) return true;
+		if (!m_Session || !ActiveWireLocked()) return false;
+		for (const auto& peer: m_Session->GetReadyPeers()) {
+			if (peer.assignedPeerId + 1 != peerId) continue;
+			std::string reason;
+			if (m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)) return true;
+			if (reason.starts_with("Your connection needs")) {
+				m_RejoinOutcome = "waiting_for_delay";
+				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::HostNotAccepting, reason);
+			}
+			return false;
+		}
+		return false;
 	}
 
 	NetMatchServiceState NetMatchService::GetState() const {
@@ -4230,7 +4284,7 @@ static std::string ResyncSaveName() {
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
-		snapshot.inputDelayText = m_InputDelayText;
+		snapshot.inputDelayText = LiveInputDelayTextLocked();
 		if (snapshot.isHost && snapshot.active) {
 			const PortMapStatus portMap = GetPortMapStatus();
 			if (portMap.enabled) {
@@ -4276,12 +4330,22 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
+			if (m_Coordinator && m_State == NetMatchServiceState::Running) {
+				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
+				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
+					member.pingMs = stats->second.pingMs;
+					member.waits = stats->second.waits; member.longestWaitMs = stats->second.longestWaitMs;
+				}
+				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame());
+				if (member.aiHeld) member.statusLine = member.reclaiming ? "Rejoining..." : "held - AI in control";
+			}
 		}
 		return snapshot;
 	}
 
 	NetMatchConfig NetMatchService::GetLobbyMatchConfig() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_Coordinator && m_State == NetMatchServiceState::Running) return m_Coordinator->GetConfig().matchConfig;
 		// A lobby publish names the agreed config on every peer; before one arrives the request's
 		// own build stands in, which is what a client still shows while its lobby starts.
 		return m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig;
@@ -4355,6 +4419,8 @@ static std::string ResyncSaveName() {
 		saved.peerCount = config.peerCount;
 		saved.dedicated = config.dedicated;
 		saved.delayPolicy = config.delayPolicy;
+		saved.slowPlayerBoundTicks = config.slowPlayerBoundTicks;
+		saved.slowPlayerPolicy = config.slowPlayerPolicy;
 		saved.inputDelayFrames = config.inputDelayFrames;
 		saved.autosaveEnabled = config.autosaveEnabled;
 		saved.autosaveIntervalSeconds = config.autosaveIntervalSeconds;
@@ -4374,6 +4440,8 @@ static std::string ResyncSaveName() {
 		static_cast<NetMatchStandardRules&>(seeded) = saved.rules;
 		seeded.modePreset = NetMatchConfigUtil::ModeName(saved.rules.mode);
 		seeded.delayPolicy = saved.delayPolicy;
+		seeded.slowPlayerBoundTicks = saved.slowPlayerBoundTicks;
+		seeded.slowPlayerPolicy = saved.slowPlayerPolicy;
 		seeded.inputDelayFrames = saved.inputDelayFrames;
 		seeded.autosaveEnabled = saved.autosaveEnabled;
 		seeded.autosaveIntervalSeconds = saved.autosaveIntervalSeconds;
@@ -4443,6 +4511,8 @@ static std::string ResyncSaveName() {
 			text += number(prefix + "AISkill", saved.rules.teamRules[team].aiSkill);
 		}
 		text += line("DelayPolicy", saved.delayPolicy == NetMatchDelayPolicy::Fixed ? "fixed" : "auto");
+		text += number("SlowPlayerBoundTicks", saved.slowPlayerBoundTicks);
+		text += line("SlowPlayerPolicy", saved.slowPlayerPolicy == NetSlowPlayerPolicy::Pause ? "pause" : "substitute");
 		text += number("InputDelayFrames", saved.inputDelayFrames);
 		text += flag("AutosaveEnabled", saved.autosaveEnabled);
 		text += number("AutosaveIntervalSeconds", saved.autosaveIntervalSeconds);
@@ -4523,6 +4593,7 @@ static std::string ResyncSaveName() {
 					              "; this build reads version " + std::to_string(c_Version));
 				}
 				parsed.version = static_cast<uint16_t>(asNumber);
+				if (parsed.version < 2) parsed.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 				sawVersion = true;
 				continue;
 			}
@@ -4606,6 +4677,12 @@ static std::string ResyncSaveName() {
 			} else if (key == "DelayPolicy") {
 				if (value != "auto" && value != "fixed") return refuse("host defaults names an unknown delay policy");
 				parsed.delayPolicy = value == "fixed" ? NetMatchDelayPolicy::Fixed : NetMatchDelayPolicy::Auto;
+			} else if (key == "SlowPlayerBoundTicks") {
+				if (!readNumber(asNumber, "slow player bound") || asNumber < 1 || asNumber > NetMatchConfigUtil::c_MaxSlowPlayerBoundTicks) return refuse("host defaults slow player bound is out of range");
+				parsed.slowPlayerBoundTicks = static_cast<uint16_t>(asNumber);
+			} else if (key == "SlowPlayerPolicy") {
+				if (value != "substitute" && value != "pause") return refuse("host defaults names an unknown slow player policy");
+				parsed.slowPlayerPolicy = value == "pause" ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
 			} else if (key == "InputDelayFrames") {
 				if (!readNumber(asNumber, "input delay")) return false;
 				parsed.inputDelayFrames = static_cast<uint16_t>(std::min<uint32_t>(asNumber, NetMatchConfigUtil::c_MaxInputDelayFrames));
@@ -4680,6 +4757,15 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetInputDelayText() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		return LiveInputDelayTextLocked();
+	}
+
+	std::string NetMatchService::LiveInputDelayTextLocked() const {
+		if (m_Coordinator && m_State == NetMatchServiceState::Running) {
+			const auto& config = m_Coordinator->GetConfig().matchConfig;
+			return "Input delay: " + std::to_string(NetMatchConfigUtil::PeerInputDelay(config, m_Coordinator->GetConfig().localPeerId)) +
+			    (config.delayPolicy == NetMatchDelayPolicy::Fixed ? " (fixed)" : " (auto, re-sized live)");
+		}
 		return m_InputDelayText;
 	}
 
@@ -5128,7 +5214,8 @@ static std::string ResyncSaveName() {
 			const auto& summary = *m_LastMatchSummary;
 			json peers = json::array();
 			for (const auto& peer : summary.peers) {
-				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames}});
+				peers.push_back({{"name", peer.name}, {"team", peer.team}, {"seat", peer.seat}, {"peer_id", peer.peerId}, {"input_delay", peer.inputDelayFrames},
+				    {"holds", peer.holds}, {"substitutions", peer.substitutions}, {"rejoins", peer.rejoins}, {"longest_wait_ms", peer.longestWaitMs}});
 			}
 			report["last_match"] = {{"result", summary.result}, {"winner_team", summary.winnerTeam}, {"running_ticks", summary.runningTicks},
 			    {"duration", summary.DurationText()}, {"peers", peers}, {"resyncs", summary.resyncs}, {"drops", summary.drops},
@@ -5648,7 +5735,7 @@ static std::string ResyncSaveName() {
 			m_LobbySnapshot = snapshot;
 			// The announced delay comes from the lobby's exchanged config (host-authored, already
 			// auto-adjusted) — never recomputed here, so every peer renders the same value.
-			const NetMatchConfig& config = runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
+			const NetMatchConfig& config = runnerRaw->GetState() != NetMatchRuntimeState::Running && runnerRaw->GetLobbySession().GetState() != NetLobbyState::Idle
 			                                   ? runnerRaw->GetLobbySession().GetMatchConfig()
 			                                   : runnerRaw->GetMatchConfig();
 			// The options view reads the same agreed config on every peer; the mirror sits under the
@@ -6413,6 +6500,8 @@ static std::string ResyncSaveName() {
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
+			config.slowPlayerBoundTicks = request.slowPlayerBoundTicks.value_or(config.slowPlayerBoundTicks);
+			config.slowPlayerPolicy = request.slowPlayerPolicy.value_or(config.slowPlayerPolicy);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
@@ -6622,6 +6711,8 @@ static std::string ResyncSaveName() {
 		NetMatchConfig saved;
 		NetMatchConfigUtil::ApplySavedHostOptions(saved);
 		if (!request.delayPolicy) request.delayPolicy = saved.delayPolicy;
+		if (!request.slowPlayerBoundTicks) request.slowPlayerBoundTicks = saved.slowPlayerBoundTicks;
+		if (!request.slowPlayerPolicy) request.slowPlayerPolicy = saved.slowPlayerPolicy;
 		if (!request.idleWaitMinutes) request.idleWaitMinutes = saved.idleWaitMinutes;
 		if (!request.automaticRepair) request.automaticRepair = saved.automaticRepair;
 		if (!request.pathHorizonTicks) request.pathHorizonTicks = saved.pathHorizonTicks;

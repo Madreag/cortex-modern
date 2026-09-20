@@ -22,6 +22,7 @@
 #include "Activity.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
+#include "MovableMan.h"
 #include "ScenarioRunner.h"
 
 #ifdef SYSTEM_MINIZIP
@@ -57,6 +58,58 @@
 namespace RTE {
 
 	namespace {
+		bool TestInputDelayUsesTheSimTick(std::string* error) {
+			NetInputDelayEstimator estimate;
+			estimate.Observe(0, 401);
+			if (estimate.RequiredFrames(1000.0 / 60.0) != 26 || estimate.RequiredFrames(1000.0 / 120.0) != 50) {
+				*error = "401ms RTT did not cover the actual simulation tick length";
+				return false;
+			}
+			for (uint64_t now = 100; now <= 5000; now += 100) estimate.Observe(now, now >= 4700 ? 501 : 401);
+			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 38 ||
+			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{38}) {
+				*error = "the five-second RTT tail did not raise the delay with its jitter margin";
+				return false;
+			}
+			for (uint64_t now = 5100; now <= 10100; now += 100) estimate.Observe(now, 100);
+			if (estimate.Change(10100, 38, 1000.0 / 60.0) || estimate.Change(15099, 38, 1000.0 / 60.0) ||
+			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{7}) {
+				*error = "a lower delay did not wait for five settled seconds";
+				return false;
+			}
+			return true;
+		}
+
+		bool TestRollbackSnapshotRing(std::string* error) {
+			MovableMan::WorldSnapshotRing ring;
+			int formats = 0;
+			const auto snapshot = [&] {
+				auto value = std::make_unique<MovableMan::WorldSnapshot>();
+				value->luaGraphs.push_back(CheckpointText::Deferred([&] { ++formats; return "retained graph"; }));
+				return value;
+			};
+			const auto fail = [&](const char* message) { *error = message; return false; };
+			if (ring.StoreCommitted(0, snapshot())) return fail("disabled rollback ring retained a snapshot");
+			ring.Reset(2);
+			if (!ring.StoreCommitted(40, snapshot()) || !ring.StoreCommitted(41, snapshot()) || !ring.StoreCommitted(42, snapshot()))
+				return fail("rollback ring refused sequential committed snapshots");
+			const auto* anchor = ring.Find(42);
+			if (ring.Size() != 3 || ring.Capacity() != 3 || !ring.Find(40) || !anchor || formats != 0)
+				return fail("rollback ring lost its window or formatted a retained Lua graph");
+			if (ring.StoreCommitted(42, snapshot()) || ring.StoreCommitted(39, snapshot()) || ring.StoreCommitted(44, snapshot()) || ring.Find(42) != anchor)
+				return fail("rollback ring accepted a duplicate, old tick or gap");
+			if (!ring.StoreCommitted(43, snapshot()) || ring.Find(40) || !ring.Find(41) || ring.Find(42) != anchor)
+				return fail("rollback ring evicted a snapshot inside the retained window");
+			ring.DiscardAfter(41);
+			if (ring.Find(42) || ring.Find(43) || !ring.Find(41) || !ring.StoreCommitted(42, snapshot()))
+				return fail("rollback ring kept a discarded timeline or refused its replacement");
+			if (ring.Find(42)->luaGraphs.front().Text() != "retained graph" || formats != 1)
+				return fail("rollback ring did not retain an owned deferred Lua graph");
+			ring.Reset(0);
+			if (ring.Size() || ring.Capacity() || ring.Find(42)) return fail("rollback ring kept a retired round");
+			return true;
+		}
+
 		template <typename Payload>
 		bool RoundTrip(const Payload& payload, std::string* error) {
 			NetLobbyMessage message;
@@ -83,6 +136,7 @@ namespace RTE {
 		NetMatchConfig MakeConfig() {
 			NetMatchConfig config = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
 			config.activityPreset = "Skirmish Defense";
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 			config.sceneName = "Grasslands";
 			config.modePreset = "PvP";
 			config.ownershipPolicy = NetActorOwnershipPolicy::TeamOwner;
@@ -277,11 +331,11 @@ namespace RTE {
 					return false;
 				}
 				const size_t reservedOffset = NetLobbyProtocol::c_HeaderBytes + 16;
-				const size_t migrationOffset = windowBytes.size() - 4;
+				const size_t migrationOffset = windowBytes.size() - 8; // The timing options and the empty relay trail the migration block.
 				if (bytes.size() <= migrationOffset + 2 || bytes[reservedOffset] != (2 | 8 | 16) ||
 				    windowBytes[migrationOffset - 2] != 2 || windowBytes[migrationOffset - 1] != 0 ||
-				    !std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.end() - 4, bytes.begin() + reservedOffset + 2) ||
-				    !std::equal(windowBytes.end() - 4, windowBytes.end(), bytes.end() - 4) ||
+					!std::equal(windowBytes.begin() + reservedOffset + 2, windowBytes.begin() + migrationOffset, bytes.begin() + reservedOffset + 2) ||
+					!std::equal(windowBytes.begin() + migrationOffset, windowBytes.end(), bytes.end() - 8) ||
 				    bytes[migrationOffset] != 1 || bytes[migrationOffset + 1] != 0) {
 					*error = "migration payload does not follow the redundancy U16 after the path horizon";
 					return false;
@@ -947,6 +1001,9 @@ namespace RTE {
 				{"interval", [](auto& c) { ++c.autosaveIntervalSeconds; }}, {"idle_wait", [](auto& c) { ++c.idleWaitMinutes; }},
 				{"repair", [](auto& c) { c.automaticRepair = true; }}, {"policy", [](auto& c) { c.delayPolicy = NetMatchDelayPolicy::Auto; }},
 				{"path_horizon", [](auto& c) { ++c.pathHorizonTicks; }},
+				{"slow_bound", [](auto& c) { ++c.slowPlayerBoundTicks; }},
+				{"slow_policy", [](auto& c) { c.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute; }},
+				{"active_seats", [](auto& c) { c.activePeerIds = {1}; }},
 				{"brainless_spectate", [](auto& c) { c.brainlessHumansSpectate = false; }},
 				// The redundancy window rides reserved bit 0x8 and a trailing word, so its round trip
 				// proves the bit and the hash sensitivity proves peers cannot disagree about it.
@@ -1007,11 +1064,16 @@ namespace RTE {
 				{"AI low", [](auto& c) { c.teamRules[0].aiSkill = 0; }}, {"AI high", [](auto& c) { c.teamRules[0].aiSkill = 101; }},
 				{"autosave interval", [](auto& c) { c.autosaveIntervalSeconds = 0; }}, {"idle wait", [](auto& c) { c.idleWaitMinutes = 61; }},
 				{"path horizon", [](auto& c) { c.pathHorizonTicks = 121; }},
+				{"slow bound zero", [](auto& c) { c.slowPlayerBoundTicks = 0; }},
+				{"slow bound high", [](auto& c) { c.slowPlayerBoundTicks = 121; }},
+				{"slow policy", [](auto& c) { c.slowPlayerPolicy = static_cast<NetSlowPlayerPolicy>(3); }},
+				{"active host absent", [](auto& c) { c.activePeerIds = {2}; }},
 				{"policy", [](auto& c) { c.delayPolicy = static_cast<NetMatchDelayPolicy>(3); }},
 				{"mode", [](auto& c) { c.mode = static_cast<NetMatchMode>(4); }},
 				{"delay count", [](auto& c) { c.peerInputDelayFrames.pop_back(); }},
 				{"delay range", [](auto& c) { c.peerInputDelayFrames[0] = 61; }},
 				{"lossy downgrade", [](auto& c) { c.version = 2; }},
+				{"lossy timing downgrade", [](auto& c) { c.version = 4; c.slowPlayerBoundTicks = 7; }},
 			};
 			for (const auto& edit : invalid) {
 				NetMatchConfig changed = config;
@@ -1035,7 +1097,8 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{prefix}}, prefixBytes)) return false;
 			const size_t difficultyOffset = prefixBytes.size() + 20 + config.activityModule.size() + config.sceneModule.size();
 			const size_t horizonTail = config.pathHorizonTicks != 0 ? 2 : 0;
-			const size_t rulesEnd = bytes.size() - 4; // The v6 empty relay suffix is U16 length plus {}.
+			// The v6 tail is the timing options (four bytes with no active peers) and the empty relay (U16 length plus {}).
+			const size_t rulesEnd = bytes.size() - 8;
 			for (const auto& [offset, value] : std::vector<std::pair<size_t, uint8_t>>{{difficultyOffset, 101}, {rulesEnd - 9 - horizonTail, 0}, {rulesEnd - 3 - horizonTail, 61}}) {
 				auto invalidWire = bytes;
 				invalidWire.at(offset) = value;
@@ -1116,7 +1179,7 @@ namespace RTE {
 			atCurrentVersion.version = 4;
 			atCurrentVersion.pathHorizonTicks = 0;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
-			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
+			if (currentHash != "22c638af51c5e30a12381e3ac10e8953cde5e32e7674c63f1e6c299d24b96b42") {
 				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
 				return false;
 			}
@@ -1131,7 +1194,7 @@ namespace RTE {
 			NetMatchConfig withHorizon = atCurrentVersion;
 			withHorizon.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
 			const std::string horizonHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(withHorizon));
-			if (horizonHash != "ec4103aa07c0661a0a5951518b5572bcd7d509d1a44b8f7d71d7489849fd100f") {
+			if (horizonHash != "4770c3f864c40148244b02fc83dcb11ae777acfdb2b464ea4d3429c5a2473b11") {
 				*error = "a reserved-bit path horizon no longer hashes as pinned: " + horizonHash;
 				return false;
 			}
@@ -1399,7 +1462,7 @@ namespace RTE {
 			std::vector<uint8_t> windowedBytes;
 			if (!NetLobbyProtocol::Encode(message, windowedBytes, &encodeError) || windowedBytes.size() != plainSize + 2 ||
 			    windowedBytes[reservedOffset] != 8 || windowedBytes[reservedOffset + 1] != 0 ||
-			    windowedBytes[windowedBytes.size() - 2] != 2 || windowedBytes.back() != 0) {
+			    windowedBytes[windowedBytes.size() - 10] != 2 || windowedBytes[windowedBytes.size() - 9] != 0) {
 				*error = "a non-default redundancy window did not encode reserved bit 0x8 and its trailing word";
 				return false;
 			}
@@ -1411,7 +1474,7 @@ namespace RTE {
 			}
 			for (const uint8_t outOfRange : {0, NetMatchConfigUtil::c_MaxFrameRedundancyTicks + 1}) {
 				std::vector<uint8_t> broken = windowedBytes;
-				broken[broken.size() - 2] = outOfRange;
+				broken[broken.size() - 10] = outOfRange;
 				const NetLobbyDecodeResult refusedWindow = NetLobbyProtocol::Decode(broken);
 				if (refusedWindow.ok || refusedWindow.error.code != NetLobbyErrorCode::InvalidValue) {
 					*error = "a redundancy window outside its range was accepted";
@@ -3829,6 +3892,8 @@ namespace RTE {
 			config.idleWaitMinutes = 0;
 			config.automaticRepair = false;
 			config.frameRedundancyTicks = 6;
+			config.slowPlayerBoundTicks = 7;
+			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 			config.teamRules[1].technologyIntent = "-Random-";
 			config.teamRules[1].technologyModule = "Coalition.rte";
 			config.teamRules[1].aiSkill = 90;
@@ -3855,7 +3920,8 @@ namespace RTE {
 			    read.rules.teamRules[1].technologyIntent != "-Random-" || read.rules.teamRules[1].technologyModule != "Coalition.rte" ||
 			    read.rules.teamRules[1].aiSkill != 90 || read.peerCount != 3 || read.delayPolicy != NetMatchDelayPolicy::Fixed ||
 			    read.inputDelayFrames != 2 || !read.autosaveEnabled || read.autosaveIntervalSeconds != 120 || read.idleWaitMinutes != 0 ||
-			    read.automaticRepair || read.frameRedundancyTicks != 6 || read.seats.size() != 4) {
+			    read.automaticRepair || read.frameRedundancyTicks != 6 || read.seats.size() != 4 ||
+			    read.slowPlayerBoundTicks != 7 || read.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) {
 				*error = "the host defaults template did not round-trip every host option";
 				return false;
 			}
@@ -3882,12 +3948,16 @@ namespace RTE {
 				*error = "a host defaults template without its version line was read";
 				return false;
 			}
+			NetHostDefaultsTemplate historical;
+			if (!NetHostDefaults::Parse("Version = 1\nFrameRedundancyTicks = 4\n", historical, error) || historical.slowPlayerPolicy != NetSlowPlayerPolicy::Pause) {
+				*error = "an old defaults file changed its classic hold policy"; return false;
+			}
 			// The saved template seeds a new lobby's draft without reshaping its roster.
 			NetMatchConfig fresh = MakeConfig();
 			if (!NetHostDefaults::ApplyTo(read, fresh, error)) return false;
 			if (fresh.difficulty != 81 || fresh.startingGold != 12345 || fresh.mode != NetMatchMode::CoopPvE || fresh.frameRedundancyTicks != 6 ||
 			    fresh.idleWaitMinutes != 0 || fresh.autosaveIntervalSeconds != 120 || fresh.players.size() != MakeConfig().players.size() ||
-			    fresh.sessionId != MakeConfig().sessionId) {
+			    fresh.sessionId != MakeConfig().sessionId || fresh.slowPlayerBoundTicks != 7 || fresh.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) {
 				*error = "the host defaults template did not seed a new draft";
 				return false;
 			}
@@ -10241,12 +10311,12 @@ namespace RTE {
 			       " completed_lockstep=" + std::to_string(observed.completedLockstep) +
 			       " config_hash=" + observed.configHash.substr(0, 16) + "}";
 		};
-		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		if (persistent.capturedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
-		    persistent.completedLockstep != NetLockstepCodec::c_WorldTransitionVersion ||
+		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
 		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 22}, {"supported_world_lockstep_codec_version", 23},
+		        {"supported_lockstep_codec_version", 24}, {"supported_world_lockstep_codec_version", 25},
 		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
@@ -11579,6 +11649,8 @@ namespace RTE {
 		if (!TestJoinWaitTrigger(&error)) return fail(error);
 		if (!TestSaveCompressionChoice(&error)) return fail(error);
 		if (!TestRewindAnchorRecord(&error)) return fail(error);
+		if (!TestRollbackSnapshotRing(&error)) return fail(error);
+		if (!TestInputDelayUsesTheSimTick(&error)) return fail(error);
 		if (!TestOverlongJoinNameSurfaces(&error)) return fail(error);
 		if (!TestServiceReportCarriesActivityPreset(&error)) return fail(error);
 		if (!TestResyncReportAbsentWhenIdle(&error)) return fail(error);

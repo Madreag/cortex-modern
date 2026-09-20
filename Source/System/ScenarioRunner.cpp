@@ -136,6 +136,11 @@ namespace RTE {
 		std::vector<ScenarioRunner::NetUiToastRecord> s_NetUiToastLog; //!< Report log; survives the queue.
 		uint64_t s_NetUiResyncOverlayFrames = 0;
 		constexpr uint64_t c_NetUiToastMs = 3000;
+		long long s_LockstepWaitUs = 0;
+		struct LockstepWaitTimer {
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
+		};
 		void (*s_StallEventPoll)() = nullptr;
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
@@ -805,6 +810,17 @@ namespace RTE {
 		s_NetUiToasts.clear();
 	}
 
+	bool ScenarioRunner::IsLockstepLocalMachineSlow() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow;
+	}
+
+	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
+		if (!s_LockstepCoordinator) return;
+		const bool warned = s_LockstepCoordinator->GetStats().localMachineSlow;
+		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
+		if (!warned && IsLockstepLocalMachineSlow()) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
+	}
+
 	void ScenarioRunner::DrawNetUiToasts() {
 		const uint64_t nowMs = NetLockstepNowMs();
 		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {
@@ -896,6 +912,7 @@ namespace RTE {
 		}
 		// A resync builds a new coordinator; the retiring one's desync-check traffic still counts.
 		if (s_LockstepCoordinator && s_LockstepCoordinator != coordinator) {
+			s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 			const NetLockstepStats& retiring = s_LockstepCoordinator->GetStats();
 			s_RetiredChecksumCounters.submissions += retiring.checksumSubmissions;
 			s_RetiredChecksumCounters.sends += retiring.checksumSends;
@@ -1014,8 +1031,10 @@ namespace RTE {
 		if (!s_LockstepCoordinator) {
 			return 0;
 		}
+		const auto held = s_LockstepDroppedControlOverrides.find(actorUniqueID);
 		const auto overrideIt = s_LockstepControlOverrides.find(actorUniqueID);
 		if (overrideIt != s_LockstepControlOverrides.end()) {
+			if (held != s_LockstepDroppedControlOverrides.end() && overrideIt->second == GetLockstepHostPeerId()) return held->second;
 			return overrideIt->second;
 		}
 		const auto droppedIt = s_LockstepDroppedControlOverrides.find(actorUniqueID);
@@ -1287,6 +1306,30 @@ namespace RTE {
 		s_LockstepAppliedFrame = frame;
 	}
 
+	bool ScenarioRunner::IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
+	}
+
+	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
+		if (!IsLockstepSeatUnderAI(peerId, frame)) return;
+		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
+			binding->second.frame = frame;
+			for (auto& player: binding->second.bindings.players) player.controlledUID = 0;
+		}
+		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peerId, true, frame);
+		PushNetUiToast("seat_held", "held - AI in control", peerId);
+	}
+
+	void ScenarioRunner::HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId) {
+		s_LockstepDroppedControlOverrides[actorUniqueID] = heldPeerId;
+		SetLockstepControlOverride(actorUniqueID, GetLockstepHostPeerId());
+	}
+
+	void ScenarioRunner::ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId) {
+		s_LockstepDroppedControlOverrides.erase(actorUniqueID);
+		SetLockstepControlOverride(actorUniqueID, peerId);
+	}
+
 	void ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(uint64_t frame) {
 		if (!s_LockstepCoordinator || s_LockstepControlOverrides.empty()) {
 			return;
@@ -1295,8 +1338,14 @@ namespace RTE {
 			if (s_LockstepCoordinator->IsPeerGoneAtFrame(it->second, frame)) {
 				// Admission can observe the drop after this frame has released its control handoffs.
 				NoteE2eOwnerTransfer(it->first);
-				s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
-				it = s_LockstepControlOverrides.erase(it);
+				const auto claim = s_LockstepDroppedControlOverrides.find(it->first);
+				if (claim != s_LockstepDroppedControlOverrides.end() && s_LockstepCoordinator->HasHeldAISeat(claim->second)) {
+					it->second = s_LockstepCoordinator->GetHostPeerId();
+					++it;
+				} else {
+					s_LockstepDroppedControlOverrides.insert_or_assign(it->first, it->second);
+					it = s_LockstepControlOverrides.erase(it);
+				}
 			} else {
 				++it;
 			}
@@ -1399,7 +1448,7 @@ namespace RTE {
 	}
 
 	uint16_t ScenarioRunner::GetLockstepInputDelayFrames() {
-		return s_LockstepCoordinator ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+		return s_LockstepCoordinator ? s_LockstepCoordinator->InputDelayAt(s_LockstepCoordinator->GetConfig().localPeerId, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) : 0;
 	}
 
 	uint8_t ScenarioRunner::GetLockstepLocalPeerId() {
@@ -1501,7 +1550,7 @@ namespace RTE {
 	bool ScenarioRunner::DescribeLockstepHoldPause(std::string& outWho, uint32_t& outSecondsLeft) {
 		outWho.clear();
 		outSecondsLeft = 0;
-		if (!s_LockstepCoordinator || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
+		if (!s_LockstepCoordinator || s_LockstepCoordinator->UsesBoundedWait() || !s_LockstepCoordinator->AnyDroppedSeatHeld()) {
 			return false;
 		}
 		outWho = s_LockstepCoordinator->DescribeHeldPause(outSecondsLeft, NetLockstepNowMs());
@@ -1595,7 +1644,23 @@ namespace RTE {
 			}
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
-		const auto& config = s_LockstepCoordinator->GetConfig();
+		NetLockstepCoordinator* producing = s_LockstepCoordinator;
+		if (producing->TimingDecisionPendingAt(tick)) {
+			LockstepWaitTimer waitTimer;
+			while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
+				producing->Tick(NetLockstepNowMs());
+				producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
+				if (s_SessionPump) s_SessionPump();
+				if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
+				if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			producing->FinishFrameWait(NetLockstepNowMs());
+		}
+		const auto& config = producing->GetConfig();
+		const bool warned = producing->GetStats().localMachineSlow;
+		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
+		if (!warned && producing->GetStats().localMachineSlow) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
+		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
 			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
 			for (size_t index = 0; index < batches.size(); ++index) {
@@ -1620,7 +1685,7 @@ namespace RTE {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
 		}
 		std::vector<NetGameCommand> commands;
-		const uint64_t targetFrame = tick + config.inputDelayFrames;
+		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
 		if ((!s_RequeuedCommands.empty() && s_RequeuedCommands.begin()->first < targetFrame) ||
 			(!s_RequeuedPlayerBindings.empty() && s_RequeuedPlayerBindings.begin()->first < targetFrame) ||
 			(!s_RequeuedInputs.empty() && s_RequeuedInputs.begin()->first < targetFrame)) {
@@ -1726,8 +1791,28 @@ namespace RTE {
 		return true;
 	}
 
+	bool ScenarioRunner::UsesBoundedLockstepWait() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->UsesBoundedWait();
+	}
+
+	bool ScenarioRunner::IsLockstepPeerGone(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsPeerGoneAtFrame(peerId, frame);
+	}
+
+	void ScenarioRunner::DiscardHeldLocalInputs() {
+		s_PendingLocalGameCommands.clear();
+		s_LocalCommandOutbox.clear();
+		s_RequeuedCommands.clear();
+		s_RequeuedPlayerBindings.clear();
+		s_RequeuedInputs.clear();
+		s_LocalInputHistory.clear();
+		s_RecoveredInputs.clear();
+		s_RecoveredCommands.clear();
+		s_RecoveredPlayerBindings.clear();
+	}
+
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
-		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetConfig().inputDelayFrames : 0;
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
 
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {
@@ -2381,15 +2466,6 @@ namespace RTE {
 		return s_ReplayReader.GetWorldSegment();
 	}
 
-	namespace {
-		long long s_LockstepWaitUs = 0;
-
-		struct LockstepWaitTimer {
-			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
-		};
-	}
-
 	long long ScenarioRunner::GetLockstepWaitUs() {
 		return s_LockstepWaitUs;
 	}
@@ -2480,6 +2556,7 @@ namespace RTE {
 			NetLockstepReadyFrame ready;
 			while (s_LockstepCoordinator->PopReadyFrame(ready)) {
 				if (ready.frame == tick) {
+					s_LockstepCoordinator->FinishFrameWait(NetLockstepNowMs());
 					if (stalled) {
 						const auto stallMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitStart).count();
 						std::cout << "[net-match] peer stall recovered after " << stallMs << "ms (tick " << tick << ")" << std::endl;
@@ -2525,6 +2602,7 @@ namespace RTE {
 					return false;
 				}
 			}
+			if (s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs())) continue;
 			// Parked on a tick the sim has not run with the round already ending: a frame owed by a
 			// connection the pump has fenced is never coming, so stop requiring it and let the tick commit.
 			if (s_LockstepCoordinator->WaivePendingPeersWhileWaiting(tick)) {

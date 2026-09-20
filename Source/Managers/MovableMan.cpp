@@ -472,6 +472,7 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 		return lhs.senderPeerId < rhs.senderPeerId;
 	});
 	for (const NetGameCommand& command: commands) {
+		if (std::holds_alternative<NetGameSeatHold>(command.payload) || std::holds_alternative<NetGameInputDelay>(command.payload)) continue;
 		if (const auto* bindings = std::get_if<NetGamePlayerBindings>(&command.payload)) {
 			ScenarioRunner::ObserveLockstepPlayerBindings(command.senderPeerId, readyFrame.frame, *bindings);
 			continue;
@@ -672,18 +673,22 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			}
 			std::cout << "[net-match] control of actor " << switchControl->actorUID << " -> peer " << static_cast<int>(switchControl->newOwnerPeerId) << std::endl;
 		} else if (const NetGameReseat* reseat = std::get_if<NetGameReseat>(&command.payload)) {
+			if (auto* game = dynamic_cast<GameActivity*>(activity)) game->ApplyNetworkSeatAI(reseat->newOwnerPeerId, false, readyFrame.frame);
 			// Like SwitchControl, the override lands even for an actor that is already gone so every
 			// peer's map stays identical; a live actor that left the team is not reseated.
 			int reseated = 0;
+			int liveReseated = 0;
 			for (const int64_t actorUID: reseat->actorUIDs) {
 				const Actor* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long int>(actorUID)));
 				if (actor && actor->GetTeam() != reseat->team) {
 					continue;
 				}
-				ScenarioRunner::SetLockstepControlOverride(actorUID, reseat->newOwnerPeerId);
+				ScenarioRunner::ReclaimLockstepActor(actorUID, reseat->newOwnerPeerId);
 				++reseated;
+				if (actor) ++liveReseated;
 			}
 			std::cout << "[net-match] reseat: team " << reseat->team << " -> peer " << static_cast<int>(reseat->newOwnerPeerId) << " actors " << reseated << "/" << reseat->actorUIDs.size() << std::endl;
+			std::cout << "[net-match] seat-reclaimed peer=" << static_cast<int>(reseat->newOwnerPeerId) << " frame=" << readyFrame.frame << " live_actors=" << liveReseated << std::endl;
 		} else if (const NetGameWorldTransition* transition = std::get_if<NetGameWorldTransition>(&command.payload)) {
 			if (transition->team < Activity::Teams::TeamOne || transition->team >= Activity::Teams::MaxTeamCount ||
 			    !std::isfinite(transition->posX) || !std::isfinite(transition->posY)) {
@@ -958,11 +963,19 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 	}
 	ScenarioRunner::SetLockstepAppliedFrame(readyFrame.frame);
 	ScenarioRunner::PurgeLockstepControlOverridesForGonePeers(readyFrame.frame);
+	for (uint8_t peer: readyFrame.aiHeldPeerIds) ScenarioRunner::ApplyLockstepSeatAI(peer, readyFrame.frame);
 	for (Actor* actor: actors) {
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
 		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
-		if (actor->IsPlayerControlled() && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end()) {
-			MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
+		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
+		const bool playerControlled = actor->IsPlayerControlled();
+		if (aiTakeover || (playerControlled && std::find(readyFrame.departedPeerIds.begin(), readyFrame.departedPeerIds.end(), claimant) != readyFrame.departedPeerIds.end())) {
+			if (aiTakeover) {
+				ScenarioRunner::HandLockstepActorToAI(uid, claimant);
+				if (!playerControlled) actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+				actor->TouchCheckpoint();
+			}
+			if (playerControlled) MovableMan::ApplyLockstepControlHandoffToActor(*actor, false);
 			ScenarioRunner::NoteE2eOwnerTransfer(uid);
 		}
 		if (ScenarioRunner::TakeExpiredDroppedClaim(uid, readyFrame.frame)) {
@@ -1838,13 +1851,25 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.sceneRuntime = scene->SaveRuntimeCheckpoint();
 	}
 	std::vector<std::string> luaProblems;
-	if (!SerializeScriptGraphs(out.luaGraphs, luaProblems)) {
+	ArmLuaCheckpointBarrier();
+	struct GraphWalk {
+		GraphWalk() { CheckpointGraphIndex::Get().BeginWalk(); }
+		~GraphWalk() { CheckpointGraphIndex::Get().EndWalk(); }
+	};
+	bool graphsCaptured = false;
+	{
+		GraphWalk walk;
+		graphsCaptured = CaptureScriptGraphs(out.luaGraphs, luaProblems);
+	}
+	if (!graphsCaptured) {
 		for (const std::string& problem: luaProblems) {
 			std::cout << "[scriptgraph] capture refused: " << problem << std::endl;
 		}
 		out.luaGraphs.clear();
 		return false;
 	}
+	CheckpointCow::Get().RememberLua(out.luaGraphs, LuaCheckpointWriteGeneration());
+	g_LuaMan.ArmCheckpointWriteTrap();
 	const long counter = MovableObject::GetUniqueIDCounter();
 	{
 		MovableObject::FaithfulCloneScope scope(false);
@@ -1853,8 +1878,10 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		out.actors.reserve(m_Actors.size());
 		out.items.reserve(m_Items.size());
 		out.particles.reserve(m_Particles.size());
+		const bool profileCapture = std::getenv("CC_CAPTURE_PROFILE") != nullptr;
 		std::map<std::string, std::pair<int, double>> profile;
-		const auto timed = [&profile](const MovableObject* mo, auto&& fn) {
+		const auto timed = [&profile, profileCapture](const MovableObject* mo, auto&& fn) {
+			if (!profileCapture) { fn(); return; }
 			const auto start = std::chrono::steady_clock::now();
 			fn();
 			auto& slot = profile[mo->GetClassName() + " " + mo->GetPresetName()];
@@ -1873,7 +1900,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		for (const Actor* actor: m_AddedActors) out.addedActors.push_back(dynamic_cast<Actor*>(actor->Clone()));
 		for (const MovableObject* item: m_AddedItems) out.addedItems.push_back(dynamic_cast<MovableObject*>(item->Clone()));
 		for (const MovableObject* particle: m_AddedParticles) out.addedParticles.push_back(dynamic_cast<MovableObject*>(particle->Clone()));
-		if (std::getenv("CC_CAPTURE_PROFILE")) {
+		if (profileCapture) {
 			std::vector<std::pair<std::string, std::pair<int, double>>> rows(profile.begin(), profile.end());
 			std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
 			for (size_t i = 0; i < rows.size() && i < 12; ++i) {
@@ -1894,7 +1921,50 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 	}
 }
 
-bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
+void MovableMan::WorldSnapshotRing::Reset(uint16_t windowTicks) {
+	m_Entries.clear();
+	m_Cache = {};
+	m_Capacity = windowTicks == 0 ? 0 : static_cast<size_t>(windowTicks) + 1;
+	m_LastCaptureUs = 0;
+}
+
+bool MovableMan::WorldSnapshotRing::CaptureCommitted(uint64_t tick) {
+	if (m_Capacity == 0 || (!m_Entries.empty() &&
+	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1)) ||
+	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != tick) return false;
+	auto snapshot = std::make_unique<WorldSnapshot>();
+	const auto start = std::chrono::steady_clock::now();
+	m_Cache.Begin();
+	bool captured = false;
+	{
+		CheckpointWriter::CacheScope cache(&m_Cache);
+		captured = g_MovableMan.CaptureWorld(*snapshot);
+	}
+	m_Cache.RetireUnused();
+	const bool stored = captured && StoreCommitted(tick, std::move(snapshot));
+	m_LastCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+	return stored;
+}
+
+bool MovableMan::WorldSnapshotRing::StoreCommitted(uint64_t tick, std::unique_ptr<WorldSnapshot> snapshot) {
+	if (!snapshot || m_Capacity == 0 || (!m_Entries.empty() &&
+	    (m_Entries.back().tick == UINT64_MAX || tick != m_Entries.back().tick + 1))) return false;
+	m_Entries.push_back({tick, std::move(snapshot)});
+	while (m_Entries.size() > m_Capacity) m_Entries.pop_front();
+	return true;
+}
+
+const MovableMan::WorldSnapshot* MovableMan::WorldSnapshotRing::Find(uint64_t tick) const {
+	const auto found = std::lower_bound(m_Entries.begin(), m_Entries.end(), tick,
+	                                  [](const Entry& entry, uint64_t value) { return entry.tick < value; });
+	return found != m_Entries.end() && found->tick == tick ? found->snapshot.get() : nullptr;
+}
+
+void MovableMan::WorldSnapshotRing::DiscardAfter(uint64_t tick) {
+	while (!m_Entries.empty() && m_Entries.back().tick > tick) m_Entries.pop_back();
+}
+
+bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vector<std::string>& luaGraphs) {
 	if (!LoadWorldStructure(in.structure, true) || !in.terrain.CanRestore() || !g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals, true)) return false;
 	struct RestoreFlag {
 		bool previous = g_MovableMan.IsRestoringSnapshot();
@@ -1956,7 +2026,7 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in) {
 	if (Activity* activity = g_ActivityMan.GetActivity(); activity && !activity->PrepareCheckpointUI()) return false;
 	if (!g_ActivityMan.PrepareCheckpointPrimitives(in.runtimeGlobals)) return false;
 	std::string luaError;
-	if (!RestoreScriptGraphs(in.luaGraphs, &luaError)) {
+	if (!RestoreScriptGraphs(luaGraphs, &luaError)) {
 		std::cout << "[scriptgraph] restore failed: " << luaError << std::endl;
 		return false;
 	}
@@ -6235,17 +6305,25 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 
 bool MovableMan::RestoreWorld(const WorldSnapshot& in) {
 	std::string error;
-	if (!LoadWorldStructure(in.structure, true) || !ValidateScriptGraphs(in.luaGraphs, &error)) {
+	std::vector<std::string> luaGraphs;
+	luaGraphs.reserve(in.luaGraphs.size());
+	try {
+		for (const CheckpointText& graph: in.luaGraphs) luaGraphs.push_back(graph.Text());
+	} catch (const std::exception& exception) {
+		std::cout << "[scriptgraph] restore graph refused: " << exception.what() << std::endl;
+		return false;
+	}
+	if (!LoadWorldStructure(in.structure, true) || !ValidateScriptGraphs(luaGraphs, &error)) {
 		std::cout << "[scriptgraph] restore refused before replacement: " << error << std::endl;
 		return false;
 	}
 	// A caller running a speculative world already owns the originals and its rollback.
-	if (m_WorldSetAside) return RestoreWorldCandidate(in);
+	if (m_WorldSetAside) return RestoreWorldCandidate(in, luaGraphs);
 	const std::string globals = g_ActivityMan.CaptureRuntimeGlobals();
 	WorldSetAside original;
 	if (!SetAsideWorld(original)) return false;
 	bool restored = false;
-	try { restored = RestoreWorldCandidate(in); }
+	try { restored = RestoreWorldCandidate(in, luaGraphs); }
 	catch (const std::exception& exception) { std::cout << "[scriptgraph] candidate failed: " << exception.what() << std::endl; }
 	if (restored) {
 		DiscardWorld(original);

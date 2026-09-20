@@ -2062,7 +2062,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 22},
+			{"lockstep_codec_version", 25},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2172,8 +2172,8 @@ namespace RTE {
 			return Fail("WorldTransition frame did not encode: " + encodeError.message);
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
-		if (worldVersion != NetLockstepCodec::c_WorldTransitionVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 23");
+		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
+			return Fail("WorldTransition frame did not stamp lockstep version 25");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2209,8 +2209,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 22) {
-			return Fail("ordinary lockstep frame did not stamp version 22");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 24) {
+			return Fail("ordinary lockstep frame did not stamp version 24");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2219,11 +2219,11 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 22 and match config 4");
+			return Fail("ordinary identity did not stamp lockstep 24 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
-		    manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_WorldTransitionVersion ||
+		    manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_WorldVersion ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_PersistentWorldVersion) {
 			return Fail("world identity did not stamp the live world versions");
 		}
@@ -2604,7 +2604,7 @@ namespace RTE {
 			if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{config}}, wire)) {
 				return false;
 			}
-			const auto decoded = NetLobbyProtocol::Decode(wire);
+			const auto decoded = NetLobbyProtocol::Decode(wire, NetLobbyDecodeOptions{true});
 			const NetLobbyMatchConfig* payload = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
 			if (payload == nullptr) {
 				return false;
@@ -2629,8 +2629,10 @@ namespace RTE {
 			            " spectators " + std::to_string(static_cast<int>(back.worldMaxSpectators)) +
 			            " respawn " + std::to_string(back.worldRespawnDelaySeconds));
 		}
-		// An ordinary config must not carry a byte of the world block, whatever the struct holds.
+		// A recorded v4 config has no world block.
 		NetMatchConfig ordinary = NetMatchConfigUtil::MakeDefault(0x4F52443ULL);
+		ordinary.version = 4;
+		ordinary.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 		std::vector<uint8_t> plainWire;
 		NetMatchConfig plainBack;
 		if (!roundTrip(ordinary, plainBack, plainWire)) {
@@ -2642,12 +2644,8 @@ namespace RTE {
 		stuffed.worldRespawnDelaySeconds = 99;
 		std::vector<uint8_t> stuffedWire;
 		NetMatchConfig stuffedBack;
-		if (!roundTrip(stuffed, stuffedBack, stuffedWire)) {
-			return Fail("world-capacity-did-not-ride-the-v5-config: a v4 config carrying capacity did not encode");
-		}
-		if (stuffedWire != plainWire) {
-			return Fail("world-capacity-moved-an-ordinary-config: the v4 bytes grew from " + std::to_string(plainWire.size()) +
-			            " to " + std::to_string(stuffedWire.size()) + " when the capacity fields were set");
+		if (roundTrip(stuffed, stuffedBack, stuffedWire)) {
+			return Fail("world-capacity-moved-an-ordinary-config: a v4 writer accepted fields it cannot carry");
 		}
 		if (NetMatchConfigUtil::HashConfig(stuffed) != NetMatchConfigUtil::HashConfig(ordinary)) {
 			return Fail("world-capacity-moved-an-ordinary-config: the v4 hash changed when the capacity fields were set");

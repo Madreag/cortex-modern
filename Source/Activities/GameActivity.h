@@ -191,6 +191,8 @@ namespace RTE {
 		/// @param team The new setting. NoTeam is no team is assisted. (default: Activity::NoTeam)
 		void SetCPUTeam(int team = Activity::NoTeam);
 		void ConfigureLockstepCPUTeams(const std::array<bool, Teams::MaxTeamCount>& cpuTeams);
+		/// Hands a held seat's team to the CPU until a committed reseat returns its player.
+		void ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame);
 
 		/// Sets the observation sceneman scroll targets, for when the game is
 		/// over or a player is in observation mode

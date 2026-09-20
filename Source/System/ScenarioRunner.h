@@ -270,6 +270,10 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
+		static void ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame);
+		static void HandLockstepActorToAI(int64_t actorUniqueID, uint8_t heldPeerId);
+		static void ReclaimLockstepActor(int64_t actorUniqueID, uint8_t peerId);
 		/// The last completed exchange tick, including paused ticks, for presentation.
 		static uint64_t GetLockstepCompletedFrame();
 		static uint64_t GetLockstepRoundId();
@@ -312,6 +316,8 @@ namespace RTE {
 		static void NoteNetUiToastsDrawn(size_t first, size_t count);
 		/// Names of peers whose next input frame is missing, for the stalled render path.
 		static std::string GetLockstepMissingPeers();
+		static bool IsLockstepLocalMachineSlow();
+		static void NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs);
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();
@@ -430,6 +436,9 @@ namespace RTE {
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
+		static bool UsesBoundedLockstepWait();
+		static bool IsLockstepPeerGone(uint8_t peerId, uint64_t frame);
+		static void DiscardHeldLocalInputs();
 
 		/// A queued buy order this peer has issued but the wire has not applied yet.
 		struct PendingQueuedPurchase {

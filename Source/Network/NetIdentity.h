@@ -115,7 +115,7 @@ namespace RTE {
 	class NetIdentity {
 	public:
 		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
-		/// c_PersistentWorldVersion / c_WorldTransitionVersion.
+		/// c_PersistentWorldVersion / c_WorldVersion.
 		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);
 		static bool BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
 

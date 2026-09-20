@@ -134,6 +134,9 @@ namespace RTE {
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
 		          : "Automatic (" + snapshot.inputDelayText + ")"));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks");
+		line("Slow player bound: " + std::to_string(config.slowPlayerBoundTicks) + " ticks");
+		line(std::string("When a player falls behind: ") + (config.slowPlayerPolicy == NetSlowPlayerPolicy::Pause
+		    ? "Pause for them (up to 20 s)" : "Hand the seat to the AI and let them rejoin"));
 		line(config.autosaveEnabled
 		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
 		         : "Autosaves: off");
