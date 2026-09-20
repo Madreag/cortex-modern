@@ -72,9 +72,11 @@ namespace RTE {
 		size_t graphRootsReused = 0;
 		size_t graphRootsRewritten = 0;
 		int64_t sceneUs = 0;
+		int64_t movableUs = 0;
 		int64_t structureUs = 0;
 		int64_t sceneRuntimeUs = 0;
 		int64_t globalsUs = 0;
+		std::vector<std::pair<std::string, int64_t>> globalParts;
 		int64_t layersUs = 0;
 		GraphDirt graph;
 		//! The dirt as it stood BEFORE the walk, which is what decided whether the root cache
@@ -106,10 +108,10 @@ namespace RTE {
 			return m_LuaGraphs;
 		}
 
-		void FinishImage(std::shared_ptr<CheckpointImage> image);
+		std::shared_ptr<const CheckpointImage> FinishImage(std::shared_ptr<CheckpointImage> image);
 		void RecordWorker(int64_t workerUs);
 		void RecordGraphText(int64_t graphTextUs);
-		void PublishLog(uint64_t tick) const;
+		void PublishLog(const CheckpointImage& image, int64_t workerUs) const;
 		void WriteMetricsJson(const std::string& path) const;
 
 		int64_t LastFreezeUs() const { std::lock_guard lock(m_Mutex); return m_LastFreezeUs; }

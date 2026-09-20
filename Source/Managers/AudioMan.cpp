@@ -36,6 +36,7 @@
 #include "backward/backward.hpp"
 
 #include <iostream>
+#include <format>
 
 #include <algorithm>
 #include <array>
@@ -737,6 +738,9 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 		// At this point the sound is ready to go, but if the SoundContainer is explicitly paused, it and this new channel will hopefully be unpaused
 		// at some later point in time by whatever paused it
 		voiceOwner->AddPlayingChannel(channelIndex);
+		if (const auto found = m_PlayingVoices.find(channelIndex); found != m_PlayingVoices.end()) {
+			StoreVoiceArchive(found->second);
+		}
 		if (!soundContainer->IsPaused()) {
 			result = channel->setPaused(false);
 			if (result != FMOD_OK) {
@@ -758,7 +762,6 @@ bool AudioMan::PlaySoundContainer(SoundContainer* soundContainer, int player) {
 				found->second.lifetime.bus = soundContainer->GetBusRouting();
 				BindVoiceLifetime(found->second, frames, rate, loopStart, loopEnd, selectedPitch, soundContainer->GetLoopSetting(), 0, soundContainer->IsPaused());
 			}
-			StoreVoiceArchive(found->second);
 		}
 
 	}
@@ -1317,96 +1320,13 @@ void AudioMan::RememberCarriedSoundIdentities(std::unordered_set<uint64_t> carri
 	m_LastCarriedSoundIdentities = std::move(carried);
 }
 
-namespace {
-	void NoteSoundContainerIdentity(const std::string& native, std::unordered_set<uint64_t>& out) {
-		if (native.empty()) return;
-		try {
-			CheckpointReader reader(native, SoundContainer::CheckpointVersion(native));
-			std::string entity;
-			uint64_t identity = 0;
-			reader.Value(entity);
-			reader.Value(identity);
-			if (identity) out.insert(identity);
-		} catch (const std::exception&) {}
-	}
-
-	void NoteMusicSound(const std::string& text, std::unordered_set<uint64_t>& out) {
-		if (text.empty()) return;
-		CheckpointReader reader(text, "MusicSound1");
-		std::string native;
-		reader.Value(native);
-		NoteSoundContainerIdentity(native, out);
-	}
-
-	void NoteMusicSection(const std::string& text, std::unordered_set<uint64_t>& out) {
-		if (text.empty()) return;
-		CheckpointReader reader(text, "MusicSection1");
-		std::string entity;
-		std::vector<std::string> transitions, sounds;
-		unsigned int lastTransition = 0, lastSound = 0;
-		std::vector<unsigned int> transitionQueue, queue;
-		int cycle = 0;
-		std::string type;
-		reader.Value(entity);
-		reader.Value(transitions);
-		reader.Value(lastTransition);
-		reader.Value(transitionQueue);
-		reader.Value(sounds);
-		reader.Value(lastSound);
-		reader.Value(queue);
-		reader.Value(cycle);
-		reader.Value(type);
-		for (const std::string& sound: transitions) NoteMusicSound(sound, out);
-		for (const std::string& sound: sounds) NoteMusicSound(sound, out);
-	}
-
-	void NoteMusicSong(const std::string& text, std::unordered_set<uint64_t>& out) {
-		if (text.empty()) return;
-		CheckpointReader reader(text, "MusicSong1");
-		std::string entity, fallback;
-		std::vector<std::string> sections;
-		reader.Value(entity);
-		reader.Value(fallback);
-		reader.Value(sections);
-		NoteMusicSection(fallback, out);
-		for (const std::string& section: sections) NoteMusicSection(section, out);
-	}
-}
-
 void AudioMan::CollectManagerSoundIdentities(std::unordered_set<uint64_t>& out) const {
 	g_GUISound.VisitCheckpointSounds([&out](size_t, const SoundContainer& sound) {
 		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
 	});
-	try {
-		// The reader keeps a view, so the text must outlive it.
-		const std::string music = g_MusicMan.SaveCheckpoint();
-		CheckpointReader reader(music, "MusicMan1");
-		bool playing = false;
-		std::string interrupting, song, nextType, currentType, previous, current;
-		int nextSection = 0;
-		std::array<int, 3> nextSound{};
-		Timer fadeTimer, timer;
-		bool fadePrevious = false, returnToDynamic = false;
-		double pausedTime = 0;
-		reader.Value(playing);
-		reader.Value(interrupting);
-		reader.Value(song);
-		reader.Value(nextType);
-		reader.Value(currentType);
-		reader.Value(nextSection);
-		reader.Value(previous);
-		reader.Value(current);
-		reader.Value(nextSound);
-		reader.Value(fadeTimer);
-		reader.Value(fadePrevious);
-		reader.Value(timer);
-		reader.Value(pausedTime);
-		reader.Value(returnToDynamic);
-		NoteMusicSound(interrupting, out);
-		NoteMusicSong(song, out);
-		NoteMusicSound(previous, out);
-		NoteMusicSound(current, out);
-	} catch (const std::exception&) {}
+	g_MusicMan.VisitCheckpointSounds([&out](const SoundContainer& sound) {
+		if (const uint64_t identity = sound.GetCheckpointIdentity()) out.insert(identity);
+	});
 }
 
 AudioMan::RestoredSoundRegistryScope::RestoredSoundRegistryScope() {
@@ -1850,7 +1770,18 @@ void AudioMan::DrainEndedVoices() {
 }
 
 void AudioMan::StoreVoiceArchive(PlayingVoice& voice) {
-	RefreshStoredVoiceControl(voice);
+	if (!voice.hasArchive) {
+		FMOD::Channel* channel = voice.Channel();
+		if (!channel) throw std::runtime_error("a new voice has no channel to capture");
+		FMOD_MODE mode;
+		AudioCheckpoint::Require(channel->getMode(&mode));
+		AudioCheckpoint::Require(channel->getPriority(&voice.priority));
+		voice.control = AudioCheckpoint::Control::Capture(channel, (mode & FMOD_3D) != 0);
+		voice.control.paused = voice.owner && voice.owner->IsPaused();
+		voice.hasArchive = true;
+	} else {
+		RefreshStoredVoiceControl(voice);
+	}
 }
 
 void AudioMan::RefreshStoredVoiceControl(PlayingVoice& voice) {
@@ -1867,8 +1798,7 @@ void AudioMan::RefreshStoredVoiceControl(PlayingVoice& voice) {
 	voice.control.pitch = voice.owner->GetPitch();
 	voice.control.spatial = !voice.owner->IsImmobile();
 	if (voice.control.spatial) {
-		const Vector& pos = voice.owner->GetPosition();
-		voice.control.position = {pos.m_X, pos.m_Y, 0.0F};
+		voice.control.position = AudioCheckpoint::Pack(GetAsFMODVector(voice.owner->GetPosition()));
 	} else {
 		voice.control.position = {};
 	}
@@ -2644,6 +2574,106 @@ std::string AudioMan::GetSoundContainerPlaybackCheckpoint(const SoundContainer* 
 	}
 	CheckpointWriter writer("SoundPlayback1"); writer(voices); return writer.Text();
 }
+bool AudioMan::RunCheckpointWorldEffectsSelfTest() {
+	bool passed = false;
+	try {
+		std::list<SceneObject*> actors;
+		g_MovableMan.GetAllActors(false, actors);
+		Actor* actor = actors.empty() ? nullptr : dynamic_cast<Actor*>(actors.front());
+		const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", "Brain Pod Hit", "Base.rte"));
+		if (!actor || !preset || !m_AudioEnabled) throw std::runtime_error("world audio fixture unavailable");
+		StopAll();
+		std::unique_ptr<SoundContainer> previous(actor->GetGibSound());
+		auto* sound = static_cast<SoundContainer*>(preset->Clone());
+		actor->SetGibSound(sound);
+		sound->SetLoopSetting(-1);
+		sound->SetPitchVariation(0);
+		sound->SetVolume(0.35F);
+		sound->SetPosition(actor->GetPos());
+		const long uid = actor->GetUniqueID();
+		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+		if (!sound->Play() || sound->GetPlayingChannels()->empty()) throw std::runtime_error("world sound did not play");
+		const int identity = *sound->GetPlayingChannels()->begin();
+		FMOD::Channel* channel = nullptr;
+		AudioCheckpoint::Require(GetVoiceChannel(identity, &channel));
+		const auto fresh = AudioCheckpoint::Control::Capture(channel, true);
+		const std::string playback = GetSoundContainerPlaybackCheckpoint(sound);
+		if (!g_ActivityMan.SaveCurrentGame("checkpoint_audio_world") || !g_ActivityMan.WaitForSaveGameTask() ||
+		    !g_ActivityMan.LoadAndLaunchGame("checkpoint_audio_world")) throw std::runtime_error("world checkpoint did not reload");
+		const auto* restoredActor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(uid));
+		const SoundContainer* restored = restoredActor ? restoredActor->GetGibSound() : nullptr;
+		FMOD::Channel* reloaded = nullptr;
+		AudioCheckpoint::Require(GetVoiceChannel(identity, &reloaded));
+		const auto after = AudioCheckpoint::Control::Capture(reloaded, true);
+		const bool rebound = restored && restored != sound && restored->IsBeingPlayed();
+		const bool same = fresh.SaveCheckpoint() == after.SaveCheckpoint() && GetSoundContainerPlaybackCheckpoint(restored) == playback;
+		const FMOD_VECTOR position = GetAsFMODVector(restored ? restored->GetPosition() : Vector());
+		const FMOD_RESULT updated = UpdatePositionalEffectsForSoundChannel(reloaded, &position);
+		Update3DEffectsForSFXChannels();
+		passed = rebound && same && updated == FMOD_OK && !after.paused && !after.effects.empty();
+		System::PrintDiagnosticLine(std::format("[checkpoint-audio-world-selftest] {} actor={} voice={} fresh_effects={} restored_effects={} update_result={} same_controls={} rebound={}\n",
+		    passed ? "PASS" : "FAIL", uid, identity, fresh.effects.size(), after.effects.size(), static_cast<int>(updated), same, rebound));
+	} catch (const std::exception& error) {
+		System::PrintDiagnosticLine(std::string("[checkpoint-audio-world-selftest] FAIL reason=") + error.what() + "\n");
+	}
+	g_ConsoleMan.SaveAllText(System::GetWorkingDirectory() + "checkpoint-audio-world-console.log");
+	System::PrintDiagnosticLine(std::string("[checkpoint-audio-world-selftest] ") + (passed ? "PASS\n" : "FAIL\n"));
+	return passed;
+}
+
+bool AudioMan::RunCheckpointEffectsSelfTest() {
+	if (!m_AudioEnabled) return false;
+	StopAll();
+	bool passed = true;
+	for (bool spatial: {false, true}) {
+		try {
+			const auto* preset = dynamic_cast<const SoundContainer*>(g_PresetMan.GetEntityPreset("SoundContainer", spatial ? "Brain Pod Hit" : "Funds Changed", "Base.rte"));
+			if (!preset) throw std::runtime_error("missing sound preset");
+			std::unique_ptr<SoundContainer> source(static_cast<SoundContainer*>(preset->Clone()));
+			source->SetImmobile(!spatial);
+			source->SetLoopSetting(-1);
+			source->SetVolume(0.35F);
+			source->SetPitch(1.125F);
+			source->SetPitchVariation(0);
+			source->SetPosition(m_CurrentActivityHumanPlayerPositions.empty() ? Vector() : *m_CurrentActivityHumanPlayerPositions.front());
+			AudioCheckpoint::MixerLock mixer(m_AudioSystem);
+			if (!source->Play() || source->GetPlayingChannels()->empty()) throw std::runtime_error("sound did not play");
+			const int identity = *source->GetPlayingChannels()->begin();
+			FMOD::Channel* live = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &live));
+			const auto fresh = AudioCheckpoint::Control::Capture(live, spatial);
+			const std::string checkpoint = SaveCheckpoint();
+			std::unique_ptr<SoundContainer> restored;
+			{ MovableObject::FaithfulCloneScope clone(true); restored.reset(static_cast<SoundContainer*>(source->Clone())); }
+			if (!LoadCheckpoint(checkpoint)) throw std::runtime_error("audio checkpoint refused");
+			FMOD::Channel* reloaded = nullptr;
+			AudioCheckpoint::Require(GetVoiceChannel(identity, &reloaded));
+			const auto after = AudioCheckpoint::Control::Capture(reloaded, spatial);
+			const FMOD_VECTOR position = GetAsFMODVector(restored->GetPosition());
+			const FMOD_RESULT updated = spatial ? UpdatePositionalEffectsForSoundChannel(reloaded, &position) : FMOD_OK;
+			const bool same = fresh.SaveCheckpoint() == after.SaveCheckpoint();
+			if (!same) {
+				System::PrintDiagnosticLine("[checkpoint-audio-effects-selftest] fresh=" + fresh.SaveCheckpoint() + "\n");
+				System::PrintDiagnosticLine("[checkpoint-audio-effects-selftest] restored=" + after.SaveCheckpoint() + "\n");
+			}
+			const bool rebound = reloaded != live && restored->IsBeingPlayed() && !source->IsBeingPlayed();
+			const bool row = same && rebound && updated == FMOD_OK && !after.paused;
+			System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] {} spatial={} fresh_mode={} restored_mode={} fresh_effects={} restored_effects={} update_result={} same_controls={} rebound={}\n",
+			    row ? "PASS" : "FAIL", spatial, fresh.mode, after.mode, fresh.effects.size(), after.effects.size(), static_cast<int>(updated), same, rebound));
+			Update3DEffectsForSFXChannels();
+			passed = row && passed;
+			StopAll();
+		} catch (const std::exception& error) {
+			System::PrintDiagnosticLine(std::format("[checkpoint-audio-effects-selftest] FAIL spatial={} reason={}\n", spatial, error.what()));
+			passed = false;
+			StopAll();
+		}
+	}
+	g_ConsoleMan.SaveAllText(System::GetWorkingDirectory() + "checkpoint-audio-console.log");
+	System::PrintDiagnosticLine(std::string("[checkpoint-audio-effects-selftest] ") + (passed ? "PASS\n" : "FAIL\n"));
+	return passed;
+}
+
 bool AudioMan::RunCheckpointSelfTest() {
 	if (!m_AudioEnabled) return false;
 	RestorePlayPhaseScope::ResetRestorePlayCount();
