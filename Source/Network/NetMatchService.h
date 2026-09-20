@@ -821,6 +821,8 @@ namespace RTE {
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, bool departedHost);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
+		void StartSnapshotLoadKeepalive();
+		void StopSnapshotLoadKeepalive();
 		/// The live wire, by the same rule. Caller holds the lock.
 		std::string GetConnectedRouteLocked(uint8_t peerId) const;
 		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get())
@@ -1058,6 +1060,7 @@ namespace RTE {
 		std::string m_SceneName;
 		std::string m_SceneModule;
 		std::thread m_Worker;
+		std::jthread m_SnapshotLoadKeepalive;
 		bool m_WorkerDone = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
