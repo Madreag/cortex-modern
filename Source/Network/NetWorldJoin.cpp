@@ -404,6 +404,7 @@ namespace RTE {
 		frame.targetFrame = ready.frame;
 		frame.frames = ready.localFrames;
 		frame.frames.insert(frame.frames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+		std::sort(frame.frames.begin(), frame.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; });
 		frame.commands = ready.localCommands;
 		frame.commands.insert(frame.commands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
 		frame.observations = ready.localObservations;
@@ -411,6 +412,105 @@ namespace RTE {
 		frame.valueObservations = ready.localValueObservations;
 		frame.valueObservations.insert(frame.valueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
 		return frame;
+	}
+
+	bool EncodeCommittedJoinFrame(const NetLockstepFrame& frame, std::vector<uint8_t>& bytes, std::string* error) {
+		constexpr uint32_t magic = 0x46544A57U;
+		constexpr size_t maxBytes = 2ULL * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes;
+		std::vector<uint8_t> encoded;
+		AppendU32LE(encoded, magic);
+		AppendU16LE(encoded, 1);
+		AppendU16LE(encoded, frame.senderPeerId);
+		AppendU64LE(encoded, frame.targetFrame);
+		AppendU64LE(encoded, frame.roundId);
+		AppendU32LE(encoded, 0);
+		uint32_t packets = 0;
+		const auto append = [&](NetLockstepFrame part) {
+			part.targetFrame = frame.targetFrame; part.roundId = frame.roundId;
+			std::vector<uint8_t> packet;
+			NetLockstepError failure;
+			if (!NetLockstepCodec::EncodeRecoveryInput(part, packet, &failure) || encoded.size() + packet.size() + 4 > maxBytes) {
+				if (error) *error = "committed join frame exceeds its bounds or has invalid input: " + failure.message;
+				return false;
+			}
+			AppendU32LE(encoded, static_cast<uint32_t>(packet.size()));
+			encoded.insert(encoded.end(), packet.begin(), packet.end());
+			++packets;
+			return true;
+		};
+		for (size_t first = 0; first < frame.frames.size(); first += NetLockstepCodec::c_MaxFramesPerPacket) {
+			NetLockstepFrame part;
+			part.senderPeerId = 1;
+			part.frames.assign(frame.frames.begin() + first, frame.frames.begin() + std::min(frame.frames.size(), first + NetLockstepCodec::c_MaxFramesPerPacket));
+			if (!append(std::move(part))) return false;
+		}
+		for (const auto& command: frame.commands) {
+			NetLockstepFrame part;
+			part.senderPeerId = command.senderPeerId; part.commands.push_back(command);
+			if (!append(std::move(part))) return false;
+		}
+		for (size_t first = 0; first < frame.observations.size();) {
+			NetLockstepFrame part;
+			part.senderPeerId = frame.observations[first].senderPeerId;
+			do { part.observations.push_back(frame.observations[first++]); }
+			while (first < frame.observations.size() && part.observations.size() < 64 && frame.observations[first].senderPeerId == part.senderPeerId);
+			if (!append(std::move(part))) return false;
+		}
+		for (size_t first = 0; first < frame.valueObservations.size();) {
+			NetLockstepFrame part;
+			part.senderPeerId = frame.valueObservations[first].senderPeerId;
+			do { part.valueObservations.push_back(frame.valueObservations[first++]); }
+			while (first < frame.valueObservations.size() && part.valueObservations.size() < 32 && frame.valueObservations[first].senderPeerId == part.senderPeerId);
+			if (!append(std::move(part))) return false;
+		}
+		for (int byte = 0; byte < 4; ++byte) encoded[24 + byte] = static_cast<uint8_t>(packets >> (8 * byte));
+		bytes = std::move(encoded);
+		return true;
+	}
+
+	bool DecodeCommittedJoinFrame(const std::vector<uint8_t>& bytes, NetLockstepFrame& frame, std::string* error) {
+		constexpr size_t maxBytes = 2ULL * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes;
+		if (bytes.size() < 4 || bytes.size() > maxBytes) { if (error) *error = "invalid committed join frame size"; return false; }
+		const uint8_t* cursor = bytes.data();
+		const uint8_t* end = cursor + bytes.size();
+		bool ok = true;
+		if (ReadU32LE(cursor, end, ok) != 0x46544A57U) {
+			NetLockstepError failure;
+			if (NetLockstepCodec::DecodeRecoveryInput(bytes, frame, &failure)) return true;
+			if (error) *error = failure.message;
+			return false;
+		}
+		if (ReadU16LE(cursor, end, ok) != 1) { if (error) *error = "unsupported committed join frame version"; return false; }
+		NetLockstepFrame decoded;
+		const uint16_t sender = ReadU16LE(cursor, end, ok);
+		decoded.senderPeerId = static_cast<uint8_t>(sender);
+		decoded.targetFrame = ReadU64LE(cursor, end, ok);
+		decoded.roundId = ReadU64LE(cursor, end, ok);
+		const uint32_t count = ReadU32LE(cursor, end, ok);
+		if (!ok || sender > NetLockstepCodec::c_MaxPeerCount || count > bytes.size() / 12) { if (error) *error = "invalid committed join frame header"; return false; }
+		for (uint32_t index = 0; index < count; ++index) {
+			const uint32_t size = ReadU32LE(cursor, end, ok);
+			if (!ok || size > static_cast<size_t>(end - cursor)) { if (error) *error = "truncated committed join frame"; return false; }
+			NetLockstepFrame part;
+			NetLockstepError failure;
+			if (!NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(cursor, cursor + size), part, &failure) ||
+			    part.targetFrame != decoded.targetFrame || part.roundId != decoded.roundId) {
+				if (error) *error = "committed join fragment has invalid input or a different tick: " + failure.message;
+				return false;
+			}
+			cursor += size;
+			decoded.frames.insert(decoded.frames.end(), part.frames.begin(), part.frames.end());
+			decoded.commands.insert(decoded.commands.end(), part.commands.begin(), part.commands.end());
+			decoded.observations.insert(decoded.observations.end(), part.observations.begin(), part.observations.end());
+			decoded.valueObservations.insert(decoded.valueObservations.end(), part.valueObservations.begin(), part.valueObservations.end());
+		}
+		if (cursor != end || !std::is_sorted(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID < rhs.actorUniqueID; }) ||
+		    std::adjacent_find(decoded.frames.begin(), decoded.frames.end(), [](const auto& lhs, const auto& rhs) { return lhs.actorUniqueID == rhs.actorUniqueID; }) != decoded.frames.end()) {
+			if (error) *error = "committed join frame has trailing bytes or duplicate controllers";
+			return false;
+		}
+		frame = std::move(decoded);
+		return true;
 	}
 
 	bool IsWorldJoinImageBlob(const std::vector<uint8_t>& bytes) {
@@ -685,9 +785,7 @@ namespace RTE {
 		}
 		Record record;
 		record.frame = frame.targetFrame;
-		NetLockstepError encodeError;
-		if (!NetLockstepCodec::EncodeRecoveryInput(frame, record.bytes, &encodeError)) {
-			if (error) *error = "the committed tail could not encode frame " + std::to_string(frame.targetFrame) + ": " + encodeError.message;
+		if (!EncodeCommittedJoinFrame(frame, record.bytes, error)) {
 			return false;
 		}
 		m_Bytes += record.bytes.size();

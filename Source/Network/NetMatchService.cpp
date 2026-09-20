@@ -3019,9 +3019,7 @@ static std::string ResyncSaveName() {
 		m_WorldCatchUp.digest = image.digest;
 		for (const std::vector<uint8_t>& encoded: tailBytes) {
 			NetLockstepFrame frame;
-			NetLockstepError decodeError;
-			if (!NetLockstepCodec::DecodeRecoveryInput(encoded, frame, &decodeError)) {
-				if (error) *error = "world join tail did not decode: " + decodeError.message;
+			if (!DecodeCommittedJoinFrame(encoded, frame, error)) {
 				return false;
 			}
 			m_WorldCatchUp.tail.push_back(std::move(frame));
@@ -3043,7 +3041,7 @@ static std::string ResyncSaveName() {
 				break;
 			}
 			NetLockstepFrame frame;
-			if (NetLockstepCodec::DecodeRecoveryInput(std::vector<uint8_t>(packed.begin() + static_cast<std::ptrdiff_t>(offset),
+			if (DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + static_cast<std::ptrdiff_t>(offset),
 			                                                              packed.begin() + static_cast<std::ptrdiff_t>(offset + size)),
 			                                          frame, nullptr)) {
 				later.push_back(frame);

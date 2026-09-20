@@ -362,6 +362,8 @@ namespace RTE {
 	std::string DigestWorldJoinBytes(const uint8_t* bytes, size_t size);
 	/// Packs every required Controller, command, binding and observation from one committed tick.
 	NetLockstepFrame PackWorldJoinReadyFrame(const NetLockstepReadyFrame& ready);
+	bool EncodeCommittedJoinFrame(const NetLockstepFrame& frame, std::vector<uint8_t>& bytes, std::string* error = nullptr);
+	bool DecodeCommittedJoinFrame(const std::vector<uint8_t>& bytes, NetLockstepFrame& frame, std::string* error = nullptr);
 	inline std::string DigestWorldJoinBytes(const std::vector<uint8_t>& bytes) {
 		return DigestWorldJoinBytes(bytes.data(), bytes.size());
 	}

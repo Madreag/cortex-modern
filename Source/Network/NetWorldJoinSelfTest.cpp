@@ -2594,6 +2594,26 @@ namespace RTE {
 		if (packed.targetFrame != 11 || packed.frames.size() != 2 || packed.commands.size() != 1) {
 			return Fail("committed ready-frame pack dropped a remote Controller or command");
 		}
+		ready.localCommands.push_back({1, NetGamePlayerBindings{}});
+		ready.remoteCommands.push_back({2, NetGamePlayerBindings{}});
+		ready.localCommands.push_back({1, NetGameSeatHold{3, 7, 91, 2, 11}});
+		NetSoundObservation sound;
+		sound.senderPeerId = 2; sound.objectUID = 91; sound.tick = 11; sound.value = .5F;
+		ready.remoteObservations.push_back(sound);
+		NetValueObservation value;
+		value.senderPeerId = 3; value.objectUID = 92; value.tick = 11; value.key = "join"; value.numberValue = 3;
+		ready.remoteValueObservations.push_back(value);
+		NetWorldFrameLog log;
+		const auto complete = PackWorldJoinReadyFrame(ready);
+		std::string error;
+		if (!log.Append(complete, &error)) return Fail("a real committed frame with mixed senders cannot enter the join tail: " + error);
+		std::vector<std::vector<uint8_t>> tail;
+		(void)log.CopyFrom(11, 1, 65536, tail);
+		NetLockstepFrame decoded;
+		if (tail.size() != 1 || !DecodeCommittedJoinFrame(tail.front(), decoded, &error) || decoded != complete)
+			return Fail("join tail changed a controller, binding, command, observation or hold identity: " + error);
+		tail.front().pop_back();
+		if (DecodeCommittedJoinFrame(tail.front(), decoded, &error)) return Fail("truncated committed join input was accepted");
 		return 0;
 	}
 
