@@ -12,7 +12,7 @@
         "-input-script",
         "{INPUT_SCRIPT}"
       ],
-      "input_script": "play-input.txt",
+      "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.host.menu.txt",
       "probe": "mp-rematch.host.probe.json"
     },
@@ -22,7 +22,7 @@
         "-input-script",
         "{INPUT_SCRIPT}"
       ],
-      "input_script": "play-input.txt",
+      "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.client.menu.txt",
       "probe": "mp-rematch.client.probe.json",
       "start_when": {
