@@ -671,7 +671,8 @@ namespace RTE {
 	bool NetMatchRunner::StartLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, const NetMatchRunnerConfig& config, std::string* error) {
 		NetLockstepConfig lockstepConfig;
 		lockstepConfig.sessionId = session.GetSessionId();
-		lockstepConfig.resumeFromSnapshot = m_ResyncRound || !m_ReceivedStateBytes.empty();
+		lockstepConfig.resumeFromSnapshot = RoundResumesASnapshot(m_ResyncRound, !m_ReceivedStateBytes.empty(),
+		                                                         m_UseLobbyProtocol && m_Lobby.AnsweredResumeHeld());
 		if (const auto* admission = session.GetReconnectHost()) {
 			lockstepConfig.seatPresenceEpoch = admission->GetEpoch();
 			for (const auto& seat: admission->GetSeatTable()) {
