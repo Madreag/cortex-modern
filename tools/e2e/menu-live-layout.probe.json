@@ -47,7 +47,7 @@
     {
       "op": "wait",
       "panel_open": false,
-      "elapsed_ms": 200
+      "elapsed_ms": 400
     },
     {
       "op": "key_down",
@@ -59,8 +59,16 @@
     },
     {
       "op": "wait",
+      "screen": "Pause"
+    },
+    {
+      "op": "menu",
+      "command": "assert_opaque_panel PauseScreen"
+    },
+    {
+      "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -102,7 +110,7 @@
     {
       "op": "wait",
       "screen": "Pause",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -111,7 +119,7 @@
     {
       "op": "wait",
       "screen": "PauseSettings",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -139,7 +147,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -167,7 +175,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -195,7 +203,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -223,7 +231,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
@@ -251,7 +259,7 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 350
+      "elapsed_ms": 450
     },
     {
       "op": "menu",
