@@ -61,7 +61,7 @@ namespace RTE {
 			int64_t open = 0;
 			for (const auto& row: object.at("seats")) {
 				const auto& slot = row.at("slot");
-				if (slot.at(3).get<bool>())
+				if (slot.at(3).get<bool>() || slot.at(1).get<uint8_t>() >= c_WorldSpectatorLobbyPeerFirst)
 					continue;
 				if (NetH4SeatIsOpen(slot.at(1).get<uint8_t>(), localPeerId, row.at("committed").get<bool>(), row.at("closed").get<bool>()))
 					++open;
@@ -78,7 +78,7 @@ namespace RTE {
 		try {
 			const auto object = nlohmann::json::from_cbor(bytes);
 			NetSeatAuthRegistry nextRegistry;
-			if (object.at("version") != 1 || object.at("session").get<uint64_t>() != config.sessionId || !object.at("seats").is_array() || object.at("seats").size() != config.players.size() || !nextRegistry.ImportMigrationState(object.at("registry").get<std::vector<uint8_t>>()))
+			if (object.at("version") != 1 || object.at("session").get<uint64_t>() != config.sessionId || !object.at("seats").is_array() || object.at("seats").size() != NetH4BuildSeatTable(config).size() || !nextRegistry.ImportMigrationState(object.at("registry").get<std::vector<uint8_t>>()))
 				return false;
 			NetReconnectHost next;
 			next.m_BanStore = m_BanStore;
