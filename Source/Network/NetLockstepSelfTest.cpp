@@ -1350,6 +1350,7 @@ namespace RTE {
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A36, 0, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A36, 0, NetTransportLane::ControlReliable);
 			a.roundId = b.roundId = 36; a.relayToOtherPeers = true;
+			a.remoteTransportPeerId = b.remoteTransportPeerId = 1;
 			if (!host.Start(hostWire, a, error) || !client.Start(clientWire, b, error)) return false;
 			NetLockstepTiming timing;
 			timing.senderPeerId = 1; timing.peerId = 2; timing.sessionId = a.sessionId; timing.roundId = 36;
@@ -1707,6 +1708,7 @@ namespace RTE {
 			returnWire.PollEvents();
 			b.startFrame = 10; b.joinsRunningRound = true; b.initialSeatHolds = held;
 			b.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 2, 2, 10, 0, 10};
+			b.remoteTransportPeerId = 1;
 			if (!returning.Start(returnWire, b, error)) return false;
 			for (uint64_t now = 30; now < 50; ++now) { hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now); }
 			if (!host.IsRunning() || !returning.IsRunning() || host.GetRoundId() != returning.GetRoundId()) {
