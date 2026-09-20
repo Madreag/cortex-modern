@@ -220,6 +220,14 @@ def check_review(results, scratch):
               all(item.get("probe") == "none" for item in document["checklist"]))
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
+    capture["peers"][0]["record"] = {"exit_code": 1, "timed_out": False}
+    document = driver.review({"name": "exit-review", "checklist": []}, capture, out)
+    ok &= row(results, "review/failed-exit-is-a-run-finding", len(document["run_findings"]) == 1)
+    ok &= row(results, "review/summary-rejects-unseen-run-failure", driver.review_only(SimpleNamespace(review_only=out)) == 1)
+    capture["peers"][0]["record"].update(exit_code=137, injected_termination="scenario drop after recorded tick 601")
+    capture["peers"][0]["expected_termination"] = True
+    document = driver.review({"name": "exit-review", "checklist": []}, capture, out)
+    ok &= row(results, "review/planned-drop-keeps-native-exit", not document["run_findings"] and capture["peers"][0]["record"]["exit_code"] == 137)
     marker_video = scratch / "markers"
     marker_video.mkdir()
     (marker_video / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [

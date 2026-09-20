@@ -531,11 +531,20 @@ def review(scenario, capture, out):
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
+    run_findings = []
+    for peer in capture["peers"]:
+        record = peer.get("record", {})
+        planned = peer.get("expected_termination") and str(record.get("injected_termination", "")).startswith("scenario drop")
+        if peer.get("error") or record.get("timed_out") or record.get("exit_code") not in (0, None) and not planned:
+            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"],
+                                 "reason": peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
+                                 "launch": peer.get("launch")})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
                 "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"],
                 "peers": [{k: v for k, v in row.items() if k != "index"} for row in capture["peers"]],
                 "checklist": items,
+                "run_findings": run_findings,
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
     (Path(out) / "review.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
@@ -825,6 +834,9 @@ def review_only(options):
     for path in paths:
         document = json.loads(path.read_text(encoding="utf-8"))
         print(f"{document['scenario']}: {document.get('verdict', 'unreviewed')} ({path})")
+        for finding in document.get("run_findings", []):
+            print(f"  run finding: {finding}")
+            complete = False
         for item in document["checklist"]:
             print(f"  {item.get('run', path.parent.name)}/{item.get('peer', '?')} {item['id']}: "
                   f"frames={item.get('frames')} probe={item.get('probe', 'none')} {item.get('what', '')}")
@@ -938,6 +950,7 @@ def aggregate_review(capture, out):
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
+                "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
                 "reviews": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}
     write_json(Path(out) / "review.json", document)
     return document
