@@ -1494,6 +1494,7 @@ namespace RTE {
 			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
 			hostConfig.relayToOtherPeers = true;
 			if (!StartCoordinatorPair(48892, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
@@ -1507,6 +1508,7 @@ namespace RTE {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
 			host.FinishFrameWait(58);
+			(void)host.FinishSimulationTick(0);
 			for (uint64_t tick = 0; tick < 16; ++tick) {
 				host.NoteLocalTickCost(tick, 40.0);
 				host.NoteLocalInputProduced(tick, tick * 40000, 0);
@@ -1534,17 +1536,30 @@ namespace RTE {
 				if (!host.PopReadyFrame(ready) || ready.frame != tick || !ready.remoteFrames.empty()) {
 					*error = "an unresolved held seat paused a survivor or supplied late input"; return false;
 				}
+				(void)host.FinishSimulationTick(tick);
 			}
 			std::string rejoinError;
 			if (host.PreparePeerRejoin(2, 401, 500, &rejoinError) || rejoinError.find("agreed input delay") == std::string::npos) {
 				*error = "a held seat reclaimed before its RTT-derived delay took effect"; return false;
 			}
-			for (uint64_t tick = 6; tick <= 80; ++tick) {
+			uint64_t applyFrame = 0;
+			for (const auto& event: clientTransport.PollEvents()) {
+				if (event.type != NetTransportEventType::PacketReceived) continue;
+				const auto decoded = NetLockstepCodec::Decode(event.bytes);
+				const auto* timing = decoded.ok ? std::get_if<NetLockstepTiming>(&decoded.packet.payload) : nullptr;
+				if (timing && timing->action == NetTimingAction::Delay && timing->phase == NetTimingPhase::Commit && timing->peerId == 2) {
+					if (timing->delayFrames < 26 || applyFrame != 0) { *error = "readmission committed an insufficient or duplicate delay"; return false; }
+					applyFrame = timing->applyFrame;
+				}
+			}
+			if (applyFrame <= 5) { *error = "readmission did not declare its future delay boundary"; return false; }
+			for (uint64_t tick = 6; tick <= applyFrame; ++tick) {
 				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
 				host.Tick(500 + tick);
-				if (!host.PopReadyFrame(ready)) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+				if (!host.PopReadyFrame(ready) || ready.frame != tick) { *error = "rejoin delay negotiation stalled the survivor"; return false; }
+				(void)host.FinishSimulationTick(tick);
 			}
-			if (!host.PreparePeerRejoin(2, 401, 600, &rejoinError) || host.PreparePeerRejoin(2, 4000, 700, &rejoinError)) {
+			if (!host.PreparePeerRejoin(2, 401, 501 + applyFrame, &rejoinError) || host.PreparePeerRejoin(2, 4000, 502 + applyFrame, &rejoinError)) {
 				*error = "rejoin delay fit admitted an over-cap link or refused a fitted one"; return false;
 			}
 			return host.IsRunning();
