@@ -1585,13 +1585,13 @@ static std::string ResyncSaveName() {
 		m_ActivateCatchUpLocalSeat = {};
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
+		m_WorldCaptureRequestedTick = 0;
+		m_WorldCapturePending = false;
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		ScenarioRunner::ReleaseWorldCatchUp();
 		m_WorldJoinImageArchive.reset(); m_WorldJoinImageDigest.clear();
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetSession> session;
-		m_WorldCaptureRequestedTick = 0;
-		m_WorldCapturePending = false;
 		std::unique_ptr<GnsTransport> transport;
 		std::unique_ptr<NetMuxTransport> mux;
 		std::unique_ptr<INetTransport> migrated;
@@ -2531,15 +2531,15 @@ static std::string ResyncSaveName() {
 		if (!SaveStampedAutosave(tick)) {
 			return;
 		}
+		if (joinCapture) {
+			m_WorldCaptureRequestedTick = tick;
+			m_WorldCapturePending = false;
+		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
 		m_RestartAdmissionDue.store(true);
 		RollWorldReplaySegment(tick);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
-		if (joinCapture) {
-			m_WorldCaptureRequestedTick = tick;
-			m_WorldCapturePending = false;
-		}
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
 		}
 	}
@@ -2590,15 +2590,15 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::SaveStampedAutosave(uint64_t tick) {
+		if (tick != static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) {
+			System::PrintDiagnosticLine(std::format("[autosave] capture refused: requested tick={} world tick={}", tick, g_TimerMan.GetSimUpdateCount()));
+			return false;
+		}
 		// The tick is complete, so the agreed lockstep state of THIS tick is what a restart needs; it
 		// is read once, here, through the same reader the heal's snapshot capture uses.
 		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
-		if (tick != static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) {
-			System::PrintDiagnosticLine(std::format("[autosave] capture refused: requested tick={} world tick={}", tick, g_TimerMan.GetSimUpdateCount()));
-			return false;
-		}
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
@@ -3844,12 +3844,12 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-world] final checkpoint refused at tick=" << tick << std::endl;
 			return;
 		}
+		m_FinalCheckpointWritten = true;
 		// The manifest is published by the writer, so the process may not leave before it lands.
 		g_ActivityMan.WaitForAutosaveTasks();
 		m_RestartAdmissionDue.store(true);
 		PublishRestartAdmission();
 		std::cout << "[net-world] final checkpoint match=" << m_AutosaveMatchId << " tick=" << tick << std::endl;
-		m_FinalCheckpointWritten = true;
 	}
 
 	void NetMatchService::SweepRestartAdmission() {
