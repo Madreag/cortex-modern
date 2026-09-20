@@ -16,6 +16,7 @@
 #include "AudioMan.h"
 #include "LuaMan.h"
 #include "RTETools.h"
+#include "TimerMan.h"
 
 #include "lua.hpp"
 
@@ -898,6 +899,7 @@ end
 }
 
 bool RTE::RunCheckpointImageSelfTest() {
+	if (!TimerMan::IsConstructed()) TimerMan::Construct();
 	bool passed = true;
 	// Only the failing actual goes on the line; the expectation belongs in the row, not in the log.
 	const auto fail = [&passed](const char* name, const std::string& actual) {
@@ -962,7 +964,7 @@ bool RTE::RunCheckpointImageSelfTest() {
 			index.BeginRoot(73, &state); index.NoteValue(&value);
 			index.EndWalk();
 			value.ArmCheckpointValueTrap();
-			const auto capture = [&] { return Writer::Capture([&](Writer& writer) { writer.NewPropertyWithValue("Controller", value.SaveCheckpoint()); }); };
+			const auto capture = [&] { return CheckpointWriter::CaptureNative([&] { return value.SaveCheckpoint(); }); };
 			const CheckpointText first = capture();
 			cow.RememberLua({first}, LuaCheckpointWriteGeneration());
 			value.SetAnalogMove(Vector(0.25F, 0.5F));
