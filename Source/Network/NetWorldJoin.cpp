@@ -101,6 +101,7 @@ namespace RTE {
 			offer["private_session_id"] = image.privateSessionId;
 			offer["checkpoint_config"] = image.checkpointConfig;
 			offer["side_state"] = image.sideState;
+			offer["pause_state"] = {{"paused", image.pauseState.paused}, {"resume_countdown", image.pauseState.resumeCountdown}, {"paused_frames", image.pauseState.pausedFrames}};
 			offer["held_state"] = image.heldState;
 			offer["round_config_hash"] = image.roundConfigHash;
 			offer["authority_generation"] = image.authorityGeneration;
@@ -134,6 +135,14 @@ namespace RTE {
 		image.boot = parsed.value("boot", uint64_t{0});
 		image.round = parsed.value("round", uint64_t{0});
 		image.tick = parsed.value("tick", uint64_t{0});
+		if (image.privateSessionId != 0) {
+			const auto& pause = parsed.at("pause_state");
+			image.pauseState = {pause.at("paused").get<bool>(), pause.at("resume_countdown").get<int>(), pause.at("paused_frames").get<uint64_t>()};
+			if (!image.pauseState.IsValid(image.tick)) {
+				if (error) *error = "private checkpoint pause state is invalid";
+				return false;
+			}
+		}
 		image.configRevision = parsed.value("config_revision", uint64_t{0});
 		image.membershipRevision = parsed.value("membership_revision", uint64_t{0});
 		image.matchConfigHash = parsed.value("match_config_hash", std::string());

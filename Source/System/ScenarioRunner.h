@@ -435,6 +435,8 @@ namespace RTE {
 		/// shared null-tick countdown, while the wire keeps exchanging empty frames.
 		static bool IsLockstepPaused();
 		static int GetLockstepResumeCountdown();
+		static NetLockstepPauseState CaptureLockstepPauseState();
+		static bool RestoreLockstepPauseState(const NetLockstepPauseState& state, uint64_t frame);
 		/// Applies the shared pause and exports its sender for presentation only.
 		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();

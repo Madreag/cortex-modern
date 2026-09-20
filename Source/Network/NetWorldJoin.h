@@ -97,6 +97,7 @@ namespace RTE {
 		uint64_t privateSessionId = 0;
 		std::string checkpointConfig;
 		std::string sideState;
+		NetLockstepPauseState pauseState;
 		std::string heldState;
 		std::string roundConfigHash;
 		uint64_t authorityGeneration = 0;
@@ -365,6 +366,7 @@ namespace RTE {
 		bool privateMatch = false;
 		NetMatchConfig checkpointConfig;
 		std::string sideState;
+		NetLockstepPauseState pauseState;
 		std::map<uint8_t, NetGameSeatHold> initialHolds;
 		uint64_t roundId = 0, authorityGeneration = 0;
 		uint8_t authorityPeerId = 1;

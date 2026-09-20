@@ -1756,6 +1756,7 @@ namespace RTE {
 
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
+			const auto timer = g_TimerMan.SaveCheckpoint();
 			LoopbackTransport transport;
 			NetLockstepCoordinator replay;
 			NetLockstepConfig config;
@@ -1763,7 +1764,7 @@ namespace RTE {
 			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
 			if (!replay.StartReplay(transport, config, error)) return false;
 			ScenarioRunner::SetLockstepCoordinator(&replay);
-			const auto finish = [&](bool result) { ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr); return result; };
+			const auto finish = [&](bool result) { ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr); g_TimerMan.LoadCheckpoint(timer); return result; };
 			NetResyncState state;
 			state.sessionId = config.sessionId; state.sourceRound = 21; state.savedTick = 40;
 			state.controlOwners[987654321] = 1; state.droppedControlOwners[987654321] = 2; state.appliedCommands[2] = 17;
@@ -1794,6 +1795,26 @@ namespace RTE {
 			ScenarioRunner::NoteWorldCatchUpTickCost(43, 5000, 1025000);
 			if (ScenarioRunner::WorldCatchUpWorkTicks() != 3 || ScenarioRunner::WorldCatchUpWorkUs() != 35000) {
 				*error = "catch-up capacity counted absent tail time or hid queued work behind render time"; return finish(false);
+			}
+			ScenarioRunner::SetLockstepAppliedFrame(43);
+			if (!ScenarioRunner::RestoreLockstepPauseState({true, 2, 7}, 43)) return finish(false);
+			record.targetFrame = 44;
+			ScenarioRunner::AppendWorldCatchUp({record});
+			g_TimerMan.RewindSimTo(44, 1000);
+			if (!g_MovableMan.RunLockstepPausedTick() || ScenarioRunner::WorldCatchUpAppliedThrough() != 44 || LockstepPlayedFrame() != 36) {
+				*error = "paused catch-up did not consume its committed tail or preserve the paused tick discount"; return finish(false);
+			}
+			ScenarioRunner::AdvanceLockstepPausedTick();
+			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
+			NetLockstepCoordinator resumed;
+			config.startFrame = 45;
+			if (!resumed.StartReplay(transport, config, error)) return finish(false);
+			ScenarioRunner::SetLockstepCoordinator(&resumed, true);
+			state.savedTick = 44;
+			if (!ScenarioRunner::RestoreCommittedCatchUpState(state, error) || !ScenarioRunner::RestoreLockstepPauseState(pause, 44) ||
+			    !ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() != 1 || !g_TimerMan.IsSimTimeFrozen() || LockstepPlayedFrame() != 36 ||
+			    ScenarioRunner::RestoreLockstepPauseState({false, 1, 8}, 44) || ScenarioRunner::RestoreLockstepPauseState({true, -1, 45}, 44)) {
+				*error = "private activation lost the pause countdown or accepted an impossible pause checkpoint"; return finish(false);
 			}
 			return finish(true);
 		}

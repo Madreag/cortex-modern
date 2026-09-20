@@ -1540,6 +1540,19 @@ namespace RTE {
 		return s_LockstepResumeCountdown;
 	}
 
+	NetLockstepPauseState ScenarioRunner::CaptureLockstepPauseState() {
+		return {s_LockstepPaused, s_LockstepResumeCountdown, GetLockstepPausedFrames()};
+	}
+
+	bool ScenarioRunner::RestoreLockstepPauseState(const NetLockstepPauseState& state, uint64_t frame) {
+		if (!state.IsValid(frame)) return false;
+		s_LockstepPaused = state.paused;
+		s_LockstepResumeCountdown = state.resumeCountdown;
+		RestoreLockstepPausedFrames(state.pausedFrames);
+		g_TimerMan.SetSimTimeFrozen(state.paused);
+		return true;
+	}
+
 	void ScenarioRunner::ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId) {
 		if (pause && !s_LockstepPaused) {
 			s_LockstepPaused = true;
