@@ -1275,6 +1275,9 @@ namespace RTE {
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
 		}
+		// A replayed tick is committed state like any other: the reclaim gap the survivors fenced is
+		// fenced here too, or the catching-up peer alone applies the seat's input through its reclaim.
+		FilterReclaimControllerInputs(outFrame);
 		s_WorldCatchUpAppliedThrough = simTick;
 		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
 		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and

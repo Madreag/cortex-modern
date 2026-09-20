@@ -12463,6 +12463,76 @@ namespace RTE {
 			return false;
 		}
 
+		// A rejoining peer replays its private tail through TakeWorldCatchUpReadyFrame instead of the
+		// round's wait, so the reclaim gap the survivors fence has to be fenced on that path too.
+		bool TestCatchUpFencesTheReclaimGap(std::string* error) {
+			const char* name = "catch_up_fences_the_reclaim_gap";
+			EnsureSwitchTestManagers();
+			const auto timer = g_TimerMan.SaveCheckpoint();
+			std::unique_ptr<Activity> activity(new Activity());
+			activity->AddPlayer(Players::PlayerOne, true, Activity::TeamTwo, 0);
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A36; config.roundId = 36; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1; config.startFrame = 41;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 3;
+			config.matchConfig.players.push_back({3, 2, false, "Survivor"});
+			config.initialSeatHolds[2] = NetGameSeatHold{2, 1, 1, 1, 40};
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::ReleaseWorldCatchUp();
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::ClearSeededOwners();
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				g_TimerMan.LoadCheckpoint(timer);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) *error = message;
+					return false;
+				}
+				std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				return true;
+			};
+			if (!replay.StartReplay(wire, config, error)) return finish("the replay coordinator did not start");
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			Actor* heldActor = MakeSwitchTestActor(Activity::TeamTwo);
+			Actor* survivorActor = MakeSwitchTestActor(Activity::TeamOne);
+			if (!heldActor || !survivorActor) return finish("selftest actors could not be created");
+			AddSwitchTestActor(heldActor);
+			AddSwitchTestActor(survivorActor);
+			const int64_t heldUID = static_cast<int64_t>(heldActor->GetUniqueID());
+			const int64_t survivorUID = static_cast<int64_t>(survivorActor->GetUniqueID());
+			// The held seat's actors sit under the host's AI with the seat recorded as their drop-time owner.
+			NetActorOwnership::SeedOwner(heldUID, 2, Activity::TeamTwo);
+			ScenarioRunner::HandLockstepActorToAI(heldUID, 2);
+			NetActorOwnership::SeedOwner(survivorUID, 3, Activity::TeamOne);
+			ScenarioRunner::SetLockstepControlOverride(survivorUID, 3);
+			NetLockstepFrame record;
+			record.targetFrame = 41;
+			record.frames = {MakeFrame(heldUID, uint64_t{1} << PRESS_PRIMARY), MakeFrame(survivorUID, uint64_t{1} << PRESS_SECONDARY)};
+			record.commands = {{1, NetGameSeatReclaim{2, 1, 2, 2, 41, 4, 45}}};
+			if (!ScenarioRunner::InstallWorldCatchUp(40, {record}, error)) return finish("the private tail could not be installed");
+			NetLockstepReadyFrame ready;
+			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, error)) return finish("the private tail had no frame for its own tick");
+			if (ready.reclaimedPeerIds != std::vector<uint8_t>{2} || !replay.IsSeatReclaimGap(2, 41)) return finish("the replayed tick did not open the seat's reclaim gap");
+			size_t heldFrames = 0, survivorFrames = 0;
+			for (const auto* set: {&ready.localFrames, &ready.remoteFrames}) {
+				for (const ControllerFrame& frame: *set) {
+					if (frame.actorUniqueID == heldUID) ++heldFrames;
+					if (frame.actorUniqueID == survivorUID) ++survivorFrames;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] catch_up_gap_frames held=" << heldFrames << " survivor=" << survivorFrames << std::endl;
+			if (heldFrames != 0) {
+				return finish("the private replay applied the reclaimed seat's input inside its reclaim gap");
+			}
+			if (survivorFrames != 1) {
+				return finish("the private replay dropped a frame of a seat that is not reclaiming");
+			}
+			return finish(nullptr);
+		}
+
 		bool TestSwitchLandsOnOneTick(std::string* error) {
 			const char* name = "switch_lands_on_one_tick";
 			EnsureSwitchTestManagers();
@@ -16095,6 +16165,7 @@ namespace RTE {
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
+		    !TestCatchUpFencesTheReclaimGap(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
