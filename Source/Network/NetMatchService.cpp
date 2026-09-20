@@ -3333,7 +3333,7 @@ static std::string ResyncSaveName() {
 					const auto decoded = NetLockstepCodec::Decode(event.bytes);
 					if (!decoded.ok) continue;
 					const auto* decision = std::get_if<NetLockstepTiming>(&decoded.packet.payload);
-					if (!decision || decision->senderPeerId != m_CatchUpCoordinator->GetHostPeerId() || decision->sessionId != live.sessionId || decision->roundId != live.roundId) continue;
+					if (!decision || decision->senderPeerId != m_CatchUpCoordinator->GetHostPeerId() || decision->sessionId != live.sessionId || decision->roundId != live.roundId || decision->authorityGeneration != live.migrationGeneration || decision->peerId > live.peerCount) continue;
 					if (decision->action == NetTimingAction::Delay && decision->phase == NetTimingPhase::Commit && decision->applyFrame >= m_WorldCatchUp.activationTick)
 						live.initialDelayChanges[decision->peerId][decision->applyFrame] = decision->delayFrames;
 					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
