@@ -1537,7 +1537,7 @@ static std::string ResyncSaveName() {
 		m_ActivateCatchUpLocalSeat = {};
 		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
-		m_PrivateActivations.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		ScenarioRunner::ReleaseWorldCatchUp();
 		m_WorldJoinImageArchive.reset(); m_WorldJoinImageDigest.clear();
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
@@ -2395,7 +2395,7 @@ static std::string ResyncSaveName() {
 		const uint64_t round = m_Coordinator->GetRoundId();
 		if (round == 0 || m_PrivateImageRound == round) return;
 		m_PrivateImageRound = round;
-		m_PrivateActivations.clear();
+		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
 		std::string error;
 		auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
@@ -2713,12 +2713,32 @@ static std::string ResyncSaveName() {
 			m_WorldJoin.Metrics().NoteBootstrapStall();
 			return false;
 		}
-		std::vector<std::vector<uint8_t>> tail;
-		uint64_t lastCopied = 0;
-		(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail, &lastCopied);
+		uint64_t lastCopied = m_WorldJoin.Image().tick;
 		std::vector<uint8_t> blob;
-		if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), *m_WorldJoinImageArchive, tail, blob, error)) {
-			return false;
+		if (m_WorldJoin.IsPrivateMatch()) {
+			auto task = m_PrivateJoinBlobs.find(session.connection);
+			if (task == m_PrivateJoinBlobs.end()) {
+				const auto image = m_WorldJoin.Image();
+				const auto archive = m_WorldJoinImageArchive;
+				task = m_PrivateJoinBlobs.emplace(session.connection, std::async(std::launch::async, [image, archive] {
+					std::vector<uint8_t> encoded;
+					EncodeWorldJoinImageBlob(image, *archive, {}, encoded, nullptr);
+					return encoded;
+				})).first;
+			}
+			if (task->second.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) return false;
+			try { blob = task->second.get(); } catch (const std::exception& exception) { m_PrivateJoinError = exception.what(); }
+			m_PrivateJoinBlobs.erase(task);
+			if (blob.empty()) {
+				if (m_PrivateJoinError.empty()) m_PrivateJoinError = "the private checkpoint envelope could not be prepared";
+				if (error) *error = m_PrivateJoinError;
+				if (outUnstartable) *outUnstartable = true;
+				return false;
+			}
+		} else {
+			std::vector<std::vector<uint8_t>> tail;
+			(void)m_WorldJoin.Tail().CopyFrom(m_WorldJoin.Image().tick + 1, 512, 1024ULL * 1024ULL, tail, &lastCopied);
+			if (!EncodeWorldJoinImageBlob(m_WorldJoin.Image(), *m_WorldJoinImageArchive, tail, blob, error)) return false;
 		}
 		// A queued image is the lobby's now: the bootstrap must not build the blob again next pump.
 		// A refusal is not a start, so the next pump retries instead of waiting out the deadline.
@@ -2882,6 +2902,8 @@ static std::string ResyncSaveName() {
 		}
 		m_WorldJoin.ReleaseLostConnections(live);
 		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
+		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
+		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid())

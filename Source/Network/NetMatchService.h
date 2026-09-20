@@ -1228,6 +1228,7 @@ namespace RTE {
 		bool m_LastJoinTargetPersistentWorld = false;
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
+		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;
 		std::deque<NetTransportEvent> m_CatchUpWirePackets;
 		size_t m_CatchUpWireBytes = 0;
 		std::unique_ptr<LoopbackTransport> m_CatchUpTransport;
