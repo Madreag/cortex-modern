@@ -2,45 +2,29 @@
   "schema": 1,
   "name": "mp-host-migration",
   "port_base": 49468,
-  "title": "The host drops after tick 600; two survivors name the successor and continue to tick 900",
+  "title": "Three peers seated in lobby order; a recorded host drop and complete survivor hash comparison",
   "size": "960x540",
   "timeout_s": 150,
   "peers": [
     {
       "name": "host",
       "args": [
-        "-net-match-service-e2e",
-        "-net-port",
-        "{PORT}",
-        "-net-match-peers",
-        "3",
-        "-net-match-humans",
-        "3",
-        "-net-match-cpu-slots",
-        "0",
-        "-net-match-ticks",
-        "900",
-        "-net-match-auto-delay",
-        "-net-autosave-seconds",
-        "0",
-        "-num-lua-states",
-        "4",
         "-seed",
         "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
         "-input-script",
         "{INPUT_SCRIPT}",
-        "-net-player-name",
-        "Host",
-        "-net-match-report",
-        "{OUT}/host-match.json",
         "-out",
         "{OUT}/host_trace.json",
-        "-tick-hashes",
-        "-net-host"
+        "-net-match-report",
+        "{OUT}/host-match.json"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
-      "start_delay_s": 0,
       "settings": {
         "NetworkDisplayName": "Host",
         "NetworkIceEnable": "0",
@@ -49,44 +33,28 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "kill_at_tick": 601
+      "kill_at_tick": 601,
+      "menu_script": "mp-host-migration.host.menu.txt"
     },
     {
       "name": "clienta",
       "args": [
-        "-net-match-service-e2e",
-        "-net-port",
-        "{PORT}",
-        "-net-match-peers",
-        "3",
-        "-net-match-humans",
-        "3",
-        "-net-match-cpu-slots",
-        "0",
-        "-net-match-ticks",
-        "900",
-        "-net-match-auto-delay",
-        "-net-autosave-seconds",
-        "0",
-        "-num-lua-states",
-        "4",
         "-seed",
         "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
         "-input-script",
         "{INPUT_SCRIPT}",
-        "-net-player-name",
-        "ClientA",
-        "-net-match-report",
-        "{OUT}/clienta-match.json",
         "-out",
         "{OUT}/clienta_trace.json",
-        "-tick-hashes",
-        "-net-join",
-        "127.0.0.1"
+        "-net-match-report",
+        "{OUT}/clienta-match.json"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
-      "start_delay_s": 1,
       "settings": {
         "NetworkDisplayName": "ClientA",
         "NetworkIceEnable": "0",
@@ -95,44 +63,33 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "probe": "mp-host-migration.survivor.probe.json"
+      "probe": "mp-host-migration.survivor.probe.json",
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "host",
+        "event": "video_mark migration-listening",
+        "timeout_s": 90
+      }
     },
     {
       "name": "clientb",
       "args": [
-        "-net-match-service-e2e",
-        "-net-port",
-        "{PORT}",
-        "-net-match-peers",
-        "3",
-        "-net-match-humans",
-        "3",
-        "-net-match-cpu-slots",
-        "0",
-        "-net-match-ticks",
-        "900",
-        "-net-match-auto-delay",
-        "-net-autosave-seconds",
-        "0",
-        "-num-lua-states",
-        "4",
         "-seed",
         "42",
+        "-max-ticks",
+        "900",
+        "-tick-hashes",
+        "-num-lua-states",
+        "4",
         "-input-script",
         "{INPUT_SCRIPT}",
-        "-net-player-name",
-        "ClientB",
-        "-net-match-report",
-        "{OUT}/clientb-match.json",
         "-out",
         "{OUT}/clientb_trace.json",
-        "-tick-hashes",
-        "-net-join",
-        "127.0.0.1"
+        "-net-match-report",
+        "{OUT}/clientb-match.json"
       ],
       "input_script": "mp-host-migration.input.txt",
       "observe_after_failure": true,
-      "start_delay_s": 5,
       "settings": {
         "NetworkDisplayName": "ClientB",
         "NetworkIceEnable": "0",
@@ -141,7 +98,13 @@
         "NetworkSlowPlayerBoundTicks": "3",
         "NetworkSlowPlayerPolicy": "Substitute"
       },
-      "probe": "mp-host-migration.survivor.probe.json"
+      "probe": "mp-host-migration.survivor.probe.json",
+      "menu_script": "mp-host-migration.client.menu.txt",
+      "start_when": {
+        "peer": "clienta",
+        "event": "video_mark migration-client-admitted",
+        "timeout_s": 90
+      }
     }
   ],
   "checklist": [
@@ -153,7 +116,8 @@
         600,
         650
       ],
-      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame."
+      "what": "The original host video ends at its recorded process drop after tick 600; injected-drop.json identifies the frame.",
+      "drop_tick": 601
     },
     {
       "id": "migration-before-clienta",
@@ -181,6 +145,32 @@
       "what": "The migration toast names ClientA as the new host.",
       "log_regex": [
         "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     },
     {
@@ -219,7 +209,7 @@
       "log_regex": [
         "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
       ],
-      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+      "gate": "migration-hashes"
     },
     {
       "id": "migration-before-clientb",
@@ -247,6 +237,32 @@
       "what": "The migration toast names ClientA as the new host.",
       "log_regex": [
         "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ],
+      "readback": [
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "is now hosting"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "ClientA"
+        },
+        {
+          "step": 7,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        }
       ]
     },
     {
@@ -285,7 +301,14 @@
       "log_regex": [
         "\\[net-match\\] Host left - .* is now hosting; boundary=\\d+ round=\\d+"
       ],
-      "blocked_by": "The video driver only exposes item9a feel gates; it has no two-survivor post-migration hash gate. Compare clienta_trace.json and clientb_trace.json from the boundary + 1 through 900 without exclusions; a handover line alone does not prove hash equality."
+      "gate": "migration-hashes"
     }
-  ]
+  ],
+  "migration_gate": {
+    "peers": [
+      "clienta",
+      "clientb"
+    ],
+    "cap": 900
+  }
 }

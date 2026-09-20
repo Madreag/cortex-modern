@@ -10,6 +10,8 @@ a real capture are named at the bottom of the result and are the driver's own fi
 import argparse
 import contextlib
 import json
+import os
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -23,13 +25,34 @@ if str(TOOLS) not in sys.path:
 import e2e_video as driver  # noqa: E402
 
 SCENARIOS = ("sp-smoke", "mp-host-join", "mp-reconnect-repair", "world-late-join", "ui-surfaces",
-             "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag")
+             "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag",
+             "mp-moderation", "mp-host-migration", "mp-resume-from-disk", "mp-direct-vs-relay",
+             "mod-void-wanderers-multiplayer")
 
 
 def row(results, name, ok, detail=""):
     results.append({"row": name, "pass": bool(ok), "detail": detail})
     print(f"[e2e-video] {'PASS' if ok else 'FAIL'} {name}{': ' + detail if detail else ''}", flush=True)
     return ok
+
+
+def check_capture_binary(results, scratch):
+    platform = sys.platform
+    previous = os.environ.pop("CCCP_TEST_BINARY", None)
+    try:
+        sys.platform = "win32"
+        ok = row(results, "manifest/windows-runner-binary", driver.capture_binary(scratch) == scratch.resolve() / "Cortex Command.exe")
+        sys.platform = "darwin"
+        ok &= row(results, "manifest/posix-default-binary", driver.capture_binary(scratch) == scratch.resolve() / "build-gns/CortexCommand")
+        os.environ["CCCP_TEST_BINARY"] = str(scratch / "custom-engine")
+        ok &= row(results, "manifest/posix-override-binary", driver.capture_binary(scratch) == (scratch / "custom-engine").resolve())
+        return ok
+    finally:
+        sys.platform = platform
+        if previous is None:
+            os.environ.pop("CCCP_TEST_BINARY", None)
+        else:
+            os.environ["CCCP_TEST_BINARY"] = previous
 
 
 def check_scenarios(results):
@@ -197,6 +220,14 @@ def check_review(results, scratch):
               all(item.get("probe") == "none" for item in document["checklist"]))
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
+    capture["peers"][0]["record"] = {"exit_code": 1, "timed_out": False}
+    document = driver.review({"name": "exit-review", "checklist": []}, capture, out)
+    ok &= row(results, "review/failed-exit-is-a-run-finding", len(document["run_findings"]) == 1)
+    ok &= row(results, "review/summary-rejects-unseen-run-failure", driver.review_only(SimpleNamespace(review_only=out)) == 1)
+    capture["peers"][0]["record"].update(exit_code=137, injected_termination="scenario drop after recorded tick 601")
+    capture["peers"][0]["expected_termination"] = True
+    document = driver.review({"name": "exit-review", "checklist": []}, capture, out)
+    ok &= row(results, "review/planned-drop-keeps-native-exit", not document["run_findings"] and capture["peers"][0]["record"]["exit_code"] == 137)
     marker_video = scratch / "markers"
     marker_video.mkdir()
     (marker_video / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [
@@ -318,6 +349,16 @@ def check_finalizer(results, scratch):
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
     ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    saved["scenario_definition"]["runs"] = [{"name": "first"}]
+    saved.pop("interrupted", None)
+    saved["runs"][0].pop("interrupted", None)
+    (peer / "launch.json").write_text(json.dumps({"started": True, "exit_code": 0, "elapsed_seconds": 7.5}), encoding="utf-8")
+    (out / "capture.json").write_text(json.dumps(saved), encoding="utf-8")
+    (out / "manifest.json").write_text(json.dumps({"wall_seconds": 7.5}), encoding="utf-8")
+    driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
+    complete = json.loads((out / "capture.json").read_text())
+    measured = json.loads((out / "manifest.json").read_text())
+    ok &= row(results, "finalize/preserves-completed-run-and-wall-time", not complete.get("interrupted") and measured["wall_seconds"] == 7.5)
     return ok
 
 
@@ -340,6 +381,154 @@ def check_completion(results, scratch):
     return ok
 
 
+def check_drop_receipts(results, scratch):
+    root = scratch / "drop-receipt"
+    video = root / "video"
+    video.mkdir(parents=True)
+    record = {"root": str(root), "video_dir": str(video), "probe_dir": str(root / "probe"),
+              "record": {}, "index": [{"frame": 0, "wall_ms": 1000, "sim_tick": 601, "screen": "game"}]}
+    item = {"id": "drop", "drop_tick": 601, "screen": "game"}
+    _, evidence = driver.item_evidence(record, item)
+    ok = row(results, "drop/no-receipt-is-not-proof", evidence["probe"] == "fail")
+    driver.write_json(video / "injected-drop.json", {"requested_tick": 601, "last_recorded_frame": record["index"][0]})
+    record["record"]["injected_termination"] = "capture interrupted"
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "drop/observer-stop-is-not-injected-drop", evidence["probe"] == "fail")
+    record["record"]["injected_termination"] = "scenario drop after recorded tick 601"
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "drop/receipt-and-runner-termination", evidence["probe"] == "pass")
+    record.update(peer="client", video=str(root / "client.mp4"), menu_script_failures=[])
+    host = {**record, "peer": "host"}
+    scenario = {"name": "drop", "checklist": [{"id": "host-sees-drop", "peer": "host", "screen": "game",
+                 "peer_drop": {"peer": "client", "tick": 601}}]}
+    capture = {"name": "run0", "peers": [host, record]}
+    document = driver.review(scenario, capture, root)
+    ok &= row(results, "drop/survivor-requires-peer-receipt", document["checklist"][0]["peer_drop"]["pass"])
+    record["record"]["injected_termination"] = None
+    document = driver.review(scenario, capture, root)
+    ok &= row(results, "drop/peer-failure-is-not-planned-drop", document["checklist"][0]["probe"] == "fail")
+    (root / "runtime").mkdir()
+    (root / "runtime/LogConsole.txt").write_text("later process\n")
+    (root / "console.log").write_text("original process\n")
+    matches = driver.log_assertions(root, ["original process"], ["later process"])
+    ok &= row(results, "resume/console-evidence-is-stable", len(matches[0]["matches"]) == 1 and not matches[1]["matches"])
+    probe = root / "probe"
+    probe.mkdir()
+    value = {"steps": [{"index": 7, "observed": {"control": {"text": "ClientA is now hosting", "visible": True}}}]}
+    driver.write_json(probe / "net-ui-result.json", value)
+    item = {"screen": "game", "probe_steps": [7], "readback": [{"step": 7, "path": ["control", "text"], "contains": "is now hosting"}, {"step": 7, "path": ["control", "visible"], "equals": True}]}
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/visible-named-toast", evidence["probe"] == "pass")
+    value["steps"][0]["observed"]["control"]["visible"] = False
+    driver.write_json(probe / "net-ui-result.json", value)
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/hidden-text-is-not-visible-proof", evidence["probe"] == "fail")
+    value["steps"][0]["observed"]["control"].update(visible=True, text="LIVE")
+    driver.write_json(probe / "net-ui-result.json", value)
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "readback/changed-toast-fails-without-blocking-observer", evidence["probe"] == "fail")
+    return ok
+
+
+def check_gameplay_epochs(results, scratch):
+    video, stage = scratch / "epochs-video", scratch / "epochs-stage"
+    video.mkdir(); stage.mkdir()
+    rows = [{"frame": 0, "screen": "game", "sim_tick": 10, "wall_ms": 100},
+            {"frame": 1, "screen": "Pause", "sim_tick": 20, "wall_ms": 200},
+            {"frame": 2, "screen": "game", "sim_tick": 30, "wall_ms": 300},
+            {"frame": 3, "screen": "game", "sim_tick": 0, "wall_ms": 400},
+            {"frame": 4, "screen": "game", "sim_tick": 10, "wall_ms": 500}]
+    (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    driver.gameplay_signals(video, stage, 2)
+    first = json.loads((stage / "gameplay-started.json").read_text())
+    second = json.loads((stage / "gameplay-epoch-2.json").read_text())
+    return row(results, "epochs/waits-for-recorded-counter-reset", first["frame"] == 0 and second["frame"] == 3 and second["sim_tick"] == 0)
+
+
+def check_menu_commands(results):
+    repo = TOOLS.parent
+    source = (repo / "Source/Main.cpp").read_text() + (repo / "Source/Menus/MenuAutomation.cpp").read_text()
+    known = set(re.findall(r'(?:command|cmd|op)\s*==\s*"([a-z_]+)"', source))
+    unknown = []
+    for path in driver.SCENARIO_DIR.glob("*.txt"):
+        if ".menu." not in path.name and path.name not in ("sp-smoke.menus.txt", "wait-for-probe.txt"):
+            continue
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            words = line.strip().split()
+            if not words or words[0].startswith("#"):
+                continue
+            verb = words[1] if words[0] == "observe" else words[0]
+            if verb not in known:
+                unknown.append(f"{path.name}:{number}: {verb}")
+    ok = row(results, "menu/verbs-exist-in-engine", not unknown, str(unknown))
+    ok &= row(results, "menu/rejects-misspelled-ready-wait", "wait_remote_ready" in known and "wait_remoteready" not in known)
+    return ok
+
+
+def check_resume_seams(results, scratch):
+    import run_sim_test
+    from compare_sim_traces import CORE
+    tokens = driver.supplied_tokens(["TURN_USER=override"], {"TURN_USER": "env", "TURN_PASS": "secret"})
+    ok = row(results, "tokens/environment-and-override", tokens == {"TURN_USER": "override", "TURN_PASS": "secret"})
+    scenario = {"name": "tokens", "path": "unit", "peers": [{"name": "host", "args": ["{TURN_SERVER}"]}]}
+    missing = driver.run_preflight(scenario, {}, [], {})
+    ok &= row(results, "tokens/unresolved-prevents-launch", missing["class"] == "harness" and missing["tokens"] == ["TURN_SERVER"])
+    ok &= row(results, "tokens/resolved", driver.run_preflight(scenario, {}, [], {"TURN_SERVER": "turn:example"}) is None)
+    scenario["peers"][0]["args"] = ["{DIRECTORY_ROOT}/listed.json"]
+    ok &= row(results, "tokens/directory-service-root", driver.run_preflight(scenario, {}, [], {}) is None)
+    same = {"name": "same", "peers": [{"name": "first", "args": []}, {"name": "second", "args": [], "retain_runtime_from": {"run": "same", "peer": "first"}, "start_when": {"peer": "first", "ended": True}}]}
+    ok &= row(results, "resume/same-run-owner-must-end", driver.run_preflight({"path": "unit"}, same, [], {}) is None)
+    same["peers"][1]["start_when"] = {"peer": "first", "sim_tick": 10}
+    ok &= row(results, "resume/rejects-concurrent-runtime-use", driver.run_preflight({"path": "unit"}, same, [], {})["class"] == "harness")
+    indexed = [{"frame": 0, "screen": "game", "sim_tick": 100, "service_state": "Starting"}, {"frame": 1, "screen": "game", "sim_tick": 1200, "service_state": "Running"}]
+    ok &= row(results, "frames/rejoin-requires-running-service", driver.frame_range(indexed, {"screen": "game", "service_state": "Running"}) == [1, 1])
+    runtime = scratch / "retained/runtime"
+    (runtime / "Userdata").mkdir(parents=True)
+    (runtime / "Autosaves").mkdir()
+    (runtime / "Temp").mkdir()
+    (runtime / "Userdata/Settings.ini").write_text("SettingsMan\n")
+    (runtime / "Userdata/NetworkIdentity.key").write_bytes(b"same-identity")
+    for tick in (60, 120):
+        (runtime / f"Autosaves/match-{tick}.ccmanifest").write_text(f"MatchId = match\nSavedTick = {tick}\n")
+        (runtime / f"Autosaves/match-{tick}.ccsave").write_bytes(b"retained-checkpoint")
+    (runtime / "Autosaves/match.admission").write_bytes(b"same-admission")
+    peer = {"peer": "host", "root": str(runtime.parent), "runtime": str(runtime), "record": {"exit_code": 137}}
+    captures = [{"name": "died", "peers": [peer]}]
+    condition = {"run": "died", "peers": ["host"], "ended": True}
+    ok &= row(results, "resume/ended-prior-run", driver.cross_run_ready(captures, condition))
+    ok &= row(results, "resume/no-missing-peer", not driver.cross_run_ready(captures, {**condition, "peers": ["host", "client"]}))
+    saved, evidence = driver.checkpoint_tokens(peer)
+    ok &= row(results, "resume/newest-complete-checkpoint", saved == {"RESUME_MATCH": "match", "RESUME_TICK": 120} and len(evidence) == 4)
+    original = run_sim_test.IsolatedRun
+    try:
+        run_sim_test.IsolatedRun = lambda argv, cwd, out, timeout, **kwargs: SimpleNamespace(argv=argv, cwd=cwd, out=out, **kwargs)
+        handle = run_sim_test.make_run(scratch, ["-test"], scratch / "resumed/host", runtime=runtime)
+        ok &= row(results, "resume/same-runtime-without-copy", handle.cwd == runtime.resolve() and not (handle.out / "runtime").exists() and (runtime / "Userdata/NetworkIdentity.key").read_bytes() == b"same-identity")
+    finally:
+        run_sim_test.IsolatedRun = original
+    rows = [{"tick": tick, "total": "a" * 64, "subsystems": {key: "b" * 64 for key in CORE | {"controller"}}} for tick in range(1, 6)]
+    paths = [scratch / "left.json", scratch / "right.json"]
+    for path in paths:
+        driver.write_json(path, {"runs": [{"tick_hashes": rows}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-ok")
+    ok &= row(results, "migration/full-post-boundary-range", result["status"] == "PASS" and result["exclusions"] == [])
+    gate_root = scratch / "round-gate"
+    gate_root.mkdir()
+    for name in ("host", "client"):
+        driver.write_json(gate_root / f"{name}_trace.json", {"runs": [{"tick_hashes": rows}]})
+    capture = {"root": str(gate_root), "peers": [{"peer": "host"}, {"peer": "client"}]}
+    driver.feel_probes({"hash_gate": {"name": "round2-hashes", "peers": ["host", "client"], "first_tick": 1, "cap": 5}}, capture, {})
+    ok &= row(results, "hash-gate/both-peers-share-full-record-proof", all(peer["gates"]["round2-hashes"]["status"] == "PASS" for peer in capture["peers"]))
+    rows[3]["subsystems"]["controller"] = "c" * 64
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-controller")
+    ok &= row(results, "migration/controller-is-not-excluded", result["status"] == "FAIL" and result["first_difference"] == 4)
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:-1]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-missing")
+    ok &= row(results, "migration/missing-cap-fails", result["status"] == "FAIL" and not result["full_rows_equal"])
+    return ok
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -353,6 +542,7 @@ def main():
     with contextlib.nullcontext(retained) if options.out else tempfile.TemporaryDirectory() as temporary:
         scratch = Path(temporary)
         ok = check_scenarios(results)
+        ok &= check_capture_binary(results, scratch)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
@@ -363,6 +553,10 @@ def main():
         ok &= check_stop_request(results, scratch)
         ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)
+        ok &= check_resume_seams(results, scratch)
+        ok &= check_menu_commands(results)
+        ok &= check_drop_receipts(results, scratch)
+        ok &= check_gameplay_epochs(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

@@ -95,6 +95,13 @@ def source_evidence(repo):
             "diff_sha256": hashlib.sha256(git("diff", "HEAD").encode()).hexdigest()}
 
 
+def capture_binary(repo):
+    if sys.platform == "win32":
+        return Path(repo).resolve() / "Cortex Command.exe"
+    from posix_test_runner import resolve_binary
+    return resolve_binary(repo)
+
+
 def find_ffmpeg():
     """PATH first, then the two machines' known locations; None when the encode has to be skipped."""
     found = shutil.which("ffmpeg")
@@ -138,6 +145,82 @@ def substitute(value, tokens):
     if isinstance(value, dict):
         return {key: substitute(item, tokens) for key, item in value.items()}
     return value
+
+
+def supplied_tokens(arguments=(), environment=None):
+    environment = os.environ if environment is None else environment
+    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS") if environment.get(name)}
+    for argument in arguments:
+        name, separator, value = argument.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not value:
+            raise ValueError("tokens require a nonempty NAME=VALUE")
+        result[name] = value
+    return result
+
+
+def prior_run(captures, name):
+    return next((run for run in captures if run["name"] == name), None)
+
+
+def prior_peer(captures, reference):
+    run = prior_run(captures, reference["run"])
+    return next((peer for peer in run["peers"] if peer["peer"] == reference["peer"]), None) if run else None
+
+
+def cross_run_ready(captures, condition):
+    names = condition.get("peers", [condition.get("peer")])
+    run = prior_run(captures, condition["run"])
+    if not run or not condition.get("ended"):
+        return False
+    return all(any(peer["peer"] == name and peer["record"].get("exit_code") is not None for peer in run["peers"]) for name in names)
+
+
+def checkpoint_tokens(peer):
+    runtime = Path(peer.get("runtime", Path(peer["root"]) / "runtime"))
+    store = runtime / "Autosaves"
+    candidates = []
+    for manifest in store.glob("*.ccmanifest"):
+        fields = dict(re.findall(r"(?m)^([A-Za-z]+)\s*=\s*([^\r\n]+)", manifest.read_text(encoding="utf-8")))
+        match, tick_text = manifest.stem.rsplit("-", 1)
+        tick = int(tick_text)
+        if fields.get("SavedTick") != str(tick) or not manifest.with_suffix(".ccsave").is_file() or not (store / f"{match}.admission").is_file():
+            continue
+        if fields.get("MatchId", match) != match:
+            continue
+        candidates.append((tick, match, manifest))
+    if not candidates:
+        raise ValueError(f"No retained checkpoint and restart manifest in {store}")
+    tick, match, manifest = max(candidates)
+    evidence = [file_evidence(path) for path in (manifest, manifest.with_suffix(".ccsave"), store / f"{match}.admission", runtime / "Userdata/NetworkIdentity.key")]
+    return {"RESUME_MATCH": match, "RESUME_TICK": tick}, evidence
+
+
+def run_preflight(scenario, run, captures, tokens):
+    peers = run.get("peers") or scenario.get("peers", [])
+    for node in [run, *peers]:
+        condition = node.get("start_when", {})
+        if condition.get("run") and not cross_run_ready(captures, condition):
+            return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
+        reference = node.get("retain_runtime_from")
+        same_run = reference and reference["run"] == run.get("name", "run0")
+        if same_run:
+            names = [peer["name"] for peer in peers]
+            if reference["peer"] not in names or node.get("name") not in names or names.index(reference["peer"]) >= names.index(node["name"]) or node.get("start_when") != {"peer": reference["peer"], "ended": True}:
+                return {"class": "harness", "reason": "A same-run runtime may be reused only after its earlier owner ends"}
+        elif reference and (not prior_peer(captures, reference) or not cross_run_ready(captures, {**reference, "ended": True})):
+            return {"class": "harness", "reason": f"Retained runtime is unavailable: {reference}"}
+    builtins = {"REPO", "PORT", "OUT", "SIZE", "WIDTH", "HEIGHT", "FPS", "PEER", "STAGE", "PROBE_DIR", "MENU_SCRIPT", "INPUT_SCRIPT", "VIDEO", "DIRECTORY_URL", "DIRECTORY_PIN", "DIRECTORY_ROOT"}
+    builtins.update(f"{prefix}_{peer['name']}" for peer in peers for prefix in ("STAGE", "PROBE_DIR", "VIDEO"))
+    body = json.dumps(peers)
+    for peer in peers:
+        for key in ("menu_script", "probe", "input_script"):
+            if peer.get(key):
+                body += scenario_text(scenario, peer[key])
+    needed = set(re.findall(r"\{([A-Z][A-Za-z0-9_]*)\}", body)) - builtins
+    missing = sorted(name for name in needed if name not in tokens)
+    if missing:
+        return {"class": "harness", "reason": "Unresolved tokens: " + ", ".join(missing), "tokens": missing}
+    return {"class": run.get("blocker_class", "engine"), "reason": run["blocked_by"]} if run.get("blocked_by") else None
 
 
 def port_for(run_index, base):
@@ -271,6 +354,8 @@ def frame_range(rows, item):
             continue
         if screen and row.get("screen") != screen:
             continue
+        if item.get("service_state") and row.get("service_state") != item["service_state"]:
+            continue
         tick = row.get("sim_tick")
         if low is not None and (tick is None or tick < low):
             continue
@@ -307,7 +392,8 @@ def menu_script_failures(peer_root):
 
 def log_assertions(peer_root, required=(), forbidden=()):
     lines = []
-    for leaf in ("stdout.log", "stderr.log", "runtime/LogConsole.txt"):
+    console = "console.log" if (Path(peer_root) / "console.log").is_file() else "runtime/LogConsole.txt"
+    for leaf in ("stdout.log", "stderr.log", console):
         path = Path(peer_root) / leaf
         if path.is_file():
             lines += [{"path": str(path), "line": index + 1, "text": line}
@@ -315,6 +401,16 @@ def log_assertions(peer_root, required=(), forbidden=()):
     return [{"assertion": pattern, "forbidden": denied,
              "matches": [line for line in lines if re.search(pattern, line["text"])]}
             for denied, patterns in ((False, required), (True, forbidden)) for pattern in patterns]
+
+
+def drop_evidence(record, tick):
+    if not record:
+        return {"pass": False, "reason": "The dropped peer was not launched"}
+    path = Path(record["video_dir"]) / "injected-drop.json"
+    receipt = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    passed = receipt.get("requested_tick") == tick and receipt.get("last_recorded_frame", {}).get("sim_tick", -1) >= tick
+    passed = passed and str(record.get("record", {}).get("injected_termination", "")).startswith("scenario drop")
+    return {"path": str(path), "receipt": receipt, "pass": passed}
 
 
 def item_evidence(record, item):
@@ -374,6 +470,24 @@ def item_evidence(record, item):
         evidence["log_assertions"] = assertions
         if not passed or evidence.get("probe") == "none":
             evidence["probe"] = "pass" if passed else "fail"
+    if item.get("drop_tick") is not None:
+        evidence["process_drop"] = drop_evidence(record, item["drop_tick"])
+        passed = evidence["process_drop"]["pass"]
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
+    if item.get("readback"):
+        observed = json.loads(probe_path.read_text(encoding="utf-8")) if probe_path.is_file() else {}
+        steps = {step["index"]: step.get("observed", {}) for step in observed.get("steps", [])}
+        checks = []
+        for check in item["readback"]:
+            value = steps.get(check["step"])
+            for key in check["path"]:
+                value = value.get(key) if isinstance(value, dict) else None
+            passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
+            checks.append({**check, "actual": value, "pass": passed})
+        evidence["readback_assertions"] = checks
+        if not all(check["pass"] for check in checks):
+            evidence["probe"] = "fail"
     return frame_range(rows, item), evidence
 
 
@@ -385,13 +499,21 @@ def review(scenario, capture, out):
         if scope and capture["name"] not in ([scope] if isinstance(scope, str) else scope):
             continue
         peer = item.get("peer")
-        peers = [peer] if peer else [row["peer"] for row in capture["peers"]]
+        declared = next((run for run in scenario.get("runs", []) if run.get("name") == capture["name"]), scenario)
+        peers = [peer] if peer else [row["peer"] for row in capture["peers"]] or [row["name"] for row in declared.get("peers", scenario.get("peers", []))]
         for name in peers:
             record = next((row for row in capture["peers"] if row["peer"] == name), None)
             if record is None:
-                items.append({**item, "peer": name, "frames": None, "state": "no such peer in this capture"})
+                items.append({**item, "peer": name, "run": capture["name"], "frames": None, "probe": "not-run", "state": "skipped",
+                              "finding": capture.get("skip_finding") or {"class": "harness", "reason": "No such peer in this capture"}})
                 continue
             found, assertions = item_evidence(record, item)
+            if item.get("peer_drop"):
+                required = item["peer_drop"]
+                witness = next((row for row in capture["peers"] if row["peer"] == required["peer"]), None)
+                assertions["peer_drop"] = {"peer": required["peer"], **drop_evidence(witness, required["tick"])}
+                if not assertions["peer_drop"]["pass"]:
+                    assertions.update(probe="fail", reason="The other peer has no matching recorded process drop")
             video_frames = found if record.get("video") else None
             encode_result = record.get("encode", {})
             seconds = None
@@ -409,11 +531,20 @@ def review(scenario, capture, out):
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
+    run_findings = []
+    for peer in capture["peers"]:
+        record = peer.get("record", {})
+        planned = peer.get("expected_termination") and str(record.get("injected_termination", "")).startswith("scenario drop")
+        if peer.get("error") or record.get("timed_out") or record.get("exit_code") not in (0, None) and not planned:
+            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"],
+                                 "reason": peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
+                                 "launch": peer.get("launch")})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
                 "reviewer_reads": ["review.json", "<peer>-sheet.png", "<peer>.mp4"],
                 "peers": [{k: v for k, v in row.items() if k != "index"} for row in capture["peers"]],
                 "checklist": items,
+                "run_findings": run_findings,
                 "failures": {row["peer"]: row["menu_script_failures"] for row in capture["peers"]},
                 "verdict": "agent-review-required"}
     (Path(out) / "review.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
@@ -461,6 +592,21 @@ def peer_arguments(peer, tokens, fps):
     return args + [str(value) for value in substitute(peer.get("args", []), tokens)]
 
 
+def gameplay_signals(video, stage, epochs=1):
+    last_tick, starts = None, []
+    for row in read_index(video):
+        if row.get("screen") != "game":
+            continue
+        tick = row.get("sim_tick", 0)
+        if last_tick is None or tick < last_tick:
+            starts.append(row)
+        last_tick = tick
+    for index, row in enumerate(starts[:epochs], 1):
+        path = Path(stage) / ("gameplay-started.json" if index == 1 else f"gameplay-epoch-{index}.json")
+        if not path.exists():
+            write_json(path, row)
+
+
 def run_one(options, scenario, run, run_index, out):
     """One scenario run: its peers launched together, each recording its own video."""
     root = Path(out) / run.get("name", f"run{run_index}")
@@ -478,7 +624,8 @@ def run_one(options, scenario, run, run_index, out):
 
     # Every peer's staging paths are known before any script is written, so a paired script can name
     # the other peer's probe directory and done file.
-    shared = {"REPO": Path(options.repo).resolve(), "PORT": port, "OUT": root, "SIZE": size,
+    shared = {**getattr(options, "tokens", {}), **getattr(options, "resume_tokens", {}),
+              "REPO": Path(options.repo).resolve(), "PORT": port, "OUT": root, "SIZE": size,
               "WIDTH": width, "HEIGHT": height, "FPS": options.fps, **getattr(options, "service_tokens", {})}
     for peer in peers:
         stage = root / f"{peer['name']}-stage"
@@ -497,7 +644,17 @@ def run_one(options, scenario, run, run_index, out):
                   "VIDEO": peer_root / "video"}
         environment = stage_peer(scenario, peer, stage, tokens)
         args = peer_arguments(peer, tokens, options.fps)
-        run_handle = make_run(options.repo, args, peer_root, timeout, env=environment)
+        reference = peer.get("retain_runtime_from")
+        retained = None
+        if reference:
+            previous = prior_peer(getattr(options, "completed_runs", []), reference)
+            retained = Path(runs[reference["peer"]].cwd).resolve() if reference["run"] == root.name else Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+            if not retained.is_relative_to(Path(out).resolve()):
+                raise ValueError(f"Retained runtime leaves this capture: {retained}")
+            console = retained / "LogConsole.txt"
+            if previous and console.is_file():
+                (Path(previous["root"]) / "console-before-restore.log").write_bytes(console.read_bytes())
+        run_handle = make_run(options.repo, args, peer_root, timeout, env=environment, **({"runtime": retained} if retained else {}))
         (Path(run_handle.out) / "video").mkdir(parents=True, exist_ok=False)
         for directory in peer.get("output_dirs", []):
             (Path(run_handle.out) / directory).mkdir(parents=True, exist_ok=False)
@@ -514,13 +671,18 @@ def run_one(options, scenario, run, run_index, out):
                 destination.write_text(entry["write"], encoding="utf-8")
         runs[name] = run_handle
         staged[name] = {"args": args, "env": {k: str(v) for k, v in environment.items()},
+                        "runtime": str(run_handle.cwd), "retain_runtime_from": reference,
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
 
     def drive(name):
         try:
-            records[name] = runs[name].start().finish()
+            record = runs[name].start().finish()
+            console = Path(runs[name].cwd) / "LogConsole.txt"
+            if console.is_file():
+                (Path(runs[name].out) / "console.log").write_bytes(console.read_bytes())
+            records[name] = record
         except Exception as error:  # the peer's record carries the failure; the others still finish
             records[name] = {"error": repr(error)}
         observe = next(peer.get("observe_after_failure", False) for peer in peers if peer["name"] == name)
@@ -530,6 +692,8 @@ def run_one(options, scenario, run, run_index, out):
 
     threads, killers = [], []
     def gate_met(gate):
+        if gate.get("run"):
+            return cross_run_ready(getattr(options, "completed_runs", []), gate)
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
@@ -595,10 +759,9 @@ def run_one(options, scenario, run, run_index, out):
                 raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
             for name in runs:
                 signal = Path(staged[name]["gameplay_signal"])
-                if not signal.exists():
-                    first = next((row for row in read_index(shared[f"VIDEO_{name}"]) if row.get("screen") == "game"), None)
-                    if first:
-                        write_json(signal, first)
+                epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
+                if not signal.exists() or epochs > 1:
+                    gameplay_signals(shared[f"VIDEO_{name}"], staged[name]["stage"], epochs)
             if failed.is_set():
                 for handle in runs.values():
                     drop_peer(handle, "another scenario peer failed")
@@ -630,6 +793,9 @@ def run_one(options, scenario, run, run_index, out):
         name = peer["name"]
         peer_root = root / name
         video_dir = peer_root / "video"
+        console = Path(runs[name].cwd) / "LogConsole.txt"
+        if console.is_file() and not (peer_root / "console.log").is_file():
+            (peer_root / "console.log").write_bytes(console.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
                           "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick")),
         "record": {k: records.get(name, {}).get(k) for k in
@@ -668,6 +834,9 @@ def review_only(options):
     for path in paths:
         document = json.loads(path.read_text(encoding="utf-8"))
         print(f"{document['scenario']}: {document.get('verdict', 'unreviewed')} ({path})")
+        for finding in document.get("run_findings", []):
+            print(f"  run finding: {finding}")
+            complete = False
         for item in document["checklist"]:
             print(f"  {item.get('run', path.parent.name)}/{item.get('peer', '?')} {item['id']}: "
                   f"frames={item.get('frames')} probe={item.get('probe', 'none')} {item.get('what', '')}")
@@ -683,12 +852,15 @@ def finalize_only(options):
     capture = json.loads((out / "capture.json").read_text(encoding="utf-8"))
     scenario = capture["scenario_definition"]
     existing = {run["name"]: run for run in capture["runs"]}
+    prior_manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8")) if (out / "manifest.json").is_file() else {}
     recovered = []
     for index, definition in enumerate(scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]):
         name = definition.get("name", f"run{index}")
         root = out / name
         definitions = definition.get("peers") or scenario.get("peers", [])
         if not any((root / peer["name"] / "launch.json").is_file() for peer in definitions):
+            if existing.get(name, {}).get("skip_finding"):
+                recovered.append(existing[name])
             continue
         run = existing.get(name, {"name": name, "root": str(root), "size": capture.get("size") or definition.get("size") or scenario.get("size") or DEFAULT_SIZE, "peers": []})
         prior = {peer["peer"]: peer for peer in run["peers"]}
@@ -715,7 +887,9 @@ def finalize_only(options):
         run["peers"] = peers
         recovered.append(run)
     capture["runs"] = recovered
-    capture["interrupted"] = capture.get("interrupted") or "Finalized after the capture owner ended; unstarted runs remain findings"
+    incomplete = len(recovered) != len(scenario.get("runs") or [None]) or any(run.get("interrupted") for run in recovered)
+    if incomplete and not capture.get("interrupted"):
+        capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
     capture["finalized"] = stamp()
     budget = options.scratch_root or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
     metadata_only = options.metadata_only or scratch_bytes(budget) >= SCRATCH_LIMIT
@@ -725,7 +899,7 @@ def finalize_only(options):
         review(scenario, run, Path(run["root"]))
     start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
     end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
-    scenario_manifest(capture, out, (end - start).total_seconds())
+    scenario_manifest(capture, out, prior_manifest.get("wall_seconds", (end - start).total_seconds()))
     aggregate_review(capture, out)
     for run in recovered:
         for peer in run["peers"]:
@@ -749,7 +923,9 @@ def scenario_manifest(capture, out, elapsed):
     manifest = {"schema": 1, "scenario": capture["scenario"], "source": capture["source"],
                 "exe": capture["exe"], "started": capture["started"], "finished": stamp(),
                 "wall_seconds": round(elapsed, 3), "fps": capture["fps"], "interrupted": capture.get("interrupted"),
-                "frame_count": sum(peer["frames"] for peer in peers), "peers": peers}
+                "frame_count": sum(peer["frames"] for peer in peers), "peers": peers,
+                "skipped_runs": [{"run": run["name"], **run["skip_finding"]} for run in capture["runs"] if run.get("skip_finding")],
+                "requires_findings": capture.get("requires_findings", [])}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
 
@@ -774,12 +950,27 @@ def aggregate_review(capture, out):
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
+                "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
                 "reviews": [str(Path(run["root"]) / "review.json") for run in capture["runs"]]}
     write_json(Path(out) / "review.json", document)
     return document
 
 
 def feel_probes(run, capture, source):
+    if run.get("migration_gate"):
+        migration_probes(run["migration_gate"], capture)
+    if run.get("hash_gate"):
+        config = run["hash_gate"]
+        root = Path(capture["root"])
+        try:
+            result = compare_hash_range(*(root / f"{name}_trace.json" for name in config["peers"]), config["first_tick"], config["cap"], root / config["name"])
+        except (OSError, ValueError, KeyError, IndexError) as error:
+            result = {"status": "FAIL", "reason": str(error), "exclusions": []}
+        result["evidence"] = str(root / (config["name"] + ".json"))
+        write_json(result["evidence"], result)
+        for peer in capture["peers"]:
+            if peer["peer"] in config["peers"]:
+                peer.setdefault("gates", {})[config["name"]] = result
     if not run.get("feel_gate"):
         return
     from feel.report import item9a_gates
@@ -796,6 +987,74 @@ def feel_probes(run, capture, source):
             result[peer["peer"]] = {"pass_check": False, "error": repr(error), "pins": {}}
             peer["gates"] = {}
     write_json(root / "feel-gates.json", result)
+
+
+def compare_hash_range(first, second, start, cap, out):
+    from compare_sim_traces import load_trace, strict_compare
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    rows, paths = [], []
+    for index, source in enumerate((Path(first), Path(second))):
+        load_trace(source)
+        data = json.loads(source.read_text(encoding="utf-8-sig"))
+        selected = [row for row in data["runs"][0]["tick_hashes"] if start <= row["tick"] <= cap]
+        data["runs"][0]["tick_hashes"] = selected
+        path = out / f"range-{index}.json"
+        write_json(path, data)
+        rows.append(selected)
+        paths.append(path)
+    passed, strict = strict_compare(*paths, expected_ticks=cap - start + 1, first_tick=start)
+    coverage = all([row["tick"] for row in trace] == list(range(start, cap + 1)) for trace in rows)
+    present = [{row["tick"] for row in trace} for trace in rows]
+    first_missing = next((tick for tick in range(start, cap + 1) if any(tick not in ticks for ticks in present)), None)
+    first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
+    exact = coverage and rows[0] == rows[1]
+    return {"status": "PASS" if passed and exact else "FAIL", "first_tick": start, "last_tick": cap,
+            "first_difference": first_difference, "first_missing_tick": first_missing, "full_rows_equal": exact, "strict": strict,
+            "traces": [file_evidence(first), file_evidence(second)], "exclusions": []}
+
+
+def migration_probes(config, capture):
+    root = Path(capture["root"])
+    names = config["peers"]
+    peers = [next(peer for peer in capture["peers"] if peer["peer"] == name) for name in names]
+    result = {"status": "FAIL", "exclusions": []}
+    try:
+        declarations = [re.findall(r"(?m)^\[net-match\] Host left - (.+) is now hosting; boundary=(\d+) round=(\d+)",
+                        (Path(peer["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace")) for peer in peers]
+        result["declarations"] = declarations
+        agreed = all(len(lines) == 1 for lines in declarations) and declarations[0] == declarations[1]
+        distinct = {entry for lines in declarations for entry in lines}
+        if len(distinct) != 1:
+            raise ValueError("Survivors did not declare one common host, boundary and round")
+        boundary = int(next(iter(distinct))[1])
+        result.update(compare_hash_range(*(root / f"{name}_trace.json" for name in names), boundary + 1, config["cap"], root / "migration-hashes"))
+        result["boundary"] = boundary
+        if not agreed:
+            result.update(status="FAIL", reason="A survivor did not declare the common host, boundary and round")
+    except (OSError, ValueError, KeyError, IndexError) as error:
+        result["reason"] = str(error)
+    result["evidence"] = str(root / "migration-hashes.json")
+    write_json(root / "migration-hashes.json", result)
+    for peer in peers:
+        peer.setdefault("gates", {})["migration-hashes"] = result
+
+
+def requirement_findings(repo, scenario):
+    findings = []
+    for name in scenario.get("requires", []):
+        path = Path(repo) / "Data" / name
+        if not path.is_dir():
+            findings.append({"class": "data", "reason": "Required module absent", "path": str(path)})
+    for requirement in scenario.get("requires_version", []):
+        path = Path(repo) / "Data" / requirement["module"] / "Index.ini"
+        if not path.is_file():
+            continue
+        declared = re.search(r"(?m)^\s*SupportedGameVersion\s*=\s*([^\r\n]+)", path.read_text(encoding="utf-8-sig"))
+        if declared and declared[1].strip() != requirement["version"]:
+            findings.append({"class": "data", "reason": requirement["reason"], "index": file_evidence(path),
+                             "declared": declared[1].strip(), "required": requirement["version"], "log": requirement.get("log")})
+    return findings
 
 
 def peer_completed(peer):
@@ -816,6 +1075,8 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
+    parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
+    parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
@@ -851,6 +1112,7 @@ def main():
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
 
     scenario = load_scenario(options.scenario)
+    options.tokens = supplied_tokens(options.token)
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
         options.port = int(scenario.get("port_base", PORT_LO))
@@ -865,31 +1127,58 @@ def main():
         raise SystemExit(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
     started = time.monotonic()
     source = source_evidence(options.repo)
-    exe = file_evidence(Path(options.repo) / ("Cortex Command.exe" if sys.platform == "win32" else "build-gns/CortexCommand"))
+    exe = file_evidence(capture_binary(options.repo))
     runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
+    if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
+        parser.error("--run names an unknown run")
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()),
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
-    missing = [str(Path(options.repo) / "Data" / name) for name in scenario.get("requires", [])
-               if not (Path(options.repo) / "Data" / name).is_dir()]
+    missing = requirement_findings(options.repo, scenario)
     if missing:
-        capture["requires_missing"] = missing
+        capture["requires_findings"] = missing
         write_json(out / "capture.json", capture)
-        write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-missing",
-                   "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-missing",
-                                  "finding": {"class": "data", "reason": "Required module absent", "paths": missing}}
+        write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-blocked",
+                   "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-blocked",
+                                  "finding": {"class": "data", "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
                                  for item in scenario["checklist"]]})
         scenario_manifest(capture, out, time.monotonic() - started)
-        print(f"{scenario['name']}: requires-missing: {missing}")
+        print(f"{scenario['name']}: requires-blocked: {missing}")
         return 2
     complete = True
     write_json(out / "capture.json", capture)
     try:
         for index, run in enumerate(runs):
+            name = run.get("name", f"run{index}")
+            options.completed_runs = capture["runs"]
+            options.resume_tokens = {}
+            skip = None
+            if options.run and name not in options.run:
+                skip = {"class": "harness", "reason": "Outside the explicitly selected named runs"}
+            if not skip and run.get("resume_from"):
+                try:
+                    previous = prior_peer(capture["runs"], run["resume_from"])
+                    if not previous:
+                        raise ValueError("Checkpoint source peer is absent")
+                    options.resume_tokens, run["checkpoint_evidence"] = checkpoint_tokens(previous)
+                except (OSError, ValueError) as error:
+                    skip = {"class": "harness", "reason": str(error)}
+            skip = skip or run_preflight(scenario, run, capture["runs"], {**options.tokens, **options.resume_tokens})
+            if skip:
+                root = out / name
+                root.mkdir(parents=True, exist_ok=False)
+                captured = {"name": name, "root": str(root), "size": options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE,
+                            "peers": [], "skip_finding": skip}
+                capture["runs"].append(captured)
+                review(scenario, captured, root)
+                write_json(out / "capture.json", capture)
+                complete = False
+                continue
             service = nullcontext({})
-            if scenario.get("directory_port"):
+            directory_port = run.get("directory_port", scenario.get("directory_port"))
+            if directory_port:
                 from e2e.directory import serve
-                service = serve(out / f"{run.get('name', f'run{index}')}-directory", scenario["directory_port"])
+                service = serve(out / f"{name}-directory", directory_port)
             with service as tokens:
                 options.service_tokens = tokens
                 captured = run_one(options, scenario, run, index, out)
@@ -899,7 +1188,7 @@ def main():
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
             else:
-                feel_probes(run, captured, source)
+                feel_probes({**scenario, **run}, captured, source)
                 render(captured, options.fps, options.sheet_every)
             review(scenario, captured, Path(captured["root"]))
             for peer in captured["peers"]:

@@ -17,6 +17,10 @@ video_mark mp-lobby-client
 wait_connected 2
 wait_ms 825
 assert_substate Lobby
+assert_text_fits LabelLobbyPlayer0
+assert_text_fits LabelLobbyPlayer1
+assert_no_overlap LabelLobbyPlayer0 LabelLobbyPlayer1
+assert_label LabelLobbyPlayer1 Joiner
 dump_lobby
 video_mark mp-details-read-only
 activate ButtonLobbyOptions

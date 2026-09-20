@@ -929,6 +929,86 @@
       "log_regex": [
         "\\[net-match-service-e2e\\] roster: peer1=host.*peer2=client.*peer3=survivor"
       ]
+    },
+    {
+      "id": "lag-100-private-catchup",
+      "run": "lag-100",
+      "peer": "client",
+      "screen": "game",
+      "what": "The held client returns through private catch-up and resumes play.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    },
+    {
+      "id": "lag-100-no-survivor-resync-host",
+      "run": "lag-100",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The surviving peer continues playing without a shared resync.",
+      "forbidden_log_regex": [
+        "(?i)resync:",
+        "(?i)resyncing the match"
+      ]
+    },
+    {
+      "id": "lag-100-no-survivor-resync-survivor",
+      "run": "lag-100",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The surviving peer continues playing without a shared resync.",
+      "forbidden_log_regex": [
+        "(?i)resync:",
+        "(?i)resyncing the match"
+      ]
+    },
+    {
+      "id": "lag-200-private-catchup",
+      "run": "lag-200",
+      "peer": "client",
+      "screen": "game",
+      "what": "The held client returns through private catch-up and resumes play.",
+      "log_regex": [
+        "\\[net-match\\] private catch-up complete frame=\\d+"
+      ]
+    },
+    {
+      "id": "lag-200-no-survivor-resync-host",
+      "run": "lag-200",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The surviving peer continues playing without a shared resync.",
+      "forbidden_log_regex": [
+        "(?i)resync:",
+        "(?i)resyncing the match"
+      ]
+    },
+    {
+      "id": "lag-200-no-survivor-resync-survivor",
+      "run": "lag-200",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The surviving peer continues playing without a shared resync.",
+      "forbidden_log_regex": [
+        "(?i)resync:",
+        "(?i)resyncing the match"
+      ]
     }
   ]
 }

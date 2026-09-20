@@ -10,25 +10,35 @@
       "name": "host",
       "args": [
         "-input-script",
-        "{INPUT_SCRIPT}"
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/host_trace.json",
+        "-max-ticks",
+        "600"
       ],
-      "input_script": "play-input.txt",
+      "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.host.menu.txt",
-      "probe": "mp-rematch.host.probe.json"
+      "probe": "mp-rematch.host.probe.json",
+      "gameplay_epochs": 2
     },
     {
       "name": "client",
       "args": [
         "-input-script",
-        "{INPUT_SCRIPT}"
+        "{INPUT_SCRIPT}",
+        "-out",
+        "{OUT}/client_trace.json",
+        "-max-ticks",
+        "600"
       ],
-      "input_script": "play-input.txt",
+      "input_script": "ui-surfaces.input.txt",
       "menu_script": "mp-rematch.client.menu.txt",
       "probe": "mp-rematch.client.probe.json",
       "start_when": {
         "peer": "host",
         "event": "video_mark host-listening"
-      }
+      },
+      "gameplay_epochs": 2
     }
   ],
   "checklist": [
@@ -83,6 +93,31 @@
       "assert": "menu assert_substate Lobby; dump_lobby",
       "peer": "client",
       "mark": "rematch-lobby"
+    },
+    {
+      "id": "round2-hashes-host",
+      "peer": "host",
+      "mark": "round2-play",
+      "screen": "game",
+      "gate": "round2-hashes",
+      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller."
+    },
+    {
+      "id": "round2-hashes-client",
+      "peer": "client",
+      "mark": "round2-play",
+      "screen": "game",
+      "gate": "round2-hashes",
+      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller."
     }
-  ]
+  ],
+  "hash_gate": {
+    "name": "round2-hashes",
+    "peers": [
+      "host",
+      "client"
+    ],
+    "first_tick": 1,
+    "cap": 600
+  }
 }

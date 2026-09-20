@@ -39,6 +39,11 @@
       "scope": "menu"
     },
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-epoch-2.json",
+      "scope": "menu"
+    },
+    {
       "op": "wait",
       "service": "Running",
       "screen": "Gameplay"
@@ -49,26 +54,19 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 3000
+      "service": "Running",
+      "sim_at_least": 550
     },
     {
-      "op": "menu",
-      "command": "video_mark round2-play-end"
-    },
-    {
-      "op": "wait",
-      "service": "Starting",
-      "scope": "menu"
-    },
-    {
-      "op": "wait",
-      "elapsed_ms": 800,
-      "scope": "menu"
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 550
     },
     {
       "op": "signal",
-      "name": "done",
-      "scope": "menu"
+      "name": "done"
     },
     {
       "op": "finish"

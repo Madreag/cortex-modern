@@ -1,6 +1,8 @@
 wait_ms 1800
 activate ButtonMainToOptions
 wait_ms 600
+select_settings_page Network
+wait_ms 250
 select_settings_page Network:Connection
 video_mark direct-connection-host
 wait_ms 900
@@ -48,6 +50,8 @@ wait_ms 600
 combo_select ComboHostNetRelay Off
 wait_ms 600
 assert_label ComboHostNetRelay Off
+activate TabHostNetTuning
+wait_ms 600
 combo_select ComboHostNetVisibility Internet: Listed
 wait_ms 900
 assert_label ComboHostNetVisibility Listed

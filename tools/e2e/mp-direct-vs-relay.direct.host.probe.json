@@ -33,6 +33,10 @@
       "command": "video_mark direct-mp-pause-host"
     },
     {
+      "op": "wait",
+      "elapsed_ms": 500
+    },
+    {
       "op": "assert",
       "equals": {
         "service": "Running",
@@ -99,7 +103,7 @@
     },
     {
       "op": "menu",
-      "command": "video_mark direct-mp-end-match"
+      "command": "video_mark direct-mp-resume-host"
     },
     {
       "op": "menu",

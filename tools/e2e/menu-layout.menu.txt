@@ -1,0 +1,31 @@
+wait_ms 1500
+activate ButtonMainToOptions
+wait_ms 500
+select_settings_page Gameplay
+wait_ms 400
+video_mark layout-gameplay
+assert_settings_page Gameplay
+assert_no_overlap CheckboxShowForeignItems CheckboxEnemyHUD
+assert_text_fits CheckboxShowForeignItems
+assert_text_fits CheckboxEnemyHUD
+dump_player_options
+wait_ms 800
+select_settings_page Misc
+wait_ms 400
+video_mark layout-misc
+assert_settings_page Misc
+assert_no_overlap CheckboxShowLoadingScreenProgressReport CheckboxShowAdvancedPerfStats
+assert_text_fits CheckboxShowLoadingScreenProgressReport
+assert_text_fits CheckboxShowAdvancedPerfStats
+dump_player_options
+wait_ms 800
+select_settings_page Network
+wait_ms 250
+select_settings_page Network:Connection
+wait_ms 400
+video_mark layout-network-connection
+assert_settings_page Network:Connection
+dump_player_options
+assert_text_fits TextNetworkStunServers
+wait_ms 800
+exit
