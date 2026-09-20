@@ -5,7 +5,7 @@ local updateDuel = FeelBaseline.UpdateActivity;
 
 local function CollectTeamActors(team)
     local actors = {};
-    local actor = MovableMan:GetFirstTeamActor(team);
+    local actor = MovableMan:GetFirstTeamActor(team, Activity.PLAYER_NONE);
     if not actor then
         return actors;
     end
