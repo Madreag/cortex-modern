@@ -72,7 +72,9 @@
       "screen": "MultiplayerScreen",
       "what": "The lobby visibly lists Host, ClientA and ClientB.",
       "events": [
-        "assert_label LabelLobbyPlayer[012].*PASS"
+        "assert_label LabelLobbyPlayer0.*Host.*PASS",
+        "assert_label LabelLobbyPlayer1.*ClientA.*PASS",
+        "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
       ]
     },
     {
@@ -178,7 +180,7 @@
       "screen": "MultiplayerScreen",
       "what": "The on-screen refused rejoin carries the protocol ban reason in its log.",
       "log_regex": [
-        "ParticipantBanned"
+        "^\\[net-(?:session|auth|reconnect|match)\\].*ParticipantBanned"
       ]
     }
   ]
