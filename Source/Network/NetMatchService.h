@@ -721,6 +721,7 @@ namespace RTE {
 		std::string GetStatusText() const;
 		std::string GetErrorText() const;
 		/// The active session's route, separate from the saved preference for the next one.
+		std::string GetConnectedRoute(uint8_t peerId = 0) const;
 		std::string GetIceRoute() const {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			return m_IceRoute;
@@ -818,6 +819,7 @@ namespace RTE {
 		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, bool departedHost);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
+		std::string GetConnectedRouteLocked(uint8_t peerId) const;
 		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get())
 			                                                                                                     : m_Transport.get(); }
 		bool SealMigrationCapsule(uint8_t peerId, const NetHash32& configHash, std::vector<uint8_t>& sealed);

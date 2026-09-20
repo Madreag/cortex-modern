@@ -22,6 +22,7 @@ namespace RTE {
 		bool aiHeld = false;
 		bool dropped = false;    //!< §11: the seat is held but its player's link is gone.
 		bool reclaiming = false; //!< §11: that player is proving its ticket right now.
+		std::string connectedRoute;
 		std::string statusLine;  //!< §11's persistent line for the seat, derived on THIS peer; "" when the seat is fine.
 	};
 

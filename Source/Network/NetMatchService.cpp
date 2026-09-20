@@ -4582,6 +4582,25 @@ static std::string ResyncSaveName() {
 		return status;
 	}
 
+	std::string NetMatchService::GetConnectedRouteLocked(uint8_t peerId) const {
+		INetTransport* wire = ActiveWireLocked();
+		if (!wire) return {};
+		if (m_Coordinator) for (const auto& [peer, transport]: m_Coordinator->GetConfig().remoteTransportPeerIds) {
+			if (peerId != 0 && peer != peerId) continue;
+			const auto route = wire->GetConnectedRoute(transport); if (!route.empty()) return route;
+		}
+		if (m_Session) for (const auto& peer: m_Session->GetReadyPeers()) {
+			if (peerId != 0 && peer.assignedPeerId + 1 != peerId) continue;
+			const auto route = wire->GetConnectedRoute(peer.transportPeerId); if (!route.empty()) return route;
+		}
+		return {};
+	}
+
+	std::string NetMatchService::GetConnectedRoute(uint8_t peerId) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return GetConnectedRouteLocked(peerId);
+	}
+
 	NetLobbySnapshot NetMatchService::GetLobbySnapshot() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		NetLobbySnapshot snapshot = m_LobbySnapshot;
@@ -4646,6 +4665,7 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
+			member.connectedRoute = GetConnectedRouteLocked(member.peerId);
 			if (m_Coordinator && m_State == NetMatchServiceState::Running) {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
 				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
@@ -4654,6 +4674,8 @@ static std::string ResyncSaveName() {
 				}
 				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame());
 				if (member.aiHeld) member.statusLine = member.reclaiming ? "Rejoining..." : "held - AI in control";
+				if (!member.aiHeld && !member.connectedRoute.empty() && g_SettingsMan.GetNetworkShowDiagnostics())
+					member.statusLine += (member.statusLine.empty() ? "" : " | ") + member.connectedRoute;
 			}
 		}
 		return snapshot;

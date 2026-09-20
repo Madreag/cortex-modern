@@ -2,6 +2,7 @@
 
 #include "NetActorOwnership.h"
 #include "GnsTransport.h"
+#include "MenuMan.h"
 #include "NetMuxTransport.h"
 #include "SettingsMan.h"
 #ifdef CCCP_WITH_GNS
@@ -11191,6 +11192,65 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestConnectedRouteEvidence(std::string* error) {
+		if (!GnsTransport::IsCompiledIn()) return true;
+		GnsTransport host, client;
+		std::ostringstream captured;
+		struct Output { std::streambuf* previous; ~Output() { std::cout.rdbuf(previous); } } output{std::cout.rdbuf(captured.rdbuf())};
+		if (!host.StartHost(49469, error) || !client.Connect("127.0.0.1", 49469, error)) return false;
+		NetPeerId hostPeer = 0, clientPeer = 0;
+		const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (std::chrono::steady_clock::now() < end) {
+			for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
+			for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
+			if (hostPeer && clientPeer && host.GetPeerConnectionInfo(hostPeer).state == 3 && client.GetPeerConnectionInfo(clientPeer).state == 3) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		const auto count = [&](const std::string& text) { size_t found = 0; for (size_t at = 0; (at = captured.str().find(text, at)) != std::string::npos; at += text.size()) ++found; return found; };
+		for (int repeat = 0; repeat < 8; ++repeat) { host.Send(hostPeer, NetTransportLane::ControlReliable, {1}); host.PollEvents(); client.PollEvents(); }
+		const bool passed = hostPeer && clientPeer && host.GetConnectedRoute(hostPeer) == "direct" && client.GetConnectedRoute(clientPeer) == "direct" &&
+		    count("[net-ice] selected candidate=host") == 2 && count("[net-route] RouteAllowed route=direct allowed=1") == 2;
+		std::cout.rdbuf(output.previous);
+		std::cout << captured.str();
+		if (!passed) { *error = "connected route and once-per-connection evidence are missing"; return false; }
+		std::cout << "[net-match-selftest] PASS connected_route_evidence loopback=direct candidate=host lines_per_connection=1" << std::endl;
+		return true;
+	}
+
+	bool TestLocalMenuKeepsInputs(std::string* error) {
+		const bool constructed = !NetMatchService::IsConstructed();
+		if (constructed) NetMatchService::Construct();
+		struct ServiceLifetime { bool owned; ~ServiceLifetime() { if (owned) NetMatchService::Destruct(); } } serviceLifetime{constructed};
+		LoopbackTransport hostWire, clientWire;
+		if (!hostWire.StartHost(49468, error) || !clientWire.Connect("loopback", 49468, error)) return false;
+		NetLockstepConfig hostConfig; hostConfig.sessionId = 0x137; hostConfig.roundId = 0x13701;
+		hostConfig.localPeerId = 1; hostConfig.remotePeerId = 2; hostConfig.remoteTransportPeerId = 1;
+		hostConfig.relayToOtherPeers = true; hostConfig.simTickMs = g_TimerMan.GetDeltaTimeMS(); hostConfig.substituteSlowPeers = true;
+		hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(hostConfig.sessionId);
+		hostConfig.matchConfig.players = {{1, 0, false, "Host"}, {2, 1, false, "Menu player"}};
+		NetLockstepConfig clientConfig = hostConfig; clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1; clientConfig.relayToOtherPeers = false; clientConfig.roundId = 0;
+		NetLockstepCoordinator host, client;
+		if (!host.Start(hostWire, hostConfig, error) || !client.Start(clientWire, clientConfig, error)) return false;
+		uint64_t now = 0;
+		auto pump = [&] { host.Tick(now); client.Tick(now); hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); ++now; };
+		for (int i = 0; i < 20; ++i) pump();
+		if (!host.IsRunning() || !client.IsRunning()) { *error = "menu input round did not start"; return false; }
+		ScenarioRunner::SetLockstepCoordinator(&client);
+		struct Restore { ~Restore() { if (g_MenuMan.IsLocalPauseMenuOpen()) g_MenuMan.ToggleLocalPauseMenu(); ScenarioRunner::SetLockstepCoordinator(nullptr); } } restore;
+		if (!g_MenuMan.ToggleLocalPauseMenu()) { *error = "local network menu did not open"; return false; }
+		bool neutral = true; uint64_t committed = 0;
+		for (uint64_t tick = 0; tick < 300; ++tick) {
+			ControllerFrame click; click.actorUniqueID = 991; click.stateMask = 1;
+			if (!host.QueueLocalInput(tick, {}, {}, error) || !ScenarioRunner::QueueLockstepLocalControllerFrames(tick, {click}, error)) return false;
+			for (int i = 0; i < 3; ++i) pump();
+			for (NetLockstepReadyFrame ready; host.PopReadyFrame(ready);) { ++committed; neutral = neutral && ready.remoteFrames.empty(); }
+			for (NetLockstepReadyFrame ready; client.PopReadyFrame(ready);) {}
+		}
+		if (!neutral || committed != 300 || host.GetStats().peers.at(2).holds != 0) { *error = "open local menu did not commit 300 neutral inputs without a hold"; return false; }
+		std::cout << "[net-match-selftest] PASS local_menu_inputs ticks=300 neutral=300 holds=0" << std::endl;
+		return true;
+	}
+
 	bool TestReservedSeatDirectoryResolve(std::string* error) {
 		NetDirectoryLocalIdentity identity;
 		identity.networkProtocolVersion = 1; identity.lockstepCodecVersion = NetLockstepCodec::c_Version;
@@ -11722,6 +11782,10 @@ namespace RTE {
 		};
 
 		std::string error;
+		std::string menuError, routeError;
+		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
+		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);
+		if (!menuInputs || !routeEvidence) return fail(menuError + "; " + routeError);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);

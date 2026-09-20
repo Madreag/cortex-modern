@@ -1720,6 +1720,7 @@ namespace RTE {
 			}
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
+		if (g_MenuMan.IsLocalPauseMenuOpen()) frames.clear();
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
 		if (producing->TimingDecisionPendingAt(tick)) {
 			LockstepWaitTimer waitTimer;

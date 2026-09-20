@@ -8,6 +8,10 @@
 #include <set>
 #include <thread>
 #include <utility>
+#include <iostream>
+#include <sstream>
+#include <string_view>
+#include <functional>
 
 #ifdef CCCP_WITH_GNS
 #include <steam/isteamnetworkingutils.h>
@@ -28,6 +32,65 @@ namespace RTE {
 #ifdef CCCP_WITH_GNS
 
 	namespace {
+		struct SignalField { uint32_t number; uint8_t wire; uint64_t integer; std::string_view bytes; };
+		bool SignalFields(std::string_view bytes, std::vector<SignalField>& out) {
+			size_t cursor = 0;
+			const auto varint = [&](uint64_t& value) {
+				value = 0;
+				for (unsigned shift = 0; shift < 64 && cursor < bytes.size(); shift += 7) {
+					const uint8_t byte = static_cast<uint8_t>(bytes[cursor++]);
+					if (shift == 63 && byte > 1) return false;
+					value |= uint64_t(byte & 127) << shift;
+					if (!(byte & 128)) return true;
+				}
+				return false;
+			};
+			while (cursor < bytes.size()) {
+				uint64_t tag = 0; if (!varint(tag) || tag < 8 || tag >> 3 > UINT32_MAX) return false;
+				SignalField field{static_cast<uint32_t>(tag >> 3), static_cast<uint8_t>(tag & 7), 0, {}};
+				if (field.wire == 0) { if (!varint(field.integer)) return false; }
+				else if (field.wire == 1 || field.wire == 5) {
+					const size_t count = field.wire == 1 ? 8 : 4; if (count > bytes.size() - cursor) return false;
+					for (size_t i = 0; i < count; ++i) field.integer |= uint64_t(static_cast<uint8_t>(bytes[cursor++])) << (8 * i);
+				} else if (field.wire == 2) {
+					uint64_t count = 0; if (!varint(count) || count > bytes.size() - cursor) return false;
+					field.bytes = bytes.substr(cursor, static_cast<size_t>(count)); cursor += static_cast<size_t>(count);
+				} else return false;
+				out.push_back(field);
+			}
+			return true;
+		}
+		struct CandidateEvidence { std::string identity; uint32_t connection = 0; std::map<std::string, std::string> candidates; };
+		CandidateEvidence ReadCandidateEvidence(std::string_view signal) {
+			CandidateEvidence result;
+			if (signal.size() > 1024 * 1024) return result;
+			std::vector<SignalField> root;
+			if (!SignalFields(signal, root)) return result;
+			for (const auto& field: root) {
+				if (field.number == 8 && field.wire == 2 && field.bytes.size() <= 256) result.identity = field.bytes;
+				if (field.number == 9 && field.wire == 5) result.connection = static_cast<uint32_t>(field.integer);
+				if (field.number != 13 || field.wire != 2) continue;
+				std::vector<SignalField> reliable; if (!SignalFields(field.bytes, reliable)) continue;
+				for (const auto& message: reliable) if (message.number == 1 && message.wire == 2) {
+					std::vector<SignalField> ice; if (!SignalFields(message.bytes, ice)) continue;
+					for (const auto& addition: ice) if (addition.number == 1 && addition.wire == 2) {
+						std::vector<SignalField> candidate; if (!SignalFields(addition.bytes, candidate)) continue;
+						for (const auto& attribute: candidate) if (attribute.number == 3 && attribute.wire == 2 && attribute.bytes.size() <= 512) {
+							std::istringstream words{std::string(attribute.bytes)};
+							std::string foundation, protocol, address, marker, type; uint32_t component = 0, priority = 0, port = 0;
+							if (!(words >> foundation >> component >> protocol >> priority >> address >> port >> marker >> type) || !foundation.starts_with("candidate:") || protocol != "udp" || port == 0 || port > 65535 || marker != "typ" ||
+							    (type != "host" && type != "srflx" && type != "prflx" && type != "relay")) continue;
+							SteamNetworkingIPAddr endpoint{};
+							const std::string text = (address.find(':') == std::string::npos ? address : "[" + address + "]") + ":" + std::to_string(port);
+							if (!endpoint.ParseString(text.c_str())) continue;
+							char canonical[SteamNetworkingIPAddr::k_cchMaxString]{}; endpoint.ToString(canonical, sizeof(canonical), true);
+							if (result.candidates.size() < 64) result.candidates[canonical] = type;
+						}
+					}
+				}
+			}
+			return result;
+		}
 		bool g_GnsInitialized = false;
 		uint32_t g_GnsRefCount = 0;
 
@@ -292,6 +355,7 @@ namespace RTE {
 		}
 
 		void Stop() {
+			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
 				m_IsHost = false;
@@ -430,12 +494,30 @@ namespace RTE {
 			}
 		}
 
+		std::string CandidateType(const SteamNetConnectionInfo_t& info) const {
+			if ((info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0) return "relay";
+			if (m_P2PMode < 0 || (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_LoopbackBuffers) != 0) return "host";
+			char identity[SteamNetworkingIdentity::k_cchMaxString]{}, address[SteamNetworkingIPAddr::k_cchMaxString]{};
+			info.m_identityRemote.ToString(identity, sizeof(identity)); info.m_addrRemote.ToString(address, sizeof(address), true);
+			const auto candidate = m_CandidateTypes.find({identity, address});
+			return candidate == m_CandidateTypes.end() ? "prflx" : candidate->second;
+		}
+
+		mutable std::set<HSteamNetConnection> m_RouteLogged;
+		std::map<uint32_t, std::string> m_CandidateIdentities;
+		std::map<std::pair<std::string, std::string>, std::string> m_CandidateTypes;
+
 		bool RouteAllowed(HSteamNetConnection connection) const {
-			if (m_P2PMode <= 0) return true;
+			if (m_P2PMode <= 0 && m_RouteLogged.contains(connection)) return true;
 			SteamNetConnectionInfo_t info{};
 			if (!m_Interface->GetConnectionInfo(connection, &info) || info.m_eState != k_ESteamNetworkingConnectionState_Connected) return true;
 			const bool relayed = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
-			return GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
+			const bool allowed = GnsTransport::ConnectionPolicyAllowsRoute(m_P2PMode, relayed);
+			if (m_RouteLogged.insert(connection).second) {
+				std::cout << "[net-ice] selected candidate=" << CandidateType(info) << " connection=" << connection << std::endl;
+				std::cout << "[net-route] RouteAllowed route=" << (relayed ? "relay" : "direct") << " allowed=" << (allowed ? 1 : 0) << " connection=" << connection << std::endl;
+			}
+			return allowed;
 		}
 
 		void RefuseRoute(HSteamNetConnection connection) {
@@ -636,7 +718,15 @@ namespace RTE {
 				return false;
 			}
 			OwningRecvContext owningContext(this, context);
-			return m_Interface->ReceivedP2PCustomSignal(blob, size, &owningContext);
+			const bool accepted = m_Interface->ReceivedP2PCustomSignal(blob, size, &owningContext);
+			if (accepted) {
+				auto evidence = ReadCandidateEvidence({static_cast<const char*>(blob), static_cast<size_t>(size)});
+				if (!evidence.identity.empty() && evidence.connection && m_CandidateIdentities.size() < 512) m_CandidateIdentities[evidence.connection] = evidence.identity;
+				if (evidence.identity.empty()) if (const auto known = m_CandidateIdentities.find(evidence.connection); known != m_CandidateIdentities.end()) evidence.identity = known->second;
+				if (!evidence.identity.empty()) for (const auto& [address, type]: evidence.candidates)
+					if (m_CandidateTypes.size() < 512 || m_CandidateTypes.contains({evidence.identity, address})) m_CandidateTypes[{evidence.identity, address}] = type;
+			}
+			return accepted;
 		}
 
 		GnsPeerConnectionInfo GetPeerConnectionInfo(NetPeerId peerId) {
@@ -660,6 +750,10 @@ namespace RTE {
 			result.remoteAddress = info.m_addrRemote.IsIPv6AllZeros() ? std::string() : std::string(address);
 			result.flags = info.m_nFlags;
 			result.relayPop = info.m_idPOPRelay;
+			if (info.m_eState == k_ESteamNetworkingConnectionState_Connected) {
+				result.connectedRoute = (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0 ? "relay" : "direct";
+				result.selectedCandidateType = CandidateType(info);
+			}
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
