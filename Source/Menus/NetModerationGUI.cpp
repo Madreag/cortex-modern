@@ -1380,6 +1380,12 @@ GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
 		}
 		return m_Toasts.front();
 	}
+	if (m_OverlayControls && name == "LabelNetMatchHandoverToast") {
+		for (auto* row : m_Toasts) {
+			if (row->GetVisible() && row->GetText().find(" is now hosting") != std::string::npos) return row;
+		}
+		return m_Toasts.front();
+	}
 	if (m_OverlayControls) {
 		if (GUIControl* overlay = m_OverlayControls->GetControl(name)) return overlay;
 	}
