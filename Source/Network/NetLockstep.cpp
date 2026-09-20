@@ -4577,7 +4577,7 @@ namespace RTE {
 		}
 		const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
 		const bool first = !m_ConsumerWaitCounted && elapsed > 0;
-		if (first) { ++m_Stats.missingFrameStalls; m_ConsumerWaitCounted = true; }
+		if (first) { ++m_Stats.blockingFrameWaits; m_ConsumerWaitCounted = true; }
 		m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, elapsed);
 		const auto remote = m_RemoteFrames.find(frame);
 		std::vector<uint8_t> missing;
@@ -4609,6 +4609,18 @@ namespace RTE {
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs)
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 		m_ConsumerWaitingFrame.reset();
+	}
+
+	void NetLockstepCoordinator::NoteLocalTickCost(uint64_t producedFrame, double computeMs) {
+		if (m_Playback || m_Config.simTickMs <= 0 || !std::isfinite(computeMs) || computeMs < 0) return;
+		const bool overrun = computeMs > m_Config.simTickMs;
+		if (overrun) ++m_Stats.localTickOverruns;
+		m_Stats.localComputeDebtMs = std::max(0.0, m_Stats.localComputeDebtMs + computeMs - m_Config.simTickMs);
+		const double budget = std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, producedFrame)) * m_Config.simTickMs;
+		const bool late = overrun && m_Stats.localComputeDebtMs > budget;
+		if (late) { ++m_Stats.localLateInputs; ++m_Stats.consecutiveLateInputs; }
+		else m_Stats.consecutiveLateInputs = 0;
+		m_Stats.localMachineSlow = m_Stats.consecutiveLateInputs >= 8;
 	}
 
 	void NetLockstepCoordinator::CommitTiming(uint64_t revision) {
@@ -6068,6 +6080,18 @@ namespace RTE {
 		out << "\"out_of_order_frames\":" << m_Stats.outOfOrderFrames << ",";
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
+		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
+		out << "\"delay_changes_proposed\":" << m_Stats.delayChangesProposed << ",";
+		out << "\"delay_changes_committed\":" << m_Stats.delayChangesCommitted << ",";
+		out << "\"delay_padding_frames\":" << m_Stats.delayPaddingFrames << ",";
+		out << "\"delay_deferred_samples\":" << m_Stats.delayDeferredSamples << ",";
+		out << "\"local_tick_overruns\":" << m_Stats.localTickOverruns << ",";
+		out << "\"local_late_inputs\":" << m_Stats.localLateInputs << ",";
+		out << "\"local_consecutive_late_inputs\":" << m_Stats.consecutiveLateInputs << ",";
+		out << "\"local_compute_debt_ms\":" << m_Stats.localComputeDebtMs << ",";
+		out << "\"local_machine_slow\":" << (m_Stats.localMachineSlow ? "true" : "false") << ",";
+		out << "\"slow_player_bound_ticks\":" << m_Config.slowPlayerBoundTicks << ",";
+		out << "\"sim_tick_ms\":" << m_Config.simTickMs << ",";
 		out << "\"longest_stall_ms\":" << m_Stats.longestStallMs << ",";
 		out << "\"last_missing_peers\":\"" << EscapeJson(m_Stats.lastMissingPeers) << "\",";
 		out << "\"relay_packets_sent\":" << m_Stats.relayPacketsSent << ",";
@@ -6125,6 +6149,10 @@ namespace RTE {
 			    << ",\"largest_relay_packet_bytes\":" << peer.largestRelayPacketBytes
 			    << ",\"relay_backlog_packets\":" << RelayBacklogPackets(it->first)
 			    << ",\"highest_target_frame\":" << peer.highestTargetFrame
+			    << ",\"ping_ms\":" << peer.pingMs << ",\"jitter_ms\":" << peer.jitterMs
+			    << ",\"delay_frames\":" << InputDelayAt(it->first, m_LastDeliveredFrame.value_or(m_Config.startFrame))
+			    << ",\"waits\":" << peer.waits << ",\"longest_wait_ms\":" << peer.longestWaitMs
+			    << ",\"holds\":" << peer.holds << ",\"substitutions\":" << peer.substitutions << ",\"rejoins\":" << peer.rejoins
 			    << ",\"last_heard_ms\":" << peer.lastHeardMs << "}";
 		}
 		out << "},";
@@ -7643,7 +7671,7 @@ namespace RTE {
 			m_WaitingFrame = m_Stats.nextFrame;
 			m_WaitStartMs = nowMs;
 		}
-		if (!UsesBoundedWait() && m_LastStallFrame != m_Stats.nextFrame) {
+		if (m_LastStallFrame != m_Stats.nextFrame) {
 			++m_Stats.missingFrameStalls;
 			m_LastStallFrame = m_Stats.nextFrame;
 		}

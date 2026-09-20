@@ -16,6 +16,10 @@ namespace RTE {
 		bool ready = false;
 		bool connected = false;
 		uint32_t pingMs = 0;
+		uint16_t inputDelayFrames = 0;
+		uint32_t waits = 0;
+		uint64_t longestWaitMs = 0;
+		bool aiHeld = false;
 		bool dropped = false;    //!< §11: the seat is held but its player's link is gone.
 		bool reclaiming = false; //!< §11: that player is proving its ticket right now.
 		std::string statusLine;  //!< §11's persistent line for the seat, derived on THIS peer; "" when the seat is fine.

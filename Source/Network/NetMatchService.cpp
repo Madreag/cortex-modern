@@ -79,6 +79,8 @@ namespace RTE {
 		text << "\nDuration: " << DurationText() << " (" << runningTicks << " ticks at 60 tps)\n\nPeers";
 		for (const Peer& peer : peers) {
 			text << '\n' << peer.name << " | team " << peer.team + 1 << " | seat " << peer.seat << " | delay " << peer.inputDelayFrames;
+			text << "\nHolds " << peer.holds << " | AI substitutions " << peer.substitutions << " | Rejoins " << peer.rejoins
+			     << " | Longest wait " << peer.longestWaitMs << " ms";
 		}
 		text << "\n\nResyncs: " << resyncs << " | Drops: " << drops << " | Reclaims: " << reclaims << " | Substitutions: " << substitutions;
 		const auto pace = nlohmann::json::parse(paceJson, nullptr, false);
@@ -125,6 +127,18 @@ namespace RTE {
 		m_CurrentMatchSummary.winnerTeam = activity ? activity->GetWinnerTeam() : Activity::NoTeam;
 		m_CurrentMatchSummary.runningTicks = ScenarioRunner::GetLockstepAppliedFrame();
 		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
+		for (auto& peer: m_CurrentMatchSummary.peers) {
+			NetLockstepPeerStats totals;
+			if (const auto past = m_LockstepTotals.peers.find(peer.peerId); past != m_LockstepTotals.peers.end()) totals = past->second;
+			if (m_Coordinator) {
+				if (const auto live = m_Coordinator->GetStats().peers.find(peer.peerId); live != m_Coordinator->GetStats().peers.end()) {
+					totals.holds += live->second.holds; totals.substitutions += live->second.substitutions; totals.rejoins += live->second.rejoins;
+					totals.longestWaitMs = std::max(totals.longestWaitMs, live->second.longestWaitMs);
+				}
+				peer.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, peer.peerId);
+			}
+			peer.holds = totals.holds; peer.substitutions = totals.substitutions; peer.rejoins = totals.rejoins; peer.longestWaitMs = totals.longestWaitMs;
+		}
 		m_LastMatchSummary = m_CurrentMatchSummary;
 	}
 
@@ -3955,6 +3969,11 @@ static std::string ResyncSaveName() {
 		m_LockstepTotals.peerFramesWaived += stats.peerFramesWaived;
 		m_LockstepTotals.peersDroppedSilent += stats.peersDroppedSilent;
 		m_LockstepTotals.connectionsClosedOnEviction += stats.connectionsClosedOnEviction;
+		for (const auto& [peer, current]: stats.peers) {
+			auto& total = m_LockstepTotals.peers[peer];
+			total.holds += current.holds; total.substitutions += current.substitutions; total.rejoins += current.rejoins;
+			total.longestWaitMs = std::max(total.longestWaitMs, current.longestWaitMs);
+		}
 	}
 
 	void NetMatchService::QueueLobbyEvent(const NetTransportEvent& event) {
@@ -4246,6 +4265,15 @@ static std::string ResyncSaveName() {
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
 			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
+			if (m_Coordinator) {
+				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
+				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
+					member.pingMs = stats->second.pingMs;
+					member.waits = stats->second.waits; member.longestWaitMs = stats->second.longestWaitMs;
+				}
+				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame());
+				if (member.aiHeld) member.statusLine = member.reclaiming ? "Rejoining..." : "held - AI in control";
+			}
 		}
 		return snapshot;
 	}

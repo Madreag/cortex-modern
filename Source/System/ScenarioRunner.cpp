@@ -136,6 +136,11 @@ namespace RTE {
 		std::vector<ScenarioRunner::NetUiToastRecord> s_NetUiToastLog; //!< Report log; survives the queue.
 		uint64_t s_NetUiResyncOverlayFrames = 0;
 		constexpr uint64_t c_NetUiToastMs = 3000;
+		long long s_LockstepWaitUs = 0;
+		struct LockstepWaitTimer {
+			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
+		};
 		void (*s_StallEventPoll)() = nullptr;
 		NetMatchReplayWriter s_ReplayWriter;
 		NetMatchReplayReader s_ReplayReader;
@@ -803,6 +808,17 @@ namespace RTE {
 
 	void ScenarioRunner::ClearNetUiToasts() {
 		s_NetUiToasts.clear();
+	}
+
+	bool ScenarioRunner::IsLockstepLocalMachineSlow() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->GetStats().localMachineSlow;
+	}
+
+	void ScenarioRunner::NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs) {
+		if (!s_LockstepCoordinator) return;
+		const bool warned = s_LockstepCoordinator->GetStats().localMachineSlow;
+		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
+		if (!warned && IsLockstepLocalMachineSlow()) PushNetUiToast("slow_machine", "Your machine cannot keep up with this match");
 	}
 
 	void ScenarioRunner::DrawNetUiToasts() {
@@ -1622,14 +1638,17 @@ namespace RTE {
 			return s_LockstepCoordinator->QueueReplayFrame(tick, std::move(record.frames), std::move(record.commands), error, std::move(record.observations), std::move(record.valueObservations));
 		}
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
-		while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
-			producing->Tick(NetLockstepNowMs());
-			producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
-			if (s_SessionPump) s_SessionPump();
-			if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
-			if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		if (producing->TimingDecisionPendingAt(tick)) {
+			LockstepWaitTimer waitTimer;
+			while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
+				producing->Tick(NetLockstepNowMs());
+				producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
+				if (s_SessionPump) s_SessionPump();
+				if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
+				if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			producing->FinishFrameWait(NetLockstepNowMs());
 		}
-		producing->FinishFrameWait(NetLockstepNowMs());
 		const auto& config = producing->GetConfig();
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (s_LockstepCoordinator->NeedsResyncPriming()) {
@@ -2415,15 +2434,6 @@ namespace RTE {
 
 	const NetWorldSegmentHeader& ScenarioRunner::GetLockstepReplayWorldSegment() {
 		return s_ReplayReader.GetWorldSegment();
-	}
-
-	namespace {
-		long long s_LockstepWaitUs = 0;
-
-		struct LockstepWaitTimer {
-			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
-		};
 	}
 
 	long long ScenarioRunner::GetLockstepWaitUs() {

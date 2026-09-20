@@ -551,6 +551,12 @@ namespace RTE {
 		uint32_t outOfOrderFrames = 0;
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
+		uint32_t blockingFrameWaits = 0;
+		uint64_t localTickOverruns = 0;
+		uint64_t localLateInputs = 0;
+		uint32_t consecutiveLateInputs = 0;
+		double localComputeDebtMs = 0;
+		bool localMachineSlow = false;
 		uint32_t delayChangesProposed = 0;
 		uint32_t delayChangesCommitted = 0;
 		uint32_t delayPaddingFrames = 0;
@@ -750,6 +756,7 @@ namespace RTE {
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		void FinishFrameWait(uint64_t nowMs);
+		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
