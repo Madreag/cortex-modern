@@ -2395,6 +2395,7 @@ static std::string ResyncSaveName() {
 		const uint64_t round = m_Coordinator->GetRoundId();
 		if (round == 0 || m_PrivateImageRound == round) return;
 		m_PrivateImageRound = round;
+		m_PrivateActivations.clear();
 		const auto& config = m_Coordinator->GetConfig();
 		std::string error;
 		auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
@@ -2866,6 +2867,7 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation << std::endl;
 		}
 		m_WorldJoin.ReleaseLostConnections(live);
+		std::erase_if(m_PrivateActivations, [&](NetPeerId connection) { return m_WorldJoin.FindSession(connection) == nullptr; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid())
@@ -3314,6 +3316,9 @@ static std::string ResyncSaveName() {
 					m_CatchUpWireBytes += event.bytes.size(); m_CatchUpWirePackets.push_back(event);
 				} else if (m_Session) m_Session->InjectEvent(event, nowMs);
 			}
+		}
+		if (m_WorldCatchUp.privateMatch && m_Session && (m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected)) {
+			ScenarioRunner::SetControllerReplayError("PeerHeld:Held - AI in control - reconnecting the private catch-up link"); return;
 		}
 		uint64_t refusal = 0;
 		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);

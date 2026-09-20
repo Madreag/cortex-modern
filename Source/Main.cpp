@@ -4918,6 +4918,7 @@ void RunGameLoop() {
 					// A joiner that cannot advance still has to receive: the tail's next frame and the
 					// lockstep start both arrive on this pump, which otherwise runs per sim tick only.
 					g_NetMatchService.PumpSessionEvents();
+					if (!ScenarioRunner::GetControllerReplayError().empty()) HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
 					break;
 				}
 				if (!g_TimerMan.TimeForSimUpdate()) {

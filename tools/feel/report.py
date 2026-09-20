@@ -158,9 +158,17 @@ def item9a_gates(run, peer='host', rows=None):
                     if held is not None and int(seat) == 2 and held < int(tick) <= final_tick and int(live) > 0], path
         host_reclaims, host_reclaim_path = reclaims('host')
         survivor_reclaims, survivor_reclaim_path = reclaims('survivor')
-        rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims
-        pins['item9a_rejoin'] = pin(rejoined, 'both survivors applied the same committed reclaim of live actors after the hold',
-            rejoined, [host_reclaim_path, survivor_reclaim_path], dict(host=host_reclaims, survivor=survivor_reclaims))
+        client_path = run / 'client/stdout.log'
+        client_log = client_path.read_text(encoding='utf-8-sig', errors='replace') if client_path.is_file() else ''
+        completed = [int(frame) for frame in re.findall(r'\[net-match\] private catch-up complete frame=(\d+)', client_log)]
+        rejoined = bool(host_reclaims) and host_reclaims == survivor_reclaims and all(tick in completed for tick, _ in host_reclaims)
+        pins['item9a_rejoin'] = pin(rejoined, 'both survivors committed the same live reclaim and that client completed private catch-up at its activation frame',
+            rejoined, [host_reclaim_path, survivor_reclaim_path, client_path], dict(host=host_reclaims, survivor=survivor_reclaims, completed=completed))
+        survivor_logs = [(run / name / 'stdout.log') for name in ('host', 'survivor')]
+        reloads = [str(path) for path in survivor_logs if path.is_file() and re.search(
+            r'\[net-match\].*(?:resync:|resyncing the match)', path.read_text(encoding='utf-8-sig', errors='replace'), re.I)]
+        pins['item9a_private_rejoin'] = pin(rejoined and not reloads, 'private catch-up completes without reloading either survivor',
+            rejoined and not reloads, [*survivor_logs, client_path], dict(survivor_reloads=reloads))
         def hashes(name):
             path = run / f'{name}_trace.json'
             if not path.is_file():
