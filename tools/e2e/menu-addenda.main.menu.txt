@@ -94,8 +94,8 @@ wait_ms 350
 post_command ButtonBackToMainMenu
 wait_ms 250
 activate ButtonMainToMultiplayer
-wait_ms 250
 video_mark addenda-landing
+wait_ms 250
 observe assert_label LabelMultiplayerBlurb LAN, direct address and internet games.
 dump_host_options
 activate ButtonMultiplayerHostGame
@@ -113,6 +113,8 @@ settext TextHostPlayers 3
 activate ButtonMultiplayerCreate
 wait_ms 1500
 video_mark addenda-lobby
+observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
+observe assert_label LabelMultiplayerStatus LAN address:
 dump_lobby
 dump_host_options
 activate ButtonLobbyOptions

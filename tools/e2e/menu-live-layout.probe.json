@@ -35,6 +35,10 @@
     },
     {
       "op": "menu",
+      "command": "assert_opaque_panel MatchOptionsBox"
+    },
+    {
+      "op": "menu",
       "command": "dump_host_options"
     },
     {

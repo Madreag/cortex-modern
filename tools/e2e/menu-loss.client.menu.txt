@@ -4,6 +4,7 @@ wait_ms 300
 activate ButtonMultiplayerJoinGame
 wait_ms 3500
 video_mark loss-lan-list
+observe assert_text_fits ListLanGames
 dump_host_options
 screenshot loss-lan-list
 settext TextJoinAddress 127.0.0.1
