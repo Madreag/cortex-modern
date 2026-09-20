@@ -3,6 +3,7 @@
 
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "MenuMan.h"
 #include "ActivityMan.h"
 #include "UInputMan.h"
 #include "SettingsMan.h"
@@ -4057,6 +4058,7 @@ bool MainMenuGUI::AutomationLabelText(const std::string& controlName, std::strin
 }
 
 std::string MainMenuGUI::AutomationActiveScreenName() const {
+	if (!g_MenuMan.GetIsInMenuScreen()) return "Gameplay";
 	switch (m_ActiveMenuScreen) {
 		case MenuScreen::MainScreen: return "MainScreen";
 		case MenuScreen::MetaGameNoticeScreen: return "MetaGameNoticeScreen";
