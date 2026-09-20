@@ -22,7 +22,9 @@
             "-out",
             "{OUT}/host_trace.json",
             "-net-match-report",
-            "{OUT}/host-match.json"
+            "{OUT}/host-match.json",
+            "-max-ticks",
+            "1200"
           ],
           "menu_script": "mp-resume-from-disk.host.menu.txt",
           "input_script": "play-input.txt",
@@ -47,7 +49,9 @@
             "-out",
             "{OUT}/client_trace.json",
             "-net-match-report",
-            "{OUT}/client-match.json"
+            "{OUT}/client-match.json",
+            "-max-ticks",
+            "1200"
           ],
           "menu_script": "mp-resume-from-disk.client.menu.txt",
           "input_script": "play-input.txt",
