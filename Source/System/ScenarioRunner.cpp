@@ -1785,6 +1785,18 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->UsesBoundedWait();
 	}
 
+	void ScenarioRunner::DiscardHeldLocalInputs() {
+		s_PendingLocalGameCommands.clear();
+		s_LocalCommandOutbox.clear();
+		s_RequeuedCommands.clear();
+		s_RequeuedPlayerBindings.clear();
+		s_RequeuedInputs.clear();
+		s_LocalInputHistory.clear();
+		s_RecoveredInputs.clear();
+		s_RecoveredCommands.clear();
+		s_RecoveredPlayerBindings.clear();
+	}
+
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
