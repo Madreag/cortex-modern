@@ -3600,6 +3600,8 @@ namespace RTE {
 			return;
 		for (const auto& event: m_MigrationTransport->PollEvents())
 			HandleMigrationEvent(event, nowMs);
+		if (m_MigrationPhase == NetHostMigrationPhase::ResyncAdmission)
+			return;
 		for (auto& [peer, pending]: m_MigrationOutbox) {
 			while (!pending.empty() && m_MigrationTransport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
 				pending.pop_front();
