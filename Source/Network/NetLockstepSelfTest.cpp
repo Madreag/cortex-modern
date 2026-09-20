@@ -1287,6 +1287,14 @@ namespace RTE {
 
 		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error);
 
+		bool ExpectEncodeError(const NetLockstepPacket& packet, NetLockstepErrorCode expected, std::string* error) {
+			std::vector<uint8_t> bytes;
+			NetLockstepError observed;
+			if (!NetLockstepCodec::Encode(packet, bytes, &observed) && observed.code == expected) return true;
+			*error = "invalid hold transaction did not fail encoding with its expected error";
+			return false;
+		}
+
 		bool TestTimingDecisionCodec(std::string* error) {
 			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold}) {
 				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status, NetTimingPhase::HoldAtFrame, NetTimingPhase::HoldAppliedAck}) {
