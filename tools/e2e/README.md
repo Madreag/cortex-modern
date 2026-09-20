@@ -138,6 +138,11 @@ blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linke
 
 The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
 
+The lockstep wait loop presents through its own renderer. The capture hook on its existing event poll reads the
+preceding completed GL presentation, tagged `LockstepWaitOverlay`, on the next poll. The frame timestamp is the
+readback time, so a wait-overlay picture can lag its native draw event by one poll. Recorded simulation ticks and
+native handover draw timestamps remain separate evidence; the video does not interpolate motion across a stall.
+
 A peer with `gameplay_epochs: 2` also receives `<stage>/gameplay-epoch-2.json` when saved gameplay frames show the
 simulation counter reset. Rematch probes wait for that record before measuring their second play window.
 
