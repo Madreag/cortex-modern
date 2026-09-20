@@ -1,8 +1,10 @@
 wait_ms 1500
 activate ButtonMainToMultiplayer
+video_mark cross-landing-host
 wait_ms 400
 settext TextMultiplayerName Cross Host
-video_mark cross-landing-host
+assert_substate Landing
+observe assert_label TextMultiplayerName Cross Host
 activate ButtonMultiplayerHostGame
 wait_ms 400
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte

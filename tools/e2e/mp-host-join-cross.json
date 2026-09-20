@@ -63,7 +63,10 @@
       "mark": "cross-landing-host",
       "screen": "MultiplayerScreen",
       "what": "The host uses the real landing screen; both full names remain readable in the lobby.",
-      "assert": "Recorded menu assertions and both-peer admission/ready state."
+      "assert": "Recorded menu assertions and both-peer admission/ready state.",
+      "events": [
+        "assert_label TextMultiplayerName.*Cross Host.*PASS"
+      ]
     },
     {
       "id": "cross-lobby-host",
@@ -71,7 +74,13 @@
       "mark": "cross-lobby-host",
       "screen": "MultiplayerScreen",
       "what": "The host uses the real lobby screen; both full names remain readable in the lobby.",
-      "assert": "Recorded menu assertions and both-peer admission/ready state."
+      "assert": "Recorded menu assertions and both-peer admission/ready state.",
+      "events": [
+        "assert_label LabelLobbyPlayer0.*Cross Host.*PASS",
+        "assert_label LabelLobbyPlayer1.*Cross Client.*PASS",
+        "assert_text_fits LabelLobbyPlayer0.*PASS",
+        "assert_text_fits LabelLobbyPlayer1.*PASS"
+      ]
     },
     {
       "id": "cross-play-host",
@@ -106,7 +115,10 @@
       "mark": "cross-landing-client",
       "screen": "MultiplayerScreen",
       "what": "The client uses the real landing screen; both full names remain readable in the lobby.",
-      "assert": "Recorded menu assertions and both-peer admission/ready state."
+      "assert": "Recorded menu assertions and both-peer admission/ready state.",
+      "events": [
+        "assert_label TextMultiplayerName.*Cross Client.*PASS"
+      ]
     },
     {
       "id": "cross-lobby-client",
@@ -114,7 +126,13 @@
       "mark": "cross-lobby-client",
       "screen": "MultiplayerScreen",
       "what": "The client uses the real lobby screen; both full names remain readable in the lobby.",
-      "assert": "Recorded menu assertions and both-peer admission/ready state."
+      "assert": "Recorded menu assertions and both-peer admission/ready state.",
+      "events": [
+        "assert_label LabelLobbyPlayer0.*Cross Host.*PASS",
+        "assert_label LabelLobbyPlayer1.*Cross Client.*PASS",
+        "assert_text_fits LabelLobbyPlayer0.*PASS",
+        "assert_text_fits LabelLobbyPlayer1.*PASS"
+      ]
     },
     {
       "id": "cross-play-client",
