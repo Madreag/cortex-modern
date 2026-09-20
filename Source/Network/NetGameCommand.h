@@ -376,6 +376,7 @@ namespace RTE {
 		uint32_t seatIncarnation = 0;
 		uint64_t activationFrame = 0;
 		uint16_t delayFrames = 0;
+		uint64_t neutralThroughFrame = 0;
 		bool operator==(const NetGameSeatReclaim&) const = default;
 	};
 

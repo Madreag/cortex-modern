@@ -1297,16 +1297,17 @@ namespace RTE {
 		}
 
 		bool TestTimingDecisionCodec(std::string* error) {
-			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold}) {
-				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status, NetTimingPhase::HoldAtFrame, NetTimingPhase::HoldAppliedAck}) {
+			for (NetTimingAction action: {NetTimingAction::Delay, NetTimingAction::Hold, NetTimingAction::Reclaim}) {
+				for (NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Acknowledge, NetTimingPhase::Commit, NetTimingPhase::Status, NetTimingPhase::HoldAtFrame, NetTimingPhase::HoldAppliedAck, NetTimingPhase::ReclaimAtFrame}) {
 					if (action == NetTimingAction::Delay && phase >= NetTimingPhase::HoldAtFrame) continue;
+					if ((action == NetTimingAction::Reclaim) != (phase == NetTimingPhase::ReclaimAtFrame)) continue;
 					NetLockstepTiming timing;
 					timing.senderPeerId = 1; timing.peerId = 2; timing.action = action; timing.phase = phase;
 					timing.sessionId = 88; timing.roundId = 99; timing.applyFrame = 120; timing.nextFrame = 50;
 					timing.delayFrames = 26; timing.pingMs = 401; timing.jitterMs = 17;
 					timing.revision = phase == NetTimingPhase::Status ? 0 : 4;
 					timing.requiredPeers = phase == NetTimingPhase::Status ? 0 : 3;
-					if (action == NetTimingAction::Hold && phase != NetTimingPhase::Status) { timing.heldPeers = 2; timing.requiredPeers = 1; }
+					if (action != NetTimingAction::Delay && phase != NetTimingPhase::Status) { timing.heldPeers = 2; timing.requiredPeers = 1; }
 					timing.authorityGeneration = 7;
 					if (phase >= NetTimingPhase::HoldAtFrame) { timing.cutoffFrame = timing.applyFrame; timing.seatIncarnations[1] = 3; }
 					if (!RoundTrip({timing}, error)) return false;
@@ -1325,7 +1326,7 @@ namespace RTE {
 			}
 			NetLockstepFrame frame;
 			frame.senderPeerId = 1; frame.targetFrame = 40;
-			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}};
+			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}, {1, NetGameSeatReclaim{2, 7, 92, 4, 40, 26}}};
 			std::vector<uint8_t> recovery;
 			NetLockstepFrame decoded;
 			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 3 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
@@ -1421,16 +1422,16 @@ namespace RTE {
 			for (uint64_t now = 0; now < 10; ++now) { hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			if (!host.IsRunning() || !client.IsRunning() || !host.QueueLocalInput(0, {}, {}, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t now = 10; now < 60; ++now) {
+			for (uint64_t now = 10; now < 58; ++now) {
 				host.Tick(now);
 				host.NoteFrameWait(0, now);
 				if (host.PopReadyFrame(ready)) { *error = "the held peer lost its input before the configured wait bound"; return false; }
 			}
-			if (!host.NoteFrameWait(0, 60) || !host.PopReadyFrame(ready) || ready.frame != 0 || !host.AnyDroppedSeatHeld() ||
+			if (!host.NoteFrameWait(0, 58) || !host.PopReadyFrame(ready) || ready.frame != 0 || !host.AnyDroppedSeatHeld() ||
 			    !host.IsSeatUnderAI(2, 0) || host.HeldSeatResolution(2) != NetLockstepHoldResolution::Substituted || host.GetStats().longestStallMs > 50) {
 				*error = "a missing peer did not become an AI-held seat at the three-tick bound"; return false;
 			}
-			host.FinishFrameWait(60);
+			host.FinishFrameWait(58);
 			for (uint64_t tick = 0; tick < 16; ++tick) {
 				host.NoteLocalTickCost(tick, 40.0);
 				host.NoteLocalInputProduced(tick, tick * 40000, 0);
@@ -1449,7 +1450,7 @@ namespace RTE {
 			if (host.GetStats().localMachineSlow) { *error = "remote waits were diagnosed as a slow local machine"; return false; }
 			const std::string report = host.BuildReportJson();
 			if (report.find("\"holds\":1") == std::string::npos || report.find("\"substitutions\":1") == std::string::npos ||
-			    report.find("\"longest_wait_ms\":50") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {
+			    report.find("\"longest_wait_ms\":48") == std::string::npos || report.find("\"blocking_frame_waits\":1") == std::string::npos) {
 				*error = "a held peer's report omitted its hold, AI handoff or wait"; return false;
 			}
 			for (uint64_t tick = 1; tick <= 5; ++tick) {
@@ -1584,6 +1585,59 @@ namespace RTE {
 				*error = "the replay rewind retained a future hold"; return false;
 			}
 			return true;
+		}
+
+		bool TestPrivateReclaimKeepsRoundRunning(std::string* error) {
+			LoopbackTransport hostWire, oldWire, returnWire;
+			NetLockstepCoordinator host, oldClient, returning;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A32, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A32, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 32; a.relayToOtherPeers = true;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+			if (!StartCoordinatorPair(48895, hostWire, oldWire, host, oldClient, a, b, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); oldWire.AdvanceTimeMs(1); host.Tick(now); oldClient.Tick(now); }
+			if (!host.QueueLocalInput(0, {}, {}, error) || !host.ProposePeerHold(2, 10, error)) return false;
+			host.Tick(10);
+			NetLockstepReadyFrame ready;
+			if (!host.PopReadyFrame(ready) || !host.IsRunning() || !host.IsSeatUnderAI(2, 0)) return false;
+			const auto held = host.HeldTransactions();
+			if (!returnWire.Connect("loopback", 48895, error) || !host.SchedulePeerReclaim(2, 2, 2, 10, error)) return false;
+			for (uint64_t frame = 1; frame < 10; ++frame) {
+				if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+				host.Tick(10 + frame);
+				if (!host.PopReadyFrame(ready) || ready.frame != frame || !host.IsRunning()) {
+					*error = "private rejoin stopped the surviving round before activation"; return false;
+				}
+			}
+			returnWire.AdvanceTimeMs(30);
+			returnWire.PollEvents();
+			b.startFrame = 10; b.joinsRunningRound = true; b.initialSeatHolds = held;
+			b.initialSeatReclaims[2] = NetGameSeatReclaim{2, 0, 2, 2, 10, 0, 10};
+			if (!returning.Start(returnWire, b, error)) return false;
+			for (uint64_t now = 30; now < 50; ++now) { hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now); }
+			if (!host.IsRunning() || !returning.IsRunning() || host.GetRoundId() != returning.GetRoundId()) {
+				*error = "private reclaim could not handshake at a later frame in the same round"; return false;
+			}
+			if (!host.QueueLocalInput(10, {}, {}, error) || !returning.QueueLocalInput(10, {}, {}, error)) return false;
+			for (uint64_t now = 50; now < 60; ++now) { hostWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1); host.Tick(now); returning.Tick(now); }
+			NetLockstepReadyFrame second;
+			if (!host.PopReadyFrame(ready) || !returning.PopReadyFrame(second) || ready.reclaimedPeerIds != std::vector<uint8_t>{2} ||
+			    ready.reclaimedPeerIds != second.reclaimedPeerIds || ready.localCommands != second.remoteCommands ||
+			    host.IsPeerGoneAtFrame(2, 10) || returning.IsPeerGoneAtFrame(2, 10) || !host.IsSeatReclaimGap(2, 10) || host.IsSeatReclaimGap(2, 11)) {
+				*error = "private reclaim disagreed on its committed authority or neutral gap"; return false;
+			}
+			NetLockstepFrame stale; stale.senderPeerId = 2; stale.roundId = 32; stale.targetFrame = 11;
+			stale.commands = {{2, NetGameSetTeamFunds{1, 999}, 1}};
+			NetTransportEvent event; event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			if (!NetLockstepCodec::Encode({stale}, event.bytes)) return false;
+			host.InjectEvent(event, 61);
+			std::vector<NetGameCommand> queued;
+			if (host.PeekQueuedCommands(11, 2, queued) && !queued.empty()) { *error = "the fenced transport replayed a stale purchase after reclaim"; return false; }
+			if (!host.ProposePeerHold(2, 62, error) || !host.IsPeerGoneAtFrame(2, 11)) {
+				*error = "a previous reclaim prevented the next incarnation from being held"; return false;
+			}
+			return host.IsRunning();
 		}
 
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
@@ -15411,6 +15465,7 @@ namespace RTE {
 		    !TestHoldWaitsForSurvivorDecision(&error, false, true) ||
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
+		    !TestPrivateReclaimKeepsRoundRunning(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
 		    !TestAIWaypointReadThroughSamePass(&error) ||

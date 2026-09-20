@@ -1333,6 +1333,10 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatUnderAI(peerId, frame);
 	}
 
+	bool ScenarioRunner::IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
+	}
+
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
 		if (!IsLockstepSeatUnderAI(peerId, frame)) return;
 		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
@@ -2018,7 +2022,7 @@ namespace RTE {
 		return agreed;
 	}
 
-	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error) {
+	bool ScenarioRunner::CaptureNetResyncState(uint64_t savedTick, NetResyncState& state, std::string* error, bool captureLocalBindings) {
 		if (!s_LockstepCoordinator || savedTick == UINT64_MAX) return false;
 		NetResyncState captured;
 		captured.sessionId = s_LockstepCoordinator->GetConfig().sessionId;
@@ -2030,7 +2034,7 @@ namespace RTE {
 		captured.e2eFirstTransferUid = agreed.firstTransferUid;
 		captured.playerBindings = s_PeerPlayerBindings;
 		captured.appliedCommands = agreed.appliedCommands;
-		if (const Activity* activity = g_ActivityMan.GetActivity()) {
+		if (const Activity* activity = g_ActivityMan.GetActivity(); captureLocalBindings && activity) {
 			auto& own = captured.playerBindings[GetLockstepLocalPeerId()];
 			own.frame = savedTick;
 			activity->CaptureNetPlayerBindings(own.bindings);
