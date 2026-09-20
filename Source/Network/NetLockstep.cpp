@@ -6207,6 +6207,12 @@ namespace RTE {
 		return true;
 	}
 
+	void NetLockstepCoordinator::RememberAppliedFrameInputs(const NetLockstepReadyFrame& ready) {
+		if (!m_LastDeliveredFrame || ready.frame != *m_LastDeliveredFrame) return;
+		m_ReadyHistory[ready.frame] = ready;
+		RetainMigrationFrame(ready);
+	}
+
 	bool NetLockstepCoordinator::PeekReadyFrame(uint64_t frame, NetLockstepReadyFrame& outFrame) const {
 		for (const NetLockstepReadyFrame& ready: m_ReadyFrames) {
 			if (ready.frame == frame) {
