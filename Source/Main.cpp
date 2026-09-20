@@ -200,6 +200,7 @@ static std::string s_saveIoSelfTestName;
 static bool s_saveMenuSelfTest = false;
 static bool s_saveMenuSelfTestPassed = true;
 static bool s_menuScriptFailed = false;
+static bool s_menuScriptObserveStep = false;
 static bool s_menuScriptComplete = false;
 static bool s_menuScriptHoldE2ePause = false;
 static std::string s_snapshotRoundtripSelfTestName;
@@ -2010,10 +2011,12 @@ static void MenuScriptPrint(const std::string& line) {
 // A scripted-menu step failed: print it and exit non-zero so the automation harness can't false-green.
 static void MenuScriptFail(const std::string& reason) {
 	FrameRecorder::Instance().RecordEvent("FAILED: " + reason);
-	GUIInputWrapper::SetAutomationDriving(false);
 	System::PrintDiagnosticErrorLine("[menu-script] FAILED: " + reason);
 	s_menuScriptFailed = true;
-	System::SetQuit(true);
+	if (!s_menuScriptObserveStep) {
+		GUIInputWrapper::SetAutomationDriving(false);
+		System::SetQuit(true);
+	}
 }
 
 static void CompleteMenuScript() {
@@ -2039,6 +2042,7 @@ static bool MenuScriptFileExists(const std::string& pattern) {
 
 // Menu scripts use real controls and the normal screenshot render path.
 void ProcessMenuScript() {
+	s_menuScriptObserveStep = false;
 	ScenarioGUI* scenarioMenu = ScenarioGUI::AutomationActive();
 	if (FrameRecorder::Instance().Enabled()) {
 		PauseMenuGUI* pause = g_MenuMan.GetActivePauseMenu();
@@ -2135,6 +2139,10 @@ void ProcessMenuScript() {
 	std::istringstream iss(steps[stepIndex++]);
 	std::string cmd;
 	iss >> cmd;
+	if (cmd == "observe") {
+		s_menuScriptObserveStep = true;
+		iss >> cmd;
+	}
 	MainMenuGUI* menu = g_MenuMan.GetMainMenu();
 	if (MenuAutomation::Handles(cmd)) {
 		std::string observation;
