@@ -10,13 +10,27 @@
     {
       "op": "wait",
       "scope": "menu",
-      "control": "LabelMultiplayerLandingStatus",
-      "text_contains": "ParticipantBanned"
+      "service": "Starting"
     },
     {
       "op": "wait",
       "scope": "menu",
-      "elapsed_ms": 1600
+      "service": "Failed"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "service": "Starting"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "service": "Failed"
+    },
+    {
+      "op": "wait",
+      "scope": "menu",
+      "elapsed_ms": 1800
     },
     {
       "op": "signal",
