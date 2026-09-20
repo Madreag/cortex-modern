@@ -10951,6 +10951,12 @@ namespace RTE {
 			*error = "expired relay credentials reached ICE";
 			return false;
 		}
+		settings.SetNetworkConnectionMode(SettingsMan::NetworkConnectionMode::RelayOnly);
+		const auto tlsOnly = NetRelayConfig::Fixed("turns:relay.example:443?transport=tcp", "temporary-user", "temporary-password", "tls-only", now + 3600);
+		if (NetMatchService::BuildIceConfig(settings, "", 41011, tlsOnly).turnServerList.empty()) {
+			*error = "Relay only received a TLS-only host offer but produced no usable relay endpoint";
+			return false;
+		}
 		std::cout << "[net-match-selftest] PASS relay offer: versioned config, expiry, secret refusal, player modes and own-relay precedence" << std::endl;
 		return true;
 	}
