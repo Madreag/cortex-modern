@@ -468,6 +468,13 @@ def check_resume_seams(results, scratch):
         driver.write_json(path, {"runs": [{"tick_hashes": rows}]})
     result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-ok")
     ok &= row(results, "migration/full-post-boundary-range", result["status"] == "PASS" and result["exclusions"] == [])
+    gate_root = scratch / "round-gate"
+    gate_root.mkdir()
+    for name in ("host", "client"):
+        driver.write_json(gate_root / f"{name}_trace.json", {"runs": [{"tick_hashes": rows}]})
+    capture = {"root": str(gate_root), "peers": [{"peer": "host"}, {"peer": "client"}]}
+    driver.feel_probes({"hash_gate": {"name": "round2-hashes", "peers": ["host", "client"], "first_tick": 1, "cap": 5}}, capture, {})
+    ok &= row(results, "hash-gate/both-peers-share-full-record-proof", all(peer["gates"]["round2-hashes"]["status"] == "PASS" for peer in capture["peers"]))
     rows[3]["subsystems"]["controller"] = "c" * 64
     driver.write_json(paths[1], {"runs": [{"tick_hashes": rows}]})
     result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-controller")
