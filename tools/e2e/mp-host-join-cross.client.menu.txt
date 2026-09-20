@@ -1,0 +1,25 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 400
+settext TextMultiplayerName Cross Client
+video_mark cross-landing-client
+activate ButtonMultiplayerJoinGame
+wait_ms 400
+settext TextJoinAddress {HOST_ADDRESS}
+settext TextJoinPort {PORT}
+video_mark cross-address-client
+assert_label TextJoinAddress {HOST_ADDRESS}
+assert_label TextJoinPort {PORT}
+wait_ms 600
+activate ButtonMultiplayerConnect
+wait_connected 2 90
+video_mark cross-lobby-client
+dump_lobby
+observe assert_label LabelLobbyPlayer0 Cross Host
+observe assert_label LabelLobbyPlayer1 Cross Client
+assert_text_fits LabelLobbyPlayer0
+assert_text_fits LabelLobbyPlayer1
+activate ButtonMultiplayerReady
+wait_ms 500
+wait_file {PROBE_DIR}/done.json 90
+exit

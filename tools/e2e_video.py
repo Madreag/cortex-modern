@@ -149,7 +149,7 @@ def substitute(value, tokens):
 
 def supplied_tokens(arguments=(), environment=None):
     environment = os.environ if environment is None else environment
-    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS") if environment.get(name)}
+    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS", "HOST_ADDRESS") if environment.get(name)}
     for argument in arguments:
         name, separator, value = argument.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not value:
@@ -198,6 +198,9 @@ def checkpoint_tokens(peer):
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
+        kill_gate = node.get("kill_when")
+        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or not kill_gate.get("event")):
+            return {"class": "harness", "reason": "A process-drop event must name an existing peer and event"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -488,6 +491,15 @@ def item_evidence(record, item):
         evidence["readback_assertions"] = checks
         if not all(check["pass"] for check in checks):
             evidence["probe"] = "fail"
+    if item.get("match_identity"):
+        identity = record.get("match_identity") or {}
+        path = Path(record.get("probe_dir", "")) / "match-identity.json"
+        if path.is_file():
+            identity = json.loads(path.read_text(encoding="utf-8"))
+        passed = bool(identity.get("session_id") and identity.get("round") and identity.get("config_hash"))
+        evidence["match_identity"] = identity
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
     return frame_range(rows, item), evidence
 
 
@@ -934,12 +946,17 @@ def scenario_manifest(capture, out, elapsed):
                           "video": file_evidence(peer["video"]) if peer.get("video") else None,
                           "contact_sheet": file_evidence(peer["contact_sheet"]) if peer.get("contact_sheet") else None,
                           "launch": peer.get("launch"), "recorder": peer["manifest"]})
+            identity = Path(peer.get("probe_dir", "")) / "match-identity.json"
+            if identity.is_file():
+                peer["match_identity"] = json.loads(identity.read_text(encoding="utf-8"))
+                peers[-1]["match_identity"] = peer["match_identity"]
     manifest = {"schema": 1, "scenario": capture["scenario"], "source": capture["source"],
                 "exe": capture["exe"], "started": capture["started"], "finished": stamp(),
                 "wall_seconds": round(elapsed, 3), "fps": capture["fps"], "interrupted": capture.get("interrupted"),
                 "frame_count": sum(peer["frames"] for peer in peers), "peers": peers,
                 "skipped_runs": [{"run": run["name"], **run["skip_finding"]} for run in capture["runs"] if run.get("skip_finding")],
-                "requires_findings": capture.get("requires_findings", [])}
+                "requires_findings": capture.get("requires_findings", []),
+                "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
 
@@ -962,6 +979,7 @@ def aggregate_review(capture, out):
                               "finding": {"class": "harness", "reason": capture.get("interrupted") or "Capture ended before this run"}})
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
+                "peer_selection": capture["scenario_definition"].get("peer_selection"),
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
@@ -1089,6 +1107,8 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
+    parser.add_argument("--peer", choices=("host", "client"))
+    parser.add_argument("--merge-peer-captures", nargs=2, type=Path, metavar=("HOST_CAPTURE", "CLIENT_CAPTURE"))
     parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
     parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
@@ -1101,6 +1121,12 @@ def main():
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
+
+    if options.merge_peer_captures:
+        if not options.out:
+            parser.error("--merge-peer-captures requires --out")
+        from e2e.cross import merge_halves
+        return 0 if merge_halves(options.merge_peer_captures, options.out) else 1
 
     if options.list:
         for path in sorted(SCENARIO_DIR.glob("*.json")):
@@ -1126,6 +1152,11 @@ def main():
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
 
     scenario = load_scenario(options.scenario)
+    if scenario.get("cross_machine") and not options.peer:
+        parser.error("a cross-machine capture requires --peer host or --peer client")
+    if options.peer:
+        from e2e.cross import select_peer
+        scenario = select_peer(scenario, options.peer)
     options.tokens = supplied_tokens(options.token)
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
@@ -1145,7 +1176,7 @@ def main():
     runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
     if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
         parser.error("--run names an unknown run")
-    capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()),
+    capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     missing = requirement_findings(options.repo, scenario)

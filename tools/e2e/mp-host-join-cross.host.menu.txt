@@ -1,0 +1,26 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 400
+settext TextMultiplayerName Cross Host
+video_mark cross-landing-host
+activate ButtonMultiplayerHostGame
+wait_ms 400
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 400
+settext TextHostPort {PORT}
+settext TextHostPlayers 2
+activate ButtonMultiplayerCreate
+wait_ms 600
+video_mark cross-lobby-host
+assert_substate Lobby
+wait_connected 2 90
+wait_remote_ready 90
+dump_lobby
+observe assert_label LabelLobbyPlayer0 Cross Host
+observe assert_label LabelLobbyPlayer1 Cross Client
+assert_text_fits LabelLobbyPlayer0
+assert_text_fits LabelLobbyPlayer1
+video_mark cross-ready-host
+activate ButtonMultiplayerStart
+wait_file {PROBE_DIR}/done.json 90
+exit
