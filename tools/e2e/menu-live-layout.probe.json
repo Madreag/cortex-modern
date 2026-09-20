@@ -65,6 +65,10 @@
     },
     {
       "op": "menu",
+      "command": "video_mark pause-transition-Video"
+    },
+    {
+      "op": "menu",
       "command": "select_settings_page Video"
     },
     {
@@ -84,12 +88,12 @@
       "command": "assert_visible CollectionBoxGameplaySettings 0"
     },
     {
-      "op": "menu",
-      "command": "video_mark pause-transition-Video"
-    },
-    {
       "op": "wait",
       "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Audio"
     },
     {
       "op": "menu",
@@ -112,12 +116,12 @@
       "command": "assert_visible CollectionBoxVideoSettings 0"
     },
     {
-      "op": "menu",
-      "command": "video_mark pause-transition-Audio"
-    },
-    {
       "op": "wait",
       "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Input"
     },
     {
       "op": "menu",
@@ -140,12 +144,12 @@
       "command": "assert_visible CollectionBoxAudioSettings 0"
     },
     {
-      "op": "menu",
-      "command": "video_mark pause-transition-Input"
-    },
-    {
       "op": "wait",
       "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Gameplay"
     },
     {
       "op": "menu",
@@ -168,12 +172,12 @@
       "command": "assert_visible CollectionBoxInputSettings 0"
     },
     {
-      "op": "menu",
-      "command": "video_mark pause-transition-Gameplay"
-    },
-    {
       "op": "wait",
       "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Misc"
     },
     {
       "op": "menu",
@@ -196,8 +200,200 @@
       "command": "assert_visible CollectionBoxGameplaySettings 0"
     },
     {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
       "op": "menu",
-      "command": "video_mark pause-transition-Misc"
+      "command": "video_mark pause-transition-Network"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxMiscSettings 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Chat"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Chat"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Chat-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Chat"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPagePlayer 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Recovery"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Recovery"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Recovery-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Recovery"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPageChat 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Files"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Files"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Files-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Files"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPageRecovery 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Internet"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Internet"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Internet-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Internet"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPageFiles 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Connection"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Connection"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Connection-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Connection"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPageInternet 0"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark pause-transition-Network-Player"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Network:Player"
+    },
+    {
+      "op": "screenshot",
+      "name": "pause-transition-Network-Player-first"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Network:Player"
+    },
+    {
+      "op": "menu",
+      "command": "assert_visible CollectionBoxNetPageConnection 0"
     },
     {
       "op": "wait",
@@ -220,6 +416,18 @@
       "op": "wait",
       "screen": "Gameplay",
       "sim_at_least": 900
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_host}/done.json"
+    },
+    {
+      "op": "wait_file",
+      "path": "{PROBE_DIR_client}/done.json"
     },
     {
       "op": "finish"
