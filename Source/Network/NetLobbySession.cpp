@@ -498,7 +498,7 @@ namespace RTE {
 		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
 		++m_IncomingNextChunkIndex;
 		++m_StateTransferProgressSerial;
-		if (m_Config.matchConfig.persistentWorld) {
+		if (m_Config.matchConfig.persistentWorld || IsWorldJoinImageBlob(m_ReceivedState)) {
 			const uint64_t progress = (static_cast<uint64_t>(m_IncomingChunkCount) << 32) | m_IncomingNextChunkIndex;
 			std::string sendError;
 			(void)Send(MakeWorldJoinReport(c_NetWorldReportProgress, progress), &sendError);
@@ -1143,7 +1143,7 @@ namespace RTE {
 					if constexpr (std::is_same_v<Payload, NetLobbyMigration>)
 						return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
 					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>)
-						return event.lane == NetTransportLane::ControlReliable && (m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
+						return event.lane == NetTransportLane::ControlReliable && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {

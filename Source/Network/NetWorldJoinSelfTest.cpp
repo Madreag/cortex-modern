@@ -643,6 +643,44 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestOrdinaryLobbyAcknowledgesJoinImage() {
+			std::string error;
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(48928, &error) || !clientWire.Connect("loopback", 48928, &error)) return Fail(error);
+			NetPeerId hostPeer = 0, clientPeer = 0;
+			for (const auto& event: hostWire.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
+			for (const auto& event: clientWire.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
+			NetLobbySession host, client;
+			NetLobbySessionConfig hostConfig;
+			hostConfig.host = true; hostConfig.localPeerId = 1; hostConfig.remotePeerId = 2; hostConfig.remoteTransportPeerId = hostPeer;
+			hostConfig.matchConfig = NetMatchConfigUtil::MakeDefault(31); hostConfig.autoStart = false;
+			auto clientConfig = hostConfig;
+			clientConfig.host = false; clientConfig.localPeerId = 2; clientConfig.remotePeerId = 1; clientConfig.remoteTransportPeerId = clientPeer;
+			if (!host.Start(hostWire, hostConfig, &error) || !client.Start(clientWire, clientConfig, &error) ||
+			    !host.BindWorldTransferRemote(2, hostPeer, &error)) return Fail(error);
+			const std::vector<uint8_t> archive(8, 0x5A);
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId; image.boot = 1; image.round = 1; image.tick = 40;
+			image.bytes = archive.size(); image.digest = DigestWorldJoinBytes(archive); image.path = "private.ccsave";
+			std::vector<uint8_t> blob;
+			if (!EncodeWorldJoinImageBlob(image, archive, {}, blob, &error)) return Fail(error);
+			if (host.BeginStateTransferToPeer(2, std::move(blob)) != NetLobbyStateTransfer::Started) return Fail("private image did not start");
+			for (uint64_t now = 0; now < 400; now += 10) {
+				host.Tick(now); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+			}
+			const auto report = host.TakeWorldJoinReport();
+			if (!report.pending || report.kind != c_NetWorldReportProgress || !client.HasCompleteStateTransfer() || client.IsFailed())
+				return Fail("ordinary-match join image was not acknowledged: pending=" + std::to_string(report.pending) + " client=" + client.GetFailureReason());
+			if (!host.Start(hostWire, hostConfig, &error) || !client.SendPayload(MakeWorldJoinReport(c_NetWorldReportProgress, report.value), &error)) return Fail(error);
+			for (uint64_t now = 400; now < 500; now += 10) {
+				host.Tick(now); client.Tick(now);
+				hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+			}
+			if (!client.IsFailed()) return Fail("an ordinary peer sent bootstrap progress without a bound transfer");
+			return 0;
+		}
+
 		int TestJoinerTransferPump() {
 			LoopbackTransport hostTransport;
 			LoopbackTransport clientTransport;
@@ -5814,6 +5852,10 @@ namespace RTE {
 			s_FailTag = "net-world-rejoin-selftest";
 			return TestH4LeaveThenNewJoinSameHolder();
 		}
+		if (std::strcmp(name, "-net-world-private-progress-selftest") == 0) {
+			s_FailTag = "net-world-private-progress-selftest";
+			return TestOrdinaryLobbyAcknowledgesJoinImage();
+		}
 		if (std::strcmp(name, "transfer") == 0 || std::strcmp(name, "-net-world-transfer-selftest") == 0) {
 			s_FailTag = "net-world-transfer-selftest";
 			return TestJoinerTransferPump();
@@ -6068,6 +6110,7 @@ namespace RTE {
 		if (const int result = TestImageBlobRoundTrip(); result != 0) {
 			return result;
 		}
+		if (const int result = TestOrdinaryLobbyAcknowledgesJoinImage(); result != 0) return result;
 		if (const int result = TestJoinerTransferPump(); result != 0) {
 			return result;
 		}
