@@ -1633,7 +1633,7 @@ namespace RTE {
 				hostWire.AdvanceTimeMs(10); residentWire.AdvanceTimeMs(10); lateWire.AdvanceTimeMs(10); now += 10;
 			};
 			for (int i = 0; i < 10; ++i) pumpLobbies();
-			if (joiner.IsFailed() || joiner.IsRejected() || !host.IsRemoteLobbyUp(route) || !host.IsRemoteLobbyUp(2))
+			if (joiner.IsFailed() || joiner.IsRejected() || !host.IsRemoteConnectionLobbyUp(route) || !host.IsRemoteLobbyUp(2))
 				return Fail("bootstrap sender rejected: session peer=3 world route=" + std::to_string(route) + " reason=" + joiner.GetFailureReason());
 			if (disconnectedTransfer) {
 				if (!host.BindWorldTransferRemote(2, residentConnection, &error) ||
@@ -5164,7 +5164,7 @@ namespace RTE {
 			if (!client.HasCompleteStateTransfer() || client.GetMatchConfig() != config) {
 				*error = "bootstrap image arrived with the client's default config instead of the world's config"; return false;
 			}
-			if (!lobby.BindWorldTransferRemote(WorldJoinLobbyPeer(join), 98, error) || lobby.IsRemoteLobbyUp(WorldJoinLobbyPeer(join))) {
+			if (!lobby.BindWorldTransferRemote(WorldJoinLobbyPeer(join), 98, error) || lobby.IsRemoteConnectionLobbyUp(WorldJoinLobbyPeer(join))) {
 				*error = "a replacement connection inherited the old bootstrap's lobby readiness"; return false;
 			}
 		}

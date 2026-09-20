@@ -125,6 +125,7 @@ namespace RTE {
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
+		m_LobbyUpConnections.clear();
 		m_WorldTransferPeers.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
@@ -315,6 +316,7 @@ namespace RTE {
 			if (error) *error = "late lobby remote is invalid";
 			return false;
 		}
+		const bool connectionWasReady = m_LobbyUpConnections.contains(transport);
 		if (IsKnownRemote(peerId) && RemoteTransportOf(peerId) != transport) RemoveRemotePeer(peerId);
 		std::vector<uint8_t> previous;
 		for (const auto& [bound, connection]: m_RemoteTransports)
@@ -323,6 +325,7 @@ namespace RTE {
 			return false;
 		}
 		for (uint8_t bound: previous) RemoveRemotePeer(bound);
+		if (connectionWasReady) m_LobbyUpConnections.insert(transport);
 		m_WorldTransferPeers.insert(peerId);
 		return true;
 	}
@@ -704,6 +707,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::RemoveRemotePeer(uint8_t peerId) {
+		m_LobbyUpConnections.erase(RemoteTransportOf(peerId));
 		std::erase_if(m_QueuedStateTransfers, [&](const auto& transfer) { return transfer.first == peerId; });
 		if (m_StateTransferOnlyPeer == peerId) {
 			m_StateTransferOnlyPeer = 0;
@@ -1159,6 +1163,11 @@ namespace RTE {
 					const auto admitted = std::find_if(ready.begin(), ready.end(), [&](const auto& peer) { return peer.transportPeerId == event.peerId; });
 					if (admitted == ready.end()) return;
 					sessionSender = static_cast<uint8_t>(admitted->assignedPeerId + 1);
+				} else if (worldSender) {
+					for (const auto& [peer, connection]: m_Config.remoteTransportPeerIds)
+						if (connection == event.peerId) sessionSender = peer;
+					if (m_Config.remoteTransportPeerIds.empty() && m_Config.remoteTransportPeerId == event.peerId)
+						sessionSender = m_Config.remotePeerId;
 				}
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
@@ -1201,7 +1210,8 @@ namespace RTE {
 				}
 				++m_Stats.messagesReceived;
 				if (m_Config.session) m_Config.session->NotePeerTraffic(event.peerId, m_Config.session->GetClockMs());
-				m_RemoteLobbyUp.insert(sender->first);
+				m_LobbyUpConnections.insert(event.peerId);
+				if (!worldSender || sender->first <= m_Config.matchConfig.peerCount) m_RemoteLobbyUp.insert(sender->first);
 				// A bootstrap's session identity and world slot share one authenticated connection.
 				if (worldSender) std::visit([&](auto& payload) {
 					if constexpr (requires { payload.peerId; }) payload.peerId = sender->first;
