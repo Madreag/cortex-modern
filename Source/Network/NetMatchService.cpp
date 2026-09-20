@@ -1585,6 +1585,8 @@ static std::string ResyncSaveName() {
 		m_WorldJoinImageArchive.reset(); m_WorldJoinImageDigest.clear();
 		std::unique_ptr<NetLockstepCoordinator> coordinator;
 		std::unique_ptr<NetSession> session;
+		m_WorldCaptureRequestedTick = 0;
+		m_WorldCapturePending = false;
 		std::unique_ptr<GnsTransport> transport;
 		std::unique_ptr<NetMuxTransport> mux;
 		std::unique_ptr<INetTransport> migrated;
@@ -2510,7 +2512,8 @@ static std::string ResyncSaveName() {
 		}
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
 		const uint32_t seconds = m_MatchAutosaveSeconds;
-		if (seconds == 0 || !ScenarioRunner::IsLockstepControllerSyncActive() ||
+		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured();
+		if ((!joinCapture && seconds == 0) || !ScenarioRunner::IsLockstepControllerSyncActive() ||
 		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
 		const int64_t now = g_TimerMan.GetSimTimeTicks();
 		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
@@ -2518,8 +2521,8 @@ static std::string ResyncSaveName() {
 			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
 		}
 		m_LastAutosaveSimTime = now;
-		if (now < m_NextAutosaveSimTime) return;
-		m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		if (!joinCapture && now < m_NextAutosaveSimTime) return;
+		if (interval > 0 && now >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
 		if (!SaveStampedAutosave(tick)) {
 			return;
 		}
@@ -2528,6 +2531,10 @@ static std::string ResyncSaveName() {
 		RollWorldReplaySegment(tick);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
+		if (joinCapture) {
+			m_WorldCaptureRequestedTick = tick;
+			m_WorldCapturePending = false;
+		}
 			std::cout << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson() << std::endl;
 		}
 	}
@@ -2583,6 +2590,10 @@ static std::string ResyncSaveName() {
 		m_AutosaveIdentity.sideState = ScenarioRunner::CaptureAgreedSideState();
 		if (m_IsHost && m_MatchConfig.persistentWorld) {
 			System::PrintDiagnosticLine(std::format("[autosave] agreed match={} tick={} state={}", m_AutosaveMatchId, tick,
+		if (tick != static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) {
+			System::PrintDiagnosticLine(std::format("[autosave] capture refused: requested tick={} world tick={}", tick, g_TimerMan.GetSimUpdateCount()));
+			return false;
+		}
 			                                       nlohmann::json(AutosaveStore::RenderSideState(m_AutosaveIdentity.sideState)).dump()));
 		}
 		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
@@ -3034,14 +3045,8 @@ static std::string ResyncSaveName() {
 				}
 				continue;
 			}
-			const uint64_t tick = m_Coordinator->GetStats().nextFrame > 0 ? m_Coordinator->GetStats().nextFrame - 1 : 0;
-			if (tick != 0 && m_WorldJoin.Image().tick != tick && m_WorldCaptureRequestedTick != tick) {
-				// One capture serves every bootstrap opened at this tick: the image is published once the
-				// writer has the archive, so the second joiner waits in SnapshotTransfer for that one image
-				// instead of costing the incumbent a second sim-thread capture at the same tick.
-				m_WorldCaptureRequestedTick = tick;
-				(void)SaveStampedAutosave(tick);
-			}
+			// The session pump may run inside a tick; capture after the world finishes it.
+			if (m_WorldCaptureRequestedTick == 0) m_WorldCapturePending = true;
 			if (const NetWorldJoinSession* session = m_WorldJoin.FindSession(peer.transportPeerId)) {
 				if (m_Runner) {
 					const uint8_t lobbyPeer = WorldJoinLobbyPeer(*session);
@@ -3827,10 +3832,9 @@ static std::string ResyncSaveName() {
 		uint64_t tick = 0;
 		if (!FinalCheckpointTick(m_IsHost, m_WorldJoin.IsConfigured() && !m_WorldJoin.IsPrivateMatch(), m_FinalCheckpointWritten, m_MatchAutosaveSeconds,
 		                         ScenarioRunner::IsLockstepControllerSyncActive(), g_ActivityMan.ActivityRunning(),
-		                         m_Coordinator->GetStats().nextFrame, tick)) {
+		                         m_Coordinator->GetResumeFrame(), tick)) {
 			return;
 		}
-		m_FinalCheckpointWritten = true;
 		if (!SaveStampedAutosave(tick)) {
 			std::cout << "[net-world] final checkpoint refused at tick=" << tick << std::endl;
 			return;
@@ -3840,6 +3844,7 @@ static std::string ResyncSaveName() {
 		m_RestartAdmissionDue.store(true);
 		PublishRestartAdmission();
 		std::cout << "[net-world] final checkpoint match=" << m_AutosaveMatchId << " tick=" << tick << std::endl;
+		m_FinalCheckpointWritten = true;
 	}
 
 	void NetMatchService::SweepRestartAdmission() {
