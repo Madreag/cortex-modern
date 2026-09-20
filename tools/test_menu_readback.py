@@ -1927,7 +1927,10 @@ def run_case(options, case, root, failing=None):
         if case in ("lobby", "lobby-name"):
             # The Leave/Seats block is centred on the lobby panel the way Start Match is; doubled
             # centres avoid halves. The Players header starts on its rows' left edge and holds its line.
-            drawn = {c["name"]: c for c in images[-1]["controls"]}
+            lobby_shots = [image for image in images
+                           if any(c["name"] == "MultiplayerLobbyPanel" for c in image["controls"])]
+            assert lobby_shots, "no capture of the lobby panel"
+            drawn = {c["name"]: c for c in lobby_shots[-1]["controls"]}
             if case == "lobby":
                 result["host_options_geometry"] = host_options_geometry(images)
                 result["timing_options_geometry"] = timing_options_geometry(images)
@@ -1937,7 +1940,7 @@ def run_case(options, case, root, failing=None):
             assert leave["rect"][0] + last["rect"][0] + last["rect"][2] == panel["rect"][0] * 2 + panel["rect"][2], \
                 (leave["rect"], last["rect"], panel["rect"])
             header = drawn["LabelLobbyPlayersHeader"]
-            seat_rows = [control for control in images[-1]["controls"]
+            seat_rows = [control for control in lobby_shots[-1]["controls"]
                          if re.fullmatch(r"LabelLobbyPlayer\d", control["name"])]
             assert seat_rows and header["text_fits"] and all(
                 row["rect"][0] == header["rect"][0] for row in seat_rows), (header, seat_rows)
