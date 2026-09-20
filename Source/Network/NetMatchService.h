@@ -731,6 +731,10 @@ namespace RTE {
 		}
 		std::string GetNatModeText() const;
 		std::string GetRelayError() const;
+		/// How often the snapshot-load keepalive has taken the service lock and ticked the session.
+		uint64_t GetSnapshotLoadKeepaliveTicks() const { return m_SnapshotLoadKeepaliveTicks.load(); }
+		/// Proves the keepalive keeps ticking through a load that runs off the service lock.
+		bool RunSnapshotLoadKeepaliveSelfTest(std::string* error);
 		std::string BuildReportJson() const;
 		/// Builds the match roster from the request. An empty scene keeps MakeDefault unless the caller
 		/// already resolved one; a named scene overwrites the default after any launch-config rules.
@@ -1061,6 +1065,8 @@ namespace RTE {
 		std::string m_SceneModule;
 		std::thread m_Worker;
 		std::jthread m_SnapshotLoadKeepalive;
+		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
+		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;

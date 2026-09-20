@@ -1262,11 +1262,15 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::StartSnapshotLoadKeepalive() {
 		if (m_SnapshotLoadKeepalive.joinable()) return;
+		m_SnapshotLoadKeepaliveWindowTicks.store(0);
 		m_SnapshotLoadKeepalive = std::jthread([this](std::stop_token stop) {
 			while (!stop.stop_requested()) {
 				{
 					std::lock_guard<std::mutex> lock(m_Mutex);
 					if (m_Session) m_Session->TickKeepalive(AdmissionNowMs());
+					// Counted under the lock: a load that held it would show a window with no ticks.
+					m_SnapshotLoadKeepaliveTicks.fetch_add(1);
+					m_SnapshotLoadKeepaliveWindowTicks.fetch_add(1);
 				}
 				std::this_thread::sleep_for(std::chrono::milliseconds(50));
 			}
@@ -1277,6 +1281,24 @@ static std::string ResyncSaveName() {
 		if (!m_SnapshotLoadKeepalive.joinable()) return;
 		m_SnapshotLoadKeepalive.request_stop();
 		m_SnapshotLoadKeepalive.join();
+		std::cout << "[net-match] snapshot keepalive ticks=" << m_SnapshotLoadKeepaliveWindowTicks.load() << std::endl;
+	}
+
+	// The load runs on the sim thread without the service lock, so the keepalive must tick right through it.
+	bool NetMatchService::RunSnapshotLoadKeepaliveSelfTest(std::string* error) {
+		StopSnapshotLoadKeepalive();
+		const uint64_t before = m_SnapshotLoadKeepaliveTicks.load();
+		StartSnapshotLoadKeepalive();
+		const auto start = std::chrono::steady_clock::now();
+		while (std::chrono::steady_clock::now() - start < std::chrono::milliseconds(300)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		const uint64_t during = m_SnapshotLoadKeepaliveTicks.load() - before;
+		StopSnapshotLoadKeepalive();
+		if (during < 3) {
+			if (error) *error = "the snapshot-load keepalive ticked " + std::to_string(during) + " times across a 300 ms load";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS snapshot_load_keepalive_ticks during_300ms=" << during << " window=" << m_SnapshotLoadKeepaliveWindowTicks.load() << std::endl;
+		return true;
 	}
 
 	bool NetMatchService::StageResyncedMatchLaunch(std::string* error) {
