@@ -798,6 +798,8 @@ namespace RTE {
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
+		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
+		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
@@ -942,6 +944,7 @@ namespace RTE {
 		bool ContactMigrationSuccessor(uint64_t nowMs);
 		bool RestartHostMigrationAfterSuccessorLoss(uint64_t nowMs);
 		bool IsLostMigrationSuccessor(uint8_t peerId) const;
+		uint64_t MigrationStepBudgetMs() const { return std::clamp<uint32_t>(m_Config.timeoutMs, 1, 1000); }
 		bool HoldsLiveMigrationCandidate(uint64_t nowMs, uint64_t budget) const;
 		void PublishMigrationPlan(uint64_t nowMs);
 		void CompleteHostMigration(uint64_t nowMs);
