@@ -2073,21 +2073,14 @@ void ProcessMenuScript() {
 		}
 	}
 	static bool introSkipped = false;
-	static uint64_t awaySinceMs = 0;
 	PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
 	if (!g_MenuMan.IsMainMenuInteractive() && !pauseMenu && !scenarioMenu) {
-		if (awaySinceMs == 0) {
-			awaySinceMs = MenuScriptNowMs();
-		}
-		// The intro is skipped at once. Later the script follows the game back to the main menu, but
-		// only once the menu has stayed away longer than a launch's own fade-out, which this must not
-		// cancel.
-		if (!introSkipped || MenuScriptNowMs() - awaySinceMs > 5000) {
+		// A pause transition follows the title state machine even after a long match.
+		if (!introSkipped && !g_ActivityMan.ActivityPaused()) {
 			g_MenuMan.SkipTitleIntroForAutomation();
 		}
 		return;
 	}
-	awaySinceMs = 0;
 	introSkipped = true;
 	if (waitFrames > 0) {
 		--waitFrames;
