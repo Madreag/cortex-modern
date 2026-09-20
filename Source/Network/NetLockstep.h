@@ -530,6 +530,7 @@ namespace RTE {
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
 		uint64_t lastHeardMs = 0;
+		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
 		uint16_t delayFrames = 0;
@@ -579,6 +580,8 @@ namespace RTE {
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
 		uint64_t lastHoldDeclarationMs = 0;
+		uint32_t ownParksExcluded = 0; //!< Gaps in our own ticks that were not charged to a peer.
+		uint64_t longestOwnParkMs = 0; //!< The longest of them; the start work a peer's machine is also doing.
 		uint64_t localTickOverruns = 0;
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;
@@ -793,6 +796,8 @@ namespace RTE {
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
+		/// Moves every running deadline past a gap in our own ticks, so our park is not charged to a peer.
+		void ShiftDeadlinesPastOurOwnPark(uint64_t nowMs);
 		void FinishFrameWait(uint64_t nowMs);
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
@@ -804,6 +809,7 @@ namespace RTE {
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
+		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
 		std::vector<uint8_t> ResumePeerIds() const;
@@ -1145,11 +1151,12 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
+		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_FirstMissingFrame;
 		uint64_t m_FirstMissingMs = 0;
-		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
+		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;

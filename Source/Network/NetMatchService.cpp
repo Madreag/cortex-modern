@@ -974,6 +974,9 @@ static std::string ResyncSaveName() {
 			m_DiagnosticRuntimeError = ScenarioRunner::GetControllerReplayError();
 			m_ResyncHealStartMs = SteadyNowMs();
 			m_ResyncHealOpen = true;
+			// The round owned the transport for the whole match, so nothing stamped a receive while it
+			// played. The silence windows start again here instead of measuring the match behind us.
+			if (m_Session) m_Session->NotePumpParked();
 			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
@@ -1119,6 +1122,10 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::NoteResyncRelaunched() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		// Staging the checkpoint and restarting the activity parked this peer's pump for seconds.
+		if (m_Session) {
+			m_Session->NotePumpParked();
+		}
 		if (!m_ResyncHealOpen) {
 			return;
 		}
@@ -1634,7 +1641,7 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetMatchRunner> runner;
 		m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset();
 		m_ActivateCatchUpLocalSeat = {};
-		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateJoinError.clear();
+		m_PrivateImageTask = {}; m_PrivateImageRound = 0; m_PrivateImageStaleFrom = 0; m_PrivateImageSeatHeld = false; m_PrivateJoinError.clear();
 		m_WorldJoin.Reset(); m_WorldCatchUp = {};
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
@@ -2496,7 +2503,17 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost || m_State != NetMatchServiceState::Running || !m_Coordinator || !m_Coordinator->IsRunning() ||
 		    !m_Coordinator->UsesBoundedWait() || m_Coordinator->IsPersistentWorldRound() || m_Coordinator->IsMigrating() || !g_ActivityMan.ActivityRunning()) return;
 		const uint64_t round = m_Coordinator->GetRoundId();
-		if (round == 0 || m_PrivateImageRound == round) return;
+		if (round == 0) return;
+		// The base a hold replays from is taken once per round, so a second hold would replay the whole
+		// match again. It is taken again once every held seat is back and nothing is bootstrapping: the
+		// capture freezes the sim, so it never runs while a seat is held or an image is in flight.
+		const bool seatHeld = m_Coordinator->AnyHeldAISeat();
+		if (m_PrivateImageSeatHeld && !seatHeld) m_PrivateImageStaleFrom = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+		m_PrivateImageSeatHeld = seatHeld;
+		const bool stale = m_PrivateImageStaleFrom != 0 && !seatHeld && m_WorldJoin.Sessions().empty() &&
+		                   !m_PrivateImageTask.valid() && m_WorldJoin.Image().tick < m_PrivateImageStaleFrom;
+		if (m_PrivateImageRound == round && !stale) return;
+		m_PrivateImageStaleFrom = 0;
 		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
 		StartSnapshotLoadKeepalive();
 		struct FinishCapture {
@@ -3455,6 +3472,10 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
+		// A member catching up privately is replaying on this thread and the round is not feeding its
+		// session: that silence is its own, not the host's. The windows stay open for as long as the
+		// catch-up runs; a host that really goes away still arrives as a transport close below.
+		if (m_Session) m_Session->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
@@ -3549,6 +3570,8 @@ static std::string ResyncSaveName() {
 			}
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
+			// The tail replayed on this thread; the session read nothing while it ran.
+			if (m_Session) m_Session->NotePumpParked();
 			std::cout << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << std::endl;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {

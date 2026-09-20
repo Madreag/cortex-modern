@@ -4882,7 +4882,26 @@ namespace RTE {
 		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
-			for (uint8_t peer: missing) held = ProposePeerHold(peer, nowMs) || held;
+			for (uint8_t peer: missing) {
+				const auto& peerStats = m_Stats.peers[peer];
+				// A sender's first frames of the round are its pipeline filling: the round starts skewed by
+				// the start message's own trip and each peer's activity restart, and the sender's delay
+				// window is the budget that fill was agreed to take. The window is the few frames from its
+				// own start; after them it is judged like any other.
+				if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
+					// Our own longest park is the start work this machine did; a peer that has not produced
+					// yet is doing the same, so it is allowed as much before its silence means anything.
+					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
+					    peerStats.pingMs + peerStats.jitterMs + m_Stats.longestOwnParkMs;
+					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+				} else if (peerStats.lastProgressMs >= firstMissingMs &&
+				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
+					// A sender still feeding the round every tick is not stalled, it is behind: the round
+					// absorbs the skew once by waiting. The bound catches a stream that STOPPED.
+					continue;
+				}
+				held = ProposePeerHold(peer, nowMs) || held;
+			}
 			return held;
 		}
 		return false;
@@ -5139,8 +5158,11 @@ namespace RTE {
 					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
+					// A peer still filling its pipeline owes its delay window before it counts as silent.
+					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) ? 0 :
+					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs));
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
-					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget) unresponsive.insert(peer);
+					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget + ramp) unresponsive.insert(peer);
 				}
 			}
 			for (uint8_t peer: unresponsive) ProposePeerHold(peer, nowMs);
@@ -5540,7 +5562,7 @@ namespace RTE {
 	void NetLockstepCoordinator::AcceptRemoteTick(const NetLockstepFrame& frame, uint64_t nowMs, bool windowCopy) {
 		if (IsPeerGoneAtFrame(frame.senderPeerId, frame.targetFrame)) return;
 		NetLockstepPeerStats& peerStats = m_Stats.peers[frame.senderPeerId];
-		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
+		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		if (frame.targetFrame < EffectiveStartOf(frame.senderPeerId)) {
 			// A member admitted mid-round reads the window copies of the ticks before its own start.
 			// They are ticks it never owed, not a broken build; only a sender's own new tick can be one.
@@ -5596,7 +5618,9 @@ namespace RTE {
 			std::cout << "[lockstep-test] received peer=" << static_cast<int>(frame.senderPeerId)
 			          << " target=" << frame.targetFrame << std::endl;
 		}
-		m_PeersPlayedThisRound.insert(frame.senderPeerId);
+		// A sender's ramp ends with its first frame; the wait it was allowed while filling its pipeline
+		// is not lateness to charge against the next one, so the missing-frame deadline starts again.
+		if (m_PeersPlayedThisRound.insert(frame.senderPeerId).second) m_FirstMissingFrame.reset();
 		if (!frame.commands.empty()) {
 			m_RemoteCommands[frame.targetFrame][frame.senderPeerId] = frame.commands;
 		}
@@ -5993,10 +6017,34 @@ namespace RTE {
 		m_RemoteChecksums.erase(m_RemoteChecksums.begin(), m_RemoteChecksums.upper_bound(frame));
 	}
 
+	void NetLockstepCoordinator::ShiftDeadlinesPastOurOwnPark(uint64_t nowMs) {
+		const uint64_t previous = m_LastTickMs;
+		m_LastTickMs = nowMs;
+		// The wait loop ticks us every millisecond, so a gap of several sim ticks is OUR park - a
+		// checkpoint capture, an activity restart - and not a peer's silence. Time nobody was listening
+		// through is not lateness: every running deadline moves with it instead of being spent.
+		const uint64_t park = static_cast<uint64_t>(std::max(50.0, 4 * m_Config.simTickMs));
+		if (previous == 0 || nowMs <= previous || nowMs - previous < park) {
+			return;
+		}
+		const uint64_t gap = nowMs - previous;
+		const auto shift = [&](uint64_t& stamp) { if (stamp != 0) stamp = std::min(nowMs, stamp + gap); };
+		shift(m_FirstMissingMs);
+		shift(m_ConsumerWaitStartMs);
+		shift(m_WaitStartMs);
+		shift(m_AuthorityLastHeardMs);
+		for (auto& [peer, heard]: m_PeerLastHeardMs) shift(heard);
+		for (auto& [peer, stats]: m_Stats.peers) { shift(stats.lastHeardMs); shift(stats.lastProgressMs); }
+		for (auto& [revision, decision]: m_TimingDecisions) shift(decision.proposedAtMs);
+		++m_Stats.ownParksExcluded;
+		m_Stats.longestOwnParkMs = std::max(m_Stats.longestOwnParkMs, gap);
+	}
+
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		ShiftDeadlinesPastOurOwnPark(nowMs);
 		m_TimingNowMs = nowMs;
 		TickMigrationRollCallLinks(nowMs);
 		if (IsMigrating()) {
@@ -6540,6 +6588,7 @@ namespace RTE {
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
 		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
 		out << "\"last_hold_declaration_ms\":" << m_Stats.lastHoldDeclarationMs << ",";
+		out << "\"own_parks_excluded\":" << m_Stats.ownParksExcluded << ",";
 		out << "\"hold_deadline_feasible\":" << (m_Stats.holdDeadlineFeasible ? "true" : "false") << ",";
 		out << "\"steady_missing_frame_stalls\":" << (m_Stats.measuredMissingFrameBase ? std::to_string(m_Stats.missingFrameStalls - *m_Stats.measuredMissingFrameBase) : "null") << ",";
 		out << "\"steady_blocking_frame_waits\":" << (m_Stats.measuredBlockingWaitBase ? std::to_string(m_Stats.blockingFrameWaits - *m_Stats.measuredBlockingWaitBase) : "null") << ",";

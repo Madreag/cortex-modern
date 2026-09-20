@@ -123,6 +123,13 @@ namespace RTE {
 		/// Joins by session id: the config's p2pJoin spec opens the connection instead of an address.
 		bool StartClientP2P(INetTransport& transport, NetSessionConfig config, std::string* error = nullptr);
 		void Tick(uint64_t nowMs, bool pollTransport = true);
+		/// Tells the session that this peer could not read its socket for a while (a checkpoint load, an
+		/// activity restart, a private catch-up replay). Nobody was listening, so that is not silence:
+		/// every silence window starts again at the next evaluation.
+		void NotePumpParked() { m_PumpParked = true; }
+		/// Holds the silence windows open for as long as this peer is the one not listening (a private
+		/// catch-up replaying on the game thread). A transport close still ends the link at once.
+		void SetSilenceSuspended(bool suspended) { m_SilenceSuspended = suspended; }
 		uint64_t GetClockMs() const { return m_NowMs; }
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
@@ -339,6 +346,8 @@ namespace RTE {
 		uint64_t m_LastTimeoutCheckMs = 0;
 		bool m_TimeoutsEvaluated = false;
 		bool m_ResumedWithoutTraffic = false;
+		bool m_PumpParked = false;
+		bool m_SilenceSuspended = false;
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;
 		NetPeerId m_RemoteTransportPeerId = c_InvalidNetPeerId;
