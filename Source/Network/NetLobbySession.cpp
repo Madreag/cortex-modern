@@ -125,6 +125,7 @@ namespace RTE {
 		m_StartRequested = config.autoStart;
 		m_FailureReason.clear();
 		m_RemoteLobbyUp.clear();
+		m_LobbyUpConnections.clear();
 		m_WorldTransferPeers.clear();
 		m_SeatAssigned = false;
 		m_StateBytesToSend.clear();
@@ -176,12 +177,11 @@ namespace RTE {
 		std::vector<NetTransportEvent> events;
 		events.swap(m_Config.pendingEvents);
 		for (NetTransportEvent& event : m_Transport->PollEvents()) events.push_back(std::move(event));
+		const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 		if (m_Config.session) {
-			const uint64_t sessionNowMs = m_Config.sessionNowMs ? m_Config.sessionNowMs() : m_SessionClockBaseMs + nowMs;
 			for (const NetTransportEvent& event: events) {
 				m_Config.session->InjectEvent(event, sessionNowMs);
 			}
-			m_Config.session->Tick(sessionNowMs, false);
 			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
 				const std::string reason = m_Config.session->BuildRejectText();
 				Fail(reason.empty() ? "session closed" : reason);
@@ -197,6 +197,15 @@ namespace RTE {
 		}
 		if (IsTerminal(m_State)) {
 			return;
+		}
+		if (m_Config.session) {
+			// Valid phase traffic is counted before the session evaluates silence.
+			m_Config.session->Tick(sessionNowMs, false);
+			if (m_Config.session->IsFailed() || m_Config.session->IsRejected() || m_Config.session->IsClosed()) {
+				const std::string reason = m_Config.session->BuildRejectText();
+				Fail(reason.empty() ? "session closed" : reason);
+				return;
+			}
 		}
 		SampleInputDelays(nowMs);
 		SendReadyIfNeeded();
@@ -303,24 +312,45 @@ namespace RTE {
 	}
 
 	bool NetLobbySession::BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error) {
+		if (!m_Config.host || peerId == 0 || peerId == m_Config.localPeerId || transport == c_InvalidNetPeerId) {
+			if (error) *error = "late lobby remote is invalid";
+			return false;
+		}
+		const bool connectionWasReady = m_LobbyUpConnections.contains(transport);
+		if (IsKnownRemote(peerId) && RemoteTransportOf(peerId) != transport) RemoveRemotePeer(peerId);
+		std::vector<uint8_t> previous;
+		for (const auto& [bound, connection]: m_RemoteTransports)
+			if (connection == transport && bound != peerId) previous.push_back(bound);
 		if (!BindLateRemote(peerId, transport, error)) {
 			return false;
 		}
+		for (uint8_t bound: previous) RemoveRemotePeer(bound);
+		if (connectionWasReady) m_LobbyUpConnections.insert(transport);
 		m_WorldTransferPeers.insert(peerId);
 		return true;
 	}
 
-	void NetLobbySession::SendMatchConfigTo(uint8_t peerId) {
+	bool NetLobbySession::SendMatchConfigTo(uint8_t peerId) {
 		if (!m_Config.host || !IsKnownRemote(peerId)) {
-			return;
+			return false;
 		}
 		SendSeatAssign(peerId);
 		std::string error;
-		(void)SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error);
+		if (!SendTo(m_RemoteTransports.at(peerId), NetLobbyMatchConfig{m_Config.matchConfig}, &error)) return false;
 		SendResumeOfferTo(peerId);
+		return true;
 	}
 
 	void NetLobbySession::PumpOutgoingChunks() {
+		if (m_Config.host && m_Config.session) {
+			const auto ready = m_Config.session->GetReadyPeers();
+			std::vector<uint8_t> disconnected;
+			for (uint8_t peer: m_WorldTransferPeers) {
+				const NetPeerId connection = RemoteTransportOf(peer);
+				if (std::none_of(ready.begin(), ready.end(), [&](const auto& live) { return live.transportPeerId == connection; })) disconnected.push_back(peer);
+			}
+			for (uint8_t peer: disconnected) RemoveRemotePeer(peer);
+		}
 		SendQueuedStateChunks();
 	}
 
@@ -486,7 +516,7 @@ namespace RTE {
 		m_IncomingReceivedBytes = static_cast<uint32_t>(m_ReceivedState.size());
 		++m_IncomingNextChunkIndex;
 		++m_StateTransferProgressSerial;
-		if (m_Config.matchConfig.persistentWorld) {
+		if (m_Config.matchConfig.persistentWorld || IsWorldJoinImageBlob(m_ReceivedState)) {
 			const uint64_t progress = (static_cast<uint64_t>(m_IncomingChunkCount) << 32) | m_IncomingNextChunkIndex;
 			std::string sendError;
 			(void)Send(MakeWorldJoinReport(c_NetWorldReportProgress, progress), &sendError);
@@ -673,8 +703,19 @@ namespace RTE {
 			return entry.second == transportPeerId;
 		});
 		if (peer == m_RemoteTransports.end()) return;
-		const uint8_t peerId = peer->first;
-		m_RemoteTransports.erase(peer);
+		RemoveRemotePeer(peer->first);
+	}
+
+	void NetLobbySession::RemoveRemotePeer(uint8_t peerId) {
+		m_LobbyUpConnections.erase(RemoteTransportOf(peerId));
+		std::erase_if(m_QueuedStateTransfers, [&](const auto& transfer) { return transfer.first == peerId; });
+		if (m_StateTransferOnlyPeer == peerId) {
+			m_StateTransferOnlyPeer = 0;
+			m_StateBytesToSend.clear();
+			m_OutgoingChunkCount = 0;
+			m_OutgoingChunkIndexByPeer.clear();
+		}
+		m_RemoteTransports.erase(peerId);
 		std::erase(m_RemotePeerIds, peerId);
 		m_RemoteLobbyUp.erase(peerId);
 		m_WorldTransferPeers.erase(peerId);
@@ -740,8 +781,14 @@ namespace RTE {
 		const auto active = [&](uint8_t peer) {
 			return m_Config.matchConfig.activePeerIds.empty() || std::binary_search(m_Config.matchConfig.activePeerIds.begin(), m_Config.matchConfig.activePeerIds.end(), peer);
 		};
+		const auto worldConnection = [&](NetPeerId connection) {
+			return std::any_of(m_WorldTransferPeers.begin(), m_WorldTransferPeers.end(), [&](uint8_t peer) {
+				return m_RemoteTransports.contains(peer) && m_RemoteTransports.at(peer) == connection;
+			});
+		};
 		std::map<uint8_t, NetPeerId> transports;
 		for (const NetSessionPeerInfo& peer: readyPeers) {
+			if (worldConnection(peer.transportPeerId)) continue;
 			if (!active(static_cast<uint8_t>(peer.assignedPeerId + 1))) continue;
 			transports[static_cast<uint8_t>(peer.assignedPeerId + 1)] = peer.transportPeerId;
 		}
@@ -760,6 +807,7 @@ namespace RTE {
 		}
 		for (const NetSessionPeerInfo& peer: readyPeers) {
 			const uint8_t peerId = static_cast<uint8_t>(peer.assignedPeerId + 1);
+			if (worldConnection(peer.transportPeerId)) continue;
 			if (!active(peerId)) continue;
 			if (IsKnownRemote(peerId)) continue;
 			addedPeer = true;
@@ -983,7 +1031,8 @@ namespace RTE {
 	}
 
 	void NetLobbySession::SendSeatAssign(uint8_t peerId) {
-		if (!m_Config.host || !m_Config.assignSeats || !IsKnownRemote(peerId)) {
+		const bool worldSeat = m_WorldTransferPeers.contains(peerId) && peerId <= m_Config.matchConfig.peerCount;
+		if (!m_Config.host || (!m_Config.assignSeats && !worldSeat) || !IsKnownRemote(peerId)) {
 			return;
 		}
 		std::string error;
@@ -1089,7 +1138,7 @@ namespace RTE {
 				});
 				if (sender == m_RemoteTransports.end()) return;
 				m_LastReceiveMs = nowMs;
-				const NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
+				NetLobbyDecodeResult decoded = NetLobbyProtocol::Decode(event.bytes);
 				if (!decoded.ok) {
 					// Another phase's packet on the shared wire: session leftovers, or the prior
 					// match's in-flight lockstep frames when a rematch lobby round starts. A chat line
@@ -1107,17 +1156,30 @@ namespace RTE {
 					else Fail(decoded.error.message);
 					return;
 				}
+				uint8_t sessionSender = sender->first;
+				const bool worldSender = m_Config.host && m_WorldTransferPeers.contains(sender->first);
+				if (worldSender && m_Config.session) {
+					const auto ready = m_Config.session->GetReadyPeers();
+					const auto admitted = std::find_if(ready.begin(), ready.end(), [&](const auto& peer) { return peer.transportPeerId == event.peerId; });
+					if (admitted == ready.end()) return;
+					sessionSender = static_cast<uint8_t>(admitted->assignedPeerId + 1);
+				} else if (worldSender) {
+					for (const auto& [peer, connection]: m_Config.remoteTransportPeerIds)
+						if (connection == event.peerId) sessionSender = peer;
+					if (m_Config.remoteTransportPeerIds.empty() && m_Config.remoteTransportPeerId == event.peerId)
+						sessionSender = m_Config.remotePeerId;
+				}
 				const bool allowed = std::visit([&](const auto& payload) {
 					using Payload = std::decay_t<decltype(payload)>;
 					if constexpr (std::is_same_v<Payload, NetLobbyMigration>)
 						return event.lane == NetTransportLane::ControlReliable && (m_Config.host ? payload.kind == 1 && payload.peerId == sender->first : (payload.kind == 2 && payload.peerId == m_Config.localPeerId) || (payload.kind == 1 && payload.peerId == sender->first));
 					if constexpr (std::is_same_v<Payload, NetLobbyStateChunk>)
-						return event.lane == NetTransportLane::ControlReliable && (m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
+						return event.lane == NetTransportLane::ControlReliable && (worldSender || m_Config.matchConfig.persistentWorld || !m_Config.host || (m_Config.snapshotProviderPeerId != 0 && sender->first == m_Config.snapshotProviderPeerId));
 					// Only the hub binds seats; a client offering one is not a peer this round keeps.
 					if constexpr (std::is_same_v<Payload, NetLobbySeatAssign>) return !m_Config.host;
 					if (m_Config.host) {
 						if constexpr (requires { payload.peerId; }) {
-							return payload.peerId == sender->first;
+							return payload.peerId == sender->first || (worldSender && payload.peerId == sessionSender);
 						}
 						return false;
 					}
@@ -1136,12 +1198,24 @@ namespace RTE {
 					return true;
 				}, decoded.message.payload);
 				if (!allowed) {
+					const uint32_t claimedPeer = std::visit([](const auto& payload) -> uint32_t {
+						if constexpr (requires { payload.peerId; }) return payload.peerId;
+						return 0;
+					}, decoded.message.payload);
+					std::cout << "[net-lobby] sender mismatch type=" << NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))
+					          << " connection=" << event.peerId << " expected=" << static_cast<unsigned>(sender->first) << " claimed=" << claimedPeer << std::endl;
 					if (m_Config.host) RejectRemote(event.peerId, "lobby message does not match its connection");
 					else Fail("invalid host lobby message");
 					return;
 				}
 				++m_Stats.messagesReceived;
-				m_RemoteLobbyUp.insert(sender->first);
+				if (m_Config.session) m_Config.session->NotePeerTraffic(event.peerId, m_Config.session->GetClockMs());
+				m_LobbyUpConnections.insert(event.peerId);
+				if (!worldSender || sender->first <= m_Config.matchConfig.peerCount) m_RemoteLobbyUp.insert(sender->first);
+				// A bootstrap's session identity and world slot share one authenticated connection.
+				if (worldSender) std::visit([&](auto& payload) {
+					if constexpr (requires { payload.peerId; }) payload.peerId = sender->first;
+				}, decoded.message.payload);
 				if (const NetLobbyStateChunk* chunk = std::get_if<NetLobbyStateChunk>(&decoded.message.payload)) {
 					uint8_t kind = 0;
 					uint64_t value = 0;
@@ -1433,6 +1507,7 @@ namespace RTE {
 	}
 
 	void NetLobbySession::HandlePeerState(const NetLobbyPeerState& message) {
+		if (m_Config.host && m_WorldTransferPeers.contains(message.peerId) && message.peerId > m_Config.matchConfig.peerCount) return;
 		// Accept any roster peer, not just direct remotes: a client hears its SIBLINGS through the
 		// host's relay, so every lobby shows real names and readies for the whole roster.
 		if (message.peerId == 0 || message.peerId == m_Config.localPeerId) {

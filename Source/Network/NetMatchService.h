@@ -606,6 +606,7 @@ namespace RTE {
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
+		static NetMatchServiceRequest BuildHeldRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget, const NetMatchServiceRequest& liveRoute);
 
 		/// The joiner's catch-up step over one lobby pump: applies the tail that arrived, adopts the
 		/// announced E and reports what the sim has applied. The value it sends is the report the host
@@ -814,7 +815,7 @@ namespace RTE {
 		bool StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable = nullptr);
 		void PumpWorldJoinLobby(uint64_t nowMs);
 		bool PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error);
-		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw);
+		void WorkerRematchMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, bool departedHost);
 		void WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes);
 		/// The live wire, by the same rule. Caller holds the lock.
 		INetTransport* ActiveWireLocked() const { return m_MigratedTransport ? m_MigratedTransport.get() : m_Mux ? static_cast<INetTransport*>(m_Mux.get())
@@ -949,6 +950,7 @@ namespace RTE {
 		friend bool TestUnreadableBanListHoldsAdmission(std::string* error);
 		friend bool TestLobbyModerationRows(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
+		friend bool TestRematchAfterHostDeparture(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);
@@ -969,6 +971,7 @@ namespace RTE {
 		friend bool TestWorldRestartOpensOnCheckpoint(std::string* error);
 		friend bool TestWorldFreshFlagOpensNewRound(std::string* error);
 		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
+		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
@@ -1280,8 +1283,11 @@ namespace RTE {
 		NetWorldJoinHost m_WorldJoin;
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
+		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
 		bool m_LastJoinTargetPersistentWorld = false;
+		std::optional<NetMatchServiceRequest> m_LastJoinRoute;
+		bool BeginTicketRejoinOnRoute(std::string* error, const NetMatchServiceRequest* liveRoute);
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;

@@ -7113,7 +7113,7 @@ namespace RTE {
 				// for, so the survivors keep playing; a host drop still ends the match. The relayed
 				// frames precede this notice on the reliable lane, so no survivor learns of the leave
 				// before it holds everything the leave references.
-				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::Running && m_Stats.nextFrame > 0) {
+				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::Running) {
 					ApplyPeerLeave(lockstepPeer, FirstFrameWithout(lockstepPeer), "connection lost", nowMs, false);
 					break;
 				}
