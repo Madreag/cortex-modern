@@ -13,6 +13,8 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+import threading
+from types import SimpleNamespace
 
 TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
@@ -172,7 +174,8 @@ def check_encode(results, scratch):
 
 
 def check_review(results, scratch):
-    scenario = driver.load_scenario("mp-host-join")
+    scenario = {"name": "paired-review", "checklist": [
+        {"id": "mp-play", "screen": "game", "what": "Both peers have gameplay evidence."}]}
     capture = {"name": "run0", "peers": [
         {"peer": "host", "root": str(scratch / "host"), "video_dir": str(scratch / "video"),
          "probe_dir": str(scratch / "host-stage/probe"), "index": driver.read_index(scratch / "video"),
@@ -193,6 +196,7 @@ def check_review(results, scratch):
     ok &= row(results, "review/no-probe-is-named",
               all(item.get("probe") == "none" for item in document["checklist"]))
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
+    ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
     marker_video = scratch / "markers"
     marker_video.mkdir()
     (marker_video / "events.jsonl").write_text(''.join(json.dumps(value) + '\n' for value in [
@@ -205,6 +209,115 @@ def check_review(results, scratch):
     ok &= row(results, "review/marker-bounds", frames == [1, 2] and observed["probe"] == "pass", str(frames))
     frames, observed = driver.item_evidence(record, {"mark": "missing", "screen": "SettingsScreen"})
     ok &= row(results, "review/missing-marker-is-not-a-screen-pass", frames is None and observed["probe"] == "not-reached")
+    return ok
+
+
+def check_interruption(results, scratch):
+    out = scratch / "interrupted"
+    first = out / "first"
+    first.mkdir(parents=True)
+    scenario = {"name": "interrupted", "runs": [{"name": "first", "peers": [{"name": "host"}]},
+                                                {"name": "second", "peers": [{"name": "client"}]}],
+                "checklist": [{"id": "play", "screen": "game", "what": "Gameplay is visible."}]}
+    run = {"name": "first", "root": str(first), "size": "640x360", "interrupted": "test interruption",
+           "peers": [{"peer": "host", "root": str(first / "host"), "video_dir": str(scratch / "video"),
+                      "probe_dir": str(first / "probe"), "record": {}, "manifest": {},
+                      "index": driver.read_index(scratch / "video"), "menu_script_failures": []}]}
+    capture = {"scenario": "interrupted", "scenario_definition": scenario, "runs": [run], "source": {}, "exe": {},
+               "started": "test", "fps": 6, "command": [], "interrupted": "test interruption"}
+    driver.review(scenario, run, first)
+    manifest = driver.scenario_manifest(capture, out, 1)
+    review = driver.aggregate_review(capture, out)
+    ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
+    ok &= row(results, "interruption/unstarted-checklist-retained", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
+    return ok
+
+
+def check_item_assertions(results, scratch):
+    root = scratch / "item-assertions"
+    probe = root / "probe"
+    probe.mkdir(parents=True)
+    observed = {"complete": True, "pass": True, "script": {"steps": [{"op": "wait"}, {"op": "assert"}]},
+                "steps": [{"index": 0, "observed": {"sim_frame": 100}}, {"index": 1, "observed": {"sim_frame": 700}}]}
+    path = probe / "net-ui-result.json"
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    record = {"root": str(root), "video_dir": str(root / "video"), "index": [], "probe_dir": str(probe)}
+    _, evidence = driver.item_evidence(record, {"probe_steps": [0, 1], "sim_progress": 600})
+    ok = row(results, "review/simulation-progress", evidence["probe"] == "pass")
+    observed["steps"][1]["observed"]["sim_frame"] = 200
+    path.write_text(json.dumps(observed), encoding="utf-8")
+    _, evidence = driver.item_evidence(record, {"probe_steps": [0, 1], "sim_progress": 600})
+    ok &= row(results, "review/missing-simulation-progress", evidence["probe"] == "fail")
+    (root / "runtime").mkdir()
+    (root / "runtime/LogConsole.txt").write_text("parked brains\nERROR: Lua failure\n", encoding="utf-8")
+    checks = driver.log_assertions(root, ["parked brains"], ["^ERROR:"])
+    ok &= row(results, "review/console-errors-retained", checks[0]["matches"][0]["line"] == 1 and checks[1]["matches"][0]["line"] == 2 and checks[1]["forbidden"])
+    _, evidence = driver.item_evidence(record, {"log_regex": ["parked brains"], "forbidden_log_regex": ["^ERROR:"]})
+    ok &= row(results, "review/positive-log-cannot-hide-lua-error", evidence["probe"] == "fail")
+    return ok
+
+
+def check_stop_request(results, scratch):
+    out = scratch / "stop-request"
+    out.mkdir()
+    (out / "stop-request.json").write_text('{"reason":"unit stop"}', encoding="utf-8")
+    handles = []
+
+    class Handle:
+        def __init__(self, root):
+            self.out = self.cwd = Path(root)
+            self.out.mkdir()
+            self.stopped = threading.Event()
+            self.closed = False
+            handles.append(self)
+
+        def start(self):
+            return self
+
+        def finish(self):
+            if not self.stopped.wait(5):
+                return {"exit_code": 124, "timed_out": True}
+            return {"exit_code": 137, "injected_termination": self.reason}
+
+        def terminate(self, reason):
+            self.reason = reason
+            self.stopped.set()
+
+        def close(self):
+            self.closed = True
+
+    original_make, original_seed = driver.make_run, driver.seed_settings
+    try:
+        driver.make_run = lambda repo, args, root, timeout, env: Handle(root)
+        driver.seed_settings = lambda handle, seed: None
+        options = SimpleNamespace(repo=scratch, size="640x360", fps=3, port=49478, scratch_root=scratch)
+        scenario = {"name": "stop", "path": "synthetic", "peers": [{"name": "host", "args": []}]}
+        captured = driver.run_one(options, scenario, {"name": "first"}, 0, out)
+    finally:
+        driver.make_run, driver.seed_settings = original_make, original_seed
+    return row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
+               "unit stop" in captured["interrupted"] and captured["peers"][0]["record"]["exit_code"] == 137)
+
+
+def check_finalizer(results, scratch):
+    out = scratch / "finalize"
+    peer = out / "first/host"
+    (peer / "video").mkdir(parents=True)
+    (peer / "launch.json").write_text(json.dumps({"started": True, "exe_sha256": "retained-exe"}), encoding="utf-8")
+    (peer / "video/frames.jsonl").write_text(json.dumps({"frame": 0, "wall_ms": 100, "sim_tick": 1, "screen": "game"}) + "\n", encoding="utf-8")
+    scenario = {"name": "finalize", "peers": [{"name": "host"}], "runs": [{"name": "first"}, {"name": "second"}],
+                "checklist": [{"id": "game", "what": "Game is drawn.", "screen": "game"}]}
+    capture = {"scenario": "finalize", "scenario_definition": scenario, "runs": [], "source": {"tip": "retained-tip"},
+               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": []}
+    (out / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
+    code = driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
+    manifest = json.loads((out / "manifest.json").read_text())
+    review = json.loads((out / "review.json").read_text())
+    saved = json.loads((out / "capture.json").read_text())
+    ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
+    ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
+    ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
     return ok
 
 
@@ -245,6 +358,10 @@ def main():
         ok &= check_index_and_checklist(results, scratch)
         ok &= check_encode(results, scratch)
         ok &= check_review(results, scratch)
+        ok &= check_interruption(results, scratch)
+        ok &= check_item_assertions(results, scratch)
+        ok &= check_stop_request(results, scratch)
+        ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",

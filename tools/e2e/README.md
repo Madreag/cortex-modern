@@ -12,9 +12,15 @@ capture is parked for the user.
 run's logical resolution. `--fps` sets the capture and encoded frame rate. The encoder uses each saved frame's
 wall-clock timestamp; a missing render interval remains visible as a held frame in the MP4.
 
+Write `<capture>/stop-request.json` with a reason to stop an active capture through its runners. The driver retains
+the stopped run and names unstarted checklist items in the aggregate review. After a hard interruption, once every
+peer is stopped, `--finalize-only <capture>` recovers the saved indexes and produces missing media and metadata.
+Add `--metadata-only` to leave media untouched; finalization uses this mode automatically at the scratch cap.
+An exit code missing from an interrupted runner record stays unknown. Finalization never launches the engine.
+
 The minimum set is `sp-smoke`, `mp-host-join`, `mp-reconnect-repair`, `world-late-join`, `ui-surfaces`,
 `mod-void-wanderers`, `mp-leave`, `mp-rematch`, and `mp-rollback-lag`. The single-process smoke includes the shipped
-Scenario Battle picker and local play. Its original, unchanged FeelBaseline leg remains a separate prerequisite.
+Scenario Battle picker and local play. Its FeelBaseline leg separately checks fixture startup and Lua errors.
 
 ## The file
 
@@ -89,6 +95,7 @@ certificate, listing observations, and service log. The listed-game selector is 
 Missing required modules produce a `requires-missing` review and manifest without starting the engine. Void Wanderers
 must be installed as `<repo>/Data/VoidWanderers.rte`; its download page is
 https://mod.io/g/cccp/m/void-wanderers-by-weegee. Verify the installed activity names before capturing that scenario.
+The installed version 6 module names its activity and launcher scene `Void Wanderers` in `MissionActivities.ini`.
 
 The scratch counter excludes symlinks and Windows reparse points. It stops at 5 GB and never removes a run tree.
 `--scratch-root` selects the budget root; under `D:/mx` the default is the lane root containing the scenario.
