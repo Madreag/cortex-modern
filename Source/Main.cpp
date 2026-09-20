@@ -2367,6 +2367,14 @@ void ProcessMenuScript() {
 		const bool ok = g_NetMatchService.SendChat(scopeValue, text);
 		MenuScriptPrint("chat scope=" + scope + " ok=" + std::to_string(static_cast<int>(ok)) + " text=\"" + text + "\"");
 		if (!ok) { return MenuScriptFail("chat send dropped: " + text); }
+	} else if (cmd == "record_tick_hashes") {
+		if (s_recordTickHashes || g_ActivityMan.IsInActivity() ||
+		    g_NetMatchService.GetState() != NetMatchServiceState::Starting ||
+		    ScenarioRunner::GetArgs().outPath.empty() || ScenarioRunner::GetArgs().maxTicks <= 0) {
+			return MenuScriptFail("record_tick_hashes needs a lobby, -out and a positive -max-ticks");
+		}
+		s_recordTickHashes = true;
+		MenuScriptPrint("record_tick_hashes armed for the next round");
 	} else if (cmd == "dump_lobby") {
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		std::string line = "dump_lobby state=" + snapshot.serviceState + " members=" + std::to_string(snapshot.members.size()) +

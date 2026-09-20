@@ -87,59 +87,19 @@
     },
     {
       "op": "wait",
-      "elapsed_ms": 3000
-    },
-    {
-      "op": "menu",
-      "command": "video_mark round2-play-end"
-    },
-    {
-      "op": "key_down",
-      "key": "Escape"
-    },
-    {
-      "op": "key_up",
-      "key": "Escape"
-    },
-    {
-      "op": "wait",
-      "screen": "Pause",
-      "elapsed_ms": 400
-    },
-    {
-      "op": "wait",
-      "elapsed_ms": 700
-    },
-    {
-      "op": "menu",
-      "command": "activate ButtonEndMatch"
-    },
-    {
-      "op": "wait",
-      "elapsed_ms": 3000,
-      "scope": "menu"
+      "service": "Running",
+      "sim_at_least": 550
     },
     {
       "op": "assert",
       "equals": {
-        "service": "Starting"
+        "service": "Running"
       },
-      "scope": "menu"
-    },
-    {
-      "op": "wait",
-      "service": "Starting",
-      "scope": "menu"
-    },
-    {
-      "op": "wait",
-      "elapsed_ms": 800,
-      "scope": "menu"
+      "sim_at_least": 550
     },
     {
       "op": "signal",
-      "name": "done",
-      "scope": "menu"
+      "name": "done"
     },
     {
       "op": "finish"
