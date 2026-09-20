@@ -1181,7 +1181,14 @@ namespace RTE {
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
 		NetRelayConfig m_RelayOffer;
-		std::atomic<std::shared_ptr<const NetRelayConfig>> m_RelaySnapshot;
+		/// A locked slot: libc++ has no atomic<shared_ptr>, and the pump reads this off the game thread.
+		struct RelaySnapshotSlot {
+			std::shared_ptr<const NetRelayConfig> load() const { std::lock_guard<std::mutex> lock(mutex); return value; }
+			void store(std::shared_ptr<const NetRelayConfig> next) { std::lock_guard<std::mutex> lock(mutex); value = std::move(next); }
+			mutable std::mutex mutex;
+			std::shared_ptr<const NetRelayConfig> value;
+		};
+		RelaySnapshotSlot m_RelaySnapshot;
 		NetRelayConfig m_FixedRelayOffer;
 		std::string m_RelayError;
 		int m_HostRelayMode = 1;
