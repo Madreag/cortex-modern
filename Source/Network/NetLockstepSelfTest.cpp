@@ -1647,19 +1647,28 @@ namespace RTE {
 			NetLockstepCoordinator host, client;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A05, 0, NetTransportLane::ControlReliable);
 			auto b = MakeCoordinatorConfig(2, 1, 0x9A05, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 20;
 			a.substituteSlowPeers = b.substituteSlowPeers = true; a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 			a.timeoutMs = b.timeoutMs = 20000; a.relayToOtherPeers = true;
 			if (!StartCoordinatorPair(48894, hostWire, clientWire, host, client, a, b, error)) return false;
 			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
 			if (!host.ProposeInputDelay(2, 4, 20, error)) return false;
 			NetLockstepReadyFrame ready;
-			for (uint64_t frame = 0; frame <= 20; ++frame) {
+			for (uint64_t frame = 0; frame < 20; ++frame) {
 				if (!host.QueueLocalInput(frame, {}, {}, error) || !client.QueueLocalInput(frame, {}, {}, error)) return false;
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(20 + frame);
-				if (frame < 20 && (!host.PopReadyFrame(ready) || ready.frame != frame)) return false;
+				if (!host.PopReadyFrame(ready) || ready.frame != frame) { *error = "the acknowledgement fixture lost an input before its timing boundary"; return false; }
+			}
+			if (!client.QueueLocalInput(20, {}, {}, error)) return false;
+			hostWire.AdvanceTimeMs(1); host.Tick(40);
+			std::string pending;
+			if (host.QueueLocalInput(20, {}, {}, &pending) || pending != "input is waiting for a timing decision") {
+				*error = "local production crossed an unacknowledged timing boundary"; return false;
 			}
 			host.NoteFrameWait(20, 100, true);
 			host.NoteFrameWait(20, 150, true);
+			if (!host.QueueLocalInput(20, {}, {}, error)) return false;
+			host.Tick(151);
 			if (host.TimingDecisionPendingAt(20) || !host.PopReadyFrame(ready) || ready.frame != 20 ||
 			    host.IsPeerGoneAtFrame(2, 20) || !host.IsPeerGoneAtFrame(2, 21) || host.InputDelayAt(2, 20) != 4) {
 				*error = "an unacknowledged delay blocked the survivor or contradicted buffered input"; return false;
