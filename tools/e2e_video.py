@@ -1032,7 +1032,7 @@ def main():
     if missing:
         capture["requires_findings"] = missing
         write_json(out / "capture.json", capture)
-        write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-missing",
+        write_json(out / "review.json", {"schema": 1, "scenario": scenario["name"], "verdict": "requires-blocked",
                    "checklist": [{**item, "frames": None, "probe": "not-run", "state": "requires-blocked",
                                   "finding": {"class": "data", "reason": "; ".join(row["reason"] for row in missing), "evidence": missing}}
                                  for item in scenario["checklist"]]})

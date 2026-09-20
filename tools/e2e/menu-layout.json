@@ -16,6 +16,123 @@
     {
       "name": "1280x720",
       "size": "1280x720"
+    },
+    {
+      "name": "pause-640x360",
+      "size": "640x360",
+      "timeout_s": 55,
+      "peers": [
+        {
+          "name": "sp",
+          "args": [
+            "-scenario",
+            "FeelBaseline",
+            "-seed",
+            "42",
+            "-max-ticks",
+            "4000",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-layout.pause.probe.json",
+          "settings": {
+            "LocalPrediction": "1",
+            "LocalPredictionMaxTicks": "20"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pause-960x540",
+      "size": "960x540",
+      "timeout_s": 55,
+      "peers": [
+        {
+          "name": "sp",
+          "args": [
+            "-scenario",
+            "FeelBaseline",
+            "-seed",
+            "42",
+            "-max-ticks",
+            "4000",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-layout.pause.probe.json",
+          "settings": {
+            "LocalPrediction": "1",
+            "LocalPredictionMaxTicks": "20"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pause-1280x720",
+      "size": "1280x720",
+      "timeout_s": 55,
+      "peers": [
+        {
+          "name": "sp",
+          "args": [
+            "-scenario",
+            "FeelBaseline",
+            "-seed",
+            "42",
+            "-max-ticks",
+            "4000",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-layout.pause.probe.json",
+          "settings": {
+            "LocalPrediction": "1",
+            "LocalPredictionMaxTicks": "20"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        }
+      ]
     }
   ],
   "peers": [
@@ -36,6 +153,11 @@
       "assert": "assert_settings_page Gameplay",
       "events": [
         "assert_no_overlap .*PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
       ]
     },
     {
@@ -47,6 +169,11 @@
       "assert": "assert_settings_page Misc",
       "events": [
         "assert_no_overlap .*PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
       ]
     },
     {
@@ -58,7 +185,38 @@
       "assert": "assert_settings_page Network:Connection",
       "events": [
         "assert_text_fits TextNetworkStunServers.*PASS"
+      ],
+      "run": [
+        "640x360",
+        "960x540",
+        "1280x720"
       ]
+    },
+    {
+      "id": "layout-pause-gameplay",
+      "run": [
+        "pause-640x360",
+        "pause-960x540",
+        "pause-1280x720"
+      ],
+      "peer": "sp",
+      "mark": "layout-pause-gameplay",
+      "screen": "PauseSettings",
+      "what": "The pause Gameplay checkboxes fit separate columns without overlap.",
+      "assert": "Native geometry assertions and control dump in the marked interval."
+    },
+    {
+      "id": "layout-pause-misc",
+      "run": [
+        "pause-640x360",
+        "pause-960x540",
+        "pause-1280x720"
+      ],
+      "peer": "sp",
+      "mark": "layout-pause-misc",
+      "screen": "PauseSettings",
+      "what": "The pause Misc checkboxes fit separate columns without overlap.",
+      "assert": "Native geometry assertions and control dump in the marked interval."
     }
   ]
 }

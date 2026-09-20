@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "timeout_ms": 50000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "sim_at_least": 180
+    },
+    {
+      "op": "key_down",
+      "key": "Escape"
+    },
+    {
+      "op": "key_up",
+      "key": "Escape"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonSettings"
+    },
+    {
+      "op": "wait",
+      "screen": "PauseSettings"
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Gameplay"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark layout-pause-gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Gameplay"
+    },
+    {
+      "op": "menu",
+      "command": "assert_no_overlap CheckboxShowForeignItems CheckboxEnemyHUD"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits CheckboxShowForeignItems"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits CheckboxEnemyHUD"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800
+    },
+    {
+      "op": "menu",
+      "command": "select_settings_page Misc"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 400
+    },
+    {
+      "op": "menu",
+      "command": "video_mark layout-pause-misc"
+    },
+    {
+      "op": "menu",
+      "command": "assert_settings_page Misc"
+    },
+    {
+      "op": "menu",
+      "command": "assert_no_overlap CheckboxShowLoadingScreenProgressReport CheckboxShowAdvancedPerfStats"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits CheckboxShowLoadingScreenProgressReport"
+    },
+    {
+      "op": "menu",
+      "command": "assert_text_fits CheckboxShowAdvancedPerfStats"
+    },
+    {
+      "op": "menu",
+      "command": "dump_player_options"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800
+    },
+    {
+      "op": "menu",
+      "command": "post_command ButtonBackToMainMenu"
+    },
+    {
+      "op": "wait",
+      "screen": "Pause"
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonResume"
+    },
+    {
+      "op": "wait",
+      "screen": "Gameplay",
+      "sim_at_least": 900
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}
