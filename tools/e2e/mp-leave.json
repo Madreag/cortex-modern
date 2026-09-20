@@ -136,7 +136,7 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 1,
+          "start_delay_s": 5,
           "probe": "mp-leave.survivor.probe.json"
         }
       ]
@@ -271,7 +271,7 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always"
           },
-          "start_delay_s": 1,
+          "start_delay_s": 5,
           "probe": "mp-leave.survivor.probe.json"
         }
       ]

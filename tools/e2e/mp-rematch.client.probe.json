@@ -3,10 +3,13 @@
   "timeout_ms": 145000,
   "steps": [
     {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
       "op": "wait",
       "service": "Running",
-      "screen": "Gameplay",
-      "sim_at_least": 120
+      "screen": "Gameplay"
     },
     {
       "op": "menu",
@@ -14,7 +17,11 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 450
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round1-play-end"
     },
     {
       "op": "wait",
@@ -34,8 +41,7 @@
     {
       "op": "wait",
       "service": "Running",
-      "screen": "Gameplay",
-      "sim_at_least": 120
+      "screen": "Gameplay"
     },
     {
       "op": "menu",
@@ -43,7 +49,11 @@
     },
     {
       "op": "wait",
-      "sim_at_least": 450
+      "elapsed_ms": 3000
+    },
+    {
+      "op": "menu",
+      "command": "video_mark round2-play-end"
     },
     {
       "op": "wait",

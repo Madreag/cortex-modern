@@ -36,17 +36,19 @@
       "id": "round1-host",
       "what": "Round 1 runs on host, with actors responding to the input script.",
       "screen": "game",
-      "assert": "probe Running at ticks 120-450 in round 1",
+      "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "host",
-      "mark": "round1-play"
+      "mark": "round1-play",
+      "sim_progress": 120
     },
     {
       "id": "round2-host",
       "what": "Round 2 runs on host, with actors responding to the input script.",
       "screen": "game",
-      "assert": "probe Running at ticks 120-450 in round 2",
+      "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "host",
-      "mark": "round2-play"
+      "mark": "round2-play",
+      "sim_progress": 120
     },
     {
       "id": "lobby-host",
@@ -60,17 +62,19 @@
       "id": "round1-client",
       "what": "Round 1 runs on client, with actors responding to the input script.",
       "screen": "game",
-      "assert": "probe Running at ticks 120-450 in round 1",
+      "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "client",
-      "mark": "round1-play"
+      "mark": "round1-play",
+      "sim_progress": 120
     },
     {
       "id": "round2-client",
       "what": "Round 2 runs on client, with actors responding to the input script.",
       "screen": "game",
-      "assert": "probe Running at ticks 120-450 in round 2",
+      "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "client",
-      "mark": "round2-play"
+      "mark": "round2-play",
+      "sim_progress": 120
     },
     {
       "id": "lobby-client",
