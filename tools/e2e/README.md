@@ -142,7 +142,7 @@ A peer with `gameplay_epochs: 2` also receives `<stage>/gameplay-epoch-2.json` w
 simulation counter reset. Rematch probes wait for that record before measuring their second play window.
 
 `record_tick_hashes` is a menu-script command for a lobby with `-out` and a positive `-max-ticks` already configured.
-It arms the existing native hash path for the next round. This lets a rematch capture end round one normally and
+With video recording active, it arms the existing native hash path and collector for the next round. The recorder's completion action exports that collector before engine shutdown. This lets a rematch capture end round one normally and
 trace round two through its cap. `hash_gate` names the two trace peers, first tick and cap; it uses the same complete
 record comparison as the migration gate. The command does not alter a wire flag, hash mask or comparison rule.
 

@@ -23,7 +23,7 @@
             "{INPUT_SCRIPT}"
           ],
           "menu_script": "mp-direct-vs-relay.direct.host.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.direct.host.probe.json",
           "settings": {
             "NetworkDisplayName": "Host",
@@ -41,7 +41,7 @@
             "{INPUT_SCRIPT}"
           ],
           "menu_script": "mp-direct-vs-relay.direct.client.menu.txt",
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "probe": "mp-direct-vs-relay.direct.client.probe.json",
           "settings": {
             "NetworkDisplayName": "Joiner",
