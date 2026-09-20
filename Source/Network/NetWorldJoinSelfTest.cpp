@@ -5898,9 +5898,10 @@ namespace RTE {
 			s_FailTag = "net-world-ready-frame-selftest";
 			return TestReadyFramePackIncludesRemotes();
 		}
-		if (std::strcmp(name, "private-neutral-prelude") == 0) return TestPrivateNeutralPrelude();
-		if (std::strcmp(name, "private-large-tail") == 0) return TestLargePrivateTailChunks();
-		if (std::strcmp(name, "private-rejoin-headroom") == 0) return TestPrivateRejoinHeadroom();
+		if (std::strcmp(name, "private-neutral-prelude") == 0 || std::strcmp(name, "-net-world-private-neutral-prelude-selftest") == 0) return TestPrivateNeutralPrelude();
+		if (std::strcmp(name, "private-large-tail") == 0 || std::strcmp(name, "-net-world-private-large-tail-selftest") == 0) return TestLargePrivateTailChunks();
+		if (std::strcmp(name, "private-rejoin-headroom") == 0 || std::strcmp(name, "-net-world-private-rejoin-headroom-selftest") == 0) return TestPrivateRejoinHeadroom();
+		if (std::strcmp(name, "-net-world-private-journal-selftest") == 0) return TestCommittedTailJournal();
 		if (std::strcmp(name, "restart") == 0 || std::strcmp(name, "-net-world-restart-selftest") == 0) {
 			s_FailTag = "net-world-restart-selftest";
 			std::string error;
@@ -6135,6 +6136,7 @@ namespace RTE {
 	}
 
 	int NetWorldJoinSelfTest::RunCase(const char* name) {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (name == nullptr || name[0] == '\0') {
 			return Run();
 		}
