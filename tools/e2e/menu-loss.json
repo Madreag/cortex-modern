@@ -166,6 +166,138 @@
       "log_regex": [
         "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
       ]
+    },
+    {
+      "id": "loss-one-row-per-session",
+      "run": "640x360",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The one hosted session is listed once, at its best address.",
+      "assert": "Native list readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "loss-join-port-default",
+      "run": "640x360",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-own-name",
+      "run": "640x360",
+      "peer": "client",
+      "mark": "loss-client-lobby",
+      "what": "The joining client's own lobby row carries its display name, never the internal default.",
+      "assert": "Native label readback on the client's own row.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelLobbyPlayer1 \\\"Joiner\\\" .* PASS"
+      ]
+    },
+    {
+      "id": "loss-activity-combo-fits",
+      "run": "640x360",
+      "peer": "host",
+      "mark": "loss-host-lobby",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
+    },
+    {
+      "id": "loss-one-row-per-session",
+      "run": "960x540",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The one hosted session is listed once, at its best address.",
+      "assert": "Native list readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "loss-join-port-default",
+      "run": "960x540",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-own-name",
+      "run": "960x540",
+      "peer": "client",
+      "mark": "loss-client-lobby",
+      "what": "The joining client's own lobby row carries its display name, never the internal default.",
+      "assert": "Native label readback on the client's own row.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelLobbyPlayer1 \\\"Joiner\\\" .* PASS"
+      ]
+    },
+    {
+      "id": "loss-activity-combo-fits",
+      "run": "960x540",
+      "peer": "host",
+      "mark": "loss-host-lobby",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
+    },
+    {
+      "id": "loss-one-row-per-session",
+      "run": "1280x720",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The one hosted session is listed once, at its best address.",
+      "assert": "Native list readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
+      ]
+    },
+    {
+      "id": "loss-join-port-default",
+      "run": "1280x720",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-own-name",
+      "run": "1280x720",
+      "peer": "client",
+      "mark": "loss-client-lobby",
+      "what": "The joining client's own lobby row carries its display name, never the internal default.",
+      "assert": "Native label readback on the client's own row.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelLobbyPlayer1 \\\"Joiner\\\" .* PASS"
+      ]
+    },
+    {
+      "id": "loss-activity-combo-fits",
+      "run": "1280x720",
+      "peer": "host",
+      "mark": "loss-host-lobby",
+      "what": "The closed Activity picker's line fits its box at this size.",
+      "assert": "Native geometry readback on the drawn line.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ComboHostActivity .* PASS"
+      ]
     }
   ]
 }
