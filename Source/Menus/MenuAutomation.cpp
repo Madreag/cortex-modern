@@ -15,6 +15,7 @@
 #include "GUITab.h"
 #include "GUITextBox.h"
 #include "FrameMan.h"
+#include "FrameRecorder.h"
 #include "GAScripted.h"
 #include "GameActivity.h"
 #include "NetLobbySnapshot.h"
@@ -195,11 +196,25 @@ namespace RTE::MenuAutomation {
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
-			command == "select_settings_page" || command == "assert_settings_page";
+			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" || command == "assert_label";
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "video_mark") {
+			args >> observation;
+			if (observation.empty()) return false;
+			FrameRecorder::Instance().RecordEvent("video_mark " + observation);
+			return true;
+		}
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "assert_label") {
+				std::string name, expected, text;
+				args >> name;
+				std::getline(args >> std::ws, expected);
+				const bool found = Text(manager->GetControl(name), text);
+				observation = name + " \"" + expected + "\" text=\"" + text + "\"";
+				return found && text.find(expected) != std::string::npos;
+			}
 			if (command == "key_down" || command == "key_up") {
 				std::string key;
 				args >> std::quoted(key);
