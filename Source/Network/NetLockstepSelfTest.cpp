@@ -1731,6 +1731,9 @@ namespace RTE {
 				host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 				host.NoteLocalStartPark(hostParkMs);
 				client.NoteLocalStartPark(clientParkMs);
+				// The automatic delay re-sizes at the start, and a peer that is still starting cannot
+				// acknowledge it: the timing plane must give it the same ramp the frame pump does.
+				if (!host.ProposeInputDelay(2, 4, 2, failure)) return false;
 				uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0;
 				std::string queueError;
 				const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
@@ -1745,7 +1748,7 @@ namespace RTE {
 						NetLockstepReadyFrame ready;
 						while (host.PopReadyFrame(ready)) { hostApplied = ready.frame; (void)host.FinishSimulationTick(ready.frame); }
 						while (client.PopReadyFrame(ready)) { clientApplied = ready.frame; (void)client.FinishSimulationTick(ready.frame); }
-						if (host.IsRunning() && hostApplied < host.GetStats().nextFrame) host.NoteFrameWait(host.GetStats().nextFrame, now);
+						if (host.IsRunning() && hostApplied < host.GetStats().nextFrame) host.NoteFrameWait(host.GetStats().nextFrame, now, true);
 						hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 					}
 				};
