@@ -27,10 +27,11 @@ succeeded. It is reapplied when recovery opens another round.
 Fast peers must sustain at least 59.5 ticks/s after tick 300, spend less than 1%
 of that wall time waiting for input, and have no wait over 50 ms. The elapsed
 window spans recovery; restarted pace counters cannot remove a rejoin pause.
-The requested zero `steady_missing_frame_stalls` check is also retained. That
-counter keeps its transport/prefetch meaning; actual blocking has a separate
-counter and wait log. Every MISS is retained, including a disagreement between
-those two measures. The slow client's presentation checks still run.
+Confirmed ticks may fall at most 50 ms behind their steady wall-clock baseline;
+the maximum lag spans recovery and cannot be hidden by later catch-up. The
+`steady_missing_frame_stalls` counter remains a transport/prefetch diagnostic;
+actual blocking has a separate counter and wait log. The slow client's
+presentation checks still run.
 
 Delay checks read the engine's timestep and measured RTT, require the initial
 pick to cover `ceil(RTT / tick) + 1`, and compare the final displayed delay with

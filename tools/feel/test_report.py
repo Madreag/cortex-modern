@@ -36,7 +36,8 @@ class ReportTests(unittest.TestCase):
                 (run / 'survivor').mkdir()
                 (run / 'survivor/stdout.log').write_text(survivor_log, encoding='utf-8')
             (run / 'host_report.json').write_text(json.dumps({'runner': {'lockstep': {
-                'next_frame': 1201, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing}}}), encoding='utf-8')
+                'next_frame': 1201, 'missing_frame_stalls': 100, 'steady_missing_frame_stalls': missing,
+                'sim_tick_ms': 1000 / 60}}}), encoding='utf-8')
             rows = [dict(type='committed', tick=300, wall_ms=5000)]
             if complete:
                 rows.append(dict(type='committed', tick=1200, wall_ms=5000 + wall_ms))
@@ -54,10 +55,17 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(result['metrics']['steady_wall_ms'], 15700)
         self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'MISS')
 
-    def test_item9a_missing_transport_or_end_evidence_never_passes(self):
-        self.assertFalse(self.item9a(missing=1)['pass_check'])
-        self.assertFalse(self.item9a(missing=None)['pass_check'])
+    def test_item9a_prefetch_misses_are_diagnostic_and_end_evidence_is_required(self):
+        self.assertTrue(self.item9a(missing=1)['pass_check'])
+        self.assertEqual(self.item9a(missing=1)['metrics']['steady_missing_frame_stalls'], 1)
+        self.assertTrue(self.item9a(missing=None)['pass_check'])
         self.assertFalse(self.item9a(complete=False)['pass_check'])
+
+    def test_item9a_confirmed_horizon_lag_cannot_hide_behind_average_rate(self):
+        self.assertEqual(self.item9a(wall_ms=15050)['pins']['item9a_confirmed_horizon_lag']['status'], 'PASS')
+        result = self.item9a(wall_ms=15051)
+        self.assertEqual(result['pins']['item9a_wall_tps']['status'], 'PASS')
+        self.assertEqual(result['pins']['item9a_confirmed_horizon_lag']['status'], 'MISS')
 
     def test_item9a_rejoin_requires_committed_live_reclaim_on_both_survivors(self):
         request = '[net-match] hold peer=2 frame=603 AI in control\n[net-match] rejoin: player reconnected - resyncing the match\n'

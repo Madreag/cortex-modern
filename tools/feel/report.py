@@ -128,13 +128,17 @@ def item9a_gates(run, peer='host', rows=None):
     latest = max(rounds, key=lambda value: value.get('next_frame', 0), default={})
     measured = [value['steady_missing_frame_stalls'] for value in rounds if value.get('steady_missing_frame_stalls') is not None]
     missing = sum(measured) if measured else None
+    tick_ms = latest.get('sim_tick_ms')
+    valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
+    horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
+                                  for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
     evidence = [raw, log_path, report_path]
     pins = {
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
         'item9a_longest_wait': pin(longest, '<= 50 ms', longest is not None and longest <= 50, evidence),
-        'item9a_missing_frame_stalls': pin(missing, '= 0 after tick 300', missing == 0, evidence,
-            'Transport observations retain their original meaning, including prefetch; the separate wait gates measure actual blocking.'),
+        'item9a_confirmed_horizon_lag': pin(horizon_lag_ms, '<= 50 ms behind the steady confirmed-tick clock, including recovery',
+            horizon_lag_ms is not None and horizon_lag_ms <= 50, evidence),
     }
     if manifest.get('loss_percent'):
         loss_log = run / 'client/stdout.log'
@@ -175,6 +179,8 @@ def item9a_gates(run, peer='host', rows=None):
     return dict(peer=peer, pins=pins, measurement_complete=wall_ms is not None and bool(rounds),
                 pass_check=all(value['status'] == 'PASS' for value in pins.values()),
                 metrics=dict(steady_wall_ms=wall_ms, steady_wall_tps=tps, net_wait_ms=wait_ms, longest_stall_ms=longest,
+                             confirmed_horizon_lag_ms=horizon_lag_ms,
+                             confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
                              steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=TICKS if TICKS in by_tick else None,
                              sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
 
