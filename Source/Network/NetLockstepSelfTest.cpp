@@ -12498,37 +12498,56 @@ namespace RTE {
 			ScenarioRunner::SetLockstepCoordinator(&replay);
 			Actor* heldActor = MakeSwitchTestActor(Activity::TeamTwo);
 			Actor* survivorActor = MakeSwitchTestActor(Activity::TeamOne);
-			if (!heldActor || !survivorActor) return finish("selftest actors could not be created");
+			// The same seat's actor as the REJOINING peer carries it: the hold arrived in its round config,
+			// so it never ran the handoff and has the host's override with no drop-time claim of its own.
+			Actor* rejoinerActor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!heldActor || !survivorActor || !rejoinerActor) return finish("selftest actors could not be created");
 			AddSwitchTestActor(heldActor);
 			AddSwitchTestActor(survivorActor);
+			AddSwitchTestActor(rejoinerActor);
 			const int64_t heldUID = static_cast<int64_t>(heldActor->GetUniqueID());
 			const int64_t survivorUID = static_cast<int64_t>(survivorActor->GetUniqueID());
+			const int64_t rejoinerUID = static_cast<int64_t>(rejoinerActor->GetUniqueID());
 			// The held seat's actors sit under the host's AI with the seat recorded as their drop-time owner.
 			NetActorOwnership::SeedOwner(heldUID, 2, Activity::TeamTwo);
 			ScenarioRunner::HandLockstepActorToAI(heldUID, 2);
 			NetActorOwnership::SeedOwner(survivorUID, 3, Activity::TeamOne);
 			ScenarioRunner::SetLockstepControlOverride(survivorUID, 3);
+			NetActorOwnership::SeedOwner(rejoinerUID, 2, Activity::TeamTwo);
+			ScenarioRunner::SetLockstepControlOverride(rejoinerUID, 1);
 			NetLockstepFrame record;
 			record.targetFrame = 41;
-			record.frames = {MakeFrame(heldUID, uint64_t{1} << PRESS_PRIMARY), MakeFrame(survivorUID, uint64_t{1} << PRESS_SECONDARY)};
+			record.frames = {MakeFrame(heldUID, uint64_t{1} << PRESS_PRIMARY), MakeFrame(survivorUID, uint64_t{1} << PRESS_SECONDARY),
+			                 MakeFrame(rejoinerUID, uint64_t{1} << PRESS_PRIMARY)};
 			record.commands = {{1, NetGameSeatReclaim{2, 1, 2, 2, 41, 4, 45}}};
 			if (!ScenarioRunner::InstallWorldCatchUp(40, {record}, error)) return finish("the private tail could not be installed");
 			NetLockstepReadyFrame ready;
 			if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, error)) return finish("the private tail had no frame for its own tick");
 			if (ready.reclaimedPeerIds != std::vector<uint8_t>{2} || !replay.IsSeatReclaimGap(2, 41)) return finish("the replayed tick did not open the seat's reclaim gap");
-			size_t heldFrames = 0, survivorFrames = 0;
+			size_t heldFrames = 0, survivorFrames = 0, rejoinerFrames = 0;
 			for (const auto* set: {&ready.localFrames, &ready.remoteFrames}) {
 				for (const ControllerFrame& frame: *set) {
 					if (frame.actorUniqueID == heldUID) ++heldFrames;
 					if (frame.actorUniqueID == survivorUID) ++survivorFrames;
+					if (frame.actorUniqueID == rejoinerUID) ++rejoinerFrames;
 				}
 			}
-			std::cout << "[net-lockstep-selftest] catch_up_gap_frames held=" << heldFrames << " survivor=" << survivorFrames << std::endl;
+			const uint8_t rejoinerSeat = ScenarioRunner::GetLockstepReclaimSeat(rejoinerUID, Activity::TeamTwo, true, 41);
+			std::cout << "[net-lockstep-selftest] catch_up_gap_frames held=" << heldFrames << " survivor=" << survivorFrames
+			          << " rejoiner=" << rejoinerFrames << " rejoiner_seat=" << static_cast<int>(rejoinerSeat) << std::endl;
 			if (heldFrames != 0) {
 				return finish("the private replay applied the reclaimed seat's input inside its reclaim gap");
 			}
+			if (rejoinerFrames != 0 || rejoinerSeat != 2) {
+				return finish("a peer that took the hold in its round config read the host, not the seat, as the actor's reclaim seat");
+			}
 			if (survivorFrames != 1) {
 				return finish("the private replay dropped a frame of a seat that is not reclaiming");
+			}
+			// The reclaim hands that actor back on this peer too, or the rejoining peer reclaims nothing.
+			ApplyLockstepSeatReclaims(ready, {heldActor, survivorActor, rejoinerActor});
+			if (ScenarioRunner::GetLockstepControlOverrideOwner(rejoinerUID) != 2) {
+				return finish("the reclaim left the seat's own actor under the host on the rejoining peer");
 			}
 			return finish(nullptr);
 		}

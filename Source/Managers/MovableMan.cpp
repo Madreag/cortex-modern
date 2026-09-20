@@ -969,7 +969,7 @@ void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const st
 		size_t reclaimed = 0;
 		for (Actor* actor: actors) {
 			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-			if (ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled()) != peer) continue;
+			if (ScenarioRunner::GetLockstepReclaimSeat(uid, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame) != peer) continue;
 			ScenarioRunner::ReclaimLockstepActor(uid, peer);
 			actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
 			actor->TouchCheckpoint(); ++reclaimed;
