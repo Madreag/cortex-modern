@@ -15,6 +15,7 @@ from test_autosave_restore import CAPTURE, _run_world_round, peer_log, run_pair
 BUDGET_MS = 5.0
 SPLIT = re.compile(r"^\[autosave\] tick=(\d+) layers_us=(\d+) activity_us=(\d+) graph_us=(\d+) scene_us=(\d+) structure_us=(\d+) scene_runtime_us=(\d+) globals_us=(\d+)$", re.M)
 WORKER = re.compile(r"^\[autosave\] tick=(\d+) freeze_us=(\d+) worker_us=(\d+) image_bytes=(\d+) .*", re.M)
+DETAIL = re.compile(r"^\[autosave-split\] tick=(\d+) serialize_scene_ms=([0-9.]+) serialize_mos_ms=([0-9.]+) lua_graph_ms=([0-9.]+) compress_write_ms=([0-9.]+) freeze_ms=([0-9.]+) bytes=(\d+)$", re.M)
 
 
 def measure(root: Path, records: dict) -> dict:
@@ -28,9 +29,12 @@ def measure(root: Path, records: dict) -> dict:
                                        (int(value) / 1000 for value in row[1:]))) for row in SPLIT.findall(log)}
         workers = {int(tick): {"freeze_ms": int(freeze) / 1000, "writer_ms": int(worker) / 1000}
                    for tick, freeze, worker, _ in WORKER.findall(log)}
+        details = {int(row[0]): dict(zip(("serialize_scene_ms", "serialize_mos_ms", "lua_graph_ms", "compress_write_ms", "freeze_ms"),
+                                        map(float, row[1:6]))) for row in DETAIL.findall(log)}
         for capture in captures:
             capture.update(splits.get(capture["tick"], {}))
             capture.update(workers.get(capture["tick"], {}))
+            capture.update(details.get(capture["tick"], {}))
         record = records.get(who, {})
         reached = 0
         trace = root / f"{who}_trace.json"
