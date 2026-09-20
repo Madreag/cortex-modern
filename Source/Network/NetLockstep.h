@@ -1085,6 +1085,7 @@ namespace RTE {
 			NetLockstepTiming proposal;
 			uint8_t acknowledgedPeers = 0;
 			bool committed = false;
+			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;

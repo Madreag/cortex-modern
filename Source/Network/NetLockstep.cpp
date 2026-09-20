@@ -4490,7 +4490,7 @@ namespace RTE {
 		timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
 		for (uint8_t peer: m_RemotePeerIds)
 			if (!IsPeerGoneAtFrame(peer, applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
-		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false};
+		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, m_TimingNowMs};
 		++m_Stats.delayChangesProposed;
 		QueueTiming(timing);
 		CommitTiming(timing.revision);
@@ -4550,7 +4550,7 @@ namespace RTE {
 		timing.requiredPeers = static_cast<uint8_t>(1U << (m_Config.localPeerId - 1));
 		for (uint8_t peer: m_RemotePeerIds)
 			if ((timing.heldPeers & (1U << (peer - 1))) == 0 && !IsPeerGoneAtFrame(peer, timing.applyFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
-		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false};
+		m_TimingDecisions[timing.revision] = {timing, static_cast<uint8_t>(1U << (m_Config.localPeerId - 1)), false, nowMs};
 		QueueTiming(timing);
 		CommitTiming(timing.revision);
 		(void)nowMs;
@@ -4779,6 +4779,21 @@ namespace RTE {
 			if (host) for (uint8_t peer: m_RemotePeerIds) status(peer);
 		}
 		std::vector<uint64_t> pending;
+		if (host && UsesBoundedWait() && m_ConsumerWaitingFrame) {
+			std::set<uint8_t> unresponsive;
+			const auto boundMs = static_cast<uint64_t>(std::max<long long>(1, std::llround(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+			for (const auto& [revision, decision]: m_TimingDecisions) {
+				if (decision.committed || decision.proposal.applyFrame > *m_ConsumerWaitingFrame) continue;
+				for (uint8_t peer: m_RemotePeerIds) {
+					const uint8_t bit = static_cast<uint8_t>(1U << (peer - 1));
+					const auto& stats = m_Stats.peers[peer];
+					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
+					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
+					    nowMs >= decision.proposedAtMs && nowMs - decision.proposedAtMs >= budget) unresponsive.insert(peer);
+				}
+			}
+			for (uint8_t peer: unresponsive) ProposePeerHold(peer, nowMs);
+		}
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
 		FlushTimingOutgoing();
