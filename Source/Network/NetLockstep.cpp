@@ -4974,6 +4974,12 @@ namespace RTE {
 		if (!IsRunning() || timing.sessionId != m_Config.sessionId || timing.roundId != m_RoundId || timing.authorityGeneration != m_Config.migrationGeneration ||
 		    timing.peerId > m_Config.peerCount || !SenderOwnsTransport(timing.senderPeerId, fromTransport)) return;
 		const bool authority = timing.senderPeerId == GetHostPeerId() && LockstepPeerOfTransport(fromTransport) == GetHostPeerId();
+		if (authority && timing.action == NetTimingAction::WorldAdmission && (timing.phase == NetTimingPhase::Propose || timing.phase == NetTimingPhase::Commit)) {
+			const auto applied = m_ReclaimTransactions.find(timing.peerId);
+			const NetGameSeatReclaim expected{timing.peerId, timing.authorityGeneration, timing.revision, timing.seatIncarnations[timing.peerId - 1],
+			    timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame, timing.worldTransition};
+			if (applied != m_ReclaimTransactions.end() && applied->second == expected) return;
+		}
 		if (timing.phase == NetTimingPhase::ReclaimAtFrame) {
 			if (!authority || timing.peerId > 4 || timing.applyFrame < m_Stats.nextFrame) return;
 			const auto prior = m_ReclaimTransactions.find(timing.peerId);
