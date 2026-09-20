@@ -5755,6 +5755,8 @@ namespace RTE {
 
 	int NetWorldJoinSelfTest::Run() {
 		s_FailTag = "net-world-join-selftest";
+		// The runner's lockstep start reads the engine timestep.
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		if (const int result = TestIdentitySurvivesRestart(); result != 0) {
 			return result;
 		}

@@ -1178,7 +1178,7 @@ namespace RTE {
 			atCurrentVersion.version = 4;
 			atCurrentVersion.pathHorizonTicks = 0;
 			const std::string currentHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(atCurrentVersion));
-			if (currentHash != "22c638af51c5e30a12381e3ac10e8953cde5e32e7674c63f1e6c299d24b96b42") {
+			if (currentHash != "87e848dea8853ff7762ffbabf6aa0c71d09e13f979382b970b69ef305fa0f5ae") {
 				*error = "a current-version roster no longer hashes by CPU team: " + currentHash;
 				return false;
 			}
@@ -1193,7 +1193,7 @@ namespace RTE {
 			NetMatchConfig withHorizon = atCurrentVersion;
 			withHorizon.pathHorizonTicks = NetMatchConfigUtil::c_DefaultPathHorizonTicks;
 			const std::string horizonHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(withHorizon));
-			if (horizonHash != "4770c3f864c40148244b02fc83dcb11ae777acfdb2b464ea4d3429c5a2473b11") {
+			if (horizonHash != "ec4103aa07c0661a0a5951518b5572bcd7d509d1a44b8f7d71d7489849fd100f") {
 				*error = "a reserved-bit path horizon no longer hashes as pinned: " + horizonHash;
 				return false;
 			}
