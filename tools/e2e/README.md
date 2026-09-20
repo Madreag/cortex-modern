@@ -193,3 +193,6 @@ A UI-only readback may end a peer with `kill_when: {"peer": "survivor", "probe_c
 for a complete, successful native probe, then terminates through the runner and retains the drop receipt. A failed or
 partially written probe never satisfies that gate. `menu-host-loss` uses this to retain the larger-size status readbacks
 without extending them into a second migration acceptance run.
+
+The pause settings skin has Video, Audio, Input, Gameplay and Misc only. Its Network tab is intentionally absent
+(`SettingsGUI.cpp` selects `SettingsPauseGUI.ini`); the main-menu settings walk covers the six Network subpages.
