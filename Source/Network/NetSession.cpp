@@ -1340,7 +1340,7 @@ namespace RTE {
 		m_LastTimeoutCheckMs = m_NowMs;
 		// A park the engine declared is not silence from anyone: the round held this peer's own pump. The
 		// windows start again here, and the next full budget without a word still ends the peer.
-		if (m_PumpParked) {
+		if (m_PumpParked || m_SilenceSuspended) {
 			m_PumpParked = false;
 			m_LastReceiveMs = m_NowMs;
 			m_ResumedWithoutTraffic = false;

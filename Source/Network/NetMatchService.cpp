@@ -3419,6 +3419,10 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
+		// A member catching up privately is replaying on this thread and the round is not feeding its
+		// session: that silence is its own, not the host's. The windows stay open for as long as the
+		// catch-up runs; a host that really goes away still arrives as a transport close below.
+		if (m_Session) m_Session->SetSilenceSuspended(!m_IsHost && m_WorldCatchUp.active);
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
