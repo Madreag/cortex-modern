@@ -103,7 +103,7 @@ screenshot transition-host-first
 dump_host_options
 observe assert_no_overlap CheckHostPortMap ButtonHostOptions
 observe assert_text_fits CheckHostPortMap
-observe assert_label ComboHostActivity P4 Alpha Duel
+observe assert_label ComboHostActivity Skirmish Defense
 video_mark addenda-host
 wait_ms 400
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
