@@ -2126,6 +2126,13 @@ void ProcessMenuScript() {
 		bool met = false;
 		if (waitCond.starts_with("file:")) {
 			met = MenuScriptFileExists(waitCond.substr(5));
+		} else if (waitCond.starts_with("label:")) {
+			std::istringstream label(waitCond.substr(6));
+			std::string control, expected, actual;
+			label >> control;
+			std::getline(label >> std::ws, expected);
+			const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, actual) : g_MenuMan.GetMainMenu()->AutomationLabelText(control, actual);
+			met = found && actual.find(expected) != std::string::npos;
 		} else if (waitCond.rfind("members:", 0) == 0) {
 			met = static_cast<int>(snapshot.members.size()) >= std::atoi(waitCond.c_str() + 8);
 		} else if (waitCond.rfind("connected:", 0) == 0) {
@@ -2251,6 +2258,13 @@ void ProcessMenuScript() {
 		iss >> n;
 		waitCond = "members:" + std::to_string(n);
 		waitCondTimeout = 4000;
+	} else if (cmd == "wait_label") {
+		std::string control, expected;
+		iss >> control;
+		std::getline(iss >> std::ws, expected);
+		if (control.empty() || expected.empty()) return MenuScriptFail("wait_label requires a control and nonempty text");
+		waitCond = "label:" + control + " " + expected;
+		waitCondDeadlineMs = MenuScriptNowMs() + 60000;
 	} else if (cmd == "wait_state") {
 		std::string s;
 		int seconds = 0;

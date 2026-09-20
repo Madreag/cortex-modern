@@ -110,6 +110,7 @@ def check_substitution(results):
     nested = driver.substitute({"a": ["{PEER}"], "b": {"c": "{PORT}"}}, tokens)
     ok &= row(results, "substitute/nested", nested == {"a": ["host"], "b": {"c": "49411"}}, str(nested))
     ok &= row(results, "substitute/unknown-token-left", driver.substitute("{NOPE}", tokens) == "{NOPE}")
+    ok &= row(results, 'substitute/quoted-native-path-has-no-escapes', driver.substitute('dump_match_identity "{PROBE_DIR}/id.json"', tokens) == 'dump_match_identity "D:/x/host-stage/probe/id.json"')
     return ok
 
 
