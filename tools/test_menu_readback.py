@@ -38,6 +38,10 @@ def layout_readback(capture):
         if name in rows:
             results.append({"control": name, "rect": rows[name]["rect"], "text": rows[name].get("text"),
                             "measurement": rows[name].get("text_measure"), "pass": rows[name].get("text_fits") is True})
+    hint = rows.get("LabelHostSeatDlgActionHint", {})
+    if rows.get("ButtonHostSeatDlgKick", {}).get("enabled"):
+        results.append({"control": "LabelHostSeatDlgActionHint", "kind": "selected-seat-hint", "text": hint.get("text"),
+                        "pass": "host's own seat" not in hint.get("text", "")})
     return results
 
 

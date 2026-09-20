@@ -2455,6 +2455,7 @@ void MainMenuGUI::ShowHostSeatDetails(int row) {
 	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
 	m_HostOptionsSeatRow = row;
 	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgActionHint->SetText("");
 	RefreshHostSeatDialog();
 	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
 	m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]->SetFocus();
@@ -3329,8 +3330,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
-	std::array<std::string, 4> lobbyRowTailMarked;
-	std::array<std::string, 4> lobbyRowTailBare;
+	std::array<std::string, 4> lobbyRowTailWithoutMetrics;
+	std::array<std::string, 4> lobbyRowTailCompact;
 	for (size_t i = 0; i < m_MultiplayerLobbyPlayerLabels.size(); ++i) {
 		GUILabel* label = m_MultiplayerLobbyPlayerLabels[i];
 		if (i >= visibleMembers.size()) {
@@ -3341,19 +3342,19 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const NetLobbyMember& member = *visibleMembers[i];
 		// The seat line is the verbose form of the seat mark; the row keeps whichever fits.
 		const std::string seatMark = std::string(NetReconnectUx::RosterMark(member.dropped, member.reclaiming));
-		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withDelay = true) {
+		const auto buildTail = [&member, &snapshot](const std::string& seat, bool withMetrics = true) {
 			std::string tail = member.isLocal ? " (you)" : "";
 			tail += " - Team " + std::to_string(member.team + 1);
 			tail += member.peerId == snapshot.hostPeerId ? " - Host" : (member.ready ? " - Ready" : " - Not ready");
 			tail += seat;
-			if (!member.cpu && withDelay) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
+			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
 		lobbyRowName[i] = member.displayName;
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
-		lobbyRowTailMarked[i] = buildTail(seatMark);
-		// The delay's own tail is the rung after the seat's: a row still too long sheds it next.
-		lobbyRowTailBare[i] = buildTail(seatMark, false);
+		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
+		// The row drops connection metrics before shortening the seat state.
+		lobbyRowTailCompact[i] = buildTail(seatMark, false);
 		label->SetVisible(true);
 	}
 	const int contentWidth = 300;
@@ -3458,8 +3459,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		const auto fits = [font, width](const std::string& text) { return !font || font->CalculateWidth(text) <= width; };
 		const std::string& name = lobbyRowName[i];
 		std::string tail = lobbyRowTailFull[i];
-		if (!fits(name + tail)) tail = lobbyRowTailMarked[i];
-		if (!fits(name + tail)) tail = lobbyRowTailBare[i];
+		if (!fits(name + tail)) tail = lobbyRowTailWithoutMetrics[i];
+		if (!fits(name + tail)) tail = lobbyRowTailCompact[i];
 		if (!fits(name + tail)) {
 			while (!tail.empty() && !fits(name + tail + "...")) tail.pop_back();
 			if (!tail.empty()) tail += "...";

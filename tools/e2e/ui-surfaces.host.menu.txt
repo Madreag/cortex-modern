@@ -159,7 +159,8 @@ observe assert_visible HostSeatDialog 1
 assert_text_fits LabelHostSeatDlgActionHint
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgCancel
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
-observe assert_enabled ButtonHostSeatDlgKick 1
+observe assert_label LabelHostSeatDlgActionHint Seat actions apply to this player.
+assert_enabled ButtonHostSeatDlgKick 1
 observe assert_enabled ButtonHostSeatDlgBan 1
 dump_host_options
 observe activate ButtonHostSeatDlgClose
