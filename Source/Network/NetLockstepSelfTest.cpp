@@ -11845,27 +11845,34 @@ namespace RTE {
 			std::unique_ptr<Actor> actor(MakeSwitchTestActor(Activity::TeamTwo));
 			if (!actor) { *error = "held-seat fixture could not create its actor"; return false; }
 			Controller& controller = *actor->GetController();
-			controller.ResetLocalInputState(Controller::CIM_PLAYER, Players::PlayerTwo);
-			controller.ApplyWireMode(Controller::CIM_PLAYER, Players::PlayerTwo);
-			const std::string baseline = controller.SaveCheckpoint();
-			std::array<NetHash32, 2> hashes;
 			bool valid = true;
-			for (size_t index = 0; index < 2; ++index) {
+			for (const auto [initialMode, disabled]: {std::pair{Controller::CIM_PLAYER, false}, std::pair{Controller::CIM_PLAYER, true}, std::pair{Controller::CIM_AI, true}, std::pair{Controller::CIM_DISABLED, true}}) {
 				ScenarioRunner::SetLockstepCoordinator(nullptr);
-				ScenarioRunner::SetLockstepCoordinator(index == 0 ? &host : &survivor);
-				NetActorOwnership::SeedOwner(actor->GetUniqueID(), 2, Activity::TeamTwo);
-				valid &= controller.LoadCheckpoint(baseline);
-				controller.ApplyWireNeutral();
-				ApplyLockstepLeaveHandoffs(index == 0 ? hostFrame : survivorFrame, {actor.get()}, false);
-				const auto owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
-				const auto claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
-				valid &= owner == 1 && claimant == 2 && controller.GetInputMode() == Controller::CIM_AI && !controller.IsQuickDisabled();
-				hashes[index] = NetIdentity::HashCanonicalText("HeldSeatController/v1", {{"controller", controller.SaveCheckpoint()}, {"owner", std::to_string(owner)}, {"claimant", std::to_string(claimant)}});
+				const int player = initialMode == Controller::CIM_PLAYER ? Players::PlayerTwo : Players::NoPlayer;
+				controller.ResetLocalInputState(initialMode, player);
+				controller.ApplyWireMode(initialMode, player);
+				controller.SetDisabled(disabled);
+				const std::string baseline = controller.SaveCheckpoint();
+				std::array<NetHash32, 2> hashes;
+				for (size_t index = 0; index < 2; ++index) {
+					ScenarioRunner::SetLockstepCoordinator(nullptr);
+					ScenarioRunner::SetLockstepCoordinator(index == 0 ? &host : &survivor);
+					NetActorOwnership::SeedOwner(actor->GetUniqueID(), 2, Activity::TeamTwo);
+					valid &= controller.LoadCheckpoint(baseline);
+					controller.ApplyWireNeutral();
+					ApplyLockstepLeaveHandoffs(index == 0 ? hostFrame : survivorFrame, {actor.get()}, false);
+					const auto owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
+					const auto claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
+					const auto expectedMode = initialMode == Controller::CIM_PLAYER ? Controller::CIM_AI : initialMode;
+					valid &= owner == 1 && claimant == 2 && controller.GetInputMode() == expectedMode && controller.IsQuickDisabled() == disabled;
+					hashes[index] = NetIdentity::HashCanonicalText("HeldSeatController/v1", {{"controller", controller.SaveCheckpoint()}, {"owner", std::to_string(owner)}, {"claimant", std::to_string(claimant)}});
+				}
+				valid &= hashes[0] == hashes[1];
+				std::cout << "[net-lockstep-selftest] held_controller_hash=" << NetIdentity::HashHex(hashes[0]) << " mode=" << initialMode << " disabled=" << disabled << std::endl;
 			}
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
 			NetActorOwnership::ClearSeededOwners();
-			if (!valid || hashes[0] != hashes[1]) { *error = "held seat did not have equal AI controller state and reclaim ownership on both survivors"; return false; }
-			std::cout << "[net-lockstep-selftest] held_controller_hash=" << NetIdentity::HashHex(hashes[0]) << std::endl;
+			if (!valid) { *error = "held seat did not preserve scripted disable state and equal AI ownership on both survivors"; return false; }
 			return true;
 		}
 
