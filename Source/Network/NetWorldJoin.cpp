@@ -1665,6 +1665,33 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetWorldJoinHost::NextTailChunk(NetPeerId connection, std::vector<uint8_t>& chunk) {
+		auto* session = Find(connection);
+		if (!session || session->phase != NetWorldJoinPhase::CatchingUp) return false;
+		if (session->pendingTail.empty()) {
+			std::vector<std::vector<uint8_t>> frames;
+			if (m_Tail.CopyFrom(session->deliveredThrough + 1, 32, 40ULL * 1024, frames, &session->pendingTailThrough) == 0) return false;
+			for (const auto& frame: frames) {
+				AppendU32LE(session->pendingTail, static_cast<uint32_t>(frame.size()));
+				session->pendingTail.insert(session->pendingTail.end(), frame.begin(), frame.end());
+			}
+			session->pendingTailOffset = 0;
+		}
+		const size_t end = std::min(session->pendingTail.size(), session->pendingTailOffset + NetLobbyProtocol::c_MaxStateChunkBytes);
+		chunk.assign(session->pendingTail.begin() + session->pendingTailOffset, session->pendingTail.begin() + end);
+		return !chunk.empty();
+	}
+
+	void NetWorldJoinHost::NoteTailChunkSent(NetPeerId connection, size_t bytes) {
+		auto* session = Find(connection);
+		if (!session || bytes > session->pendingTail.size() - session->pendingTailOffset) return;
+		session->pendingTailOffset += bytes;
+		if (session->pendingTailOffset == session->pendingTail.size()) {
+			session->deliveredThrough = std::max(session->deliveredThrough, session->pendingTailThrough);
+			session->pendingTail.clear(); session->pendingTailOffset = 0;
+		}
+	}
+
 	bool NetWorldJoinHost::NoteDeliveredThrough(NetPeerId connection, uint64_t frame) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {
