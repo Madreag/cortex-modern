@@ -162,11 +162,12 @@ INTERNET_REASON = "Replays and connection details come with a later update."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
 # The host's saved session options steer the match; the client's own copy differs and must not.
-HOST_OPTIONS = {"NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
+HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "Pause", "NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
                 "NetworkPathHorizonTicks": "45"}
-CLIENT_OPTIONS = {"NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
+CLIENT_OPTIONS = {"NetworkSlowPlayerBoundTicks": "3", "NetworkSlowPlayerPolicy": "Substitute", "NetworkHostDelayPolicy": "Auto", "NetworkHostIdleWaitMinutes": "5", "NetworkHostAutoRepair": "1",
                   "NetworkPathHorizonTicks": "15"}
-MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45}
+MATCH_RULES = {"delay_policy": 2, "idle_wait_minutes": 25, "automatic_repair": False, "path_horizon_ticks": 45,
+               "slow_player_bound_ticks": 7, "slow_player_policy": 2}
 # A combo box draws its selected item left of the drop-down button, so its text budget is narrower than its rect.
 COMBO_BUTTON = 17
 FIT_LINE = re.compile(r"assert_text_fits (\w+).*?rect=\[(-?\d+),(-?\d+),(-?\d+),(-?\d+)\].*?available=\[(-?\d+),(-?\d+)\]")
