@@ -1,0 +1,171 @@
+{
+  "schema": 1,
+  "name": "menu-loss",
+  "title": "Lobby host loss and discovered-row geometry",
+  "port_base": 49443,
+  "timeout_s": 75,
+  "size": "960x540",
+  "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360",
+      "peers": [
+        {
+          "name": "host",
+          "menu_script": "menu-loss.host.menu.txt",
+          "args": [],
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
+          }
+        },
+        {
+          "name": "client",
+          "menu_script": "menu-loss.client.menu.txt",
+          "args": [],
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark loss-host-lobby",
+            "timeout_s": 30
+          },
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "960x540",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "host",
+          "menu_script": "menu-loss.host.menu.txt",
+          "args": [],
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
+          }
+        },
+        {
+          "name": "client",
+          "menu_script": "menu-loss.client.menu.txt",
+          "args": [],
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark loss-host-lobby",
+            "timeout_s": 30
+          },
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          }
+        }
+      ]
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720",
+      "peers": [
+        {
+          "name": "host",
+          "menu_script": "menu-loss.host.menu.txt",
+          "args": [],
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          },
+          "kill_when": {
+            "peer": "client",
+            "event": "video_mark loss-client-lobby"
+          }
+        },
+        {
+          "name": "client",
+          "menu_script": "menu-loss.client.menu.txt",
+          "args": [],
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark loss-host-lobby",
+            "timeout_s": 30
+          },
+          "settings": {
+            "NetworkAutoReconnect": "0"
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "loss-lan-list",
+      "run": "640x360",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-landing",
+      "run": "640x360",
+      "peer": "client",
+      "mark": "loss-client-landing",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
+    },
+    {
+      "id": "loss-lan-list",
+      "run": "960x540",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-landing",
+      "run": "960x540",
+      "peer": "client",
+      "mark": "loss-client-landing",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
+    },
+    {
+      "id": "loss-lan-list",
+      "run": "1280x720",
+      "peer": "client",
+      "mark": "loss-lan-list",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_text_fits ListLanGames .* PASS"
+      ]
+    },
+    {
+      "id": "loss-client-landing",
+      "run": "1280x720",
+      "peer": "client",
+      "mark": "loss-client-landing",
+      "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
+      "assert": "Native label/geometry readback.",
+      "log_regex": [
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+      ]
+    }
+  ]
+}

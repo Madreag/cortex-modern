@@ -1,0 +1,56 @@
+{
+  "schema": 1,
+  "timeout_ms": 85000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 550
+    },
+    {
+      "op": "menu",
+      "command": "video_mark status-before-loss"
+    },
+    {
+      "op": "wait",
+      "control": "LabelNetMatchStatus",
+      "text_contains": "Host connection lost - choosing a new host",
+      "equals": {
+        "visible": true
+      }
+    },
+    {
+      "op": "menu",
+      "command": "video_mark status-loss"
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchStatus",
+      "text_contains": "RTT -- ms"
+    },
+    {
+      "op": "menu",
+      "command": "dump_network_layout"
+    },
+    {
+      "op": "screenshot",
+      "name": "status-first"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 500
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchStatus",
+      "text_contains": "Current wait "
+    },
+    {
+      "op": "screenshot",
+      "name": "status-held"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

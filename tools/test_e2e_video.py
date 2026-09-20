@@ -27,7 +27,7 @@ import e2e_video as driver  # noqa: E402
 SCENARIOS = ("sp-smoke", "mp-host-join", "mp-reconnect-repair", "world-late-join", "ui-surfaces",
              "mod-void-wanderers", "mp-leave", "mp-rematch", "mp-rollback-lag",
              "mp-moderation", "mp-host-migration", "mp-resume-from-disk", "mp-direct-vs-relay",
-             "mod-void-wanderers-multiplayer")
+             "mod-void-wanderers-multiplayer", "mp-host-join-cross")
 
 
 def row(results, name, ok, detail=""):
@@ -110,6 +110,7 @@ def check_substitution(results):
     nested = driver.substitute({"a": ["{PEER}"], "b": {"c": "{PORT}"}}, tokens)
     ok &= row(results, "substitute/nested", nested == {"a": ["host"], "b": {"c": "49411"}}, str(nested))
     ok &= row(results, "substitute/unknown-token-left", driver.substitute("{NOPE}", tokens) == "{NOPE}")
+    ok &= row(results, 'substitute/quoted-native-path-has-no-escapes', driver.substitute('dump_match_identity "{PROBE_DIR}/id.json"', tokens) == 'dump_match_identity "D:/x/host-stage/probe/id.json"')
     return ok
 
 
@@ -286,13 +287,21 @@ def check_item_assertions(results, scratch):
     ok &= row(results, "review/console-errors-retained", checks[0]["matches"][0]["line"] == 1 and checks[1]["matches"][0]["line"] == 2 and checks[1]["forbidden"])
     _, evidence = driver.item_evidence(record, {"log_regex": ["parked brains"], "forbidden_log_regex": ["^ERROR:"]})
     ok &= row(results, "review/positive-log-cannot-hide-lua-error", evidence["probe"] == "fail")
+    observed['steps'][0]['observed']['control'] = {'text': 'Host connection lost / RTT -- ms'}
+    path.write_text(json.dumps(observed), encoding='utf-8')
+    item = {'readback': [{'step': 0, 'path': ['control', 'text'], 'not_contains': 'LIVE'}]}
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, 'review/forbidden-control-text', evidence['readback_assertions'][0]['pass'])
+    item['readback'][0]['step'] = 2
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, 'review/missing-control-is-not-negative-proof', evidence['probe'] == 'fail')
     return ok
 
 
 def check_stop_request(results, scratch):
     out = scratch / "stop-request"
     out.mkdir()
-    (out / "stop-request.json").write_text('{"reason":"unit stop"}', encoding="utf-8")
+    (out / "stop-request.json").write_text('{"class":"engine","reason":"unit stop"}', encoding="utf-8")
     handles = []
 
     class Handle:
@@ -327,8 +336,12 @@ def check_stop_request(results, scratch):
         captured = driver.run_one(options, scenario, {"name": "first"}, 0, out)
     finally:
         driver.make_run, driver.seed_settings = original_make, original_seed
-    return row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
+    ok = row(results, "interruption/stops-and-closes-runner", len(handles) == 1 and handles[0].closed and
                "unit stop" in captured["interrupted"] and captured["peers"][0]["record"]["exit_code"] == 137)
+    scenario['checklist'] = [{'id': 'play', 'what': 'The match continues.', 'screen': 'game'}]
+    report = driver.review(scenario, captured, out)
+    ok &= row(results, 'interruption/engine-stop-keeps-its-class', report['run_findings'][0]['class'] == 'engine' and report['checklist'][0]['finding']['class'] == 'engine')
+    return ok
 
 
 def check_finalizer(results, scratch):
@@ -526,6 +539,79 @@ def check_resume_seams(results, scratch):
     driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:-1]}]})
     result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-missing")
     ok &= row(results, "migration/missing-cap-fails", result["status"] == "FAIL" and not result["full_rows_equal"])
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:2]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-prefix-only")
+    ok &= row(results, 'migration/prefix-names-first-missing-tick', result['status'] == 'FAIL' and result['first_missing_tick'] == 3)
+    driver.write_json(paths[1], {"runs": [{"tick_hashes": rows[:2] + rows[3:]}]})
+    result = driver.compare_hash_range(*paths, 3, 5, scratch / "range-gap")
+    ok &= row(results, 'migration/gap-keeps-strict-failure-and-missing-tick', result['status'] == 'FAIL' and result['first_missing_tick'] == 3 and bool(result['validation_errors']))
+    return ok
+
+
+def check_cross_capture(results, scratch):
+    from e2e.cross import select_peer, identity_agrees, merge_halves
+    scenario = driver.load_scenario('mp-host-join-cross')
+    host = select_peer(scenario, 'host')
+    client = select_peer(scenario, 'client')
+    ok = row(results, 'cross/one-local-peer', [peer['name'] for peer in host['peers']] == ['host'] and [peer['name'] for peer in client['peers']] == ['client'])
+    ok &= row(results, 'cross/no-remote-file-rendezvous', all('{PROBE_DIR_' not in driver.scenario_text(value, value['peers'][0]['probe']) for value in (host, client)))
+    ok &= row(results, 'cross/missing-address-skips-client', driver.run_preflight(client, {'name': 'run0', 'peers': client['peers']}, [], {})['tokens'] == ['HOST_ADDRESS'])
+    ok &= row(results, 'cross/host-needs-no-address-token', driver.run_preflight(host, {'name': 'run0', 'peers': host['peers']}, [], {}) is None)
+    ok &= row(results, 'cross/address-token-from-environment', driver.supplied_tokens([], {'HOST_ADDRESS': '192.0.2.1'}) == {'HOST_ADDRESS': '192.0.2.1'})
+    identity = {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 1, 'host': True}
+    remote = {**identity, 'peer_id': 2, 'host': False}
+    ok &= row(results, 'cross/shared-native-identity', identity_agrees([identity, remote]))
+    ok &= row(results, 'cross/reject-different-round', not identity_agrees([identity, {**remote, 'round': 8}]))
+    ok &= row(results, 'cross/reject-same-peer', not identity_agrees([identity, {**remote, 'peer_id': 1}]))
+    roots = []
+    for name, definition, ident, platform in [('host', host, identity, 'win32'), ('client', client, remote, 'darwin')]:
+        root = scratch / ('cross-' + name)
+        root.mkdir()
+        roots.append(root)
+        video, sheet = root / (name + '.mp4'), root / (name + '-sheet.png')
+        video.write_bytes(b'synthetic contract video')
+        sheet.write_bytes(b'synthetic contract sheet')
+        driver.write_json(root / 'capture.json', {'synthetic': True, 'scenario': scenario['name'], 'scenario_definition': definition, 'out': str(root)})
+        driver.write_json(root / 'manifest.json', {'synthetic': True, 'platform': platform, 'source': {'tip': 'synthetic'}, 'frame_count': 1, 'peers': [{'peer': name, 'match_identity': ident, 'video': driver.file_evidence(video), 'contact_sheet': driver.file_evidence(sheet)}]})
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'checklist': [{'id': name, 'peer': name, 'frames': [0, 0], 'probe': 'pass'}]})
+    ok &= row(results, 'cross/merged-media-and-contract', merge_halves(roots, scratch / 'cross-merged'))
+    merged = json.loads((scratch / 'cross-merged/manifest.json').read_text())
+    ok &= row(results, 'cross/shared-key-and-platforms', merged['match_identity_gate']['match_id'] == '0000000000000005-0000000000000007' and merged['match_identity_gate']['cross_platform'])
+    (roots[1] / 'client.mp4').write_bytes(b'changed synthetic video')
+    ok &= row(results, 'cross/transferred-media-tamper-fails', not merge_halves(roots, scratch / 'cross-tampered'))
+    bad = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'absent', 'event': 'ready'}}]}
+    ok &= row(results, 'drop/unknown-event-peer-skips-before-launch', driver.run_preflight({'peers': bad['peers']}, bad, [], {})['class'] == 'harness')
+    good = {'name': 'run0', 'peers': [{'name': 'host', 'kill_when': {'peer': 'host', 'probe_complete': True}}]}
+    ok &= row(results, 'drop/completed-probe-gate', driver.run_preflight({'peers': good['peers']}, good, [], {}) is None)
+    result = scratch / 'completed-probe.json'
+    result.write_text('{"complete":true,"pass":false}')
+    ok &= row(results, 'drop/failed-probe-is-not-planned-completion', not driver.completed_probe(result))
+    result.write_text('{"complete":true,')
+    ok &= row(results, 'drop/partial-write-keeps-observing', not driver.completed_probe(result))
+    result.write_text('{"complete":true,"pass":true}')
+    ok &= row(results, 'drop/successful-probe-completes', driver.completed_probe(result))
+    return ok
+
+
+def check_migration_timing(results, scratch):
+    from e2e.timing import migration_timing
+    root = scratch / 'timing'
+    root.mkdir()
+    events = [
+        {'wall_ms': 2000, 'message': 'net_status peer=2 host_lost=1 local_slow=1'},
+        {'wall_ms': 4600, 'message': 'net_status peer=2 host_lost=0 local_slow=1'},
+        {'wall_ms': 4700, 'message': 'handover_toast peer=2 longest_ms=2700 text=Host left - ClientA is now hosting'},
+        {'wall_ms': 5000, 'message': 'net_status peer=2 host_lost=0 local_slow=0'},
+        {'wall_ms': 5500, 'message': 'net_status peer=2 host_lost=0 local_slow=1'}]
+    (root / 'events.jsonl').write_text('\n'.join(json.dumps(event) for event in events))
+    capture = {'peers': [{'peer': 'host', 'index': [{'frame': 1, 'screen': 'game', 'wall_ms': 1900}]},
+                         {'peer': 'clienta', 'video_dir': str(root), 'index': [{'frame': 2, 'wall_ms': 4750}, {'frame': 3, 'wall_ms': 6000}]}]}
+    item = migration_timing(capture, ['clienta'])['survivors'][0]
+    ok = row(results, 'migration/timing-from-host-last-frame', item['seconds_from_host_last_frame'] == 2.8 and item['overlay_longest_ms_at_toast'] == 2700 and item['toast_nearest_frame']['frame'] == 2)
+    ok &= row(results, 'migration/complete-and-truncated-slow-banners', item['local_slow_intervals'] == [{'start_ms': 2000, 'end_ms': 5000, 'seconds': 3.0, 'complete': True}, {'start_ms': 5500, 'end_ms': 6000, 'seconds': .5, 'complete': False}])
+    capture['peers'][0]['index'] = []
+    item = migration_timing(capture, ['clienta'])['survivors'][0]
+    ok &= row(results, 'migration/no-invented-loss-time', not item['timing_complete'] and item['seconds_from_host_last_frame'] is None)
     return ok
 
 
@@ -557,6 +643,8 @@ def main():
         ok &= check_menu_commands(results)
         ok &= check_drop_receipts(results, scratch)
         ok &= check_gameplay_epochs(results, scratch)
+        ok &= check_cross_capture(results, scratch)
+        ok &= check_migration_timing(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

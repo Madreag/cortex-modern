@@ -138,7 +138,7 @@ def scenario_text(scenario, key):
 def substitute(value, tokens):
     if isinstance(value, str):
         for name, replacement in tokens.items():
-            value = value.replace("{" + name + "}", str(replacement))
+            value = value.replace("{" + name + "}", replacement.as_posix() if isinstance(replacement, Path) else str(replacement))
         return value
     if isinstance(value, list):
         return [substitute(item, tokens) for item in value]
@@ -149,7 +149,7 @@ def substitute(value, tokens):
 
 def supplied_tokens(arguments=(), environment=None):
     environment = os.environ if environment is None else environment
-    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS") if environment.get(name)}
+    result = {name: environment[name] for name in ("TURN_SERVER", "TURN_USER", "TURN_PASS", "HOST_ADDRESS") if environment.get(name)}
     for argument in arguments:
         name, separator, value = argument.partition("=")
         if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or not value:
@@ -198,6 +198,10 @@ def checkpoint_tokens(peer):
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
+        kill_gate = node.get("kill_when")
+        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or
+                          bool(kill_gate.get("event")) == (kill_gate.get("probe_complete") is True)):
+            return {"class": "harness", "reason": "A process-drop gate must name a peer and either an event or a completed probe"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -413,6 +417,14 @@ def drop_evidence(record, tick):
     return {"path": str(path), "receipt": receipt, "pass": passed}
 
 
+def completed_probe(path):
+    try:
+        result = json.loads(Path(path).read_text(encoding="utf-8"))
+        return isinstance(result, dict) and result.get("complete") is True and result.get("pass") is True
+    except (OSError, ValueError):
+        return False
+
+
 def item_evidence(record, item):
     rows = record["index"]
     events_path = Path(record["video_dir"]) / "events.jsonl"
@@ -483,11 +495,23 @@ def item_evidence(record, item):
             value = steps.get(check["step"])
             for key in check["path"]:
                 value = value.get(key) if isinstance(value, dict) else None
-            passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
+            if "not_contains" in check:
+                passed = isinstance(value, str) and check["not_contains"] not in value
+            else:
+                passed = check["contains"] in value if "contains" in check and isinstance(value, str) else value == check.get("equals") and "equals" in check
             checks.append({**check, "actual": value, "pass": passed})
         evidence["readback_assertions"] = checks
         if not all(check["pass"] for check in checks):
             evidence["probe"] = "fail"
+    if item.get("match_identity"):
+        identity = record.get("match_identity") or {}
+        path = Path(record.get("probe_dir", "")) / "match-identity.json"
+        if path.is_file():
+            identity = json.loads(path.read_text(encoding="utf-8"))
+        passed = bool(identity.get("session_id") and identity.get("round") and identity.get("config_hash"))
+        evidence["match_identity"] = identity
+        if not passed or evidence.get("probe") == "none":
+            evidence["probe"] = "pass" if passed else "fail"
     return frame_range(rows, item), evidence
 
 
@@ -527,7 +551,7 @@ def review(scenario, capture, out):
                           "state": "captured" if video_frames else "no MP4 evidence",
                           **assertions}
             if not video_frames or item.get("blocked_by") or assertions.get("probe") in ("fail", "not-reached"):
-                resolved["finding"] = {"class": "harness" if capture.get("interrupted") else "unclassified", "reason": capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
+                resolved["finding"] = {"class": (capture.get("stop_finding") or {}).get("class", "harness" if capture.get("interrupted") else "unclassified"), "reason": (capture.get("stop_finding") or {}).get("reason") or capture.get("interrupted") or item.get("blocked_by") or assertions.get("reason") or
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
@@ -536,8 +560,8 @@ def review(scenario, capture, out):
         record = peer.get("record", {})
         planned = peer.get("expected_termination") and str(record.get("injected_termination", "")).startswith("scenario drop")
         if peer.get("error") or record.get("timed_out") or record.get("exit_code") not in (0, None) and not planned:
-            run_findings.append({"class": "unclassified", "run": capture["name"], "peer": peer["peer"],
-                                 "reason": peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
+            run_findings.append({"class": (capture.get("stop_finding") or {}).get("class", "unclassified"), "run": capture["name"], "peer": peer["peer"],
+                                 "reason": (capture.get("stop_finding") or {}).get("reason") or peer.get("error") or f"Unexpected runner result: exit={record.get('exit_code')} timed_out={record.get('timed_out')}",
                                  "launch": peer.get("launch")})
     document = {"schema": 1, "scenario": scenario["name"], "title": scenario.get("title", ""),
                 "requires": scenario.get("requires", []),
@@ -697,6 +721,8 @@ def run_one(options, scenario, run, run_index, out):
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
+        if gate.get("probe_complete"):
+            return completed_probe(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json")
         video = Path(shared[f"VIDEO_{name}"])
         if "sim_tick" in gate:
             return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
@@ -715,7 +741,18 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")
                 return
 
-    interrupted = None
+    def kill_when(name, gate):
+        while not stop_watchers.wait(.05):
+            if name in records:
+                return
+            if gate_met(gate):
+                rows = read_index(shared[f"VIDEO_{name}"])
+                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None})
+                description = "completed peer probe" if gate.get("probe_complete") else "peer event " + gate["event"]
+                drop_peer(runs[name], "scenario drop after " + description)
+                return
+
+    interrupted, stop_finding = None, None
     try:
         for peer in peers:
             name = peer["name"]
@@ -752,11 +789,22 @@ def run_one(options, scenario, run, run_index, out):
                 watcher = threading.Thread(target=kill_at_tick, args=(name, int(peer["kill_at_tick"])), daemon=True)
                 watcher.start()
                 killers.append(watcher)
+            if peer.get("kill_when"):
+                watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
+                watcher.start()
+                killers.append(watcher)
         next_size_check = time.monotonic()
         while any(thread.is_alive() for thread in threads):
             request = Path(out) / "stop-request.json"
             if request.is_file():
-                raise RuntimeError("capture stop requested: " + request.read_text(encoding="utf-8").strip())
+                reason = request.read_text(encoding="utf-8").strip()
+                try:
+                    finding = json.loads(reason)
+                    if finding.get("class") in ("engine", "harness", "data") and finding.get("reason"):
+                        stop_finding = finding
+                except (ValueError, AttributeError):
+                    pass
+                raise RuntimeError("capture stop requested: " + reason)
             for name in runs:
                 signal = Path(staged[name]["gameplay_signal"])
                 epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
@@ -797,7 +845,7 @@ def run_one(options, scenario, run, run_index, out):
         if console.is_file() and not (peer_root / "console.log").is_file():
             (peer_root / "console.log").write_bytes(console.read_bytes())
         collected.append({"peer": name, "root": str(peer_root), "video_dir": str(video_dir),
-                          "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick")),
+                          "expected_termination": bool(peer.get("kill_after_s") or peer.get("kill_at_tick") or peer.get("kill_when")),
         "record": {k: records.get(name, {}).get(k) for k in
                                      ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
                                       "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")},
@@ -805,7 +853,7 @@ def run_one(options, scenario, run, run_index, out):
                           "error": records.get(name, {}).get("error"),
                           "manifest": read_manifest(video_dir), "index": read_index(video_dir),
                           "menu_script_failures": menu_script_failures(peer_root), **staged[name]})
-    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted}
+    return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding}
 
 
 def render(capture_run, fps, every):
@@ -874,7 +922,7 @@ def finalize_only(options):
             peer = prior.get(peer_name, {"peer": peer_name, "root": str(peer_root), "video_dir": str(video),
                                         "probe_dir": str(root / f"{peer_name}-stage" / "probe"), "launch": str(launch_path),
                                         "args": launch.get("argv"), "env": launch.get("env_set"),
-                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick"))})
+                                        "expected_termination": bool(definition_peer.get("kill_after_s") or definition_peer.get("kill_at_tick") or definition_peer.get("kill_when"))})
             peer["record"] = {key: launch.get(key) for key in ("exit_code", "timed_out", "pid", "elapsed_seconds", "exe_sha256",
                               "private_desktop", "input_desktop_before", "input_desktop_after", "injected_termination")}
             peer["manifest"] = read_manifest(video)
@@ -920,12 +968,17 @@ def scenario_manifest(capture, out, elapsed):
                           "video": file_evidence(peer["video"]) if peer.get("video") else None,
                           "contact_sheet": file_evidence(peer["contact_sheet"]) if peer.get("contact_sheet") else None,
                           "launch": peer.get("launch"), "recorder": peer["manifest"]})
+            identity = Path(peer.get("probe_dir", "")) / "match-identity.json"
+            if identity.is_file():
+                peer["match_identity"] = json.loads(identity.read_text(encoding="utf-8"))
+                peers[-1]["match_identity"] = peer["match_identity"]
     manifest = {"schema": 1, "scenario": capture["scenario"], "source": capture["source"],
                 "exe": capture["exe"], "started": capture["started"], "finished": stamp(),
                 "wall_seconds": round(elapsed, 3), "fps": capture["fps"], "interrupted": capture.get("interrupted"),
                 "frame_count": sum(peer["frames"] for peer in peers), "peers": peers,
                 "skipped_runs": [{"run": run["name"], **run["skip_finding"]} for run in capture["runs"] if run.get("skip_finding")],
-                "requires_findings": capture.get("requires_findings", [])}
+                "requires_findings": capture.get("requires_findings", []),
+                "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
 
@@ -948,6 +1001,7 @@ def aggregate_review(capture, out):
                               "finding": {"class": "harness", "reason": capture.get("interrupted") or "Capture ended before this run"}})
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
+                "peer_selection": capture["scenario_definition"].get("peer_selection"),
                 "command": capture["command"], "verdict": "agent-review-required",
                 "checklist": items, "interrupted": capture.get("interrupted"),
                 "run_findings": [finding for document in documents for finding in document.get("run_findings", [])],
@@ -993,9 +1047,12 @@ def compare_hash_range(first, second, start, cap, out):
     from compare_sim_traces import load_trace, strict_compare
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
-    rows, paths = [], []
+    rows, paths, validation_errors = [], [], []
     for index, source in enumerate((Path(first), Path(second))):
-        load_trace(source)
+        try:
+            load_trace(source)
+        except ValueError as error:
+            validation_errors.append({"path": str(source), "error": str(error)})
         data = json.loads(source.read_text(encoding="utf-8-sig"))
         selected = [row for row in data["runs"][0]["tick_hashes"] if start <= row["tick"] <= cap]
         data["runs"][0]["tick_hashes"] = selected
@@ -1009,12 +1066,13 @@ def compare_hash_range(first, second, start, cap, out):
     first_missing = next((tick for tick in range(start, cap + 1) if any(tick not in ticks for ticks in present)), None)
     first_difference = next((a["tick"] for a, b in zip(*rows) if a != b), None)
     exact = coverage and rows[0] == rows[1]
-    return {"status": "PASS" if passed and exact else "FAIL", "first_tick": start, "last_tick": cap,
+    return {"status": "PASS" if passed and exact and not validation_errors else "FAIL", "first_tick": start, "last_tick": cap,
             "first_difference": first_difference, "first_missing_tick": first_missing, "full_rows_equal": exact, "strict": strict,
-            "traces": [file_evidence(first), file_evidence(second)], "exclusions": []}
+            "traces": [file_evidence(first), file_evidence(second)], "exclusions": [], "validation_errors": validation_errors}
 
 
 def migration_probes(config, capture):
+    from e2e.timing import migration_timing
     root = Path(capture["root"])
     names = config["peers"]
     peers = [next(peer for peer in capture["peers"] if peer["peer"] == name) for name in names]
@@ -1035,6 +1093,9 @@ def migration_probes(config, capture):
     except (OSError, ValueError, KeyError, IndexError) as error:
         result["reason"] = str(error)
     result["evidence"] = str(root / "migration-hashes.json")
+    timing = migration_timing(capture, names)
+    write_json(root / "migration-timing.json", timing)
+    result["timing"] = str(root / "migration-timing.json")
     write_json(root / "migration-hashes.json", result)
     for peer in peers:
         peer.setdefault("gates", {})["migration-hashes"] = result
@@ -1075,6 +1136,8 @@ def main():
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--scenario")
+    parser.add_argument("--peer", choices=("host", "client"))
+    parser.add_argument("--merge-peer-captures", nargs=2, type=Path, metavar=("HOST_CAPTURE", "CLIENT_CAPTURE"))
     parser.add_argument("--run", action="append", default=[], help="capture only this named run, repeatable")
     parser.add_argument("--token", action="append", default=[], metavar="NAME=VALUE")
     parser.add_argument("--size")
@@ -1087,6 +1150,12 @@ def main():
     parser.add_argument("--scratch-root", type=Path)
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
+
+    if options.merge_peer_captures:
+        if not options.out:
+            parser.error("--merge-peer-captures requires --out")
+        from e2e.cross import merge_halves
+        return 0 if merge_halves(options.merge_peer_captures, options.out) else 1
 
     if options.list:
         for path in sorted(SCENARIO_DIR.glob("*.json")):
@@ -1112,6 +1181,11 @@ def main():
         parser.error("CCCP_HEADLESS must stay 1: nothing this driver launches may reach a desktop")
 
     scenario = load_scenario(options.scenario)
+    if scenario.get("cross_machine") and not options.peer:
+        parser.error("a cross-machine capture requires --peer host or --peer client")
+    if options.peer:
+        from e2e.cross import select_peer
+        scenario = select_peer(scenario, options.peer)
     options.tokens = supplied_tokens(options.token)
     # Each scenario keeps its own slice of the block, so two of them can record side by side.
     if options.port is None:
@@ -1131,7 +1205,7 @@ def main():
     runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
     if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
         parser.error("--run names an unknown run")
-    capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()),
+    capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     missing = requirement_findings(options.repo, scenario)
@@ -1187,7 +1261,7 @@ def main():
             write_json(out / "capture.json", capture)
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
-            else:
+            if scratch_bytes(options.scratch_root) < SCRATCH_LIMIT:
                 feel_probes({**scenario, **run}, captured, source)
                 render(captured, options.fps, options.sheet_every)
             review(scenario, captured, Path(captured["root"]))

@@ -138,6 +138,11 @@ blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linke
 
 The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
 
+The lockstep wait loop presents through its own renderer. The capture hook on its existing event poll reads the
+preceding completed GL presentation, tagged `LockstepWaitOverlay`, on the next poll. The frame timestamp is the
+readback time, so a wait-overlay picture can lag its native draw event by one poll. Recorded simulation ticks and
+native handover draw timestamps remain separate evidence; the video does not interpolate motion across a stall.
+
 A peer with `gameplay_epochs: 2` also receives `<stage>/gameplay-epoch-2.json` when saved gameplay frames show the
 simulation counter reset. Rematch probes wait for that record before measuring their second play window.
 
@@ -148,3 +153,46 @@ record comparison as the migration gate. The command does not alter a wire flag,
 
 An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
 both exact visibility and text without blocking all later capture steps when the expected toast is absent.
+
+## One peer per machine
+
+`mp-host-join-cross` launches only the selected local peer. Start the Windows host first, then the Mac client with
+the Windows machine's reachable address. The scripts dial the address and port through the separate join fields;
+neither peer waits for a file on the other machine. Both halves record their live session, round and configuration hash.
+
+```text
+python tools/e2e_video.py --repo <windows-tree> --scenario mp-host-join-cross --peer host --out <host-capture> --fps 6
+python tools/e2e_video.py --repo <mac-tree> --scenario mp-host-join-cross --peer client --token HOST_ADDRESS=<windows-address> --out <client-capture> --fps 6
+```
+
+`HOST_ADDRESS` may also come from the environment. This definition uses a plain address on port 49412; it does not
+depend on a directory listing. The address must be reachable from the client and the two binaries must be compatible.
+After transferring the complete Mac capture through the lead's approved evidence workflow, join its contract with
+the host's retained capture:
+
+```text
+python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> --out <merged-contract>
+```
+
+The merge reads both halves and writes metadata only. It requires the same checklist, live session, round and
+configuration hash, complementary host/client roles, distinct peer ids, and unchanged MP4/contact-sheet hashes.
+It preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
+`local-pair-validation-only`; it is not a Mac capture. Picture review remains pending after a successful merge.
+
+On the Mac, both this definition and `sp-smoke` need Python, `date`, ffmpeg/ffprobe on PATH (or a listed Unix path),
+the matching data modules, and a built executable selected by `CCCP_TEST_BINARY` or `build-gns/CortexCommand`.
+Pillow supplies labelled contact sheets; the ffmpeg fallback is unlabelled. The binary must include `wait_label`,
+`dump_match_identity` and the recorder flags. `CCCP_TEST_DATA` and `CCCP_TEST_SETTINGS` can select the data and settings.
+The POSIX runner supplies the runtime, `CCCP_HEADLESS=1`, `SDL_MAC_BACKGROUND_APP=1` and its dylib search path;
+a working native display/GL context is still required. The engine requests an SDL hidden window in both creation paths.
+Windows private-desktop isolation has no POSIX equivalent in this driver. The Mac lane must verify its own display
+isolation, GL frame readback, encoding and runtime dependencies. No Mac execution is implied by these definitions.
+Reading the scripts and runtime setup reveals no additional Mac-specific change needed by `sp-smoke`.
+
+A UI-only readback may end a peer with `kill_when: {"peer": "survivor", "probe_complete": true}`. The driver waits
+for a complete, successful native probe, then terminates through the runner and retains the drop receipt. A failed or
+partially written probe never satisfies that gate. `menu-host-loss` uses this to retain the larger-size status readbacks
+without extending them into a second migration acceptance run.
+
+The pause settings skin has Video, Audio, Input, Gameplay and Misc only. Its Network tab is intentionally absent
+(`SettingsGUI.cpp` selects `SettingsPauseGUI.ini`); the main-menu settings walk covers the six Network subpages.

@@ -11,6 +11,7 @@
 #include "SettingsMan.h"
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "FrameRecorder.h"
 #include "UInputMan.h"
 #include "GUI.h"
 #include "GUIEvent.h"
@@ -516,7 +517,7 @@ void NetModerationGUI::Refresh() {
 			if (!member.cpu) {
 				roster += (roster.empty() ? "" : "\n\n") +
 				    (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
-				if (!member.dropped && !member.reclaiming && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
+				if (!member.dropped && !member.reclaiming && !member.aiHeld && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
 			}
 		}
 		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));
@@ -597,7 +598,7 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	auto* font = g_FrameMan.GetSmallFont(true);
 	const int width = std::min(412, g_WindowMan.GetResX() - 16);
-	int y = 8;
+	const int y = std::max(8, g_FrameMan.GetLargeFont()->GetFontHeight() + 4);
 	std::string text = "Seats  [F6]";
 	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
@@ -607,6 +608,7 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;
+	m_RosterRect = {8, y, width + 1, height + 1, true};
 	rectfill(g_FrameMan.GetBackBuffer32(), 8, y, width + 8, y + height, makeacol32(20, 22, 27, 255));
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
@@ -619,7 +621,8 @@ bool NetModerationGUI::MatchStatusWanted() const {
 		default: break;
 	}
 	// The countdown is still a pause state, so it must not blink the widget off.
-	bool active = m_Open || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
+	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	bool active = m_Open || snapshot.statusText.starts_with("Host lost") || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
 	if (!active) {
 		// The seats placing their brains hold the world too, and the player is waiting on exactly that.
 		std::string placementNames;
@@ -653,6 +656,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	char metrics[128];
 	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
 	const auto ping = g_NetMatchService.GetMatchPingMs();
+	const bool hostLost = snapshot.statusText.starts_with("Host lost") || snapshot.serviceState == "HostLost" || snapshot.serviceState == "Migrating";
 	// Sim updates against wall time over the last second, so a stalled or paused match reads its true pace
 	static long long s_paceMarkUs = 0;
 	static uint64_t s_paceMarkUpdates = 0;
@@ -679,11 +683,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 	const bool placing = !resyncing && setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
 	const bool holdPause = !resyncing && !placing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
-	const bool missingFrames = !resyncing && !placing && !holdPause &&
-	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame();
+	const bool missingFrames = !resyncing && !placing && !holdPause && (hostLost ||
+	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame());
 	const bool paused = !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
 	const bool waiting = resyncing || placing || holdPause || missingFrames;
+	if (!waiting) m_StatusWaitStartedUs = 0;
+	else if (m_StatusWaitStartedUs == 0) m_StatusWaitStartedUs = paceNowUs;
+	const long long currentWaitMs = waiting ? (paceNowUs - m_StatusWaitStartedUs) / 1000 : 0;
 	const EditorArea editor = FreeArea(backbuffer->w);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
@@ -730,12 +737,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		const int maxTextWidth = std::max(0, freeRight - freeLeft - 14);
-		const std::string pingText = ping ? std::to_string(*ping) : "--";
+		const std::string pingText = !hostLost && ping ? std::to_string(*ping) : "--";
 		char tail[96];
 		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
 		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
-			if (resyncing) {
+			if (hostLost) {
+				line += "HOST LOST / CHOOSING A NEW HOST / " + std::to_string(currentWaitMs) + " ms";
+			} else if (resyncing) {
 				line += "RESYNCING MATCH";
 			} else if (placing) {
 				const std::string count = " / " + std::to_string(placed) + " of " + std::to_string(seats);
@@ -792,6 +801,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 		hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 		m_NetStatus->Draw(&bitmap, false);
+		RecordStatusObservation(snapshot, hostLost, currentWaitMs);
 		return;
 	}
 	// The box is tall enough that a picker column beside it matters wherever the rows land, so its span
@@ -814,19 +824,21 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (m_MatchDelayFrames != m_BaseDelayFrames) {
 		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
 	}
-	text += "\nRTT " + (ping ? std::to_string(*ping) : "--") + " ms / " + (snapshot.isHost ? "max peer" : "host link");
+	text += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
 	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
 	if (ScenarioRunner::IsLockstepLocalMachineSlow()) text += "\nYour machine cannot keep up with this match";
 	if (g_SettingsMan.GetNetworkShowDiagnostics()) {
 		for (const auto& member: snapshot.members) {
 			if (member.cpu) continue;
-			text += "\nP" + std::to_string(member.peerId) + ": Ping " + std::to_string(member.pingMs) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
+			text += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
 			text += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
 			if (member.reclaiming || member.aiHeld) text += member.reclaiming ? " / Rejoining..." : " / held - AI in control";
 		}
 	}
-	if (resyncing) {
+	if (hostLost) {
+		text += "\nHost connection lost - choosing a new host...\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
+	} else if (resyncing) {
 		text += "\nRESYNCING MATCH";
 	} else if (placing) {
 		const int room = width - 12 - font->CalculateWidth("Waiting for  to place their brains");
@@ -837,6 +849,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
 	} else if (missingFrames) {
 		text += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), width - 12);
+		text += "\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
 	} else if (paused) {
 		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
 	} else {
@@ -869,6 +882,21 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	rect(backbuffer, x, y, x + width - 1, y + height - 1, makeacol32(59, 65, 83, 255));
 	hline(backbuffer, x + 1, y + 1, x + width - 2, waiting ? makeacol32(170, 120, 0, 255) : makeacol32(108, 118, 168, 255));
 	m_NetStatus->Draw(&bitmap, false);
+	RecordStatusObservation(snapshot, hostLost, currentWaitMs);
+}
+
+void NetModerationGUI::RecordStatusObservation(const NetLobbySnapshot& snapshot, bool hostLost, long long currentWaitMs) {
+	if (!FrameRecorder::Instance().Enabled()) return;
+	const long long now = FrameRecorder::SteadyNowMS();
+	const bool slow = ScenarioRunner::IsLockstepLocalMachineSlow();
+	if (now - m_LastStatusObservationMs < 250 && slow == m_LastSlowNotice && hostLost == m_LastHostLost) return;
+	m_LastStatusObservationMs = now;
+	m_LastSlowNotice = slow;
+	m_LastHostLost = hostLost;
+	uint64_t longest = 0;
+	for (const auto& member: snapshot.members) longest = std::max(longest, member.longestWaitMs);
+	FrameRecorder::Instance().RecordEvent("net_status peer=" + std::to_string(snapshot.localPeerId) + " host_lost=" + std::to_string(hostLost) +
+	    " local_slow=" + std::to_string(slow) + " current_wait_ms=" + std::to_string(currentWaitMs) + " longest_ms=" + std::to_string(longest));
 }
 
 void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
@@ -1227,6 +1255,17 @@ void NetModerationGUI::DrawMatchToasts() {
 		label->Resize(width - 16, rowHeight - 8);
 		rectfill(backbuffer, x, y, x + width - 1, y + rowHeight - 3, makeacol32(20, 22, 27, 255));
 		label->Draw(&bitmap, false);
+		const std::string& message = label->GetText();
+		const uint64_t round = ScenarioRunner::GetLockstepRoundId();
+		if (FrameRecorder::Instance().Enabled() && message.find(" is now hosting") != std::string::npos &&
+		    (message != m_LastHandoverToast || round != m_LastHandoverRound)) {
+			m_LastHandoverToast = message;
+			m_LastHandoverRound = round;
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			uint64_t longest = 0;
+			for (const auto& member: snapshot.members) longest = std::max(longest, member.longestWaitMs);
+			FrameRecorder::Instance().RecordEvent("handover_toast peer=" + std::to_string(snapshot.localPeerId) + " longest_ms=" + std::to_string(longest) + " text=" + message);
+		}
 	}
 	ScenarioRunner::NoteNetUiToastsDrawn(firstRow, rowCount);
 	t_simRNGOverride = previousRNG;
@@ -1236,6 +1275,7 @@ void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	m_StatusRect = {};
 	m_ChatRect = {};
+	m_RosterRect = {};
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
@@ -1243,7 +1283,7 @@ void NetModerationGUI::Draw() {
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
-	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing() || snapshot.statusText.starts_with("Host lost");
 	if (inMatch) {
 		CreateOverlay();
 	} else {
@@ -1337,6 +1377,12 @@ GUIControl* NetModerationGUI::GetControl(const std::string& name) const {
 	if (m_OverlayControls && name == "LabelNetMatchToastNewest") {
 		for (auto row = m_Toasts.rbegin(); row != m_Toasts.rend(); ++row) {
 			if ((*row)->GetVisible()) return *row;
+		}
+		return m_Toasts.front();
+	}
+	if (m_OverlayControls && name == "LabelNetMatchHandoverToast") {
+		for (auto* row : m_Toasts) {
+			if (row->GetVisible() && row->GetText().find(" is now hosting") != std::string::npos) return row;
 		}
 		return m_Toasts.front();
 	}

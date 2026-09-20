@@ -1,13 +1,14 @@
 {
   "schema": 1,
-  "name": "mp-leave",
-  "title": "A leaving player and a held player hand their seats to AI while two survivors play on",
-  "port_base": 49460,
+  "name": "menu-host-loss",
+  "title": "Host-loss label and Funds separation readbacks at the two larger sizes",
+  "port_base": 49450,
   "size": "960x540",
-  "timeout_s": 100,
+  "timeout_s": 95,
   "runs": [
     {
-      "name": "announced",
+      "name": "960x540",
+      "size": "960x540",
       "peers": [
         {
           "name": "host",
@@ -41,7 +42,7 @@
             "host",
             "-net-host"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "settings": {
             "NetworkSlowPlayerBoundTicks": "3",
             "NetworkSlowPlayerPolicy": "Substitute",
@@ -49,7 +50,7 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 0,
-          "probe": "mp-leave.announced-host.probe.json"
+          "kill_at_tick": 601
         },
         {
           "name": "leaver",
@@ -81,147 +82,10 @@
             "-tick-hashes",
             "-net-player-name",
             "leaver",
-            "-net-join",
-            "127.0.0.1",
-            "-net-match-e2e-leave",
-            "-net-match-e2e-leave-tick",
-            "600"
-          ],
-          "input_script": "play-input.txt",
-          "settings": {
-            "NetworkSlowPlayerBoundTicks": "3",
-            "NetworkSlowPlayerPolicy": "Substitute",
-            "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
-          },
-          "start_delay_s": 1
-        },
-        {
-          "name": "survivor",
-          "args": [
-            "-net-match-service-e2e",
-            "-net-port",
-            "{PORT}",
-            "-net-match-peers",
-            "3",
-            "-net-match-humans",
-            "3",
-            "-net-match-cpu-slots",
-            "0",
-            "-net-match-ticks",
-            "1200",
-            "-net-match-auto-delay",
-            "-net-autosave-seconds",
-            "0",
-            "-num-lua-states",
-            "4",
-            "-seed",
-            "42",
-            "-input-script",
-            "{INPUT_SCRIPT}",
-            "-net-match-report",
-            "{OUT}/survivor-match.json",
-            "-out",
-            "{OUT}/survivor_trace.json",
-            "-tick-hashes",
-            "-net-player-name",
-            "survivor",
             "-net-join",
             "127.0.0.1"
           ],
-          "input_script": "play-input.txt",
-          "settings": {
-            "NetworkSlowPlayerBoundTicks": "3",
-            "NetworkSlowPlayerPolicy": "Substitute",
-            "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
-          },
-          "start_delay_s": 5,
-          "probe": "mp-leave.announced-survivor.probe.json"
-        }
-      ]
-    },
-    {
-      "name": "held",
-      "peers": [
-        {
-          "name": "host",
-          "args": [
-            "-net-match-service-e2e",
-            "-net-port",
-            "{PORT}",
-            "-net-match-peers",
-            "3",
-            "-net-match-humans",
-            "3",
-            "-net-match-cpu-slots",
-            "0",
-            "-net-match-ticks",
-            "1200",
-            "-net-match-auto-delay",
-            "-net-autosave-seconds",
-            "0",
-            "-num-lua-states",
-            "4",
-            "-seed",
-            "42",
-            "-input-script",
-            "{INPUT_SCRIPT}",
-            "-net-match-report",
-            "{OUT}/host-match.json",
-            "-out",
-            "{OUT}/host_trace.json",
-            "-tick-hashes",
-            "-net-player-name",
-            "host",
-            "-net-host"
-          ],
-          "input_script": "play-input.txt",
-          "settings": {
-            "NetworkSlowPlayerBoundTicks": "3",
-            "NetworkSlowPlayerPolicy": "Substitute",
-            "NetworkShowDiagnostics": "1",
-            "NetworkMatchStatusMode": "Always"
-          },
-          "start_delay_s": 0,
-          "probe": "mp-leave.survivor.probe.json"
-        },
-        {
-          "name": "leaver",
-          "args": [
-            "-net-match-service-e2e",
-            "-net-port",
-            "{PORT}",
-            "-net-match-peers",
-            "3",
-            "-net-match-humans",
-            "3",
-            "-net-match-cpu-slots",
-            "0",
-            "-net-match-ticks",
-            "1200",
-            "-net-match-auto-delay",
-            "-net-autosave-seconds",
-            "0",
-            "-num-lua-states",
-            "4",
-            "-seed",
-            "42",
-            "-input-script",
-            "{INPUT_SCRIPT}",
-            "-net-match-report",
-            "{OUT}/leaver-match.json",
-            "-out",
-            "{OUT}/leaver_trace.json",
-            "-tick-hashes",
-            "-net-player-name",
-            "leaver",
-            "-net-join",
-            "127.0.0.1",
-            "-selftest-frame-stall",
-            "600:1500"
-          ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "settings": {
             "NetworkSlowPlayerBoundTicks": "3",
             "NetworkSlowPlayerPolicy": "Substitute",
@@ -229,7 +93,11 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 1,
-          "observe_after_failure": true
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "leaver",
+            "probe_complete": true
+          }
         },
         {
           "name": "survivor",
@@ -264,7 +132,7 @@
             "-net-join",
             "127.0.0.1"
           ],
-          "input_script": "play-input.txt",
+          "input_script": "ui-surfaces.input.txt",
           "settings": {
             "NetworkSlowPlayerBoundTicks": "3",
             "NetworkSlowPlayerPolicy": "Substitute",
@@ -272,207 +140,198 @@
             "NetworkMatchStatusMode": "Always"
           },
           "start_delay_s": 5,
-          "probe": "mp-leave.survivor.probe.json"
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "survivor",
+            "probe_complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "host",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 0,
+          "kill_at_tick": 601
+        },
+        {
+          "name": "leaver",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/leaver-match.json",
+            "-out",
+            "{OUT}/leaver_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "leaver",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 1,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "leaver",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-humans",
+            "3",
+            "-net-match-cpu-slots",
+            "0",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-seed",
+            "42",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/survivor-match.json",
+            "-out",
+            "{OUT}/survivor_trace.json",
+            "-tick-hashes",
+            "-net-player-name",
+            "survivor",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "settings": {
+            "NetworkSlowPlayerBoundTicks": "3",
+            "NetworkSlowPlayerPolicy": "Substitute",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_delay_s": 5,
+          "probe": "menu-host-loss.probe.json",
+          "kill_when": {
+            "peer": "survivor",
+            "probe_complete": true
+          }
         }
       ]
     }
   ],
   "checklist": [
     {
-      "id": "announced-before",
-      "what": "Both survivors show the original three-seat match before tick 600.",
-      "screen": "game",
-      "assert": "Running service, gameplay frames and scripted movement",
-      "run": "announced",
-      "sim_ticks": [
-        30,
-        590
-      ]
-    },
-    {
-      "id": "announced-continues",
-      "what": "The host continues to advance after the departure, with the seat under AI control.",
-      "screen": "game",
-      "assert": "Probe asserts Running at tick 1000; inspect the AI seat and acting units",
-      "peer": "host",
-      "run": "announced",
-      "sim_ticks": [
-        620,
-        1100
-      ]
-    },
-    {
-      "id": "announced-survivor",
-      "what": "The second surviving peer also continues; its overlay reflects the departed seat.",
-      "screen": "game",
-      "assert": "Probe asserts Running at tick 1000 and opens F6",
-      "peer": "survivor",
-      "run": "announced",
-      "sim_ticks": [
-        620,
-        1100
-      ]
-    },
-    {
-      "id": "held-before",
-      "what": "Both survivors show the original three-seat match before tick 600.",
-      "screen": "game",
-      "assert": "Running service, gameplay frames and scripted movement",
-      "run": "held",
-      "sim_ticks": [
-        30,
-        590
-      ]
-    },
-    {
-      "id": "held-continues",
-      "what": "The host continues to advance after the departure, with the seat under AI control.",
-      "screen": "game",
-      "assert": "Probe asserts Running at tick 1000; inspect the AI seat and acting units",
-      "peer": "host",
-      "run": "held",
-      "sim_ticks": [
-        620,
-        1100
-      ]
-    },
-    {
-      "id": "held-survivor",
-      "what": "The second surviving peer also continues; its overlay reflects the departed seat.",
-      "screen": "game",
-      "assert": "Probe asserts Running at tick 1000 and opens F6",
-      "peer": "survivor",
-      "run": "held",
-      "sim_ticks": [
-        620,
-        1100
-      ]
-    },
-    {
-      "id": "held-ai",
-      "what": "The silent seat is held at an agreed frame and its units keep acting.",
-      "screen": "game",
-      "assert": "host log: hold peer=2 ... AI in control; inspect post-hold unit motion",
-      "peer": "host",
-      "run": "held",
-      "sim_ticks": [
-        600,
-        1200
-      ],
-      "log_regex": [
-        "\\[net-match\\] hold peer=2 frame=\\d+ AI in control"
-      ]
-    },
-    {
-      "id": "announced-ai-label",
-      "peer": "host",
-      "run": "announced",
-      "screen": "game",
-      "mark": "survivor-after-leave",
-      "what": "The departed seat reads Left - AI in control, without drop or hold timers.",
-      "probe_steps": [
-        8
-      ]
-    },
-    {
-      "id": "held-client-rejoining",
+      "id": "loss-960x540-leaver",
+      "run": "960x540",
       "peer": "leaver",
-      "run": "held",
-      "screen": "RejoinOverlay",
-      "what": "The held client sees Held - AI in control - rejoining, then returns to play.",
-      "assert": "Private catch-up completes in the held client log; its rejoin overlay is recorded.",
-      "log_regex": [
-        "\\[net-match\\] private catch-up complete frame=\\d+"
-      ]
-    },
-    {
-      "id": "announced-ai-toast-host",
-      "peer": "host",
-      "run": "announced",
-      "screen": "game",
-      "mark": "survivor-after-leave",
-      "what": "The departure toast names leaver and says AI in control while the survivors keep playing.",
+      "mark": "status-loss",
+      "screen": "LockstepWaitOverlay",
       "probe_steps": [
-        2
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
       ],
       "readback": [
         {
-          "step": 2,
+          "step": 4,
           "path": [
             "control",
             "text"
           ],
-          "contains": "AI in control"
+          "contains": "Host connection lost - choosing a new host"
         },
         {
-          "step": 2,
+          "step": 4,
           "path": [
             "control",
             "text"
           ],
-          "contains": "leaver"
+          "contains": "RTT -- ms"
         },
         {
-          "step": 2,
-          "path": [
-            "control",
-            "visible"
-          ],
-          "equals": true
-        }
-      ]
-    },
-    {
-      "id": "announced-ai-toast-survivor",
-      "peer": "survivor",
-      "run": "announced",
-      "screen": "game",
-      "mark": "survivor-after-leave",
-      "what": "The departure toast names leaver and says AI in control while the survivors keep playing.",
-      "probe_steps": [
-        2
-      ],
-      "readback": [
-        {
-          "step": 2,
+          "step": 4,
           "path": [
             "control",
             "text"
           ],
-          "contains": "AI in control"
-        },
-        {
-          "step": 2,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "leaver"
-        },
-        {
-          "step": 2,
-          "path": [
-            "control",
-            "visible"
-          ],
-          "equals": true
-        }
-      ]
-    },
-    {
-      "id": "announced-ai-roster-once",
-      "run": "announced",
-      "peer": "survivor",
-      "mark": "survivor-after-leave",
-      "what": "The remote roster names AI control once for the departed seat.",
-      "readback": [
-        {
-          "step": 8,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "AI in control"
+          "not_contains": "LIVE"
         },
         {
           "step": 8,
@@ -480,9 +339,170 @@
             "control",
             "text"
           ],
-          "not_contains": "AI in control - AI in control"
+          "contains": "Current wait "
         }
-      ]
+      ],
+      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
+      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "loss-960x540-survivor",
+      "run": "960x540",
+      "peer": "survivor",
+      "mark": "status-loss",
+      "screen": "LockstepWaitOverlay",
+      "probe_steps": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        }
+      ],
+      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
+      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "loss-1280x720-leaver",
+      "run": "1280x720",
+      "peer": "leaver",
+      "mark": "status-loss",
+      "screen": "LockstepWaitOverlay",
+      "probe_steps": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        }
+      ],
+      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
+      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
+    },
+    {
+      "id": "loss-1280x720-survivor",
+      "run": "1280x720",
+      "peer": "survivor",
+      "mark": "status-loss",
+      "screen": "LockstepWaitOverlay",
+      "probe_steps": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10
+      ],
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Host connection lost - choosing a new host"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "RTT -- ms"
+        },
+        {
+          "step": 4,
+          "path": [
+            "control",
+            "text"
+          ],
+          "not_contains": "LIVE"
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Current wait "
+        }
+      ],
+      "what": "During host loss the status box names the loss, blanks RTT and updates its wait; the old top-left roster does not cover Funds.",
+      "assert": "Native status text twice, completed probe, first and later screenshots, and dump_network_layout."
     }
   ]
 }

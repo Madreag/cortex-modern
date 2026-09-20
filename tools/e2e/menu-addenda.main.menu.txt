@@ -1,0 +1,128 @@
+wait_ms 1500
+activate ButtonMainToOptions
+wait_ms 300
+select_settings_page Audio
+video_mark transition-audio
+screenshot transition-audio-first
+dump_player_options
+screenshot transition-audio-settled
+observe assert_settings_page Audio
+observe assert_visible CollectionBoxVideoSettings 0
+wait_ms 350
+select_settings_page Input
+video_mark transition-input
+screenshot transition-input-first
+dump_player_options
+screenshot transition-input-settled
+observe assert_settings_page Input
+observe assert_visible CollectionBoxAudioSettings 0
+wait_ms 350
+select_settings_page Gameplay
+video_mark transition-gameplay
+screenshot transition-gameplay-first
+dump_player_options
+screenshot transition-gameplay-settled
+observe assert_settings_page Gameplay
+observe assert_visible CollectionBoxInputSettings 0
+wait_ms 350
+select_settings_page Misc
+video_mark transition-misc
+screenshot transition-misc-first
+dump_player_options
+screenshot transition-misc-settled
+observe assert_settings_page Misc
+observe assert_visible CollectionBoxGameplaySettings 0
+wait_ms 350
+select_settings_page Video
+video_mark transition-video
+screenshot transition-video-first
+dump_player_options
+screenshot transition-video-settled
+observe assert_settings_page Video
+observe assert_visible CollectionBoxMiscSettings 0
+wait_ms 350
+select_settings_page Network
+video_mark transition-network
+screenshot transition-network-first
+dump_player_options
+screenshot transition-network-settled
+observe assert_settings_page Network
+observe assert_visible CollectionBoxVideoSettings 0
+wait_ms 350
+select_settings_page Network:Chat
+video_mark transition-network-chat
+screenshot transition-network-chat-first
+dump_player_options
+screenshot transition-network-chat-settled
+observe assert_settings_page Network:Chat
+wait_ms 350
+select_settings_page Network:Recovery
+video_mark transition-network-recovery
+screenshot transition-network-recovery-first
+dump_player_options
+screenshot transition-network-recovery-settled
+observe assert_settings_page Network:Recovery
+wait_ms 350
+select_settings_page Network:Files
+video_mark transition-network-files
+screenshot transition-network-files-first
+dump_player_options
+screenshot transition-network-files-settled
+observe assert_settings_page Network:Files
+wait_ms 350
+select_settings_page Network:Internet
+video_mark transition-network-internet
+screenshot transition-network-internet-first
+dump_player_options
+screenshot transition-network-internet-settled
+observe assert_settings_page Network:Internet
+wait_ms 350
+select_settings_page Network:Connection
+video_mark transition-network-connection
+screenshot transition-network-connection-first
+dump_player_options
+screenshot transition-network-connection-settled
+observe assert_settings_page Network:Connection
+wait_ms 350
+select_settings_page Network:Player
+video_mark transition-network-player
+screenshot transition-network-player-first
+dump_player_options
+screenshot transition-network-player-settled
+observe assert_settings_page Network:Player
+wait_ms 350
+post_command ButtonBackToMainMenu
+wait_ms 250
+activate ButtonMainToMultiplayer
+video_mark addenda-landing
+wait_ms 250
+observe assert_label LabelMultiplayerBlurb LAN, direct address and internet games.
+dump_host_options
+activate ButtonMultiplayerHostGame
+video_mark addenda-host
+screenshot transition-host-first
+dump_host_options
+observe assert_no_overlap CheckHostPortMap ButtonHostOptions
+observe assert_text_fits CheckHostPortMap
+observe assert_label ComboHostActivity Skirmish Defense
+wait_ms 400
+combo_select ComboHostActivity P4 Alpha Duel - Base.rte
+wait_ms 250
+settext TextHostPort {PORT}
+settext TextHostPlayers 3
+activate ButtonMultiplayerCreate
+wait_ms 1500
+video_mark addenda-lobby
+observe assert_label LabelMultiplayerStatus Waiting for 2 players to join
+observe assert_label LabelMultiplayerStatus LAN address:
+dump_lobby
+dump_host_options
+activate ButtonLobbyOptions
+wait_ms 350
+observe assert_text_fits LabelHostSeatHeader
+dump_host_options
+activate ButtonHostOptBack
+wait_ms 300
+activate ButtonMultiplayerLeave
+wait_ms 400
+exit

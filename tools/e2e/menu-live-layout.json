@@ -1,0 +1,321 @@
+{
+  "schema": 1,
+  "name": "menu-live-layout",
+  "title": "Live pause fill and first-frame readbacks for the five supported pause settings pages",
+  "port_base": 49446,
+  "size": "960x540",
+  "timeout_s": 100,
+  "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "960x540",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
+        }
+      ]
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "probe": "menu-live-layout.probe.json",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "client",
+            "probe_complete": true
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "pause-panel-background",
+      "run": "640x360",
+      "mark": "pause-panel-background",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Video",
+      "run": "640x360",
+      "mark": "pause-transition-Video",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Audio",
+      "run": "640x360",
+      "mark": "pause-transition-Audio",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Input",
+      "run": "640x360",
+      "mark": "pause-transition-Input",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Gameplay",
+      "run": "640x360",
+      "mark": "pause-transition-Gameplay",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Misc",
+      "run": "640x360",
+      "mark": "pause-transition-Misc",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-panel-background",
+      "run": "960x540",
+      "mark": "pause-panel-background",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Video",
+      "run": "960x540",
+      "mark": "pause-transition-Video",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Audio",
+      "run": "960x540",
+      "mark": "pause-transition-Audio",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Input",
+      "run": "960x540",
+      "mark": "pause-transition-Input",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Gameplay",
+      "run": "960x540",
+      "mark": "pause-transition-Gameplay",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Misc",
+      "run": "960x540",
+      "mark": "pause-transition-Misc",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-panel-background",
+      "run": "1280x720",
+      "mark": "pause-panel-background",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Video",
+      "run": "1280x720",
+      "mark": "pause-transition-Video",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Audio",
+      "run": "1280x720",
+      "mark": "pause-transition-Audio",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Input",
+      "run": "1280x720",
+      "mark": "pause-transition-Input",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Gameplay",
+      "run": "1280x720",
+      "mark": "pause-transition-Gameplay",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    },
+    {
+      "id": "pause-transition-Misc",
+      "run": "1280x720",
+      "mark": "pause-transition-Misc",
+      "what": "The live pause panel blocks world HUD and the settings page changes with its correct title.",
+      "assert": "Software panel opacity and native first-frame visibility readbacks."
+    }
+  ]
+}

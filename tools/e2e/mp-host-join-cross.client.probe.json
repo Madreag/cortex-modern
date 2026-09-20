@@ -1,0 +1,42 @@
+{
+  "schema": 1,
+  "timeout_ms": 140000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 60
+    },
+    {
+      "op": "menu",
+      "command": "video_mark cross-play-client"
+    },
+    {
+      "op": "menu",
+      "command": "dump_match_identity \"{PROBE_DIR}/match-identity.json\""
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 720
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 720
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

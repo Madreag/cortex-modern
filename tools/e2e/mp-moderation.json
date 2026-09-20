@@ -181,6 +181,25 @@
       "log_regex": [
         "^\\[net-(?:session|auth|reconnect|match)\\].*ParticipantBanned"
       ]
+    },
+    {
+      "id": "moderation-host-open-seats",
+      "peer": "host",
+      "mark": "moderation-final-roster",
+      "screen": "MultiplayerScreen",
+      "what": "After Kick and Ban the host counts the two open seats and shows a plain refusal notice.",
+      "events": [
+        "(?s)assert_label LabelMultiplayerStatus.*Waiting for 2 players to join.*PASS",
+        "assert_label LabelMultiplayerError.*A banned player was refused.*PASS"
+      ]
+    },
+    {
+      "id": "moderation-host-named-refusal",
+      "peer": "host",
+      "mark": "moderation-final-roster",
+      "screen": "MultiplayerScreen",
+      "what": "The host notice identifies ClientB as the banned participant whose rejoin was refused.",
+      "blocked_by": "ENGINE 140/141 wire: the host rejection supplies no participant name; the label uses a plain generic refusal until that identity is exposed."
     }
   ]
 }
