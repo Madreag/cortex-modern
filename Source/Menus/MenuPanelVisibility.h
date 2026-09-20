@@ -5,7 +5,7 @@
 /// panel's own visible flag, so a child of a hidden box keeps drawing over whatever replaced it.
 /// A screen that swaps panels takes the subtree's visibility with the box and gives it back.
 
-#include "GUIControl.h"
+#include "GUI.h"
 
 #include <unordered_map>
 #include <utility>
