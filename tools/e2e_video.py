@@ -95,6 +95,13 @@ def source_evidence(repo):
             "diff_sha256": hashlib.sha256(git("diff", "HEAD").encode()).hexdigest()}
 
 
+def capture_binary(repo):
+    if sys.platform == "win32":
+        return Path(repo).resolve() / "Cortex Command.exe"
+    from posix_test_runner import resolve_binary
+    return resolve_binary(repo)
+
+
 def find_ffmpeg():
     """PATH first, then the two machines' known locations; None when the encode has to be skipped."""
     found = shutil.which("ffmpeg")
@@ -1094,7 +1101,7 @@ def main():
         raise SystemExit(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
     started = time.monotonic()
     source = source_evidence(options.repo)
-    exe = file_evidence(Path(options.repo) / ("Cortex Command.exe" if sys.platform == "win32" else "build-gns/CortexCommand"))
+    exe = file_evidence(capture_binary(options.repo))
     runs = scenario.get("runs") or [{"name": "run0", "peers": scenario.get("peers", [])}]
     if options.run and set(options.run) - {run.get("name", f"run{i}") for i, run in enumerate(runs)}:
         parser.error("--run names an unknown run")
