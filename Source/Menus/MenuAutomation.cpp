@@ -5,6 +5,7 @@
 #include "NetModerationGUI.h"
 
 #include "GUI.h"
+#include "GUIDrawRecord.h"
 #include "GUIFont.h"
 #include "GUIButton.h"
 #include "GUICheckbox.h"
@@ -60,10 +61,12 @@ namespace RTE::MenuAutomation {
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetVisible()) return false;
 		return true;
 	}
-	// What the renderer draws: GUIManager::Draw reads each panel's own flag, never its parents'.
+	// What the renderer drew, read from its own record: a visible flag only says what a panel would
+	// draw if its parents did. A menu frame is 1/60 s, so a quarter second covers the last one.
+	constexpr double c_DrawWindowSeconds = 0.25;
 	GUIControl* FirstDrawn(GUIControl* control) {
 		if (!control || !control->GetPanel()) return nullptr;
-		if (control->GetPanel()->_GetVisible()) return control;
+		if (PanelDrewRecently(control->GetPanel(), c_DrawWindowSeconds)) return control;
 		if (std::vector<GUIControl*>* children = control->GetChildren()) {
 			for (GUIControl* child: *children) {
 				if (GUIControl* drawn = FirstDrawn(child)) return drawn;
