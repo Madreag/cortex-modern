@@ -785,6 +785,7 @@ static std::string ResyncSaveName() {
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			m_WorkerSession = session.get();
+			NoteSessionHandedToWorker(*session);
 			runner = std::move(m_Runner);
 			if (m_IsHost) {
 				// A rematch restarts from a zeroed sim count.
@@ -1100,6 +1101,7 @@ static std::string ResyncSaveName() {
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			m_WorkerSession = session.get();
+			NoteSessionHandedToWorker(*session);
 			runner = std::move(m_Runner);
 			if (isHost) {
 				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
@@ -3325,6 +3327,13 @@ static std::string ResyncSaveName() {
 
 	// The catch-up is armed on the worker thread, which owns the session until it hands it back, and the
 	// replay that follows may never reach the service pump: the park is declared here, on that session.
+	// The round this session just left never evaluated its timeouts, and the game thread that hands it
+	// over then waits without pumping anything: the worker's first evaluation would measure the whole
+	// match as silence. The windows start again at the handover instead.
+	void NetMatchService::NoteSessionHandedToWorker(NetSession& session) {
+		session.NotePumpParked();
+	}
+
 	void NetMatchService::NoteWorldCatchUpArmed(NetSession& session) {
 		session.NotePumpParked();
 		session.SetSilenceSuspended(true);
