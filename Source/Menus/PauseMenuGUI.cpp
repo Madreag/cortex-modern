@@ -568,6 +568,12 @@ void PauseMenuGUI::Draw(bool drawPostProcessBuffer) {
 		g_WindowMan.DrawPostProcessBuffer();
 	}
 	blit(m_BackdropBitmap, g_FrameMan.GetBackBuffer32(), 0, 0, 0, 0, m_BackdropBitmap->w, m_BackdropBitmap->h);
+	for (GUICollectionBox* panel: {m_MatchOptionsBox, m_LeaveConfirmBox}) {
+		if (!panel || !panel->GetVisible()) continue;
+		int x, y, width, height;
+		panel->GetControlRect(&x, &y, &width, &height);
+		rectfill(g_FrameMan.GetBackBuffer32(), x, y, x + width - 1, y + height - 1, makeacol32(20, 22, 27, 255));
+	}
 
 	switch (m_ActiveMenuScreen) {
 		case PauseMenuScreen::SaveOrLoadGameScreen:
