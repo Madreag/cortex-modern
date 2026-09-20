@@ -397,7 +397,7 @@ namespace RTE {
 			if (!NetIdentity::CaptureManifestInputs(worldInputs, error, worldOptions) ||
 			    !NetIdentity::CaptureManifestInputs(defaultInputs, error, defaultOptions)) return false;
 			if (worldInputs.schema != 2 || defaultInputs.schema != 2 ||
-			    worldInputs.deterministicConfig.lockstepCodecVersion != 29 || defaultInputs.deterministicConfig.lockstepCodecVersion != 28 ||
+			    worldInputs.deterministicConfig.lockstepCodecVersion != 31 || defaultInputs.deterministicConfig.lockstepCodecVersion != 30 ||
 			    worldInputs.deterministicConfig.matchConfigVersion != 7 || defaultInputs.deterministicConfig.matchConfigVersion != 6) {
 				*error = "world and default targets lost their diagnostic layout versions";
 				return false;

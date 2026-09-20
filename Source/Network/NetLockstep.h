@@ -53,6 +53,7 @@ namespace RTE {
 		ResyncRequested = 8, // The host ends the round so everyone reconvenes and reloads its snapshot (rejoin/heal).
 		Reclaimed = 10, // Host: the held seat's player was admitted back; resume through the rejoin path at this frame.
 		Substituted = 11, // Host: a moderator reseat takes the held seat; resume through the reseat path at this frame.
+		PeerRemoved = 13,
 		Expired = 12, // Host: the admission hold timed out; the seat is gone and commits resume without it.
 	};
 
@@ -623,8 +624,8 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 28;
-		static constexpr uint16_t c_WorldVersion = 29;
+		static constexpr uint16_t c_Version = 30;
+		static constexpr uint16_t c_WorldVersion = 31;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
@@ -1050,7 +1051,7 @@ namespace RTE {
 		bool SenderOwnsTransport(uint8_t claimedPeerId, NetPeerId fromTransport) const;
 		void CompareChecksums(uint64_t frame);
 		void AdvanceReadyFrames(uint64_t nowMs);
-		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false);
+		void ApplyPeerLeave(uint8_t peerId, uint64_t firstFrameWithout, const std::string& message, uint64_t nowMs, bool announced, bool closeTransport = false, bool agreedBoundary = false, bool removed = false);
 		void ApplyHoldResolution(uint8_t peerId, NetLockstepHoldResolution resolution, uint64_t nowMs, bool relay);
 		void MaybeSendHoldHeartbeats(uint64_t nowMs);
 		static bool IsHoldResolutionReason(NetLockstepStopReason reason);
