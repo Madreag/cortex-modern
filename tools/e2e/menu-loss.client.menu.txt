@@ -1,0 +1,22 @@
+wait_ms 1500
+activate ButtonMainToMultiplayer
+wait_ms 300
+activate ButtonMultiplayerJoinGame
+wait_ms 3500
+video_mark loss-lan-list
+dump_host_options
+screenshot loss-lan-list
+settext TextJoinAddress 127.0.0.1
+settext TextJoinPort {PORT}
+activate ButtonMultiplayerConnect
+wait_connected 2 30
+video_mark loss-client-lobby
+dump_lobby
+wait_state Failed 45
+video_mark loss-client-landing
+wait_ms 300
+observe assert_label LabelMultiplayerLandingStatus The host's connection was lost
+dump_host_options
+screenshot loss-client-landing
+wait_ms 1000
+exit

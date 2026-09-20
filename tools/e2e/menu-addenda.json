@@ -1,0 +1,405 @@
+{
+  "schema": 1,
+  "name": "menu-addenda",
+  "port_base": 49440,
+  "size": "960x540",
+  "timeout_s": 85,
+  "title": "Menu addenda readback and first-frame transition evidence",
+  "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360",
+      "peers": [
+        {
+          "name": "ui",
+          "args": [],
+          "menu_script": "menu-addenda.main.menu.txt"
+        }
+      ]
+    },
+    {
+      "name": "960x540",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "ui",
+          "args": [],
+          "menu_script": "menu-addenda.main.menu.txt"
+        }
+      ]
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720",
+      "peers": [
+        {
+          "name": "ui",
+          "args": [],
+          "menu_script": "menu-addenda.main.menu.txt"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "landing",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-landing",
+      "what": "The landing panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "host",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The host panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "lobby",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "The lobby panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "transition-audio",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-audio",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-input",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-input",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-gameplay",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-gameplay",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-misc",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-misc",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-video",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-video",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-chat",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-chat",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-recovery",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-recovery",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-files",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-files",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-internet",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-internet",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-connection",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-connection",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-player",
+      "run": "640x360",
+      "peer": "ui",
+      "mark": "transition-network-player",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "landing",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-landing",
+      "what": "The landing panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "host",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The host panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "lobby",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "The lobby panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "transition-audio",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-audio",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-input",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-input",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-gameplay",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-gameplay",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-misc",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-misc",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-video",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-video",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-chat",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-chat",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-recovery",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-recovery",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-files",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-files",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-internet",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-internet",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-connection",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-connection",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-player",
+      "run": "960x540",
+      "peer": "ui",
+      "mark": "transition-network-player",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "landing",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-landing",
+      "what": "The landing panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "host",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-host",
+      "what": "The host panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "lobby",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "addenda-lobby",
+      "what": "The lobby panel shows the corrected labels and geometry.",
+      "assert": "Recorded control readbacks and first-frame screenshots."
+    },
+    {
+      "id": "transition-audio",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-audio",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-input",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-input",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-gameplay",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-gameplay",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-misc",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-misc",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-video",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-video",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-chat",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-chat",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-recovery",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-recovery",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-files",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-files",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-internet",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-internet",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-connection",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-connection",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    },
+    {
+      "id": "transition-network-player",
+      "run": "1280x720",
+      "peer": "ui",
+      "mark": "transition-network-player",
+      "what": "The selected page and its title appear without the old page controls.",
+      "assert": "First-frame screenshot, software GUI dump, effective page visibility."
+    }
+  ]
+}
