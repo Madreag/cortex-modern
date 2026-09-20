@@ -215,6 +215,8 @@ namespace RTE {
 
 	void NetMatchConfigUtil::ApplySavedHostOptions(NetMatchConfig& config) {
 		config.delayPolicy = DelayPolicyFromSetting(g_SettingsMan.GetNetworkHostDelayPolicy());
+		config.slowPlayerBoundTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkSlowPlayerBoundTicks());
+		config.slowPlayerPolicy = g_SettingsMan.GetNetworkSlowPlayerPolicy() == SettingsMan::NetworkSlowPlayerPolicy::Pause ? NetSlowPlayerPolicy::Pause : NetSlowPlayerPolicy::Substitute;
 		config.idleWaitMinutes = static_cast<uint8_t>(std::clamp(g_SettingsMan.GetNetworkHostIdleWaitMinutes(), 0, 60));
 		config.automaticRepair = g_SettingsMan.GetNetworkHostAutoRepair();
 		config.pathHorizonTicks = static_cast<uint16_t>(g_SettingsMan.GetNetworkPathHorizonTicks());

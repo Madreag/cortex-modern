@@ -109,6 +109,7 @@ namespace {
 	using ChatScope = SettingsMan::NetworkChatDefaultScope;
 	using ChatSize = SettingsMan::NetworkChatTextSize;
 	using DelayPolicy = SettingsMan::NetworkHostDelayPolicy;
+	using SlowPolicy = SettingsMan::NetworkSlowPlayerPolicy;
 	using Visibility = SettingsMan::NetworkHostVisibility;
 
 	MatchMode ParseMatchStatusMode(const std::string& raw) { return ParseEnum(raw, {{"off", MatchMode::Off}, {"auto", MatchMode::Auto}, {"always", MatchMode::Always}}, MatchMode::Auto, "NetworkMatchStatusMode"); }
@@ -121,6 +122,8 @@ namespace {
 	const char* ChatScopeText(ChatScope scope) { return scope == ChatScope::Team ? "Team" : "All"; }
 	const char* ChatSizeText(ChatSize size) { return size == ChatSize::Large ? "Large" : "Small"; }
 	const char* DelayPolicyText(DelayPolicy policy) { return policy == DelayPolicy::Fixed ? "Fixed" : "Auto"; }
+	SlowPolicy ParseSlowPolicy(const std::string& raw) { return ParseEnum(raw, {{"substitute", SlowPolicy::Substitute}, {"pause", SlowPolicy::Pause}}, SlowPolicy::Substitute, "NetworkSlowPlayerPolicy"); }
+	const char* SlowPolicyText(SlowPolicy policy) { return policy == SlowPolicy::Pause ? "Pause" : "Substitute"; }
 	const char* VisibilityText(Visibility visibility) { return visibility == Visibility::Listed ? "Listed" : (visibility == Visibility::Unlisted ? "Unlisted" : "LAN"); }
 
 }
@@ -180,6 +183,9 @@ void SettingsMan::Clear() {
 	m_NetworkDisplayName = "Player";
 	m_NetworkDiagnosticsDirectory.clear();
 	m_NetworkMatchStatusMode = NetworkMatchStatusMode::Auto;
+	m_NetworkShowDiagnostics = false;
+	m_NetworkSlowPlayerBoundTicks = 3;
+	m_NetworkSlowPlayerPolicy = NetworkSlowPlayerPolicy::Substitute;
 	m_NetworkChatDefaultScope = NetworkChatDefaultScope::All;
 	m_NetworkChatTextSize = NetworkChatTextSize::Small;
 	m_NetworkChatKey = "T";
@@ -366,6 +372,9 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("LocalPredictionMaxTicks", { reader >> m_LocalPredictionMaxTicks; });
 	MatchProperty("NetworkDisplayName", { SetNetworkDisplayName(reader.ReadPropValue()); });
 	MatchProperty("NetworkMatchStatusMode", { m_NetworkMatchStatusMode = ParseMatchStatusMode(reader.ReadPropValue()); });
+	MatchProperty("NetworkShowDiagnostics", { reader >> m_NetworkShowDiagnostics; });
+	MatchProperty("NetworkSlowPlayerBoundTicks", { int ticks = 3; reader >> ticks; SetNetworkSlowPlayerBoundTicks(ticks); });
+	MatchProperty("NetworkSlowPlayerPolicy", { m_NetworkSlowPlayerPolicy = ParseSlowPolicy(reader.ReadPropValue()); });
 	MatchProperty("NetworkToastsEnabled", { reader >> m_NetworkToastsEnabled; });
 	MatchProperty("NetworkChatVisible", { reader >> m_NetworkChatVisible; });
 	MatchProperty("NetworkChatDefaultScope", { m_NetworkChatDefaultScope = ParseChatDefaultScope(reader.ReadPropValue()); });
@@ -714,6 +723,9 @@ bool SettingsMan::SaveNetworkHostDefaultsText(const std::string& text, std::stri
 void SettingsMan::WriteNetworkPreferences(Writer& writer) const {
 	writer.NewPropertyWithValue("NetworkDisplayName", m_NetworkDisplayName);
 	writer.NewPropertyWithValue("NetworkMatchStatusMode", MatchStatusText(m_NetworkMatchStatusMode));
+	writer.NewPropertyWithValue("NetworkShowDiagnostics", m_NetworkShowDiagnostics);
+	writer.NewPropertyWithValue("NetworkSlowPlayerBoundTicks", m_NetworkSlowPlayerBoundTicks);
+	writer.NewPropertyWithValue("NetworkSlowPlayerPolicy", SlowPolicyText(m_NetworkSlowPlayerPolicy));
 	writer.NewPropertyWithValue("NetworkToastsEnabled", m_NetworkToastsEnabled);
 	writer.NewPropertyWithValue("NetworkChatVisible", m_NetworkChatVisible);
 	writer.NewPropertyWithValue("NetworkChatDefaultScope", ChatScopeText(m_NetworkChatDefaultScope));
