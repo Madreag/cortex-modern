@@ -1286,6 +1286,7 @@ namespace RTE {
 		}
 
 		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error);
+		bool VerifyReclaimedSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& first, NetLockstepCoordinator& client, const NetLockstepReadyFrame& second, std::string* error);
 		void EnsureSwitchTestManagers();
 
 		bool ExpectEncodeError(const NetLockstepPacket& packet, NetLockstepErrorCode expected, std::string* error) {
@@ -1674,6 +1675,7 @@ namespace RTE {
 			    host.IsPeerGoneAtFrame(2, 10) || returning.IsPeerGoneAtFrame(2, 10) || !host.IsSeatReclaimGap(2, 10) || host.IsSeatReclaimGap(2, 11)) {
 				*error = "private reclaim disagreed on its committed authority or neutral gap"; return false;
 			}
+			if (!VerifyReclaimedSeatControllerState(host, ready, returning, second, error)) return false;
 			NetLockstepFrame stale; stale.senderPeerId = 2; stale.roundId = 32; stale.targetFrame = 11;
 			stale.commands = {{2, NetGameSetTeamFunds{1, 999}, 1}};
 			NetTransportEvent event; event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
@@ -12028,6 +12030,35 @@ namespace RTE {
 			actor->SetTeam(team);
 			actor->GetController()->SetControlledActor(actor);
 			return actor;
+		}
+
+		bool VerifyReclaimedSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& first, NetLockstepCoordinator& client, const NetLockstepReadyFrame& second, std::string* error) {
+			EnsureSwitchTestManagers();
+			std::unique_ptr<Actor> actor(MakeSwitchTestActor(Activity::TeamTwo));
+			if (!actor) return false;
+			Controller& controller = *actor->GetController();
+			bool valid = true;
+			for (const auto [mode, disabled]: {std::pair{Controller::CIM_AI, false}, std::pair{Controller::CIM_AI, true}, std::pair{Controller::CIM_DISABLED, true}}) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				controller.ResetLocalInputState(mode); controller.ApplyWireMode(mode, Players::NoPlayer); controller.SetDisabled(disabled);
+				const auto baseline = controller.SaveCheckpoint();
+				std::array<NetHash32, 2> hashes;
+				for (size_t index = 0; index < 2; ++index) {
+					ScenarioRunner::SetLockstepCoordinator(index == 0 ? &host : &client);
+					NetActorOwnership::SeedOwner(actor->GetUniqueID(), 2, Activity::TeamTwo);
+					ScenarioRunner::HandLockstepActorToAI(actor->GetUniqueID(), 2);
+					valid &= controller.LoadCheckpoint(baseline);
+					ApplyLockstepSeatReclaims(index == 0 ? first : second, {actor.get()});
+					const uint8_t owner = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), Activity::TeamTwo, true);
+					valid &= owner == 2 && controller.GetInputMode() == mode && controller.IsQuickDisabled() == disabled;
+					hashes[index] = NetIdentity::HashCanonicalText("ReclaimedSeatController/v1", {{"controller", controller.SaveCheckpoint()}, {"owner", std::to_string(owner)}});
+				}
+				valid &= hashes[0] == hashes[1];
+				std::cout << "[net-lockstep-selftest] reclaimed_controller_hash=" << NetIdentity::HashHex(hashes[0]) << std::endl;
+			}
+			ScenarioRunner::SetLockstepCoordinator(nullptr); NetActorOwnership::ClearSeededOwners();
+			if (!valid) *error = "reclaim changed script disable state or disagreed on the new producer";
+			return valid;
 		}
 
 		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error) {

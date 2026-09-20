@@ -483,6 +483,7 @@ namespace RTE {
 	};
 
 	/// Applies the committed frame's departures before its game commands.
+	void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors);
 	void ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, const std::deque<Actor*>& actors, bool paused);
 
 	/// The applied frame with the frames a synced pause committed discounted: a pause commits frames the
@@ -565,6 +566,7 @@ namespace RTE {
 		uint32_t blockingFrameWaits = 0;
 		uint64_t holdNoticeBudgetMs = 0;
 		bool holdDeadlineFeasible = true;
+		uint64_t lastHoldDeclarationMs = 0;
 		uint64_t localTickOverruns = 0;
 		uint64_t localLateInputs = 0;
 		uint32_t consecutiveLateInputs = 0;
@@ -1099,6 +1101,7 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing);
+		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
 			NetLockstepTiming proposal;
@@ -1121,6 +1124,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AiHeldSeats;
 		std::map<uint8_t, NetGameSeatHold> m_HoldTransactions;
 		std::map<uint8_t, NetGameSeatReclaim> m_ReclaimTransactions;
+		std::optional<uint64_t> m_FirstMissingFrame;
+		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_ConsumerWaitingFrame;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;

@@ -955,7 +955,7 @@ void RTE::ResetLockstepPausedFrames() {
 	s_LockstepPausedFrames = 0;
 }
 
-static void ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
+void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const std::deque<Actor*>& actors) {
 	for (uint8_t peer: ready.reclaimedPeerIds) {
 		size_t reclaimed = 0;
 		for (Actor* actor: actors) {

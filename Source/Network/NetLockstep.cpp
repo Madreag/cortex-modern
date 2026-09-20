@@ -4105,6 +4105,7 @@ namespace RTE {
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
 		m_ConsumerWaitingFrame.reset();
+		m_FirstMissingFrame.reset();
 		m_LastDeliveredFrame.reset();
 		m_ConsumerWaitStartMs = 0;
 		m_ConsumerWaitCounted = false;
@@ -4773,6 +4774,28 @@ namespace RTE {
 		return peers;
 	}
 
+	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
+		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId() || missing.empty()) return false;
+		const uint64_t boundMs = static_cast<uint64_t>(std::max<long long>(1, std::llround(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+		uint64_t noticeMs = 2;
+		for (uint8_t survivor: m_RemotePeerIds) {
+			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame)) continue;
+			const auto estimate = m_DelayEstimators.find(survivor);
+			const auto& stats = m_Stats.peers[survivor];
+			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
+		}
+		m_Stats.holdNoticeBudgetMs = noticeMs;
+		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : 0;
+		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
+			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
+			bool held = false;
+			for (uint8_t peer: missing) held = ProposePeerHold(peer, nowMs) || held;
+			return held;
+		}
+		return false;
+	}
+
 	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision) {
 		if (!UsesBoundedWait()) return false;
 		if (m_ConsumerWaitingFrame != frame) {
@@ -4802,21 +4825,8 @@ namespace RTE {
 			stats.longestWaitMs = std::max(stats.longestWaitMs, elapsed);
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
-		const uint64_t boundMs = static_cast<uint64_t>(std::max<long long>(1, std::llround(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		uint64_t noticeMs = 2;
-		for (uint8_t survivor: m_RemotePeerIds) {
-			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame)) continue;
-			const auto estimate = m_DelayEstimators.find(survivor);
-			const auto& stats = m_Stats.peers[survivor];
-			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
-		}
-		m_Stats.holdNoticeBudgetMs = noticeMs;
-		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
-		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : 0;
-		if (m_Config.localPeerId == GetHostPeerId() && elapsed >= declarationDeadline) {
-			for (uint8_t peer: missing) ProposePeerHold(peer, nowMs);
-			AdvanceReadyFrames(nowMs);
-		}
+		const uint64_t firstMissing = m_FirstMissingFrame == frame ? std::min(m_FirstMissingMs, m_ConsumerWaitStartMs) : m_ConsumerWaitStartMs;
+		if (DeclareOverdueInputs(frame, nowMs, firstMissing, missing)) AdvanceReadyFrames(nowMs);
 		return m_Stats.nextFrame > frame;
 	}
 
@@ -6413,6 +6423,7 @@ namespace RTE {
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
 		out << "\"hold_notice_budget_ms\":" << m_Stats.holdNoticeBudgetMs << ",";
+		out << "\"last_hold_declaration_ms\":" << m_Stats.lastHoldDeclarationMs << ",";
 		out << "\"hold_deadline_feasible\":" << (m_Stats.holdDeadlineFeasible ? "true" : "false") << ",";
 		out << "\"steady_missing_frame_stalls\":" << (m_Stats.measuredMissingFrameBase ? std::to_string(m_Stats.missingFrameStalls - *m_Stats.measuredMissingFrameBase) : "null") << ",";
 		out << "\"steady_blocking_frame_waits\":" << (m_Stats.measuredBlockingWaitBase ? std::to_string(m_Stats.blockingFrameWaits - *m_Stats.measuredBlockingWaitBase) : "null") << ",";
@@ -7940,8 +7951,16 @@ namespace RTE {
 				}
 			}
 			if (!allRequiredIn) {
+				if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
+					if (m_FirstMissingFrame != m_Stats.nextFrame) { m_FirstMissingFrame = m_Stats.nextFrame; m_FirstMissingMs = nowMs; }
+					std::vector<uint8_t> missing;
+					for (uint8_t peer: m_RemotePeerIds) if (IsRemoteRequiredForFrame(peer, m_Stats.nextFrame) &&
+					    (remoteIt == m_RemoteFrames.end() || !remoteIt->second.contains(peer))) missing.push_back(peer);
+					if (DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing)) continue;
+				}
 				break;
 			}
+			m_FirstMissingFrame.reset();
 			NetLockstepReadyFrame ready;
 			ready.frame = m_Stats.nextFrame;
 			if (localIt != m_LocalFrames.end()) {
