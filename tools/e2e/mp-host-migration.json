@@ -178,7 +178,10 @@
       "peer": "clienta",
       "mark": "migration-new-host",
       "screen": "game",
-      "what": "The migration toast names ClientA as the new host."
+      "what": "The migration toast names ClientA as the new host.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ]
     },
     {
       "id": "migration-continued-clienta",
@@ -241,7 +244,10 @@
       "peer": "clientb",
       "mark": "migration-new-host",
       "screen": "game",
-      "what": "The migration toast names ClientA as the new host."
+      "what": "The migration toast names ClientA as the new host.",
+      "log_regex": [
+        "^\\[net-match\\] Host left - ClientA is now hosting; boundary=\\d+ round=\\d+"
+      ]
     },
     {
       "id": "migration-continued-clientb",
