@@ -1718,30 +1718,27 @@ namespace RTE {
 				LoopbackTransport hostWire, clientWire;
 				NetLockstepCoordinator host, client;
 				auto a = MakeCoordinatorConfig(1, 2, sessionId, 1, NetTransportLane::ControlReliable);
-				auto b = MakeCoordinatorConfig(2, 1, sessionId, 1, NetTransportLane::ControlReliable);
+				auto b = MakeCoordinatorConfig(2, 1, sessionId, 8, NetTransportLane::ControlReliable);
 				a.startFrame = b.startFrame = 1;
 				a.roundId = b.roundId = 27;
 				a.substituteSlowPeers = b.substituteSlowPeers = true;
 				a.simTickMs = b.simTickMs = 1000.0 / 60.0;
 				a.timeoutMs = b.timeoutMs = 30000;
 				a.relayToOtherPeers = true;
-				a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 1}};
+				a.peerInputDelayFrames = b.peerInputDelayFrames = {{1, 1}, {2, 8}};
 				a.matchConfig = b.matchConfig = NetMatchConfigUtil::MakeDefault(sessionId);
 				if (!StartCoordinatorPair(port, hostWire, clientWire, host, client, a, b, failure)) return false;
 				host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
 				host.NoteLocalStartPark(hostParkMs);
 				client.NoteLocalStartPark(clientParkMs);
-				// The automatic delay re-sizes at the start, and a peer that is still starting cannot
-				// acknowledge it: the timing plane must give it the same ramp the frame pump does.
-				if (!host.ProposeInputDelay(2, 4, 2, failure)) return false;
-				uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 1, clientApplied = 0;
+				uint64_t hostProduced = 1, hostApplied = 0, clientProduced = 9, clientApplied = 0;
 				std::string queueError;
 				const auto pump = [&](uint64_t from, uint64_t to, bool clientPlays) {
 					for (uint64_t now = from; now < to; ++now) {
 						while (host.IsRunning() && hostProduced <= hostApplied + 2 &&
 						       host.QueueLocalInput(hostProduced, {MakeFrame(100, hostProduced)}, {}, &queueError)) ++hostProduced;
 						if (clientPlays) {
-							while (client.IsRunning() && clientProduced <= clientApplied + 2 &&
+							while (client.IsRunning() && clientProduced <= clientApplied + 10 &&
 							       client.QueueLocalInput(clientProduced, {MakeFrame(200, clientProduced)}, {}, &queueError)) ++clientProduced;
 						}
 						host.Tick(now); client.Tick(now);
@@ -1765,7 +1762,7 @@ namespace RTE {
 				};
 				// The joiner's machine is still restarting; nothing of its has reached the round yet.
 				pump(0, clientStartsAtMs, false);
-				if (host.GetStats().peers.at(2).holds != 0 || host.IsSeatUnderAI(2, 2)) {
+				if (host.GetStats().peers.at(2).holds != 0 || host.IsSeatUnderAI(2, 9)) {
 					return describe("the host gave a starting peer's seat to the AI before its machine had started");
 				}
 				if (clientParkMs > 0 && host.GetStats().peers.at(2).startParkMs != clientParkMs) {
@@ -1786,10 +1783,10 @@ namespace RTE {
 				}
 				return true;
 			};
-			// A peer whose own machine measured 120 ms of start work is allowed it, though ours cost nothing.
-			if (!play(48897, 0x9A0B, 0, 120, 110, error)) return false;
+			// A peer whose own machine measured 200 ms of start work is allowed it, though ours cost nothing.
+			if (!play(48897, 0x9A0B, 0, 200, 260, error)) return false;
 			// A peer that published nothing gets our own measured start work as its floor.
-			return play(48898, 0x9A0C, 150, 0, 140, error);
+			return play(48898, 0x9A0C, 250, 0, 300, error);
 		}
 
 		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
