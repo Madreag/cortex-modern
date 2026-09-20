@@ -8,6 +8,7 @@ dump_player_options
 screenshot transition-audio-settled
 observe assert_settings_page Audio
 observe assert_visible CollectionBoxVideoSettings 0
+observe assert_not_drawn CollectionBoxVideoSettings
 wait_ms 350
 select_settings_page Input
 video_mark transition-input
@@ -16,6 +17,7 @@ dump_player_options
 screenshot transition-input-settled
 observe assert_settings_page Input
 observe assert_visible CollectionBoxAudioSettings 0
+observe assert_not_drawn CollectionBoxAudioSettings
 wait_ms 350
 select_settings_page Gameplay
 video_mark transition-gameplay
@@ -24,6 +26,7 @@ dump_player_options
 screenshot transition-gameplay-settled
 observe assert_settings_page Gameplay
 observe assert_visible CollectionBoxInputSettings 0
+observe assert_not_drawn CollectionBoxInputSettings
 wait_ms 350
 select_settings_page Misc
 video_mark transition-misc
@@ -32,6 +35,7 @@ dump_player_options
 screenshot transition-misc-settled
 observe assert_settings_page Misc
 observe assert_visible CollectionBoxGameplaySettings 0
+observe assert_not_drawn CollectionBoxGameplaySettings
 wait_ms 350
 select_settings_page Video
 video_mark transition-video
@@ -40,6 +44,7 @@ dump_player_options
 screenshot transition-video-settled
 observe assert_settings_page Video
 observe assert_visible CollectionBoxMiscSettings 0
+observe assert_not_drawn CollectionBoxMiscSettings
 wait_ms 350
 select_settings_page Network
 video_mark transition-network
@@ -48,6 +53,7 @@ dump_player_options
 screenshot transition-network-settled
 observe assert_settings_page Network
 observe assert_visible CollectionBoxVideoSettings 0
+observe assert_not_drawn CollectionBoxVideoSettings
 wait_ms 350
 select_settings_page Network:Chat
 video_mark transition-network-chat
@@ -104,6 +110,8 @@ screenshot transition-host-first
 dump_host_options
 observe assert_no_overlap CheckHostPortMap ButtonHostOptions
 observe assert_text_fits CheckHostPortMap
+observe assert_text_fits ComboHostActivity
+observe assert_not_drawn MultiplayerLandingPanel
 observe assert_label ComboHostActivity Skirmish Defense
 wait_ms 400
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
@@ -120,9 +128,11 @@ dump_host_options
 activate ButtonLobbyOptions
 wait_ms 350
 observe assert_text_fits LabelHostSeatHeader
+observe assert_not_drawn MultiplayerLobbyPanel
 dump_host_options
 activate ButtonHostOptBack
 wait_ms 300
+observe assert_not_drawn MultiplayerHostOptionsPanel
 activate ButtonMultiplayerLeave
 wait_ms 400
 exit

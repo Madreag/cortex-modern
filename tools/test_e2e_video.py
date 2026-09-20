@@ -298,6 +298,28 @@ def check_item_assertions(results, scratch):
     return ok
 
 
+def check_frame_gaps(results, scratch):
+    root = scratch / "frame-gaps"
+    root.mkdir(parents=True)
+    index = [{"frame": 0, "wall_ms": 0, "screen": "MultiplayerScreen"},
+             {"frame": 1, "wall_ms": 160, "screen": "MultiplayerScreen"},
+             {"frame": 2, "wall_ms": 320, "screen": "MultiplayerScreen"}]
+    record = {"root": str(root), "video_dir": str(root / "video"), "index": index, "probe_dir": str(root / "probe")}
+    item = {"frame_gap": {"max_ms": 1000}}
+    _, evidence = driver.item_evidence(record, item)
+    ok = row(results, "review/frame-gap-clean-menu", evidence["probe"] == "pass" and evidence["frame_gap"]["worst"]["gap_ms"] == 160)
+    index[2]["wall_ms"] = 2500
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "review/frame-gap-render-stall", evidence["probe"] == "fail" and evidence["frame_gap"]["over"][0]["gap_ms"] == 2340,
+              json.dumps(evidence["frame_gap"]["over"]))
+    index[2]["screen"] = "Loading"
+    _, evidence = driver.item_evidence(record, item)
+    ok &= row(results, "review/frame-gap-ignores-loading", evidence["probe"] == "pass")
+    _, evidence = driver.item_evidence({**record, "index": []}, item)
+    ok &= row(results, "review/frame-gap-needs-frames", evidence["probe"] == "fail")
+    return ok
+
+
 def check_stop_request(results, scratch):
     out = scratch / "stop-request"
     out.mkdir()
@@ -636,6 +658,7 @@ def main():
         ok &= check_review(results, scratch)
         ok &= check_interruption(results, scratch)
         ok &= check_item_assertions(results, scratch)
+        ok &= check_frame_gaps(results, scratch)
         ok &= check_stop_request(results, scratch)
         ok &= check_finalizer(results, scratch)
         ok &= check_completion(results, scratch)

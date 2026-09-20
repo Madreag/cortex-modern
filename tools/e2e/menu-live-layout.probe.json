@@ -9,6 +9,48 @@
     },
     {
       "op": "key_down",
+      "key": "F6"
+    },
+    {
+      "op": "key_up",
+      "key": "F6"
+    },
+    {
+      "op": "wait",
+      "panel_open": true,
+      "elapsed_ms": 300
+    },
+    {
+      "op": "menu",
+      "command": "video_mark live-toast-band"
+    },
+    {
+      "op": "menu",
+      "command": "assert_toast_band"
+    },
+    {
+      "op": "menu",
+      "command": "assert_net_label LabelNetMatchStatus PACE"
+    },
+    {
+      "op": "menu",
+      "command": "assert_net_label_absent LabelNetMatchStatus Your machine cannot keep up"
+    },
+    {
+      "op": "key_down",
+      "key": "F6"
+    },
+    {
+      "op": "key_up",
+      "key": "F6"
+    },
+    {
+      "op": "wait",
+      "panel_open": false,
+      "elapsed_ms": 200
+    },
+    {
+      "op": "key_down",
       "key": "Escape"
     },
     {
@@ -19,6 +61,14 @@
       "op": "wait",
       "screen": "Pause",
       "elapsed_ms": 350
+    },
+    {
+      "op": "menu",
+      "command": "video_mark live-pause-menu"
+    },
+    {
+      "op": "menu",
+      "command": "assert_opaque_panel PauseScreen"
     },
     {
       "op": "menu",

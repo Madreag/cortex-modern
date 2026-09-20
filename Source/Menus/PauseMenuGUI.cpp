@@ -568,7 +568,9 @@ void PauseMenuGUI::Draw(bool drawPostProcessBuffer) {
 		g_WindowMan.DrawPostProcessBuffer();
 	}
 	blit(m_BackdropBitmap, g_FrameMan.GetBackBuffer32(), 0, 0, 0, 0, m_BackdropBitmap->w, m_BackdropBitmap->h);
-	for (GUICollectionBox* panel: {m_MatchOptionsBox, m_LeaveConfirmBox}) {
+	// A network match keeps simulating under this menu, so its rows need the panel a frozen world does not.
+	GUICollectionBox* liveMenuBox = m_NetworkMatchMode && m_ActiveMenuScreen == PauseMenuScreen::MainScreen ? m_PauseMenuBox : nullptr;
+	for (GUICollectionBox* panel: {m_MatchOptionsBox, m_LeaveConfirmBox, liveMenuBox}) {
 		if (!panel || !panel->GetVisible()) continue;
 		int x, y, width, height;
 		panel->GetControlRect(&x, &y, &width, &height);

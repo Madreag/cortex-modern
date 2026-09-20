@@ -137,6 +137,13 @@ void SettingsGUI::SetActiveSettingsMenuScreen(SettingsMenuScreen activeMenu, boo
 			RTEAbort("Invalid settings menu passed to SettingsGUI::SetActiveSettingsMenuScreen!");
 			break;
 	}
+	// A page's controls are drawn from their own flags, so the page that goes away takes them with it
+	// and gives back exactly what it had when it returns.
+	for (const char* page: {"Video", "Audio", "Input", "Gameplay", "Misc", "Network"}) {
+		if (GUIControl* box = m_GUIControlManager->GetControl("CollectionBox" + std::string(page) + "Settings")) {
+			m_PageVisibility.SetPresent(box, box->GetVisible());
+		}
+	}
 	m_ActiveSettingsMenuScreen = activeMenu;
 	// Remove focus so the tab hovered graphic is removed after being pressed, otherwise it remains stuck on the active tab.
 	m_GUIControlManager->GetManager()->SetFocus(nullptr);

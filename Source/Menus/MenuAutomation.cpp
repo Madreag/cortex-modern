@@ -60,6 +60,17 @@ namespace RTE::MenuAutomation {
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetVisible()) return false;
 		return true;
 	}
+	// What the renderer draws: GUIManager::Draw reads each panel's own flag, never its parents'.
+	GUIControl* FirstDrawn(GUIControl* control) {
+		if (!control || !control->GetPanel()) return nullptr;
+		if (control->GetPanel()->_GetVisible()) return control;
+		if (std::vector<GUIControl*>* children = control->GetChildren()) {
+			for (GUIControl* child: *children) {
+				if (GUIControl* drawn = FirstDrawn(child)) return drawn;
+			}
+		}
+		return nullptr;
+	}
 	bool Enabled(GUIControl* control) {
 		if (!Visible(control)) return false;
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetEnabled()) return false;
@@ -162,6 +173,8 @@ namespace RTE::MenuAutomation {
 		std::string text;
 		const bool measureHiddenPreset = control && control->GetName() == "ComboPresetResolution";
 		if ((!Visible(control) && !measureHiddenPreset) || !Text(control, text)) return false;
+		// A closed picker is measured on the line it draws, which is not always the whole item name.
+		if (auto* combo = dynamic_cast<GUIComboBox*>(control)) text = combo->GetText();
 		const auto rect = Rectangle(control->GetPanel());
 		observation += " text=" + Json(text).dump() + " rect=" + Json(rect).dump();
 		if (auto* label = dynamic_cast<GUILabel*>(control)) {
@@ -214,7 +227,9 @@ namespace RTE::MenuAutomation {
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
-			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity";
+			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
+			command == "assert_net_label" || command == "assert_net_label_absent";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -253,6 +268,32 @@ namespace RTE::MenuAutomation {
 				{"funds_bottom", fundsBottom}, {"roster_below_funds", roster.y >= fundsBottom}, {"local_pause", g_MenuMan.IsLocalPauseMenuOpen()}}.dump();
 			return true;
 		}
+		if (command == "assert_net_label" || command == "assert_net_label_absent") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			std::string name, expected, text;
+			args >> name;
+			std::getline(args >> std::ws, expected);
+			const bool found = panel && panel->AutomationLabelText(name, text);
+			const bool carries = found && text.find(expected) != std::string::npos;
+			observation = name + " \"" + expected + "\" text=" + Json(text).dump();
+			return found && carries == (command == "assert_net_label");
+		}
+		if (command == "assert_toast_band") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const auto& toasts = panel->GetToastRect();
+			const auto& seats = panel->GetSeatsPanelRect();
+			BITMAP* screen = g_FrameMan.GetBackBuffer32();
+			const bool inside = !toasts.visible || (toasts.x >= 0 && toasts.y >= 0 &&
+			                                        toasts.x + toasts.width <= screen->w && toasts.y + toasts.height <= screen->h);
+			const bool clearOfSeats = !toasts.visible || !seats.visible ||
+			                          toasts.y + toasts.height <= seats.y || toasts.y >= seats.y + seats.height ||
+			                          toasts.x + toasts.width <= seats.x || toasts.x >= seats.x + seats.width;
+			observation = Json{{"screen", {screen->w, screen->h}}, {"toasts", {toasts.x, toasts.y, toasts.width, toasts.height}},
+				{"toasts_visible", toasts.visible}, {"seats", {seats.x, seats.y, seats.width, seats.height}}, {"seats_visible", seats.visible},
+				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}}.dump();
+			return inside && clearOfSeats;
+		}
 		if (command == "assert_vertical_scroll") {
 			std::string name;
 			args >> name;
@@ -271,6 +312,23 @@ namespace RTE::MenuAutomation {
 		}
 		try {
 			if (!manager) { observation = "no active control manager"; return false; }
+			if (command == "assert_list_rows") {
+				std::string name;
+				int expected = -1;
+				args >> name >> expected;
+				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(name));
+				const int actual = list && list->GetItemList() ? static_cast<int>(list->GetItemList()->size()) : -1;
+				observation = name + " expected=" + std::to_string(expected) + " actual=" + std::to_string(actual);
+				return list != nullptr && actual == expected;
+			}
+			if (command == "assert_not_drawn") {
+				std::string name;
+				args >> name;
+				auto* control = manager->GetControl(name);
+				GUIControl* drawn = FirstDrawn(control);
+				observation = name + (control ? "" : " missing") + " drawn=" + (drawn ? drawn->GetName() : std::string("none"));
+				return control != nullptr && drawn == nullptr;
+			}
 			if (command == "assert_opaque_panel") {
 				std::string name;
 				args >> name;

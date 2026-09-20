@@ -74,8 +74,9 @@ namespace RTE {
 		uint64_t bytes = 0, elapsedMs = 0;
 		service.GetResyncStatus(&inFlight, &bytes, &elapsedMs);
 		if (inFlight) {
-			return "Repairing: " + std::string(bytes > 0 ? "transfer" : "snapshot") + " " +
-			       std::to_string(bytes) + " B " + std::to_string(elapsedMs / 1000) + "s";
+			// A receiver has no byte count of its own yet, so it names the transfer instead of reading zero.
+			if (bytes == 0) return "Repairing: receiving the host's snapshot " + std::to_string(elapsedMs / 1000) + "s";
+			return "Repairing: transfer " + std::to_string(bytes) + " B " + std::to_string(elapsedMs / 1000) + "s";
 		}
 		if (armed) return "Every peer pauses and reloads the host's snapshot - press again";
 		if (bytes > 0 || elapsedMs > 0) return "Repaired: " + std::to_string(bytes) + " B " + std::to_string(elapsedMs / 1000) + "s";
