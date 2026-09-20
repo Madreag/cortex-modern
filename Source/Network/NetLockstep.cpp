@@ -4824,6 +4824,7 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision) {
 		if (!UsesBoundedWait()) return false;
+		if (frame < m_Stats.nextFrame) return true;
 		if (m_ConsumerWaitingFrame != frame) {
 			m_ConsumerWaitingFrame = frame;
 			m_ConsumerWaitStartMs = nowMs;
