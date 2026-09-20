@@ -126,6 +126,20 @@ def peer_log(root: Path, who: str) -> str:
                      for name in ("stdout.log", "stderr.log") if (root / who / name).exists())
 
 
+def carry_store_files(source: Path, target: Path) -> None:
+    """Carry regular store files without traversing directories or reparse points."""
+    if source.is_symlink() or getattr(source, "is_junction", lambda: False)():
+        raise RuntimeError(f"store is a reparse point: {source}")
+    target.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+            raise RuntimeError(f"store entry is a reparse point: {path}")
+        if path.is_file():
+            shutil.copy2(path, target / path.name)
+        elif path.is_dir():
+            raise RuntimeError(f"unexpected directory in store: {path}")
+
+
 def descriptor(path: Path) -> dict:
     """The checkpoint's own restore identity, read the way a restore reads it."""
     with zipfile.ZipFile(path) as archive:
@@ -371,7 +385,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         source = first / who / "runtime/Autosaves"
         target = second / who / "runtime/Autosaves"
         if source.exists():
-            shutil.copytree(source, target, dirs_exist_ok=True)
+            carry_store_files(source, target)
         if who == "client":
             # ONE peer holds the checkpoint and ONE is streamed it: the host keeps its copy, the client
             # loses the archive the host will resume on, so the round is played across both paths. Two
@@ -452,7 +466,7 @@ def _carry_world_state(source: Path, who: str, runtime: Path) -> None:
     for relative in ("Autosaves", "Worlds"):
         held = source / who / "runtime" / relative
         if held.exists():
-            shutil.copytree(held, runtime / relative, dirs_exist_ok=True)
+            carry_store_files(held, runtime / relative)
     for name in ("reconnect.ticket", "NetworkIdentity.key", "ParticipantIdentity.key"):
         carried = source / who / "runtime/Userdata" / name
         if carried.exists():

@@ -72,6 +72,7 @@ namespace RTE {
 		size_t graphRootsReused = 0;
 		size_t graphRootsRewritten = 0;
 		int64_t sceneUs = 0;
+		int64_t movableUs = 0;
 		int64_t structureUs = 0;
 		int64_t sceneRuntimeUs = 0;
 		int64_t globalsUs = 0;

@@ -1,0 +1,91 @@
+"""Measure checkpoint stalls in a two-peer match and a persistent world."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+
+from test_autosave_restore import CAPTURE, _run_world_round, peer_log, run_pair
+
+
+BUDGET_MS = 5.0
+SPLIT = re.compile(r"^\[autosave\] tick=(\d+) layers_us=(\d+) activity_us=(\d+) graph_us=(\d+) scene_us=(\d+) structure_us=(\d+) scene_runtime_us=(\d+) globals_us=(\d+)$", re.M)
+WORKER = re.compile(r"^\[autosave\] tick=(\d+) freeze_us=(\d+) worker_us=(\d+) image_bytes=(\d+) .*", re.M)
+
+
+def measure(root: Path, records: dict) -> dict:
+    peers = {}
+    for who in ("host", "client"):
+        log = peer_log(root, who)
+        captures = [{"tick": int(tick), "capture_ms": float(ms), "bytes": int(size)}
+                    for tick, ms, size in CAPTURE.findall(log)]
+        splits = {int(row[0]): dict(zip(("layers_ms", "activity_ms", "lua_graph_ms", "scene_and_mos_ms",
+                                        "structure_ms", "scene_runtime_ms", "globals_ms"),
+                                       (int(value) / 1000 for value in row[1:]))) for row in SPLIT.findall(log)}
+        workers = {int(tick): {"freeze_ms": int(freeze) / 1000, "writer_ms": int(worker) / 1000}
+                   for tick, freeze, worker, _ in WORKER.findall(log)}
+        for capture in captures:
+            capture.update(splits.get(capture["tick"], {}))
+            capture.update(workers.get(capture["tick"], {}))
+        record = records.get(who, {})
+        reached = 0
+        trace = root / f"{who}_trace.json"
+        if trace.exists():
+            data = json.loads(trace.read_text(encoding="utf-8"))
+            reached = max((int(row["tick"]) for run in data.get("runs", [])
+                           for row in run.get("tick_hashes", [])), default=0)
+        peers[who] = {"record": record, "captures": captures, "last_trace_tick": reached,
+                      "max_capture_ms": max((row["capture_ms"] for row in captures), default=None)}
+    return peers
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--arm", choices=("match", "world", "all"), default="all")
+    parser.add_argument("--port", type=int, default=49520)
+    parser.add_argument("--score-existing", action="store_true")
+    options = parser.parse_args()
+    os.environ["CCCP_HEADLESS"] = "1"
+    os.environ["CCCP_CHECKPOINT_SPLIT"] = "1"
+    root = options.out.resolve()
+    if not options.score_existing:
+        root.mkdir(parents=True, exist_ok=False)
+    with (options.repo / "Cortex Command.exe").open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "arms": {}}
+    for index, arm in enumerate(("match", "world") if options.arm == "all" else (options.arm,)):
+        directory = root / arm
+        try:
+            if options.score_existing:
+                records = {who: json.loads((directory / who / "launch.json").read_text(encoding="utf-8"))
+                           for who in ("host", "client")}
+                result["exe_sha256"] = records["host"].get("exe_sha256")
+            elif arm == "match":
+                records = run_pair(options.repo, directory, options.port + 2 * index, 600, 1, {})
+            else:
+                directory.mkdir()
+                records = _run_world_round(options.repo, directory, options.port + 2 * index, 600, {})
+            peers = measure(directory, records)
+            passed = all(peer["record"].get("exit_code") == 0 and not peer["record"].get("timed_out")
+                         and peer["captures"] and peer["last_trace_tick"] >= 600
+                         and peer["max_capture_ms"] < BUDGET_MS for peer in peers.values())
+            result["arms"][arm] = {"passed": passed, "peers": peers}
+            costs = ", ".join(f"{who}={peer['max_capture_ms']} ms tick={peer['last_trace_tick']}" for who, peer in peers.items())
+            line = f"{'PASS' if passed else 'FAIL'} {arm}: budget < {BUDGET_MS} ms; {costs}"
+        except Exception as error:
+            result["arms"][arm] = {"passed": False, "error": repr(error)}
+            line = f"FAIL {arm}: {error}"
+        result["arms"][arm]["final_line"] = line
+        print(line, flush=True)
+        (root / ("result-rescored.json" if options.score_existing else "result.json")).write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+    return 0 if all(arm["passed"] for arm in result["arms"].values()) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
