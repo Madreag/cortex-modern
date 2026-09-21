@@ -1245,6 +1245,19 @@ namespace RTE {
 		if (const auto* hostHello = std::get_if<NetHostHello>(&message.payload)) {
 			m_RemoteLuaStateCount = hostHello->luaStateCount;
 			m_HasRemoteLuaStateCount = true;
+			const bool countDiffers = hostHello->luaStateCount != static_cast<uint16_t>(std::clamp(m_Config.localIdentity.deterministicConfig.numLuaStates, 0, 65535));
+			const bool identityDiffers = hostHello->deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash ||
+			                             hostHello->sessionIdentityHash != m_Config.localIdentity.sessionIdentityHash;
+			if (countDiffers || identityDiffers) {
+				std::string manifestError;
+				if (!NetIdentity::ApplyHostLuaStateCountToManifest(m_Config.localIdentity, hostHello->luaStateCount, &manifestError)) {
+					SetRejected(NetRejectReason::DeterministicConfigMismatch, "num_lua_states", std::to_string(hostHello->luaStateCount),
+					            std::to_string(m_Config.localIdentity.deterministicConfig.numLuaStates), manifestError);
+					Send(peerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::DeterministicConfigMismatch), manifestError});
+					m_Transport->Disconnect(peerId, manifestError);
+					return;
+				}
+			}
 			const NetIdentityMismatch mismatch = ValidateHostHello(*hostHello);
 			if (HasMismatch(mismatch)) {
 				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !m_AwaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
@@ -1714,15 +1727,8 @@ namespace RTE {
 		if (hello.controllerFrameEncodedSize != m_Config.localIdentity.controllerFrameEncodedSize) {
 			return MakeMismatch("controller_frame_encoded_size", NetRejectReason::ControllerFrameSizeMismatch, std::to_string(m_Config.localIdentity.controllerFrameEncodedSize), std::to_string(hello.controllerFrameEncodedSize), "ControllerFrame encoded size does not match");
 		}
-		NetIdentityManifest expected = m_Config.localIdentity;
-		if (hello.luaStateCount != static_cast<uint16_t>(std::clamp(expected.deterministicConfig.numLuaStates, 0, 65535))) {
-			expected.deterministicConfig.numLuaStates = hello.luaStateCount;
-			expected.deterministicConfig.numLuaStatesOverride = hello.luaStateCount;
-			expected.deterministicConfigHash = NetIdentity::HashDeterministicConfig(expected.deterministicConfig);
-			expected.sessionIdentityHash = NetIdentity::HashSessionIdentity(expected);
-		}
-		if (hello.deterministicConfigHash != expected.deterministicConfigHash) {
-			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(expected.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
+		if (hello.deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
+			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
 		}
 		if (m_Config.rejectUserdataModules && hello.hasUserdataModules) {
 			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");
@@ -1733,8 +1739,8 @@ namespace RTE {
 		if (hello.sessionRulesHash != m_Config.localIdentity.sessionRulesHash) {
 			return MakeMismatch("session_rules_hash", NetRejectReason::SessionRulesMismatch, HashText(m_Config.localIdentity.sessionRulesHash), HashText(hello.sessionRulesHash), "session rules hash does not match");
 		}
-		if (hello.sessionIdentityHash != expected.sessionIdentityHash) {
-			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(expected.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
+		if (hello.sessionIdentityHash != m_Config.localIdentity.sessionIdentityHash) {
+			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(m_Config.localIdentity.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
 		}
 		return NoMismatch();
 	}
