@@ -1506,6 +1506,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
 		}
+		if (!lastArg && currentArg == "-net-rendezvous-log") {
+			GnsTransport::SetRendezvousLogLevel(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
 		if (!lastArg && currentArg == "-feel-render-settings") {
 			if (!FrameMan::SetFeelRenderSettings(argValue[++i])) {
 				{

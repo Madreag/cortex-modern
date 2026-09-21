@@ -1,11 +1,13 @@
 #include "GnsTransport.h"
 #include "SettingsMan.h"
+#include "System.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <utility>
@@ -153,6 +155,28 @@ namespace RTE {
 		}
 
 		int s_SimulatedLagMs = 0;
+		int s_RendezvousLogLevel = 0;
+
+		// GNS calls this on its service thread while holding its lock: print, nothing else.
+		void GnsDebugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
+			static std::mutex mutex;
+			std::istringstream lines(message ? message : "");
+			std::lock_guard<std::mutex> lock(mutex);
+			for (std::string line; std::getline(lines, line);) {
+				if (!line.empty()) {
+					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + line);
+				}
+			}
+		}
+
+		// Diagnostics: routes GNS's own rendezvous spew into the run's log.
+		void ApplyRendezvousLog() {
+			if (s_RendezvousLogLevel <= 0) {
+				return;
+			}
+			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(s_RendezvousLogLevel), GnsDebugOutput);
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, s_RendezvousLogLevel);
+		}
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection.
 		void ApplySimulatedLag() {
@@ -661,6 +685,7 @@ namespace RTE {
 				return false;
 			}
 			ApplySimulatedLag();
+			ApplyRendezvousLog();
 			std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 			m_ListenSocket = m_Interface->CreateListenSocketP2P(virtualPort, static_cast<int>(connectionConfigs.size()), connectionConfigs.data());
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
@@ -700,6 +725,7 @@ namespace RTE {
 				m_Interface = SteamNetworkingSockets();
 				if (ApplyP2PIdentity(config, error)) {
 					ApplySimulatedLag();
+					ApplyRendezvousLog();
 					std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 					if (config.localVirtualPort >= 0) {
 						connectionConfigs.emplace_back();
@@ -1086,6 +1112,14 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	void GnsTransport::SetRendezvousLogLevel(int level) {
+#ifdef CCCP_WITH_GNS
+		s_RendezvousLogLevel = level;
+#else
+		(void)level;
 #endif
 	}
 
