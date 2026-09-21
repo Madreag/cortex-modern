@@ -56,16 +56,26 @@
 
 #include <bit>
 
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+}
+
 #include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <execution>
 #include <fstream>
+#include <iomanip>
 #include <map>
+#include <memory>
+#include <queue>
 #include <string>
+#include <sstream>
 #include <tuple>
 #include <unordered_set>
 #include <vector>
@@ -228,6 +238,32 @@ struct MOUniqueIDLess {
 		return a->GetUniqueID() < b->GetUniqueID();
 	}
 };
+
+struct ThreadedSyncedUpdateSelfTestContext {
+	std::vector<long> order;
+};
+
+ThreadedSyncedUpdateSelfTestContext* s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+
+int AppendThreadedSyncedUpdateSelfTestOrder(lua_State* state) {
+	if (!s_ThreadedSyncedUpdateSelfTestContext) return 0;
+	s_ThreadedSyncedUpdateSelfTestContext->order.push_back(static_cast<long>(luaL_checknumber(state, 1)));
+	return 0;
+}
+
+int ReadThreadedSyncedUpdateSelfTestOrderLength(lua_State* state) {
+	lua_pushinteger(state, s_ThreadedSyncedUpdateSelfTestContext ? static_cast<lua_Integer>(s_ThreadedSyncedUpdateSelfTestContext->order.size()) : 0);
+	return 1;
+}
+
+void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
+	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+	lua_State* luaState = state.GetLuaState();
+	lua_pushcfunction(luaState, AppendThreadedSyncedUpdateSelfTestOrder);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateAppend");
+	lua_pushcfunction(luaState, ReadThreadedSyncedUpdateSelfTestOrderLength);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateLength");
+}
 
 // A Lua state's registered-MO set copied into canonical unique-ID order (the set itself is unordered).
 static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state, bool includePending = false) {
@@ -4765,6 +4801,196 @@ static void ForgetActivitySlots(MovableObject* object) {
 	if (const Actor* actor = dynamic_cast<Actor*>(object)) activity->ForgetDestroyedActor(actor);
 }
 
+void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
+	const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
+	if (!globalMoidOrder) {
+		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+			g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
+				if (ValidMO(mo->GetRootParent()) && mo->HasRequestedSyncedUpdate()) {
+					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+					mo->ResetRequestedSyncedUpdateFlag();
+				}
+			}
+		}
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		return;
+	}
+
+	struct Cursor {
+		LuaStateWrapper* state = nullptr;
+		std::vector<MovableObject*> objects;
+		size_t next = 0;
+	};
+	struct Pending {
+		MovableObject* object = nullptr;
+		size_t cursor = 0;
+	};
+	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
+		return lhs.object->GetUniqueID() > rhs.object->GetUniqueID();
+	};
+
+	std::vector<Cursor> cursors;
+	cursors.reserve(g_LuaMan.GetThreadedScriptStates().size());
+	std::priority_queue<Pending, std::vector<Pending>, decltype(earlier)> pending(earlier);
+	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+		Cursor& cursor = cursors.emplace_back();
+		cursor.state = &luaState;
+		cursor.objects = SortedRegisteredMOs(luaState);
+		if (!cursor.objects.empty()) {
+			pending.push({cursor.objects.front(), cursors.size() - 1});
+		}
+	}
+
+	LuaStateWrapper* currentState = nullptr;
+	while (!pending.empty()) {
+		const Pending next = pending.top();
+		pending.pop();
+		Cursor& cursor = cursors[next.cursor];
+		if (currentState != cursor.state) {
+			g_LuaMan.SetThreadLuaStateOverride(cursor.state);
+			currentState = cursor.state;
+		}
+		if (ValidMO(next.object->GetRootParent()) && next.object->HasRequestedSyncedUpdate()) {
+			next.object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+			next.object->ResetRequestedSyncedUpdateFlag();
+		}
+		++cursor.next;
+		if (cursor.next < cursor.objects.size()) {
+			pending.push({cursor.objects[cursor.next], next.cursor});
+		}
+	}
+	g_LuaMan.SetThreadLuaStateOverride(nullptr);
+}
+
+bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
+	constexpr int c_ObjectCount = 1024;
+	constexpr int c_MeasureRounds = 12;
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	const int savedCursor = g_LuaMan.GetScriptStateCursor();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	std::array<std::string, 2> perStateHashes;
+	std::array<std::string, 2> globalHashes;
+	long long perStateUs = 0;
+	long long globalUs = 0;
+	bool passed = true;
+
+	const auto hashFixture = [](const ThreadedSyncedUpdateSelfTestContext& context, const std::vector<std::unique_ptr<MOPixel>>& objects) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		const auto mix = [&hash](uint64_t value) {
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		};
+		for (long uniqueID: context.order) mix(static_cast<uint64_t>(uniqueID));
+		for (const auto& object: objects) {
+			mix(static_cast<uint64_t>(object->GetUniqueID()));
+			mix(static_cast<uint64_t>(object->GetNumberValue("threaded_synced_order_length")));
+		}
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
+
+	for (size_t countIndex = 0; countIndex < 2; ++countIndex) {
+		const int count = countIndex == 0 ? 4 : 32;
+		LuaStatesArray replacement(static_cast<size_t>(count));
+		states.swap(replacement);
+		for (LuaStateWrapper& state: states) {
+			state.Initialize();
+			InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+		}
+
+		ThreadedSyncedUpdateSelfTestContext context;
+		std::vector<std::unique_ptr<MOPixel>> objects;
+		objects.reserve(c_ObjectCount);
+		MovableObject::PinUniqueIDCounter(savedCounter);
+		s_ThreadedSyncedUpdateSelfTestContext = &context;
+		bool fixtureReady = true;
+		for (int index = 0; index < c_ObjectCount; ++index) {
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0) {
+				fixtureReady = false;
+				break;
+			}
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			objects.push_back(std::move(object));
+			MOPixel* fixtureObject = objects.back().get();
+			fixtureObject->MoveScriptsToState(states[static_cast<size_t>(index) % states.size()]);
+			if (fixtureObject->LoadScript(std::string(c_Fixture), true) < 0 || fixtureObject->AdoptScriptObject() < 0) {
+				fixtureReady = false;
+				break;
+			}
+		}
+
+		const auto run = [&](bool globalOrder) {
+			context.order.clear();
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(globalOrder);
+			return hashFixture(context, objects);
+		};
+
+		if (fixtureReady && objects.size() == c_ObjectCount) {
+			perStateHashes[countIndex] = run(false);
+			globalHashes[countIndex] = run(true);
+			if (count == 32) {
+				run(false);
+				run(true);
+				const auto measure = [&](bool globalOrder) {
+					const auto started = std::chrono::steady_clock::now();
+					for (int round = 0; round < c_MeasureRounds; ++round) run(globalOrder);
+					return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count() / c_MeasureRounds;
+				};
+				perStateUs = measure(false);
+				globalUs = measure(true);
+			}
+		} else {
+			passed = false;
+			std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order fixture_objects=" << objects.size() << " expected=" << c_ObjectCount << std::endl;
+		}
+
+		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+		for (const auto& object: objects) {
+			m_ValidParticles.erase(object.get());
+			std::erase(m_AddedParticles, object.get());
+			object->DestroyScriptState();
+			object->Destroy();
+		}
+		states.swap(replacement);
+	}
+
+	states.swap(savedStates);
+	g_LuaMan.SetScriptStateCursor(savedCursor);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+	const bool perStateRed = perStateHashes[0] != perStateHashes[1];
+	const bool globalGreen = globalHashes[0] == globalHashes[1];
+	const double deltaPercent = perStateUs == 0 ? 0.0 : (100.0 * static_cast<double>(globalUs - perStateUs) / static_cast<double>(perStateUs));
+	const bool timingGreen = std::abs(deltaPercent) <= 5.0;
+	passed = passed && perStateRed && globalGreen && timingGreen;
+	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
+	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1] << std::endl;
+	std::cout << "[script-graph-selftest] " << (globalGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_global_moid_order states=4,32 hash4=" << globalHashes[0] << " hash32=" << globalHashes[1] << std::endl;
+	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
+	          << " after_us=" << globalUs << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
+	return passed;
+}
+
 void MovableMan::Update() {
 	ZoneScoped;
 
@@ -4882,30 +5108,16 @@ void MovableMan::Update() {
 	{
 		ZoneScopedN("Multithreaded Scripts SyncedUpdate");
 
-		// The serial, MOID-ordered channel for script-driven shared-state mutation;
+		// The serial, global-MOID channel for script-driven shared-state mutation;
 		// scripts opt in via RequestSyncedUpdate. See Data/Modding/threaded-determinism.md.
-		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
-
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
-				mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+				mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
 			}
 		}
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
-
-		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-			g_LuaMan.SetThreadLuaStateOverride(&luaState);
-
-			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
-				if (mo->HasRequestedSyncedUpdate()) {
-					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-					mo->ResetRequestedSyncedUpdateFlag();
-				}
-			}
-
-			g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		}
+		RunThreadedSyncedUpdatePass(true);
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
 

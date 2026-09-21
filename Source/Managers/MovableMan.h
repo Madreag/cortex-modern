@@ -140,6 +140,7 @@ namespace RTE {
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
+		bool RunThreadedSyncedUpdateOrderSelfTest();
 
 		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
 		/// installing an empty one. Leaves the live record as it found it.
@@ -1193,6 +1194,7 @@ namespace RTE {
 		/// This is needed because of a very awkward and ugly old code path where controllers were updated in the middle of update, and various mods relied of this behaviour for actions that were therefore delayed by a frame
 		/// Ideally we wouldn't need this, but this is all very fragile code and I'd prefer to avoid breaking things.
 		void PreControllerUpdate();
+		void RunThreadedSyncedUpdatePass(bool globalMoidOrder);
 
 		// Disallow the use of some implicit methods.
 		MovableMan(const MovableMan& reference) = delete;
