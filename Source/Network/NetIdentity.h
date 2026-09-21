@@ -126,6 +126,18 @@ namespace RTE {
 		/// Hashes the captured modules' files and fills the manifest's hashes. Touches no manager, so a
 		/// worker thread can do this work while the game thread keeps its frame budget.
 		static bool CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error = nullptr, NetIdentityBuildOptions options = {});
+
+		/// Starts the file work for the loaded modules on a worker thread, so the menu that needs a
+		/// manifest does not pay a disk walk of every module on its draw thread. Captures its inputs
+		/// here, on the caller's thread, because only that phase reads the managers; call it once the
+		/// modules are loaded. A second call while one is in flight does nothing.
+		static void PrimeManifest();
+		/// Blocks until a started priming pass has finished. For the rows that measure it.
+		static void WaitForPrimedManifest();
+		/// Module contents hashed from disk so far. A primed build adds none.
+		static uint64_t ModuleContentHashCount();
+		/// Drops the primed file work; the next build walks the disk again.
+		static void DropPrimedManifest();
 		static bool WriteManifestJson(const NetIdentityManifest& manifest, const std::string& path, std::string* error = nullptr);
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);
 
