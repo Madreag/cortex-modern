@@ -40,6 +40,7 @@ SELFTESTS = [
     "render-window-scripts",
     "text-wrap",
     "save-refusal-diagnosis",
+    "headless-render-cap",
 ]
 FATAL = re.compile(
     r"^.*(?:\bFAIL\b|RTE Assert|RTE Abort|stack traceback|Stack trace \(most recent call last\)).*$",
@@ -162,6 +163,12 @@ def main():
             from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
 
             case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
+            scored = score_detect(case_data)
+            scored["binary"] = case_data.get("exe_sha256")
+        elif name == "headless-render-cap":
+            from test_headless_render_cap import run_case, score_detect  # noqa: PLC0415
+
+            case_data = run_case(options.repo, case, options.timeout)
             scored = score_detect(case_data)
             scored["binary"] = case_data.get("exe_sha256")
         else:

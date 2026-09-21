@@ -84,6 +84,7 @@ namespace {
 		uint64_t nextCaptureTick = 60;
 		size_t eventIndex = 0;
 		double capHz = 0;
+		bool settingsApplied = false;
 		double nextDrawMS = 0;
 		double drawBeginMS = 0;
 		double presentBeginMS = 0;
@@ -172,7 +173,15 @@ bool FrameMan::SetFeelRenderSettings(const std::string& path) {
 	double hz = -1;
 	if (!(in >> key >> equals >> hz) || key != "RenderCapHz" || equals != "=" || (hz != 0 && hz != 60) || (in >> extra)) return false;
 	s_Feel.capHz = hz;
+	s_Feel.settingsApplied = true;
 	return true;
+}
+
+void FrameMan::ApplyHeadlessPresentationDefault() {
+	const char* headless = std::getenv("CCCP_HEADLESS");
+	if (!headless || std::string(headless) != "1") return;
+	if (!s_Feel.settingsApplied) s_Feel.capHz = 60;
+	System::PrintDiagnosticLine(std::string("[render] headless presentation cap=") + (s_Feel.capHz > 0 ? "60hz" : "off"));
 }
 
 bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
@@ -242,13 +251,13 @@ void FrameMan::FeelBeforePreview() {
 	    {"wraps_x", g_SceneMan.SceneWrapsX()}, {"wraps_y", g_SceneMan.SceneWrapsY()}});
 }
 
-void FrameMan::FeelBeginDraw() {
+bool FrameMan::FeelBeginDraw() {
 	if (s_Feel.capHz > 0) {
 		const double now = FeelNowMS();
-		if (s_Feel.nextDrawMS > now) std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(s_Feel.nextDrawMS - now));
-		s_Feel.nextDrawMS = std::max(FeelNowMS(), s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
+		if (s_Feel.nextDrawMS > now) return false;
+		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / s_Feel.capHz;
 	}
-	if (!FeelRecordingEnabled()) return;
+	if (!FeelRecordingEnabled()) return true;
 	s_Feel.drawBeginMS = FeelNowMS();
 	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
 	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
@@ -259,6 +268,7 @@ void FrameMan::FeelBeginDraw() {
 	s_Feel.frame["scene_height"] = g_SceneMan.GetSceneHeight();
 	s_Feel.frame["wraps_x"] = g_SceneMan.SceneWrapsX();
 	s_Feel.frame["wraps_y"] = g_SceneMan.SceneWrapsY();
+	return true;
 }
 
 void FrameMan::FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta) {
