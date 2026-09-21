@@ -487,6 +487,10 @@ namespace RTE {
 			s_Args.scriptGraphSelfTest = true;
 			return 1;
 		}
+		if (a == "-mod-api-shims-selftest") {
+			s_Args.modApiShimsSelfTest = true;
+			return 1;
+		}
 		if (a == "-render-window-scripts-selftest") {
 			s_Args.renderWindowScriptsSelfTest = true;
 			return 1;

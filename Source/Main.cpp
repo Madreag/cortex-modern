@@ -77,6 +77,10 @@
 #include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
+#include "RTEError.h"
+#include "DataModule.h"
+#include "MenuAutomation.h"
+#include "LuaAdapterDefinitions.h"
 
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
@@ -8193,6 +8197,24 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
 			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-rteerror-selftest") {
+			return RTEError::RunAssertPolicySelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-module-version-selftest") {
+			return DataModule::RunVersionGuardSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-ext-validate-version-selftest") {
+			return DataModule::RunExtValidateVersionSelfTest();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-path-prefix-selftest") {
+			return PresetMan::RunPathPrefixSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-limb-path-selftest") {
+			return AHuman::RunLimbPathTravelSpeedSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-menu-automation-selftest") {
+			return MenuAutomation::RunSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
 			return SettingsMan::RunNetworkPreferencesSelfTest();
 		}
@@ -8616,6 +8638,9 @@ int main(int argc, char** argv) {
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().modApiShimsSelfTest) {
+		return ShutDown(LuaAdaptersAudioMan::RunModApiShimsSelfTest() ? 0 : 1);
 	}
 	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
 		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);

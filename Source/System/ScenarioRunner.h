@@ -63,6 +63,7 @@ namespace RTE {
 			bool        selftestStall = false; // -net-match-e2e-stall: this peer stops producing frames for 8s at tick 300 (stall-grace test).
 			bool        selftestJoinRejection = false; // -net-match-e2e-join-rejection: stop the harness after recording a refused join.
 			bool        scriptGraphSelfTest = false; // -script-graph-selftest: run the script graph's contract tests in the master state and exit.
+			bool        modApiShimsSelfTest = false; // -mod-api-shims-selftest: 6.x compatibility bindings after modules load.
 			bool        renderWindowScriptsSelfTest = false; // -render-window-scripts-selftest: freeze contract of the render window.
 			bool        textWrapSelfTest = false; // -text-wrap-selftest: word-aware wrap cases.
 			bool        saveRefusalDiagnosisSelfTest = false; // -save-refusal-diagnosis-selftest: player-facing save refusal.
