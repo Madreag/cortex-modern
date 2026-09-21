@@ -16,7 +16,6 @@ extern "C" {
 #include <deque>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -139,8 +138,7 @@ namespace RTE::CheckpointLua {
 		AllocationStats Stats() const { return {m_Bytes, m_Blocks}; }
 
 		// The caller must hold the VM's execution lock throughout: nothing may write while the pages are read.
-		// The copy runs in blocks through the runner given, which may spread them over other threads and returns when all are done.
-		template<class Parallel> Snapshot Freeze(Parallel&& parallel) {
+		Snapshot Freeze() {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			void* allocatorData = nullptr;
@@ -151,16 +149,14 @@ namespace RTE::CheckpointLua {
 			m_Written.resize(pageCount);
 			const size_t written = WrittenPages();
 			const auto copyStarted = std::chrono::steady_clock::now();
-			// One slab per freeze; every copied page aliases it, so a freeze costs one allocation.
-			const std::shared_ptr<Slab> slab = written ? TakeSlab(written) : nullptr;
-			parallel(written, [&](size_t first, size_t last) {
-				for (size_t index = first; index < last; ++index) {
-					const auto* source = static_cast<const std::byte*>(m_Written[index]);
-					Snapshot::Page& page = slab->pages[index];
-					std::memcpy(page.bytes, source, Snapshot::c_PageBytes);
-					m_Pages[(reinterpret_cast<uintptr_t>(source) - m_Base) / Snapshot::c_PageBytes] = std::shared_ptr<const Snapshot::Page>(slab, &page);
-				}
-			});
+			// One page-mapped slab per freeze, outside the process heap; every copied page aliases it.
+			const std::shared_ptr<Slab> slab = written ? Slab::Map(written) : nullptr;
+			for (size_t index = 0; index < written; ++index) {
+				const auto* source = static_cast<const std::byte*>(m_Written[index]);
+				Snapshot::Page& page = slab->pages[index];
+				std::memcpy(page.bytes, source, Snapshot::c_PageBytes);
+				m_Pages[(reinterpret_cast<uintptr_t>(source) - m_Base) / Snapshot::c_PageBytes] = std::shared_ptr<const Snapshot::Page>(slab, &page);
+			}
 			auto data = std::make_shared<Snapshot::Data>();
 			data->state = m_State;
 			data->serial = G(m_State)->objserial;
@@ -192,41 +188,19 @@ namespace RTE::CheckpointLua {
 		std::vector<std::shared_ptr<const Snapshot::Page>> m_Pages;
 		std::vector<void*> m_Written;
 
-		// Copy buffers are reused: a fresh one costs a page fault per page, serialized across the process.
+		// A copy buffer mapped straight from the system, so the process heap and its lock stay out of a freeze.
 		struct Slab {
-			std::unique_ptr<Snapshot::Page[]> pages;
-			size_t capacity = 0;
-		};
-		struct SlabPool {
-			std::mutex mutex;
-			std::vector<std::unique_ptr<Slab>> idle;
-		};
-		std::shared_ptr<SlabPool> m_Slabs = std::make_shared<SlabPool>();
-		static constexpr size_t c_IdleSlabs = 2;
-
-		std::shared_ptr<Slab> TakeSlab(size_t pages) {
-			std::unique_ptr<Slab> slab;
-			{
-				std::lock_guard lock(m_Slabs->mutex);
-				auto& idle = m_Slabs->idle;
-				const auto fit = std::find_if(idle.begin(), idle.end(), [pages](const auto& candidate) { return candidate->capacity >= pages; });
-				if (fit != idle.end()) {
-					slab = std::move(*fit);
-					idle.erase(fit);
-				}
+			Snapshot::Page* pages = nullptr;
+			size_t bytes = 0;
+			~Slab() { if (pages) Unmap(pages, bytes); }
+			static std::shared_ptr<Slab> Map(size_t count) {
+				auto slab = std::make_shared<Slab>();
+				slab->bytes = count * Snapshot::c_PageBytes;
+				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->bytes));
+				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
+				return slab;
 			}
-			if (!slab) {
-				slab = std::make_unique<Slab>();
-				slab->capacity = std::max(pages, pages + pages / 4);
-				slab->pages.reset(new Snapshot::Page[slab->capacity]);
-			}
-			// The last page released on any thread gives the buffer back to the pool.
-			return std::shared_ptr<Slab>(slab.release(), [pool = m_Slabs](Slab* done) {
-				std::unique_ptr<Slab> owned(done);
-				std::lock_guard lock(pool->mutex);
-				if (pool->idle.size() < c_IdleSlabs) pool->idle.push_back(std::move(owned));
-			});
-		}
+		};
 
 		static int64_t MicrosecondsSince(std::chrono::steady_clock::time_point started) {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
@@ -277,6 +251,8 @@ namespace RTE::CheckpointLua {
 		}
 
 #ifdef _WIN32
+		static void* MapPages(size_t bytes) noexcept { return VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE); }
+		static void Unmap(void* pages, size_t) noexcept { VirtualFree(pages, 0, MEM_RELEASE); }
 		void Reserve() {
 			void* base = VirtualAlloc(nullptr, c_ReserveBytes, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
 			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
@@ -300,6 +276,11 @@ namespace RTE::CheckpointLua {
 			return count;
 		}
 #else
+		static void* MapPages(size_t bytes) noexcept {
+			void* pages = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			return pages == MAP_FAILED ? nullptr : pages;
+		}
+		static void Unmap(void* pages, size_t bytes) noexcept { munmap(pages, bytes); }
 		void Reserve() {
 			void* base = mmap(nullptr, c_ReserveBytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
 			if (base == MAP_FAILED) throw std::runtime_error("could not reserve the tracked Lua heap");
