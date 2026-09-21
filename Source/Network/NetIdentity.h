@@ -114,6 +114,11 @@ namespace RTE {
 
 	class NetIdentity {
 	public:
+		/// Enables the test-only cross-hardware Lua-state experiment. It is set before
+		/// manager initialization and never belongs in a shipped protocol mode.
+		static void SetLuaStateCountExperiment(bool enabled);
+		static bool LuaStateCountExperimentEnabled();
+
 		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
 		/// c_PersistentWorldVersion / c_WorldVersion.
 		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);

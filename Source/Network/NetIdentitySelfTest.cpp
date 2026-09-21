@@ -380,6 +380,18 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-identity-selftest] PASS lua state count pinned: 4 and 32 states reject with distinct deterministic_config_hash values" << std::endl;
+
+			const bool wasExperiment = NetIdentity::LuaStateCountExperimentEnabled();
+			NetIdentity::SetLuaStateCountExperiment(true);
+			const NetHash32 experimentFour = NetIdentity::HashDeterministicConfig(four);
+			const NetHash32 experimentThirtyTwo = NetIdentity::HashDeterministicConfig(thirtyTwo);
+			NetIdentity::SetLuaStateCountExperiment(wasExperiment);
+			if (experimentFour != experimentThirtyTwo) {
+				*error = "the identity experiment still hashes the local Lua state count: 4 states " + NetIdentity::HashHex(experimentFour) +
+				         " vs 32 states " + NetIdentity::HashHex(experimentThirtyTwo);
+				return false;
+			}
+			std::cout << "[net-identity-selftest] PASS lua state count experiment: 4 and 32 states share deterministic_config_hash" << std::endl;
 			return true;
 		}
 
