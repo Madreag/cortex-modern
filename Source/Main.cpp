@@ -5833,6 +5833,29 @@ void RunGameLoop() {
 					     << " capture_ms=" << captureMs << " budget_ms=" << budgetMs << " first_walk=" << firstCapture;
 					System::PrintDiagnosticLine(line.str());
 				}
+				// A capture is no sim event: a second one at the same tick leaves the world's structure, both RNG
+				// streams and every allocation counter as they were, and the serializers draw and allocate nothing
+				// while they run.
+				if (s_cowCheckpointCaptures == 1) {
+					const auto fingerprint = [] {
+						return g_MovableMan.SaveWorldStructure() + "|" + g_SimRNG.SerializeStateForHashing() + "|" + g_RenderRNG.SerializeStateForHashing()
+						     + "|" + std::to_string(MovableObject::GetUniqueIDCounter()) + "|" + std::to_string(g_LuaMan.GetScriptStateCursor())
+						     + "|" + std::to_string(g_AudioMan.GetCheckpointSoundContainerCursor()) + "|" + std::to_string(g_SimRNG.GetDrawCount());
+					};
+					const std::string before = fingerprint();
+					const long uidBefore = MovableObject::GetUniqueIDCounter();
+					const bool again = g_ActivityMan.SaveAutosaveSnapshot("c0de-a2", simTick);
+					const ActivityMan::CaptureEffects effects = g_ActivityMan.LastCaptureEffects();
+					const std::string after = fingerprint();
+					const bool untouched = again && before == after && uidBefore == MovableObject::GetUniqueIDCounter();
+					const bool pure = effects.uidsAllocated == 0 && effects.simDraws == 0 && effects.renderDraws == 0 && effects.cursorMoves == 0 && effects.soundCursorMoves == 0;
+					std::ostringstream line;
+					line << "[cow-checkpoint-selftest] " << (untouched && pure ? "PASS" : "FAIL") << " capture_is_side_effect_free tick=" << simTick
+					     << " second_saved=" << again << " digest_same=" << (before == after) << " uid_counter=" << uidBefore << "->" << MovableObject::GetUniqueIDCounter()
+					     << " during: uids_allocated=" << effects.uidsAllocated << " sim_draws=" << effects.simDraws << " render_draws=" << effects.renderDraws
+					     << " cursor_moves=" << effects.cursorMoves << " sound_cursor_moves=" << effects.soundCursorMoves;
+					System::PrintDiagnosticLine(line.str());
+				}
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
