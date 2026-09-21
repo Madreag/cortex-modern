@@ -3,6 +3,7 @@
 #include "NetReconnectUx.h"
 
 #include <array>
+#include <cstdint>
 #include <deque>
 #include <memory>
 #include <optional>
@@ -52,6 +53,8 @@ namespace RTE {
 		const OverlayRect& GetRosterRect() const { return m_RosterRect; }
 		const OverlayRect& GetSeatsPanelRect() const { return m_SeatsPanelRect; }
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
+		int RefreshCount() const { return m_RefreshCount; }
+		int RefreshChangeCount() const { return m_RefreshChangeCount; }
 
 		/// What the chat band laid out on the last frame, so a check can hold the rows it drew against the heights it used.
 		struct ChatBand {
@@ -174,5 +177,9 @@ namespace RTE {
 		std::vector<uint8_t> m_AnnouncedAISeats;
 		uint64_t m_DepartureFrame = 0;
 		bool m_Open = false;
+		int m_RefreshCount = 0;
+		int m_RefreshChangeCount = 0;
+		uint64_t m_LastRefreshHash = 0;
+		long long m_LastRefreshMs = 0;
 	};
 }
