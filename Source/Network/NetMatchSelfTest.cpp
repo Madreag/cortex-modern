@@ -8294,37 +8294,79 @@ namespace RTE {
 		return true;
 	}
 
-	// The in-match net surfaces belong to the match, not to the running round: a peer whose lockstep
-	// completed or stopped is still in its match and still needs its status box, roster and toasts.
+	// The in-match net surfaces belong to the match, not to the running round. This walks the sequence
+	// FinishMatch and LeaveMatch really take: the round completes, the service detaches the coordinator
+	// from the ScenarioRunner (NetMatchService.cpp:1921 / :1954) and only then reports Completed
+	// (:1934 / :1972), while the player still stands in the match activity.
 	bool TestMatchSurfacesOutliveTheRound(std::string* error) {
 		const auto say = [](bool drawn) { return drawn ? "drawn" : "gone"; };
-		// A running round draws, as it always did.
-		if (!NetModerationGUI::MatchSurfacesDrawn(true, false, false, true, true)) {
-			*error = "a running round's surfaces read gone";
+		// The live gate as Draw() asks it, with the two facts the managers cannot supply here.
+		const auto gate = [](bool matchEnded, bool activityInMatch) {
+			return NetModerationGUI::MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), false, false,
+			    ScenarioRunner::HasLockstepCoordinator(), matchEnded, activityInMatch);
+		};
+		LoopbackTransport wire;
+		if (!wire.StartHost(45861, error)) return false;
+		NetLockstepCoordinator coordinator;
+		NetLockstepConfig config;
+		config.sessionId = 0x9A50;
+		config.roundId = 50;
+		config.localPeerId = config.peerCount = 1;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(45861);
+		if (!coordinator.Start(wire, config, error)) return false;
+		coordinator.Tick(0);
+		ScenarioRunner::SetLockstepCoordinator(&coordinator);
+		struct Detach { ~Detach() { ScenarioRunner::SetLockstepCoordinator(nullptr); } } detach;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !gate(false, true)) {
+			*error = "a running round's surfaces read " + std::string(say(gate(false, true))) + ": sync=" +
+			         std::to_string(ScenarioRunner::IsLockstepControllerSyncActive()) + " attached=" +
+			         std::to_string(ScenarioRunner::HasLockstepCoordinator());
 			return false;
 		}
-		// The round completed or stopped on this peer; the activity is still up and the coordinator attached.
-		if (!NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, true)) {
-			*error = "a completed or stopped round's surfaces read gone while the match activity is still up: "
-			         "sync=0 resync=0 host_lost=0 attached=1 activity=1 -> " +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, true)));
+		// The round ends. The coordinator is still attached here, and the service has not reported yet.
+		coordinator.Complete("match over");
+		if (ScenarioRunner::IsLockstepControllerSyncActive() || !ScenarioRunner::HasLockstepCoordinator() || !gate(false, true)) {
+			*error = "a completed round's surfaces read " + std::string(say(gate(false, true))) +
+			         " while its coordinator was still attached: sync=" + std::to_string(ScenarioRunner::IsLockstepControllerSyncActive()) +
+			         " attached=" + std::to_string(ScenarioRunner::HasLockstepCoordinator());
 			return false;
 		}
-		// A resync and a lost host keep drawing with no coordinator of their own.
-		if (!NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, true) ||
-		    !NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false)) {
-			*error = "a resyncing or host-lost peer's surfaces read gone";
+		// The service's own detach, the call FinishMatch and LeaveMatch make before they report the end.
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (ScenarioRunner::HasLockstepCoordinator()) {
+			*error = "the service's detach left a coordinator attached to the ScenarioRunner";
+			return false;
+		}
+		// Then Completed, with the player still standing in the match - paused or not, it is not over.
+		if (!gate(true, true)) {
+			*error = "after the detach a completed match's surfaces read " + std::string(say(gate(true, true))) +
+			         ": sync=" + std::to_string(ScenarioRunner::IsLockstepControllerSyncActive()) + " attached=" +
+			         std::to_string(ScenarioRunner::HasLockstepCoordinator()) + " ended=1 activity_in_match=1";
+			return false;
+		}
+		// Once the activity is over the match is off this screen: the lobby draws its own roster.
+		if (gate(true, false)) {
+			*error = "the in-match surfaces read " + std::string(say(gate(true, false))) +
+			         " with the activity over: ended=1 activity_in_match=0";
+			return false;
+		}
+		// A resync and a lost host keep drawing with no coordinator of their own, as they always did.
+		if (!NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false) ||
+		    !NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false)) {
+			*error = "a resyncing or host-lost peer's surfaces read resync=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false))) + " host_lost=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false)));
 			return false;
 		}
 		// Out of a match nothing in-match draws: the lobby and the main menu are not a match.
-		if (NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true) ||
-		    NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false)) {
+		if (NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true) ||
+		    NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false)) {
 			*error = "the in-match surfaces drew outside a match: no_coordinator=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true))) + " no_activity=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false)));
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true))) + " no_activity=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false)));
 			return false;
 		}
-		std::cout << "[net-match-selftest] PASS overlay: the in-match surfaces outlive the round that stopped" << std::endl;
+		std::cout << "[net-match-selftest] PASS overlay: the surfaces outlive the detach-then-Completed end of a match" << std::endl;
 		return true;
 	}
 
@@ -8373,6 +8415,61 @@ namespace RTE {
 		std::cout << "[net-match-selftest] PASS identity: a primed manifest skips the disk walk - cold hashed " << coldHashes
 		          << " modules, primed hashed " << primedHashes << ", session_identity_hash "
 		          << NetIdentity::HashHex(primed.sessionIdentityHash) << std::endl;
+		return true;
+	}
+
+	// A quit during the priming walk must not sit through the rest of the disk pass. The stop is
+	// cooperative: the pass checks it between modules and between files, so a stop asked for before the
+	// walk reaches its first module leaves the store untouched and the join returns at once.
+	bool TestManifestPrimingStopsOnRequest(std::string* error) {
+		NetIdentity::DropPrimedManifest();
+		NetIdentityManifest cold;
+		const uint64_t beforeCold = NetIdentity::ModuleContentHashCount();
+		if (!NetIdentity::BuildCurrentManifest(cold, error)) return false;
+		const uint64_t coldHashes = NetIdentity::ModuleContentHashCount() - beforeCold;
+		if (coldHashes == 0) {
+			*error = "the cold build hashed no module content, so this row measures nothing";
+			return false;
+		}
+		NetIdentity::DropPrimedManifest();
+		// The quit comes first: the pass must find the request already standing and walk nothing.
+		NetIdentity::RequestManifestPrimingStop();
+		const uint64_t beforeStopped = NetIdentity::ModuleContentHashCount();
+		NetIdentity::PrimeManifest();
+		const auto askedAt = std::chrono::steady_clock::now();
+		NetIdentity::StopManifestPriming();
+		const long long joinMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - askedAt).count();
+		const uint64_t walkedAnyway = NetIdentity::ModuleContentHashCount() - beforeStopped;
+		if (walkedAnyway != 0) {
+			*error = "the stopped priming pass hashed " + std::to_string(walkedAnyway) + " modules anyway (a full walk is " +
+			         std::to_string(coldHashes) + "), join took " + std::to_string(joinMs) + " ms";
+			return false;
+		}
+		// A join that does not return is the defect this row exists for; the bound is generous on purpose.
+		if (joinMs > 5000) {
+			*error = "the stop-and-join took " + std::to_string(joinMs) + " ms, past its 5000 ms bound";
+			return false;
+		}
+		// The latch is clear again, so a later prime runs, and what any pass left behind is whole: the
+		// manifest built over it is the one the disk walk produces.
+		NetIdentity::PrimeManifest();
+		NetIdentity::WaitForPrimedManifest();
+		const uint64_t beforeWarm = NetIdentity::ModuleContentHashCount();
+		NetIdentityManifest warm;
+		if (!NetIdentity::BuildCurrentManifest(warm, error)) return false;
+		const uint64_t warmHashes = NetIdentity::ModuleContentHashCount() - beforeWarm;
+		if (warmHashes != 0) {
+			*error = "the prime after the stop left " + std::to_string(warmHashes) + " modules for the caller to walk";
+			return false;
+		}
+		if (warm.sessionIdentityHash != cold.sessionIdentityHash) {
+			*error = "the store the stopped pass left produced " + NetIdentity::HashHex(warm.sessionIdentityHash) + " instead of " +
+			         NetIdentity::HashHex(cold.sessionIdentityHash);
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS identity: the priming walk stops on request - hashed " << walkedAnyway
+		          << " of " << coldHashes << " modules, join " << joinMs << " ms, session_identity_hash "
+		          << NetIdentity::HashHex(warm.sessionIdentityHash) << std::endl;
 		return true;
 	}
 
@@ -12590,6 +12687,7 @@ namespace RTE {
 		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
 		if (!TestMatchSurfacesOutliveTheRound(&error)) return fail(error);
 		if (!TestPrimedManifestSkipsTheDiskWalk(&error)) return fail(error);
+		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);

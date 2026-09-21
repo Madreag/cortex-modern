@@ -134,6 +134,11 @@ namespace RTE {
 		static void PrimeManifest();
 		/// Blocks until a started priming pass has finished. For the rows that measure it.
 		static void WaitForPrimedManifest();
+		/// Asks a running priming pass to stop at its next module or file boundary.
+		static void RequestManifestPrimingStop();
+		/// Asks and waits: the shutdown path calls this so a quit does not sit through a disk walk.
+		/// What the pass finished is kept - whole modules only - and a later prime may run again.
+		static void StopManifestPriming();
 		/// Module contents hashed from disk so far. A primed build adds none.
 		static uint64_t ModuleContentHashCount();
 		/// Drops the primed file work; the next build walks the disk again.
