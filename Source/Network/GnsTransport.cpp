@@ -644,6 +644,22 @@ namespace RTE {
 			ReleaseHeldPackets(m_HeldPackets, m_PendingEvents, connection, peerId);
 		}
 
+		bool PayloadHoldSelfTest(std::string* error) {
+			m_Announced.clear();
+			m_HeldPackets.clear();
+			m_PendingEvents.clear();
+			const HSteamNetConnection connection = static_cast<HSteamNetConnection>(41);
+			HoldUntilAnnounced(connection, NetTransportEvent{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}});
+			HoldUntilAnnounced(connection, NetTransportEvent{NetTransportEventType::PacketReceived, 2, NetTransportLane::InputUnreliable, {4, 5}, {}});
+			AnnounceConnected(connection, 2);
+			if (m_PendingEvents.size() != 3 || m_PendingEvents[0].type != NetTransportEventType::PeerConnected ||
+			    m_PendingEvents[1].bytes != std::vector<uint8_t>({1, 2, 3}) || m_PendingEvents[2].bytes != std::vector<uint8_t>({4, 5})) {
+				if (error) *error = "the announced transport did not release held packets in order";
+				return false;
+			}
+			return true;
+		}
+
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
@@ -1181,6 +1197,8 @@ namespace RTE {
 
 	bool GnsTransport::PayloadHoldSelfTest(std::string* error) {
 #ifdef CCCP_WITH_GNS
+		GnsTransport transport;
+		if (!transport.m_Impl->PayloadHoldSelfTest(error)) return false;
 		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> held;
 		const HSteamNetConnection connection = static_cast<HSteamNetConnection>(41);
 		NetTransportEvent first{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}};
@@ -1201,13 +1219,6 @@ namespace RTE {
 		if (QueueHeldPacket(held, connection, std::move(oversized)) || HeldPacketOverflowReason(attemptedBytes).find(std::to_string(attemptedBytes)) == std::string::npos ||
 		    HeldPacketOverflowReason(attemptedBytes).find(std::to_string(c_MaxHeldBytesBeforeAnnounce)) == std::string::npos) {
 			if (error) *error = "the payload hold did not enforce and name its byte cap";
-			return false;
-		}
-		std::vector<NetTransportEvent> pending;
-		ReleaseHeldPackets(held, pending, connection, 2);
-		if (pending.size() != 3 || pending[0].type != NetTransportEventType::PeerConnected || pending[1].bytes != std::vector<uint8_t>({1, 2, 3}) ||
-		    pending[2].bytes != std::vector<uint8_t>({4, 5})) {
-			if (error) *error = "the announcement did not precede and release held packets in order";
 			return false;
 		}
 		return true;
