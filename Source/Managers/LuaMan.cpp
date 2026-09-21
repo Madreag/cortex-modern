@@ -3455,6 +3455,24 @@ do
 	check("sg5_reader_takes_a_gap", pcall(_ScriptGraph.validate, sg5Gap))
 	check("sg5_reader_refuses_a_duplicate_id", not pcall(_ScriptGraph.validate, sg5Duplicate))
 	check("sg5_reader_refuses_an_id_past_the_counter", not pcall(_ScriptGraph.validate, sg5OverCounter))
+	-- A capture-born closure's upvalue cell is named in the scratch band like the nodes around it, so
+	-- the reader has to admit a banded cell reference beside the horizon ids.
+	do
+		local band = 1099511627776
+		local function makeCell()
+			local kept = 7
+			return function() kept = kept + 1 return kept end
+		end
+		local cellText = _ScriptGraph.serialize({ ["71"] = makeCell() })
+		local cellId = tonumber(string.match(cellText, "u1;c(%d+);"))
+		local banded = cellId and string.gsub(string.gsub(cellText, "C" .. cellId .. ";", "C" .. (band + 1) .. ";", 1),
+		                                      "c" .. cellId .. ";", "c" .. (band + 1) .. ";", 1) or ""
+		local ok, problems = pcall(_ScriptGraph.validate, banded)
+		local restored = ok and select(1, _ScriptGraph.deserialize(banded)) or nil
+		check("sg6_reader_admits_a_scratch_band_cell", cellId ~= nil and ok and #(problems or {}) == 0 and
+		      restored ~= nil and restored["71"] ~= nil and restored["71"]() == 8,
+		      "cell=" .. tostring(cellId) .. " admitted=" .. tostring(ok) .. " " .. tostring(problems))
+	end
 	-- Saves written before the birth numbers still load, and they keep the old contiguous rule.
 	check("sg4_archive_still_loads", pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T1;P-;Mz;k0;"))
 	check("sg4_keeps_contiguous_ids", not pcall(_ScriptGraph.validate, "SG4;r0;G0;L0;E0;Rz;N1;T7;P-;Mz;k0;"))
@@ -7466,6 +7484,68 @@ end
 		RunScriptString("_ScriptGraphDeadFixture = nil");
 		std::cout << "[script-graph-selftest] " << (deadReference ? "PASS" : "FAIL") << " dead_actor_reference_same_tick_capture_restore" << std::endl;
 		checkpointValues = deadReference && checkpointValues;
+	}
+
+	{
+		// What a capture's cached answers name must die with the object they describe: a script table an
+		// image once read is collected exactly as it would be if no capture had ever run.
+		auto* probe = new MOPixel;
+		probe->Create();
+		g_MovableMan.RegisterObject(probe);
+		luabind::object(m_State, static_cast<MovableObject*>(probe)).push(m_State);
+		lua_setglobal(m_State, "_ScriptGraphGcProbe");
+		const int planted = RunScriptString(R"lua(
+_ScriptGraphGcProbe.CheckpointGcMarker = { pinned = true }
+_ScriptGraphGcWatch = setmetatable({}, { __mode = "v" })
+_ScriptGraphGcWatch[1] = _ScriptGraphGcProbe.CheckpointGcMarker
+assert(({_ScriptGraphNative(_ScriptGraphGcProbe)})[1] == "entity", "the probe is not a live entity reference")
+)lua");
+		CheckpointText probeImage;
+		std::vector<std::string> probeProblems;
+		const bool probeCaptured = planted == 0 && CaptureScriptGraph(probeImage, probeProblems, true);
+		RunScriptString("_ScriptGraphGcProbe = nil");
+		g_MovableMan.UnregisterObject(probe);
+		delete probe;
+		g_LuaMan.CollectGarbageForCheckpoint();
+		g_LuaMan.CollectGarbageForCheckpoint();
+		lua_getglobal(m_State, "_ScriptGraphGcWatch");
+		lua_rawgeti(m_State, -1, 1);
+		const bool markerHeld = !lua_isnil(m_State, -1);
+		lua_pop(m_State, 2);
+		RunScriptString("_ScriptGraphGcWatch = nil");
+		const bool collected = probeCaptured && !markerHeld;
+		std::cout << "[script-graph-selftest] " << (collected ? "PASS" : "FAIL") << " capture_cache_releases_a_dead_objects_table captured="
+		          << probeCaptured << " marker_held=" << markerHeld << std::endl;
+		for (const std::string& problem: probeProblems) std::cout << "[script-graph-selftest] gc-probe capture: " << problem << std::endl;
+		checkpointValues = collected && checkpointValues;
+	}
+
+	{
+		// The capture walks userdata by the live walk's rule: a finalizer that already ran left a
+		// destroyed native payload behind, and the answers are read through that payload.
+		RunScriptString(R"lua(
+_ScriptGraphFinalizedProbes = {}
+for index = 1, 3 do
+	local probe = newproxy(true)
+	getmetatable(probe).__gc = function() end
+	_ScriptGraphFinalizedProbes[index] = probe
+end
+)lua");
+		RunScriptString("_ScriptGraphFinalizedProbes = nil");
+		// One cycle: the finalizers run at its end and their userdata are swept by the cycle after it.
+		lua_gc(m_State, LUA_GCCOLLECT, 0);
+		size_t finalizedPresent = 0;
+		CheckpointLua::ForEachUserdata(m_State, true, false, [&](GCudata* data) {
+			if (obj2gco(data)->gch.marked & LJ_GC_FINALIZED) ++finalizedPresent;
+		});
+		size_t finalizedVisited = 0;
+		CheckpointLua::ForEachCapturedUserdata(m_State, [&](GCudata* data) {
+			if (obj2gco(data)->gch.marked & LJ_GC_FINALIZED) ++finalizedVisited;
+		});
+		const bool skipsFinalized = finalizedPresent >= 3 && finalizedVisited == 0;
+		std::cout << "[script-graph-selftest] " << (skipsFinalized ? "PASS" : "FAIL") << " capture_walks_userdata_by_the_live_rule finalized_present="
+		          << finalizedPresent << " finalized_visited=" << finalizedVisited << std::endl;
+		checkpointValues = skipsFinalized && checkpointValues;
 	}
 
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
