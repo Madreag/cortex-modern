@@ -80,7 +80,6 @@
 #include "RTEError.h"
 #include "DataModule.h"
 #include "MenuAutomation.h"
-#include "LuaAdapterDefinitions.h"
 
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
@@ -178,6 +177,12 @@
 
 extern "C" {
 FILE __iob_func[3] = {*stdin, *stdout, *stderr};
+}
+
+namespace RTE {
+	struct LuaAdaptersAudioMan {
+		static bool RunModApiShimsSelfTest();
+	};
 }
 
 using namespace RTE;
