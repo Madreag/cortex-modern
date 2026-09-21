@@ -16,11 +16,13 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <map>
 #include <set>
 #include <sstream>
@@ -28,6 +30,8 @@
 namespace RTE {
 
 	namespace {
+		std::atomic<bool> s_LuaStateCountExperiment{false};
+
 		using json = nlohmann::json;
 		namespace fs = std::filesystem;
 
@@ -132,7 +136,9 @@ namespace RTE {
 			AppendInt(hasher, "recommended_moid_count", static_cast<uint64_t>(config.recommendedMoidCount));
 			AppendBool(hasher, "particle_settling", config.particleSettling);
 			AppendBool(hasher, "mo_subtraction", config.moSubtraction);
-			AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
+			if (!s_LuaStateCountExperiment.load(std::memory_order_relaxed)) {
+				AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
+			}
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			// Admission checks supported layouts; the lobby agrees on the host's selected layout.
@@ -397,6 +403,17 @@ namespace RTE {
 		return HashConfig(config);
 	}
 
+	void NetIdentity::SetLuaStateCountExperiment(bool enabled) {
+		s_LuaStateCountExperiment.store(enabled, std::memory_order_relaxed);
+		if (enabled) {
+			std::cout << "[net-identity] EXPERIMENT ONLY: Lua threaded-state count is omitted from deterministic identity and hello admission; this run is not wave-safe" << std::endl;
+		}
+	}
+
+	bool NetIdentity::LuaStateCountExperimentEnabled() {
+		return s_LuaStateCountExperiment.load(std::memory_order_relaxed);
+	}
+
 	NetHash32 NetIdentity::HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules) {
 		return ComputeModuleManifestHash(modules);
 	}
@@ -435,6 +452,10 @@ namespace RTE {
 		manifest.deterministicConfig.particleSettling = g_MovableMan.IsParticleSettlingEnabled();
 		manifest.deterministicConfig.moSubtraction = g_MovableMan.IsMOSubtractionEnabled();
 		manifest.deterministicConfig.numLuaStates = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
+		if (LuaStateCountExperimentEnabled()) {
+			std::cout << "[net-identity] EXPERIMENT ONLY: local Lua threaded states=" << manifest.deterministicConfig.numLuaStates
+			          << "; count is diagnostic only for this run" << std::endl;
+		}
 		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;

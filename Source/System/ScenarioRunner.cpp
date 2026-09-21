@@ -2687,6 +2687,13 @@ namespace RTE {
 			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
 			return false;
 		}
+		// A service match measures and republishes activity startup after the
+		// lobby handshake. Keep the sim on the lobby countdown until the agreed
+		// first frame is installed; no AI hold can judge this interval.
+		if (!s_LockstepCoordinator->IsRunning()) {
+			s_PreSimWait = now;
+			return false;
+		}
 		std::string primeError;
 		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
 		const auto& config = s_LockstepCoordinator->GetConfig();

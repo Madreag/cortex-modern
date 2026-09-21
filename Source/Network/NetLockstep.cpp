@@ -4235,6 +4235,9 @@ namespace RTE {
 		m_DroppedSeatResolutions.clear();
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
+		m_RequirePublishedStart = m_Config.requirePublishedStart;
+		m_StartWaitAnnounced = false;
+		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
 		m_UnreachablePeers.clear();
 		m_CongestedPeers.clear();
@@ -7626,10 +7629,50 @@ namespace RTE {
 			AnswerRepeatedStart(start.localPeerId, nowMs);
 		}
 		if (m_State == NetLockstepState::WaitingForStart && AllRemoteStartsReceived()) {
-			m_State = NetLockstepState::Running;
-			auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
-			for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
-			m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+			bool startsPublished = m_LocalStartParkMs > 0;
+			uint32_t slowestStartupMs = m_LocalStartParkMs;
+			for (uint8_t peer: m_RemotePeerIds) {
+				const uint32_t peerStartupMs = m_Stats.peers[peer].startParkMs;
+				startsPublished = startsPublished && peerStartupMs > 0;
+				slowestStartupMs = std::max(slowestStartupMs, peerStartupMs);
+			}
+			if (m_RequirePublishedStart && !startsPublished) {
+				if (!m_StartWaitAnnounced) {
+					m_StartWaitAnnounced = true;
+					for (uint8_t peer: m_RemotePeerIds) {
+						if (m_Stats.peers[peer].startParkMs == 0) {
+							std::cout << "[net-match] waiting for " << DescribePeer(peer) << "'s machine startup before the agreed first frame" << std::endl;
+						}
+					}
+				}
+			} else {
+				if (!m_RequirePublishedStart) {
+					m_State = NetLockstepState::Running;
+					auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
+					for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
+					m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+					return;
+				}
+				const uint64_t startupFrames = m_Config.simTickMs > 0
+					? static_cast<uint64_t>(std::ceil(static_cast<double>(slowestStartupMs) / m_Config.simTickMs)) : 0;
+				const uint64_t agreedFrame = m_Config.startFrame + startupFrames;
+				uint64_t firstCommitFrame = UINT64_MAX;
+				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+					const auto delayIt = m_Config.peerInputDelayFrames.find(peer);
+					const uint16_t delay = delayIt != m_Config.peerInputDelayFrames.end() ? delayIt->second : m_Config.inputDelayFrames;
+					m_PeerEffectiveStart[peer] = agreedFrame + (m_Config.resumeFromSnapshot ? 0 : delay);
+					firstCommitFrame = std::min(firstCommitFrame, m_PeerEffectiveStart[peer]);
+				}
+				if (firstCommitFrame != UINT64_MAX) {
+					m_Stats.effectiveStartFrame = firstCommitFrame;
+					m_Stats.nextFrame = firstCommitFrame;
+				}
+				std::cout << "[net-match] agreed first frame=" << agreedFrame << " startup_ms=" << slowestStartupMs << std::endl;
+				m_State = NetLockstepState::Running;
+				auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
+				for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
+				m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+			}
 		}
 		if (firstFromThisPeer) {
 			FlushPreStart(start.localPeerId, nowMs);
