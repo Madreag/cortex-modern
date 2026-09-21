@@ -973,10 +973,31 @@ def scripts(case, port, root, size="960x540"):
                 "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
                 "dump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                # Only the host and the CPU remain in the lobby after the human is removed.
-                "dump_lobby\nassert_label LabelLobbyPlayer1 CPU\n"
+                # The kicked seat is open again: it reads the unseated name, never CPU, and the
+                # kicked client rejoins it below - only the ban list keeps an identity out.
+                "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\n"
                 "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
-                "assert_visible LabelLobbyPlayer2 0\nwait 600\nexit\n")
+                "assert_label LabelLobbyPlayer2 CPU\n"
+                # The kicked client's own rejoin is admitted and seats it under its name again.
+                "wait_label LabelLobbyPlayer1 Joiner\n"
+                "dump_lobby\n"
+                # The ban list is the only refusal: the host bans the re-seated joiner, the session
+                # ban list names it, and its next join draws the plain refusal on the error line.
+                "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
+                "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
+                "assert_label LabelHostSeatDlgName Joiner\n"
+                "assert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgBan\nwait 10\n"
+                "assert_visible HostSeatDialog 0\n"
+                "assert_label LabelHostOptStatus Ban: Ok\n"
+                "activate TabHostPageSession\nwait 3\n"
+                "activate ButtonHostSessBanned\nwait 5\n"
+                "assert_visible HostBannedDialog 1\nassert_label LabelHostBannedList Joiner\n"
+                "activate ButtonHostBannedClose\nwait 3\n"
+                "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
+                "wait_label LabelMultiplayerError banned player was refused\n"
+                "dump_lobby\ndump_host_options\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
@@ -1025,12 +1046,35 @@ def scripts(case, port, root, size="960x540"):
                   # to name the removal instead of reading as a network fault.
                   "wait_state Failed 60\n"
                   "assert_status The host removed you from this session\n"
+                  "assert_substate Landing\n"
+                  "dump_lobby\n"
+                  # A kick is not a ban: the same identity joins again and lands back in the lobby.
+                  "activate ButtonMultiplayerJoinGame\nwait 5\n"
+                  "settext TextJoinAddress 127.0.0.1\n"
+                  f"settext TextJoinPort {port}\n"
+                  "activate ButtonMultiplayerConnect\n"
+                  "wait_connected 3 60\n"
+                  "assert_substate Lobby\n"
+                  "assert_label LabelLobbyPlayer1 Joiner\n"
+                  "dump_lobby\n"
+                  # The host bans the re-seated peer next: the removal and the refused rejoin after
+                  # it both read the ban sentence, and the lobby never comes back.
+                  "wait_state Failed 60\n"
+                  "assert_status The host banned you from this session\n"
+                  "assert_substate Landing\n"
+                  "activate ButtonMultiplayerJoinGame\nwait 5\n"
+                  "settext TextJoinAddress 127.0.0.1\n"
+                  f"settext TextJoinPort {port}\n"
+                  "activate ButtonMultiplayerConnect\n"
+                  "wait_state Failed 60\n"
+                  "assert_status The host banned you from this session\n"
+                  "assert_substate Landing\n"
                   "dump_lobby\nexit\n")
         return {"host": host, "client": client}, {
             "host": {"schema": 1, "timeout_ms": 90000, "steps": [
                 {"op": "wait", "service": "Starting", "scope": "menu"},
                 {"op": "signal", "name": "hosting", "scope": "menu"},
-                {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_10.json"), "scope": "menu"},
+                {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_11.json"), "scope": "menu"},
                 {"op": "finish"}]}}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
