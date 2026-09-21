@@ -4,6 +4,8 @@
 #include "Constants.h"
 #include "CameraMan.h"
 #include "GameActivity.h"
+#include "MainMenuGUI.h"
+#include "MenuMan.h"
 #include "NetMatchService.h"
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
@@ -427,8 +429,23 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
-bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch) {
+bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool completedLobbyPump, bool lobbyMenuActive) {
 	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch);
+}
+
+namespace {
+	/// The multiplayer lobby is the menu up in the menu loop: the title screen, settings and every
+	/// other menu leave the post-match arm off. The lobby's own sub-state does not gate it - a
+	/// survivor of a lost host reads the same surfaces on the landing it lands on.
+	bool LobbyMenuUp() {
+		const MainMenuGUI* mainMenu = g_MenuMan.GetMainMenu();
+		return g_MenuMan.GetIsInMenuScreen() && g_MenuMan.IsMainMenuInteractive() && mainMenu &&
+		    mainMenu->AutomationActiveScreenName() == "MultiplayerScreen";
+	}
+}
+
+bool NetModerationGUI::PostMatchLobbySurfaces() {
+	return g_NetMatchService.NeedsCompletedLobbyPump() && LobbyMenuUp();
 }
 
 bool NetModerationGUI::ActivityInMatch() {
@@ -936,7 +953,8 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 	// lives as long as the surfaces around it do.
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
 	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(),
-	    snapshot.serviceState == "Completed" && ActivityInMatch(), ActivityInMatch());
+	    snapshot.serviceState == "Completed" && ActivityInMatch(), ActivityInMatch(),
+	    g_NetMatchService.NeedsCompletedLobbyPump(), LobbyMenuUp());
 	if (!inMatch) {
 		m_MatchChatLines.clear();
 		if (m_ChatEntryOpen) {
@@ -1328,7 +1346,8 @@ void NetModerationGUI::Draw() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
-	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch());
+	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch(),
+	    g_NetMatchService.NeedsCompletedLobbyPump(), LobbyMenuUp());
 	if (inMatch) {
 		CreateOverlay();
 	} else {
