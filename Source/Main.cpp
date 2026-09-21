@@ -5188,7 +5188,7 @@ void RunGameLoop() {
 			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
-			const bool liveHashTick = !s_netLiveTickHashPath.empty() && (ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsActive());
+			const bool liveHashTick = !s_netLiveTickHashPath.empty() && (ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsActive() || ScenarioRunner::WorldCatchUpActive());
 			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick || liveHashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);

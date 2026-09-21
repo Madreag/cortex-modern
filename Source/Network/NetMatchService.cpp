@@ -3526,7 +3526,7 @@ static std::string ResyncSaveName() {
 		if (m_IsHost || !m_WorldCatchUp.active || !m_Runner) return;
 		NetLobbySession& lobby = m_Runner->GetLobbySession();
 		INetTransport* wire = ActiveWireLocked();
-		if (wire && !(m_Coordinator && m_Coordinator->IsRunning())) {
+		if (wire) {
 			for (const NetTransportEvent& event: wire->PollEvents()) {
 				if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 					lobby.HandleTransportEvent(event, nowMs);
@@ -3550,7 +3550,7 @@ static std::string ResyncSaveName() {
 		if (refusal != 0) {
 			m_State = NetMatchServiceState::Failed; m_ErrorText = NetWorldJoinRefusalText(refusal); return;
 		}
-		if ((m_WorldCatchUp.privateMatch || m_WorldCatchUp.activationCommitted) && m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 >= m_WorldCatchUp.activationTick && m_Coordinator &&
+		if ((m_WorldCatchUp.privateMatch || m_WorldCatchUp.activationCommitted) && m_WorldCatchUp.activationTick != 0 && m_Coordinator &&
 		    !m_Coordinator->IsRunning() && m_Session && wire) {
 			std::string error;
 			if (m_WorldCatchUp.privateMatch && !m_Runner->IsWorldJoinLockstepStarting() && m_CatchUpCoordinator) {
@@ -3590,6 +3590,8 @@ static std::string ResyncSaveName() {
 			}
 			if (!error.empty()) { m_PrivateJoinError = error; m_ErrorText = error; }
 		}
+		// The connection handshakes ahead of E; the simulation changes producer only after E-1.
+		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 < m_WorldCatchUp.activationTick) return;
 		if (m_Coordinator && m_Coordinator->IsRunning() && m_WorldCatchUp.privateMatch) {
 			NetResyncState committed;
 			std::string error;
