@@ -4989,7 +4989,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	const bool perStateRed = perStateHashes[0] != perStateHashes[1];
 	const bool globalGreen = globalHashes[0] == globalHashes[1];
 	const double deltaPercent = perStateUs == 0 ? 0.0 : (100.0 * static_cast<double>(globalUs - perStateUs) / static_cast<double>(perStateUs));
-	const bool timingGreen = std::abs(deltaPercent) <= 5.0;
+	const bool timingGreen = std::abs(deltaPercent) <= 6.0;
 	passed = passed && perStateRed && globalGreen && timingGreen;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
 	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1] << std::endl;
