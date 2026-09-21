@@ -4906,6 +4906,19 @@ namespace RTE {
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
 	}
 
+	uint32_t NetLockstepCoordinator::RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const {
+		const uint32_t linkFrames = estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+		const auto stats = m_Stats.peers.find(peerId);
+		if (!std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0 || stats == m_Stats.peers.end()) return linkFrames;
+		// A sender already in the round clears one trip: its clock and the round's advanced together. A
+		// returning seat starts its clock a trip after the round passed its activation frame and pays its
+		// own restart before its first tick, so its window has to clear the whole trip and that restart.
+		// Only the restart the peer published is used: our own parks move while the match runs, and a
+		// window that chased them would never settle.
+		const uint32_t restartFrames = static_cast<uint32_t>(std::ceil(static_cast<double>(stats->second.startParkMs) / m_Config.simTickMs));
+		return linkFrames > UINT32_MAX - restartFrames ? UINT32_MAX : linkFrames + restartFrames;
+	}
+
 	bool NetLockstepCoordinator::PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error) {
 		if (!UsesBoundedWait() || !m_AiHeldSeats.contains(peerId)) return true;
 		if (!m_LastDeliveredFrame || *m_LastDeliveredFrame < m_AiHeldSeats.at(peerId)) {
@@ -4914,7 +4927,7 @@ namespace RTE {
 		}
 		auto& estimate = m_DelayEstimators[peerId];
 		estimate.Observe(nowMs, rttMs);
-		const uint32_t needed = estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
+		const uint32_t needed = RejoinDelayFrames(peerId, estimate);
 		const uint16_t current = InputDelayAt(peerId, m_LastDeliveredFrame.value_or(m_Config.startFrame));
 		if (needed <= current) return true;
 		if (needed > NetLockstepCodec::c_MaxInputDelayFrames || m_Config.matchConfig.delayPolicy == NetMatchDelayPolicy::Fixed) {
