@@ -997,7 +997,9 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostBannedClose\nwait 3\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                 "wait_label LabelMultiplayerError banned player was refused\n"
-                "dump_lobby\ndump_host_options\nwait 600\nexit\n")
+                # The last dump stays the post-Apply lobby readback: a second Lobby capture here
+                # would break the paired check that counts one lobby-mode capture per peer.
+                "dump_lobby\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
@@ -1068,13 +1070,14 @@ def scripts(case, port, root, size="960x540"):
                   "activate ButtonMultiplayerConnect\n"
                   "wait_state Failed 60\n"
                   "assert_status The host banned you from this session\n"
-                  "assert_substate Landing\n"
-                  "dump_lobby\nexit\n")
+                  # No trailing dump: a refused peer's lobby view is its own local default config,
+                  # and the paired check reads each side's last dump_lobby for the same match.
+                  "assert_substate Landing\nexit\n")
         return {"host": host, "client": client}, {
             "host": {"schema": 1, "timeout_ms": 90000, "steps": [
                 {"op": "wait", "service": "Starting", "scope": "menu"},
                 {"op": "signal", "name": "hosting", "scope": "menu"},
-                {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_11.json"), "scope": "menu"},
+                {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_10.json"), "scope": "menu"},
                 {"op": "finish"}]}}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
