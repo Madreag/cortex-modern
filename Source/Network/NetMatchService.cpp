@@ -3525,8 +3525,11 @@ static std::string ResyncSaveName() {
 				} else if (m_Session) m_Session->InjectEvent(event, nowMs);
 			}
 		}
-		if (m_WorldCatchUp.privateMatch && m_Session && (m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected)) {
-			ScenarioRunner::SetControllerReplayError("PeerHeld:Held - AI in control - reconnecting the private catch-up link"); return;
+		if (m_Session && (m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected)) {
+			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
+			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
+			    : "PeerLeft:The host connection was lost while joining the world");
+			return;
 		}
 		uint64_t refusal = 0;
 		StepWorldJoinCatchUpClient(lobby, m_WorldCatchUp, &refusal);
