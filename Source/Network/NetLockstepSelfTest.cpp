@@ -1038,6 +1038,22 @@ namespace RTE {
 			if (!RoundTrip({start}, error)) {
 				return false;
 			}
+			NetLockstepStart agreed = start;
+			agreed.agreedStartRecord = true;
+			agreed.agreedFirstFrame = 37;
+			agreed.agreedEffectiveStartFrame = 39;
+			agreed.agreedDeadlineMs = 512;
+			agreed.publishedPeerMask = 3;
+			agreed.heldPeerMask = 0;
+			agreed.peerEffectiveStartFrames[0] = 39;
+			agreed.peerEffectiveStartFrames[1] = 45;
+			agreed.peerStartupParks[0] = 216;
+			agreed.peerStartupParks[1] = 83;
+			agreed.peerInputDelays[0] = 2;
+			agreed.peerInputDelays[1] = 8;
+			agreed.startupPublished = true;
+			agreed.activityRestartMs = 216;
+			if (!RoundTrip({agreed}, error)) return false;
 
 			NetLockstepFrame frame;
 			frame.senderPeerId = 2;
@@ -1328,6 +1344,17 @@ namespace RTE {
 					if (!ExpectDecodeError(bytes, NetLockstepErrorCode::UnsupportedVersion, error)) return false;
 				}
 			}
+			NetLockstepTiming capture;
+			capture.senderPeerId = 1; capture.peerId = 1; capture.action = NetTimingAction::CapturePark;
+			capture.phase = NetTimingPhase::Commit; capture.sessionId = 88; capture.roundId = 99;
+			capture.revision = 5; capture.applyFrame = 101; capture.nextFrame = 118; capture.cutoffFrame = 118;
+			capture.pingMs = 300; capture.delayFrames = 18; capture.requiredPeers = 3; capture.authorityGeneration = 7;
+			if (!RoundTrip({capture}, error)) return false;
+			NetLockstepTiming captureStatus = capture;
+			captureStatus.senderPeerId = captureStatus.peerId = 2;
+			captureStatus.phase = NetTimingPhase::Status;
+			captureStatus.revision = 0; captureStatus.requiredPeers = 0; captureStatus.nextFrame = 118;
+			if (!RoundTrip({captureStatus}, error)) return false;
 			NetLockstepFrame frame;
 			frame.senderPeerId = 1; frame.targetFrame = 40;
 			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}, {1, NetGameSeatReclaim{2, 7, 92, 4, 40, 26}}};

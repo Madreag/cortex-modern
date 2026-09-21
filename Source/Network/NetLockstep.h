@@ -153,6 +153,7 @@ namespace RTE {
 		uint32_t heldPeerMask = 0;
 		std::array<uint64_t, 16> peerEffectiveStartFrames{};
 		std::array<uint32_t, 16> peerStartupParks{};
+		std::array<uint16_t, 16> peerInputDelays{};
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -1189,6 +1190,9 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing);
+		void PublishCapturePark(uint64_t startFrame);
+		void ApplyCapturePark(const NetLockstepTiming& timing);
+		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
@@ -1278,6 +1282,11 @@ namespace RTE {
 		uint64_t m_SynchronizedCaptureStartFrame = UINT64_MAX;
 		uint64_t m_SynchronizedCaptureEndFrame = 0;
 		double m_SynchronizedCaptureBudgetMs = 250.0;
+		uint64_t m_CaptureParkRevision = 0;
+		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		std::vector<NetLockstepTiming> m_DeferredParkTimings;
+		bool m_ApplyingDeferredParkTiming = false;
+		bool m_CaptureParkAwaitingReports = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
