@@ -69,9 +69,9 @@ namespace RTE::CheckpointLua {
 				}
 				throw std::runtime_error("frozen native helper requires captured userdata: " + std::string(name));
 			}
-			const auto found = m_Entries.find(gcval(&*value));
-			if (found == m_Entries.end()) throw std::runtime_error("frozen userdata has no native descriptor");
-			const Entry& entry = found->second;
+			const Entry* found = FindEntry(gcval(&*value));
+			if (!found) throw std::runtime_error("frozen userdata has no native descriptor");
+			const Entry& entry = *found;
 			if (name == "_ScriptGraphNative") {
 				if (carriedObjects && entry.carriesCopy) carriedObjects->insert(entry.movable);
 				return entry.native[lua_toboolean(destination, 2) ? 1 : 0].Push(destination, view, carried);
@@ -93,7 +93,7 @@ namespace RTE::CheckpointLua {
 		void NoteCarried(lua_State* destination, View& view, std::unordered_set<uintptr_t>& carriedObjects) const {
 			const auto value = view.Value(destination, 1);
 			if (!value || !tvisudata(&*value)) return;
-			if (const auto found = m_Entries.find(gcval(&*value)); found != m_Entries.end() && found->second.movable) carriedObjects.insert(found->second.movable);
+			if (const Entry* found = FindEntry(gcval(&*value)); found && found->movable) carriedObjects.insert(found->movable);
 		}
 
 		// The live walk's last check: a registered script-owned object with borrowed references that no root reached.
@@ -107,11 +107,10 @@ namespace RTE::CheckpointLua {
 			return problems;
 		}
 
-		size_t EntryCount() const { return m_Entries.size(); }
+		size_t EntryCount() const { return m_Entries.size() + (m_Classes ? m_Classes->entries.size() : 0); }
 		size_t IteratorCount() const { return m_Iterators.size(); }
 		size_t OwnedCount() const { return m_Owned.size(); }
 
-	private:
 		using NativeId = uintptr_t;
 		struct Entry {
 			std::array<Result, 2> native;
@@ -125,7 +124,16 @@ namespace RTE::CheckpointLua {
 			bool borrows = false;
 			std::string className;
 			std::string presetName;
+			uint64_t serial = 0; // The userdata's birth number: a reused address with another serial is another object.
 		};
+		// The class descriptors and plain userdata a state holds never change; every capture shares one map of them.
+		struct ClassEntries { std::unordered_map<const void*, Entry> entries; };
+		size_t CachedCount() const { return m_CachedClasses; }
+		int64_t EnumUs() const { return m_EnumUs; }
+		int64_t WorldUs() const { return m_WorldUs; }
+		int64_t AnswerUs() const { return m_AnswerUs; }
+
+	private:
 		struct GibLink { int index = 0; NativeId particle = 0; };
 		struct Object {
 			long uid = 0;
@@ -140,7 +148,17 @@ namespace RTE::CheckpointLua {
 			Topology topology;
 		};
 		std::unordered_map<const void*, Entry> m_Entries;
+		std::shared_ptr<const ClassEntries> m_Classes;
+		size_t m_CachedClasses = 0;
+		int64_t m_EnumUs = 0, m_WorldUs = 0, m_AnswerUs = 0;
 		std::unordered_map<const void*, Result> m_Iterators;
+		const Entry* FindEntry(const void* address) const {
+			if (const auto own = m_Entries.find(address); own != m_Entries.end()) return &own->second;
+			if (m_Classes) {
+				if (const auto shared = m_Classes->entries.find(address); shared != m_Classes->entries.end()) return &shared->second;
+			}
+			return nullptr;
+		}
 		std::unordered_set<const void*> m_Scratch;
 		std::shared_ptr<const World> m_World;
 		Topology m_Owned;
@@ -198,9 +216,9 @@ namespace RTE::CheckpointLua {
 			while (lua_next(destination, 1)) {
 				const auto value = view.Value(destination, -1);
 				if (value && tvisudata(&*value)) {
-					const auto entry = m_Entries.find(gcval(&*value));
-					if (entry == m_Entries.end()) throw std::runtime_error("frozen gib target has no native descriptor");
-					collect(entry->second.movable);
+					const Entry* entry = FindEntry(gcval(&*value));
+					if (!entry) throw std::runtime_error("frozen gib target has no native descriptor");
+					collect(entry->movable);
 				}
 				lua_pop(destination, 1);
 			}
@@ -227,10 +245,40 @@ namespace RTE::CheckpointLua {
 		friend class CaptureScope;
 	};
 
+	// What a state's captures keep between freezes: the class descriptors and the heap values they name.
+	class NativeCache {
+	public:
+		explicit NativeCache(lua_State* state) : m_State(state) {
+			lua_newtable(state);
+			m_Retained = luaL_ref(state, LUA_REGISTRYINDEX);
+		}
+		~NativeCache() {
+			if (m_State && m_Retained != LUA_NOREF) luaL_unref(m_State, LUA_REGISTRYINDEX, m_Retained);
+		}
+		NativeCache(const NativeCache&) = delete;
+		NativeCache& operator=(const NativeCache&) = delete;
+		std::shared_ptr<const NativeImage::ClassEntries> classes = std::make_shared<NativeImage::ClassEntries>();
+		// A reference to a live object answers the same while the object it names is the same live object.
+		struct Reference {
+			NativeImage::Entry entry;
+			const void* pointer = nullptr;
+			long uid = 0;
+			bool entity = false;
+		};
+		std::unordered_map<const void*, Reference> references;
+		int RetainedTable() const { return m_Retained; }
+		int NextRetained() { return ++m_RetainedCount; }
+
+	private:
+		lua_State* m_State;
+		int m_Retained = LUA_NOREF;
+		int m_RetainedCount = 0;
+	};
+
 	// The caller holds the VM lock and keeps carried sound observations enabled.
 	class CaptureScope {
 	public:
-		explicit CaptureScope(lua_State* state) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()) {}
+		CaptureScope(lua_State* state, NativeCache& cache) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()), m_Cache(cache) {}
 		CaptureScope(const CaptureScope&) = delete;
 		CaptureScope& operator=(const CaptureScope&) = delete;
 
@@ -238,18 +286,43 @@ namespace RTE::CheckpointLua {
 			CheckThread();
 			if (m_Captured || !m_Image) throw std::logic_error("native image capture cannot be repeated");
 			if (!s_GraphNativeCapture) m_NativeScope.emplace();
-			std::vector<TValue> roots;
-			LuaThreadCodec::VisitUserdata(State(), [](void* data, size_t, const void*, void* opaque) {
-				TValue value;
-				setgcVraw(&value, reinterpret_cast<GCobj*>(static_cast<GCudata*>(data) - 1), LJ_TUDATA);
-				static_cast<std::vector<TValue>*>(opaque)->push_back(value);
-			}, &roots);
-			for (GCobj* object = gcref(G(State())->gc.root); object; object = gcnext(object)) {
-				if (object->gch.gct == ~LJ_TFUNC && IteratorCandidate(&object->fn)) {
-					TValue value; setgcVraw(&value, object, LJ_TFUNC); roots.push_back(value);
+			const auto enumStarted = std::chrono::steady_clock::now();
+			// The class descriptors were answered by an earlier capture; everything else is asked again.
+			const auto& classes = m_Cache.classes->entries;
+			auto& references = m_Cache.references;
+			ForEachUserdata(State(), true, false, [&](GCudata* data) {
+				GCobj* object = obj2gco(data);
+				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) { ++m_Image->m_CachedClasses; return; }
+				if (const auto known = references.find(object); known != references.end() && known->second.entry.serial == data->serial) {
+					const auto& reference = known->second;
+					const auto* rep = static_cast<const luabind::detail::object_rep*>(uddata(data));
+					bool same = rep->ptr() == reference.pointer;
+					if (same && reference.entity) {
+						const auto* mo = static_cast<const MovableObject*>(reference.pointer);
+						same = g_MovableMan.ValidMO(mo) && mo->GetUniqueID() == reference.uid;
+					}
+					if (same) {
+						m_Image->m_Entries.emplace(object, reference.entry);
+						m_Kept.insert(object);
+						++m_Image->m_CachedClasses;
+						return;
+					}
+				}
+				TValue value; setgcVraw(&value, object, LJ_TUDATA); Enqueue(value);
+			});
+			// The value iterators registered themselves when made; nothing else the walk asks about is a function.
+			lua_getfield(State(), LUA_REGISTRYINDEX, "_ScriptGraphIterators");
+			if (lua_istable(State(), -1)) {
+				const int table = lua_gettop(State());
+				lua_pushnil(State());
+				while (lua_next(State(), table)) {
+					if (lua_isfunction(State(), -2)) Enqueue(At(-2));
+					lua_pop(State(), 1);
 				}
 			}
-			for (const TValue& value: roots) Enqueue(value);
+			lua_pop(State(), 1);
+			const auto worldStarted = std::chrono::steady_clock::now();
+			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
 			auto& shared = s_GraphNativeCapture->frozenWorld;
 			if (!shared) {
 				auto world = std::make_shared<NativeImage::World>();
@@ -261,10 +334,18 @@ namespace RTE::CheckpointLua {
 				shared = std::move(world);
 			}
 			m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
+			const auto answerStarted = std::chrono::steady_clock::now();
+			m_Image->m_WorldUs = std::chrono::duration_cast<std::chrono::microseconds>(answerStarted - worldStarted).count();
 			for (size_t index = 0; index < m_Queue.size(); ++index) {
 				const TValue value = m_Queue[index];
 				if (tvisudata(&value)) CaptureUserdata(value);
 				else CaptureIterator(value);
+			}
+			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answerStarted).count();
+			if (m_Histogram) {
+				for (const auto& [name, count]: *m_Histogram) {
+					std::cout << "[frozen-kinds] state=" << reinterpret_cast<const void*>(State()) << " " << name << " count=" << count.first << " us=" << count.second << std::endl;
+				}
 			}
 			m_Captured = true;
 		}
@@ -272,6 +353,15 @@ namespace RTE::CheckpointLua {
 		std::shared_ptr<const NativeImage> Finish(const Snapshot& heap) {
 			CheckThread();
 			if (!m_Captured || !m_Image || heap.State() != State()) throw std::logic_error("native results require the same frozen Lua heap");
+			if (!m_NewClasses.empty()) {
+				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
+				for (auto& [address, entry]: m_NewClasses) merged->entries[address] = std::move(entry);
+				m_Cache.classes = std::move(merged);
+			}
+			// References this walk neither reused nor made again name objects that are gone.
+			std::erase_if(m_Cache.references, [this](const auto& entry) { return !m_Kept.contains(entry.first); });
+			for (auto& [address, reference]: m_NewReferences) m_Cache.references[address] = std::move(reference);
+			m_Image->m_Classes = m_Cache.classes;
 			std::shared_ptr<const NativeImage> result = std::move(m_Image);
 			m_References.Release();
 			return result;
@@ -303,13 +393,12 @@ namespace RTE::CheckpointLua {
 			RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 			long uid = MovableObject::GetUniqueIDCounter();
 			int cursor = g_LuaMan.GetScriptStateCursor();
-			CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
+			// The sound registry is restored once per world capture, as the live walk has it.
 			uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 			std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
 			~NativeEffects() {
 				g_SimRNG = sim; g_RenderRNG = render;
 				MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor);
-				g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
 				g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 				g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
 			}
@@ -318,6 +407,12 @@ namespace RTE::CheckpointLua {
 		ScriptGraphCaptureScope m_Capture;
 		std::optional<LuaScriptGraphNativeCaptureScope> m_NativeScope;
 		std::thread::id m_Thread;
+		NativeCache& m_Cache;
+		std::unordered_map<const void*, NativeImage::Entry> m_NewClasses;
+		std::unordered_map<const void*, NativeCache::Reference> m_NewReferences;
+		std::unordered_set<const void*> m_Kept;
+		bool m_Persist = false;
+		std::optional<std::map<std::string, std::pair<size_t, int64_t>>> m_Histogram = std::getenv("CCCP_FROZEN_KINDS") ? std::optional<std::map<std::string, std::pair<size_t, int64_t>>>(std::in_place) : std::nullopt;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
 		std::unordered_set<const void*> m_Queued;
 		std::vector<TValue> m_Queue;
@@ -339,6 +434,30 @@ namespace RTE::CheckpointLua {
 			lua_pushvalue(State(), index);
 			lua_rawseti(State(), -2, ++m_References.count);
 			lua_pop(State(), 1);
+			// A cached descriptor's values must outlive this capture: the state keeps them for every later freeze.
+			if (m_Persist) {
+				lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+				lua_pushvalue(State(), index);
+				lua_rawseti(State(), -2, m_Cache.NextRetained());
+				lua_pop(State(), 1);
+			}
+		}
+		// The heap values a cached answer names stay alive in the state's retained table.
+		void Retain(const NativeImage::Entry& entry) {
+			const auto keep = [&](const NativeImage::Result& result) {
+				for (const NativeImage::Value& item: result.values) {
+					if (item.text || !tvisgcv(&item.token)) continue;
+					Push(item.token);
+					lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+					lua_pushvalue(State(), -2);
+					lua_rawseti(State(), -2, m_Cache.NextRetained());
+					lua_pop(State(), 2);
+				}
+			};
+			for (const auto& result: entry.native) keep(result);
+			keep(entry.members);
+			for (const auto& [name, result]: entry.helpers) keep(result);
+			for (const auto& [name, result]: entry.properties) keep(result);
 		}
 		void Enqueue(const TValue& value) {
 			if ((!tvisudata(&value) && !tvisfunc(&value)) || !m_Queued.insert(gcval(&value)).second) return;
@@ -367,6 +486,16 @@ namespace RTE::CheckpointLua {
 		}
 
 		template<class Arguments> NativeImage::Result Invoke(lua_CFunction function, const char* name, Arguments arguments, bool observesNative = false) {
+			const auto invokeStarted = std::chrono::steady_clock::now();
+			struct Timed {
+				CaptureScope& scope; const char* name; std::chrono::steady_clock::time_point started;
+				~Timed() {
+					if (!scope.m_Histogram) return;
+					auto& bucket = (*scope.m_Histogram)[std::string("call=") + name];
+					++bucket.first;
+					bucket.second += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+				}
+			} timed{*this, name, invokeStarted};
 			const int top = lua_gettop(State());
 			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
 			std::optional<AudioMan::SoundCheckpointSaveScope> notes;
@@ -427,14 +556,25 @@ namespace RTE::CheckpointLua {
 		}
 
 		void CaptureUserdata(const TValue& value) {
-			auto& entry = m_Image->m_Entries[gcval(&value)];
+			const auto started = std::chrono::steady_clock::now();
 			std::string className;
 			bool detached = false;
 			Push(value);
-			if (const auto* object = luabind::detail::is_class_object(State(), -1); object && object->crep()) {
+			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
+			const auto* object = luabind::detail::is_class_object(State(), -1);
+			const bool immutable = luabind::detail::is_class_rep(State(), -1) || !object;
+			struct Persist {
+				bool& flag;
+				Persist(bool& value, bool on) : flag(value) { flag = on; }
+				~Persist() { flag = false; }
+			} persist{m_Persist, immutable};
+			auto& entry = immutable ? m_NewClasses[gcval(&value)] : m_Image->m_Entries[gcval(&value)];
+			entry.serial = luaJIT_value_serial(State(), -1);
+			bool movable = false, owned = false;
+			if (object && object->crep()) {
 				className = object->crep()->name();
-				const bool movable = ClassDerivesFrom(object->crep(), "MovableObject");
-				const bool owned = (object->flags() & luabind::detail::object_rep::owner) != 0;
+				movable = ClassDerivesFrom(object->crep(), "MovableObject");
+				owned = (object->flags() & luabind::detail::object_rep::owner) != 0;
 				detached = !object->ptr() && (!movable || owned);
 				if (movable && object->ptr()) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
@@ -482,6 +622,23 @@ namespace RTE::CheckpointLua {
 			else if (className == "AlarmEvent") properties = {"ScenePos", "Team", "Range"};
 			for (const char* property: properties) {
 				entry.properties.emplace(property, Invoke(Property, property, [&] { Push(value); lua_pushstring(State(), property); return 2; }));
+			}
+			// A reference to a live entity or to a manager singleton answers the same next time if it still names the same object.
+			const std::string kind = Kind(entry.native[0]);
+			const bool entity = kind == "entity" && object && object->ptr();
+			const bool singleton = kind.empty() && object && object->ptr() && !owned && !movable && entry.helpers.size() == 2;
+			if (entity || singleton) {
+				NativeCache::Reference reference{entry, object->ptr(), entity ? static_cast<const MovableObject*>(object->ptr())->GetUniqueID() : 0, entity};
+				m_NewReferences[gcval(&value)] = std::move(reference);
+				m_Kept.insert(gcval(&value));
+				Retain(entry);
+			}
+			if (m_Histogram) {
+				std::string kindNames;
+				for (const auto& kind: kinds) kindNames += (kindNames.empty() ? "" : "|") + kind;
+				auto& bucket = (*m_Histogram)["class=" + (className.empty() ? std::string("<class_rep>") : className) + " kind=" + kindNames];
+				++bucket.first;
+				bucket.second += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 			}
 		}
 
