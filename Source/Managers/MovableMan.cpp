@@ -76,6 +76,7 @@ extern "C" {
 #include <map>
 #include <memory>
 #include <queue>
+#include <set>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -245,6 +246,15 @@ struct ThreadedSyncedUpdateSelfTestContext {
 	std::vector<long> order;
 	// Armed by the deleted-object row; the first SyncedUpdate of the pass retires another state's object.
 	std::function<void()> retire;
+	// Armed for the ordered runs; the first SyncedUpdate of the pass spawns one object into the world.
+	std::function<void()> spawn;
+	// The object every SyncedUpdate writes into: the contract's "modifying other objects" channel.
+	MovableObject* witness = nullptr;
+	std::vector<long> spawnedIDs;
+	// The contract's global-table channel: one write per object, landing in as many per-state tables
+	// as the peer runs states. The count of tables is what F2 is about, so it is counted, never hashed.
+	long globalWrites = 0;
+	std::set<const void*> globalWriteStates;
 };
 
 ThreadedSyncedUpdateSelfTestContext* s_ThreadedSyncedUpdateSelfTestContext = nullptr;
@@ -267,6 +277,32 @@ int RunThreadedSyncedUpdateSelfTestRetire(lua_State* state) {
 	return 0;
 }
 
+// The contract's "modifying other objects": every SyncedUpdate folds its own identity into one other
+// object's field, so the value carries the order the pass ran in and not merely its membership.
+int RunThreadedSyncedUpdateSelfTestWitness(lua_State* state) {
+	if (!s_ThreadedSyncedUpdateSelfTestContext || !s_ThreadedSyncedUpdateSelfTestContext->witness) return 0;
+	MovableObject* witness = s_ThreadedSyncedUpdateSelfTestContext->witness;
+	const auto previous = static_cast<uint32_t>(witness->GetNumberValue("threaded_synced_witness"));
+	const auto uniqueID = static_cast<uint32_t>(static_cast<long>(luaL_checknumber(state, 1)));
+	witness->SetNumberValue("threaded_synced_witness", static_cast<double>((previous ^ uniqueID) * 16777619u));
+	// The caller has just written its own state's global table; the value it reports is that table's
+	// running count, so a positive one says the write happened and the state says which table took it.
+	if (luaL_checknumber(state, 2) > 0) {
+		++s_ThreadedSyncedUpdateSelfTestContext->globalWrites;
+		s_ThreadedSyncedUpdateSelfTestContext->globalWriteStates.insert(g_LuaMan.GetThreadLuaStateOverride());
+	}
+	return 0;
+}
+
+// The contract's "spawning objects": the first SyncedUpdate of an armed pass puts one object into the
+// world. Its unique ID is part of what the row hashes, so a spawn at a different point in the order shows.
+int RunThreadedSyncedUpdateSelfTestSpawn(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext && s_ThreadedSyncedUpdateSelfTestContext->spawn) {
+		std::exchange(s_ThreadedSyncedUpdateSelfTestContext->spawn, nullptr)();
+	}
+	return 0;
+}
+
 void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
 	lua_State* luaState = state.GetLuaState();
@@ -276,6 +312,10 @@ void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateLength");
 	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestRetire);
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateRetire");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestWitness);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateWitness");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestSpawn);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateSpawn");
 }
 
 // A registered MO beside the identity the synced pass orders on, read once when the pass snapshots the
@@ -4976,6 +5016,13 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	std::string retiredActualHash;
 	size_t retiredFirstDivergence = 0;
 	bool unlistedRootRan = false;
+	std::array<long, 2> globalWriteTotals{};
+	std::array<long, 2> globalWriteStatesWritten{};
+	std::array<long, 2> spawnedInPass{};
+	long long loadPerStateUs = 0;
+	long long loadGlobalUs = 0;
+	long long loadGlobalAfterADeletionUs = 0;
+	int loadObjectsRegistered = 0;
 	bool passed = true;
 
 	const auto hashOrder = [](const std::vector<long>& order) {
@@ -5005,6 +5052,10 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			mix(static_cast<uint64_t>(object->GetUniqueID()));
 			mix(static_cast<uint64_t>(object->GetNumberValue("threaded_synced_order_length")));
 		}
+		// The two permitted writes whose value carries the order: what the pass wrote into another
+		// object, and what it spawned. The third, a global table, is per state and is counted instead.
+		if (context.witness) mix(static_cast<uint64_t>(context.witness->GetNumberValue("threaded_synced_witness")));
+		for (long uniqueID: context.spawnedIDs) mix(static_cast<uint64_t>(uniqueID));
 		std::ostringstream text;
 		text << std::hex << std::setw(16) << std::setfill('0') << hash;
 		return text.str();
@@ -5047,16 +5098,56 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 		}
 		for (LuaStateWrapper& state: states) state.Update();
 
-		const auto run = [&](bool globalOrder) {
+		// The object every SyncedUpdate writes into, and the objects the pass spawns. Neither is
+		// registered with a state, so they are written and made, never run.
+		std::vector<std::unique_ptr<MOPixel>> spawned;
+		std::unique_ptr<MOPixel> witness;
+		{
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 64);
+			auto created = std::make_unique<MOPixel>();
+			if (created->Create() >= 0) {
+				witness = std::move(created);
+				context.witness = witness.get();
+			}
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+		}
+
+		const auto run = [&](bool globalOrder, bool armWrites = false) {
 			context.order.clear();
+			const long counterBeforeRun = MovableObject::GetUniqueIDCounter();
+			if (armWrites) {
+				// Above every other fixture object, so a spawn never takes an identity the rows expect.
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 128);
+				if (context.witness) context.witness->SetNumberValue("threaded_synced_witness", 0);
+				context.spawnedIDs.clear();
+				context.globalWrites = 0;
+				context.globalWriteStates.clear();
+				context.spawn = [this, &spawned, &context] {
+					auto object = std::make_unique<MOPixel>();
+					if (object->Create() < 0) return;
+					m_ValidParticles.insert(object.get());
+					m_AddedParticles.push_back(object.get());
+					context.spawnedIDs.push_back(object->GetUniqueID());
+					spawned.push_back(std::move(object));
+				};
+			}
 			for (const auto& object: objects) object->RequestSyncedUpdate();
 			RunThreadedSyncedUpdatePass(globalOrder);
+			if (armWrites) {
+				context.spawn = nullptr;
+				MovableObject::PinUniqueIDCounter(counterBeforeRun);
+			}
 			return hashFixture(context, objects);
 		};
 
+		// What the per-state globals hold after a pass: the total has to be one write per object, and
+		// how it is spread over the states is the count's business, never the world's.
 		if (fixtureReady && objects.size() == c_ObjectCount) {
-			perStateHashes[countIndex] = run(false);
-			globalHashes[countIndex] = run(true);
+			perStateHashes[countIndex] = run(false, true);
+			globalHashes[countIndex] = run(true, true);
+			globalWriteTotals[countIndex] = context.globalWrites;
+			globalWriteStatesWritten[countIndex] = static_cast<long>(context.globalWriteStates.size());
+			spawnedInPass[countIndex] = static_cast<long>(context.spawnedIDs.size());
 
 			// Two live objects can share a unique ID: a faithful clone copies the source's, and a
 			// restored object adopts a persisted one. A pair of those, on two states, must run in the
@@ -5172,6 +5263,58 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				perStateUs = perStateSamples[perStateSamples.size() / 2];
 				globalUs = globalSamples[globalSamples.size() / 2];
 
+				// The same walk at the size of a battle. What the global order added is per registered
+				// MO - one snapshot entry, one heap push and one pop each - so the accepted cost scales
+				// with the count and the budget with it. These carry no scripts, which is what most of a
+				// battle's registered objects are to this pass: a request flag read and nothing more.
+				constexpr int c_LoadObjectCount = 5000;
+				std::vector<std::unique_ptr<MOPixel>> loadObjects;
+				loadObjects.reserve(c_LoadObjectCount);
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 1024);
+				for (int index = 0; index < c_LoadObjectCount; ++index) {
+					auto object = std::make_unique<MOPixel>();
+					if (object->Create() < 0) break;
+					states[static_cast<size_t>(index) % states.size()].RegisterMO(object.get());
+					loadObjects.push_back(std::move(object));
+				}
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+				loadObjectsRegistered = static_cast<int>(loadObjects.size());
+				for (LuaStateWrapper& state: states) state.Update();
+				{
+					std::vector<long long> loadPerStateSamples;
+					std::vector<long long> loadGlobalSamples;
+					std::vector<long long> loadAfterDeletionSamples;
+					const auto measure = [this](bool globalOrder) {
+						const auto started = std::chrono::steady_clock::now();
+						RunThreadedSyncedUpdatePass(globalOrder);
+						return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+					};
+					measure(false);
+					measure(true);
+					for (int round = 0; round < c_MeasureRounds; ++round) {
+						loadPerStateSamples.push_back(measure(false));
+						loadGlobalSamples.push_back(measure(true));
+					}
+					// And again with the liveness lookup engaged: one unregistration means the pass can no
+					// longer take a pointer on trust, so every entry is looked up in its state's set.
+					if (!loadObjects.empty()) {
+						states[(loadObjects.size() - 1) % states.size()].UnregisterMO(loadObjects.back().get());
+					}
+					for (int round = 0; round < c_MeasureRounds; ++round) {
+						loadAfterDeletionSamples.push_back(measure(true));
+					}
+					std::sort(loadPerStateSamples.begin(), loadPerStateSamples.end());
+					std::sort(loadGlobalSamples.begin(), loadGlobalSamples.end());
+					std::sort(loadAfterDeletionSamples.begin(), loadAfterDeletionSamples.end());
+					loadPerStateUs = loadPerStateSamples[loadPerStateSamples.size() / 2];
+					loadGlobalUs = loadGlobalSamples[loadGlobalSamples.size() / 2];
+					loadGlobalAfterADeletionUs = loadAfterDeletionSamples[loadAfterDeletionSamples.size() / 2];
+				}
+				for (size_t index = 0; index < loadObjects.size(); ++index) {
+					states[index % states.size()].UnregisterMO(loadObjects[index].get());
+				}
+				loadObjects.clear();
+
 				// The first object of the pass deletes another state's later object, which the pass has
 				// already snapshotted. The merge must order that entry by the identity it read at
 				// snapshot time; reading the object again picks up whatever took its place.
@@ -5225,7 +5368,9 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 		}
 
 		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
-		for (auto* group: {&objects, &twins}) {
+		context.witness = nullptr;
+		witness.reset();
+		for (auto* group: {&objects, &twins, &spawned}) {
 			for (const auto& object: *group) {
 				m_ValidParticles.erase(object.get());
 				std::erase(m_AddedParticles, object.get());
@@ -5256,7 +5401,19 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	                                    freedAcrossStatesHashes[0] == freedAcrossStatesHashes[1] &&
 	                                    freedAcrossStatesSkipped[0] == 1 && freedAcrossStatesSkipped[1] == 1 &&
 	                                    !freedAcrossStatesVictimRan;
-	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen;
+	// One global write per object and one spawn per armed pass, at either count - and the writes land
+	// in exactly as many per-state tables as the peer runs states, which is what keeps the count in the
+	// identity until a fixed state count makes the assignment the same on every peer.
+	const bool permittedWritesGreen = globalWriteTotals[0] == c_ObjectCount && globalWriteTotals[1] == c_ObjectCount &&
+	                                  globalWriteStatesWritten[0] == 4 && globalWriteStatesWritten[1] == 32 &&
+	                                  spawnedInPass[0] == 1 && spawnedInPass[1] == 1;
+	// 150 us was accepted at 1,024 registered MOs; the walk's added cost is per MO, so the budget is too.
+	constexpr long long c_LoadBudgetUs = c_AddedBudgetUs * 5000 / c_ObjectCount;
+	const long long loadAddedUs = loadGlobalUs - loadPerStateUs;
+	const long long loadAddedWithLookupUs = loadGlobalAfterADeletionUs - loadPerStateUs;
+	const bool loadTimingGreen = loadObjectsRegistered == 5000 && loadPerStateUs > 0 &&
+	                             loadAddedUs <= c_LoadBudgetUs && loadAddedWithLookupUs <= c_LoadBudgetUs;
+	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen && permittedWritesGreen && loadTimingGreen;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
 	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1]
 	          << (perStateRed ? "" : " (the per-state control ran the same order at both counts, so it detects nothing)") << std::endl;
@@ -5293,6 +5450,18 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
 	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
 	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
+	std::cout << "[script-graph-selftest] " << (loadTimingGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_pass_timing_under_load registered=" << loadObjectsRegistered
+	          << " states=32 before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs
+	          << " added_us=" << loadAddedUs << " after_a_deletion_us=" << loadGlobalAfterADeletionUs
+	          << " added_with_lookup_us=" << loadAddedWithLookupUs << " budget_us=" << c_LoadBudgetUs
+	          << (loadTimingGreen ? "" : " (the walk costs more per registered MO than 1,024 said it would)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (permittedWritesGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_permitted_writes states=4,32 global_writes=" << globalWriteTotals[0]
+	          << "," << globalWriteTotals[1] << " expected=" << c_ObjectCount
+	          << " states_written=" << globalWriteStatesWritten[0] << "," << globalWriteStatesWritten[1]
+	          << " spawned=" << spawnedInPass[0] << "," << spawnedInPass[1]
+	          << (permittedWritesGreen ? "" : " (a spawn, an other-object write or a global write did not happen once per object)") << std::endl;
 	return passed;
 }
 
