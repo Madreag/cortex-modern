@@ -318,7 +318,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state";
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -340,6 +340,15 @@ namespace RTE::MenuAutomation {
 			for (const auto& member: snapshot.members) members.push_back({{"peer", member.peerId}, {"name", NetPlayerPresentation::Name(member)}, {"state", NetPlayerPresentation::State(member)}, {"route", member.connectedRoute}});
 			observation = Json{{"members", members}, {"private_catch_up", ScenarioRunner::WorldCatchUpActive()},
 				{"resyncing", g_NetMatchService.IsMatchResyncing()}, {"slow_notice", ScenarioRunner::IsLockstepLocalMachineSlow()}}.dump();
+			return true;
+		}
+		if (command == "fire_assert") {
+			// The assert seam the harness needs: a scripted run must be able to answer a real assert the way
+			// a player does, and prove the run went on.
+			std::string reason{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			if (reason.empty()) return false;
+			observation = reason;
+			RTEAssert(false, reason);
 			return true;
 		}
 		if (command == "push_toast") {
@@ -660,6 +669,11 @@ namespace RTE::MenuAutomation {
 					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
 					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
 					{"activity_table", table}, {"game_activities", loaded}, {"loaded_scenes", loadedScenes},
+					// The video page hides the preset box when the window's aspect is not the display's, so a
+					// reader needs the display the engine itself measured.
+					{"display", {{"res_x", g_WindowMan.GetResX()}, {"res_y", g_WindowMan.GetResY()},
+						{"max_res_x", g_WindowMan.GetMaxResX()}, {"max_res_y", g_WindowMan.GetMaxResY()},
+						{"fullscreen", g_WindowMan.IsFullscreen()}}},
 					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
