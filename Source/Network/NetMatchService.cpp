@@ -1355,16 +1355,20 @@ static std::string ResyncSaveName() {
 			}
 			m_WorldCatchUp.tail.clear();
 			if (committed) {
-				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false; };
+				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false, prepared = false; };
 				const auto local = std::make_shared<LocalState>();
 				const auto pause = m_WorldCatchUp.pauseState;
-				m_ActivateCatchUpLocalSeat = [local](Activity& activity) { return local->valid && activity.RestoreNetLocalPlayerState(local->activity); };
+				m_ActivateCatchUpLocalSeat = [local](Activity& activity) { return local->prepared && activity.Activity::RestoreNetLocalPlayerState(local->activity); };
 				if (!g_ActivityMan.SetPendingCheckpointCallbacks([local] {
 					local->input = g_UInputMan.SaveCheckpoint(); local->gui = GUIInput::SaveSharedCheckpoint(); local->frame = g_FrameMan.SaveNetLocalState();
 					if (g_ActivityMan.GetActivity()) local->valid = g_ActivityMan.GetActivity()->CaptureNetLocalPlayerState(local->activity);
 					return true;
 				}, [local, committed, pause](Activity& activity) {
-					if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != committed->savedTick || !activity.ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
+					if (static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) != committed->savedTick) return false;
+					if (local->valid) {
+						if (!activity.RestoreNetLocalPlayerState(local->activity) || !activity.Activity::ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
+						local->prepared = true;
+					} else if (!activity.ApplyNetPlayerBindings(NetGamePlayerBindings{})) return false;
 					return g_UInputMan.LoadCheckpoint(local->input) && GUIInput::LoadSharedCheckpoint(local->gui) && g_FrameMan.LoadNetLocalState(local->frame) &&
 					    ScenarioRunner::RestoreCommittedCatchUpState(*committed) && ScenarioRunner::RestoreLockstepPauseState(pause, committed->savedTick);
 				})) return false;
@@ -3593,10 +3597,12 @@ static std::string ResyncSaveName() {
 		// The connection handshakes ahead of E; the simulation changes producer only after E-1.
 		if (m_WorldCatchUp.activationTick != 0 && m_WorldCatchUp.appliedThrough + 1 < m_WorldCatchUp.activationTick) return;
 		if (m_Coordinator && m_Coordinator->IsRunning() && m_WorldCatchUp.privateMatch) {
+			const auto activationBegan = std::chrono::steady_clock::now();
 			NetResyncState committed;
 			std::string error;
 			if (!ScenarioRunner::CaptureNetResyncState(m_WorldCatchUp.activationTick - 1, committed, &error, false)) { ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return; }
 			committed.pendingInputs.clear(); committed.pendingCommands.clear(); committed.pendingPlayerBindings.clear(); committed.admittedReseats.clear();
+			const auto activationCaptured = std::chrono::steady_clock::now();
 			const auto pause = ScenarioRunner::CaptureLockstepPauseState();
 			ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), true);
 			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
@@ -3611,6 +3617,7 @@ static std::string ResyncSaveName() {
 			g_UInputMan.ClearMouseButtons();
 			for (MovableObject* object: g_MovableMan.SnapshotKnownObjects()) if (auto* actor = dynamic_cast<Actor*>(object))
 				actor->GetController()->ResetLocalInputState(actor->GetController()->GetInputMode());
+			const auto activationLocal = std::chrono::steady_clock::now();
 			for (const auto& event: m_CatchUpWirePackets) {
 				if (event.bytes.size() > 17 && event.bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) {
 					const size_t offset = event.bytes[17] == 0 ? 20 : 28;
@@ -3620,10 +3627,15 @@ static std::string ResyncSaveName() {
 				}
 				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
 			}
+			const auto activationWired = std::chrono::steady_clock::now();
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
 			// The tail replayed on this thread; the session read nothing while it ran.
 			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
+			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
+			std::cout << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
+			          << " capture_ms=" << milliseconds(activationBegan, activationCaptured) << " local_ms=" << milliseconds(activationCaptured, activationLocal)
+			          << " wire_ms=" << milliseconds(activationLocal, activationWired) << " cleanup_ms=" << milliseconds(activationWired, std::chrono::steady_clock::now()) << std::endl;
 			std::cout << "[net-match] private catch-up complete frame=" << m_WorldCatchUp.activationTick << std::endl;
 		}
 		if (m_Coordinator && m_Coordinator->IsRunning() && !m_WorldCatchUp.privateMatch) {
