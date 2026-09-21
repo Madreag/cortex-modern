@@ -1509,7 +1509,9 @@ namespace RTE {
 			host.Tick(10); client.Tick(10);
 			NetLockstepReadyFrame frame;
 			if (!client.PopReadyFrame(frame) || frame.frame != 0) {
-				*error = "the sender did not commit its local input optimistically";
+				*error = "the sender did not commit its local input optimistically: next_frame=" + std::to_string(client.GetStats().nextFrame) +
+				         " frames_accepted=" + std::to_string(client.GetStats().framesAccepted) +
+				         " local_sent=" + std::to_string(client.GetStats().localControllerFramesSent);
 				return false;
 			}
 			for (const auto& stale: {NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 69, 1, 0x9A70, 0},
@@ -1519,13 +1521,20 @@ namespace RTE {
 				std::vector<uint8_t> bytes;
 				if (!NetLockstepCodec::Encode({stale}, bytes)) return false;
 				client.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 11);
-				if (client.PopReadyFrame(frame)) { *error = "a stale round or incarnation acknowledged the sender's input"; return false; }
+				if (client.PopReadyFrame(frame)) {
+					*error = "a stale round or incarnation acknowledged the sender's input: frame=" + std::to_string(frame.frame) +
+					         " ack_round=" + std::to_string(stale.roundId) + " ack_incarnation=" + std::to_string(stale.seatIncarnation);
+					return false;
+				}
 			}
 			clientWire.loseInput = false;
 			if (!host.QueueLocalInput(1, {}, {}, error) || !client.QueueLocalInput(1, {}, {}, error)) return false;
 			for (uint64_t now = 12; now < 30; ++now) { host.Tick(now); client.Tick(now); }
 			if (!host.PopReadyFrame(frame) || frame.frame != 0 || !client.PopReadyFrame(frame) || frame.frame != 1) {
-				*error = "an accepted retransmission did not release the host and sender horizons";
+				*error = "an accepted retransmission did not release the host and sender horizons: host_next=" + std::to_string(host.GetStats().nextFrame) +
+				         " client_next=" + std::to_string(client.GetStats().nextFrame) +
+				         " host_received=" + std::to_string(host.GetStats().remoteControllerFramesReceived) +
+				         " client_accepted=" + std::to_string(client.GetStats().framesAccepted);
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS sender_commits_optimistically_and_retransmits" << std::endl;
@@ -1542,12 +1551,15 @@ namespace RTE {
 			if (!wire.StartHost(49475, error) || !coordinator.Start(wire, config, error)) return false;
 			coordinator.BeginSynchronizedCapture(100);
 			if (coordinator.IsSynchronizedCapturePark(100) || !coordinator.IsSynchronizedCapturePark(101)) {
-				*error = "the agreed capture park did not begin on the first frame after the completed tick";
+				*error = "the agreed capture park did not begin on the first frame after the completed tick: frame=100 park101=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(101));
 				return false;
 			}
 			coordinator.CompleteSynchronizedCapture(100, 97.0);
 			if (!coordinator.IsSynchronizedCapturePark(106) || coordinator.IsSynchronizedCapturePark(120)) {
-				*error = "the capture park was not bounded by the measured capture duration";
+				*error = "the capture park was not bounded by the measured capture duration: park106=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(106)) + " park120=" +
+				         std::to_string(coordinator.IsSynchronizedCapturePark(120)) + " capture_ms=97";
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park" << std::endl;

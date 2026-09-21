@@ -654,7 +654,8 @@ namespace RTE {
 			AnnounceConnected(connection, 2);
 			if (m_PendingEvents.size() != 3 || m_PendingEvents[0].type != NetTransportEventType::PeerConnected ||
 			    m_PendingEvents[1].bytes != std::vector<uint8_t>({1, 2, 3}) || m_PendingEvents[2].bytes != std::vector<uint8_t>({4, 5})) {
-				if (error) *error = "the announced transport did not release held packets in order";
+				if (error) *error = "the announced transport did not release held packets in order: events=" + std::to_string(m_PendingEvents.size()) +
+				                  " first_type=" + std::to_string(static_cast<int>(m_PendingEvents.empty() ? NetTransportEventType::TransportError : m_PendingEvents[0].type));
 				return false;
 			}
 			return true;
@@ -1204,21 +1205,25 @@ namespace RTE {
 		NetTransportEvent first{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}};
 		NetTransportEvent second{NetTransportEventType::PacketReceived, 2, NetTransportLane::InputUnreliable, {4, 5}, {}};
 		if (!QueueHeldPacket(held, connection, std::move(first)) || !QueueHeldPacket(held, connection, std::move(second))) {
-			if (error) *error = "the payload hold rejected a packet below its cap";
+			if (error) *error = "the payload hold rejected a packet below its cap: first_bytes=3 second_bytes=2 cap=" + std::to_string(c_MaxHeldBytesBeforeAnnounce);
 			return false;
 		}
 		const auto found = held.find(connection);
 		if (found == held.end() || found->second.size() != 2 || found->second[0].bytes != std::vector<uint8_t>({1, 2, 3}) ||
 		    found->second[1].bytes != std::vector<uint8_t>({4, 5})) {
-			if (error) *error = "the payload hold did not preserve pre-announcement order";
+			if (error) *error = "the payload hold did not preserve pre-announcement order: connections=" + std::to_string(held.size()) +
+			                  " packets=" + std::to_string(found == held.end() ? 0 : found->second.size());
 			return false;
 		}
 		NetTransportEvent oversized{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable,
 		                            std::vector<uint8_t>(c_MaxHeldBytesBeforeAnnounce, 0), {}};
 		const size_t attemptedBytes = 5 + oversized.bytes.size();
-		if (QueueHeldPacket(held, connection, std::move(oversized)) || HeldPacketOverflowReason(attemptedBytes).find(std::to_string(attemptedBytes)) == std::string::npos ||
+		const bool acceptedOversized = QueueHeldPacket(held, connection, std::move(oversized));
+		if (acceptedOversized || HeldPacketOverflowReason(attemptedBytes).find(std::to_string(attemptedBytes)) == std::string::npos ||
 		    HeldPacketOverflowReason(attemptedBytes).find(std::to_string(c_MaxHeldBytesBeforeAnnounce)) == std::string::npos) {
-			if (error) *error = "the payload hold did not enforce and name its byte cap";
+			if (error) *error = "the payload hold did not enforce and name its byte cap: attempted_bytes=" + std::to_string(attemptedBytes) +
+			                  " cap=" + std::to_string(c_MaxHeldBytesBeforeAnnounce) + " accepted=" +
+			                  std::to_string(acceptedOversized);
 			return false;
 		}
 		return true;

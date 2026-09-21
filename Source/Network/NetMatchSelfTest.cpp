@@ -10684,9 +10684,13 @@ namespace RTE {
 			service.m_KeepEndedDirectoryLease = true;
 		}
 		if (!service.ShouldKeepIceDirectoryLease()) {
-			*error = "a completed match with a held seat released its directory lease before the match-over answer";
+			*error = "a completed match with a held seat released its directory lease before the match-over answer: registered=" +
+			         std::to_string(service.m_DirectoryRegistered) + " keep_ended=" + std::to_string(service.m_KeepEndedDirectoryLease) +
+			         " state=" + std::to_string(static_cast<int>(service.m_State));
 			return false;
 		}
+		std::cout << "PASS end_match_hold_resync_keeps_lease held=1 state=Completed keep_ended="
+		          << service.m_KeepEndedDirectoryLease << std::endl;
 		{
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_LeftMatch = true;
