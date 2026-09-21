@@ -93,10 +93,10 @@
       "peer": "host",
       "mark": "moderation-kick-roster",
       "screen": "MultiplayerScreen",
-      "what": "The lobby removes ClientA and leaves ClientB next to Host.",
+      "what": "The lobby opens ClientA's seat under its unseated name and keeps ClientB listed.",
       "events": [
-        "assert_label LabelLobbyPlayer1.*ClientB.*PASS",
-        "assert_visible LabelLobbyPlayer2 0 actual=0 PASS"
+        "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
+        "assert_label LabelLobbyPlayer2.*ClientB.*PASS"
       ]
     },
     {
@@ -167,9 +167,10 @@
       "peer": "host",
       "mark": "moderation-final-roster",
       "screen": "MultiplayerScreen",
-      "what": "After both removals only Host remains in the lobby.",
+      "what": "After both removals the host's lobby lists the two seats back open under their unseated names.",
       "events": [
-        "assert_visible LabelLobbyPlayer1 0 actual=0 PASS"
+        "assert_label LabelLobbyPlayer1.*Client 2.*PASS",
+        "assert_label LabelLobbyPlayer2.*Client 3.*PASS"
       ]
     },
     {

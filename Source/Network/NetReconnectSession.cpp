@@ -1204,7 +1204,9 @@ namespace RTE {
 				return NetKickBanResult::PersistenceFailed;
 			}
 		}
-		if (action == NetParticipantRemovalAction::Kick && issued.hasParticipantId) m_RemovedParticipants.insert(issued.participantId);
+		// A kick opens the seat for anyone to take - including the player it just removed. Only the
+		// ban list above holds an identity out of a rejoin; m_RemovedParticipants stays for
+		// pre-fix migration state that still carries one.
 		if (issued.connection != c_InvalidNetPeerId) {
 			m_Admission.DropConnection(issued.connection);
 		}
