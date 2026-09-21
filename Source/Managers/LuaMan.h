@@ -28,6 +28,11 @@ namespace RTE {
 	struct PathRequest;
 	struct LuaPathCallbackContext;
 
+	/// Threaded Lua states, the same number on every machine. Lua globals are per state and an object's
+	/// state is its unique ID modulo this, so the count is a simulation input: it is a build constant,
+	/// never a setting. Changing it is a different build and the deterministic identity says so.
+	static constexpr int c_LuaStateCount = 32;
+
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
 	public:

@@ -383,7 +383,7 @@ namespace RTE {
 			return 2;
 		}
 		if (a == "-num-lua-states" && hasValue) {
-			s_Args.numLuaStates = static_cast<int>(std::strtol(argValue[startIndex + 1], nullptr, 10));
+			// Retired: the count is a build constant. The value is consumed so old command lines still run.
 			return 2;
 		}
 		if (a == "-tick-hashes") {
@@ -682,7 +682,7 @@ namespace RTE {
 			s_ControllerRecordLog->metadata.commit = "unknown";
 			s_ControllerRecordLog->metadata.seed = s_Args.seed;
 			s_ControllerRecordLog->metadata.maxTicks = s_Args.maxTicks;
-			s_ControllerRecordLog->metadata.numLuaStates = s_Args.numLuaStates;
+			s_ControllerRecordLog->metadata.numLuaStates = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
 			s_ControllerRecordLog->metadata.simConfig = GatherSimConfig();
 		}
 
@@ -702,9 +702,10 @@ namespace RTE {
 				if (error) *error = "controller log seed metadata mismatch.";
 				return false;
 			}
-			if (s_ControllerReplayLog->metadata.numLuaStates >= 0 && s_Args.numLuaStates >= 0 && s_ControllerReplayLog->metadata.numLuaStates != s_Args.numLuaStates) {
-				// The threaded Lua state count does not change the sim, so a recording replays at any count.
-				std::cout << "[scenario] controller log recorded " << s_ControllerReplayLog->metadata.numLuaStates << " lua states, running " << s_Args.numLuaStates << std::endl;
+			const int liveLuaStates = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
+			if (s_ControllerReplayLog->metadata.numLuaStates >= 0 && s_ControllerReplayLog->metadata.numLuaStates != liveLuaStates) {
+				// A recording from a build with another state count groups its per-state globals differently.
+				std::cout << "[scenario] controller log recorded " << s_ControllerReplayLog->metadata.numLuaStates << " lua states, running " << liveLuaStates << std::endl;
 			}
 			if (!s_ControllerReplayLog->metadata.simConfig.empty() && s_ControllerReplayLog->metadata.simConfig != GatherSimConfig()) {
 				if (error) *error = "controller log sim config mismatch.";
