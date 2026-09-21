@@ -8273,8 +8273,7 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				break;
 			}
-			if (UsesBoundedWait() && !m_Playback && m_Config.localPeerId != GetHostPeerId() && localIt != m_LocalFrames.end() &&
-			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !m_HostAcceptedLocalFrames.contains(m_Stats.nextFrame)) break;
+			// Local input commits optimistically; hold-gap fencing handles a later seat transition.
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
 			// required past its announced last frame.
 			auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
