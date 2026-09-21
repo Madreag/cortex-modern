@@ -372,6 +372,8 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
+		m_PrivateJoinConfig.reset();
+		m_WorldJoinStarting = false;
 		m_HostLostDuringSetup = false;
 		m_HostOptionsRefused = false;
 		m_SetupError.clear();
@@ -738,7 +740,7 @@ namespace RTE {
 				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 			} while (lockstepConfig.roundId == 0);
 		}
-		if (m_PrivateJoinConfig) {
+		if (m_WorldJoinStarting && m_PrivateJoinConfig) {
 			lockstepConfig.resumeFromSnapshot = false;
 			lockstepConfig.roundId = m_PrivateJoinConfig->roundId;
 			lockstepConfig.migrationGeneration = m_PrivateJoinConfig->migrationGeneration;
