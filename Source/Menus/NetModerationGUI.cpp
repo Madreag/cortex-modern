@@ -38,6 +38,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -431,13 +432,15 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	const int top = PanelTop(screenHeight);
 	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight >= c_CompactMaxHeight) {
-		const int fittedTop = std::max(top, reservedTop);
+		int fittedTop = std::max(top, reservedTop);
+		fittedTop = std::min(fittedTop, screenHeight - c_PanelGap - minHeight);
 		return {fittedTop, std::max(minHeight, std::min(height, screenHeight - c_PanelGap - fittedTop))};
 	}
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
 	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
 	// An open chat entry's run sits above the panel too, so its reservation is a floor for the top.
-	const int highestTop = std::max({top, c_StripBandBottom + rowHeight + c_PanelGap, reservedTop});
+	int highestTop = std::max({top, c_StripBandBottom + rowHeight + c_PanelGap, reservedTop});
+	highestTop = std::min(highestTop, screenHeight - c_PanelGap - minHeight);
 	// A seat's message owns its own rows and the toast row under them, wherever on the screen it sits.
 	std::vector<PanelBand> bands;
 	for (const PanelBand& band: textBands) {
@@ -1310,7 +1313,29 @@ void NetModerationGUI::Draw() {
 		m_NetStatus->SetVisible(true);
 	}
 	if (m_Open) {
-		Refresh();
+		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
+		hash ^= std::hash<std::string>{}(snapshot.statusText) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+		hash ^= std::hash<bool>{}(snapshot.isHost);
+		for (const auto& member: snapshot.members) {
+			hash ^= std::hash<unsigned>{}(member.peerId) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.dropped);
+			hash ^= std::hash<bool>{}(member.reclaiming);
+			hash ^= std::hash<bool>{}(member.connected);
+			hash ^= std::hash<std::string>{}(member.connectedRoute);
+			hash ^= std::hash<std::string>{}(member.statusLine);
+		}
+		const long long nowMs = static_cast<long long>(SDL_GetTicks());
+		const bool changed = hash != m_LastRefreshHash;
+		const bool due = m_LastRefreshMs == 0 || (nowMs - m_LastRefreshMs) >= 100;
+		if (changed || due) {
+			if (changed) {
+				++m_RefreshChangeCount;
+			}
+			m_LastRefreshHash = hash;
+			m_LastRefreshMs = nowMs;
+			++m_RefreshCount;
+			Refresh();
+		}
 		m_Controls->Draw();
 	}
 	if (inMatch) {
