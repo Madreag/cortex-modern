@@ -3275,6 +3275,15 @@ namespace RTE {
 						*error = "the host streamed " + std::to_string(tap.chunks.size()) + " chunk(s) to a peer that holds the checkpoint";
 						return false;
 					}
+					// Being spared the stream leaves this peer with no received bytes; its round is still a
+					// resumed one, and a start that says otherwise is refused by the host's own start.
+					const bool hostResumes = NetMatchRunner::RoundResumesASnapshot(true, false, false);
+					const bool clientResumes = NetMatchRunner::RoundResumesASnapshot(false, client.HasCompleteStateTransfer(), client.AnsweredResumeHeld());
+					std::cout << "[net-match-selftest] held_resume_round host=" << hostResumes << " client=" << clientResumes << std::endl;
+					if (hostResumes != clientResumes) {
+						*error = "a peer that holds the checkpoint starts a round that does not resume, against a host that does";
+						return false;
+					}
 				} else {
 					if (host.IsResumeHeldBy(2) || client.AnsweredResumeHeld()) {
 						*error = armName + " peer answered that it holds the offered checkpoint";
@@ -6162,6 +6171,11 @@ namespace RTE {
 		// The worker takes the session exactly as StartResync does, and the catch-up keeps replaying.
 		std::unique_ptr<NetSession> owned = std::move(service.m_Session);
 		service.m_WorkerSession = owned.get();
+		service.NoteSessionHandedToWorker(*owned);
+		if (!owned->IsPumpParked()) {
+			*error = "a session handed to a worker kept the silence window the finished round never evaluated";
+			return false;
+		}
 		owned->SetSilenceSuspended(false);
 		service.DriveWorldJoinClient(1);
 		if (!owned->IsSilenceSuspended()) {
@@ -6183,6 +6197,46 @@ namespace RTE {
 		service.DriveWorldJoinClient(3);
 		if (!service.m_Session->IsSilenceSuspended()) {
 			*error = "the park stopped reaching the session once the worker handed it back";
+			return false;
+		}
+		// A lobby message handled inside the client's private world-join drive calls back into the
+		// service while the drive already holds its lock; taking the lock again is an error, not a wait.
+		{
+			NetMatchService reentrant;
+			reentrant.m_IsHost = false;
+			reentrant.m_State = NetMatchServiceState::Running;
+			reentrant.m_WorldCatchUp.active = true;
+			std::lock_guard<std::mutex> held(reentrant.m_Mutex);
+			const NetMatchService::LockedLobbyDrive drive(reentrant);
+			NetLobbyMigration capsule;
+			capsule.kind = 2;
+			bool threw = false;
+			try {
+				(void)reentrant.OpenMigrationCapsule(capsule);
+			} catch (const std::exception&) {
+				threw = true;
+			}
+			std::cout << "[net-match-selftest] locked_lobby_callback threw=" << (threw ? 1 : 0) << std::endl;
+			if (threw) {
+				*error = "a lobby callback inside the locked world-join drive took the service lock again";
+				return false;
+			}
+		}
+		// The arm itself: WorkerMain holds the session in a local before it hands it to the service, so
+		// nothing the game thread drives can reach it and the replay may never return to the pump.
+		NetMatchService arming;
+		arming.m_IsHost = false;
+		arming.m_State = NetMatchServiceState::Starting;
+		std::unique_ptr<NetSession> workerLocal = std::make_unique<NetSession>();
+		arming.m_WorldCatchUp.active = true;
+		arming.DriveWorldJoinClient(0);
+		if (workerLocal->IsSilenceSuspended()) {
+			*error = "the service pump reached a session only the worker thread holds";
+			return false;
+		}
+		arming.NoteWorldCatchUpArmed(*workerLocal);
+		if (!workerLocal->IsSilenceSuspended()) {
+			*error = "arming the private catch-up declared no park on the session the worker holds";
 			return false;
 		}
 		return true;

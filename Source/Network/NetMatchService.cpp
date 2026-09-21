@@ -785,6 +785,7 @@ static std::string ResyncSaveName() {
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			m_WorkerSession = session.get();
+			NoteSessionHandedToWorker(*session);
 			runner = std::move(m_Runner);
 			if (m_IsHost) {
 				// A rematch restarts from a zeroed sim count.
@@ -1100,6 +1101,7 @@ static std::string ResyncSaveName() {
 			link = TakeTransportLinkLocked();
 			session = std::move(m_Session);
 			m_WorkerSession = session.get();
+			NoteSessionHandedToWorker(*session);
 			runner = std::move(m_Runner);
 			if (isHost) {
 				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
@@ -1160,6 +1162,9 @@ static std::string ResyncSaveName() {
 			receivedEnvelope = receivedState.size();
 			(void)PrepareReceivedResync(receivedState, *coordinator, pendingLoad, resyncState, &error, &receivedArchive);
 		}
+		// Staging the snapshot parked this thread for seconds and the game thread cannot reach this
+		// session while the worker owns it, so the silence windows start again here.
+		session->NotePumpParked();
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_LastResync.transferMs = transferMs;
@@ -1251,7 +1256,8 @@ static std::string ResyncSaveName() {
 		const std::string why = !held ? reason : (!hasManifest ? manifestReason : "the checkpoint's world or agreed state differs");
 		std::cout << "[autosave] resume offer match=" << offer.matchId << " tick=" << offer.savedTick
 		          << (same ? " held locally" : " not held: " + why) << std::endl;
-		std::lock_guard<std::mutex> lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex, std::defer_lock);
+		if (!HoldsServiceLock()) lock.lock();
 		m_ResumeHeldMatchId.clear();
 		m_ResumeHeldTick = 0;
 		m_ResumeHeldRound = 0;
@@ -3319,6 +3325,20 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	// The catch-up is armed on the worker thread, which owns the session until it hands it back, and the
+	// replay that follows may never reach the service pump: the park is declared here, on that session.
+	// The round this session just left never evaluated its timeouts, and the game thread that hands it
+	// over then waits without pumping anything: the worker's first evaluation would measure the whole
+	// match as silence. The windows start again at the handover instead.
+	void NetMatchService::NoteSessionHandedToWorker(NetSession& session) {
+		session.NotePumpParked();
+	}
+
+	void NetMatchService::NoteWorldCatchUpArmed(NetSession& session) {
+		session.NotePumpParked();
+		session.SetSilenceSuspended(true);
+	}
+
 	bool NetMatchService::PrepareReceivedWorldJoin(const std::vector<uint8_t>& bytes, const NetMatchConfig& adopted, std::string& pendingLoad, std::string* error) {
 		NetWorldCheckpointImage image;
 		std::vector<uint8_t> archive;
@@ -3481,6 +3501,9 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::DriveWorldJoinClient(uint64_t nowMs) {
+		// This runs under m_Mutex and hands lobby messages to the session below, so the service calls
+		// those messages make have to take the locked path.
+		const LockedLobbyDrive lockedDrive(*this);
 		// A member catching up privately is replaying on this thread and the round is not feeding its
 		// session: that silence is its own, not the host's. The windows stay open for as long as the
 		// catch-up runs; a host that really goes away still arrives as a transport close below.
@@ -4153,6 +4176,7 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::OpenMigrationCapsule(const NetLobbyMigration& capsule) {
+		if (HoldsServiceLock()) return OpenMigrationCapsuleLocked(capsule);
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return OpenMigrationCapsuleLocked(capsule);
 	}
@@ -6353,10 +6377,14 @@ static std::string ResyncSaveName() {
 			if (!receivedState.empty()) {
 				if (IsWorldJoinImageBlob(receivedState)) {
 					started = PrepareReceivedWorldJoin(receivedState, runner->GetMatchConfig(), pendingLoad, &error);
+					if (started) NoteWorldCatchUpArmed(*session);
 				} else {
 					NetResyncState state;
 					started = PrepareReceivedResync(receivedState, *coordinator, pendingLoad, state, &error);
 					if (started) pendingState = std::move(state);
+					// Staging the snapshot parked this thread, and the game thread cannot reach a session
+					// the worker owns: the silence windows start again here, as they do for a catch-up.
+					session->NotePumpParked();
 				}
 			}
 		}

@@ -1275,6 +1275,9 @@ namespace RTE {
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
 		}
+		// A replayed tick is committed state like any other: the reclaim gap the survivors fenced is
+		// fenced here too, or the catching-up peer alone applies the seat's input through its reclaim.
+		FilterReclaimControllerInputs(outFrame);
 		s_WorldCatchUpAppliedThrough = simTick;
 		// The tail's last frame is applied; the joiner's own coordinator owns everything from here.
 		// Hold the sim on this tick until it runs, or ordinary pacing would commit no input at all and
@@ -1360,14 +1363,32 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsSeatReclaimGap(peerId, frame);
 	}
 
+	// The seat a reclaim at this frame covers an actor for. A peer that joined the round with the hold
+	// already in its config never ran the hold's actor handoff, so it has no drop-time claimant to read:
+	// there the seat that owns the actor in the world is the one reclaiming it, which is the same seat
+	// every survivor reads out of its own claim. Outside a reclaim gap nothing changes.
+	uint8_t ScenarioRunner::GetLockstepReclaimSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		if (!s_LockstepCoordinator || !cpuControlled || owner != GetLockstepHostPeerId() ||
+		    s_LockstepCoordinator->IsSeatReclaimGap(owner, frame)) {
+			return owner;
+		}
+		const uint8_t seeded = NetActorOwnership::GetSeededOwner(actorUniqueID);
+		return seeded != 0 && s_LockstepCoordinator->IsSeatReclaimGap(seeded, frame) ? seeded : owner;
+	}
+
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
 		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) || !MovableMan::IsConstructed()) return;
+		size_t seen = 0, fenced = 0;
 		const auto suppressed = [&](const ControllerFrame& input) {
 			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
 			const auto* actor = dynamic_cast<const Actor*>(g_MovableMan.FindObjectByUniqueID(static_cast<long>(input.actorUniqueID)));
 			if (!actor) return false;
-			const uint8_t owner = GetLockstepDropTimeActorOwner(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled());
-			return s_LockstepCoordinator->IsSeatReclaimGap(owner, ready.frame);
+			const uint8_t seat = GetLockstepReclaimSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
+			++seen;
+			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame);
+			if (gap) ++fenced;
+			return gap;
 		};
 		const size_t before = ready.localFrames.size() + ready.remoteFrames.size();
 		std::erase_if(ready.localFrames, suppressed);
@@ -1380,6 +1401,8 @@ namespace RTE {
 				for (; offset < end; ++offset) if (!suppressed(incoming[offset])) { ready.remoteFrames.push_back(std::move(incoming[offset])); ++count; }
 			}
 		} else std::erase_if(ready.remoteFrames, suppressed);
+		// Every peer fences the same actors at the same frame: a count that disagrees is the desync.
+		std::cout << "[net-lockstep] reclaim gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
 		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
 	}
 

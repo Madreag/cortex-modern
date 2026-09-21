@@ -197,6 +197,11 @@ namespace RTE {
 		}
 		const NetHash32& GetMatchConfigHash() const { return m_MatchConfigHash; }
 		bool UsesLobbyProtocol() const { return m_UseLobbyProtocol; }
+		/// Whether this round loads a checkpoint, however the checkpoint reached this peer: streamed by
+		/// the host, or already held here and therefore never streamed.
+		static bool RoundResumesASnapshot(bool resyncRound, bool receivedState, bool answeredResumeHeld) {
+			return resyncRound || receivedState || answeredResumeHeld;
+		}
 		const std::string& GetSetupError() const { return m_SetupError; }
 		bool HasRefusedHostOptions() const { return m_HostOptionsRefused; }
 
