@@ -348,9 +348,10 @@ def remote_commands(path, local_peer):
 
 
 def canonical_positions(path, wanted):
-    actors, ticks = {}, set()
+    actors, ticks, records = {}, set(), {}
     duplicate = None
     duplicate_count = 0
+    repeat_count = 0
     with open_record(path, encoding='utf-8-sig') as stream:
         for number, line in enumerate(stream, 1):
             if re.match(r'^\d+ activity ', line):
@@ -360,17 +361,23 @@ def canonical_positions(path, wanted):
                 key = int(match[1]), int(match[2])
                 if key in wanted:
                     if key in actors:
+                        # A resync restarts the simdump, so an epoch can be written again; an identical
+                        # record is that repetition. A record that differs at the same tick and actor is
+                        # the engine committing it twice, which is a failed pin, not a trace artefact.
+                        if records[key] == line:
+                            repeat_count += 1
+                            continue
                         duplicate_count += 1
                         if duplicate is None:
-                            duplicate = dict(tick=key[0], actor=key[1], line=number, path=str(path))
-                        # A restarted simdump can contain a second copy of an earlier epoch. Keep
-                        # the first record for the displacement calculation, but make the trace
-                        # defect an explicit failed pin instead of aborting the matrix.
+                            duplicate = dict(tick=key[0], actor=key[1], line=number,
+                                             first_line=actors[key][1], path=str(path))
                         continue
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
+                    records[key] = line
     if ticks != set(range(1, TICKS + 1)):
         raise EarlyDecision(max(ticks) if ticks else 0, path)
     canonical_positions.last_duplicate = dict(first=duplicate, count=duplicate_count) if duplicate else None
+    canonical_positions.last_repeats = repeat_count
     return actors
 
 
