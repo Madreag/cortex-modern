@@ -36,7 +36,8 @@ MAX_BODY = 128 * 1024
 REG_PER_MIN = 10
 REQ_PER_MIN = 120
 IP_REG_PER_MIN = 30
-IP_REQ_PER_MIN = 300
+# Four seated installs keep their individual budgets behind one NAT.
+IP_REQ_PER_MIN = 4 * REQ_PER_MIN
 RATE_WINDOW_S = 60.0
 RATE_IDLE_S = 600.0
 PRUNE_EVERY_N = 256

@@ -1049,6 +1049,13 @@ class DirectoryTests(unittest.TestCase):
                 self.assert_keys(err, ERROR_KEYS)
                 self.assertEqual(err["error"], "invalid_install_key")
 
+    def test_one_host_and_three_joiners_keep_admission_budget(self) -> None:
+        limiter = DualRateLimiter()
+        for request in range(80):
+            for peer in range(4):
+                refused = limiter.check(f"peer{peer:012d}", "127.0.0.1", request * 0.7, False)
+                self.assertIsNone(refused, f"four-peer signalling refused at request {request}, peer {peer}")
+
     def test_per_ip_rate_limit(self) -> None:
         self.start()
         for i in range(30):
@@ -1065,7 +1072,7 @@ class DirectoryTests(unittest.TestCase):
         self.server.stop()
         self.server = None
         self.start()
-        for i in range(299):
+        for i in range(IP_REQ_PER_MIN - 1):
             status, body = self.list_sessions(headers={"X-Install-Key": f"L{i:015d}"})
             self.assertEqual(status, 200, msg=f"list {i+1}")
             self.assert_keys(body, LIST_KEYS)

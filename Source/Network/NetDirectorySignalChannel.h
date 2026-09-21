@@ -83,7 +83,7 @@ namespace RTE {
 		/// c_JoinNonceChars install-key-alphabet characters drawn from std::random_device.
 		static std::string MintJoinNonce();
 
-		static constexpr uint64_t c_PollIntervalMs = 500;
+		static constexpr uint64_t c_PollIntervalMs = 1000;
 		static constexpr uint64_t c_MaxPollWaitS = 12;        //!< NetHttpClient's total timeout is 15 s; a held poll must answer inside it.
 		static constexpr size_t c_MaxSignalBytes = 64 * 1024; //!< The service's MAX_PAYLOAD.
 		static constexpr size_t c_MaxPendingPosts = 256;      //!< The service's MAX_QUEUE.
