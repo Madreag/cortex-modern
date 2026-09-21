@@ -10,6 +10,8 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <memory>
+#include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -20,6 +22,30 @@
 struct lua_State;
 
 namespace RTE {
+	namespace CheckpointLua { class HeapOwner; class NativeCache; }
+
+	/// What one frozen script graph capture cost on the simulation thread, summed over the states.
+	struct FrozenCaptureStats {
+		int states = 0;
+		int64_t nativeUs = 0;
+		int64_t heapUs = 0;
+		int64_t copyUs = 0;
+		size_t pages = 0;
+		size_t bytes = 0;
+		size_t userdata = 0;
+		size_t cached = 0;
+		size_t iterators = 0;
+		size_t owned = 0;
+		int64_t callbacksUs = 0;
+		size_t faults = 0; // The faults the previous snapshots cost the VM's threads while they lived, and their time.
+		int64_t faultUs = 0;
+		int64_t receiversUs = 0, activityUs = 0, asyncUs = 0, cacheUs = 0, objectsUs = 0; // The descriptor's parts.
+		size_t cachedScripts = 0;
+		int64_t rootsUs = 0;
+		int64_t enumUs = 0;
+		int64_t worldUs = 0;
+		int64_t answerUs = 0;
+	};
 
 	class LuabindObjectWrapper;
 	class MovableObject;
@@ -27,6 +53,25 @@ namespace RTE {
 	class CheckpointText;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
+	struct LuaScriptGraphNativeCaptureData;
+
+	/// Shares native identity lookups across the states of one world capture.
+	class LuaScriptGraphNativeCaptureScope {
+	public:
+		LuaScriptGraphNativeCaptureScope();
+		~LuaScriptGraphNativeCaptureScope();
+		LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureScope&) = delete;
+		LuaScriptGraphNativeCaptureScope& operator=(const LuaScriptGraphNativeCaptureScope&) = delete;
+	private:
+		std::unique_ptr<const LuaScriptGraphNativeCaptureData> m_Data;
+		const LuaScriptGraphNativeCaptureData* m_Previous;
+	};
+
+	/// What a script graph capture cannot carry, raised where the walk ran off the simulation thread.
+	struct ScriptGraphRefusal : std::runtime_error {
+		explicit ScriptGraphRefusal(std::vector<std::string> list) : std::runtime_error("script graph capture refused"), problems(std::move(list)) {}
+		std::vector<std::string> problems;
+	};
 
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
@@ -159,7 +204,14 @@ namespace RTE {
 		/// @param problems Receives what could not be carried; any entry means the capture is not faithful.
 		/// @return Whether the graph carries everything.
 		bool SerializeScriptGraph(std::string& text, std::vector<std::string>& problems);
-		bool CaptureScriptGraph(CheckpointText& text, std::vector<std::string>& problems);
+		/// Captures the graph as owned text: off a frozen heap image, or by the live walk when frozen is false.
+		bool CaptureScriptGraph(CheckpointText& text, std::vector<std::string>& problems, bool frozen);
+		/// Freezes the heap and the native records the walk reads, so the walk itself runs on the writer.
+		bool CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems);
+		/// Whether this state's captures may come off a frozen image; a worker failure on one turns it off.
+		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
+		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
+		void WaitFrozenCopy();
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
@@ -177,6 +229,8 @@ namespace RTE {
 
 		/// Restores a graph into this state, laying each root's fields onto its live object; false with the reasons when anything did not restore.
 		bool RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld = false);
+		/// Calls a function of the graph module directly; no chunk is compiled, so the birth sequence stays where the restore left it.
+		void CallScriptGraph(const char* function);
 
 		/// Restores the per-object script fields carried by older saves.
 		bool RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text);
@@ -404,6 +458,9 @@ namespace RTE {
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
 
 		lua_State* m_State;
+		std::unique_ptr<CheckpointLua::HeapOwner> m_CheckpointHeap;
+		std::shared_ptr<CheckpointLua::NativeCache> m_NativeCache; //!< The class descriptors and the heap values a frozen capture keeps between freezes.
+		std::shared_ptr<std::atomic<bool>> m_FrozenCaptureUnavailable = std::make_shared<std::atomic<bool>>(false); //!< Set by the worker when a frozen image could not be serialized.
 		bool m_ScriptGraphHelperLoaded = false; //!< Whether the script graph codec has been installed in this state.
 		std::atomic<bool> m_PreviewGlobalFenceArmed{false}; //!< Whether the VM's native table barrier is armed for this state; read off the state mutex on the cached script path.
 		bool m_PreviewReferencesDropped = false; //!< Whether this state's window references are dropped and it only waits for the rollback.
@@ -508,6 +565,7 @@ namespace RTE {
 
 		/// Makes the next table write in any state mark itself for the checkpoint.
 		void ArmCheckpointWriteTrap();
+		static thread_local FrozenCaptureStats* s_FrozenCaptureStats; //!< Where the frozen captures of one world capture add their cost.
 
 		/// Tables born in the master state so far. The archive names its tables by this sequence.
 		uint64_t GetTableBirthCount() const;

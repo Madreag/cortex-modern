@@ -8,6 +8,7 @@
 #include "MOPixel.h"
 #include "Deployment.h"
 #include "Reader.h"
+#include "Timer.h"
 
 #include <iomanip>
 #include <fstream>
@@ -28,7 +29,7 @@ std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe
 }
 
 namespace {
-	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property };
+	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime };
 	template<class T> T ReadCaptureValue(std::string_view values, size_t& cursor) {
 		if (sizeof(T) > values.size() - cursor) throw std::logic_error("truncated owned checkpoint values");
 		T value;
@@ -71,6 +72,8 @@ struct CheckpointText::Data {
 	std::function<std::string()> produce;
 	std::string identity;
 	size_t ownedBytes = 0;
+	bool usesSimTime = false;
+	int64_t simTimeTicks = 0;
 	mutable std::once_flag ready;
 	mutable std::atomic<bool> formatted{false};
 	mutable std::string text;
@@ -117,6 +120,47 @@ CheckpointText CheckpointText::Base64(bool url) const {
 	CheckpointBuffer buffer;
 	buffer.Base64(*this, url);
 	return buffer.Finish();
+}
+
+CheckpointText CheckpointText::BindSimTime(int64_t ticks) const {
+	if (!m_Data || !m_Data->usesSimTime) return *this;
+	// The worker binds timer paths while timeless branches keep their published text.
+	return Deferred([source = *this, ticks] { return source.AtSimTime(ticks).Text(); }, OwnedBytes());
+}
+
+CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
+	if (!m_Data || !m_Data->usesSimTime) return *this;
+	struct Frame { const Data* source; std::shared_ptr<Data> bound; size_t next = 0; };
+	std::unordered_map<const Data*, std::shared_ptr<Data>> bound;
+	std::vector<Frame> pending;
+	const auto copy = [&](const Data* source) {
+		auto node = std::make_shared<Data>();
+		node->values = source->values;
+		node->children.reserve(source->children.size());
+		node->ownedBytes = source->ownedBytes;
+		node->simTimeTicks = ticks;
+		bound.emplace(source, node);
+		pending.push_back({source, node});
+		return node;
+	};
+	const auto root = copy(m_Data.get());
+	while (!pending.empty()) {
+		Frame& frame = pending.back();
+		if (frame.next == frame.source->children.size()) { pending.pop_back(); continue; }
+		const auto& child = frame.source->children[frame.next++];
+		if (!child.m_Data || !child.m_Data->usesSimTime) {
+			frame.bound->children.push_back(child);
+			continue;
+		}
+		const auto found = bound.find(child.m_Data.get());
+		if (found != bound.end()) {
+			frame.bound->children.emplace_back(CheckpointText(found->second));
+			continue;
+		}
+		const auto parent = frame.bound;
+		parent->children.emplace_back(CheckpointText(copy(child.m_Data.get())));
+	}
+	return CheckpointText(root);
 }
 
 size_t CheckpointText::OwnedBytes() const { return m_Data ? m_Data->ownedBytes : 0; }
@@ -191,6 +235,8 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 			value->values = frame.current->values;
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
+			value->usesSimTime = frame.current->usesSimTime;
+			value->simTimeTicks = frame.current->simTimeTicks;
 			for (size_t index = 0; index < count; ++index) {
 				const Data::Pair child{frame.current->children[index].m_Data.get(), frame.previous->children[index].m_Data.get()};
 				value->children[index] = CheckpointText(results.at(child).value);
@@ -207,6 +253,13 @@ const std::string& CheckpointText::Text() const {
 	if (!m_Data) return empty;
 	const auto root = m_Data;
 	if (root->formatted.load(std::memory_order_acquire)) return root->text;
+	if (root->usesSimTime) {
+		std::call_once(root->ready, [this, root] {
+			root->text = AtSimTime(root->simTimeTicks).Text();
+			root->formatted.store(true, std::memory_order_release);
+		});
+		return root->text;
+	}
 	struct Frame { const Data* node; size_t next = 0; };
 	std::vector<Frame> pending{{root.get()}};
 	while (!pending.empty()) {
@@ -244,6 +297,12 @@ const std::string& CheckpointText::Text() const {
 						break;
 					case CaptureValue::Float: AppendCaptureNumber(text, ReadCaptureValue<float>(values, cursor)); break;
 					case CaptureValue::Double: AppendCaptureNumber(text, ReadCaptureValue<double>(values, cursor)); break;
+					case CaptureValue::ElapsedSimTime: {
+						const int64_t startTicks = ReadCaptureValue<int64_t>(values, cursor);
+						const double ticksPerMS = ReadCaptureValue<double>(values, cursor);
+						AppendCaptureNumber(text, static_cast<double>(node->simTimeTicks - startTicks) / ticksPerMS);
+						break;
+					}
 					case CaptureValue::String: {
 						const auto string = ReadCaptureString(values, cursor);
 						AppendCaptureNumber(text, string.size()); text.push_back(' '); text += string; text.push_back(' ');
@@ -290,6 +349,11 @@ void CheckpointBuffer::Integer(int64_t value, bool space) { Copy(space ? Capture
 void CheckpointBuffer::Unsigned(uint64_t value, bool space) { Copy(space ? CaptureValue::SpacedUnsigned : CaptureValue::Unsigned); Copy(value); }
 void CheckpointBuffer::Real(float value) { Copy(CaptureValue::Float); Copy(value); }
 void CheckpointBuffer::Real(double value) { Copy(CaptureValue::Double); Copy(value); }
+void CheckpointBuffer::ElapsedSimTime(int64_t startTicks, double ticksPerMS) {
+	Copy(CaptureValue::ElapsedSimTime); Copy(startTicks); Copy(ticksPerMS);
+	m_UsesSimTime = true;
+	m_SimTimeTicks = g_TimerMan.GetSimTickCount();
+}
 void CheckpointBuffer::String(std::string_view value) { Copy(CaptureValue::String); Copy(static_cast<uint64_t>(value.size())); m_Values.append(value); }
 void CheckpointBuffer::Child(const CheckpointText& value, bool sized) { Copy(sized ? CaptureValue::SizedChild : CaptureValue::Child); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
 void CheckpointBuffer::Base64(const CheckpointText& value, bool url) { Copy(url ? CaptureValue::UrlBase64 : CaptureValue::Base64); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
@@ -302,7 +366,15 @@ CheckpointText CheckpointBuffer::Finish() {
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);
 	data->ownedBytes = data->values.size();
-	for (const auto& child: data->children) data->ownedBytes += child.OwnedBytes();
+	data->usesSimTime = m_UsesSimTime;
+	data->simTimeTicks = m_SimTimeTicks;
+	for (const auto& child: data->children) {
+		data->ownedBytes += child.OwnedBytes();
+		if (!data->usesSimTime && child.m_Data && child.m_Data->usesSimTime) {
+			data->usesSimTime = true;
+			data->simTimeTicks = child.m_Data->simTimeTicks;
+		}
+	}
 	return CheckpointText(std::move(data));
 }
 
@@ -410,6 +482,11 @@ void Writer::Append(const CheckpointText& text) {
 	if (m_Capture) m_Capture->Child(text); else *m_Stream << text.Text();
 }
 
+void Writer::ElapsedSimTime(const Timer& timer) {
+	if (m_Capture) m_Capture->ElapsedSimTime(timer.GetStartSimTimeMS(), static_cast<double>(g_TimerMan.GetTicksPerSecond()) * 0.001);
+	else *this << timer.GetElapsedSimTimeMS();
+}
+
 void Writer::Clear() {
 	m_Stream = nullptr;
 	m_FilePath.clear();
@@ -470,8 +547,10 @@ void Writer::NewLine(bool toIndent, int lineCount) const {
 
 bool RTE::RunOwnedCheckpointSelfTest() {
 	bool passed = true;
-	const auto check = [&passed](bool result, const char* name) {
-		std::cout << "[script-graph-selftest] " << (result ? "PASS" : "FAIL") << " " << name << std::endl;
+	const auto check = [&passed](bool result, const char* name, const std::string& detail = {}) {
+		std::cout << "[script-graph-selftest] " << (result ? "PASS" : "FAIL") << " " << name;
+		if (!result && !detail.empty()) std::cout << " " << detail;
+		std::cout << std::endl;
 		passed = result && passed;
 	};
 	try {
@@ -529,6 +608,80 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 		      "owned_checkpoint_cache_keeps_the_first_reach_identity_of_nested_writers");
 
 		{
+			struct RestoreClock {
+				long long count = g_TimerMan.GetSimUpdateCount(), ticks = g_TimerMan.GetSimTickCount();
+				~RestoreClock() { g_TimerMan.RestoreSimTickAfterPreview(count, ticks); }
+			} restoreClock;
+			constexpr int64_t firstTicks = 999960, secondTicks = 1999920;
+			Timer past, future;
+			past.SetStartSimTimeTicks(-1234567890123LL);
+			future.SetStartSimTimeTicks(1500001);
+			const auto saveTimers = [&](Writer& writer) {
+				writer.NewPropertyWithValue("PastStart", past.GetStartSimTimeMS());
+				writer.NewProperty("PastElapsed"); writer.ElapsedSimTime(past);
+				writer.NewPropertyWithValue("FutureStart", future.GetStartSimTimeMS());
+				writer.NewProperty("FutureElapsed"); writer.ElapsedSimTime(future);
+			};
+			const auto synchronous = [&] {
+				auto stream = std::make_unique<std::ostringstream>();
+				auto* output = stream.get();
+				Writer writer(std::move(stream));
+				writer << "timeless|";
+				saveTimers(writer);
+				return output->str();
+			};
+			auto timelessCalls = std::make_shared<std::atomic<int>>(0);
+			const auto timeless = CheckpointText::Deferred([timelessCalls] { ++*timelessCalls; return std::string("timeless|"); });
+			const auto capture = [&] {
+				CheckpointBuffer buffer;
+				buffer.Child(timeless);
+				buffer.Child(Writer::Capture(saveTimers));
+				return buffer.Finish();
+			};
+			CheckpointCache timerCache;
+			timerCache.Begin();
+			g_TimerMan.RestoreSimTickAfterPreview(60, firstTicks);
+			const auto first = timerCache.Remember(&past, 0, capture());
+			const auto firstImage = first.BindSimTime(firstTicks);
+			const auto firstReference = synchronous();
+			const bool signedElapsed = future.GetElapsedSimTimeMS() < 0;
+			timerCache.Begin();
+			g_TimerMan.RestoreSimTickAfterPreview(120, secondTicks);
+			const auto fresh = capture();
+			const auto second = timerCache.Remember(&past, 0, fresh);
+			const auto secondImage = second.BindSimTime(secondTicks);
+			const auto secondReference = synchronous();
+			check(first.SameValues(fresh) && timerCache.Reused() == 1 && timelessCalls->load() == 0,
+			      "owned_checkpoint_caches_timer_values_without_formatting_or_binding",
+			      "same_values=" + std::to_string(first.SameValues(fresh)) + " reused=" + std::to_string(timerCache.Reused()) +
+			          " timeless_calls=" + std::to_string(timelessCalls->load()));
+			auto firstText = std::async(std::launch::async, [firstImage] { return firstImage.Text(); });
+			auto secondText = std::async(std::launch::async, [secondImage] { return secondImage.Text(); });
+			const std::string firstBound = firstText.get();
+			const std::string secondBound = secondText.get();
+			check(firstBound == firstReference && secondBound == secondReference && firstReference != secondReference &&
+			          past.GetStartSimTimeMS() < 0 && signedElapsed && future.GetElapsedSimTimeMS() > 0,
+			      "owned_checkpoint_binds_signed_timers_to_each_image_tick",
+			      "first_bound=\"" + firstBound + "\" first_reference=\"" + firstReference + "\" second_bound=\"" + secondBound +
+			          "\" second_reference=\"" + secondReference + "\" start_ms=" + std::to_string(past.GetStartSimTimeMS()) +
+			          " signed_elapsed=" + std::to_string(signedElapsed) + " future_ms=" + std::to_string(future.GetElapsedSimTimeMS()));
+			check(firstImage.Text() == firstReference && first.Text() == firstReference && fresh.Text() == secondReference && timelessCalls->load() == 1,
+			      "owned_checkpoint_timer_images_preserve_prior_text_and_timeless_sharing",
+			      "first_image=\"" + firstImage.Text() + "\" first=\"" + first.Text() + "\" first_reference=\"" + firstReference +
+			          "\" fresh=\"" + fresh.Text() + "\" second_reference=\"" + secondReference + "\" timeless_calls=" +
+			          std::to_string(timelessCalls->load()));
+			CheckpointBuffer prior; prior.Raw("prior|"); prior.Child(first);
+			CheckpointBuffer current; current.Raw("current|"); current.Child(fresh);
+			const auto reusedTimers = current.Finish().ReuseChildren(prior.Finish());
+			const std::string reusedText = reusedTimers.BindSimTime(secondTicks).Text();
+			const std::string encodedText = first.Base64().BindSimTime(secondTicks).Text();
+			check(reusedText == "current|" + secondReference && encodedText == base64_encode(secondReference, true),
+			      "owned_checkpoint_binds_reused_and_encoded_timer_children",
+			      "reused=\"" + reusedText + "\" expected=\"current|" + secondReference + "\" encoded=\"" + encodedText +
+			          "\" expected_encoded=\"" + base64_encode(secondReference, true) + "\"");
+		}
+
+		{
 			CheckpointCache sceneCache;
 			CheckpointWriter::CacheScope cacheScope(&sceneCache);
 			const auto capture = [](const SceneObject& object) {
@@ -548,7 +701,9 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			pixel.AdoptPersistedUniqueID();
 			pixel.SetPos(Vector(20, 0));
 			const auto restored = capture(pixel);
-			check(pixel.GetUniqueID() == identity && pixel.CheckpointWriteGeneration() == stamp &&
+			std::cout << "[owned-checkpoint] restored_identity uid_kept=" << (pixel.GetUniqueID() == identity) << " generation_moved=" << (pixel.CheckpointWriteGeneration() != stamp)
+			          << " unchanged_same=" << before.SameValues(unchanged) << " restored_same=" << before.SameValues(restored) << " text_differs=" << (before.Text() != restored.Text()) << std::endl;
+			check(pixel.GetUniqueID() == identity && pixel.CheckpointWriteGeneration() != stamp &&
 			          before.SameValues(unchanged) && !before.SameValues(restored) && before.Text() != restored.Text(),
 			      "owned_checkpoint_does_not_reuse_a_restored_identity_at_the_same_address");
 

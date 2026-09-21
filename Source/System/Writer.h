@@ -71,6 +71,7 @@ namespace RTE {
 	};
 
 	struct BitmapSnapshot;
+	class Timer;
 	bool RunOwnedCheckpointSelfTest();
 
 	/// Owned checkpoint values whose text is produced by the archive worker.
@@ -83,11 +84,13 @@ namespace RTE {
 		bool SameValues(const CheckpointText& other) const;
 		CheckpointText ReuseChildren(const CheckpointText& previous) const;
 		CheckpointText Base64(bool url = true) const;
+		CheckpointText BindSimTime(int64_t ticks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
 	private:
 		struct Data;
 		std::shared_ptr<Data> m_Data;
 		explicit CheckpointText(std::shared_ptr<Data> data) : m_Data(std::move(data)) {}
+		CheckpointText AtSimTime(int64_t ticks) const;
 		friend class CheckpointBuffer;
 	};
 
@@ -99,6 +102,7 @@ namespace RTE {
 		void Unsigned(uint64_t value, bool space = false);
 		void Real(float value);
 		void Real(double value);
+		void ElapsedSimTime(int64_t startTicks, double ticksPerMS);
 		void String(std::string_view value);
 		void Child(const CheckpointText& value, bool sized = false);
 		void Base64(const CheckpointText& value, bool url);
@@ -109,6 +113,8 @@ namespace RTE {
 	private:
 		std::string m_Values;
 		std::vector<CheckpointText> m_Children;
+		bool m_UsesSimTime = false;
+		int64_t m_SimTimeTicks = 0;
 		template<class T> void Copy(const T& value) {
 			m_Values.append(reinterpret_cast<const char*>(&value), sizeof(value));
 		}
@@ -203,6 +209,7 @@ namespace RTE {
 		static CheckpointText Capture(const std::function<void(Writer&)>& visit, int indent = 0);
 		bool IsCapturing() const { return m_Capture != nullptr; }
 		void Append(const CheckpointText& text);
+		void ElapsedSimTime(const Timer& timer);
 		struct SaveOverrides {
 			struct Identity { std::string name; int module = -1; bool original = false; };
 			std::unordered_map<const void*, Identity> identities;

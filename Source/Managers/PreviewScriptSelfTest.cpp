@@ -745,15 +745,20 @@ if not (jit and jit.status()) then
   return
 end
 local starts, stops, aborts, lastTr, lastWhy = 0, 0, 0, 0, ''
+-- The penalty is applied to the bytecode the aborted trace STARTED at, so an abort belongs to the
+-- start before it and only starts at that same bytecode measure whether the penalty took.
+local startFunc, startPc, abortFunc, abortPc
 local function ev(what, tr, func, pc, err)
-  if what == 'start' then starts = starts + 1; lastTr = tr
+  if what == 'start' then starts = starts + 1; lastTr = tr; startFunc, startPc = func, pc
   elseif what == 'stop' then stops = stops + 1
-  elseif what == 'abort' then aborts = aborts + 1; lastTr = tr; lastWhy = tostring(err)
+  elseif what == 'abort' then aborts = aborts + 1; lastTr = tr; lastWhy = tostring(err); abortFunc, abortPc = startFunc, startPc
   end
 end
-local after = 0
-local function ev2(what)
-  if what == 'start' then after = after + 1 end
+local after, elsewhere = 0, 0
+local function ev2(what, tr, func, pc)
+  if what == 'start' then
+    if func == abortFunc and pc == abortPc then after = after + 1 else elsewhere = elsewhere + 1 end
+  end
 end
 local function boom()
   local z = nil
@@ -779,7 +784,11 @@ local ok, err = pcall(function()
   pcall(body)
   jit.attach(ev2)
   assert(aborts > 0 and lastWhy ~= '', 'no TRACE abort event aborts='..tostring(aborts)..' why='..tostring(lastWhy)..' starts='..tostring(starts)..' stops='..tostring(stops))
-  assert(after == 0, 'bytecode still starting after repeats after='..tostring(after)..' starts='..tostring(starts))
+  -- An abort at least doubles the bytecode's hot count from PENALTY_MIN (72), so the 2 x 128 loop
+  -- iterations left can pay for at most two more starts there; how many exactly is the penalty's
+  -- random bump, which is speed and not state, so the row takes the bound and not a fixed count.
+  assert(after <= 2, 'the aborted bytecode was not penalised after='..tostring(after)..' elsewhere='..tostring(elsewhere)..' starts='..tostring(starts))
+  assert(starts <= 40, 'the aborting loop started a trace on every repeat starts='..tostring(starts)..' aborts='..tostring(aborts))
 end)
 pcall(function() jit.attach(ev) end)
 pcall(function() jit.attach(ev2) end)

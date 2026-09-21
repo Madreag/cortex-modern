@@ -152,7 +152,8 @@ namespace RTE {
 	public:
 		static CheckpointGraphIndex& Get();
 
-		void BeginWalk(bool full = true);
+		/// A world walk covers every state and retires the roots of states it no longer sees; a walk of one state leaves the others' entries and dirt in place.
+		void BeginWalk(bool full = true, bool world = true);
 		void BeginRoot(uint64_t root, const void* state = nullptr, std::string part = {});
 		void ReuseRoot(uint64_t root, const void* state, const std::string& part);
 		void RestartStateWalk(const void* state);
@@ -203,6 +204,7 @@ namespace RTE {
 		bool m_UnknownTable = false;
 		bool m_Walk = false;
 		bool m_FullWalk = true;
+		bool m_WorldWalk = true;
 		int m_WalkDepth = 0;
 		size_t m_RootsReused = 0;
 		size_t m_RootsRewritten = 0;
@@ -233,6 +235,15 @@ namespace RTE {
 		~LuaCheckpointBarrierPause();
 		LuaCheckpointBarrierPause(const LuaCheckpointBarrierPause&) = delete;
 		LuaCheckpointBarrierPause& operator=(const LuaCheckpointBarrierPause&) = delete;
+	};
+
+	/// Keeps a VM that holds no gameplay state, the checkpoint worker's, out of the barrier's counts.
+	class LuaCheckpointBarrierIgnore {
+	public:
+		LuaCheckpointBarrierIgnore();
+		~LuaCheckpointBarrierIgnore();
+		LuaCheckpointBarrierIgnore(const LuaCheckpointBarrierIgnore&) = delete;
+		LuaCheckpointBarrierIgnore& operator=(const LuaCheckpointBarrierIgnore&) = delete;
 	};
 
 	bool RunCheckpointImageSelfTest();

@@ -176,6 +176,10 @@ namespace RTE {
 		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
 		bool RunCheckpointCaptureSelfTest(uint64_t tick);
+		/// Waits for every queued checkpoint and reports what the worker refused; whether they all completed.
+		bool WaitForAutosaveVerdict();
+		/// Reports on the simulation thread the refusals the checkpoint worker found off it.
+		void ReportDeferredSaveRefusals();
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
 		/// The last automatic capture this process published; empty when none has.
@@ -183,6 +187,9 @@ namespace RTE {
 		uint64_t LastAutosaveTick() const { return m_LastAutosaveTick; }
 		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
 		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
+		/// What the last capture did to the sim's counters while it ran; every field is zero when the serializers are pure.
+		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int cursorMoves = 0; int soundCursorMoves = 0; };
+		CaptureEffects LastCaptureEffects() const { return m_LastCaptureEffects; }
 		/// One finished autosave archive, as the writer thread left it: the bytes it wrote, their
 		/// digest and the buffer itself. A capture that is still being zipped is not one of these.
 		struct CompletedAutosave {
@@ -193,6 +200,10 @@ namespace RTE {
 			std::string digest;
 			std::shared_ptr<const std::vector<uint8_t>> archive;
 		};
+		/// What an automatic capture's writer thread decided, in the order the verdicts landed. The
+		/// simulation thread queued the capture a tick or more earlier and takes the verdict here.
+		struct AutosaveVerdict { uint64_t tick = 0; bool archived = false; };
+		std::optional<AutosaveVerdict> TakeAutosaveVerdict();
 		/// The newest archive the writer thread has finished; empty before the first one lands.
 		std::optional<CompletedAutosave> LastCompletedAutosave() const;
 		/// Writer thread: reads the archive it just wrote, hashes it and publishes the entry above.
@@ -250,7 +261,7 @@ namespace RTE {
 
 		/// Waits for the task that saves the game to complete.
 		/// @return Whether the save completed successfully, or no save was pending.
-		bool WaitForSaveGameTask() const;
+		bool WaitForSaveGameTask();
 
 		/// Returns whether a save is currently in progress.
 		/// @return Whether or not a save is currently in progress.
@@ -413,12 +424,18 @@ namespace RTE {
 		uint64_t m_LastAutosaveTick = 0;
 		size_t m_LastAutosaveBytes = 0;
 		double m_LastAutosaveCaptureMs = 0.0;
+		CaptureEffects m_LastCaptureEffects;
 		mutable std::mutex m_CompletedAutosaveMutex; //!< The writer thread publishes through it.
 		std::optional<CompletedAutosave> m_CompletedAutosave;
 		uint64_t m_CompletedAutosaveSerial = 0;
 		std::function<std::string(const std::vector<uint8_t>&)> m_AutosaveDigest;
 		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
+		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
+		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
+		std::deque<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
+		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
+		void NoteAutosaveVerdict(uint64_t tick, bool archived);
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;

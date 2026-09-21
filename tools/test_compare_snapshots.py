@@ -293,6 +293,30 @@ class GraphIdentityTests(unittest.TestCase):
     def compare(self, first, second):
         return checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
 
+    def test_cross_process_compare_masks_only_the_timer_real_anchor(self):
+        # A Timer rides the graph as m<StartSimTime,SimTimeLimit,StartRealTime,RealTimeLimit>; two processes never share the real anchor.
+        def timer_graph(token):
+            return birth_graph("SG6", (table(1, ((string("timer"), "#2;"),)), "U2;" + token + "Iz;"), roots=(("1", "#1;"),), serial=3)
+        base = timer_graph("m100,-1,3229022,-1;")
+        real_anchor = timer_graph("m100,-1,3229192,-1;")
+        compare = lambda first, second, cross: checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), cross_process=cross)
+        self.assertEqual(compare(base, real_anchor, True)["matched_nodes"], 2)
+        for other in (timer_graph("m101,-1,3229022,-1;"), timer_graph("m100,20,3229022,-1;"), timer_graph("m100,-1,3229022,500;")):
+            with self.assertRaises(checker.GraphMismatch):
+                compare(base, other, True)
+        # One process, one clock: the anchor is a value like any other.
+        with self.assertRaises(checker.GraphMismatch):
+            compare(base, real_anchor, False)
+
+    def test_sg6_scratch_band_ids_parse_beside_the_older_horizon_ids(self):
+        band = checker.SCRATCH_BAND
+        scratch = birth_graph("SG6", (table(1, ((string("scratch"), f"#{band + 1};"),)), table(band + 1, ())), roots=(("1", "#1;"),), serial=1)
+        self.assertEqual(self.compare(scratch, scratch)["matched_nodes"], 2)
+        older = birth_graph("SG6", (table(1, ((string("scratch"), "#2;"),)), table(2, ())), roots=(("1", "#1;"),), serial=2)
+        self.assertEqual(self.compare(older, older)["matched_nodes"], 2)
+        with self.assertRaises(ValueError):
+            checker.parse_graph(birth_graph("SG6", (table(1, ((string("scratch"), f"#{band + 3};"),)), table(band + 3, ())), roots=(("1", "#1;"),), serial=1))
+
     def test_sg6_engine_patch_carries_its_pairs_inline(self):
         node = table(1, ((string("k"), "n7;"),))
         data = birth_graph("SG6", (node,), roots=(("1", "#1;"),),

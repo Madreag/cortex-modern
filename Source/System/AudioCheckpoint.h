@@ -250,7 +250,12 @@ struct Voice {
 		// The archived cursor is the sim-time position, never the mixer's.
 		voice.position = simPosition;
 		if (!channel) return voice;
-		Require(channel->getFrequency(&voice.frequency)); Require(channel->getPriority(&voice.priority));
+		// The mixer ends or steals a channel on its own thread and the END callback lands only with the next
+		// update, so in between a handle the bookkeeping still holds answers nothing. What the voice is comes
+		// from the bookkeeping, which the caller lays over these fields, so the capture reads no further here.
+		const FMOD_RESULT probe = channel->getFrequency(&voice.frequency);
+		if (probe == FMOD_ERR_INVALID_HANDLE || probe == FMOD_ERR_CHANNEL_STOLEN) return voice;
+		Require(probe); Require(channel->getPriority(&voice.priority));
 		Require(channel->getLoopCount(&voice.loops)); Require(channel->getLoopPoints(&voice.loopStart, FMOD_TIMEUNIT_PCM, &voice.loopEnd, FMOD_TIMEUNIT_PCM));
 		FMOD_MODE mode; Require(channel->getMode(&mode)); voice.control = Control::Capture(channel, (mode & FMOD_3D) != 0);
 		return voice;

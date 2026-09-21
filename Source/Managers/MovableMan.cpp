@@ -2349,7 +2349,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	// The stash only has to outlive the candidate. Held past that it keeps unreachable script
 	// objects alive into the next capture, which then names sound owners no restore can produce.
 	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
-		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).CallScriptGraph("releaseObjects");
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
@@ -2360,22 +2360,65 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
-bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const {
+bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
+	LuaScriptGraphNativeCaptureScope nativeCapture;
 	struct PathCapture {
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
 	} pathCapture;
-	graphs.clear();
-	const auto capture = [&](LuaStateWrapper& state) {
-		CheckpointText text;
-		const bool complete = state.CaptureScriptGraph(text, problems);
-		graphs.push_back(std::move(text));
+	auto& states = g_LuaMan.GetThreadedScriptStates();
+	const auto captureAll = [&](bool frozen, std::vector<std::string>& into) {
+		graphs.clear();
+		const auto capture = [&](LuaStateWrapper& state) {
+			CheckpointText text;
+			const bool complete = state.CaptureScriptGraph(text, into, frozen);
+			graphs.push_back(std::move(text));
+			return complete;
+		};
+		// The live walk collects every state's refusals; a frozen capture stops at the first state it cannot freeze.
+		bool complete = capture(g_LuaMan.GetMasterScriptState());
+		for (LuaStateWrapper& state: states) {
+			if (frozen && !complete) break;
+			complete = capture(state) && complete;
+		}
 		return complete;
 	};
-	bool complete = capture(g_LuaMan.GetMasterScriptState());
-	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) complete = capture(state) && complete;
+	// Every state off a frozen image or none: the live walk's index and chunk caches stay coherent
+	// only while a walk covers every state, so one state that cannot freeze sends the whole capture that way.
+	bool frozen = g_LuaMan.GetMasterScriptState().FrozenCaptureAvailable();
+	for (const LuaStateWrapper& state: states) frozen = frozen && state.FrozenCaptureAvailable();
+	const auto started = std::chrono::steady_clock::now();
+	const auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); };
+	if (frozen) {
+		FrozenCaptureStats stats;
+		LuaMan::s_FrozenCaptureStats = &stats;
+		std::vector<std::string> frozenProblems;
+		const bool complete = captureAll(true, frozenProblems);
+		// Every state's page copy has landed before any state may run again. The capture path copies
+		// inline, so this is where a copy given a thread of its own would be waited for.
+		const auto waitStarted = std::chrono::steady_clock::now();
+		g_LuaMan.GetMasterScriptState().WaitFrozenCopy();
+		for (LuaStateWrapper& state: states) state.WaitFrozenCopy();
+		stats.copyUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStarted).count();
+		LuaMan::s_FrozenCaptureStats = nullptr;
+		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
+		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
+		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
+		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
+		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts
+		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs << std::endl;
+		if (complete) {
+			if (fromAnImage) *fromAnImage = true;
+			return true;
+		}
+		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;
+	}
+	CheckpointGraphIndex::Get().BeginWalk();
+	const bool complete = captureAll(false, problems);
+	CheckpointGraphIndex::Get().EndWalk();
+	std::cout << "[script-graph-capture] path=live states=" << 1 + states.size() << " us=" << elapsed() << std::endl;
 	return complete;
 }
 
@@ -2385,6 +2428,11 @@ bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::ve
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
 	} pathCapture;
+	// One walk over every state: a state's walk that ended alone would clear the others' dirty roots.
+	struct IndexWalk {
+		IndexWalk() { CheckpointGraphIndex::Get().BeginWalk(); }
+		~IndexWalk() { CheckpointGraphIndex::Get().EndWalk(); }
+	} indexWalk;
 	graphs.clear();
 	bool complete = true;
 	graphs.emplace_back();
@@ -2466,9 +2514,9 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 		if (prepared) {
 			state.RestoreScriptGraph(graphs[index], errors, reuseHeld);
 		}
-		state.RunScriptString("_ScriptGraph.clearPrepared()");
+		state.CallScriptGraph("clearPrepared");
 		if (reuseHeld) {
-			state.RunScriptString("_ScriptGraph.releaseObjects()");
+			state.CallScriptGraph("releaseObjects");
 		}
 	}
 	if (!errors.empty()) {
@@ -6333,7 +6381,7 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 	for (auto& roster: in.rosters) roster.clear();
 	in.sceneAreas.areas.clear(); in.sceneAreas.navigableAreas.clear();
 	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
-		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).CallScriptGraph("releaseObjects");
 	}
 	in.primitiveQueues.reset();
 	in.musicOwners.reset();
