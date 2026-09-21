@@ -2312,6 +2312,30 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestSignalPostInterruptsAnIdlePoll(std::string* error) {
+				struct HeldPoll final : NetDirectoryClient::Transport {
+					std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent;
+					bool post = false;
+					explicit HeldPoll(std::shared_ptr<std::vector<NetDirectoryClient::Request>> requests) : sent(std::move(requests)) {}
+					void Start(const NetDirectoryClient::Request& request) override { sent->push_back(request); post = request.method == "POST"; }
+					bool Finished() override { return post; }
+					NetDirectoryClient::Reply Take() override { return {200, R"({"ok":true,"seq":1})", ""}; }
+					void Abort() override {}
+				};
+				auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				NetDirectorySignalChannel channel;
+				channel.SetTransportFactory([sent] { return std::make_unique<HeldPoll>(sent); });
+				channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", kSignalSession);
+				channel.SetPollWait(2); channel.SetPolling(true); channel.Update(0);
+				if (!channel.Post("host", "rendezvous")) { *error = "the rendezvous was not queued"; return false; }
+				channel.Update(1);
+				if (sent->size() != 2 || sent->back().method != "POST") { *error = "an idle long poll blocked the outgoing rendezvous"; return false; }
+				channel.Update(2);
+				if (sent->size() != 3 || sent->back().method != "GET") { *error = "the signal poll did not resume after the rendezvous"; return false; }
+				std::cout << "[net-directory-selftest] PASS long_poll_preemption post_ms=1 polling_resumed_ms=2" << std::endl;
+				return true;
+			}
+
 			bool TestSignalLongPoll(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -2761,6 +2785,7 @@ namespace RTE {
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
+			if (!TestSignalPostInterruptsAnIdlePoll(&error)) return fail(error);
 			if (!TestSignal404Fails(&error)) return fail(error);
 			if (!TestSignal403Fails(&error)) return fail(error);
 			if (!TestSignalQueueFullRetries(&error)) return fail(error);
