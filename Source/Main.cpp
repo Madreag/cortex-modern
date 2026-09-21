@@ -6356,7 +6356,8 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					if (!unlimitedWorld && s_netMatchE2ETicks.Total() > tickCap) {
+					const uint64_t completedTicks = ScenarioRunner::IsPersistentWorld() ? simTick : s_netMatchE2ETicks.Total();
+					if (!unlimitedWorld && completedTicks > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
