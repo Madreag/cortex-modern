@@ -6015,6 +6015,24 @@ namespace RTE {
 			}
 		}
 		std::cout << "[net-match-selftest] PASS default joiner adopts world config and refuses a different lobby hash" << std::endl;
+		{
+			NetMatchService service;
+			NetLockstepConfig adopted;
+			adopted.matchConfig = NetMatchConfigUtil::MakeDefault(42);
+			adopted.matchConfig.peerCount = 3;
+			adopted.matchConfig.players.push_back({3, 2, false, "Returning player"});
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Runner->ConfigurePrivateJoin(adopted);
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			service.m_WorldCatchUp.active = service.m_WorldCatchUp.privateMatch = true;
+			service.m_WorldCatchUp.roundId = 77;
+			service.m_State = NetMatchServiceState::ReadyToLaunch;
+			std::string preset;
+			if (!service.ConsumeReadyToLaunch(preset) || service.m_CurrentMatchSummary.peers.size() != 3 || service.m_AutosaveIdentity.roundId != 77) {
+				*error = "the private bootstrap read its roster and round from an idle coordinator"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS private_bootstrap_identity peers=3 round=77" << std::endl;
+		}
 		return true;
 	}
 
@@ -12204,6 +12222,7 @@ namespace RTE {
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
+		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
@@ -12253,7 +12272,6 @@ namespace RTE {
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
-		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
 		NetMatchService keepaliveService;
 		if (!keepaliveService.RunSnapshotLoadKeepaliveSelfTest(&error)) return fail(error);
 		if (!twoIceRoundsError.empty()) return fail(twoIceRoundsError);
