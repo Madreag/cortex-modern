@@ -922,6 +922,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		} else {
 			composed += "\nLIVE";
 		}
+		if (!m_StatusProbeLine.empty()) composed += "\n" + m_StatusProbeLine;
 		return composed;
 	};
 	int width = std::max(1, std::min(c_StatusBoxWidth, maxPanelWidth));
@@ -933,13 +934,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	}
 	// Measured at the final width, so the height below is the height these rows really need.
 	m_NetStatus->Resize(width - 12, backbuffer->h);
+	const int column = std::max(0, width - 12);
+	const std::string drawn = WrapText(font, FitTokens(font, text, std::max(1, column)), std::max(1, column));
 	m_StatusWrap.source = text;
-	m_StatusWrap.wrapped = text;
-	m_StatusWrap.textWidth = width - 12;
+	m_StatusWrap.wrapped = drawn;
+	m_StatusWrap.textWidth = column;
 	m_StatusWrap.longestWord = LongestWordWidth(font, text);
 	m_StatusWrap.capWidth = maxPanelWidth - 12;
 	m_StatusWrap.active = true;
-	m_NetStatus->SetText(text);
+	m_NetStatus->SetText(drawn);
 	// The box grows for a state that needs more rows than the metric ones; those keep the stock height.
 	const int height = std::max(c_StatusBoxHeight, m_NetStatus->GetTextHeight() + 12);
 	// The editor's own top band and picker column are its own, so the box takes the bottom of the rest.
