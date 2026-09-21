@@ -198,6 +198,13 @@ namespace RTE {
 		}
 		PumpChatOutbox();
 		MaybeSendHeartbeats();
+		// A survivor can be in the lockstep hold pause while its own seat is completing an H4
+		// admission.  Keep the reconnect transaction's retransmit/deadline clock alive even though
+		// the ordinary session timeout is intentionally suspended during the pause.
+		if (m_ReconnectClient) {
+			m_ReconnectClient->Tick(m_NowMs);
+		}
+		FlushReconnectOutbound();
 	}
 
 	void NetSession::NotePeerTraffic(NetPeerId peerId, uint64_t nowMs) {

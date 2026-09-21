@@ -1042,7 +1042,7 @@ namespace RTE {
 			agreed.agreedStartRecord = true;
 			agreed.agreedFirstFrame = 37;
 			agreed.agreedEffectiveStartFrame = 39;
-			agreed.agreedDeadlineMs = 512;
+			agreed.agreedDeadlineMs = 0;
 			agreed.publishedPeerMask = 3;
 			agreed.heldPeerMask = 0;
 			agreed.peerEffectiveStartFrames[0] = 39;
@@ -1111,7 +1111,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x22, 0x00,
+				0x23, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1306,6 +1306,7 @@ namespace RTE {
 
 		bool VerifyHeldSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& hostFrame, NetLockstepCoordinator& survivor, const NetLockstepReadyFrame& survivorFrame, std::string* error);
 		bool VerifyReclaimedSeatControllerState(NetLockstepCoordinator& host, const NetLockstepReadyFrame& first, NetLockstepCoordinator& client, const NetLockstepReadyFrame& second, std::string* error);
+		bool DriveCoordinators(LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetLockstepCoordinator& host, NetLockstepCoordinator& client, const std::function<bool()>& done, std::string* error, uint64_t maxMs, uint64_t stepMs);
 		void EnsureSwitchTestManagers();
 
 		bool ExpectEncodeError(const NetLockstepPacket& packet, NetLockstepErrorCode expected, std::string* error) {
@@ -1590,6 +1591,43 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park" << std::endl;
+			return true;
+		}
+
+		bool TestCaptureParkCommitsCanonicalEmptyFrames(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A72, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A72, 0, NetTransportLane::ControlReliable);
+			hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 20;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49476, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			if (!host.QueueLocalInput(0, {}, {}, error) || !client.QueueLocalInput(0, {}, {}, error)) return false;
+			for (uint64_t now = 0; now < 200; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) { if (ready.frame != 0) { *error = "the pre-park frame advanced out of order"; return false; } (void)host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) { if (ready.frame != 0) { *error = "the client pre-park frame advanced out of order"; return false; } (void)client.FinishSimulationTick(ready.frame); }
+				if (host.GetStats().nextFrame > 0 && client.GetStats().nextFrame > 0) break;
+			}
+			if (host.GetStats().nextFrame != 1 || client.GetStats().nextFrame != 1) { *error = "the two peers did not commit the pre-park frame"; return false; }
+			host.BeginSynchronizedCapture(0); client.BeginSynchronizedCapture(0);
+			host.CompleteSynchronizedCapture(0, 700.0); client.CompleteSynchronizedCapture(0, 700.0);
+			std::vector<uint64_t> hostFrames, clientFrames;
+			for (uint64_t now = 200; now < 1200 && (host.GetStats().nextFrame <= 44 || client.GetStats().nextFrame <= 44); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) { hostFrames.push_back(ready.frame); if (!ready.localFrames.empty() || !ready.remoteFrames.empty()) { *error = "the capture park applied noncanonical input"; return false; } (void)host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) { clientFrames.push_back(ready.frame); if (!ready.localFrames.empty() || !ready.remoteFrames.empty()) { *error = "the client capture park applied noncanonical input"; return false; } (void)client.FinishSimulationTick(ready.frame); }
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+			}
+			if (host.GetStats().nextFrame <= 43 || client.GetStats().nextFrame <= 43 || hostFrames != clientFrames || hostFrames.size() < 40) {
+				*error = "the capture park gate froze or peers committed different empty frames: host_next=" + std::to_string(host.GetStats().nextFrame) +
+				         " client_next=" + std::to_string(client.GetStats().nextFrame) + " host_frames=" + std::to_string(hostFrames.size()) + " client_frames=" + std::to_string(clientFrames.size());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames through=" << (host.GetStats().nextFrame - 1) << std::endl;
 			return true;
 		}
 
@@ -6900,7 +6938,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x22, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x23, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -17210,8 +17248,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
-		    !TestSenderWaitsForHostAcceptance(&error) ||
-		    !TestSynchronizedCapturePark(&error) ||
+			!TestSenderWaitsForHostAcceptance(&error) ||
+			!TestSynchronizedCapturePark(&error) ||
+			!TestCaptureParkCommitsCanonicalEmptyFrames(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||

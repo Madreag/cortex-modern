@@ -7248,6 +7248,13 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		CloseNetReplayPlayback();
 		return false;
 	}
+	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed) {
+		if (!s_replayCoordinator.ApplyReplayAgreedStart(*agreed, &setupError)) {
+			if (error) *error = setupError;
+			CloseNetReplayPlayback();
+			return false;
+		}
+	}
 	ScenarioRunner::SetLockstepCoordinator(&s_replayCoordinator);
 
 	// Watch through the first human seat; per-peer view bindings are off-sim.

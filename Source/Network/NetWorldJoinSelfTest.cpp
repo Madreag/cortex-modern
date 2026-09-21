@@ -2375,8 +2375,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 34) {
-			return Fail("ordinary lockstep frame did not stamp version 34");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 35) {
+			return Fail("ordinary lockstep frame did not stamp version 35");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2385,7 +2385,7 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 34 and match config 6");
+			return Fail("ordinary identity did not stamp lockstep 35 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||

@@ -1956,6 +1956,10 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
 	}
 
+	uint64_t ScenarioRunner::GetLockstepEffectiveStartFrame() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetStats().effectiveStartFrame : 0;
+	}
+
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {
 		out.clear();
 		const uint64_t now = canonicalTick;
@@ -2515,6 +2519,16 @@ namespace RTE {
 		if (!s_ReplayWriter.Open(pending.path, pending.config, &pending.header, error)) {
 			return false;
 		}
+		if (s_LockstepCoordinator) {
+			if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed && !s_ReplayWriter.HasAgreedStart()) {
+				std::string startError;
+				if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
+					s_ReplayWriter.Close();
+					if (error) *error = startError;
+					return false;
+				}
+			}
+		}
 		s_WorldSegment = pending.header;
 		s_ReplayRecordClosed = false;
 		for (const HeldReplayFrame& held: pending.frames) {
@@ -2624,6 +2638,10 @@ namespace RTE {
 
 	uint64_t ScenarioRunner::GetLockstepReplayStartFrame() {
 		return s_ReplayReader.GetStartFrame();
+	}
+
+	const std::optional<NetLockstepStart>& ScenarioRunner::GetLockstepReplayAgreedStart() {
+		return s_ReplayReader.GetAgreedStart();
 	}
 
 	bool ScenarioRunner::IsLockstepReplayWorldSegment() {
@@ -2803,6 +2821,17 @@ namespace RTE {
 								                                        std::move(allObservations), std::move(allValueObservations)});
 							}
 						} else {
+							if (!s_ReplayWriter.HasAgreedStart() && s_LockstepCoordinator) {
+								if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed) {
+									std::string startError;
+									if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
+										std::cout << "[net-match] replay recording stopped: " << startError << std::endl;
+										s_ReplayWriter.Close();
+										outFrame = std::move(ready);
+										return true;
+									}
+								}
+							}
 							std::string writeError;
 							if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
 								std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;

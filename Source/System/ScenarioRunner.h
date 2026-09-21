@@ -410,6 +410,7 @@ namespace RTE {
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();
+		static const std::optional<NetLockstepStart>& GetLockstepReplayAgreedStart();
 		/// Whether the recording being played is a world segment, and the checkpoint it stands on.
 		static bool IsLockstepReplayWorldSegment();
 		static const NetWorldSegmentHeader& GetLockstepReplayWorldSegment();
@@ -455,6 +456,7 @@ namespace RTE {
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
+		static uint64_t GetLockstepEffectiveStartFrame();
 		static bool UsesBoundedLockstepWait();
 		static bool IsLockstepPeerGone(uint8_t peerId, uint64_t frame);
 		static void DiscardHeldLocalInputs();
