@@ -462,7 +462,7 @@ namespace RTE::MenuAutomation {
 					{"last", last.found ? Json{{"x", last.x}, {"y", last.y}, {"run", last.run}} : Json(nullptr)}}.dump();
 				return hits == 0;
 			}
-			observation = "unknown ghost_watch mode";
+			observation = Json{{"mode", mode}}.dump();
 			return false;
 		}
 		if (command == "assert_word_wrap") {
@@ -477,10 +477,13 @@ namespace RTE::MenuAutomation {
 				// The same helper and width rule the roster box runs, on a script-chosen text - a
 				// long token exercises the wrap without depending on match state.
 				const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
-				source = rest.substr(rest.find_first_not_of(' '));
+				const auto start = rest.find_first_not_of(' ');
+				source = start == std::string::npos ? std::string() : rest.substr(start);
 				int boxWidth = 0;
-				if (source.empty() || !panel->AutomationWrapLines(source, wrapped, boxWidth)) {
-					observation = "probe text missing or wrap unavailable";
+				const bool textMissing = source.empty();
+				const bool wrapUnavailable = !textMissing && !panel->AutomationWrapLines(source, wrapped, boxWidth);
+				if (textMissing || wrapUnavailable) {
+					observation = Json{{"text_missing", textMissing}, {"wrap_unavailable", wrapUnavailable}, {"source", source}}.dump();
 					return false;
 				}
 				textWidth = boxWidth - 12;
