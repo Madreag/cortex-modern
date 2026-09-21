@@ -14,8 +14,10 @@
 #include <atomic>
 #include <deque>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <vector>
 
 using namespace RTE;
@@ -703,6 +705,7 @@ namespace {
 
 	/// Builds a MUSIC-bus SoundContainer for one queue entry. Length is read from the loaded sound data, not the caller's simulation domain.
 	SoundContainer MakeCompatMusicContainer(const CompatMusicQueueEntry& entry) {
+		SoundSimulationScope presentation(1, 1, SoundExecutionDomain::Presentation);
 		SoundContainer container;
 		container.SetPresetName("V6CompatMusic");
 		container.SetBusRouting(SoundContainer::BusRouting::MUSIC);
@@ -868,8 +871,11 @@ bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
 	if (!std::filesystem::exists(fixture)) {
 		check("lua_fixture_present", false, fixture.string());
 	} else {
-		const int ran = g_LuaMan.GetMasterScriptState().RunScriptFile(fixture.generic_string(), true, false);
-		check("lua_fixture_ran", ran == 0, "status=" + std::to_string(ran));
+		std::ifstream in(fixture);
+		std::ostringstream body;
+		body << in.rdbuf();
+		const int ran = g_LuaMan.GetMasterScriptState().RunScriptString(body.str(), true);
+		check("lua_fixture_ran", ran == 0, "status=" + std::to_string(ran) + " path=" + fixture.string());
 	}
 
 	std::cout << "[mod-api-shims-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
