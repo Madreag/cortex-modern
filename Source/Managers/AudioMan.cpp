@@ -2713,8 +2713,9 @@ bool AudioMan::RunCheckpointSelfTest() {
 			AudioCheckpoint::Require(originalChannel->setPaused(true));
 		}
 		const auto reportArm = [&ok](const char* name, bool passed) { { std::ostringstream line; line << "[audio-checkpoint-selftest] " << (passed ? "PASS " : "FAIL ") << name; System::PrintDiagnosticLine(line.str()); } ok = ok && passed; };
+		std::unique_ptr<SoundContainer> held;
 		try {
-			std::unique_ptr<SoundContainer> held(static_cast<SoundContainer*>(preset->Clone()));
+			held.reset(static_cast<SoundContainer*>(preset->Clone()));
 			held->SetPaused(true); held->SetImmobile(true); held->SetLoopSetting(0);
 			if (!held->Play()) throw std::runtime_error("held tail voice did not play");
 			const int heldId = *held->GetPlayingChannels()->begin();
@@ -2761,7 +2762,12 @@ bool AudioMan::RunCheckpointSelfTest() {
 		} catch (const std::exception& error) {
 			{
 				std::ostringstream line;
-				line << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what();
+				size_t unbound = 0;
+				for (const auto& [identity, voice]: m_PlayingVoices) if (!voice.Channel()) ++unbound;
+				line << "[audio-checkpoint-selftest] FAIL held_voice_playing_is_stable_across_mixer_progress " << error.what()
+				     << " held_channels=" << (held ? held->GetPlayingChannels()->size() : 0) << " held_logical=" << (held ? held->GetSharedLogicalVoices().size() : 0)
+				     << " voices=" << m_PlayingVoices.size() << " unbound=" << unbound << " simulation=" << SoundSimulationScope::IsSimulation()
+				     << " domain=" << static_cast<int>(SoundSimulationScope::Domain()) << " suppressed=" << s_PlaybackSuppressed << " enabled=" << m_AudioEnabled;
 				System::PrintDiagnosticLine(line.str());
 			}
 			ok = false;
