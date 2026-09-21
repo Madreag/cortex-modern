@@ -285,18 +285,48 @@ def early_peer_report(run, peer, error):
     return report
 
 
+def unreduced_peer_report(run, peer, reason, evidence=None):
+    """An arm the reducer could not read at all is a failed pin naming why, never a dead matrix."""
+    run = Path(run)
+    try:
+        report = item9a_gates(run, peer)
+    except Exception as error:  # the arm has no clock either: pin that too
+        report = dict(peer=peer, pins={}, metrics={}, pass_check=False, measurement_complete=False,
+                      clock_unreadable=f'{type(error).__name__}: {error}')
+    report['pins']['item9a_reduction'] = pin(
+        None, 'the arm must reduce to measured frames', False, [evidence] if evidence else [], reason)
+    report['pass_check'] = False
+    report['measurement_complete'] = False
+    report['reduction_failure'] = reason
+    report.setdefault('raw_path', str(record_path(run / peer / 'feel/raw.jsonl')))
+    return report
+
+
 def reduce_or_fail(run, peer, baseline=None):
     try:
         return reduce_peer(run, peer, baseline)
     except EarlyDecision as error:
         print(f'{Path(run).name}/{peer}: {error.fail_line}', flush=True)
         return early_peer_report(run, peer, error)
+    except (ValueError, KeyError, IndexError, OSError) as error:
+        reason = f'{type(error).__name__}: {error}'
+        print(f'{Path(run).name}/{peer}: {reason}', flush=True)
+        return unreduced_peer_report(run, peer, reason, record_path(Path(run) / peer / 'feel/raw.jsonl'))
+
+
+def timing_peer(run, peer):
+    try:
+        return item9a_gates(run, peer)
+    except (ValueError, KeyError, IndexError, OSError) as error:
+        reason = f'{type(error).__name__}: {error}'
+        print(f'{Path(run).name}/{peer}: {reason}', flush=True)
+        return unreduced_peer_report(run, peer, reason)
 
 
 def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
-    peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    peers = {peer: timing_peer(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
@@ -526,6 +556,14 @@ def main(argv=None):
                    item9a_pass=False, gates_pass=False, gates_unverified=True, failure=error.fail_line,
                    evidence=str(error.path)))
         print(error.fail_line, flush=True)
+        return 1
+    except Exception as error:  # the matrix still owes its report: name the shape that broke it
+        import traceback
+        reason = f'{type(error).__name__}: {error}'
+        write_json(root / 'completion.json', dict(finished=stamp(), measurement_complete=False,
+                   item9a_pass=False, gates_pass=False, gates_unverified=True, failure=reason,
+                   traceback=traceback.format_exc().splitlines()[-6:]))
+        print(reason, flush=True)
         return 1
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)

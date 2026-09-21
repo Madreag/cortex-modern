@@ -318,5 +318,47 @@ class EarlyDecidedArmTest(unittest.TestCase):
             self.assertFalse(result['pass_check'])
 
 
+    def test_an_arm_with_no_measured_frames_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1200)
+            # A complete dump: the reducer gets past the window check and fails on the records.
+            (run / 'client_trace.json.simdump.txt').write_text(
+                ''.join('%d activity running' % tick + chr(10) for tick in range(1, 1201)), encoding='utf-8')
+            (run / 'client' / 'feel').mkdir(parents=True)
+            (run / 'client' / 'feel' / 'raw.jsonl').write_text(
+                json.dumps(dict(type='schema', version=1)) + '\n', encoding='utf-8')
+            result = feel_measure.reduce_or_fail(run, 'client')
+            pinned = result['pins']['item9a_reduction']
+            self.assertEqual(pinned['status'], 'MISS')
+            self.assertIn('no measured match frames or iterations', pinned['detail'])
+            self.assertIn('ValueError', result['reduction_failure'])
+            self.assertFalse(result['measurement_complete'])
+            self.assertFalse(result['pass_check'])
+
+    def test_an_arm_with_no_run_files_at_all_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder) / '200ms-loss5'
+            (run / 'host').mkdir(parents=True)
+            (run / 'manifest.json').write_text(json.dumps(dict(ticks=1200, launches_complete=False)), encoding='utf-8')
+            result = feel_measure.reduce_or_fail(run, 'host')
+            self.assertEqual(result['pins']['item9a_reduction']['status'], 'MISS')
+            self.assertFalse(result['measurement_complete'])
+
+    def test_a_missing_key_in_one_arm_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1200)
+            with patch.object(feel_measure, 'reduce_peer', side_effect=KeyError('auto_picks')):
+                result = feel_measure.reduce_or_fail(run, 'client')
+            self.assertEqual(result['pins']['item9a_reduction']['status'], 'MISS')
+            self.assertIn('auto_picks', result['reduction_failure'])
+            self.assertFalse(result['pass_check'])
+
+
 if __name__ == '__main__':
     unittest.main()
