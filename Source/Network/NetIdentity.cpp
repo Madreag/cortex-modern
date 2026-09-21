@@ -719,6 +719,16 @@ namespace RTE {
 		return std::nullopt;
 	}
 
+	std::string NetIdentity::LocalMatchRefusal(int threadedLuaStateCount) {
+		// Lua debugging puts every object script on the master state, and the master pass runs
+		// SyncedUpdate on all of them every tick instead of on request, so this runtime cannot stay in
+		// step with a normal peer. It is a single-player debugging mode; say so rather than desync.
+		if (threadedLuaStateCount <= 0) {
+			return "Lua debugging runs the game on the master script state only - turn EnableLuaDebugging off to host or join a match";
+		}
+		return {};
+	}
+
 	std::vector<NetModuleDigestEntry> NetIdentity::BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated) {
 		// A name with a tab or a 300-byte friendly name would fail the encode and cost the exchange
 		// entirely, so the text is cut to what the wire takes.
