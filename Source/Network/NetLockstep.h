@@ -1195,6 +1195,9 @@ namespace RTE {
 		void ApplyTiming(const NetLockstepTiming& timing);
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
+		uint64_t CaptureParkCapTicks() const;
+		void SendCaptureParkReport();
+		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t FutureTimingFrame() const;
@@ -1235,6 +1238,7 @@ namespace RTE {
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
+		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
@@ -1288,6 +1292,8 @@ namespace RTE {
 		double m_SynchronizedCaptureBudgetMs = 250.0;
 		uint64_t m_CaptureParkRevision = 0;
 		uint64_t m_CaptureParkDeadlineMs = 0;
+		uint64_t m_CaptureParkPublishedEndFrame = UINT64_MAX;
+		uint32_t m_PendingCaptureReportMs = 0;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		bool m_ApplyingDeferredParkTiming = false;

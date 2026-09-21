@@ -1600,6 +1600,9 @@ namespace RTE {
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A72, 0, NetTransportLane::ControlReliable);
 			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A72, 0, NetTransportLane::ControlReliable);
 			hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 20;
+			// The park travels as a timing decision, and a decision of round 0 never encodes: the row has to be
+			// in a real round or the host's window never reaches the client.
+			hostConfig.roundId = clientConfig.roundId = 0x9A72;
 			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
 			if (!StartCoordinatorPair(49476, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
