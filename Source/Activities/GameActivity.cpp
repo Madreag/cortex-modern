@@ -4913,6 +4913,13 @@ assert(_NetPrivate.RecoilOffset.Y == 41.25)
 			check("shared_objective_uses_above_head", !fixture->m_Objectives.empty() && fixture->m_Objectives.front().m_ScenePos == head,
 				fixture->m_Objectives.empty() ? "none" : std::to_string(fixture->m_Objectives.front().m_ScenePos.m_X),
 				std::to_string(head.m_X));
+			// The seat brain was handed to the world: leaving it live past the enclosing registry scope
+			// would let the scope roll back its registration while it is still a world member.
+			fixture->m_Brain[0] = nullptr;
+			if (Actor* removed = g_MovableMan.RemoveActor(actor)) {
+				removed->DestroyScriptState();
+				delete removed;
+			}
 		}
 		{
 			// Update under a live coordinator leaves the dump; DrawGUI arms a drawn ring; SP and MP dumps match.

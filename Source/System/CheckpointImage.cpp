@@ -48,8 +48,10 @@ namespace {
 	std::atomic<int> s_BarrierPaused{0};
 	std::atomic<std::thread::id> s_BarrierPauseOwner{};
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
+	thread_local int s_BarrierIgnored = 0;
 
 	void OnLuaTableWrite(void* table) {
+		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			// The capture's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
@@ -69,6 +71,7 @@ namespace {
 	// does, so it is counted and attributed the same way. The write generation moves too: a capture
 	// that reuses the whole Lua half keys on it.
 	void OnLuaValueWrite(void* value) {
+		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
 				return;
@@ -92,7 +95,7 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 	return index;
 }
 
-void CheckpointGraphIndex::BeginWalk(bool full) {
+void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
 	std::lock_guard lock(m_Mutex);
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
@@ -102,6 +105,7 @@ void CheckpointGraphIndex::BeginWalk(bool full) {
 	m_ReusedRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
+	m_WorldWalk = world;
 	m_RootsReused = 0;
 	m_RootsRewritten = 0;
 	m_Root = {};
@@ -161,42 +165,46 @@ void CheckpointGraphIndex::EndWalk() {
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
-	if (m_FullWalk) {
-		m_TableRoots = std::move(m_Walking);
-		m_ValueRoots = std::move(m_WalkingValues);
-		m_Roots = std::move(m_WalkingRoots);
-		m_DirtyRoots.clear();
-		m_UnknownTable = false;
-	} else {
-		// A partial walk keeps what the roots it skipped recorded, so their tables stay known. It
-		// has answered the unknown table too: the capture it ends rewrote every root it did not
-		// reuse, so leaving the flag set would disable the cache for the rest of the process.
-		m_UnknownTable = false;
-		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
-			std::erase_if(entry->second, [this](const Root& root) { return !m_ReusedRoots.contains(root); });
-			entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
-		}
-		for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
-			entry = !m_ReusedRoots.contains(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
-		}
-		for (const auto& [table, roots]: m_Walking) {
-			auto& kept = m_TableRoots[table];
-			for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
-		}
-		for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
-		m_Roots = std::move(m_ReusedRoots);
-		m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
-		m_DirtyRoots.clear();
+	// A walk answers for the states it covered: their rewritten roots leave the index, their reused
+	// ones stay. A world walk covered every state, so a root it never saw belongs to a state that is
+	// gone; a walk of one state leaves the other states' entries and their dirt in place.
+	std::unordered_set<const void*> walked;
+	for (const Root& root: m_WalkingRoots) walked.insert(root.state);
+	for (const Root& root: m_ReusedRoots) walked.insert(root.state);
+	for (const void* state: m_WalkStates) walked.insert(state);
+	const bool world = m_WorldWalk;
+	const auto covered = [&](const Root& root) { return world || walked.contains(root.state); };
+	const auto rewritten = [&](const Root& root) { return covered(root) && !m_ReusedRoots.contains(root); };
+	for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
+		std::erase_if(entry->second, rewritten);
+		entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
 	}
+	for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
+		entry = rewritten(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
+	}
+	std::erase_if(m_Roots, rewritten);
+	std::erase_if(m_DirtyRoots, covered);
+	for (const auto& [table, roots]: m_Walking) {
+		auto& kept = m_TableRoots[table];
+		for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
+	}
+	for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
+	m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
+	// The unknown table is answered once no state this walk skipped could still own it.
+	const bool skipped = !world && std::any_of(m_Roots.begin(), m_Roots.end(), [&walked](const Root& root) { return !walked.contains(root.state); });
+	if (!skipped) m_UnknownTable = false;
 	m_Walking.clear();
 	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
 	m_ReusedRoots.clear();
-	m_DirtyTables = 0;
-	m_DirtyValues = 0;
+	if (world) {
+		m_DirtyTables = 0;
+		m_DirtyValues = 0;
+	}
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
 	m_FullWalk = true;
+	m_WorldWalk = true;
 	m_Root = {};
 	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {}});
 }
@@ -519,6 +527,10 @@ RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
 	}
 }
 
+RTE::LuaCheckpointBarrierIgnore::LuaCheckpointBarrierIgnore() { ++s_BarrierIgnored; }
+
+RTE::LuaCheckpointBarrierIgnore::~LuaCheckpointBarrierIgnore() { --s_BarrierIgnored; }
+
 uint64_t RTE::LuaCheckpointPausedWrites() {
 	return s_PausedForeignWrites.load(std::memory_order_relaxed);
 }
@@ -553,7 +565,7 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 		writer.NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", image.placeObjects);
 		writer.NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", image.placeUnits);
 		writer.Append(image.scene);
-	});
+	}).BindSimTime(image.simTimeTicks);
 }
 
 CheckpointText RTE::AssembleCheckpointIndex(const CheckpointImage& image) {

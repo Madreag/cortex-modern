@@ -1829,7 +1829,8 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 
 		if (const HeldDevice* heldDeviceToSave = dynamic_cast<const HeldDevice*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("SpecialBehaviour_Activated", heldDeviceToSave->IsActivated());
-			writer.NewPropertyWithValue("SpecialBehaviour_ActivationTimerElapsedSimTimeMS", heldDeviceToSave->GetActivationTimer().GetElapsedSimTimeMS());
+			writer.NewProperty("SpecialBehaviour_ActivationTimerElapsedSimTimeMS");
+			writer.ElapsedSimTime(heldDeviceToSave->GetActivationTimer());
 			writer.NewPropertyWithValue("ActivationTimerStart", heldDeviceToSave->GetActivationTimer().GetStartSimTimeMS());
 		}
 

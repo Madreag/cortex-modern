@@ -433,6 +433,10 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
+		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
+		/// Takes every verdict the writer thread has finished since the last tick boundary.
+		void TakeAutosaveVerdicts();
 		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
@@ -989,6 +993,7 @@ namespace RTE {
 		friend bool TestWorldFreshFlagOpensNewRound(std::string* error);
 		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
+		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
@@ -1318,6 +1323,9 @@ namespace RTE {
 		NetWorldIdentity m_WorldIdentity;
 		NetWorldJoinHost m_WorldJoin;
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
+		// A capture the simulation queued and whose verdict the writer thread has not given yet.
+		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
+		std::vector<AwaitedAutosave> m_AwaitedAutosaves;
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.
