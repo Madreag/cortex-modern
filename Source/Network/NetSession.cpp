@@ -1727,8 +1727,15 @@ namespace RTE {
 		if (hello.controllerFrameEncodedSize != m_Config.localIdentity.controllerFrameEncodedSize) {
 			return MakeMismatch("controller_frame_encoded_size", NetRejectReason::ControllerFrameSizeMismatch, std::to_string(m_Config.localIdentity.controllerFrameEncodedSize), std::to_string(hello.controllerFrameEncodedSize), "ControllerFrame encoded size does not match");
 		}
-		if (hello.deterministicConfigHash != m_Config.localIdentity.deterministicConfigHash) {
-			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(m_Config.localIdentity.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
+		NetIdentityManifest expected = m_Config.localIdentity;
+		if (hello.luaStateCount != static_cast<uint16_t>(std::clamp(expected.deterministicConfig.numLuaStates, 0, 65535))) {
+			std::string applyError;
+			if (!NetIdentity::ApplyHostLuaStateCountToManifest(expected, hello.luaStateCount, &applyError)) {
+				return MakeMismatch("num_lua_states", NetRejectReason::DeterministicConfigMismatch, "valid host count", std::to_string(hello.luaStateCount), applyError);
+			}
+		}
+		if (hello.deterministicConfigHash != expected.deterministicConfigHash) {
+			return MakeMismatch("deterministic_config_hash", NetRejectReason::DeterministicConfigMismatch, HashText(expected.deterministicConfigHash), HashText(hello.deterministicConfigHash), "deterministic config hash does not match");
 		}
 		if (m_Config.rejectUserdataModules && hello.hasUserdataModules) {
 			return MakeMismatch("userdata_modules", NetRejectReason::UserdataModulesNotAllowed, "false", "true", "userdata modules are not allowed in network sessions");
@@ -1739,8 +1746,8 @@ namespace RTE {
 		if (hello.sessionRulesHash != m_Config.localIdentity.sessionRulesHash) {
 			return MakeMismatch("session_rules_hash", NetRejectReason::SessionRulesMismatch, HashText(m_Config.localIdentity.sessionRulesHash), HashText(hello.sessionRulesHash), "session rules hash does not match");
 		}
-		if (hello.sessionIdentityHash != m_Config.localIdentity.sessionIdentityHash) {
-			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(m_Config.localIdentity.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
+		if (hello.sessionIdentityHash != expected.sessionIdentityHash) {
+			return MakeMismatch("session_identity_hash", NetRejectReason::BuildMismatch, HashText(expected.sessionIdentityHash), HashText(hello.sessionIdentityHash), "session identity hash does not match");
 		}
 		return NoMismatch();
 	}
