@@ -68,6 +68,7 @@ extern "C" {
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <execution>
 #include <fstream>
 #include <functional>
@@ -4844,14 +4845,32 @@ static void ForgetActivitySlots(MovableObject* object) {
 
 void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
+	m_SyncedPassSkippedDeadEntries = 0;
+	// DeleteEntity frees an object where the script stands (LuaAdapters.cpp), so a SyncedUpdate can
+	// destroy an object this pass read before it started - its own included. The live registration set
+	// answers for the whole pass: a destructor unregisters, and a new registration waits in the pending
+	// set until the next LuaMan::Update, so nothing joins the set in between. The removal count tells
+	// the ordinary tick, where nothing died, from the one that has to look each object up.
+	const uint64_t unregistrationsAtSnapshot = LuaStateWrapper::RegisteredMOUnregistrationCount();
+	const auto stillRegistered = [unregistrationsAtSnapshot](LuaStateWrapper& state, MovableObject* mo) {
+		return LuaStateWrapper::RegisteredMOUnregistrationCount() == unregistrationsAtSnapshot || state.IsRegisteredMO(mo);
+	};
 	if (!globalMoidOrder) {
 		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 			g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
+				if (!stillRegistered(luaState, mo)) {
+					++m_SyncedPassSkippedDeadEntries;
+					continue;
+				}
 				// The request flag alone, as the threaded loop has always had it: the master pass owns
 				// the ValidMO rule, and a threaded object that asked for a SyncedUpdate still gets one.
 				if (mo->HasRequestedSyncedUpdate()) {
 					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+					if (!stillRegistered(luaState, mo)) {
+						++m_SyncedPassSkippedDeadEntries;
+						continue;
+					}
 					mo->ResetRequestedSyncedUpdateFlag();
 				}
 			}
@@ -4895,9 +4914,17 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 			currentState = cursor.state;
 		}
 		MovableObject* mo = next.entry.object;
-		if (mo->HasRequestedSyncedUpdate()) {
+		// Ordered on the identity read at snapshot time and reached only while the object is still
+		// registered: an earlier script in this same pass may have freed it, on any state.
+		if (!stillRegistered(*cursor.state, mo)) {
+			++m_SyncedPassSkippedDeadEntries;
+		} else if (mo->HasRequestedSyncedUpdate()) {
 			mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-			mo->ResetRequestedSyncedUpdateFlag();
+			if (stillRegistered(*cursor.state, mo)) {
+				mo->ResetRequestedSyncedUpdateFlag();
+			} else {
+				++m_SyncedPassSkippedDeadEntries;
+			}
 		}
 		++cursor.next;
 		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
@@ -4929,6 +4956,14 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	long long perStateUs = 0;
 	long long globalUs = 0;
 	std::array<std::string, 2> duplicateHashes;
+	std::array<std::string, 2> freedAcrossStatesHashes{};
+	std::array<std::string, 2> freedAcrossStatesExpected{};
+	std::array<long, 2> freedAcrossStatesSkipped{};
+	std::array<long, 2> freedAcrossStatesRan{};
+	std::array<long, 2> freedAcrossStatesPoisonHit{};
+	std::array<long, 2> freedAcrossStatesVictimID{};
+	bool freedAcrossStatesVictimRan = false;
+	bool freedAcrossStatesReady = true;
 	std::array<std::array<long, 2>, 2> duplicatePositions{};
 	std::array<std::array<long, 2>, 2> duplicateIDs{};
 	std::array<std::array<long, 2>, 2> duplicateMOIDs{};
@@ -5057,6 +5092,66 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			duplicateHashes[countIndex] = hashOrder({duplicatePositions[countIndex][0], duplicatePositions[countIndex][1]});
 			duplicateOrderLength[countIndex] = static_cast<long>(context.order.size());
 
+			// The Harvester shape: the first object of the pass frees another state's object, which the
+			// snapshot already holds and the merge reaches later. DeleteEntity frees where the script
+			// stands (LuaAdapters.cpp), so the pass must never touch that entry again.
+			{
+				void* victimPoison = nullptr;
+				const void* victimAddress = nullptr;
+				long victimID = 0;
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 8);
+				auto victim = std::make_unique<MOPixel>();
+				if (victim->Create() < 0) {
+					freedAcrossStatesReady = false;
+				} else {
+					m_ValidParticles.insert(victim.get());
+					m_AddedParticles.push_back(victim.get());
+					MOPixel* victimObject = victim.get();
+					// One state on from the first object of the walk, at either count, and the highest
+					// unique ID there is, so the walk reaches it last.
+					victimObject->MoveScriptsToState(states[1 % states.size()]);
+					const int loadStatus = victimObject->LoadScript(fixturePath, true);
+					if (loadStatus < 0 || victimObject->AdoptScriptObject() < 0) freedAcrossStatesReady = false;
+					victimAddress = victimObject;
+					victimID = victimObject->GetUniqueID();
+					for (LuaStateWrapper& state: states) state.Update();
+					std::vector<long> expectedOrder;
+					expectedOrder.reserve(objects.size() + twins.size());
+					for (const auto& object: objects) expectedOrder.push_back(object->GetUniqueID());
+					for (const auto& twin: twins) expectedOrder.push_back(twin->GetUniqueID());
+					std::sort(expectedOrder.begin(), expectedOrder.end());
+					context.order.clear();
+					for (const auto& object: objects) object->RequestSyncedUpdate();
+					for (const auto& twin: twins) twin->RequestSyncedUpdate();
+					victimObject->RequestSyncedUpdate();
+					context.retire = [this, &victim, &victimPoison] {
+						m_ValidParticles.erase(victim.get());
+						std::erase(m_AddedParticles, victim.get());
+						victim.reset();
+						// A block of the same size over the freed one, filled with a value no vtable
+						// pointer or flag survives, so a stale read faults instead of looking alive.
+						victimPoison = ::operator new(sizeof(MOPixel));
+						std::memset(victimPoison, 0xDD, sizeof(MOPixel));
+					};
+					RunThreadedSyncedUpdatePass(true);
+					context.retire = nullptr;
+					freedAcrossStatesSkipped[countIndex] = static_cast<long>(GetSyncedPassSkippedDeadEntries());
+					freedAcrossStatesRan[countIndex] = static_cast<long>(context.order.size());
+					freedAcrossStatesHashes[countIndex] = hashOrder(context.order);
+					freedAcrossStatesExpected[countIndex] = hashOrder(expectedOrder);
+					freedAcrossStatesVictimID[countIndex] = victimID;
+					freedAcrossStatesPoisonHit[countIndex] = victimPoison == victimAddress ? 1 : 0;
+					freedAcrossStatesVictimRan = freedAcrossStatesVictimRan || std::find(context.order.begin(), context.order.end(), victimID) != context.order.end();
+				}
+				if (victimPoison) ::operator delete(victimPoison);
+				if (victim) {
+					m_ValidParticles.erase(victim.get());
+					std::erase(m_AddedParticles, victim.get());
+					victim->DestroyScriptState();
+				}
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+			}
+
 			if (count == 32) {
 				run(false);
 				run(true);
@@ -5155,7 +5250,13 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	const bool timingGreen = perStateUs > 0 && addedUs <= c_AddedBudgetUs;
 	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
 	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
-	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan;
+	const bool freedAcrossStatesGreen = freedAcrossStatesReady && !freedAcrossStatesHashes[0].empty() &&
+	                                    freedAcrossStatesHashes[0] == freedAcrossStatesExpected[0] &&
+	                                    freedAcrossStatesHashes[1] == freedAcrossStatesExpected[1] &&
+	                                    freedAcrossStatesHashes[0] == freedAcrossStatesHashes[1] &&
+	                                    freedAcrossStatesSkipped[0] == 1 && freedAcrossStatesSkipped[1] == 1 &&
+	                                    !freedAcrossStatesVictimRan;
+	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
 	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1]
 	          << (perStateRed ? "" : " (the per-state control ran the same order at both counts, so it detects nothing)") << std::endl;
@@ -5179,6 +5280,15 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	          << " pass_order=" << retiredActualHash << " expected_length=" << retiredExpectedLength
 	          << " pass_length=" << retiredActualLength << " first_divergence=" << retiredFirstDivergence
 	          << " expected_at=" << retiredExpectedAt << " pass_at=" << retiredActualAt << std::endl;
+	std::cout << "[script-graph-selftest] " << (freedAcrossStatesGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_freed_across_states_is_skipped states=4,32 order4=" << freedAcrossStatesHashes[0]
+	          << " order32=" << freedAcrossStatesHashes[1] << " expected4=" << freedAcrossStatesExpected[0]
+	          << " expected32=" << freedAcrossStatesExpected[1] << " skipped4=" << freedAcrossStatesSkipped[0]
+	          << " skipped32=" << freedAcrossStatesSkipped[1] << " ran4=" << freedAcrossStatesRan[0]
+	          << " ran32=" << freedAcrossStatesRan[1] << " victim4=" << freedAcrossStatesVictimID[0]
+	          << " victim32=" << freedAcrossStatesVictimID[1] << " victim_ran=" << (freedAcrossStatesVictimRan ? 1 : 0)
+	          << " poison_over_the_freed_block=" << freedAcrossStatesPoisonHit[0] << "," << freedAcrossStatesPoisonHit[1]
+	          << (freedAcrossStatesGreen ? "" : " (the pass reached an object a script in the same pass had freed)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
 	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
