@@ -283,11 +283,15 @@ void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 struct SyncedUpdateEntry {
 	MovableObject* object = nullptr;
 	long uniqueID = 0;
+	MOID moid = g_NoMOID;
 };
 
-// The snapshot order: unique ID, which the sim assigns identically on every peer.
+// The snapshot order: unique ID, then MOID for the pair that shares one (a faithful clone copies the
+// source's ID, and a restore adopts a persisted one). Both come from the sim, so neither depends on how
+// many Lua states the peer runs; the state-vector position the heap would otherwise fall back on does.
 static bool SyncedUpdateEntryEarlier(const SyncedUpdateEntry& lhs, const SyncedUpdateEntry& rhs) {
-	return lhs.uniqueID < rhs.uniqueID;
+	if (lhs.uniqueID != rhs.uniqueID) return lhs.uniqueID < rhs.uniqueID;
+	return lhs.moid < rhs.moid;
 }
 
 // A Lua state's registered-MO set copied into canonical order with each object's identity read once.
@@ -296,7 +300,7 @@ static std::vector<SyncedUpdateEntry> SnapshotRegisteredMOs(const LuaStateWrappe
 	std::vector<SyncedUpdateEntry> snapshot;
 	snapshot.reserve(registered.size());
 	for (MovableObject* mo: registered) {
-		snapshot.push_back({mo, mo->GetUniqueID()});
+		snapshot.push_back({mo, mo->GetUniqueID(), mo->GetID()});
 	}
 	std::sort(snapshot.begin(), snapshot.end(), SyncedUpdateEntryEarlier);
 	return snapshot;
