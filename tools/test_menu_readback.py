@@ -1223,6 +1223,10 @@ def scripts(case, port, root, size="960x540"):
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
+                 # ENGINE 166: the caption follows the typed interval on the Changed notification,
+                 # before any Apply or focus loss commits it.
+                 "set_text TextHostRecAutosaveInterval 30\nwait_ms 500\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 30 sim seconds - none saved yet\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
@@ -1291,7 +1295,25 @@ def scripts(case, port, root, size="960x540"):
         if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
-        steps = ([{"op": "wait", "sim_at_least": 150},
+        steps = (([{"op": "wait", "sim_at_least": 150},
+                  # ENGINE 195: a band pushed while the panel is closed paints at the bottom of the
+                  # game screen; opening the panel moves it, and `single` fails if the old band's
+                  # pixels stay behind on the GUI layer. The watch arms before the move so a ghost
+                  # that only lives for the frames between the move and the next wipe still counts.
+                  menu_step("push_toast info band-before-panel"), {"op": "wait", "renders": 3},
+                  menu_step("assert_toast_band"),
+                  menu_step("ghost_watch start"),
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 5},
+                  menu_step("ghost_watch assert"),
+                  menu_step("assert_toast_band single"),
+                  # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
+                  # rule grows the panel to the longest word instead of letting it hang over. The
+                  # status box only wraps in its tall layout; the strip path is one FitLine'd line.
+                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row")] +
+                  ([menu_step("assert_word_wrap status")] if size != "640x360" else []) +
+                  [{"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": False},
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": True},
                   menu_step("push_toast info toast-one"), menu_step("push_toast info toast-two"),
@@ -1301,7 +1323,7 @@ def scripts(case, port, root, size="960x540"):
                   menu_step("dump_refresh_count"),
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "key_down", "key": "Escape"},
-                  {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}] if case == "live"
+                  {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}]) if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
             # The match's pause menu opens without pausing the shared sim (L03): the menu is a local
