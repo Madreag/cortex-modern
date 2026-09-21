@@ -15,7 +15,7 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, item9a_gates, apply_tps_call, write_json
+from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
 from feel.retained_resume import compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run
@@ -268,12 +268,29 @@ def single_case_peer(root):
     return None
 
 
+def early_peer_report(run, peer, error):
+    """A peer that stopped before the window is a failed pin on its own arm.
+
+    Its numbers are whatever its clock did reach; the arm is marked incomplete and carries the tick
+    and the cause, and every other arm is still measured and reported.
+    """
+    run = Path(run)
+    report = item9a_gates(run, peer)
+    report['pins']['item9a_measurement_window'] = pin(
+        error.tick, f'the peer must reach tick {TICKS}', False, [error.path] if error.path else [], error.fail_line)
+    report['pass_check'] = False
+    report['measurement_complete'] = False
+    report['early_decision'] = dict(tick=error.tick, evidence=str(error.path), failure=error.fail_line)
+    report.setdefault('raw_path', str(record_path(run / peer / 'feel/raw.jsonl')))
+    return report
+
+
 def reduce_or_fail(run, peer, baseline=None):
     try:
         return reduce_peer(run, peer, baseline)
     except EarlyDecision as error:
-        print(error.fail_line, flush=True)
-        raise
+        print(f'{Path(run).name}/{peer}: {error.fail_line}', flush=True)
+        return early_peer_report(run, peer, error)
 
 
 def reduce_timing_case(run, reference=None):
