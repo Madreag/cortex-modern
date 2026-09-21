@@ -49,6 +49,7 @@ using namespace RTE;
 
 bool RTEError::s_CurrentlyAborting = false;
 bool RTEError::s_IgnoreAllAsserts = false;
+bool RTEError::s_AssertFired = false;
 std::string RTEError::s_LastIgnoredAssertDescription = "";
 std::source_location RTEError::s_LastIgnoredAssertLocation = {};
 
@@ -353,10 +354,11 @@ bool RTEError::ShowAssertMessageBox(const std::string& message) {
 		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
 		return false;
 	}
-	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
+	// A headless run answers the dialog the way a player does: Ignore, and carry on. The fired assert is
+	// remembered so the run still ends non-zero and the reviewer reads the line the player would have read.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		System::PrintFaultLine("RTE Assert (headless): " + message);
-		return true;
+		System::PrintFaultLine("RTE Assert (headless, continued like Ignore): " + message);
+		return false;
 	}
 	enum AssertMessageButton {
 		ButtonInvalid,
@@ -526,6 +528,7 @@ void RTEError::AssertFunc(const std::string& description, const std::source_loca
 	std::string funcName = srcLocation.function_name();
 
 	g_ConsoleMan.PrintString("ERROR: Assertion in file '" + fileName + "', line " + lineNum + ", in function '" + funcName + "' because: " + description);
+	s_AssertFired = true;
 
 	bool storeAssertInfo = false;
 

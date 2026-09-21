@@ -26,6 +26,7 @@ namespace RTE {
 	public:
 		static bool s_CurrentlyAborting; //!< Flag to prevent a potential recursive fault while attempting to save the game when aborting.
 		static bool s_IgnoreAllAsserts; //!< Whether to skip the assert dialog and just let everything burn at whatever point that happens.
+		static bool s_AssertFired; //!< Whether any assert fired this run, however it was answered.
 		static std::string s_LastIgnoredAssertDescription; //!< The last ignored assert message.
 		static std::source_location s_LastIgnoredAssertLocation; //!< The last ignored assert call site.
 
@@ -50,6 +51,9 @@ namespace RTE {
 		/// @param description The description of the assertion.
 		/// @param srcLocation std::source_location corresponding to the location of the call site.
 		static void AssertFunc(const std::string& description, const std::source_location& srcLocation);
+
+		/// Whether any assert fired this run: an ignored dialog is still a failed run.
+		static bool AssertFired() { return s_AssertFired; }
 
 		/// Formats function signatures so they're slightly more sane.
 		/// @param funcSig Reference to the function signature to format.

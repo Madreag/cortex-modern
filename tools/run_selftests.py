@@ -37,6 +37,7 @@ SELFTESTS = [
     "combo-key",
     "settings-preferences",
     "single-module-harness",
+    "headless-assert-continues",
     "render-window-scripts",
     "text-wrap",
     "save-refusal-diagnosis",
@@ -158,7 +159,12 @@ def main():
     results = {}
     for name in SELFTESTS:
         case = out / f"{name}-selftest"
-        if name == "single-module-harness":
+        if name == "headless-assert-continues":
+            from test_headless_assert import run_case as assert_case  # noqa: PLC0415
+
+            scored = assert_case(options.repo, case, options.timeout)
+            scored["binary"] = scored.get("exe_sha256")
+        elif name == "single-module-harness":
             from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
 
             case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
