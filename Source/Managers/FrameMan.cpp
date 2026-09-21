@@ -84,6 +84,7 @@ namespace {
 		uint64_t nextCaptureTick = 60;
 		size_t eventIndex = 0;
 		double capHz = 0;
+		bool settingsApplied = false;
 		double nextDrawMS = 0;
 		double drawBeginMS = 0;
 		double presentBeginMS = 0;
@@ -172,7 +173,15 @@ bool FrameMan::SetFeelRenderSettings(const std::string& path) {
 	double hz = -1;
 	if (!(in >> key >> equals >> hz) || key != "RenderCapHz" || equals != "=" || (hz != 0 && hz != 60) || (in >> extra)) return false;
 	s_Feel.capHz = hz;
+	s_Feel.settingsApplied = true;
 	return true;
+}
+
+void FrameMan::ApplyHeadlessPresentationDefault() {
+	const char* headless = std::getenv("CCCP_HEADLESS");
+	if (!headless || std::string(headless) != "1") return;
+	if (!s_Feel.settingsApplied) s_Feel.capHz = 60;
+	System::PrintDiagnosticLine(std::string("[render] headless presentation cap=") + (s_Feel.capHz > 0 ? "60hz" : "off"));
 }
 
 bool FrameMan::SetFeelRecordDirectory(const std::string& path) {

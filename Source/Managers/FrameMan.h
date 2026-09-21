@@ -62,6 +62,8 @@ namespace RTE {
 		void Draw();
 
 		static bool SetFeelRenderSettings(const std::string& path);
+		/// Cap headless presentation at 60 Hz when no feel file chose a rate.
+		static void ApplyHeadlessPresentationDefault();
 		static bool SetFeelRecordDirectory(const std::string& path);
 		static bool FeelRecordingEnabled();
 		static double FeelClockMS();
