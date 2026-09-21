@@ -24,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -1065,6 +1066,7 @@ namespace RTE {
 				return false;
 			}
 			const std::string summary = client.GetRejectSummary();
+			if (client.BuildPlayerRefusalText() != summary || client.BuildPlayerRefusalText().find("module_manifest_hash") != std::string::npos) { *error = "the player refusal exposed the internal manifest field"; return false; }
 			if (summary.find("Install: Coalition.rte") == std::string::npos ||
 			    summary.find("Remove: MyTestMod.rte") == std::string::npos ||
 			    summary.find("Update: Ronin.rte (you 3, host 5)") == std::string::npos) {
@@ -1085,6 +1087,23 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-session-selftest] PASS module mismatch names the modules: " << summary << std::endl;
+			return true;
+		}
+
+		bool TestAdmissionRefusalIsLogged(std::string* error) {
+			std::ostringstream log;
+			auto* prior = std::cout.rdbuf(log.rdbuf());
+			const bool matched = TestModuleMismatchNamesModules(error);
+			std::cout.rdbuf(prior);
+			if (!matched) return false;
+			for (const std::string role : {"host", "client"}) {
+				const std::string expected = "admission refused reason=ModuleManifestMismatch role=" + role;
+				if (log.str().find(expected) == std::string::npos) {
+					*error = "admission refusal was not logged on the " + role;
+					return false;
+				}
+			}
+			std::cout << log.str() << "[net-session-selftest] PASS admission_refusal_logged host=ModuleManifestMismatch client=ModuleManifestMismatch" << std::endl;
 			return true;
 		}
 
@@ -1920,6 +1939,7 @@ namespace RTE {
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
+		if (!TestAdmissionRefusalIsLogged(&error)) return fail(error);
 		if (!TestModuleDigestJoinerSideMirror(&error)) return fail(error);
 		if (!TestModuleDigestSilentPeerExpires(&error)) return fail(error);
 		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);

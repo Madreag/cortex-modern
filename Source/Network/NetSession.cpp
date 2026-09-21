@@ -6,6 +6,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
 #include "System/FaultInjection.h"
+#include "System/System.h"
 
 #include "nlohmann/json.hpp"
 
@@ -1473,7 +1474,8 @@ namespace RTE {
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		if (reason == NetRejectReason::ParticipantBanned) std::cout << "[net-session] admission refused reason=ParticipantBanned" << std::endl;
+		System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
+		                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
@@ -1492,6 +1494,30 @@ namespace RTE {
 		RecordReject(reason, key, expected, actual, summary);
 		m_State = NetSessionState::Failed;
 		m_StateStartedMs = m_NowMs;
+	}
+
+	std::string NetSession::BuildPlayerRefusalText() const {
+		if (!m_HasReject) return {};
+		switch (m_RejectReason) {
+			case NetRejectReason::ModuleManifestMismatch: return m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
+			case NetRejectReason::ProtocolMismatch:
+			case NetRejectReason::GameVersionMismatch:
+			case NetRejectReason::BuildMismatch:
+			case NetRejectReason::ControllerFrameVersionMismatch:
+			case NetRejectReason::ControllerFrameSizeMismatch: return "This host uses a different game version.";
+			case NetRejectReason::DeterministicConfigMismatch: return "This match's simulation settings do not match yours.";
+			case NetRejectReason::SessionRulesMismatch: return "This match's rules do not match yours.";
+			case NetRejectReason::UserdataModulesNotAllowed: return "This host does not allow local userdata mods.";
+			case NetRejectReason::SessionFull: return "This match is full.";
+			case NetRejectReason::HostNotAccepting: return "The host is not accepting players right now.";
+			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
+			case NetRejectReason::SessionEnded: return "This session has ended.";
+			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
+			case NetRejectReason::ParticipantRemoved: return "The host removed you from this session";
+			case NetRejectReason::ParticipantBanned: return BuildRejectText();
+			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
+			default: return "The host could not admit this connection. Please try again.";
+		}
 	}
 
 	std::string NetSession::BuildRejectText() const {

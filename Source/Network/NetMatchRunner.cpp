@@ -813,7 +813,7 @@ namespace RTE {
 		// Start waits on a live remote ready, not the idle default (a reject never seats one).
 		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
 		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
-			snapshot.errorText = "A player could not join: " + session.BuildRejectText();
+			snapshot.errorText = "A player could not join: " + session.BuildPlayerRefusalText();
 		}
 
 		const uint8_t localId = LocalLockstepPeerId(session);
