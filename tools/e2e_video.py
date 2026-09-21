@@ -609,6 +609,24 @@ def review(scenario, capture, out):
                                        "Required frames or assertions absent; inspect the retained launch, probe and logs",
                                        "launch": record.get("launch"), "errors": record.get("menu_script_failures", [])}
             items.append(resolved)
+    # Every capture answers the same question the player would have been asked: did a dialog fire? A headless
+    # run continues past an assert the way a player's Ignore does, so the line it logged is the evidence.
+    dialogs = []
+    for peer in capture["peers"]:
+        log = Path(peer["root"]) / "stdout.log"
+        text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
+        dialogs += [{"peer": peer["peer"], "line": line.strip(), "log": str(log)}
+                    for line in text.splitlines() if "RTE Assert (headless" in line]
+    items.append({"id": "no-assert-dialogs", "run": capture["name"], "peer": "all", "screen": "any",
+                  "what": "No peer had to answer an assert dialog: a player would have seen one for each line below.",
+                  "assert": "No 'RTE Assert (headless' line in any peer's stdout.",
+                  "frames": None, "capture_frames": None, "video_seconds": None, "video": None,
+                  "contact_sheet": None, "state": "checked", "probe": "fail" if dialogs else "pass",
+                  "assert_dialogs": dialogs,
+                  **({"finding": {"class": "engine", "reason": "assert dialog: " + dialogs[0]["line"][:200],
+                                  "launch": None, "errors": [row["line"] for row in dialogs[:3]]}} if dialogs else
+                     {"finding": {"class": "harness", "reason": capture["interrupted"], "launch": None, "errors": []}}
+                     if capture.get("interrupted") else {})})
     run_findings = []
     for peer in capture["peers"]:
         record = peer.get("record", {})

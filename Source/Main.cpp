@@ -704,6 +704,11 @@ int ShutDown(int exitCode) {
 		System::PrintDiagnosticErrorLine("[menu-readback] queued snapshot write failed");
 		exitCode = EXIT_FAILURE;
 	}
+	// An assert a player would have had to dismiss is a failed run, whichever way it was answered.
+	if (RTEError::AssertFired()) {
+		System::PrintDiagnosticErrorLine("[assert] the run continued past an assert; see the RTE Assert line above");
+		exitCode = EXIT_FAILURE;
+	}
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_checkpointAudioEffects && !s_checkpointAudioEffectsPassed) exitCode = EXIT_FAILURE;

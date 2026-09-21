@@ -293,8 +293,25 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs"]
     ok &= row(results, "review/no-probe-is-named",
-              all(item.get("probe") == "none" for item in document["checklist"]))
+              all(item.get("probe") == "none" for item in scenario_items))
+    # The dialog row is written for every capture: a player would have had to answer each line it lists.
+    dialog_rows = [item for item in document["checklist"] if item["id"] == "no-assert-dialogs"]
+    ok &= row(results, "review/assert-dialog-row-present",
+              len(dialog_rows) == 1 and dialog_rows[0]["probe"] == "pass" and dialog_rows[0]["assert_dialogs"] == [],
+              str(dialog_rows))
+    (scratch / "host").mkdir(parents=True, exist_ok=True)
+    (scratch / "host/stdout.log").write_text(
+        "[menu-script] loaded 2 steps\nRTE Assert (headless, continued like Ignore): Assertion in file 'X.cpp'\n",
+        encoding="utf-8")
+    fired = driver.review(scenario, capture, out)
+    flagged = [item for item in fired["checklist"] if item["id"] == "no-assert-dialogs"][0]
+    ok &= row(results, "review/assert-dialog-row-reports-the-line",
+              flagged["probe"] == "fail" and "continued like Ignore" in flagged["finding"]["reason"]
+              and flagged["assert_dialogs"][0]["peer"] == "host", str(flagged.get("assert_dialogs")))
+    (scratch / "host/stdout.log").unlink()
+    document = driver.review(scenario, capture, out)
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
     capture["peers"][0]["record"] = {"exit_code": 1, "timed_out": False}
@@ -337,7 +354,8 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    ok &= row(results, "interruption/unstarted-checklist-retained", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
 
@@ -460,7 +478,8 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
     ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
               manifest.get("scratch_root") == str(scratch))
     with patch.object(driver, "scratch_bytes", return_value=6_000_000_000), patch.object(driver, "render") as rendered:
