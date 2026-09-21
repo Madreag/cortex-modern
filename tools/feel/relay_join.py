@@ -70,7 +70,7 @@ def main():
                      '-net-match-report', str(root / f'{peer}_report.json'),
                      '-net-live-tick-hashes', str(root / f'{peer}-live.jsonl')]
             flags += ['-net-host'] if peer == 'host' else ['-net-join-session', session_id]
-            run = make_run(repo, flags, root / peer, 180, env={'CCCP_HEADLESS': '1', 'CC_TEST_GNS_TRACE': '1'})
+            run = make_run(repo, flags, root / peer, 180, env={'CCCP_HEADLESS': '1'})
             runs[peer] = run
             patch_settings(Path(run.cwd), {**settings, 'SessionDirectoryInstallKey': f'feel-relay-{peer}-install'})
             stage_baseline(run, 1200)

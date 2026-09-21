@@ -21,6 +21,7 @@
 #include "NetModerationGUI.h"
 #include "NetHostOptionsText.h"
 #include "Activity.h"
+#include "AEmitter.h"
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
 #include "MovableMan.h"
@@ -59,6 +60,21 @@
 namespace RTE {
 
 	namespace {
+		bool TestRemovedWoundReleasesItsRadiusCache(std::string* error) {
+			MOSRotating body;
+			auto* wound = new AEmitter;
+			body.AddWound(wound, Vector(20, 0), false);
+			body.HandlePotentialRadiusAffectingAttachable(wound);
+			if (body.GetRadiusAffectingAttachable() != wound) { *error = "the wound did not become the radius owner"; return false; }
+			const float radius = body.GetRadius();
+			body.RemoveWounds(1);
+			if (body.GetRadius() != radius) { *error = "wound removal changed the published numeric radius"; return false; }
+			if (body.GetRadiusAffectingAttachable() != nullptr) {
+				*error = "a deleted wound still owns the cached radius";
+				return false;
+			}
+			return true;
+		}
 
 		bool TestConnectionCallbacksReachTheirListener(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
@@ -12378,6 +12394,7 @@ namespace RTE {
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
 		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestServiceWorldJoinAdoptsConfig(&error)) return fail(error);
+		if (!TestRemovedWoundReleasesItsRadiusCache(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
