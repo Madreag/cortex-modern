@@ -6373,19 +6373,19 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
-					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
-						s_menuScriptHoldE2ePause = true;
-						g_MenuMan.HandleTransitionIntoMenuLoop();
-						RunMenuLoop();
-						s_menuScriptHoldE2ePause = false;
-						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
-					}
 					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
 					// with nobody left, ends their match at once - unlike a drop, which holds the seat
 					// open for its reclaim window. The §7 exchange runs before the link goes down.
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
+					}
+					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
+						s_menuScriptHoldE2ePause = true;
+						g_MenuMan.HandleTransitionIntoMenuLoop();
+						RunMenuLoop();
+						s_menuScriptHoldE2ePause = false;
+						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
 					}
 					// The e2e has no menu to return to; a leaver's run ends here.
 					if (s_netMatchServiceE2E) {
