@@ -685,7 +685,7 @@
       "run": "640x360",
       "peer": "ui",
       "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
-      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "assert": "Create Lobby returns inside one 60 Hz frame; recorder gaps retain every held video frame.",
       "frame_gap": {
         "max_ms": 1000,
         "ignore_screens": [
@@ -693,14 +693,17 @@
           "LoadingScreen",
           "game"
         ]
-      }
+      },
+      "log_regex": [
+        "\\[video-ui\\] menu_start host=1 elapsed_us=\\d+ budget_us=16667 within_one_frame=1"
+      ]
     },
     {
       "id": "addenda-no-render-stall",
       "run": "960x540",
       "peer": "ui",
       "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
-      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "assert": "Create Lobby returns inside one 60 Hz frame; recorder gaps retain every held video frame.",
       "frame_gap": {
         "max_ms": 1000,
         "ignore_screens": [
@@ -708,14 +711,17 @@
           "LoadingScreen",
           "game"
         ]
-      }
+      },
+      "log_regex": [
+        "\\[video-ui\\] menu_start host=1 elapsed_us=\\d+ budget_us=16667 within_one_frame=1"
+      ]
     },
     {
       "id": "addenda-no-render-stall",
       "run": "1280x720",
       "peer": "ui",
       "what": "Every menu screen keeps presenting: no held frame longer than one frame while nothing is loading.",
-      "assert": "The recorder's own frame index, wall clock between consecutive presented menu frames.",
+      "assert": "Create Lobby returns inside one 60 Hz frame; recorder gaps retain every held video frame.",
       "frame_gap": {
         "max_ms": 1000,
         "ignore_screens": [
@@ -723,7 +729,10 @@
           "LoadingScreen",
           "game"
         ]
-      }
+      },
+      "log_regex": [
+        "\\[video-ui\\] menu_start host=1 elapsed_us=\\d+ budget_us=16667 within_one_frame=1"
+      ]
     },
     {
       "id": "addenda-settings-page-clean",
