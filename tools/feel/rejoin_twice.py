@@ -26,7 +26,7 @@ def main():
     measure.input_pattern(script)
     run = measure.launch_case(root, 'twice', 100, 60, True, args.port, script,
                               measure.file_record(measure.REPO / 'Cortex Command.exe')['sha256'], args.timeout,
-                              silent_tick=600, live_stalls=[(600, 1500), (1500, 1500)])
+                              silent_tick=600, live_stalls=[(600, 1500), (1500, 1500)], window_ticks=4200)
     log = (run / 'client/stdout.log').read_text(encoding='utf-8-sig', errors='replace')
     events = re.findall(r'\[net-test\] live stall frame=(\d+) ms=1500|\[net-match\] private catch-up complete frame=(\d+)', log)
     pending, returns = None, []
