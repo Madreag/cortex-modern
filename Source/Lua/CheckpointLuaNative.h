@@ -483,7 +483,9 @@ namespace RTE::CheckpointLua {
 				}
 			};
 			for (const auto& result: entry.native) keep(result);
-			keep(entry.members);
+			// The members are the class's table and the subject's own: both are reachable from the subject
+			// and live exactly as long as it does, so keeping them here would only pin the subject's table
+			// to itself and outlive it.
 			for (const auto& [name, result]: entry.helpers) keep(result);
 			for (const auto& [name, result]: entry.properties) keep(result);
 		}
