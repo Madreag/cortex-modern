@@ -349,6 +349,8 @@ def remote_commands(path, local_peer):
 
 def canonical_positions(path, wanted):
     actors, ticks = {}, set()
+    duplicate = None
+    duplicate_count = 0
     with open_record(path, encoding='utf-8-sig') as stream:
         for number, line in enumerate(stream, 1):
             if re.match(r'^\d+ activity ', line):
@@ -358,10 +360,17 @@ def canonical_positions(path, wanted):
                 key = int(match[1]), int(match[2])
                 if key in wanted:
                     if key in actors:
-                        raise ValueError(f'{path}:{number}: duplicate committed actor')
+                        duplicate_count += 1
+                        if duplicate is None:
+                            duplicate = dict(tick=key[0], actor=key[1], line=number, path=str(path))
+                        # A restarted simdump can contain a second copy of an earlier epoch. Keep
+                        # the first record for the displacement calculation, but make the trace
+                        # defect an explicit failed pin instead of aborting the matrix.
+                        continue
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
     if ticks != set(range(1, TICKS + 1)):
         raise EarlyDecision(max(ticks) if ticks else 0, path)
+    canonical_positions.last_duplicate = dict(first=duplicate, count=duplicate_count) if duplicate else None
     return actors
 
 
@@ -372,6 +381,8 @@ def corrections(previews, committed, canonical_path, command_path, local_peer):
         if key not in forecasts or row['committed_tick'] > forecasts[key]['committed_tick']:
             forecasts[key] = row
     canonical = canonical_positions(canonical_path, forecasts)
+    candidate_duplicate = getattr(canonical_positions, 'last_duplicate', None)
+    corrections.last_duplicate = candidate_duplicate if isinstance(candidate_duplicate, dict) else None
     commands, commands_complete = remote_commands(command_path, local_peer)
     result, missing = [], []
     for (tick, uid), forecast in sorted(forecasts.items()):
@@ -475,6 +486,7 @@ def reduce_peer(run, peer, baseline=None):
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
     command_log = run / 'replay-inspect/stdout.log'
     correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'])
+    duplicate_actor = getattr(corrections, 'last_duplicate', None)
     firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log')
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}
     for name, values in [('latencies', latency), ('warps', warps), ('corrections', correction_rows),
@@ -553,10 +565,12 @@ def reduce_peer(run, peer, baseline=None):
                    frames_over_50_ms=over_50, warp_frames=len(warps), warp_frames_over_4_px=sum(row['over_4_px'] for row in warps),
                    capture_missing=capture_missing, frame_count=len(frames), cap_hz=cap,
                    effective_hz=(len(frames) - 1) * 1000 / (frames[-1]['present_end_ms'] - frames[0]['present_end_ms']) if len(frames) > 1 else None)
-    measured = bool(ended and coverage and latency and not missing_inputs and len(firing) == schedule['fire_presses'] and cpu_ms is not None
+    measured = bool(ended and coverage and latency and not missing_inputs and not duplicate_actor and len(firing) == schedule['fire_presses'] and cpu_ms is not None
                     and (auto_picks or peer == 'sp')
                     and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
     pins = {}
+    pins['canonical_duplicate_actor'] = pin(duplicate_actor, 'no duplicate committed actor in the simdump', duplicate_actor is None,
+                                            [canonical_dump])
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
     pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
