@@ -142,6 +142,7 @@ SIZE_GATES = (
     ("lobby-name", "960x540"),
     ("lobby-name", "1280x720"),
     ("lobby-name", "1920x1080"),
+    ("live", "1280x720"),
 )
 # CalculateWidth adds each printable glyph's m_Width (GUIFont.cpp:333). FontSmall's
 # thinnest printable cell is 2 px, so 139 characters exceed the 276 px status row.
@@ -1282,23 +1283,12 @@ def scripts(case, port, root, size="960x540"):
                 "focus_previous\nassert_focus TextMultiplayerName\nfocus_next\n"
                 "pad south down\npad south up\nwait 3\nassert_substate HostSetup\n"
                 "dump_host_options\nexit\n")
-    elif case == "input-parity":
-        text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 8\n"
-                "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
-                "key Return down\ndump_enter_state\nkey Return up\n"
-                "key KPEnter down\ndump_enter_state\nkey KPEnter up\n"
-                "activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
-                "assert_visible ComboHostActivity 1\nfocus ComboHostActivity\n"
-                "key Return down\ndump_enter_state\nkey Return up\n"
-                "key KPEnter down\ndump_enter_state\nkey KPEnter up\n"
-                "dump_host_options\ndump_host_options\ndump_host_options\ndump_host_options\n"
-                "exit\n")
-    elif case in ("live", "disabled", "scope-off"):
+    elif case in ("live", "disabled", "scope-off", "input-parity"):
         text = ("wait 12\nassert_screen Pause\nassert_visible ButtonSettings 1\n" if case == "live"
                 else RESET_INPUT + host_lobby(port) if case == "disabled"
-                else LANDING)
+                else RESET_INPUT + LANDING if case == "input-parity" else LANDING)
         text += "assert_visible root 1\n"
-        if case == "scope-off":
+        if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
         steps = ([{"op": "wait", "sim_at_least": 150},
@@ -1323,6 +1313,30 @@ def scripts(case, port, root, size="960x540"):
                       menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
                       {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100}]
+        elif case == "input-parity":
+            steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}}]
+            steps += [menu_step("key Return down"), menu_step("dump_enter_state"), menu_step("key Return up"),
+                      menu_step("key KPEnter down"), menu_step("dump_enter_state"), menu_step("key KPEnter up")]
+            for route in ("key", "pad", "mouse", "post_command"):
+                if route == "post_command":
+                    steps += [menu_step("post_command ButtonMultiplayerHostGame")]
+                else:
+                    steps += [{"op": "mouse_move", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
+                    for edge in ("down", "up"):
+                        steps += ([{"op": f"mouse_{edge}", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
+                                  if route == "mouse" else [menu_step(f"{route} {'KP1' if route == 'key' else 'south'} {edge}")])
+                        if edge == "down":
+                            steps += [menu_step("assert_focus ButtonMultiplayerHostGame")]
+                steps += [menu_step("assert_visible TextHostPort 1"), menu_step("dump_host_options"),
+                          menu_step("post_command ButtonHostBack"), menu_step("assert_visible ButtonMultiplayerHostGame 1")]
+                if route != "post_command":
+                    steps += [menu_step("focus_previous")]
+                steps += [menu_step("assert_focus TextMultiplayerName")]
+            steps += [menu_step("post_command ButtonMultiplayerHostGame"), menu_step("assert_visible ComboHostActivity 1"),
+                      menu_step("focus ComboHostActivity"),
+                      menu_step("key Return down"), menu_step("dump_enter_state"), menu_step("key Return up"),
+                      menu_step("key KPEnter down"), menu_step("dump_enter_state"), menu_step("key KPEnter up"),
+                      menu_step("post_command ButtonHostBack")]
         elif case == "disabled":
             steps += [{"op": "wait", "scope": "menu", "control": "ButtonMultiplayerStart",
                        "equals": {"visible": True, "enabled": False}},
@@ -2281,7 +2295,7 @@ def main():
 
     def sizes_for(case):
         sizes = [requested]
-        if options.all_sizes or case in ("net-chat", "lobby-name"):
+        if options.all_sizes or case in ("net-chat", "lobby-name", "live"):
             sizes.extend(size for name, size in SIZE_GATES if name == case and size not in sizes)
         return sizes
 
