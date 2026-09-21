@@ -232,7 +232,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent";
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -248,6 +248,15 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "push_toast") {
+			std::string kind, text;
+			args >> kind;
+			std::getline(args >> std::ws, text);
+			if (!FrameRecorder::Instance().Enabled() || kind.empty() || text.empty()) return false;
+			ScenarioRunner::PushNetUiToast(kind, text);
+			observation = kind + " " + text;
+			return true;
+		}
 		if (command == "dump_match_identity") {
 			std::string path;
 			args >> std::quoted(path);
@@ -286,6 +295,13 @@ namespace RTE::MenuAutomation {
 			if (!panel) return false;
 			const auto& toasts = panel->GetToastRect();
 			const auto& seats = panel->GetSeatsPanelRect();
+			int expectedRows = -1;
+			args >> expectedRows;
+			int rows = 0;
+			for (int row = 0; row < 3; ++row) {
+				auto* label = panel->GetControl("LabelNetMatchToast" + std::to_string(row));
+				if (Visible(label)) ++rows;
+			}
 			BITMAP* screen = g_FrameMan.GetBackBuffer32();
 			const bool inside = !toasts.visible || (toasts.x >= 0 && toasts.y >= 0 &&
 			                                        toasts.x + toasts.width <= screen->w && toasts.y + toasts.height <= screen->h);
@@ -294,8 +310,25 @@ namespace RTE::MenuAutomation {
 			                          toasts.x + toasts.width <= seats.x || toasts.x >= seats.x + seats.width;
 			observation = Json{{"screen", {screen->w, screen->h}}, {"toasts", {toasts.x, toasts.y, toasts.width, toasts.height}},
 				{"toasts_visible", toasts.visible}, {"seats", {seats.x, seats.y, seats.width, seats.height}}, {"seats_visible", seats.visible},
-				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}}.dump();
-			return inside && clearOfSeats;
+				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}, {"rows", rows}, {"expected_rows", expectedRows}}.dump();
+			return inside && clearOfSeats && (expectedRows < 0 || rows == expectedRows);
+		}
+		if (command == "assert_no_overlap") {
+			const std::string arguments{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::istringstream names(arguments);
+			std::string first, second;
+			names >> first >> second;
+			auto* network = g_MenuMan.GetNetworkPanel();
+			auto find = [&](const std::string& name) {
+				auto* control = manager ? manager->GetControl(name) : nullptr;
+				return control ? control : network ? network->GetControl(name) : nullptr;
+			};
+			auto* aControl = find(first);
+			auto* bControl = find(second);
+			if (!Visible(aControl) || !Visible(bControl)) { observation = "both controls must be visible"; return false; }
+			const auto a = Rectangle(aControl->GetPanel()), b = Rectangle(bControl->GetPanel());
+			observation = first + " " + second + " rect=" + Json(a).dump() + " other=" + Json(b).dump();
+			return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
 		}
 		if (command == "assert_vertical_scroll") {
 			std::string name;
@@ -623,13 +656,6 @@ namespace RTE::MenuAutomation {
 				return input && input->QueueAutomationCommand([box] { box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0); });
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
-			if (command == "assert_no_overlap") {
-				auto* other = manager->GetControl(argument);
-				if (!Visible(control) || !Visible(other)) return false;
-				const auto a = Rectangle(control->GetPanel()), b = Rectangle(other->GetPanel());
-				observation += " rect=" + Json(a).dump() + " other=" + Json(b).dump();
-				return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
-			}
 			if (command == "assert_rect_inside") {
 				auto* parent = argument == "parent" ? control->GetPanel()->GetParentPanel() : manager->GetControl(argument) ? manager->GetControl(argument)->GetPanel() : nullptr;
 				observation += " rect=" + Json(Rectangle(control->GetPanel())).dump() + " bounds=" + Json(Rectangle(parent)).dump();
