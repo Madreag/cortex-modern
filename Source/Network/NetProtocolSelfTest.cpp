@@ -40,7 +40,8 @@ namespace RTE {
 			payload.moduleManifestHash = MakeHash(33);
 			payload.sessionRulesHash = MakeHash(65);
 			payload.sessionIdentityHash = MakeHash(97);
-			payload.hasUserdataModules = false;
+		payload.hasUserdataModules = false;
+		payload.luaStateCount = 4;
 			return payload;
 		}
 
@@ -125,7 +126,8 @@ namespace RTE {
 			hostHello.moduleManifestHash = MakeHash(33);
 			hostHello.sessionRulesHash = MakeHash(65);
 			hostHello.sessionIdentityHash = MakeHash(97);
-			hostHello.hasUserdataModules = false;
+		hostHello.hasUserdataModules = false;
+			hostHello.luaStateCount = 32;
 
 			const std::vector<NetMessage> messages = {
 				{1, 0, clientHello},
@@ -188,7 +190,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x04, 0x00,
 				0x18, 0x00,
 				0x07, 0x00,
 				0x00, 0x00,
@@ -309,7 +311,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expected = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x04, 0x00,
 				0x18, 0x00,
 				0x10, 0x00,
 				0x00, 0x00,
@@ -335,7 +337,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedAck = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x04, 0x00,
 				0x18, 0x00,
 				0x13, 0x00,
 				0x00, 0x00,
@@ -358,7 +360,7 @@ namespace RTE {
 			}
 			std::vector<uint8_t> expectedSubstitution = {
 				0x43, 0x43, 0x4E, 0x32,
-				0x03, 0x00,
+				0x04, 0x00,
 				0x18, 0x00,
 				0x17, 0x00,
 				0x00, 0x00,
@@ -399,7 +401,7 @@ namespace RTE {
 			// An oversized admission message is refused on the header, before any field is parsed.
 			mutated.assign(NetProtocol::c_HeaderBytes + NetProtocol::c_MaxH4PayloadBytes + 1U, 0);
 			mutated[0] = 0x43; mutated[1] = 0x43; mutated[2] = 0x4E; mutated[3] = 0x32;
-			mutated[4] = 0x03;
+			mutated[4] = static_cast<uint8_t>(NetProtocol::c_Version);
 			mutated[5] = 0x00;
 			mutated[6] = 0x18;
 			mutated[8] = static_cast<uint8_t>(NetMessageType::Reclaim);

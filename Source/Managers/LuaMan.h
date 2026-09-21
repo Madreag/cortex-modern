@@ -449,6 +449,10 @@ namespace RTE {
 		/// Makes the LuaMan object ready for use.
 		void Initialize();
 
+		/// Rebuilds the threaded Lua states before a match owns any scripted object.
+		/// The caller must be at the pre-activity boundary; live script objects are refused.
+		bool ResizeThreadedStates(int count, std::string* error = nullptr);
+
 		/// Scripts are frozen inside a rollback re-sim window; every Lua entry point returns without running.
 		static bool AreScriptsFrozen() { return s_ScriptsFrozen; }
 		static void SetScriptsFrozen(bool frozen) { s_ScriptsFrozen = frozen; }

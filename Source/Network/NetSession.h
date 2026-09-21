@@ -367,6 +367,7 @@ namespace RTE {
 		std::string m_RejectSummary;
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
+		uint16_t m_RemoteLuaStateCount = 0;
 		// Client mirror of the parked peer state, bounded by its own deadline rather than by the
 		// handshake expiry the host runs.
 		bool m_AwaitingModuleDigests = false;

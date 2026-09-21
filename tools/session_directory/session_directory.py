@@ -434,7 +434,7 @@ class Session:
 
     def as_list_row(self, now: float) -> dict[str, Any]:
         row = {key: self.fields[key] for key in LIST_ROW_FIELDS}
-        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max"):
+        for key in ("persistent_world", "world_id", "world_boot", "spectator_free", "spectator_max", "lua_state_count"):
             if key in self.fields:
                 row[key] = self.fields[key]
         row["session_id"] = self.session_id
@@ -530,6 +530,8 @@ class SessionDirectory:
                     fields[name] = require_int(data, name, 1, 65535)
                 else:
                     fields[name] = require_int(data, name, 0, 10**9)
+            if "lua_state_count" in data:
+                fields["lua_state_count"] = require_int(data, "lua_state_count", 0, 10**9)
             fields["listen_addrs"] = require_listen_addrs(data)
             if "persistent_world" in data:
                 if not isinstance(data["persistent_world"], bool):

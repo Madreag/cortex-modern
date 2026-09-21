@@ -178,6 +178,7 @@ namespace RTE {
 		local.networkProtocolVersion = manifest.networkProtocolVersion;
 		local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
 		local.controllerFrameVersion = manifest.controllerFrameVersion;
+		local.luaStateCount = manifest.deterministicConfig.numLuaStates;
 		local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 		local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 	}
@@ -642,6 +643,7 @@ static std::string ResyncSaveName() {
 				m_DirectoryRow.networkProtocolVersion = manifest.networkProtocolVersion;
 				m_DirectoryRow.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
 				m_DirectoryRow.controllerFrameVersion = manifest.controllerFrameVersion;
+				m_DirectoryRow.luaStateCount = manifest.deterministicConfig.numLuaStates;
 				m_DirectoryRow.matchConfigHash = NetIdentity::HashHex(NetMatchConfigUtil::HashConfig(matchConfig));
 				m_DirectoryRow.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 				m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
@@ -6232,6 +6234,7 @@ static std::string ResyncSaveName() {
 			local.networkProtocolVersion = manifest.networkProtocolVersion;
 			local.lockstepCodecVersion = manifest.deterministicConfig.lockstepCodecVersion;
 			local.controllerFrameVersion = manifest.controllerFrameVersion;
+			local.luaStateCount = manifest.deterministicConfig.numLuaStates;
 			local.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
 			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
 			// The store path, the install key, the directory and the ICE choice are read here; the retry

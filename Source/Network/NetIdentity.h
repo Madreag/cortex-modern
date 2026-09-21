@@ -114,11 +114,6 @@ namespace RTE {
 
 	class NetIdentity {
 	public:
-		/// Enables the test-only cross-hardware Lua-state experiment. It is set before
-		/// manager initialization and never belongs in a shipped protocol mode.
-		static void SetLuaStateCountExperiment(bool enabled);
-		static bool LuaStateCountExperimentEnabled();
-
 		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
 		/// c_PersistentWorldVersion / c_WorldVersion.
 		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);
@@ -148,6 +143,8 @@ namespace RTE {
 
 		static NetHash32 HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields);
 		static NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config);
+		/// Applies the host's effective Lua worker count before the match creates any script state.
+		static bool AdoptHostLuaStateCount(NetIdentityManifest& manifest, int count, std::string* error = nullptr);
 		static NetHash32 HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules);
 		static NetHash32 HashSessionIdentity(const NetIdentityManifest& manifest);
 		static std::string HashHex(const NetHash32& hash);

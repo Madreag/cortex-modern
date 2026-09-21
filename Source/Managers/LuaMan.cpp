@@ -6502,7 +6502,10 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
-	lua_close(m_State);
+	if (m_State) {
+		lua_close(m_State);
+		m_State = nullptr;
+	}
 }
 
 // During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
@@ -6620,6 +6623,52 @@ void LuaMan::Initialize() {
 	if (!s_CollectorModeAnnounced.exchange(true)) {
 		PrintCollectorMode(s_DeterministicCollection);
 	}
+}
+
+bool LuaMan::ResizeThreadedStates(int count, std::string* error) {
+	if (count < 0) {
+		if (error) *error = "Lua threaded state count cannot be negative";
+		return false;
+	}
+	if (static_cast<size_t>(count) == m_ScriptStates.size()) return true;
+	if (g_MovableMan.GetMOIDCount() != 0) {
+		if (error) *error = "cannot resize Lua states while MovableMan owns objects";
+		return false;
+	}
+	const auto hasRegisteredObjects = [](const LuaStateWrapper& state) {
+		return !state.GetRegisteredMOs().empty() || !state.GetPendingRegisteredMOs().empty();
+	};
+	if (hasRegisteredObjects(m_MasterScriptState) || std::any_of(m_ScriptStates.begin(), m_ScriptStates.end(), hasRegisteredObjects)) {
+		if (error) *error = "cannot resize Lua states while a script-owned object is registered";
+		return false;
+	}
+	WaitForAsyncGarbageCollection();
+	if (m_PathCallbacks) {
+		std::scoped_lock lock(m_PathCallbacks->mutex);
+		if (!m_PathCallbacks->callbacks.empty() || !m_PathCallbacks->pending.empty() || !m_PathCallbacks->incoming.empty()) {
+			if (error) *error = "cannot resize Lua states while path callbacks are pending";
+			return false;
+		}
+	}
+
+	const int savedCursor = m_LastAssignedLuaState;
+	LuaStatesArray oldStates;
+	oldStates.swap(m_ScriptStates);
+	LuaStatesArray replacement(static_cast<size_t>(count));
+	m_ScriptStates.swap(replacement);
+	try {
+		for (LuaStateWrapper& state: m_ScriptStates) state.Initialize();
+	} catch (const std::exception& exception) {
+		LuaStatesArray failed;
+		failed.swap(m_ScriptStates);
+		m_ScriptStates.swap(oldStates);
+		m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : savedCursor % static_cast<int>(m_ScriptStates.size());
+		if (error) *error = std::string("could not initialize replacement Lua states: ") + exception.what();
+		return false;
+	}
+	m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : savedCursor % static_cast<int>(m_ScriptStates.size());
+	ResetPathCallbacks();
+	return true;
 }
 
 void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
@@ -6745,35 +6794,52 @@ bool LuaMan::RunThreadedScriptWriteHashSelfTest() {
 }
 
 bool LuaMan::RunThreadedScriptWriteHashSelfTestTwoCounts() {
-	const auto hasLiveScriptObjects = [](const LuaStateWrapper& state) {
-		return !state.GetRegisteredMOs().empty() || !state.GetPendingRegisteredMOs().empty();
-	};
-	if (g_MovableMan.GetMOIDCount() != 0 || hasLiveScriptObjects(m_MasterScriptState) || std::any_of(m_ScriptStates.begin(), m_ScriptStates.end(), hasLiveScriptObjects)) {
-		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash live movable/script objects prevent the temporary state-set test" << std::endl;
+	if (g_MovableMan.GetMOIDCount() != 0) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash live movable objects prevent the resize test" << std::endl;
 		return false;
 	}
-	WaitForAsyncGarbageCollection();
-
-	LuaStatesArray savedStates;
-	savedStates.swap(m_ScriptStates);
-	const int savedCursor = m_LastAssignedLuaState;
+	const int savedCount = static_cast<int>(m_ScriptStates.size());
+	{
+		auto* live = new MOPixel;
+		if (live->Create() < 0) {
+			delete live;
+			std::cout << "[script-graph-selftest] FAIL lua_state_resize_refuses_live_objects could not create fixture" << std::endl;
+			return false;
+		}
+		if (!m_ScriptStates.empty()) live->MoveScriptsToState(m_ScriptStates.front());
+		live->AdoptScriptObject();
+		std::string refusalError;
+		const bool refused = !ResizeThreadedStates(savedCount == 4 ? 32 : 4, &refusalError);
+		live->DestroyScriptState();
+		delete live;
+		if (!refused) {
+			std::cout << "[script-graph-selftest] FAIL lua_state_resize_refuses_live_objects" << std::endl;
+			return false;
+		}
+		std::cout << "[script-graph-selftest] PASS lua_state_resize_refuses_live_objects" << std::endl;
+	}
 	std::array<std::string, 2> hashes;
 	const std::array<int, 2> counts{4, 32};
+	std::array<uint64_t, 2> resizeMs{};
 	bool passed = true;
 	for (size_t countIndex = 0; countIndex < counts.size(); ++countIndex) {
-		LuaStatesArray replacement(static_cast<size_t>(counts[countIndex]));
-		m_ScriptStates.swap(replacement);
-		for (LuaStateWrapper& state: m_ScriptStates) state.Initialize();
-		m_LastAssignedLuaState = 0;
+		const auto resizeStart = std::chrono::steady_clock::now();
+		std::string resizeError;
+		if (!ResizeThreadedStates(counts[countIndex], &resizeError)) {
+			std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash resize states=" << counts[countIndex] << " error=" << resizeError << std::endl;
+			return false;
+		}
+		resizeMs[countIndex] = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - resizeStart).count());
 		passed = RunThreadedScriptWriteHashSelfTestForCurrentStates(&hashes[countIndex]) && passed;
-		m_ScriptStates.swap(replacement);
 	}
-	m_ScriptStates.swap(savedStates);
-	m_LastAssignedLuaState = savedCursor;
+	std::string restoreError;
+	passed = ResizeThreadedStates(savedCount, &restoreError) && passed;
+	if (!restoreError.empty()) std::cout << "[script-graph-selftest] resize restore: " << restoreError << std::endl;
 
 	const bool equal = passed && hashes[0] == hashes[1];
 	if (equal) {
-		std::cout << "[script-graph-selftest] PASS lua_state_two_count_hash states=4,32 hash=" << hashes[0] << std::endl;
+		std::cout << "[script-graph-selftest] PASS lua_state_two_count_hash states=4,32 hash=" << hashes[0]
+		          << " resize_ms_4=" << resizeMs[0] << " resize_ms_32=" << resizeMs[1] << std::endl;
 	} else {
 		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash states=4,32 hash4=" << hashes[0] << " hash32=" << hashes[1] << std::endl;
 	}

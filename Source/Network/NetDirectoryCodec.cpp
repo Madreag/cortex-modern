@@ -227,6 +227,7 @@ namespace RTE {
 			      (IsJoinMode(out.joinMode) || Fail(reason, "invalid_field", "join_mode")))) {
 				return false;
 			}
+			if (obj.contains("lua_state_count") && !ReadInt(obj, "lua_state_count", 0, NetDirectoryLimits::c_MaxIntField, out.luaStateCount, reason)) return false;
 			if (obj.contains("persistent_world")) {
 				if (!obj["persistent_world"].is_boolean()) {
 					return Fail(reason, "invalid_field", "persistent_world");
@@ -268,6 +269,7 @@ namespace RTE {
 			obj["network_protocol_version"] = in.networkProtocolVersion;
 			obj["lockstep_codec_version"] = in.lockstepCodecVersion;
 			obj["controller_frame_version"] = in.controllerFrameVersion;
+			if (in.luaStateCount >= 0) obj["lua_state_count"] = in.luaStateCount;
 			obj["match_config_hash"] = in.matchConfigHash;
 			obj["session_identity_hash"] = in.sessionIdentityHash;
 			obj["module_manifest_hash"] = in.moduleManifestHash;
@@ -298,6 +300,7 @@ namespace RTE {
 			out.networkProtocolVersion = fields.networkProtocolVersion;
 			out.lockstepCodecVersion = fields.lockstepCodecVersion;
 			out.controllerFrameVersion = fields.controllerFrameVersion;
+			out.luaStateCount = fields.luaStateCount;
 			out.matchConfigHash = std::move(fields.matchConfigHash);
 			out.sessionIdentityHash = std::move(fields.sessionIdentityHash);
 			out.moduleManifestHash = std::move(fields.moduleManifestHash);
@@ -329,6 +332,7 @@ namespace RTE {
 			fields.networkProtocolVersion = row.networkProtocolVersion;
 			fields.lockstepCodecVersion = row.lockstepCodecVersion;
 			fields.controllerFrameVersion = row.controllerFrameVersion;
+			fields.luaStateCount = row.luaStateCount;
 			fields.matchConfigHash = row.matchConfigHash;
 			fields.sessionIdentityHash = row.sessionIdentityHash;
 			fields.moduleManifestHash = row.moduleManifestHash;

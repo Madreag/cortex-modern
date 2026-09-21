@@ -37,6 +37,7 @@ namespace RTE {
 		int64_t networkProtocolVersion = 0;
 		int64_t lockstepCodecVersion = 0;
 		int64_t controllerFrameVersion = 0;
+		int64_t luaStateCount = -1; //!< Optional host count; absent on legacy directory rows.
 		std::string matchConfigHash;
 		std::string sessionIdentityHash;
 		std::string moduleManifestHash;
@@ -115,6 +116,7 @@ namespace RTE {
 		int64_t networkProtocolVersion = 0;
 		int64_t lockstepCodecVersion = 0;
 		int64_t controllerFrameVersion = 0;
+		int64_t luaStateCount = -1;
 		std::string matchConfigHash;
 		std::string sessionIdentityHash;
 		std::string moduleManifestHash;
@@ -183,6 +185,7 @@ namespace RTE {
 		int64_t networkProtocolVersion = 0;
 		int64_t lockstepCodecVersion = 0;
 		int64_t controllerFrameVersion = 0;
+		int64_t luaStateCount = -1;
 		std::string sessionIdentityHash;
 		std::string moduleManifestHash;
 

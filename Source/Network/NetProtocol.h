@@ -151,6 +151,7 @@ namespace RTE {
 		NetHash32 sessionRulesHash{};
 		NetHash32 sessionIdentityHash{};
 		bool hasUserdataModules = false;
+		uint16_t luaStateCount = 0; //!< This peer's effective count before host adoption.
 
 		bool operator==(const NetClientHello&) const = default;
 	};
@@ -172,6 +173,7 @@ namespace RTE {
 		NetHash32 sessionRulesHash{};
 		NetHash32 sessionIdentityHash{};
 		bool hasUserdataModules = false;
+		uint16_t luaStateCount = 0; //!< Host's effective threaded Lua state count.
 
 		bool operator==(const NetHostHello&) const = default;
 	};
@@ -537,7 +539,7 @@ namespace RTE {
 	class NetProtocol {
 	public:
 		static constexpr uint32_t c_Magic = 0x324E4343U;
-		static constexpr uint16_t c_Version = 3;
+		static constexpr uint16_t c_Version = 4;
 		static constexpr uint16_t c_HeaderBytes = 24;
 		static constexpr size_t c_MaxControlPayloadBytes = 64U * 1024U;
 		static constexpr size_t c_MaxDisplayNameBytes = 64;
