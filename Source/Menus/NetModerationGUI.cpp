@@ -432,8 +432,7 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	const int top = PanelTop(screenHeight);
 	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight >= c_CompactMaxHeight) {
-		int fittedTop = std::max(top, reservedTop);
-		fittedTop = std::min(fittedTop, screenHeight - c_PanelGap - minHeight);
+		const int fittedTop = std::max(top, reservedTop);
 		return {fittedTop, std::max(minHeight, std::min(height, screenHeight - c_PanelGap - fittedTop))};
 	}
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
@@ -1315,12 +1314,12 @@ void NetModerationGUI::Draw() {
 	if (m_Open) {
 		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
 		hash ^= std::hash<std::string>{}(snapshot.statusText) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
-		hash ^= std::hash<bool>{}(snapshot.isHost);
+		hash ^= std::hash<bool>{}(snapshot.isHost) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
 		for (const auto& member: snapshot.members) {
 			hash ^= std::hash<unsigned>{}(member.peerId) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
-			hash ^= std::hash<bool>{}(member.dropped);
-			hash ^= std::hash<bool>{}(member.reclaiming);
-			hash ^= std::hash<bool>{}(member.connected);
+			hash ^= std::hash<bool>{}(member.dropped) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.reclaiming) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.connected) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
 			hash ^= std::hash<std::string>{}(member.connectedRoute);
 			hash ^= std::hash<std::string>{}(member.statusLine);
 		}
