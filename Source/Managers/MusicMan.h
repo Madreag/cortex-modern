@@ -63,6 +63,18 @@ namespace RTE {
 		/// @return Whether the song was successfully started or not.
 		bool PlayDynamicSong(const std::string& songName, const std::string& songSectionType = "Default", bool playImmediately = false, bool playTransition = true, bool smoothFade = false);
 
+		/// Plays a cloned copy of the given song; the by-name overload looks the preset up and calls this.
+		bool PlayDynamicSong(const DynamicSong& song, const std::string& songSectionType = "Default", bool playImmediately = false, bool playTransition = true, bool smoothFade = false);
+
+		/// Ends the dynamic song when the current section's timer expires.
+		void EndDynamicMusicAfterCurrent() { m_EndWhenCurrentEnds = true; }
+
+		/// Stops the current containers and clears playing-dynamic-music state.
+		bool EndPlayingDynamicSong();
+
+		/// Expires the current section timer so Update takes the end-of-song path.
+		void ExpireCurrentSectionForTest();
+
 		/// Switches the next SongSection queued to play.
 		/// @param songSectionType Next SongSectionType to play.
 		/// @param playImmediately Whether to immediately play the new SongSectionType or not.
@@ -97,6 +109,7 @@ namespace RTE {
 
 	protected:
 		bool m_IsPlayingDynamicMusic; //!< Whether this is actively playing dynamic music or not.
+		bool m_EndWhenCurrentEnds; //!< End the song instead of cycling when the current section timer expires.
 
 		std::unique_ptr<SoundContainer> m_InterruptingMusicSoundContainer; //!< Current interrupting music being played.
 

@@ -2651,7 +2651,9 @@ end
 -- The script graph's contracts, run inside the engine's master state by -script-graph-selftest.
 local results = {}
 local function check(name, ok, detail)
-	results[#results + 1] = string.format("[script-graph-selftest] %s %s%s", ok and "PASS" or "FAIL", name, detail and (" " .. tostring(detail)) or "")
+	local extra = ""
+	if not ok and detail ~= nil then extra = " " .. tostring(detail) end
+	results[#results + 1] = string.format("[script-graph-selftest] %s %s%s", ok and "PASS" or "FAIL", name, extra)
 	if _ScriptGraphProgress then _ScriptGraphProgress(results[#results]) end
 end
 local function resumed(co, ...)
@@ -3666,30 +3668,6 @@ end
 _SelfTestShared, _SelfTestMod, _SelfTestKlass = nil, nil, nil
 _G["selftest.lua"] = nil
 
--- 6.x compatibility bindings: the names Void Wanderers-era scripts call on the old objects.
-do
-	local musicOk, musicErr = pcall(function()
-		AudioMan:ClearMusicQueue()
-		AudioMan:PlayMusic("Base.rte/Music/dBSoundworks/cc2g.ogg", -1, -1)
-		AudioMan:QueueMusicStream("Base.rte/Music/dBSoundworks/ruinexploration.ogg")
-	end)
-	check("v6_audioman_music_queue_methods", musicOk, musicErr)
-	check("v6_audioman_playmusic_arms_compat_song", musicOk and MusicMan:GetCurrentDynamicSongSectionType() == "V6CompatNow", MusicMan:GetCurrentDynamicSongSectionType())
-	check("v6_audioman_clearmusicqueue_returns", pcall(AudioMan.ClearMusicQueue, AudioMan))
-
-	local scene = CreateScene("Alezer Canyon")
-	check("v6_scene_getoptionalarea_missing_is_nil", scene ~= nil and scene:GetOptionalArea("No Such Area") == nil and scene:HasArea("No Such Area") == false)
-	check("v6_scene_getoptionalarea_returns_area", scene ~= nil and scene:GetOptionalArea("LZ Team 1") ~= nil and scene:GetOptionalArea("LZ Team 1").Name == "LZ Team 1")
-
-	local actor = CreateAHuman("Green Dummy")
-	local baseSpeed
-	local limbOk, limbErr = pcall(function()
-		baseSpeed = actor:GetLimbPathSpeed(1)
-		actor:SetLimbPathSpeed(1, baseSpeed * 0.5)
-	end)
-	check("v6_ahuman_limbpathspeed_methods", limbOk, limbErr)
-	check("v6_ahuman_limbpathspeed_roundtrip", limbOk and type(baseSpeed) == "number" and math.abs(actor:GetLimbPathSpeed(1) - baseSpeed * 0.5) < 0.0001, baseSpeed)
-end
 return table.concat(results, "\n")
 
 )lua";

@@ -10,6 +10,10 @@
 #include "ConsoleMan.h"
 #include "PresetMan.h"
 
+namespace RTE {
+	void ResetV6CompatMusicState();
+}
+
 using namespace RTE;
 
 MusicMan::MusicMan() {
@@ -22,6 +26,7 @@ MusicMan::~MusicMan() {
 
 void MusicMan::Clear() {
 	m_IsPlayingDynamicMusic = false;
+	m_EndWhenCurrentEnds = false;
 
 	m_InterruptingMusicSoundContainer = nullptr;
 
@@ -54,7 +59,11 @@ void MusicMan::Destroy() {
 void MusicMan::Update() {
 	if (m_IsPlayingDynamicMusic) {
 		if (m_MusicTimer.IsPastRealTimeLimit()) {
-			CyclePlayingSoundContainers(false);
+			if (m_EndWhenCurrentEnds) {
+				EndPlayingDynamicSong();
+			} else {
+				CyclePlayingSoundContainers(false);
+			}
 		}
 		if (m_PreviousSoundContainerSetToFade && m_MusicFadeTimer.IsPastRealTimeLimit()) {
 			m_PreviousSoundContainerSetToFade = false;
@@ -101,31 +110,53 @@ void MusicMan::ResetMusicState() {
 	}
 
 	Clear();
+	ResetV6CompatMusicState();
+}
+
+bool MusicMan::PlayDynamicSong(const DynamicSong& song, const std::string& songSectionType, bool playImmediately, bool playTransition, bool smoothFade) {
+	m_NextSongSection = nullptr;
+	m_CurrentSong = std::unique_ptr<DynamicSong>(dynamic_cast<DynamicSong*>(song.Clone()));
+	if (!m_CurrentSong) {
+		return false;
+	}
+	m_EndWhenCurrentEnds = false;
+	SetNextSongSectionType(songSectionType);
+	SelectNextSongSection();
+	SelectNextSoundContainer(playTransition);
+	if (playImmediately) {
+		if (m_IsPlayingDynamicMusic) {
+			if (m_PreviousSoundContainer) {
+				m_PreviousSoundContainer->Stop();
+				m_PreviousSoundContainer = nullptr;
+			}
+		}
+		CyclePlayingSoundContainers(smoothFade);
+	}
+	m_IsPlayingDynamicMusic = true;
+	return true;
 }
 
 bool MusicMan::PlayDynamicSong(const std::string& songName, const std::string& songSectionType, bool playImmediately, bool playTransition, bool smoothFade) {
 	if (const DynamicSong* dynamicSongToPlay = dynamic_cast<const DynamicSong*>(g_PresetMan.GetEntityPreset("DynamicSong", songName))) {
-		m_NextSongSection = nullptr;
-		m_CurrentSong = std::unique_ptr<DynamicSong>(dynamic_cast<DynamicSong*>(dynamicSongToPlay->Clone()));
-		SetNextSongSectionType(songSectionType);
-		SelectNextSongSection();
-		SelectNextSoundContainer(playTransition);
-		// If this isn't the case, then the MusicTimer's existing setup should make it play properly anyway, even if it's just instant
-		if (playImmediately) {
-			if (m_IsPlayingDynamicMusic) {
-				if (m_PreviousSoundContainer) {
-					m_PreviousSoundContainer->Stop();
-					m_PreviousSoundContainer = nullptr;
-				}
-			}
-			CyclePlayingSoundContainers(smoothFade);
-		}
-		m_IsPlayingDynamicMusic = true;
-
-		return true;
+		return PlayDynamicSong(*dynamicSongToPlay, songSectionType, playImmediately, playTransition, smoothFade);
 	}
 
 	return false;
+}
+
+bool MusicMan::EndPlayingDynamicSong() {
+	if (m_CurrentSoundContainer) {
+		m_CurrentSoundContainer->Stop();
+	}
+	if (m_PreviousSoundContainer) {
+		m_PreviousSoundContainer->Stop();
+	}
+	return EndDynamicMusic(false);
+}
+
+void MusicMan::ExpireCurrentSectionForTest() {
+	m_MusicTimer.SetRealTimeLimitMS(0);
+	Update();
 }
 
 bool MusicMan::SetNextDynamicSongSection(const std::string& newSongSectionType, bool playImmediately, bool playTransition, bool smoothFade) {
