@@ -249,7 +249,6 @@ static bool s_netPerturbWhenLive = false;
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
 static int s_cliNumLuaStatesOverride = -1;
-static bool s_netIdentityLuaStatesExperiment = false;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
@@ -8334,8 +8333,6 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
-		} else if (arg == "-net-identity-lua-states-experiment") {
-			s_netIdentityLuaStatesExperiment = true;
 		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
 			netSessionRequested = true;
 			if (arg == "-net-dedicated") matchServiceRequested = true;
@@ -8343,9 +8340,6 @@ int main(int argc, char** argv) {
 			matchServiceRequested = true;
 		}
 	}
-	// Normal sessions keep the Lua-state count in the identity. The experiment flag is a
-	// deliberately loud, test-only exception used only while proving count invariance.
-	NetIdentity::SetLuaStateCountExperiment(s_netIdentityLuaStatesExperiment);
 	// Service launches keep the saved VM layout, including a match restarted from this runtime.
 	if (netSessionRequested && !matchServiceRequested && !explicitLuaStateOverride) {
 		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
