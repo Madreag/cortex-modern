@@ -553,7 +553,7 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 		writer.NewPropertyWithValue("PlaceObjectsIfSceneIsRestarted", image.placeObjects);
 		writer.NewPropertyWithValue("PlaceUnitsIfSceneIsRestarted", image.placeUnits);
 		writer.Append(image.scene);
-	});
+	}).BindSimTime(image.simTimeTicks);
 }
 
 CheckpointText RTE::AssembleCheckpointIndex(const CheckpointImage& image) {
