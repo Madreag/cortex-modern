@@ -2791,8 +2791,10 @@ _SelfTestVector = Vector(11, 12)
 _SelfTestTimer = Timer()
 _SelfTestTimer.StartSimTimeTicks = 4567
 math._Checkpoint = { count = 7 }
-local function wrapAbs(original) return function(value) return original(value) end end
-math.abs = wrapAbs(math.abs)
+-- A library function a mod replaced, capturing nothing: a wrapper closing over the original would
+-- hold an upvalue cell no barrier watches, which is the chunk cache's subject, not this fixture's.
+local function plainAbs(value) if value < 0 then return -value end return value end
+math.abs = plainAbs
 _VERSION = "snapshot version"
 _SelfTestMod = {}
 do
