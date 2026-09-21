@@ -71,9 +71,9 @@ extern "C" {
 #include <execution>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
 #include <map>
 #include <memory>
+#include <queue>
 #include <string>
 #include <sstream>
 #include <tuple>
@@ -4817,21 +4817,44 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		return;
 	}
 
+	struct Cursor {
+		LuaStateWrapper* state = nullptr;
+		std::vector<MovableObject*> objects;
+		size_t next = 0;
+	};
+	struct Pending {
+		MovableObject* object = nullptr;
+		size_t cursor = 0;
+	};
+	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
+		return lhs.object->GetUniqueID() > rhs.object->GetUniqueID();
+	};
+
+	std::vector<Cursor> cursors;
+	cursors.reserve(g_LuaMan.GetThreadedScriptStates().size());
+	std::priority_queue<Pending, std::vector<Pending>, decltype(earlier)> pending(earlier);
+	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+		Cursor& cursor = cursors.emplace_back();
+		cursor.state = &luaState;
+		cursor.objects = SortedRegisteredMOs(luaState);
+		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1});
+	}
+
 	LuaStateWrapper* currentState = nullptr;
-	LuaStateWrapper& masterState = g_LuaMan.GetMasterScriptState();
-	for (const auto& [uniqueID, object]: m_KnownObjects) {
-		(void)uniqueID;
-		LuaStateWrapper* state = object->GetLuaState();
-		if (!state || state == &masterState) continue;
-		if (!state->GetPendingRegisteredMOs().empty() && !state->GetRegisteredMOs().contains(object)) continue;
-		if (currentState != state) {
-			g_LuaMan.SetThreadLuaStateOverride(state);
-			currentState = state;
+	while (!pending.empty()) {
+		const Pending next = pending.top();
+		pending.pop();
+		Cursor& cursor = cursors[next.cursor];
+		if (currentState != cursor.state) {
+			g_LuaMan.SetThreadLuaStateOverride(cursor.state);
+			currentState = cursor.state;
 		}
-		if (ValidMO(object->GetRootParent()) && object->HasRequestedSyncedUpdate()) {
-			object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-			object->ResetRequestedSyncedUpdateFlag();
+		if (ValidMO(next.object->GetRootParent()) && next.object->HasRequestedSyncedUpdate()) {
+			next.object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+			next.object->ResetRequestedSyncedUpdateFlag();
 		}
+		++cursor.next;
+		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
 	}
 	g_LuaMan.SetThreadLuaStateOverride(nullptr);
 }
