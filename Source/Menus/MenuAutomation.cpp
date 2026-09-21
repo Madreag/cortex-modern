@@ -835,16 +835,17 @@ namespace RTE::MenuAutomation {
 			check("toast_band_arg_is_n", rows == 3, "expectedRows=" + std::to_string(rows));
 		}
 		{
-			const char* previous = SDL_getenv("CCCP_HEADLESS");
-			SDL_setenv_unsafe("CCCP_HEADLESS", "", 1);
+			const char* runner = SDL_getenv("CCCP_HEADLESS");
+			const bool runnerHad = runner != nullptr;
+			const std::string runnerValue = runnerHad ? runner : "";
 			SDL_unsetenv_unsafe("CCCP_HEADLESS");
 			const bool refused = !FireAssertAllowed();
-			if (previous) {
-				SDL_setenv_unsafe("CCCP_HEADLESS", previous, 1);
-			} else {
-				SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
-			}
 			check("fire_assert_refused_when_headed", refused, refused ? "refused" : "allowed");
+			check("headless_unset_stays_unset", SDL_getenv("CCCP_HEADLESS") == nullptr,
+			      SDL_getenv("CCCP_HEADLESS") ? "set" : "unset");
+			if (runnerHad) {
+				SDL_setenv_unsafe("CCCP_HEADLESS", runnerValue.c_str(), 1);
+			}
 		}
 		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 		return passed;

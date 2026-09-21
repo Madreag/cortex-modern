@@ -17,6 +17,10 @@ from pathlib import Path
 import re
 import sys
 
+SELFTEST_FIXTURES = {
+    "mod-api-shims": ["mod-api-shims.lua"],
+}
+
 SELFTESTS = [
     "controller-frame",
     "net-protocol",
@@ -183,7 +187,7 @@ def main():
             scored = score_detect(case_data)
             scored["binary"] = case_data.get("exe_sha256")
         else:
-            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout)
+            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
             try:
                 record = run.start().finish()
             finally:
