@@ -350,9 +350,9 @@ namespace RTE::CheckpointLua {
 			m_Captured = true;
 		}
 
-		std::shared_ptr<const NativeImage> Finish(const Snapshot& heap) {
+		std::shared_ptr<const NativeImage> Finish(lua_State* state) {
 			CheckThread();
-			if (!m_Captured || !m_Image || heap.State() != State()) throw std::logic_error("native results require the same frozen Lua heap");
+			if (!m_Captured || !m_Image || state != State()) throw std::logic_error("native results require the same frozen Lua heap");
 			if (!m_NewClasses.empty()) {
 				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
 				for (auto& [address, entry]: m_NewClasses) merged->entries[address] = std::move(entry);
