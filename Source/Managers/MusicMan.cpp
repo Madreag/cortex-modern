@@ -9,6 +9,7 @@
 #include "AudioMan.h"
 #include "ConsoleMan.h"
 #include "PresetMan.h"
+#include "MovableMan.h"
 
 namespace RTE {
 	void ResetV6CompatMusicState();
@@ -83,9 +84,6 @@ void MusicMan::Update() {
 }
 
 bool MusicMan::IsMusicPlaying() const {
-	if (m_IsPlayingDynamicMusic) {
-		return true;
-	}
 	bool interruptingMusicSoundContainerPlaying = m_InterruptingMusicSoundContainer != nullptr && m_InterruptingMusicSoundContainer->GetAudibleVolume() > 0.0F;
 	bool previousSoundContainerPlaying = m_PreviousSoundContainer != nullptr && m_PreviousSoundContainer->GetAudibleVolume() > 0.0F;
 	bool currentSoundContainerPlaying = m_CurrentSoundContainer != nullptr && m_CurrentSoundContainer->GetAudibleVolume() > 0.0F;
@@ -114,6 +112,18 @@ void MusicMan::ResetMusicState() {
 
 	Clear();
 	ResetV6CompatMusicState();
+}
+
+void MusicMan::PrepareForActivityStart() {
+	if (!g_MovableMan.IsRestoringSnapshot()) {
+		ResetMusicState();
+	} else {
+		ResetV6CompatMusicState();
+	}
+}
+
+bool MusicMan::IsCompatCarrierPlaying() const {
+	return m_IsPlayingDynamicMusic && (m_CurrentSongSectionType == "V6CompatNow" || m_CurrentSongSectionType == "V6CompatNext");
 }
 
 bool MusicMan::PlayDynamicSong(const DynamicSong& song, const std::string& songSectionType, bool playImmediately, bool playTransition, bool smoothFade) {
