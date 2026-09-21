@@ -227,11 +227,26 @@ namespace RTE::CheckpointLua {
 		}
 
 		void Lookup(lua_State* state, const GCtab* table, int key) {
+			const std::string name = Key(state, key);
+			if (table == m_InjectTable && name == m_InjectKey) { Push(state, m_InjectValue); return; }
 			const auto& saved = ReadTable(table);
-			const auto found = saved.positions.find(Key(state, key));
+			const auto found = saved.positions.find(name);
 			if (found == saved.positions.end()) lua_pushnil(state);
 			else Push(state, saved.entries[found->second].second);
 		}
+
+	public:
+		// One value answered under a key of one frozen table, for a value the capture kept out of the live heap's table.
+		void Inject(const GCtab* table, const char* key, const TValue& value) {
+			m_InjectTable = table;
+			m_InjectKey = std::string("s") + key;
+			m_InjectValue = value;
+		}
+
+	private:
+		const GCtab* m_InjectTable = nullptr;
+		std::string m_InjectKey;
+		TValue m_InjectValue{};
 
 		static int Type(lua_State* state) {
 			auto value = Self(state).Value(state, 1);

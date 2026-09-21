@@ -13,7 +13,7 @@ namespace RTE::CheckpointLua {
 	struct GraphImage {
 		Snapshot heap;
 		std::shared_ptr<const NativeImage> native;
-		TValue roots, globals, baseline, package;
+		TValue roots, globals, baseline, package, callbacks;
 		uint64_t liveSerial = 0;
 		CheckpointText rng;
 		std::unordered_set<const void*> scratch;
@@ -21,6 +21,7 @@ namespace RTE::CheckpointLua {
 
 		GraphImage() {
 			setnilV(&roots);
+			setnilV(&callbacks);
 			setnilV(&globals);
 			setnilV(&baseline);
 			setnilV(&package);
@@ -50,6 +51,8 @@ namespace RTE::CheckpointLua {
 			         "_ScriptGraphReuseRoot", "_ScriptGraphNoteTable", "_ScriptGraphNoteValue",
 			         "_ScriptGraphNoteUncacheable", "_ScriptGraphNoteRootReuse", "_ScriptGraphWalkPart"})
 				Bind(worker, context, name, NoOp);
+			// The capture's descriptor was taken out of the live globals before the freeze; the walk reads it under its name.
+			if (tvistab(&callbacks)) context.view.Inject(tabV(&globals), "_ScriptGraphCallbacks", callbacks);
 			context.view.Push(worker, globals); lua_setglobal(worker, "_G");
 			context.view.Push(worker, baseline); lua_setglobal(worker, "_ScriptGraphBaseline");
 			context.view.Push(worker, package); lua_setglobal(worker, "package");

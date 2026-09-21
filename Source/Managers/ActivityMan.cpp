@@ -612,6 +612,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && beforeWalk.dirtyValues == 0 && !beforeWalk.unknownTable;
 	const auto graphStart = std::chrono::steady_clock::now();
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
+	// Compiled table stores only mark while the trap is armed; it is re-armed before the freeze protects the heap.
+	g_LuaMan.ArmCheckpointWriteTrap();
 	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration(), luaStateCount) || (graphClean && cow.HasLua(luaStateCount))) {
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
@@ -633,8 +635,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// A skipped capture reused every root; a capture that ran reports what its chunks did.
 	image->graphRootsReused = image->luaReused ? image->graph.roots : image->graph.rootsReused;
 	image->graphRootsRewritten = image->luaReused ? 0 : image->graph.rootsRewritten;
-	// Compiled table stores only mark while the trap is armed, so every freeze re-arms it.
-	g_LuaMan.ArmCheckpointWriteTrap();
 	const auto sceneStart = std::chrono::steady_clock::now();
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();

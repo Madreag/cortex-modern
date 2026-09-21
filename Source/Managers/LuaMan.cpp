@@ -5545,6 +5545,8 @@ struct ScriptCallbackRootScope {
 		lua_pushvalue(state, LUA_GLOBALSINDEX);
 		luaJIT_arm_tab_write(state, -1);
 		lua_pop(state, 1);
+		// The store above marked the globals and cleared the trap; the stores that follow must report again.
+		luaJIT_arm_tab_write_trap(state);
 	}
 };
 
@@ -5738,18 +5740,25 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
 	const auto started = std::chrono::steady_clock::now();
 	const int top = lua_gettop(m_State);
+	// Every write to the live heap happens before the freeze: after it each first write to a page is a fault.
 	struct RestoreCapture {
 		lua_State* state;
 		int top;
 		uint64_t serial;
-		~RestoreCapture() { lua_settop(state, top); luaJIT_set_state_serial(state, serial); }
+		bool done = false;
+		void Run() {
+			if (done) return;
+			done = true;
+			lua_settop(state, top);
+			luaJIT_set_state_serial(state, serial);
+		}
+		~RestoreCapture() { Run(); }
 	} restore{m_State, top, luaJIT_state_serial(m_State)};
 	try {
 		if (luaJIT_preview_active(m_State)) throw std::runtime_error("a checkpoint capture cannot run inside an armed preview window");
 		LoadScriptGraphHelper();
 		LuaCheckpointBarrierPause barrierPause;
 		ScriptGraphScratchScope scratch(m_State);
-		ScriptCallbackRootScope callbacks(m_State);
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
 		image->liveSerial = restore.serial;
 		image->rng = CaptureRandomGeneratorCheckpoint();
@@ -5774,6 +5783,15 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		}
 		image->roots = m_State->top[-1];
 		const auto rootsDone = std::chrono::steady_clock::now();
+		// The descriptor leaves the live globals now, before the freeze; the worker sees it injected under the same name.
+		lua_getglobal(m_State, "_ScriptGraphCallbacks");
+		image->callbacks = m_State->top[-1];
+		lua_pushnil(m_State);
+		lua_setglobal(m_State, "_ScriptGraphCallbacks");
+		lua_pushvalue(m_State, LUA_GLOBALSINDEX);
+		luaJIT_arm_tab_write(m_State, -1);
+		lua_pop(m_State, 1);
+		luaJIT_arm_tab_write_trap(m_State);
 		setgcVraw(&image->globals, gcref(m_State->env), LJ_TTAB);
 		lua_getglobal(m_State, "_ScriptGraphBaseline"); image->baseline = m_State->top[-1];
 		lua_getglobal(m_State, "package"); image->package = m_State->top[-1];
@@ -5785,9 +5803,11 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 		natives.Capture();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
-		image->heap = m_CheckpointHeap->Freeze();
-		image->native = natives.Finish(image->heap);
+		image->native = natives.Finish(m_State);
 		image->scratch = scratch.values;
+		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
+		restore.Run();
+		image->heap = m_CheckpointHeap->Freeze();
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
