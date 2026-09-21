@@ -603,7 +603,7 @@ void NetModerationGUI::Update() {
 	m_DepartureFrame = frame;
 	if (snapshot.serviceState == "Running") {
 		for (const auto& member: snapshot.members) {
-			if (member.cpu || g_NetMatchService.GetSeatPresence().StateOf(member.peerId) != NetSeatPresenceState::Left || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
+			if (member.cpu || !NetPlayerPresentation::Seated(member.peerId) || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
 			if (std::find(m_AnnouncedAISeats.begin(), m_AnnouncedAISeats.end(), member.peerId) != m_AnnouncedAISeats.end()) continue;
 			m_AnnouncedAISeats.push_back(member.peerId);
 			ScenarioRunner::PushNetUiToast("seat_left_ai", DisplayName(NetPlayerPresentation::Name(member)) + ": " + NetPlayerPresentation::State(member));
