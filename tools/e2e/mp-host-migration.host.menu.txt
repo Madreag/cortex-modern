@@ -1,14 +1,14 @@
 wait_ms 1500
 activate ButtonMainToMultiplayer
-wait_ms 300
+wait_ms 450
 activate ButtonMultiplayerHostGame
-wait_ms 300
+wait_ms 450
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
 settext TextHostPort {PORT}
 settext TextHostPlayers 3
-wait_ms 300
+wait_ms 450
 activate ButtonMultiplayerCreate
-wait_ms 300
+wait_ms 450
 assert_substate Lobby
 video_mark migration-listening
 wait_connected 3 90
