@@ -5251,7 +5251,7 @@ namespace RTE {
 		const bool authority = timing.senderPeerId == GetHostPeerId() && LockstepPeerOfTransport(fromTransport) == GetHostPeerId();
 		if (timing.action == NetTimingAction::CapturePark) {
 			if (timing.phase == NetTimingPhase::Status) {
-				if (m_Config.localPeerId != GetHostPeerId() || timing.peerId != timing.senderPeerId || timing.pingMs == 0) return;
+				if (m_Config.localPeerId != GetHostPeerId() || timing.peerId != timing.senderPeerId) return;
 				m_CaptureParkReportsMs[timing.peerId] = std::max(m_CaptureParkReportsMs[timing.peerId], timing.pingMs);
 				PublishCapturePark(timing.applyFrame);
 			} else if (timing.phase == NetTimingPhase::Commit && authority) {

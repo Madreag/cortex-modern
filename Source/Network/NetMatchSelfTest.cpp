@@ -4698,6 +4698,7 @@ namespace RTE {
 			std::map<uint64_t, std::string> trace;        //!< Every tick this round committed, as the sim applied it.
 			uint64_t nextProduce = 0;
 			uint64_t lastApplied = 0;
+			bool startParkPublished = false;
 
 			uint8_t LockstepId() const { return static_cast<uint8_t>(session.GetLocalPeerId() + 1); }
 		};
@@ -4820,6 +4821,7 @@ namespace RTE {
 			round.SetSessionEventSink([owner](const NetTransportEvent& event) { owner->handover.push_back(event); });
 			peer.nextProduce = round.GetConfig().startFrame;
 			peer.lastApplied = round.GetConfig().startFrame > 0 ? round.GetConfig().startFrame - 1 : 0;
+			peer.startParkPublished = false;
 		}
 
 		// Setup rounds on worker threads, one per peer, as each process's match worker runs its own.
@@ -5006,6 +5008,13 @@ namespace RTE {
 				peer.seats = std::move(snapshot);
 			}
 			std::string ignored;
+			// The fixture has no ScenarioRunner activity restart to measure. Publish the measured zero park
+			// through the coordinator API before producing input, exactly where the real sim publishes its
+			// restart; the wire retransmit path then proves rematch starts do not depend on harness ordering.
+			if (!peer.startParkPublished) {
+				peer.startParkPublished = true;
+				round.NoteLocalStartPark(0);
+			}
 			if (round.IsRunning() && round.NeedsResyncPriming()) {
 				std::vector<NetLockstepFrame> priming(round.GetConfig().inputDelayFrames);
 				for (size_t index = 0; index < priming.size(); ++index) {
