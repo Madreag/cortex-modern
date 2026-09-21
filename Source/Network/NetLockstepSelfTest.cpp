@@ -1555,6 +1555,13 @@ namespace RTE {
 		}
 
 		bool TestBoundedHoldKeepsCommitting(std::string* error) {
+			const uint64_t measuredRamp = NetLockstepCoordinator::RequiredAdmissionRampMs(400, 0, 26, 1000.0 / 60.0, 76, 285);
+			if (measuredRamp < 1118 || measuredRamp > 1120) {
+				*error = "400ms RTT admission ramp formula produced " + std::to_string(measuredRamp) + "ms (expected 1119ms)";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS rejoin_ramp_400ms_rtt measured_ms=" << measuredRamp
+			          << " formula=delay_frames*sim_tick+rtt+park" << std::endl;
 			LoopbackTransport hostTransport, clientTransport;
 			NetLockstepCoordinator host, client;
 			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A02, 0, NetTransportLane::ControlReliable);
