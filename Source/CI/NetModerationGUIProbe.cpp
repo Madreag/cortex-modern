@@ -778,6 +778,7 @@ namespace {
 }
 
 uint64_t RendezvousCount() { return rendezvousCount.load(); }
+bool Running() { return probe.loaded && probe.enabled && !probe.done; }
 
 void BeforePoll() { Process(Phase::Poll); }
 void AfterDraw() { Process(Phase::Draw); }

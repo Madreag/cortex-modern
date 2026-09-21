@@ -399,6 +399,12 @@ static std::vector<std::string> s_rbProbeFirstDeep;
 static long long s_rbProbeDeepDivergence = -1;
 static bool s_rbProbeRestoreMismatch = false;
 
+/// The longest a completed e2e round waits for a menu probe to read its still-drawn pause menu.
+static constexpr int64_t c_CompletedProbeHoldMs = 12000;
+static int64_t s_netMatchE2ECompletedMs = 0;
+static int64_t SteadyMilliseconds() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static NetMatchHealWindow s_netMatchHeals;
@@ -4705,9 +4711,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			System::SetQuit(true);
 		} else if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
 			g_NetMatchService.Complete("e2e complete");
-			g_ActivityMan.EndActivity();
-			ScenarioRunner::ClearControllerReplayError();
-			System::SetQuit(true);
+			// A probe still reading the pause menu the round ended under keeps it for a bounded window; the
+			// game loop ends the activity as soon as the probe is done (ENGINE 200).
+			if (NetModerationGUIProbe::Running()) {
+				s_netMatchE2ECompletedMs = SteadyMilliseconds();
+			} else {
+				g_ActivityMan.EndActivity();
+				ScenarioRunner::ClearControllerReplayError();
+				System::SetQuit(true);
+			}
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
@@ -5024,6 +5036,15 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
+		if (s_netMatchE2ECompletedMs && (!NetModerationGUIProbe::Running() ||
+		                                 SteadyMilliseconds() - s_netMatchE2ECompletedMs >= c_CompletedProbeHoldMs)) {
+			s_netMatchE2ECompletedMs = 0;
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			System::SetQuit(true);
+			break;
+		}
 		static uint64_t lossArmRound = UINT64_MAX;
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && lossArmRound != ScenarioRunner::GetLockstepRoundId()) {
 			lossArmRound = ScenarioRunner::GetLockstepRoundId();
@@ -6368,8 +6389,18 @@ void RunGameLoop() {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
-						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
-						g_NetMatchService.Complete("e2e complete");
+						if (!s_netMatchE2ECompletedMs) {
+							(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
+							g_NetMatchService.Complete("e2e complete");
+							s_netMatchE2ECompletedMs = SteadyMilliseconds();
+						}
+						// A player reading the pause menu when the round ends keeps seeing it; a probe that is
+						// still mid-script gets that same window before the harness ends the activity.
+						const int64_t heldMs = SteadyMilliseconds() - s_netMatchE2ECompletedMs;
+						if (NetModerationGUIProbe::Running() && heldMs < c_CompletedProbeHoldMs) {
+							// Leave the update loop for this frame: the drawn pause menu is what the probe reads.
+							break;
+						}
 						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 						g_ActivityMan.EndActivity();
 						System::SetQuit(true);

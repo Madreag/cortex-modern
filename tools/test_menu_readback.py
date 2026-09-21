@@ -371,7 +371,12 @@ def pause_probe(who, root):
                   {"op": "wait", "service": "Completed", "scope": "menu"},
                   {"op": "signal", "name": "left", "scope": "menu"}]
     else:
-        steps += [{"op": "signal", "name": "done"}]
+        # ENGINE 200: End Match is the host's row only while the round runs. The enabled state is re-derived
+        # from the live service on every pause-menu Update and the button is drawn by that same pass, so the
+        # host reads it live here and the capture's recorded pause rows carry the state after completion.
+        steps += [menu_step("assert_enabled ButtonEndMatch 1"),
+                  {"op": "assert", "equals": {"service": "Running"}},
+                  {"op": "signal", "name": "done"}]
     steps += [{"op": "finish"}]
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
