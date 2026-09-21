@@ -21,6 +21,11 @@ namespace RTE {
 		void ApplyQueuedPage(GUIControlManager* manager);
 		bool Handles(const std::string& command);
 		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
+		/// Missing assert_toast_band argument keeps -1.
+		int ParseToastBandExpectedRows(std::istream& args);
+		/// fire_assert is allowed when the recorder is on or the run is headless.
+		bool FireAssertAllowed();
+		bool RunSelfTest();
 		/// Finishes queued readback files before the image library shuts down.
 		bool FinishReadbacks();
 		void Click(GUIControlManager* manager, const std::string& control);
