@@ -2349,7 +2349,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	// The stash only has to outlive the candidate. Held past that it keeps unreachable script
 	// objects alive into the next capture, which then names sound owners no restore can produce.
 	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
-		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).CallScriptGraph("releaseObjects");
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
 	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
@@ -2510,9 +2510,9 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 		if (prepared) {
 			state.RestoreScriptGraph(graphs[index], errors, reuseHeld);
 		}
-		state.RunScriptString("_ScriptGraph.clearPrepared()");
+		state.CallScriptGraph("clearPrepared");
 		if (reuseHeld) {
-			state.RunScriptString("_ScriptGraph.releaseObjects()");
+			state.CallScriptGraph("releaseObjects");
 		}
 	}
 	if (!errors.empty()) {
@@ -6377,7 +6377,7 @@ void MovableMan::DiscardWorld(WorldSetAside& in) {
 	for (auto& roster: in.rosters) roster.clear();
 	in.sceneAreas.areas.clear(); in.sceneAreas.navigableAreas.clear();
 	for (size_t index = 0; index < in.luaGraphs.size(); ++index) {
-		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
+		g_LuaMan.GetStateByIndex(static_cast<int>(index)).CallScriptGraph("releaseObjects");
 	}
 	in.primitiveQueues.reset();
 	in.musicOwners.reset();
