@@ -1203,6 +1203,8 @@ namespace RTE {
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpTail.clear();
 		s_CatchUpPriorInputThrough = 0;
+		std::erase_if(s_NetUiToasts, [](const NetUiToast& toast) { return toast.record.kind == "seat_held"; });
+		s_SlowMachineNoticeUntilMs = 0;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
