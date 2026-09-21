@@ -290,15 +290,19 @@ namespace RTE {
 		std::mutex s_PrimedMutex;
 		std::map<std::string, PrimedModule> s_PrimedModules; // key: index|fileName|root
 		// A future from std::async waits in its own destructor, so process exit cannot meet a joinable
-		// thread and terminate; the pass it waits for is bounded by the modules on disk.
+		// thread and terminate; the stop below is what keeps that wait short.
 		std::future<void> s_Priming;
 		bool s_PrimingStarted = false;
+		// Only the priming pass reads this; a caller building its own manifest is never cut short.
+		std::atomic<bool> s_PrimingStopRequested{false};
+
+		bool StopRequested(const std::atomic<bool>* stop) { return stop && stop->load(std::memory_order_relaxed); }
 
 		std::string PrimedKey(const NetIdentityModuleEntry& module) {
 			return std::to_string(module.index) + "|" + module.fileName + "|" + module.root;
 		}
 
-		bool HashModuleContent(const NetIdentityModuleEntry& module, const fs::path& root, NetHash32& outHash, std::string* error) {
+		bool HashModuleContent(const NetIdentityModuleEntry& module, const fs::path& root, NetHash32& outHash, std::string* error, const std::atomic<bool>* stop = nullptr) {
 			std::vector<ModuleFileRecord> files;
 			if (!CollectModuleFiles(root, files, error)) {
 				return false;
@@ -314,6 +318,10 @@ namespace RTE {
 			AppendInt(hasher, "file_count", static_cast<uint64_t>(files.size()));
 
 			for (const ModuleFileRecord& file : files) {
+				if (StopRequested(stop)) {
+					if (error) *error = "manifest priming stopped inside " + module.fileName;
+					return false;
+				}
 				AppendField(hasher, "file.path", file.relativePath);
 				AppendInt(hasher, "file.size", file.size);
 				if (!ReadFileIntoHasher(file.absolutePath, hasher, error)) {
@@ -505,11 +513,17 @@ namespace RTE {
 		return true;
 	}
 
-	bool NetIdentity::CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error, NetIdentityBuildOptions options) {
+	// The walk itself. `stop` is the priming pass's own flag and nothing else's: a caller building its
+	// own manifest passes nullptr and is never cut short.
+	static bool WalkManifestModules(NetIdentityManifest& manifest, std::string* error, const NetIdentityBuildOptions& options, const std::atomic<bool>* stop) {
 		const auto started = std::chrono::steady_clock::now();
 		// The working directory is fixed at startup, so the file work below reads nothing live.
 		const std::string workingDirectory = System::GetWorkingDirectory();
 		for (NetIdentityModuleEntry& module : manifest.modules) {
+			if (StopRequested(stop)) {
+				if (error) *error = "manifest priming stopped before " + module.fileName;
+				return false;
+			}
 			// A module already read this session is taken from what that pass measured: the loaded
 			// modules do not change under a running game, and the disk walk is what stalls the menu.
 			bool primed = false;
@@ -533,9 +547,10 @@ namespace RTE {
 				for (const ModuleFileRecord& file : files) {
 					module.totalBytes += file.size;
 				}
-				if (!HashModuleContent(module, rootAbsolute, module.contentHash, error)) {
+				if (!HashModuleContent(module, rootAbsolute, module.contentHash, error, stop)) {
 					return false;
 				}
+				// Only a module whose whole hash finished reaches the store.
 				std::lock_guard<std::mutex> lock(s_PrimedMutex);
 				s_PrimedModules[PrimedKey(module)] = {module.fileCount, module.totalBytes, module.contentHash};
 			}
@@ -546,29 +561,47 @@ namespace RTE {
 			}
 		}
 
-		manifest.deterministicConfigHash = HashDeterministicConfig(manifest.deterministicConfig);
-		manifest.moduleManifestHash = HashModuleManifest(manifest.modules);
+		manifest.deterministicConfigHash = NetIdentity::HashDeterministicConfig(manifest.deterministicConfig);
+		manifest.moduleManifestHash = NetIdentity::HashModuleManifest(manifest.modules);
 		manifest.sessionRulesHash = HashSessionRulesTag(options.sessionRulesTag);
 		manifest.sessionIdentityHash = HashIdentity(manifest);
 		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 		return true;
 	}
 
+	bool NetIdentity::CompleteManifestFromInputs(NetIdentityManifest& manifest, std::string* error, NetIdentityBuildOptions options) {
+		return WalkManifestModules(manifest, error, options, nullptr);
+	}
+
 	void NetIdentity::PrimeManifest() {
 		if (s_PrimingStarted) return;
-		s_PrimingStarted = true;
 		// Only the capture reads the managers, so it stays on this thread; the disk walk does not.
 		auto inputs = std::make_shared<NetIdentityManifest>();
 		NetIdentityBuildOptions options;
 		options.includeUserdataModules = true; // Every module a later build could ask for, read once.
+		// The latch is set only once there is a pass to latch: a failed capture must be retryable.
 		if (!CaptureManifestInputs(*inputs, nullptr, options)) return;
+		s_PrimingStarted = true;
 		s_Priming = std::async(std::launch::async, [inputs, options]() {
 			std::string error;
 			NetIdentityManifest work = *inputs;
-			if (!CompleteManifestFromInputs(work, &error, options)) {
+			if (!WalkManifestModules(work, &error, options, &s_PrimingStopRequested)) {
 				std::cout << "[net-identity] manifest priming stopped: " << error << std::endl;
 			}
 		});
+	}
+
+	void NetIdentity::RequestManifestPrimingStop() {
+		s_PrimingStopRequested.store(true, std::memory_order_relaxed);
+	}
+
+	void NetIdentity::StopManifestPriming() {
+		RequestManifestPrimingStop();
+		WaitForPrimedManifest();
+		s_Priming = {};
+		s_PrimingStopRequested.store(false, std::memory_order_relaxed);
+		// The pass is over and nothing is in flight, so a later prime may run over what it left.
+		s_PrimingStarted = false;
 	}
 
 	void NetIdentity::WaitForPrimedManifest() {
@@ -578,10 +611,9 @@ namespace RTE {
 	uint64_t NetIdentity::ModuleContentHashCount() { return s_ModuleContentHashes.load(); }
 
 	void NetIdentity::DropPrimedManifest() {
-		WaitForPrimedManifest();
+		StopManifestPriming();
 		std::lock_guard<std::mutex> lock(s_PrimedMutex);
 		s_PrimedModules.clear();
-		s_PrimingStarted = false;
 	}
 
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {

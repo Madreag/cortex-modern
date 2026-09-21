@@ -702,6 +702,9 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	// A quit during the identity walk must not sit through the rest of the disk pass; what it finished
+	// is kept. This runs before the statics are torn down, where the future would wait unasked.
+	NetIdentity::StopManifestPriming();
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;

@@ -427,8 +427,15 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
-bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool activityRunning) {
-	return controllerSyncActive || matchResyncing || hostLost || (lockstepAttached && activityRunning);
+bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch) {
+	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch);
+}
+
+bool NetModerationGUI::ActivityInMatch() {
+	// Not ActivityRunning(): that reads false the moment the pause menu opens, and the host's End Match
+	// pauses the activity on its way out.
+	const Activity* activity = g_ActivityMan.GetActivity();
+	return activity && !activity->IsOver();
 }
 
 void NetModerationGUI::LayoutPanel() {
@@ -925,7 +932,11 @@ void NetModerationGUI::RecordStatusObservation(const NetLobbySnapshot& snapshot,
 }
 
 void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
-	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	// Chat follows the status: the end of the round is when players say gg and agree a rematch, so it
+	// lives as long as the surfaces around it do.
+	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
+	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(),
+	    snapshot.serviceState == "Completed" && ActivityInMatch(), ActivityInMatch());
 	if (!inMatch) {
 		m_MatchChatLines.clear();
 		if (m_ChatEntryOpen) {
@@ -1309,14 +1320,15 @@ void NetModerationGUI::Draw() {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
 	}
-	// A completed round's peer is still in its match until the activity ends, and it still needs its
+	// A completed round's peer is still in its match until the activity is over, and it still needs its
 	// surfaces to read the result and leave.
+	const bool matchEnded = snapshot.serviceState == "Completed" && ActivityInMatch();
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" &&
-	    !(snapshot.serviceState == "Completed" && g_ActivityMan.ActivityRunning()) && !snapshot.hostLost && !snapshot.migrating && !m_Open) return;
+	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
-	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), g_ActivityMan.ActivityRunning());
+	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch());
 	if (inMatch) {
 		CreateOverlay();
 	} else {
