@@ -4867,6 +4867,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	constexpr int c_ObjectCount = 1024;
 	constexpr int c_MeasureRounds = 12;
 	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
 	if (states.empty()) {
 		std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order no threaded Lua states" << std::endl;
@@ -4931,7 +4932,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			objects.push_back(std::move(object));
 			MOPixel* fixtureObject = objects.back().get();
 			fixtureObject->MoveScriptsToState(states[static_cast<size_t>(index) % states.size()]);
-			const int loadStatus = fixtureObject->LoadScript(std::string(c_Fixture), true);
+			const int loadStatus = fixtureObject->LoadScript(fixturePath, true);
 			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
 			if (loadStatus < 0 || adoptStatus < 0) {
 				std::cout << "[script-graph-selftest] threaded_synced_update_fixture_refused index=" << index << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
