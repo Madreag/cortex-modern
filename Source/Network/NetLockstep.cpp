@@ -4595,6 +4595,13 @@ namespace RTE {
 		if (producedFrame > UINT64_MAX - delay) { if (error) *error = "input target overflow"; return false; }
 		const uint64_t target = producedFrame + delay;
 		if (IsSeatReclaimGap(m_Config.localPeerId, target)) { m_DeferredControllerFrames.clear(); return true; }
+		// The agreed first frame can sit past our own start frame, so the ramp keeps producing targets the
+		// round will never require. Only that shift is dropped instead of refused - every peer agrees the
+		// same first frame - and a target below the round's own start is still an error.
+		if (target >= m_Config.startFrame + delay && target < EffectiveStartOf(m_Config.localPeerId)) {
+			m_DeferredControllerFrames.clear();
+			return true;
+		}
 		if (TimingDecisionPendingAt(producedFrame)) { if (error) *error = "input is waiting for a timing decision"; return false; }
 		if (!m_DelayChanges.empty() && m_LastQueuedTargetFrame != UINT64_MAX && target <= m_LastQueuedTargetFrame) {
 			if (error) *error = "input sample must be deferred while the delay shrinks";
@@ -6215,6 +6222,28 @@ namespace RTE {
 		return m_SynchronizedCaptureStartFrame != UINT64_MAX && frame >= m_SynchronizedCaptureStartFrame && frame <= m_SynchronizedCaptureEndFrame;
 	}
 
+	void NetLockstepCoordinator::FormAgreedFirstFrame(uint32_t slowestStartupMs, uint64_t nowMs) {
+		const uint64_t startupFrames = m_Config.simTickMs > 0
+			? static_cast<uint64_t>(std::ceil(static_cast<double>(slowestStartupMs) / m_Config.simTickMs)) : 0;
+		const uint64_t agreedFrame = m_Config.startFrame + startupFrames;
+		uint64_t firstCommitFrame = UINT64_MAX;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			const auto delayIt = m_Config.peerInputDelayFrames.find(peer);
+			const uint16_t delay = delayIt != m_Config.peerInputDelayFrames.end() ? delayIt->second : m_Config.inputDelayFrames;
+			m_PeerEffectiveStart[peer] = agreedFrame + (m_Config.resumeFromSnapshot ? 0 : delay);
+			firstCommitFrame = std::min(firstCommitFrame, m_PeerEffectiveStart[peer]);
+		}
+		if (firstCommitFrame != UINT64_MAX) {
+			m_Stats.effectiveStartFrame = firstCommitFrame;
+			m_Stats.nextFrame = firstCommitFrame;
+		}
+		std::cout << "[net-match] agreed first frame=" << agreedFrame << " startup_ms=" << slowestStartupMs << std::endl;
+		m_State = NetLockstepState::Running;
+		auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
+		for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
+		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+	}
+
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
@@ -7668,33 +7697,13 @@ namespace RTE {
 						}
 					}
 				}
-			} else {
-				if (!m_RequirePublishedStart) {
-					m_State = NetLockstepState::Running;
-					auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
-					for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
-					m_WaitingFrame = std::numeric_limits<uint64_t>::max();
-					return;
-				}
-				const uint64_t startupFrames = m_Config.simTickMs > 0
-					? static_cast<uint64_t>(std::ceil(static_cast<double>(slowestStartupMs) / m_Config.simTickMs)) : 0;
-				const uint64_t agreedFrame = m_Config.startFrame + startupFrames;
-				uint64_t firstCommitFrame = UINT64_MAX;
-				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-					const auto delayIt = m_Config.peerInputDelayFrames.find(peer);
-					const uint16_t delay = delayIt != m_Config.peerInputDelayFrames.end() ? delayIt->second : m_Config.inputDelayFrames;
-					m_PeerEffectiveStart[peer] = agreedFrame + (m_Config.resumeFromSnapshot ? 0 : delay);
-					firstCommitFrame = std::min(firstCommitFrame, m_PeerEffectiveStart[peer]);
-				}
-				if (firstCommitFrame != UINT64_MAX) {
-					m_Stats.effectiveStartFrame = firstCommitFrame;
-					m_Stats.nextFrame = firstCommitFrame;
-				}
-				std::cout << "[net-match] agreed first frame=" << agreedFrame << " startup_ms=" << slowestStartupMs << std::endl;
+			} else if (!m_RequirePublishedStart) {
 				m_State = NetLockstepState::Running;
 				auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
 				for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
 				m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+			} else {
+				FormAgreedFirstFrame(slowestStartupMs, nowMs);
 			}
 		}
 		if (firstFromThisPeer) {

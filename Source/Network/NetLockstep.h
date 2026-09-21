@@ -1149,6 +1149,7 @@ namespace RTE {
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
+		void FormAgreedFirstFrame(uint32_t slowestStartupMs, uint64_t nowMs);
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
