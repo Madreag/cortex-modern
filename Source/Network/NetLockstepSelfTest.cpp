@@ -2053,6 +2053,22 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestFinalRelayDrainIncludesPrivateTail(std::string* error) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 1; config.peerCount = 2;
+			if (!replay.StartReplay(wire, config, error)) return false;
+			unsigned int pumped = 0;
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			ScenarioRunner::SetSessionPump([&] { ++pumped; }, [&] { return pumped < 3; });
+			const bool drained = ScenarioRunner::DrainLockstepRelay(20, 0);
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (!drained || pumped < 3) { *error = "the final relay drain abandoned a private join's committed tail"; return false; }
+			return true;
+		}
+
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto timer = g_TimerMan.SaveCheckpoint();
@@ -16266,6 +16282,7 @@ namespace RTE {
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
+		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||

@@ -6117,6 +6117,7 @@ void RunGameLoop() {
 			const uint64_t restoreCheckTick = std::max(s_netAutosaveRestoreTick, s_netAutosaveRestoreAtTick);
 			if (restoreCheckTick > 0 && simTick >= restoreCheckTick &&
 			    (s_netAutosaveRestoreTick > 0 || !s_netAutosaveRestoreWhich.empty())) {
+				(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 				s_netAutosaveRestorePassed = RunAutosaveRestoreCheck(s_netAutosaveRestoreTick, s_netAutosaveRestoreWhich);
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();

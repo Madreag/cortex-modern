@@ -63,6 +63,7 @@ namespace RTE {
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
+		std::function<bool()> s_PendingSessionTail;
 		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		uint64_t s_NextLocalCommandSequence = 1;
@@ -789,8 +790,9 @@ namespace RTE {
 		return s_ControllerReplayError;
 	}
 
-	void ScenarioRunner::SetSessionPump(std::function<void()> pump) {
+	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail) {
 		s_SessionPump = std::move(pump);
+		s_PendingSessionTail = std::move(pendingTail);
 	}
 
 	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
@@ -2624,14 +2626,22 @@ namespace RTE {
 			std::this_thread::sleep_for(std::chrono::milliseconds(lingerMs));
 			return true;
 		}
-		while (s_LockstepCoordinator->HasPendingRelayWork() && elapsed() < budgetMs) {
-			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+		const auto pending = [] {
+			return (s_LockstepCoordinator && s_LockstepCoordinator->HasPendingRelayWork()) || (s_PendingSessionTail && s_PendingSessionTail());
+		};
+		const auto pump = [] {
+			if (s_LockstepCoordinator) s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			if (s_SessionPump) s_SessionPump();
+		};
+		pump();
+		while (pending() && elapsed() < budgetMs) {
+			pump();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
-		const bool drained = !s_LockstepCoordinator->HasPendingRelayWork();
+		const bool drained = !pending();
 		const uint32_t drainMs = elapsed();
 		if (!drained) {
-			std::cout << "[net-match] quit with " << s_LockstepCoordinator->GetStats().relayBacklogBytes
+			std::cout << "[net-match] quit with " << (s_LockstepCoordinator ? s_LockstepCoordinator->GetStats().relayBacklogBytes : 0)
 			          << " bytes still owed to peers after " << drainMs << "ms" << std::endl;
 		} else if (drainMs > 0) {
 			std::cout << "[net-match] relay drained in " << drainMs << "ms" << std::endl;
@@ -2639,7 +2649,7 @@ namespace RTE {
 		// Keep relaying through the linger rather than idling it away: a client finishing its own last
 		// tick sends a frame its siblings still need, and we are the only route between them.
 		for (const uint32_t until = drainMs + lingerMs; elapsed() < until;) {
-			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			pump();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		return drained;
