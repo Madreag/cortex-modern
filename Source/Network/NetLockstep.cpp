@@ -4056,9 +4056,9 @@ namespace RTE {
 		if (!config.activePeerIds.empty()) {
 			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)
 				if (std::find(config.activePeerIds.begin(), config.activePeerIds.end(), peer) == config.activePeerIds.end()) {
-					m_PeerLeaveFrames[peer] = config.startFrame;
+					m_PeerLeaveFrames.try_emplace(peer, config.startFrame);
 					if (UsesBoundedWait()) {
-						m_AiHeldSeats[peer] = config.startFrame;
+						m_AiHeldSeats.try_emplace(peer, m_PeerLeaveFrames.at(peer));
 						m_DroppedSeats.insert(peer);
 						m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 					}

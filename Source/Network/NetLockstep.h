@@ -742,6 +742,7 @@ namespace RTE {
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		bool IsReplayPlayback() const { return m_Playback; }
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
 		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});

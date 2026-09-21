@@ -1273,7 +1273,7 @@ namespace RTE {
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
-		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning()) {
+		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->IsReplayPlayback()) {
 			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
 			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
 			s_LockstepCoordinator->Tick(0);
