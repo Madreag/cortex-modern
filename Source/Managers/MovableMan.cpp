@@ -992,7 +992,8 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 	for (uint8_t peer: readyFrame.aiHeldPeerIds) ScenarioRunner::ApplyLockstepSeatAI(peer, readyFrame.frame);
 	for (Actor* actor: actors) {
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		const uint8_t claimant = readyFrame.aiHeldPeerIds.empty() ? ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled())
+		    : ScenarioRunner::GetLockstepHeldSeat(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame);
 		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
 		const bool playerControlled = actor->IsPlayerControlled();
 		const bool disabled = actor->GetController()->IsQuickDisabled();

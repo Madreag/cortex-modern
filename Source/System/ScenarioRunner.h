@@ -188,6 +188,7 @@ namespace RTE {
 		/// with leaves not applied. The drop ledger records this; a leave must not rename it first.
 		static uint8_t GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// The seat a reclaim at this frame covers an actor for; outside a reclaim gap the drop-time owner.
+		static uint8_t GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 		static uint8_t GetLockstepReclaimSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 		/// The synced match's host peer; 0 without a coordinator.
 		static uint8_t GetLockstepHostPeerId();
