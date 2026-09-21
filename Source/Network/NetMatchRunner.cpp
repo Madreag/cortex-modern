@@ -791,7 +791,7 @@ namespace RTE {
 			}
 			// The initial start packets are the lobby handshake. A service match remains
 			// parked until the game thread measures and republishes activity startup.
-			if (coordinator.HasReceivedAllRemoteStarts() && coordinator.GetConfig().requirePublishedStart) {
+			if (coordinator.IsRunning() || (coordinator.HasReceivedAllRemoteStarts() && coordinator.GetConfig().requirePublishedStart)) {
 				return true;
 			}
 			if (nowMs - startMs > maxWaitMs) {
