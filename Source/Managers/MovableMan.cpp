@@ -4951,16 +4951,22 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			if (count == 32) {
 				run(false);
 				run(true);
+				std::vector<long long> perStateSamples;
+				std::vector<long long> globalSamples;
+				perStateSamples.reserve(c_MeasureRounds);
+				globalSamples.reserve(c_MeasureRounds);
 				for (int round = 0; round < c_MeasureRounds; ++round) {
 					const auto perStateStarted = std::chrono::steady_clock::now();
 					run(false);
-					perStateUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - perStateStarted).count();
+					perStateSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - perStateStarted).count());
 					const auto globalStarted = std::chrono::steady_clock::now();
 					run(true);
-					globalUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - globalStarted).count();
+					globalSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - globalStarted).count());
 				}
-				perStateUs /= c_MeasureRounds;
-				globalUs /= c_MeasureRounds;
+				std::sort(perStateSamples.begin(), perStateSamples.end());
+				std::sort(globalSamples.begin(), globalSamples.end());
+				perStateUs = perStateSamples[perStateSamples.size() / 2];
+				globalUs = globalSamples[globalSamples.size() / 2];
 			}
 		} else {
 			passed = false;
