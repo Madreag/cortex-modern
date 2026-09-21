@@ -6156,6 +6156,25 @@ namespace RTE {
 
 	// A rematch or resync worker owns the session while the game thread replays a private catch-up, so the
 	// park it declares has to reach the session that is evaluating silence, not the empty member.
+	bool TestLobbyStartReturnsBeforeHashingModules(std::string* error) {
+		NetMatchService service;
+		NetMatchServiceRequest request;
+		request.host = true;
+		request.port = 49475;
+		request.activityPreset = "P4 Alpha Duel";
+		request.activityModule = "Base.rte";
+		request.sceneName = "Grasslands";
+		request.sceneModule = "Base.rte";
+		const auto begin = std::chrono::steady_clock::now();
+		const bool started = service.Start(request, error);
+		const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+		service.Destroy();
+		std::cout << "[net-match-selftest] lobby_start_game_thread_ms=" << elapsed << std::endl;
+		if (!started) return false;
+		if (elapsed >= 16.0) { *error = "creating a lobby blocked the game thread for module hashing"; return false; }
+		return true;
+	}
+
 	bool TestAParkReachesTheSessionAWorkerOwns(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = false;
@@ -12144,6 +12163,7 @@ namespace RTE {
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
+		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);
 		if (!TestResumeCarriesTheAgreedSeats(&error)) return fail(error);

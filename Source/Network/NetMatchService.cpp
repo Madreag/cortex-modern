@@ -542,12 +542,11 @@ static std::string ResyncSaveName() {
 		m_LastJoinTargetPersistentWorld = targetingWorld;
 		NetIdentity::StampOptionsForTarget(identityOptions, targetingWorld);
 		std::string buildError;
-		if (!NetIdentity::BuildCurrentManifest(manifest, &buildError, identityOptions)) {
+		if (!NetIdentity::CaptureManifestInputs(manifest, &buildError, identityOptions)) {
 			if (error) *error = buildError;
 			SetState(NetMatchServiceState::Failed, "Identity build failed", buildError);
 			return false;
 		}
-		CacheDiagnosticIdentity(manifest);
 
 		if (!request.host && NetA7Journal::HasConnectGate() && !WaitForA7ConnectGate(error)) return false;
 
@@ -613,6 +612,7 @@ static std::string ResyncSaveName() {
 			m_FinalCheckpointWritten = false;
 			m_ResumeSegmentTick = 0;
 			m_WorkerDone = false;
+			m_IdentityPending = true;
 			m_IsHost = request.host;
 			m_CurrentMatchSummary = {};
 			m_SummarySeats.clear();
@@ -701,7 +701,7 @@ static std::string ResyncSaveName() {
 		}
 		s_PortMapApplied = false;
 		m_EverStarted.store(true);
-		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest));
+		m_Worker = std::thread(&NetMatchService::WorkerMain, this, request, std::move(manifest), std::move(identityOptions));
 		return true;
 	}
 
@@ -1638,6 +1638,7 @@ static std::string ResyncSaveName() {
 		if (m_Worker.joinable()) {
 			m_Worker.join();
 		}
+		m_IdentityPending = false;
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
@@ -2007,11 +2008,11 @@ static std::string ResyncSaveName() {
 		NetLobbySnapshot snapshot;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			beaconWanted = m_IsHost && m_State == NetMatchServiceState::Starting;
+			beaconWanted = m_IsHost && !m_IdentityPending && m_State == NetMatchServiceState::Starting;
 			if (beaconWanted) {
 				snapshot = m_LobbySnapshot;
 			}
-			directoryWanted = m_IsHost && !m_DirectoryRetracted &&
+			directoryWanted = m_IsHost && !m_IdentityPending && !m_DirectoryRetracted &&
 			                  (m_State == NetMatchServiceState::Starting || m_State == NetMatchServiceState::ReadyToLaunch ||
 			                   m_State == NetMatchServiceState::Running || (m_DirectoryHidden && m_State == NetMatchServiceState::Completed));
 			directoryRunning = m_State == NetMatchServiceState::Running;
@@ -6109,7 +6110,23 @@ static std::string ResyncSaveName() {
 		config.hostOptions = &m_HostOptionsRequest;
 	}
 
-	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest) {
+	void NetMatchService::WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions) {
+		std::string identityError;
+		const bool identityReady = !m_CancelRequested.load() && NetIdentity::CompleteManifestFromInputs(manifest, &identityError, identityOptions);
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_IdentityPending = false;
+			if (!identityReady || m_CancelRequested.load()) {
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Identity build failed";
+				m_ErrorText = identityError.empty() ? "match setup canceled" : identityError;
+				m_WorkerDone = true;
+				return;
+			}
+			m_DirectoryRow.sessionIdentityHash = NetIdentity::HashHex(manifest.sessionIdentityHash);
+			m_DirectoryRow.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+		}
+		CacheDiagnosticIdentity(manifest);
 		if (request.host) {
 			// Arm the off-sim reconnect-auth epoch; without real crypto nothing is issued (fail closed).
 			std::lock_guard<std::mutex> lock(m_Mutex);

@@ -803,7 +803,7 @@ namespace RTE {
 				                                                                 : ip.get(); }
 		};
 
-		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
+		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
@@ -1085,6 +1085,7 @@ namespace RTE {
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;
+		bool m_IdentityPending = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
