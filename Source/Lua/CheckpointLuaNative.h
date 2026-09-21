@@ -249,6 +249,10 @@ namespace RTE::CheckpointLua {
 	class NativeCache {
 	public:
 		explicit NativeCache(lua_State* state) : m_State(state) {
+			// Keyed by this cache's own address, never by a registry ref: luabind hands out registry
+			// refs from a counter of its own, so a ref number can be given to a second owner whose
+			// release then puts a free-list number where this table was.
+			lua_pushlightuserdata(state, this);
 			lua_newtable(state);
 			// Each userdata keys its own answers, and the table holds its keys weakly, so what a
 			// descriptor named is collected with the object it describes and not one cycle later.
@@ -256,10 +260,13 @@ namespace RTE::CheckpointLua {
 			lua_pushliteral(state, "k");
 			lua_setfield(state, -2, "__mode");
 			lua_setmetatable(state, -2);
-			m_Retained = luaL_ref(state, LUA_REGISTRYINDEX);
+			lua_rawset(state, LUA_REGISTRYINDEX);
 		}
 		~NativeCache() {
-			if (m_State && m_Retained != LUA_NOREF) luaL_unref(m_State, LUA_REGISTRYINDEX, m_Retained);
+			if (!m_State) return;
+			lua_pushlightuserdata(m_State, this);
+			lua_pushnil(m_State);
+			lua_rawset(m_State, LUA_REGISTRYINDEX);
 		}
 		NativeCache(const NativeCache&) = delete;
 		NativeCache& operator=(const NativeCache&) = delete;
@@ -272,11 +279,14 @@ namespace RTE::CheckpointLua {
 			bool entity = false;
 		};
 		std::unordered_map<const void*, Reference> references;
-		int RetainedTable() const { return m_Retained; }
+		// Pushes the table this cache keeps its descriptors' answers in.
+		void PushRetained(lua_State* state) const {
+			lua_pushlightuserdata(state, const_cast<NativeCache*>(this));
+			lua_rawget(state, LUA_REGISTRYINDEX);
+		}
 
 	private:
 		lua_State* m_State;
-		int m_Retained = LUA_NOREF;
 	};
 
 	// The caller holds the VM lock and keeps carried sound observations enabled.
@@ -378,17 +388,24 @@ namespace RTE::CheckpointLua {
 			lua_State* state;
 			decltype(std::declval<global_State&>().gc.threshold) threshold;
 			uint64_t serial;
-			int table = LUA_NOREF;
 			int count = 0;
 			explicit References(lua_State* source) : state(source), threshold(G(source)->gc.threshold), serial(luaJIT_state_serial(source)) {
 				G(state)->gc.threshold = std::numeric_limits<decltype(threshold)>::max();
+				// This capture's own address keys its table, for the reason the cache's does.
+				lua_pushlightuserdata(state, this);
 				lua_newtable(state);
-				table = luaL_ref(state, LUA_REGISTRYINDEX);
+				lua_rawset(state, LUA_REGISTRYINDEX);
 			}
 			~References() { Release(); }
+			void Push() const {
+				lua_pushlightuserdata(state, const_cast<References*>(this));
+				lua_rawget(state, LUA_REGISTRYINDEX);
+			}
 			void Release() {
 				if (!state) return;
-				luaL_unref(state, LUA_REGISTRYINDEX, table);
+				lua_pushlightuserdata(state, this);
+				lua_pushnil(state);
+				lua_rawset(state, LUA_REGISTRYINDEX);
 				G(state)->gc.threshold = threshold;
 				luaJIT_set_state_serial(state, serial);
 				state = nullptr;
@@ -437,7 +454,7 @@ namespace RTE::CheckpointLua {
 		TValue At(int index) const { return *(index > 0 ? State()->base + index - 1 : State()->top + index); }
 		void Keep(int index) {
 			if (index < 0) index += lua_gettop(State()) + 1;
-			lua_rawgeti(State(), LUA_REGISTRYINDEX, m_References.table);
+			m_References.Push();
 			lua_pushvalue(State(), index);
 			lua_rawseti(State(), -2, ++m_References.count);
 			lua_pop(State(), 1);
@@ -451,7 +468,7 @@ namespace RTE::CheckpointLua {
 		}
 		// The subject's own bucket in the retained table; it and every answer in it die with the subject.
 		int PushRetainedBucket() {
-			lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+			m_Cache.PushRetained(State());
 			Push(m_Subject);
 			lua_rawget(State(), -2);
 			if (lua_isnil(State(), -1)) {
@@ -465,7 +482,7 @@ namespace RTE::CheckpointLua {
 		}
 		// A subject answered again names new values; what the last capture kept for it goes.
 		void ReleaseRetained(const TValue& subject) {
-			lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+			m_Cache.PushRetained(State());
 			Push(subject);
 			lua_pushnil(State());
 			lua_rawset(State(), -3);
