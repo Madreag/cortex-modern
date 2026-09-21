@@ -59,6 +59,20 @@
 namespace RTE {
 
 	namespace {
+		bool TestConnectionCallbacksReachTheirListener(std::string* error) {
+			if (!GnsTransport::IsCompiledIn()) return true;
+			GnsTransport first, other, client;
+			if (!first.StartHost(49472, error) || !other.StartHost(49473, error) || !client.Connect("127.0.0.1", 49472, error)) return false;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+			while (std::chrono::steady_clock::now() < deadline) {
+				if (!other.PollEvents().empty()) { *error = "another listener consumed a connection's callbacks"; return false; }
+				for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) return true;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			*error = "a connecting peer's listener lost its callback to another transport pump";
+			return false;
+		}
+
 		bool TestInputDelayUsesTheSimTick(std::string* error) {
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
@@ -12189,6 +12203,7 @@ namespace RTE {
 		if (!healedEndError.empty()) return fail(healedEndError);
 		if (!TestHoldResolutionPumpDoesNotRelock(&error)) return fail(error);
 		if (!TestAParkReachesTheSessionAWorkerOwns(&error)) return fail(error);
+		if (!TestConnectionCallbacksReachTheirListener(&error)) return fail(error);
 		if (!TestLobbyStartReturnsBeforeHashingModules(&error)) return fail(error);
 		if (!TestRestartManifestAndAdmission(&error)) return fail(error);
 		if (!TestWorldCheckpointOrderAndRoundPin(&error)) return fail(error);

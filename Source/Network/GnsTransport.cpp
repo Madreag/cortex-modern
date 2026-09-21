@@ -187,6 +187,7 @@ namespace RTE {
 				SetError(error, "CreateListenSocketIP failed");
 				return false;
 			}
+			s_ListenerOwners[m_ListenSocket] = this;
 
 			m_PollGroup = m_Interface->CreatePollGroup();
 			if (m_PollGroup == k_HSteamNetPollGroup_Invalid) {
@@ -385,6 +386,7 @@ namespace RTE {
 			}
 
 			if (m_ListenSocket != k_HSteamListenSocket_Invalid) {
+				s_ListenerOwners.erase(m_ListenSocket);
 				m_Interface->CloseListenSocket(m_ListenSocket);
 				m_ListenSocket = k_HSteamListenSocket_Invalid;
 			}
@@ -454,11 +456,7 @@ namespace RTE {
 		}
 
 		void PollCallbacks() {
-			s_CallbackInstance = this;
 			m_Interface->RunCallbacks();
-			if (s_CallbackInstance == this) {
-				s_CallbackInstance = nullptr;
-			}
 		}
 
 		void PollIncomingMessages() {
@@ -631,8 +629,10 @@ namespace RTE {
 				ownerIt->second->OnConnectionStatusChanged(info);
 				return;
 			}
-			if (s_CallbackInstance) {
-				s_CallbackInstance->OnConnectionStatusChanged(info);
+			// A process-wide callback belongs to its listener, not the transport polling it.
+			if (info->m_info.m_eState == k_ESteamNetworkingConnectionState_Connecting) {
+				const auto listener = s_ListenerOwners.find(info->m_info.m_hListenSocket);
+				if (listener != s_ListenerOwners.end()) listener->second->OnConnectionStatusChanged(info);
 			}
 		}
 
@@ -658,6 +658,7 @@ namespace RTE {
 				SetError(error, "CreateListenSocketP2P failed");
 				return false;
 			}
+			s_ListenerOwners[m_ListenSocket] = this;
 
 			m_PollGroup = m_Interface->CreatePollGroup();
 			if (m_PollGroup == k_HSteamNetPollGroup_Invalid) {
@@ -917,7 +918,7 @@ namespace RTE {
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
 
-		static Impl* s_CallbackInstance;
+		static std::map<HSteamListenSocket, Impl*> s_ListenerOwners;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
 		static std::set<const Impl*> s_LiveImpls;
 
@@ -929,7 +930,7 @@ namespace RTE {
 		} m_LiveImplRegistration{this};
 	};
 
-	GnsTransport::Impl* GnsTransport::Impl::s_CallbackInstance = nullptr;
+	std::map<HSteamListenSocket, GnsTransport::Impl*> GnsTransport::Impl::s_ListenerOwners;
 	std::map<HSteamNetConnection, GnsTransport::Impl*> GnsTransport::Impl::s_ConnectionOwners;
 	std::set<const GnsTransport::Impl*> GnsTransport::Impl::s_LiveImpls;
 
