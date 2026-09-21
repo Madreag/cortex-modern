@@ -308,7 +308,15 @@ std::string PresetMan::GetFullModulePath(const std::string& modulePath) const {
 		// Bundled non-official modules (the determinism Tests.rte) ship in Data/, not Mods/.
 		moduleTopDir = System::GetDataDirectory();
 	}
-	return (pathTopDir == moduleTopDir) ? modulePathGeneric : moduleTopDir + modulePathGeneric;
+	if (pathTopDir == moduleTopDir) {
+		return modulePathGeneric;
+	}
+	// A path that already names a top directory keeps its module, not its prefix: a mod written when mods lived
+	// in Mods/ reads its own files from wherever the module is actually installed.
+	if (pathTopDir == System::GetDataDirectory() || pathTopDir == System::GetModDirectory() || pathTopDir == System::GetUserdataDirectory()) {
+		return moduleTopDir + modulePathGeneric.substr(pathTopDir.size());
+	}
+	return moduleTopDir + modulePathGeneric;
 }
 
 bool PresetMan::AddEntityPreset(Entity* pEntToAdd, int whichModule, bool overwriteSame, const std::string& readFromFile) {
