@@ -17,7 +17,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -49,7 +49,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -63,6 +63,38 @@
           ],
           "settings": {
             "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "1"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "survivor",
             "NetworkMatchStatusMode": "Always",
             "NetworkShowDiagnostics": "1"
           },
@@ -87,7 +119,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -119,7 +151,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -133,6 +165,38 @@
           ],
           "settings": {
             "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "1"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "survivor",
             "NetworkMatchStatusMode": "Always",
             "NetworkShowDiagnostics": "1"
           },
@@ -157,7 +221,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -189,7 +253,7 @@
             "-net-port",
             "{PORT}",
             "-net-match-peers",
-            "2",
+            "3",
             "-net-match-ticks",
             "1200",
             "-net-autosave-seconds",
@@ -203,6 +267,38 @@
           ],
           "settings": {
             "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "1"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        },
+        {
+          "name": "survivor",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "3",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "survivor",
             "NetworkMatchStatusMode": "Always",
             "NetworkShowDiagnostics": "1"
           },
