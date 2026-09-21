@@ -6941,6 +6941,12 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool threadedWritesTwoCounts = RunThreadedScriptWriteHashSelfTestTwoCounts();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
+	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
+	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
+	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
+	std::cout << "[script-graph-selftest] " << (queuedDeletionOrder ? "PASS" : "FAIL")
+	          << " queued_entity_deletion_order states=4,32 order4=" << queuedDeletionOrder4 << " order32=" << queuedDeletionOrder32
+	          << (queuedDeletionOrder ? "" : " (the drain follows the state count, not the unique ID)") << std::endl;
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
 	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
@@ -6950,7 +6956,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && threadedSyncedOrder && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && threadedSyncedOrder && queuedDeletionOrder && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
