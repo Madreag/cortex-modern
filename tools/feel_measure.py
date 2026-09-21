@@ -123,10 +123,10 @@ TIMING_CASES = (
 )
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None):
     out = root / name
     out.mkdir(exist_ok=False)
-    final_tick = 2 * TICKS if silent_tick else TICKS
+    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,

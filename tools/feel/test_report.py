@@ -10,6 +10,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 from contextlib import nullcontext
 import stat
+import tempfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +29,16 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
+    def test_host_earlier_replay_mismatch_is_not_hidden(self):
+        from feel.retained_resume import compare_live_hashes
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good = {"tick": 1, "sim_gated": "good", "subsystems": {"actors": "same"}}
+            bad = dict(good, sim_gated="bad")
+            (root / 'host.jsonl').write_text(json.dumps(bad) + '\n' + json.dumps(good) + '\n')
+            (root / 'client.jsonl').write_text(json.dumps(good) + '\n')
+            self.assertEqual(compare_live_hashes(root / 'host.jsonl', root / 'client.jsonl', 1)[0]['mismatched_ticks'], 1)
+
     def test_compressed_records_keep_the_original_bytes_and_detector(self):
         from tempfile import TemporaryDirectory
         from feel.records import compress_case_records, open_record

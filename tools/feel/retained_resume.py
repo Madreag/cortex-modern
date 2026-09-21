@@ -51,14 +51,17 @@ def split_passes(lines: list[dict]) -> list[list[dict]]:
 
 def compare_live_hashes(host_path: Path, client_path: Path, first_tick: int) -> list[dict]:
     """Every tick both peers ran carries the same gated hash and the same subsystem hashes."""
-    host = {entry["tick"]: entry for entry in read_live_hashes(host_path)}
+    host = {}
+    for entry in read_live_hashes(host_path):
+        host.setdefault(entry["tick"], []).append(entry)
     results = []
     for index, run in enumerate(split_passes(read_live_hashes(client_path))):
         shared = [entry for entry in run if entry["tick"] >= first_tick and entry["tick"] in host]
         mismatched = [entry["tick"] for entry in shared
-                      if entry["sim_gated"] != host[entry["tick"]]["sim_gated"] or entry["subsystems"] != host[entry["tick"]]["subsystems"]]
+                      if any(entry["sim_gated"] != reference["sim_gated"] or entry["subsystems"] != reference["subsystems"]
+                             for reference in host[entry["tick"]])]
         subsystems = sorted({name for entry in shared for name, value in entry["subsystems"].items()
-                             if value != host[entry["tick"]]["subsystems"].get(name)})
+                             if any(value != reference["subsystems"].get(name) for reference in host[entry["tick"]])})
         results.append({"pass": index, "first_tick": run[0]["tick"], "last_tick": run[-1]["tick"], "compared_ticks": len(shared),
                         "mismatched_ticks": len(mismatched), "first_mismatches": mismatched[:8], "subsystems": subsystems})
     return results
