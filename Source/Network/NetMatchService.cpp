@@ -2547,6 +2547,8 @@ static std::string ResyncSaveName() {
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
 		                   !m_PrivateImageTask.valid() && cadenceOpen;
 		const bool initial = m_PrivateImageRound != round;
+		// A successor captures a private base only when a held seat needs one.
+		if (initial && m_Coordinator->GetConfig().migrationGeneration != 0 && !seatHeld) return;
 		if (!initial && !stale) return;
 		m_PrivateImageStaleFrom = 0;
 		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
