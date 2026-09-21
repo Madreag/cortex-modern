@@ -5025,7 +5025,6 @@ namespace RTE {
 					// restart: ping, jitter and park all read zero and the allowance would be none at all. The
 					// window the round agreed for that peer was sized from its link, so it is the floor.
 					const uint64_t windowMs = static_cast<uint64_t>(std::max<long long>(0, std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)));
-					const uint64_t windowMs = static_cast<uint64_t>(std::max<long long>(0, std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)));
 					const uint64_t ramp = std::max<uint64_t>(windowMs,
 					    2 * static_cast<uint64_t>(peerStats.pingMs) + peerStats.jitterMs + peerStats.startParkMs);
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
