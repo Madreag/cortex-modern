@@ -91,13 +91,13 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_PauseMenuBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("PauseScreen"));
 	m_PauseMenuBox->CenterInParent(true, true);
 	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
-	m_MatchOptionsBox->Resize(568, 308);
+	m_MatchOptionsBox->Resize(568, 324);
 	m_MatchOptionsBox->CenterInParent(true, true);
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton] = dynamic_cast<GUIButton*>(m_GUIControlManager->AddControl(
-	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 276, 260, 20));
+	    "ButtonMatchRepairNow", "BUTTON", m_MatchOptionsBox, 12, 292, 260, 20));
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetText("Repair match now");
 	m_MatchRepairHint = dynamic_cast<GUILabel*>(m_GUIControlManager->AddControl(
-	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 236, 544, 34));
+	    "LabelMatchRepairHint", "LABEL", m_MatchOptionsBox, 12, 252, 544, 34));
 	m_MatchRepairHint->SetHAlignment(GUIFont::Left);
 	m_MatchRepairHint->SetVAlignment(GUIFont::Top);
 
@@ -137,11 +137,11 @@ void PauseMenuGUI::Create(AllegroScreen* guiScreen, GUIInputWrapper* guiInput) {
 	m_MatchOptionsBox = dynamic_cast<GUICollectionBox*>(m_GUIControlManager->GetControl("MatchOptionsBox"));
 	m_MatchOptionsBox->CenterInParent(true, true);
 	m_MatchOptionsLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchOptions"));
-	m_MatchOptionsLabel->Resize(544, 210);
-	m_GUIControlManager->GetControl("LabelMatchOptionsTitle")->Resize(568, 14);
-	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, 276);
+	m_MatchOptionsLabel->Resize(544, 225);
+	m_GUIControlManager->GetControl("LabelMatchOptionsTitle")->Resize(568, 16);
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, 292);
 	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->Resize(260, 20);
-	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, 276);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, 292);
 
 	int boxPosX = 0;
 	int boxPosY = 0;
@@ -327,11 +327,42 @@ void PauseMenuGUI::ShowMatchOptions(bool show) {
 
 void PauseMenuGUI::RefreshMatchOptions() {
 	m_MatchOptionsLabel->SetText(NetHostOptionsSummary(g_NetMatchService.GetLobbyMatchConfig(), g_NetMatchService.GetLobbySnapshot()));
+	FitMatchOptionsBox();
 	const bool enabled = NetHostRepairEnabled(g_NetMatchService);
 	if (!enabled) m_MatchRepairArmed = false;
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetVisible(g_NetMatchService.IsHost());
 	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetEnabled(enabled);
 	m_MatchRepairHint->SetText(NetHostRepairHint(g_NetMatchService, m_MatchRepairArmed, m_MatchRepairRefusal));
+}
+
+// The match summary grows with the match's own rows, so the panel takes the height its text needs and
+// the rows below it move down; a screen too short for the whole summary scrolls it instead of clipping.
+void PauseMenuGUI::FitMatchOptionsBox() {
+	constexpr int c_LabelTop = 22;
+	constexpr int c_HintHeight = 34;
+	constexpr int c_RowGap = 6;
+	constexpr int c_ButtonHeight = 20;
+	constexpr int c_BottomMargin = 12;
+	const int screenHeight = g_FrameMan.GetBackBuffer32()->h;
+	const int chrome = c_LabelTop + c_RowGap + c_HintHeight + c_RowGap + c_ButtonHeight + c_BottomMargin;
+	const int room = std::max(120, screenHeight - 8 - chrome);
+	const int wanted = std::min(std::max(m_MatchOptionsLabel->GetTextHeight(), 225), room);
+	const bool scrolls = m_MatchOptionsLabel->GetTextHeight() > room;
+	if (m_MatchOptionsLabel->GetVerticalOverflowScroll() != scrolls) {
+		m_MatchOptionsLabel->SetVerticalOverflowScroll(scrolls);
+		m_MatchOptionsLabel->ActivateDeactivateOverflowScroll(scrolls);
+	}
+	if (m_MatchOptionsLabel->GetHeight() == wanted) {
+		return;
+	}
+	m_MatchOptionsLabel->Resize(m_MatchOptionsLabel->GetWidth(), wanted);
+	const int hintTop = c_LabelTop + wanted + c_RowGap;
+	m_MatchRepairHint->SetPositionRel(12, hintTop);
+	const int buttonTop = hintTop + c_HintHeight + c_RowGap;
+	m_PauseMenuButtons[PauseMenuButton::MatchRepairButton]->SetPositionRel(12, buttonTop);
+	m_PauseMenuButtons[PauseMenuButton::MatchOptionsCloseButton]->SetPositionRel(296, buttonTop);
+	m_MatchOptionsBox->Resize(m_MatchOptionsBox->GetWidth(), buttonTop + c_ButtonHeight + c_BottomMargin);
+	m_MatchOptionsBox->CenterInParent(true, true);
 }
 
 void PauseMenuGUI::SetActiveMenuScreen(PauseMenuScreen screenToShow, bool playButtonPressSound) {

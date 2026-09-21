@@ -202,6 +202,9 @@ namespace RTE {
 		void ShowMatchOptions(bool show);
 		void RefreshMatchOptions();
 
+		/// Sizes the match details panel to the summary it draws.
+		void FitMatchOptionsBox();
+
 		/// The one line of what leaving costs this player, from the session's own hold.
 		std::string LeaveConsequenceText() const;
 
