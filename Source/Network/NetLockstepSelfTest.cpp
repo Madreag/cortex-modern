@@ -2546,7 +2546,54 @@ namespace RTE {
 		// A returning seat's frames reach our decoder long before its new start does, and until that start
 		// lands they sit in the pre-start buffer: nothing it sent can be consumed. Counting those frames as
 		// an answer skipped the seat's allowance and the bound took the seat back at the first frame it owed.
-				// A seat that returns on a new connection has no ping samples on it and may have published no
+				// A link the round has measured must survive the connection that measured it: a peer that comes
+		// back on a new transport reports no samples yet, and reading that as an instant link left the
+		// returning seat's allowance with nothing to size itself from.
+		bool TestReturnKeepsTheLinkItLastMeasured(std::string* error) {
+			LoopbackTransportConfig lagged;
+			lagged.latencyMs = 200;
+			LoopbackTransport hostWire, clientWire;
+			hostWire.SetFaultConfig(lagged); clientWire.SetFaultConfig(lagged);
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A42, 2, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A42, 2, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 42; a.relayToOtherPeers = true;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			if (!StartCoordinatorPair(48887, hostWire, clientWire, host, client, a, b, error)) return false;
+			const auto pingOf = [&] {
+				const auto found = host.GetStats().peers.find(2);
+				return found == host.GetStats().peers.end() ? 0u : found->second.pingMs;
+			};
+			uint64_t now = 0;
+			for (; now < 2000 && pingOf() == 0; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const uint32_t measured = pingOf();
+			if (measured != 2 * lagged.latencyMs) {
+				*error = "the fixture never measured the peer's link: ping=" + std::to_string(measured) +
+				         " expected=" + std::to_string(2 * lagged.latencyMs);
+				return false;
+			}
+			// The seat drops and comes back on a connection with no samples on it: it reports nothing.
+			LoopbackTransportConfig fresh;
+			hostWire.SetFaultConfig(fresh); clientWire.SetFaultConfig(fresh);
+			for (uint64_t until = now + 2000; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (pingOf() != measured) {
+				*error = "a connection with no samples overwrote the link the round had measured: ping=" +
+				         std::to_string(pingOf()) + " last_measured=" + std::to_string(measured);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS return_keeps_the_link_it_last_measured last_measured="
+			          << measured << "ms ping=" << pingOf() << "ms" << std::endl;
+			return true;
+		}
+
+		// A seat that returns on a new connection has no ping samples on it and may have published no
 		// restart: every measurement reads zero. The window the round agreed for that peer is the floor,
 		// or the bound takes the seat back at the first frame it owes with no allowance at all.
 		bool TestReturnOnAFreshLinkKeepsItsWindow(std::string* error) {
@@ -17123,6 +17170,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestUnpublishedStartupCannotParkTheRound(&error) ||
 		    !TestBufferedReturnIsNotAnAnswer(&error) ||
 		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
+		    !TestReturnKeepsTheLinkItLastMeasured(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
