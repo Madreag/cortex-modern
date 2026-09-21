@@ -276,6 +276,10 @@ namespace RTE {
 		uint8_t senderPeerId = 0;
 		uint64_t highestContiguousFrame = 0;
 		uint32_t receivedMask = 0;
+		uint64_t roundId = 0;
+		uint32_t seatIncarnation = 0;
+		uint64_t sessionId = 0;
+		uint64_t authorityGeneration = 0;
 
 		bool operator==(const NetLockstepAck&) const = default;
 	};
@@ -629,13 +633,15 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 32;
-		static constexpr uint16_t c_WorldVersion = 33;
+		static constexpr uint16_t c_Version = 34;
+		static constexpr uint16_t c_WorldVersion = 35;
+		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
+		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
 		static constexpr uint8_t c_MaxWindowTicks = 8;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
@@ -1025,6 +1031,7 @@ namespace RTE {
 		bool FindLocalInput(uint64_t targetFrame, NetLockstepFrame& out) const;
 		void AdvertiseFrameWindow();
 		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
+		void AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame);
 		bool FrameWindowAllRemotesAdvertised() const;
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
@@ -1203,6 +1210,7 @@ namespace RTE {
 		std::map<uint8_t, PeerAdmission> m_PeerAdmissions;
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
+		std::set<uint64_t> m_HostAcceptedLocalFrames;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
