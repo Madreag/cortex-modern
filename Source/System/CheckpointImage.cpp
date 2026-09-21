@@ -164,33 +164,31 @@ void CheckpointGraphIndex::EndWalk() {
 	const auto start = std::chrono::steady_clock::now();
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
-	if (m_FullWalk) {
-		m_TableRoots = std::move(m_Walking);
-		m_ValueRoots = std::move(m_WalkingValues);
-		m_Roots = std::move(m_WalkingRoots);
-		m_DirtyRoots.clear();
-		m_UnknownTable = false;
-	} else {
-		// A partial walk keeps what the roots it skipped recorded, so their tables stay known. It
-		// has answered the unknown table too: the capture it ends rewrote every root it did not
-		// reuse, so leaving the flag set would disable the cache for the rest of the process.
-		m_UnknownTable = false;
-		for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
-			std::erase_if(entry->second, [this](const Root& root) { return !m_ReusedRoots.contains(root); });
-			entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
-		}
-		for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
-			entry = !m_ReusedRoots.contains(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
-		}
-		for (const auto& [table, roots]: m_Walking) {
-			auto& kept = m_TableRoots[table];
-			for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
-		}
-		for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
-		m_Roots = std::move(m_ReusedRoots);
-		m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
-		m_DirtyRoots.clear();
+	// A walk answers for the states it covered: their rewritten roots leave the index, their reused
+	// ones and every other state's stay, and so does the dirt of a state this walk never read.
+	std::unordered_set<const void*> walked;
+	for (const Root& root: m_WalkingRoots) walked.insert(root.state);
+	for (const Root& root: m_ReusedRoots) walked.insert(root.state);
+	for (const void* state: m_WalkStates) walked.insert(state);
+	const auto rewritten = [&](const Root& root) { return walked.contains(root.state) && !m_ReusedRoots.contains(root); };
+	for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
+		std::erase_if(entry->second, rewritten);
+		entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
 	}
+	for (auto entry = m_ValueRoots.begin(); entry != m_ValueRoots.end();) {
+		entry = rewritten(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
+	}
+	std::erase_if(m_Roots, rewritten);
+	std::erase_if(m_DirtyRoots, [&walked](const Root& root) { return walked.contains(root.state); });
+	for (const auto& [table, roots]: m_Walking) {
+		auto& kept = m_TableRoots[table];
+		for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
+	}
+	for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
+	m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
+	// The unknown table is answered once no state this walk skipped could still own it.
+	const bool skipped = std::any_of(m_Roots.begin(), m_Roots.end(), [&walked](const Root& root) { return !walked.contains(root.state); });
+	if (!skipped) m_UnknownTable = false;
 	m_Walking.clear();
 	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
