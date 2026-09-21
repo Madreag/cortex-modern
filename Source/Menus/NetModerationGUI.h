@@ -69,6 +69,7 @@ namespace RTE {
 		struct GhostBandHit {
 			bool found = false;
 			int x = 0, y = 0, run = 0;
+			int probePixel = -1;  //!< The raw pixel inside the live toast band, so a blind scan is visible.
 		};
 		/// Scans the GUI layer for a toast-fill run of at least minRunPx that no reported rect covers.
 		GhostBandHit ScanGhostBand(int minRunPx) const;
@@ -78,6 +79,7 @@ namespace RTE {
 		void DisarmGhostWatch() { m_GhostWatchArmed = false; }
 		int GhostWatchHits() const { return m_GhostWatchHits; }
 		const GhostBandHit& GhostWatchLast() const { return m_GhostWatchLast; }
+		int GhostWatchProbe() const { return m_GhostWatchProbe; }
 		/// Wraps a text the way the roster box does - same helper, same width rule - so a script can
 		/// check the wrap on a line the match may never produce.
 		bool AutomationWrapLines(const std::string& text, std::string& wrapped, int& boxWidth) const;
@@ -168,6 +170,7 @@ namespace RTE {
 		bool m_GhostWatchArmed = false;  //!< Whether DrawMatchToasts runs the ghost scan after each draw.
 		int m_GhostWatchHits = 0;        //!< Frames the armed watch saw a stale band on.
 		GhostBandHit m_GhostWatchLast;   //!< The last stale run the watch saw.
+		int m_GhostWatchProbe = -1;      //!< The last frame's pixel inside the live band, so a blind scan shows.
 		void GhostWatchTick();
 		long long m_StatusWaitStartedUs = 0;
 		long long m_LastStatusObservationMs = 0;
