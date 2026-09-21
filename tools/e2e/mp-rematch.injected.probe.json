@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "timeout_ms": 145000,
+  "steps": [
+    {
+      "op": "wait_file",
+      "path": "{STAGE}/gameplay-started.json"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "screen": "Gameplay",
+      "sim_at_least": 60
+    },
+    {
+      "op": "menu",
+      "command": "video_mark injected-before"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 210
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 210
+    },
+    {
+      "op": "menu",
+      "command": "video_mark injected-desync-await"
+    },
+    {
+      "op": "wait",
+      "control": "LabelNetMatchToastNewest",
+      "equals": {
+        "visible": true
+      },
+      "text_contains": "Match resynced (healed at frame "
+    },
+    {
+      "op": "menu",
+      "command": "video_mark injected-repair-complete"
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchToastNewest",
+      "equals": {
+        "visible": true
+      },
+      "text_contains": "Match resynced (healed at frame "
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 660
+    },
+    {
+      "op": "menu",
+      "command": "video_mark injected-play-resumed"
+    },
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 900
+    },
+    {
+      "op": "assert",
+      "equals": {
+        "service": "Running"
+      },
+      "sim_at_least": 900
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 660
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

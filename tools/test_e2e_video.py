@@ -103,6 +103,34 @@ def check_module_requirements(results, scratch):
     return ok
 
 
+def check_rematch_contract(results):
+    scenario = driver.load_scenario("mp-rematch")
+    runs = {run["name"]: run for run in scenario.get("runs", [])}
+    ok = row(results, "rematch/two-distinct-runs", set(runs) == {"rematch", "injected-desync"})
+    if not ok:
+        return False
+    regular, injected = runs["rematch"], runs["injected-desync"]
+    ok &= row(results, "rematch/full-second-round-hash-range", regular.get("hash_gate") == {
+        "name": "round2-hashes", "peers": ["host", "client"], "first_tick": 1, "cap": 600})
+    peers = {peer["name"]: peer for peer in injected["peers"]}
+    host_args, client_args = peers["host"]["args"], peers["client"]["args"]
+    ok &= row(results, "rematch/one-sided-existing-perturbation", "-determinism-selftest-perturb" in host_args and
+              "-determinism-selftest-perturb" not in client_args and
+              host_args[host_args.index("-determinism-selftest-perturb-tick") + 1] == "240")
+    ok &= row(results, "rematch/automatic-repair-enabled", all("-net-match-e2e-resync" in peer["args"] and
+              "-net-match-service-e2e" in peer["args"] for peer in peers.values()))
+    probes = [json.loads(driver.scenario_text(scenario, peer["probe"])) for peer in peers.values()]
+    ok &= row(results, "rematch/no-manual-repair-substitution", all("ButtonMatchRepairNow" not in json.dumps(probe) for probe in probes))
+    items = [item for item in scenario["checklist"] if item.get("run") == "injected-desync"]
+    ok &= row(results, "rematch/repair-needs-video-and-native-evidence", all(
+        any(item.get("peer") == name and item.get("screen") == "ResyncOverlay" and
+            any("reloading from the host snapshot" in pattern for pattern in item.get("log_regex", [])) for item in items) and
+        any(item.get("peer") == name and item.get("readback") and
+            any("match relaunched from the snapshot" in pattern for pattern in item.get("log_regex", [])) for item in items)
+        for name in peers))
+    return ok
+
+
 def check_scenarios(results):
     """Every scenario parses, names peers, points at scripts that exist and keeps its own port slice."""
     ok = True
@@ -712,6 +740,7 @@ def main():
         ok &= check_capture_binary(results, scratch)
         ok &= check_scratch_limit(results, scratch)
         ok &= check_module_requirements(results, scratch)
+        ok &= check_rematch_contract(results)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
