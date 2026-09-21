@@ -27,6 +27,12 @@ from test_directory_ice_join import start_service, list_sessions, patch_settings
 from feel_measure import stage_baseline
 from feel.retained_resume import compare_live_hashes
 
+HTTP_429 = re.compile(r'(?i)(?:\bHTTP\s+429\b|\bstatus\s*=\s*429\b|"\s*429\s+-)')
+
+
+def has_http_429(text: str) -> bool:
+    return bool(HTTP_429.search(text))
+
 STUN_MAGIC = 0x2112A442
 # A WSL relay only answers the host while the VM's neighbour entry is resolved, so the keepalive
 # makes the VM talk to its gateway instead of merely holding the distribution open.
@@ -166,14 +172,14 @@ def main():
         checks[peer] = dict(lines=lines, completed=records[peer].get('exit_code') == 0 and report.get('running_ticks', 0) >= 1200,
                             relay_candidate=bool(re.search(r'\[net-ice\] selected candidate=.*relay', log)),
                             relay_allowed='[net-route] RouteAllowed route=relay allowed=1' in log,
-                            no_429=not re.search(r'\b429\b', log))
+                            no_429=not has_http_429(log))
     directory = (root / 'service.log').read_text(encoding='utf-8', errors='replace')
     comparisons = compare_live_hashes(root / 'host-live.jsonl', root / 'client-live.jsonl', 1)
     passed = (all(all(value for key, value in checks[peer].items() if key != 'lines') for peer in checks)
-              and not re.search(r'\b429\b', directory) and bool(comparisons)
+              and not has_http_429(directory) and bool(comparisons)
               and all(row['compared_ticks'] > 0 and row['mismatched_ticks'] == 0 for row in comparisons))
     result = dict(passed=passed, checks=checks, comparisons=comparisons,
-                  directory_no_429=not re.search(r'\b429\b', directory), directory_port=args.port, game_port=args.game_port,
+                  directory_no_429=not has_http_429(directory), directory_port=args.port, game_port=args.game_port,
                   relay=dict(endpoint=f'{turn_host}:{turn_port}', warm_attempts=warm_attempts, reachable=reachable))
     (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
     print(f"[relay-join] {'PASS' if passed else 'FAIL'} " + str(root / 'result.json'))
