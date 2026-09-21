@@ -537,6 +537,7 @@ namespace RTE {
 		uint32_t largestRelayPacketBytes = 0; //!< Host: the biggest single forward, so an oversized frame is visible.
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
+		uint64_t acceptedThroughFrame = 0; //!< The newest tick of this sender's the round could consume.
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
