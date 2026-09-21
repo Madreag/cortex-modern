@@ -20,6 +20,9 @@ import re
 import sys
 import zipfile
 
+# SG6 numbers a capture-owned node in walk order in this band above every birth number.
+SCRATCH_BAND = 1 << 40
+
 if __package__:
     from . import snapshot_runtime
 else:
@@ -183,7 +186,8 @@ def parse_graph(data):
     limit = serial if serial is not None else count
     for expected in range(1, count + 1):
         kind, index = reader.char(), reader.integer(minimum=1)
-        if index > limit:
+        # SG6 numbers a capture-owned node in the scratch band above every birth, at most one per node.
+        if index > limit and not (version == "SG6" and SCRATCH_BAND < index <= SCRATCH_BAND + count):
             raise ValueError("graph node ID out of range")
         if serial is None:
             if index != expected:

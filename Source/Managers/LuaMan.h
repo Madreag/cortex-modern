@@ -229,6 +229,8 @@ namespace RTE {
 
 		/// Restores a graph into this state, laying each root's fields onto its live object; false with the reasons when anything did not restore.
 		bool RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld = false);
+		/// Calls a function of the graph module directly; no chunk is compiled, so the birth sequence stays where the restore left it.
+		void CallScriptGraph(const char* function);
 
 		/// Restores the per-object script fields carried by older saves.
 		bool RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text);

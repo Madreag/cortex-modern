@@ -674,6 +674,42 @@ namespace {
 		return 1;
 	}
 
+	static void NoteScriptGraphNewborn(lua_State* state, int index, uint64_t before, std::unordered_set<const void*>& seen) {
+		if (index < 0) index += lua_gettop(state) + 1;
+		const int type = lua_type(state, index);
+		if (type != LUA_TTABLE && type != LUA_TUSERDATA && type != LUA_TFUNCTION && type != LUA_TTHREAD) return;
+		if (luaJIT_value_serial(state, index) <= before) return;
+		NoteScriptGraphScratch(state, index);
+		if (type != LUA_TTABLE || !seen.insert(lua_topointer(state, index)).second) return;
+		lua_pushnil(state);
+		while (lua_next(state, index)) {
+			NoteScriptGraphNewborn(state, -2, before, seen);
+			NoteScriptGraphNewborn(state, -1, before, seen);
+			lua_pop(state, 1);
+		}
+	}
+
+	// A walk helper answers with wrappers of its own for the owners and members it names; like the tables
+	// a capture allocates they are the capture's, so they take walk-order scratch names on the live walk
+	// exactly as the frozen image's answers do.
+	static int ScriptGraphHelperCall(lua_State* state) {
+		const lua_CFunction call = lua_tocfunction(state, lua_upvalueindex(1));
+		const uint64_t before = luaJIT_state_serial(state);
+		const int count = call(state);
+		if (s_ScriptGraphScratch && s_ScriptGraphScratch->state == state) {
+			std::unordered_set<const void*> seen;
+			const int top = lua_gettop(state);
+			for (int index = top - count + 1; index <= top; ++index) NoteScriptGraphNewborn(state, index, before, seen);
+		}
+		return count;
+	}
+
+	static void RegisterScriptGraphHelper(lua_State* state, const char* name, lua_CFunction call) {
+		lua_pushcfunction(state, call);
+		lua_pushcclosure(state, ScriptGraphHelperCall, 1);
+		lua_setglobal(state, name);
+	}
+
 	static std::string ScriptGraphPrototypeIdentity(const ScriptGraphPrototype& prototype) {
 		std::string identity = "LuaPrototype1";
 		const auto scalar = [&identity](const auto& value) { identity.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
@@ -1086,6 +1122,10 @@ local function stringToken(s)
 	return "s" .. #s .. ":" .. s
 end
 
+-- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
+-- bytes of an unchanged state do not follow where its birth counter stands.
+local SCRATCH_BAND = 1099511627776
+
 local function outputNumber(value)
 	return capturing and captureNative.number(value, false) or value
 end
@@ -1266,7 +1306,7 @@ local function birthId(ctx, value, what)
 	if id > ctx.base and _ScriptGraphScratchValue(value) then
 		ctx.scratch = ctx.scratch + 1
 		ctx.rootUnwatched = ctx.rootUnwatched or "capture scratch"
-		return ctx.scratch
+		return SCRATCH_BAND + ctx.scratch
 	end
 	if id < 1 or id > ctx.base then
 		problem(ctx, "a " .. what .. " with no birth number (serial=" .. numberText(id) .. ", horizon=" .. numberText(ctx.base) .. ")")
@@ -1643,7 +1683,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		if cache and not samePaths(paths, cache.paths) then cache = nil end
 	end
 	phase("paths")
-	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = base, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
@@ -1814,7 +1854,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		_ScriptGraphEndCapture()
 		return serializeGraph(roots, true, base)
 	end
-	local out = { "SG6;", "S", outputNumber(ctx.scratch), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
+	local out = { "SG6;", "S", outputNumber(base), ";", "r", #rootIds, ";", concatenate(rootIds), "G", #globals, ";", concatenate(globals), "L", #loaded, ";", concatenate(loaded), patches, "R", rng, "X", #gibReferences, ";", concatenate(gibReferences), "N", ctx.count, ";" }
 	for _, text in ipairs(ctx.chunks) do out[#out + 1] = text end
 	for index = tailFirst, #ctx.order do out[#out + 1] = ctx.nodes[ctx.order[index]] end
 	local byId = {}
@@ -2001,10 +2041,10 @@ local function parse(text)
 	if version ~= "SG1" then
 		reader:expect("E")
 		for _ = 1, reader:count() do
-			local target = reader:typed("path")
 			-- Only SG6 ever wrote an engine patch that a reader can apply: the older shape named a
 			-- node holding the pairs, and no archive with one exists.
 			if version ~= "SG6" then reader:bad("engine patch before SG6") end
+			local target = reader:typed("path")
 			reader:expect("c")
 			local pairsIn = {}
 			for _ = 1, reader:count() do pairsIn[#pairsIn + 1] = { reader:readToken(), reader:readToken() } end
@@ -2036,7 +2076,9 @@ local function parse(text)
 	for expected = 1, count do
 		local kind = reader:peek()
 		reader.pos = reader.pos + 1
-		local id = reader:integer(reader:readUntil(";"), 1, idLimit)
+		local id = reader:integer(reader:readUntil(";"), 1)
+		-- A capture-owned node sits in the scratch band above every birth, at most one per node.
+		if id > idLimit and not (explicit and id > SCRATCH_BAND and id <= SCRATCH_BAND + count) then reader:bad("invalid integer") end
 		if explicit then
 			if graph.nodes[id] then reader:bad("noncontiguous or duplicate node ID") end
 		elseif id ~= expected then reader:bad("noncontiguous or duplicate node ID") end
@@ -2610,7 +2652,8 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 						fail("an open upvalue's coroutine is missing")
 					else
 						local ok, message = _ScriptGraphJoinOpenUpvalue(fn, i, thread, cell.open.slot)
-						if not ok then fail("an open upvalue could not be joined: " .. tostring(message)) end
+						if not ok then fail("an open upvalue could not be joined: " .. tostring(message))
+						elseif graph.serial then _ScriptGraphSetUpvalueSerial(fn, i, cellId) end
 					end
 				elseif owner then
 					debug.upvaluejoin(fn, i, owner[1], owner[2])
@@ -2964,7 +3007,7 @@ if #restoreProblems ~= 0 then return table.concat(results, "\n") end
 local ra, rb = restored["11"], restored["22"]
 check("roots_present", ra ~= nil and rb ~= nil)
 local text2, problems2 = _ScriptGraph.serialize({ ["11"] = ra, ["22"] = rb })
-check("canonical_reserialize", text2 == text, string.format("len %d vs %d, problems %d", #text2, #text, #problems2))
+check("canonical_reserialize", text2 == text, string.format("len %d vs %d, problems %d %s", #text2, #text, #problems2, table.concat(problems2, " | ")))
 if text2 ~= text then
 	local f1 = io.open("script_graph_selftest_capture.txt", "wb")
 	if f1 then f1:write(text) f1:close() end
@@ -3395,7 +3438,10 @@ do
 	local cacheThird = _ScriptGraph.serialize(cacheRoots)
 	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one")
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
-	check("root_cache_rewrites_the_root_that_moved", string.find(cacheSecond, "s5:moved", 1, true) ~= nil and string.find(cacheFirst, "s5:moved", 1, true) == nil)
+	local movedSecond, movedFirst = string.find(cacheSecond, "s5:moved", 1, true) ~= nil, string.find(cacheFirst, "s5:moved", 1, true) ~= nil
+	local tagAt = string.find(cacheSecond, "s3:tag", 1, true)
+	check("root_cache_rewrites_the_root_that_moved", movedSecond and not movedFirst,
+	      "second_has_moved=" .. tostring(movedSecond) .. " first_has_moved=" .. tostring(movedFirst) .. " second_tag=" .. tostring(tagAt and string.sub(cacheSecond, math.max(1, tagAt - 30), tagAt + 30)))
 	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
 )lua"
     R"lua(
@@ -3480,7 +3526,10 @@ do
 		local previousPatch = rawget(string, "CheckpointCacheProbe")
 		rawset(string, "CheckpointCacheProbe", 73)
 		local patched = _ScriptGraph.serialize(graphRoots)
-		check("engine_patches_rederive_only_on_a_library_write", engineKept and not _ScriptGraph.cacheState("0", "engine") and string.find(patched, "s20:CheckpointCacheProben73;", 1, true) ~= nil)
+		local patchedState = _ScriptGraph.cacheState("0", "engine")
+		local patchFound = string.find(patched, "s20:CheckpointCacheProben73;", 1, true) ~= nil
+		check("engine_patches_rederive_only_on_a_library_write", engineKept and not patchedState and patchFound,
+		      "engine_kept=" .. tostring(engineKept) .. " engine_reused_after_write=" .. tostring(patchedState) .. " patch_found=" .. tostring(patchFound))
 		rawset(string, "CheckpointCacheProbe", previousPatch)
 		local restored, errors = _ScriptGraph.deserialize(second)
 		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse", keptAlias and #errors == 0 and
@@ -3529,9 +3578,15 @@ do
 	if not patchOk then
 		patchText, patchProblems, patchCount, patchRestoreProblems, patchAgain = "", { tostring(patchText) }, 0, {}, ""
 	end
+	local patchDifference = ""
+	if patchAgain ~= patchText then
+		local at = 1
+		while at <= #patchText and at <= #patchAgain and string.byte(patchText, at) == string.byte(patchAgain, at) do at = at + 1 end
+		patchDifference = string.format(" again_equal=false at %d: %q vs %q", at, string.sub(patchText, at, at + 60), string.sub(patchAgain, at, at + 60))
+	end
 	check("sg6_engine_patch_round_trips", patchOk and #patchProblems == 0 and #patchRestoreProblems == 0 and patchCount > 0 and
 	      string.sub(patchText, 1, 4) == "SG6;" and patchAgain == patchText,
-	      "patches=" .. patchCount .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | "))
+	      "patches=" .. patchCount .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | ") .. patchDifference)
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
 	local file = io.tmpfile()
@@ -3912,6 +3967,7 @@ static int ScriptGraphReuseRoot(lua_State* L) {
 static thread_local std::unordered_map<lua_State*, std::vector<uint64_t>> s_SerialBeforeCapture;
 static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<LuaCheckpointBarrierPause>>> s_GraphBarrierPauses;
 static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<LuaScriptGraphNativeCaptureScope>>> s_GraphNativeCaptureScopes;
+static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<ScriptGraphScratchScope>>> s_GraphScratchScopes;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
 	// The walk the index records is the capture itself, so every caller gets one, nested or not; one
@@ -3921,6 +3977,8 @@ static int ScriptGraphBeginCapture(lua_State* L) {
 	s_GraphBarrierPauses[L].push_back(std::make_unique<LuaCheckpointBarrierPause>());
 	s_SerialBeforeCapture[L].push_back(static_cast<uint64_t>(luaL_optnumber(L, 2, static_cast<lua_Number>(luaJIT_state_serial(L)))));
 	s_GraphNativeCaptureScopes[L].push_back(s_GraphNativeCapture ? nullptr : std::make_unique<LuaScriptGraphNativeCaptureScope>());
+	// The helper wrappers this walk makes are noted in a scope of its own unless the engine's capture opened one.
+	s_GraphScratchScopes[L].push_back(s_ScriptGraphScratch && s_ScriptGraphScratch->state == L ? nullptr : std::make_unique<ScriptGraphScratchScope>(L));
 	return 0;
 }
 
@@ -3938,6 +3996,10 @@ static int ScriptGraphEndCapture(lua_State* L) {
 	if (const auto native = s_GraphNativeCaptureScopes.find(L); native != s_GraphNativeCaptureScopes.end()) {
 		native->second.pop_back();
 		if (native->second.empty()) s_GraphNativeCaptureScopes.erase(native);
+	}
+	if (const auto scratch = s_GraphScratchScopes.find(L); scratch != s_GraphScratchScopes.end()) {
+		scratch->second.pop_back();
+		if (scratch->second.empty()) s_GraphScratchScopes.erase(scratch);
 	}
 	return 0;
 }
@@ -5576,16 +5638,12 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 	if (!m_ScriptGraphHelperLoaded) {
 		lua_pushcfunction(m_State, ScriptGraphObjectAddress);
 		lua_setglobal(m_State, "_ScriptGraphObjectAddress");
-		lua_pushcfunction(m_State, ScriptGraphNativeAddress);
-		lua_setglobal(m_State, "_ScriptGraphNativeAddress");
-		lua_pushcfunction(m_State, ScriptGraphInstance);
-		lua_setglobal(m_State, "_ScriptGraphInstance");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphNativeAddress", ScriptGraphNativeAddress);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphInstance", ScriptGraphInstance);
 		lua_pushcfunction(m_State, ScriptGraphSetInstance);
 		lua_setglobal(m_State, "_ScriptGraphSetInstance");
-		lua_pushcfunction(m_State, ScriptGraphMembers);
-		lua_setglobal(m_State, "_ScriptGraphMembers");
-		lua_pushcfunction(m_State, ScriptGraphCaptureCall<ScriptGraphNative>);
-		lua_setglobal(m_State, "_ScriptGraphNative");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphMembers", ScriptGraphMembers);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphNative", ScriptGraphCaptureCall<ScriptGraphNative>);
 		lua_pushcfunction(m_State, ScriptGraphOwnerState);
 		lua_setglobal(m_State, "_ScriptGraphOwnerState");
 		lua_pushcfunction(m_State, ScriptGraphEntityCast);
@@ -5602,50 +5660,40 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphPathQueueSelfTest");
 		lua_pushcfunction(m_State, ScriptGraphIteratorRewind);
 		lua_setglobal(m_State, "_ScriptGraphIteratorRewind");
-		lua_pushcfunction(m_State, ScriptGraphIteratorSnapshot);
-		lua_setglobal(m_State, "_ScriptGraphIteratorSnapshot");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphIteratorSnapshot", ScriptGraphIteratorSnapshot);
 		lua_pushcfunction(m_State, ScriptGraphIteratorRestore);
 		lua_setglobal(m_State, "_ScriptGraphIteratorRestore");
 		lua_pushcfunction(m_State, ScriptGraphIteratorFromValues);
 		lua_setglobal(m_State, "_ScriptGraphIteratorFromValues");
-		lua_pushcfunction(m_State, ScriptGraphGibOwner);
-		lua_setglobal(m_State, "_ScriptGraphGibOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphGibOwner", ScriptGraphGibOwner);
 		lua_pushcfunction(m_State, ScriptGraphGib);
 		lua_setglobal(m_State, "_ScriptGraphGib");
-		lua_pushcfunction(m_State, ScriptGraphGibReferences);
-		lua_setglobal(m_State, "_ScriptGraphGibReferences");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphGibReferences", ScriptGraphGibReferences);
 		lua_pushcfunction(m_State, ScriptGraphRestoreGibReference);
 		lua_setglobal(m_State, "_ScriptGraphRestoreGibReference");
-		lua_pushcfunction(m_State, ScriptGraphPropertyOwner);
-		lua_setglobal(m_State, "_ScriptGraphPropertyOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 		lua_pushcfunction(m_State, ScriptGraphProperty);
 		lua_setglobal(m_State, "_ScriptGraphProperty");
-		lua_pushcfunction(m_State, ScriptGraphSoundSetOwner);
-		lua_setglobal(m_State, "_ScriptGraphSoundSetOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
 		lua_pushcfunction(m_State, ScriptGraphSoundSet);
 		lua_setglobal(m_State, "_ScriptGraphSoundSet");
-		lua_pushcfunction(m_State, ScriptGraphLimbOwner);
-		lua_setglobal(m_State, "_ScriptGraphLimbOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphLimbOwner", ScriptGraphLimbOwner);
 		lua_pushcfunction(m_State, ScriptGraphActorLimb);
 		lua_setglobal(m_State, "_ScriptGraphActorLimb");
-		lua_pushcfunction(m_State, ScriptGraphLimbVectorOwner);
-		lua_setglobal(m_State, "_ScriptGraphLimbVectorOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
 		lua_pushcfunction(m_State, ScriptGraphLimbVector);
 		lua_setglobal(m_State, "_ScriptGraphLimbVector");
 		lua_pushcfunction(m_State, ScriptGraphGlobalScript);
 		lua_setglobal(m_State, "_ScriptGraphGlobalScript");
-		lua_pushcfunction(m_State, ScriptGraphNativeSave);
-		lua_setglobal(m_State, "_ScriptGraphNativeSave");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphNativeSave", ScriptGraphNativeSave);
 		lua_pushcfunction(m_State, ScriptGraphPrimitiveCreate);
 		lua_setglobal(m_State, "_ScriptGraphPrimitiveCreate");
 		lua_pushcfunction(m_State, ScriptGraphPrimitiveResolve);
 		lua_setglobal(m_State, "_ScriptGraphPrimitiveResolve");
-		lua_pushcfunction(m_State, ScriptGraphAreaBoxes);
-		lua_setglobal(m_State, "_ScriptGraphAreaBoxes");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
 		lua_pushcfunction(m_State, ScriptGraphAreaBox);
 		lua_setglobal(m_State, "_ScriptGraphAreaBox");
-		lua_pushcfunction(m_State, ScriptGraphSceneBoxOwner);
-		lua_setglobal(m_State, "_ScriptGraphSceneBoxOwner");
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphSceneBoxOwner", ScriptGraphSceneBoxOwner);
 		lua_pushcfunction(m_State, ScriptGraphNativeLoad);
 		lua_setglobal(m_State, "_ScriptGraphNativeLoad");
 		lua_pushcfunction(m_State, ScriptGraphNativeRelease);
@@ -6047,6 +6095,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 		return false;
 	}
 	CollectStrings(m_State, -1, problems);
+	const uint64_t horizon = luaJIT_state_serial(m_State);
 	const int roots = lua_gettop(m_State) - 1;
 	// The script receiver is a graph object even when no saved field or coroutine refers to it yet.
 	lua_getglobal(m_State, "_ScriptGraphCallbacks");
@@ -6113,8 +6162,23 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 	if (this == &g_LuaMan.GetMasterScriptState()) {
 		if (const char* probe = std::getenv("CC_TEST_F21_INVENTORY"); probe && std::strcmp(probe, "1") == 0) GameActivity::RunNetInventoryRelaunchProbe("held");
 	}
+	// The archive's horizon is where the state counts on from, whatever the wiring above allocated.
+	luaJIT_set_state_serial(m_State, horizon);
 	lua_settop(m_State, top);
 	return problems.size() == before;
+}
+
+void LuaStateWrapper::CallScriptGraph(const char* function) {
+	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	const int top = lua_gettop(m_State);
+	lua_getglobal(m_State, "_ScriptGraph");
+	if (lua_istable(m_State, -1)) {
+		lua_getfield(m_State, -1, function);
+		if (lua_isfunction(m_State, -1) && lua_pcall(m_State, 0, 0, 0) != 0) {
+			g_ConsoleMan.PrintString(std::string("ERROR: _ScriptGraph.") + function + ": " + (lua_tostring(m_State, -1) ? lua_tostring(m_State, -1) : "?"));
+		}
+	}
+	lua_settop(m_State, top);
 }
 
 bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text) {
@@ -7724,7 +7788,7 @@ _PrimitiveQueueCapture = nil
 )lua") == 0;
 		g_PrimitiveMan.ClearPrimitivesQueue();
 		g_PrimitiveMan.ReinstateQueues(original);
-		std::cout << "[primitive-lua-selftest] " << (primitivesPassed ? "PASS" : "FAIL") << " public_tables_atomic_adoption_shared_vertices_concrete_types" << std::endl;
+		std::cout << "[primitive-lua-selftest] " << (primitivesPassed ? "PASS" : "FAIL") << " public_tables_atomic_adoption_shared_vertices_concrete_types" << (primitivesPassed ? "" : " " + GetLastError()) << std::endl;
 		checkpointValues = primitivesPassed && checkpointValues;
 	}
 	checkpointValues = g_SceneMan.RunMaterialCheckpointSelfTest() && checkpointValues;
@@ -8656,7 +8720,7 @@ _PrimitiveQueueCapture = nil
 			while (at < first.size() && at < second.size() && first[at] == second[at]) {
 				++at;
 			}
-			graphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + second.substr(at, 60) + "'";
+			graphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + first.substr(at, 40) + "' vs '" + second.substr(at, 40) + "'";
 		}
 		std::cout << "[preview-late-script] staged=" << staged << " loaded=" << loaded << " state=" << stateTaken
 		          << " cursor " << cursorBefore << "->" << cursorAfter << " bindings_kept=" << bindingsKept
@@ -8917,6 +8981,15 @@ _PrimitiveQueueCapture = nil
 		const bool settled = captured && g_MovableMan.SetAsideWorld(aside, false) && g_MovableMan.ReinstateWorld(aside);
 		const bool recaptured = settled && g_MovableMan.SerializeScriptGraphs(after, graphProblems);
 		const bool graphsEqual = recaptured && after == before;
+		std::string graphDelta;
+		for (size_t index = 0; index < std::max(before.size(), after.size()); ++index) {
+			const std::string first = index < before.size() ? before[index] : std::string();
+			const std::string second = index < after.size() ? after[index] : std::string();
+			if (first == second) continue;
+			size_t at = 0;
+			while (at < first.size() && at < second.size() && first[at] == second[at]) ++at;
+			graphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + first.substr(at, 40) + "' vs '" + second.substr(at, 40) + "'";
+		}
 		RunScriptString(
 		    "local probe = { 1, 2 };"
 		    "local clear = rawget(table, 'clear');"
@@ -8934,7 +9007,7 @@ _PrimitiveQueueCapture = nil
 		detail << "staged=" << staged << " settled=" << settled << " graphs_equal=" << graphsEqual
 		       << " table.clear=" << (clearKept ? "kept" : "missing") << " string.f69probe=" << (probeKept ? "kept" : "missing")
 		       << " graph_problems=" << graphProblems.size() << " distinct=" << distinctProblems.size()
-		       << (graphProblems.empty() ? "" : " first=" + graphProblems.front());
+		       << (graphProblems.empty() ? "" : " first=" + graphProblems.front()) << graphDelta;
 		addedLibraryKeyDetail = detail.str();
 		// The keys are this arm's own, so the libraries reach whatever runs next as it found them.
 		RunScriptString(
