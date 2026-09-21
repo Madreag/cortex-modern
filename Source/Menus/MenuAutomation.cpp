@@ -34,23 +34,108 @@
 #include "WindowMan.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <list>
+#include <mutex>
 #include <sstream>
 #include <string_view>
 #include <tuple>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace RTE::MenuAutomation {
 	using Json = nlohmann::json;
 	using Rect = std::array<int, 4>;
+	class ReadbackWriter {
+		struct Dump {
+			std::filesystem::path path;
+			Json controls;
+			std::vector<unsigned char> pixels;
+			int width = 0, height = 0;
+		};
+		std::mutex m_Mutex;
+		std::condition_variable m_Wake;
+		std::deque<Dump> m_Queue;
+		bool m_Stopping = false, m_Failed = false;
+		std::thread m_Worker;
+		void Write() {
+			for (;;) {
+				Dump dump;
+				{
+					std::unique_lock lock(m_Mutex);
+					m_Wake.wait(lock, [&] { return m_Stopping || !m_Queue.empty(); });
+					if (m_Queue.empty()) return;
+					dump = std::move(m_Queue.front());
+					m_Queue.pop_front();
+				}
+				bool saved = false;
+				try {
+					SDL_Surface* image = SDL_CreateSurfaceFrom(dump.width, dump.height, SDL_PIXELFORMAT_RGB24, dump.pixels.data(), dump.width * 3);
+					saved = image && IMG_SavePNG(image, (dump.path.string() + ".png").c_str());
+					if (image) SDL_DestroySurface(image);
+					if (saved) {
+						const std::string temporary = dump.path.string() + ".json.tmp";
+						std::ofstream output(temporary);
+						output << dump.controls.dump(2) << '\n';
+						output.close();
+						saved = output.good();
+						if (saved) std::filesystem::rename(temporary, dump.path.string() + ".json");
+					}
+				} catch (...) { saved = false; }
+				if (!saved) {
+					std::lock_guard lock(m_Mutex);
+					m_Failed = true;
+				}
+			}
+		}
+	public:
+		ReadbackWriter() = default;
+		~ReadbackWriter() { Finish(); }
+		bool Queue(const std::filesystem::path& path, Json controls, BITMAP* bitmap) {
+			if (!bitmap || bitmap_color_depth(bitmap) != 32) return false;
+			Dump dump{path, std::move(controls), {}, bitmap->w, bitmap->h};
+			dump.pixels.resize(static_cast<size_t>(bitmap->w) * bitmap->h * 3);
+			for (int y = 0; y < bitmap->h; ++y) {
+				const auto* source = reinterpret_cast<const uint32_t*>(bitmap->line[y]);
+				auto* target = dump.pixels.data() + static_cast<size_t>(y) * bitmap->w * 3;
+				for (int x = 0; x < bitmap->w; ++x) {
+					target[3 * x] = getr32(source[x]);
+					target[3 * x + 1] = getg32(source[x]);
+					target[3 * x + 2] = getb32(source[x]);
+				}
+			}
+			{
+				std::lock_guard lock(m_Mutex);
+				if (m_Stopping || m_Failed || m_Queue.size() >= 8) return false;
+				m_Queue.push_back(std::move(dump));
+				if (!m_Worker.joinable()) m_Worker = std::thread([this] { Write(); });
+			}
+			m_Wake.notify_one();
+			return true;
+		}
+		bool Finish() {
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Stopping = true;
+			}
+			m_Wake.notify_one();
+			if (m_Worker.joinable()) m_Worker.join();
+			return !m_Failed;
+		}
+	};
+	ReadbackWriter& Writer() { static ReadbackWriter writer; return writer; }
+	bool FinishReadbacks() { return Writer().Finish(); }
 	Rect Rectangle(GUIPanel* panel) {
 		Rect rect{0, 0, g_WindowMan.GetResX(), g_WindowMan.GetResY()};
 		if (panel) panel->GetRect(&rect[0], &rect[1], &rect[2], &rect[3]);
@@ -505,7 +590,10 @@ namespace RTE::MenuAutomation {
 			if (command == "dump_host_options" || command == "dump_player_options") {
 				if (!name.empty()) return false;
 				static unsigned int capture = 0;
-				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
+				std::filesystem::path path;
+				do {
+					path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
+				} while (std::filesystem::exists(path.string() + ".json") || std::filesystem::exists(path.string() + ".png") || std::filesystem::exists(path.string() + ".json.tmp"));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
 				Json table = Json::array();
 				for (const NetHostActivityChoice& activity : NetMatchService::ListHostActivities()) {
@@ -628,11 +716,8 @@ namespace RTE::MenuAutomation {
 					if (!text.empty()) { row["text_fits"] = TextFits(manager, item, measured); row["text_measure"] = measured; }
 					result["controls"].push_back(row);
 				}
-				std::ofstream output(path.string() + ".json");
-				output << result.dump(2) << '\n';
-				output.flush();
 				observation = result.dump();
-				return output.good() && g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), (path.string() + ".png").c_str()) == 0;
+				return Writer().Queue(path, std::move(result), g_FrameMan.GetBackBuffer32());
 			}
 			observation = name + " " + argument;
 			if (!control) { observation += " missing control"; return false; }

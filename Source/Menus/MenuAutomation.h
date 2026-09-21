@@ -21,6 +21,8 @@ namespace RTE {
 		void ApplyQueuedPage(GUIControlManager* manager);
 		bool Handles(const std::string& command);
 		bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation);
+		/// Finishes queued readback files before the image library shuts down.
+		bool FinishReadbacks();
 		void Click(GUIControlManager* manager, const std::string& control);
 		void BindSettingsOwner(GUIControlManager* manager, SettingsGUI* owner);
 		void UnbindSettingsOwner(GUIControlManager* manager);
