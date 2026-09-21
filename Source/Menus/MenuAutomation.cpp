@@ -3,6 +3,7 @@
 #include "MenuMan.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
+#include "NetPlayerPresentation.h"
 
 #include "GUI.h"
 #include "GUIDrawRecord.h"
@@ -317,7 +318,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast";
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -333,6 +334,14 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "dump_seat_state") {
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			Json members = Json::array();
+			for (const auto& member: snapshot.members) members.push_back({{"peer", member.peerId}, {"name", NetPlayerPresentation::Name(member)}, {"state", NetPlayerPresentation::State(member)}, {"route", member.connectedRoute}});
+			observation = Json{{"members", members}, {"private_catch_up", ScenarioRunner::WorldCatchUpActive()},
+				{"resyncing", g_NetMatchService.IsMatchResyncing()}, {"slow_notice", ScenarioRunner::IsLockstepLocalMachineSlow()}}.dump();
+			return true;
+		}
 		if (command == "push_toast") {
 			std::string kind, text;
 			args >> kind;

@@ -3088,7 +3088,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - Rejoining..." : "Resyncing the match...", GUIFont::Centre);
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...", GUIFont::Centre);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
