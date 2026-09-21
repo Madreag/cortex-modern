@@ -184,8 +184,9 @@ python tools/e2e_video.py --repo <mac-tree> --scenario mp-host-join-cross --peer
 
 `HOST_ADDRESS` may also come from the environment. This definition uses a plain address on port 49412; it does not
 depend on a directory listing. The address must be reachable from the client and the two binaries must be compatible.
-After transferring the complete Mac capture through the lead's approved evidence workflow, join its contract with
-the host's retained capture:
+Transfer selected evidence files through the approved workflow, preserving their paths relative to the Mac capture
+root: `capture.json`, `manifest.json`, `review.json`, MP4s, sheets, native match-identity files, traces and the logs/probe
+results the review references. No runtime or directory-tree copy is needed. Join the transferred half with the host:
 
 ```text
 python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> --out <merged-contract>
@@ -193,7 +194,15 @@ python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> 
 
 The merge reads both halves and writes metadata only. It requires the same checklist, live session, round and
 configuration hash, complementary host/client roles, distinct peer ids, and unchanged MP4/contact-sheet hashes.
-It preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
+Paths inside each original `capture.json` output root resolve beneath the supplied local half; traversal, outside-root
+paths, resolved link escapes and changed files refuse the merge. The input metadata stays untouched. Merged file
+evidence keeps `original_path`; `relocations` lists every mapped reference, and `provenance` retains original commands
+and hashes of the three input metadata files. Review media references must name their verified peer media.
+New cross captures record native identity and trace hashes in each peer's `identity_file` and `trace`, required by
+`cross_auxiliary`; merging checks those files and compares native identity contents with the embedded match identity.
+Older halves explicitly list absent historical auxiliary hashes in `auxiliary_checksum_coverage` and cannot claim
+that verification. Media hashes remain mandatory for both old and new halves.
+The merge preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
 `local-pair-validation-only`; it is not a Mac capture. Picture review remains pending after a successful merge.
 
 On the Mac, both this definition and `sp-smoke` need Python, `date`, ffmpeg/ffprobe on PATH (or a listed Unix path),

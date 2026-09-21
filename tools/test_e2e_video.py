@@ -702,6 +702,100 @@ def check_cross_capture(results, scratch):
     return ok
 
 
+def check_cross_transfer(results, scratch):
+    from e2e.cross import CaptureRelocation, merge_halves, select_peer
+    scenario = driver.load_scenario('mp-host-join-cross')
+    identities = {'host': {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 1, 'host': True},
+                  'client': {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 2, 'host': False}}
+    roots, originals = [], {}
+    for name, platform in (('host', 'win32'), ('client', 'darwin')):
+        root = scratch / ('transferred-' + name)
+        (root / 'run0' / (name + '-stage') / 'probe').mkdir(parents=True)
+        roots.append(root)
+        original = str(root) if name == 'host' else '/Users/erol/captures/client-half'
+        originals[name] = original
+        def evidence(relative, data):
+            path = root / relative
+            path.write_bytes(data)
+            return {**driver.file_evidence(path), 'path': original.replace('\\', '/') + '/' + relative}
+        video = evidence(f'run0/{name}.mp4', b'synthetic transferred video')
+        sheet = evidence(f'run0/{name}-sheet.png', b'synthetic transferred sheet')
+        native = evidence(f'run0/{name}-stage/probe/match-identity.json', json.dumps(identities[name]).encode())
+        trace = evidence(f'run0/{name}_trace.json', b'{"synthetic":true,"ticks":[1,2]}')
+        peer = {'peer': name, 'match_identity': identities[name], 'video': video, 'contact_sheet': sheet,
+                'identity_file': native, 'trace': trace}
+        driver.write_json(root / 'capture.json', {'scenario': scenario['name'], 'scenario_definition': select_peer(scenario, name), 'out': original})
+        driver.write_json(root / 'manifest.json', {'platform': platform, 'source': {'tip': 'synthetic-transfer'}, 'frame_count': 2, 'peers': [peer]})
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'command': ['--out', original], 'checklist': [{
+            'id': name, 'peer': name, 'frames': [0, 1], 'probe': 'pass', 'video': video['path'], 'contact_sheet': sheet['path'],
+            'identity_file': native, 'trace': trace, 'readback': [{'path': ['control', 'visible'], 'equals': True}]}]})
+    before = {str(path): path.read_bytes() for root in roots for path in (root / 'capture.json', root / 'manifest.json', root / 'review.json')}
+    ok = row(results, 'cross-transfer/unix-half-relocates', merge_halves(roots, scratch / 'transferred-merged'))
+    manifest = json.loads((scratch / 'transferred-merged/manifest.json').read_text())
+    review = json.loads((scratch / 'transferred-merged/review.json').read_text())
+    peer = next(peer for peer in manifest['peers'] if peer['peer'] == 'client')
+    item = next(item for item in review['checklist'] if item['peer'] == 'client')
+    ok &= row(results, 'cross-transfer/original-media-path-retained', peer['video'].get('original_path') == originals['client'] + '/run0/client.mp4')
+    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(roots[1] / 'run0/client.mp4') and
+              item['identity_file']['path'] == str(roots[1] / 'run0/client-stage/probe/match-identity.json') and
+              item['trace']['path'] == str(roots[1] / 'run0/client_trace.json'))
+    ok &= row(results, 'cross-transfer/provenance-and-inputs-unchanged', bool(manifest.get('relocations')) and
+              all(Path(path).read_bytes() == data for path, data in before.items()))
+    ok &= row(results, 'cross-transfer/property-path-is-not-a-file', item['readback'][0]['path'] == ['control', 'visible'])
+    trace_path = roots[1] / 'run0/client_trace.json'
+    trace_bytes = trace_path.read_bytes()
+    trace_path.write_bytes(b'changed trace')
+    ok &= row(results, 'cross-transfer/changed-trace-refused', not merge_halves(roots, scratch / 'transferred-bad-trace'))
+    trace_path.write_bytes(trace_bytes)
+    native_path = roots[1] / 'run0/client-stage/probe/match-identity.json'
+    native_bytes = native_path.read_bytes()
+    native_path.write_bytes(b'{"changed":true}')
+    ok &= row(results, 'cross-transfer/changed-identity-refused', not merge_halves(roots, scratch / 'transferred-bad-identity'))
+    native_path.write_bytes(native_bytes)
+    client_manifest = json.loads((roots[1] / 'manifest.json').read_text())
+    outside = scratch / 'outside-client.mp4'
+    outside.write_bytes(b'synthetic transferred video')
+    saved_video = client_manifest['peers'][0]['video']
+    for variant, escaped in [('outside', str(outside)), ('traversal', originals['client'] + '/../outside-client.mp4')]:
+        client_manifest['peers'][0]['video'] = {**saved_video, 'path': escaped}
+        driver.write_json(roots[1] / 'manifest.json', client_manifest)
+        ok &= row(results, f'cross-transfer/{variant}-refused', not merge_halves(roots, scratch / ('transferred-' + variant)))
+    client_manifest['peers'][0]['video'] = saved_video
+    saved_trace = client_manifest['peers'][0].pop('trace')
+    client_manifest['cross_auxiliary'] = {'schema': 1, 'required': ['identity_file', 'trace']}
+    driver.write_json(roots[1] / 'manifest.json', client_manifest)
+    ok &= row(results, 'cross-transfer/fresh-capture-requires-auxiliary-hashes', not merge_halves(roots, scratch / 'transferred-missing-required-trace'))
+    client_manifest['peers'][0]['trace'] = saved_trace
+    driver.write_json(roots[1] / 'manifest.json', client_manifest)
+    client_review = json.loads((roots[1] / 'review.json').read_text())
+    client_review['checklist'][0]['video'] = str(outside)
+    driver.write_json(roots[1] / 'review.json', client_review)
+    ok &= row(results, 'cross-transfer/review-path-outside-refused', not merge_halves(roots, scratch / 'transferred-review-outside'))
+    relocation = CaptureRelocation(originals['client'], roots[1])
+    with patch.object(Path, 'resolve', return_value=scratch / 'outside-resolved-file'):
+        try:
+            relocation.path(originals['client'] + '/run0/client.mp4', 'video')
+            rejected = False
+        except ValueError:
+            rejected = True
+    ok &= row(results, 'cross-transfer/resolved-link-escape-refused', rejected)
+    produced = scratch / 'cross-producer'
+    (produced / 'probe').mkdir(parents=True)
+    driver.write_json(produced / 'probe/match-identity.json', identities['host'])
+    (produced / 'host_trace.json').write_text('{"synthetic":true}')
+    native_peer = {'peer': 'host', 'root': str(produced), 'record': {}, 'index': [], 'manifest': {},
+                   'probe_dir': str(produced / 'probe'), 'args': ['-out', str(produced / 'host_trace.json')]}
+    capture = {'scenario': scenario['name'], 'scenario_definition': select_peer(scenario, 'host'),
+               'source': {'tip': 'synthetic'}, 'exe': {}, 'started': driver.stamp(), 'fps': 6,
+               'runs': [{'name': 'run0', 'size': '640x360', 'peers': [native_peer]}]}
+    produced_manifest = driver.scenario_manifest(capture, produced, 1)
+    ok &= row(results, 'cross-transfer/producer-hashes-native-identity-and-trace',
+              produced_manifest.get('cross_auxiliary', {}).get('required') == ['identity_file', 'trace'] and
+              produced_manifest['peers'][0]['identity_file']['sha256'] == driver.file_evidence(produced / 'probe/match-identity.json')['sha256'] and
+              produced_manifest['peers'][0]['trace']['sha256'] == driver.file_evidence(produced / 'host_trace.json')['sha256'])
+    return ok
+
+
 def check_migration_timing(results, scratch):
     from e2e.timing import migration_timing
     root = scratch / 'timing'
@@ -757,6 +851,7 @@ def main():
         ok &= check_drop_receipts(results, scratch)
         ok &= check_gameplay_epochs(results, scratch)
         ok &= check_cross_capture(results, scratch)
+        ok &= check_cross_transfer(results, scratch)
         ok &= check_migration_timing(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
