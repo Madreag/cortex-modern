@@ -344,8 +344,8 @@ namespace RTE {
 
 			const NetHash32 identityFour = NetIdentity::HashSessionIdentity(manifestFour);
 			const NetHash32 identityThirtyTwo = NetIdentity::HashSessionIdentity(manifestThirtyTwo);
-			if (configFour != configThirtyTwo || identityFour != identityThirtyTwo) {
-				*error = "the identity depends on the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
+			if (configFour == configThirtyTwo || identityFour == identityThirtyTwo) {
+				*error = "the identity does not pin the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
 				         " vs 32 states " + NetIdentity::HashHex(configThirtyTwo) + ", session_identity_hash 4 states " + NetIdentity::HashHex(identityFour) +
 				         " vs 32 states " + NetIdentity::HashHex(identityThirtyTwo);
 				return false;
@@ -379,8 +379,7 @@ namespace RTE {
 				*error = "session_identity_hash stopped reacting to session_rules_hash";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] PASS lua state count out of identity: 4 and 32 states share deterministic_config_hash "
-			          << NetIdentity::HashHex(configFour) << " and session_identity_hash " << NetIdentity::HashHex(identityFour) << std::endl;
+			std::cout << "[net-identity-selftest] PASS lua state count pinned: 4 and 32 states reject with distinct deterministic_config_hash values" << std::endl;
 			return true;
 		}
 
