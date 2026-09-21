@@ -832,6 +832,8 @@ namespace RTE {
 		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
+		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { return m_State; }

@@ -2044,6 +2044,82 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
+		bool TestRejoinWindowClearsTheRestart(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A33, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A33, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 33; a.relayToOtherPeers = true;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.timeoutMs = b.timeoutMs = 20000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+			if (!StartCoordinatorPair(48890, hostWire, clientWire, host, client, a, b, error)) return false;
+			// The 200 ms arms' numbers: a 400 ms round trip and a restart the returning machine published.
+			// The seat's window has to clear both, or the round requires its input before its first tick.
+			client.NoteLocalStartPark(285);
+			for (uint64_t now = 0; now < 10; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now); }
+			if (!host.QueueLocalInput(0, {}, {}, error) || !host.ProposePeerHold(2, 10, error)) return false;
+			host.Tick(10);
+			NetLockstepReadyFrame ready;
+			if (!host.PopReadyFrame(ready) || !host.IsSeatUnderAI(2, 0)) {
+				*error = "the rejoin fixture did not hand the seat to the AI: running=" + std::to_string(host.IsRunning()) +
+				         " next_frame=" + std::to_string(host.GetStats().nextFrame);
+				return false;
+			}
+			const auto published = host.GetStats().peers.find(2);
+			if (published == host.GetStats().peers.end() || published->second.startParkMs != 285) {
+				*error = "the fixture did not publish the returning machine's restart: park=" +
+				         std::to_string(published == host.GetStats().peers.end() ? 0 : published->second.startParkMs);
+				return false;
+			}
+			(void)host.FinishSimulationTick(0);
+			std::string rejoin;
+			// The estimator samples a link at most every 100 ms, so a steady 400 ms trip is read over
+			// several attempts; each one is refused while the seat's window is still the old one.
+			for (uint64_t at = 200; at <= 650; at += 150) {
+				if (host.PreparePeerRejoin(2, 400, at, &rejoin)) {
+					*error = "a 400ms rejoin was admitted on the old window: delay=" + std::to_string(host.InputDelayAt(2, 900));
+					return false;
+				}
+			}
+			uint64_t committedAt = 0;
+			for (uint64_t tick = 1; tick <= 85; ++tick) {
+				if (!host.QueueLocalInput(tick, {}, {}, error)) return false;
+				host.Tick(700 + tick * 17);
+				if (!host.PopReadyFrame(ready) || ready.frame != tick) {
+					*error = "the rejoin delay negotiation stalled the survivor at frame " + std::to_string(tick);
+					return false;
+				}
+				for (const auto& command: ready.localCommands)
+					if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload); delay && delay->peerId == 2) committedAt = tick;
+				(void)host.FinishSimulationTick(tick);
+			}
+			if (committedAt == 0) {
+				*error = "the returning seat's delay never reached a committed frame";
+				return false;
+			}
+			const uint16_t sized = host.InputDelayAt(2, 900);
+			// Re-derived from the fixture's own numbers: the trip and the frame it lands in, plus the
+			// restart the returning machine published.
+			const uint32_t link = static_cast<uint32_t>(std::ceil(400.0 / a.simTickMs)) + 1;
+			const uint32_t restart = static_cast<uint32_t>(std::ceil(285.0 / a.simTickMs));
+			if (sized != link + restart) {
+				*error = "the rejoin window did not clear the round trip and the restart: delay=" + std::to_string(sized) +
+				         " expected=" + std::to_string(link + restart) + " (" + rejoin + ")";
+				return false;
+			}
+			if (!host.SchedulePeerReclaim(2, 2, 2, 500, error)) return false;
+			if (!host.IsSeatReclaimGap(2, 500 + link + 1) || host.IsSeatReclaimGap(2, 500 + sized + 1)) {
+				*error = "the reclaim gap ended before the returning seat's restart: gap_at=" + std::to_string(500 + link + 1) +
+				         " delay=" + std::to_string(sized);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS rejoin_window_clears_restart rtt_ms=400 restart_ms=285 delay_frames=" << sized
+			          << " gap=" << 500 << ".." << 500 + sized << std::endl;
+			return true;
+		}
+
 		bool TestWorldTailKeepsItsLiveCoordinatorSeparate(std::string* error) {
 			LoopbackTransport wire;
 			if (!wire.StartHost(49474, error)) return false;
@@ -16402,6 +16478,7 @@ namespace RTE {
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
+		    !TestRejoinWindowClearsTheRestart(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
