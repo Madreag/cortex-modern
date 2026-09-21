@@ -4829,7 +4829,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	std::vector<Pending> pending;
 	pending.reserve(registeredCount);
 	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-		for (MovableObject* mo: SortedRegisteredMOs(luaState)) pending.push_back({mo, &luaState});
+		for (MovableObject* mo: luaState.GetRegisteredMOs()) pending.push_back({mo, &luaState});
 	}
 	std::sort(pending.begin(), pending.end(), earlier);
 
