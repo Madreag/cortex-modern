@@ -142,6 +142,7 @@ namespace RTE {
 		bool m_MatchPausedShown; //!< The last shared pause state applied to the match pause row.
 		GUIButton* m_HoveredButton; //!< The currently hovered pause menu button.
 		std::string m_PendingAutomationCommand;
+		std::string m_LastRecordedMatchButton;
 		int m_PrevHoveredButtonIndex; //!< The index of the previously hovered pause menu button in the main menu button array.
 
 		bool m_SavingButtonsDisabled; //!< Whether the save and load buttons are disabled and hidden.

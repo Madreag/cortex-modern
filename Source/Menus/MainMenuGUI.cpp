@@ -4,6 +4,7 @@
 
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "FrameRecorder.h"
 #include "MenuMan.h"
 #include "ActivityMan.h"
 #include "UInputMan.h"
@@ -3096,7 +3097,16 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	std::string error;
 	m_MultiplayerJoinRequest = request;
 	m_MultiplayerApplyOffered = !host;
-	if (g_NetMatchService.Start(request, &error)) {
+	const auto start = std::chrono::steady_clock::now();
+	const bool started = g_NetMatchService.Start(request, &error);
+	if (FrameRecorder::Instance().Enabled()) {
+		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		const std::string event = "menu_start host=" + std::to_string(host) + " elapsed_us=" + std::to_string(elapsed) +
+		    " budget_us=16667 within_one_frame=" + std::to_string(elapsed <= 16667);
+		FrameRecorder::Instance().RecordEvent(event);
+		System::PrintDiagnosticLine("[video-ui] " + event);
+	}
+	if (started) {
 		m_MultiplayerLandingStatusLabel->SetText(host ? "" : "Joining the host's lobby...");
 		m_ReconnectStatusShown.clear();
 		// A joining peer keeps the landing until the host admits it; the refresh switches the screen

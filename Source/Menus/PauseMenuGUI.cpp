@@ -2,6 +2,8 @@
 
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "FrameRecorder.h"
+#include "System.h"
 #include "MenuMan.h"
 #include "ConsoleMan.h"
 #include "ActivityMan.h"
@@ -53,6 +55,7 @@ void PauseMenuGUI::Clear() {
 	m_MatchPausedShown = false;
 	m_HoveredButton = nullptr;
 	m_PendingAutomationCommand.clear();
+	m_LastRecordedMatchButton.clear();
 	m_PrevHoveredButtonIndex = 0;
 
 	m_SavingButtonsDisabled = false;
@@ -595,6 +598,16 @@ void PauseMenuGUI::BlinkResumeButton() {
 }
 
 void PauseMenuGUI::Draw(bool drawPostProcessBuffer) {
+	if (FrameRecorder::Instance().Enabled() && m_NetworkMatchMode && m_ActiveMenuScreen == PauseMenuScreen::MainScreen && m_PauseMenuBox->GetVisible()) {
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		const std::string event = "pause_end_match service=" + snapshot.serviceState + " enabled=" +
+		    std::to_string(m_PauseMenuButtons[PauseMenuButton::EndMatchButton]->GetEnabled());
+		if (event != m_LastRecordedMatchButton) {
+			m_LastRecordedMatchButton = event;
+			FrameRecorder::Instance().RecordEvent(event);
+			System::PrintDiagnosticLine("[video-ui] " + event);
+		}
+	}
 	if (drawPostProcessBuffer) {
 		g_WindowMan.DrawPostProcessBuffer();
 	}
