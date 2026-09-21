@@ -1003,6 +1003,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 self._send(413, {"error": "payload_too_large"})
             elif isinstance(exc, ValueError):
                 self._send(400, {"error": "malformed_json"})
+            elif isinstance(exc, ConnectionError):
+                # The peer drops a long poll it no longer needs; that is the client's call, not a server error.
+                LOGGER.info("client aborted %s", self.path)
+                self.close_connection = True
             else:
                 LOGGER.exception("handler error")
                 self._send(500, {"error": "internal"})
