@@ -1862,6 +1862,12 @@ namespace RTE {
 		if (auto* session = Find(connection)) session->activationCommitted = true;
 	}
 
+	bool NetWorldJoinHost::HasBootstrapInFlight() const {
+		return std::any_of(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
+			return session.phase != NetWorldJoinPhase::Active && session.phase != NetWorldJoinPhase::Spectating && session.phase != NetWorldJoinPhase::Failed;
+		});
+	}
+
 	bool NetWorldJoinHost::CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error) {
 		NetWorldJoinSession* session = Find(connection);
 		if (session == nullptr) {
