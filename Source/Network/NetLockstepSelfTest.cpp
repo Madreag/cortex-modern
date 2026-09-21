@@ -2172,6 +2172,109 @@ namespace RTE {
 			return true;
 		}
 
+		// What a seat waited while it was away is the round's record, not the reading its player is owed
+		// after it comes back: the surfaces read the since-reclaim values, and the returning machine's
+		// own slow-machine verdict was measured before the seat returned.
+		bool TestReclaimedSeatRestartsItsWaitReadings(std::string* error) {
+			LoopbackTransport hostWire, clientWire, returnWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A48, 0, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A48, 0, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 48; a.relayToOtherPeers = true;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+			if (!StartCoordinatorPair(48896, hostWire, clientWire, host, client, a, b, error)) return false;
+			const auto seatOf = [&](uint8_t peer) {
+				const auto found = host.GetStats().peers.find(peer);
+				return found == host.GetStats().peers.end() ? NetLockstepPeerStats{} : found->second;
+			};
+			uint64_t now = 0, hostProduced = 0, hostDue = 0, clientProduced = 0, clientDue = 0, committed = 0;
+			bool hostHasCommitted = false;
+			NetLockstepReadyFrame ready;
+			const auto pump = [&](bool clientAlive) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1);
+				if (now >= hostDue && (!hostHasCommitted || hostProduced <= committed + 1)) {
+					if (host.QueueLocalInput(hostProduced, {}, {}, nullptr)) { ++hostProduced; hostDue = now + 17; }
+				}
+				if (clientAlive && now >= clientDue && client.IsRunning()) {
+					if (client.QueueLocalInput(clientProduced, {}, {}, nullptr)) { ++clientProduced; clientDue = now + 17; }
+				}
+				host.Tick(now);
+				if (clientAlive) client.Tick(now);
+				while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); committed = ready.frame; hostHasCommitted = true; }
+				if (clientAlive) { NetLockstepReadyFrame theirs; while (client.PopReadyFrame(theirs)) (void)client.FinishSimulationTick(theirs.frame); }
+				// The consumer's own wait, the way ScenarioRunner::PollLockstepSimulationTick records it.
+				if (!host.HasReadyFrame(host.GetStats().nextFrame)) (void)host.NoteFrameWait(host.GetStats().nextFrame, now);
+				++now;
+			};
+			while (now < 1200 && committed < 20) pump(true);
+			if (committed < 20) { *error = "the pair never reached its steady state: frame=" + std::to_string(committed); return false; }
+			// The client goes silent: the host waits on it and records those waits, then holds the seat.
+			const uint64_t holds = seatOf(2).holds;
+			const uint64_t silentFrom = now;
+			while (now < silentFrom + 200 && seatOf(2).holds == holds) pump(false);
+			if (seatOf(2).holds == holds && !host.ProposePeerHold(2, now, error)) return false;
+			while (now < silentFrom + 600 && (seatOf(2).holds == holds || !host.IsSeatUnderAI(2, committed))) pump(false);
+			if (seatOf(2).holds == holds) { *error = "the silent seat was never held: frame=" + std::to_string(committed); return false; }
+			const uint32_t waitsWhileAway = seatOf(2).waits;
+			const uint64_t longestWhileAway = seatOf(2).longestWaitMs;
+			if (waitsWhileAway == 0 || longestWhileAway == 0) {
+				*error = "the hold recorded no wait to restart from: waits=" + std::to_string(waitsWhileAway) +
+				         " longest=" + std::to_string(longestWhileAway) + "ms";
+				return false;
+			}
+			if (!returnWire.Connect("loopback", 48896, error)) return false;
+			for (int step = 0; step < 20; ++step) { returnWire.AdvanceTimeMs(1); returnWire.PollEvents(); pump(false); }
+			const uint64_t activation = std::max(host.GetStats().nextFrame, host.SentInputThrough()) + 5;
+			if (!host.SchedulePeerReclaim(2, 2, 2, activation, error)) return false;
+			while (now < 4000 && committed < activation) pump(false);
+			if (committed < activation) {
+				*error = "the round never reached the activation frame: frame=" + std::to_string(committed) +
+				         " activation=" + std::to_string(activation);
+				return false;
+			}
+			if (host.WaitsSinceReclaim(2) != 0 || host.LongestWaitMsSinceReclaim(2) != 0) {
+				*error = "the reclaimed seat's reading kept the wait it ran up while it was away: waits_since=" +
+				         std::to_string(host.WaitsSinceReclaim(2)) + " longest_since=" + std::to_string(host.LongestWaitMsSinceReclaim(2)) +
+				         "ms (round totals waits=" + std::to_string(seatOf(2).waits) + " longest=" + std::to_string(seatOf(2).longestWaitMs) +
+				         "ms, frame=" + std::to_string(committed) + ")";
+				return false;
+			}
+			// The round's own record is untouched: the report and the feel gates read these.
+			if (seatOf(2).waits < waitsWhileAway || seatOf(2).longestWaitMs < longestWhileAway) {
+				*error = "the reclaim erased the round's wait record: waits=" + std::to_string(seatOf(2).waits) +
+				         " was=" + std::to_string(waitsWhileAway) + " longest=" + std::to_string(seatOf(2).longestWaitMs) +
+				         "ms was=" + std::to_string(longestWhileAway) + "ms";
+				return false;
+			}
+			// The returning machine's own verdict, on peer 2's own coordinator: its ticks ran four times
+			// over the step while it was away, which is what raised "Your machine cannot keep up".
+			for (uint64_t frame = 0; frame < 12; ++frame) {
+				client.NoteLocalTickCost(frame, 4 * b.simTickMs);
+				client.NoteLocalInputProduced(frame, frame * 64000, 0);
+			}
+			if (!client.GetStats().localMachineSlow) {
+				*error = "the returning machine never read as slow: consecutive_late=" + std::to_string(client.GetStats().consecutiveLateInputs) +
+				         " debt=" + std::to_string(client.GetStats().localComputeDebtMs) + "ms";
+				return false;
+			}
+			client.NoteSeatReclaimed(2);
+			if (client.GetStats().localMachineSlow || client.GetStats().consecutiveLateInputs != 0 || client.GetStats().localComputeDebtMs != 0) {
+				*error = "the rejoined machine kept the slow verdict it earned while it was away: slow=" +
+				         std::to_string(client.GetStats().localMachineSlow) + " consecutive_late=" +
+				         std::to_string(client.GetStats().consecutiveLateInputs) + " debt=" +
+				         std::to_string(client.GetStats().localComputeDebtMs) + "ms";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS reclaimed_seat_restarts_its_wait_readings activation=" << activation
+			          << " waits_while_away=" << waitsWhileAway << " longest_while_away=" << longestWhileAway
+			          << "ms waits_since=" << host.WaitsSinceReclaim(2) << " longest_since=" << host.LongestWaitMsSinceReclaim(2)
+			          << "ms round_waits=" << seatOf(2).waits << " round_longest=" << seatOf(2).longestWaitMs << "ms" << std::endl;
+			return true;
+		}
+
 		// The 200 ms arms' second hold. The round reaches the first frame a returning seat owes one
 		// delay window after the activation frame, but that seat only hears of the activation a trip
 		// later, pays its restart, and its answer needs the trip back: on a 400 ms link the first input
@@ -17020,6 +17123,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestUnpublishedStartupCannotParkTheRound(&error) ||
 		    !TestBufferedReturnIsNotAnAnswer(&error) ||
 		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
+		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
