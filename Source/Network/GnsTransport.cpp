@@ -396,6 +396,7 @@ namespace RTE {
 
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
+			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
 				m_IsHost = false;
@@ -514,12 +515,20 @@ namespace RTE {
 				const auto peerIt = m_PeersByConnection.find(message->m_conn);
 				if (peerIt != m_PeersByConnection.end() && RouteAllowed(message->m_conn)) {
 					const uint8_t* data = static_cast<const uint8_t*>(message->m_pData);
-					m_PendingEvents.push_back({
+					NetTransportEvent received{
 						NetTransportEventType::PacketReceived,
 						peerIt->second,
 						LaneFromMessage(*message),
 						std::vector<uint8_t>(data, data + message->m_cbSize),
-						{}});
+						{}};
+					// GNS decrypts a P2P peer's payload as soon as the rendezvous is done, which over a
+					// relay routinely beats our own Connected callback. Handing it up before the session
+					// has been told the peer exists loses it, so it waits behind that announcement.
+					if (m_Announced.contains(message->m_conn)) {
+						m_PendingEvents.push_back(std::move(received));
+					} else {
+						HoldUntilAnnounced(message->m_conn, std::move(received));
+					}
 				}
 				message->Release();
 			}
@@ -576,7 +585,7 @@ namespace RTE {
 					}
 					if (m_IsHost && m_P2PMode >= 0) {
 						const auto peer = m_PeersByConnection.find(info->m_hConn);
-						if (peer != m_PeersByConnection.end()) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peer->second, NetTransportLane::ControlReliable, {}, {}});
+						if (peer != m_PeersByConnection.end()) AnnounceConnected(info->m_hConn, peer->second);
 					}
 					if (!m_IsHost && info->m_hConn == m_ServerConnection) {
 						EnsureClientConnected(info->m_hConn);
@@ -590,6 +599,36 @@ namespace RTE {
 				default:
 					break;
 			}
+		}
+
+		// A peer cannot say anything useful before its connection is announced, so the queue only ever
+		// holds a handshake's worth; a connection that buries us in payloads before then is closed.
+		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
+
+		void HoldUntilAnnounced(HSteamNetConnection connection, NetTransportEvent&& received) {
+			std::vector<NetTransportEvent>& held = m_HeldPackets[connection];
+			size_t bytes = received.bytes.size();
+			for (const NetTransportEvent& event : held) bytes += event.bytes.size();
+			if (bytes > c_MaxHeldBytesBeforeAnnounce) {
+				const char* reason = "too much data before the connection was announced";
+				m_Interface->CloseConnection(connection, 0, reason, false);
+				HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
+				return;
+			}
+			held.push_back(std::move(received));
+		}
+
+		void AnnounceConnected(HSteamNetConnection connection, NetPeerId peerId) {
+			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			m_Announced.insert(connection);
+			const auto held = m_HeldPackets.find(connection);
+			if (held == m_HeldPackets.end()) {
+				return;
+			}
+			for (NetTransportEvent& event : held->second) {
+				m_PendingEvents.push_back(std::move(event));
+			}
+			m_HeldPackets.erase(held);
 		}
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
@@ -608,7 +647,7 @@ namespace RTE {
 			m_PeersByConnection[connection] = peerId;
 			m_ConnectionsByPeer[peerId] = connection;
 			s_ConnectionOwners[connection] = this;
-			if (m_P2PMode < 0) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			if (m_P2PMode < 0) AnnounceConnected(connection, peerId);
 		}
 
 		void EnsureClientConnected(HSteamNetConnection connection) {
@@ -617,7 +656,7 @@ namespace RTE {
 				m_ConnectionsByPeer[1] = connection;
 				s_ConnectionOwners[connection] = this;
 			}
-			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
+			AnnounceConnected(connection, 1);
 		}
 
 		void HandleConnectionClosed(HSteamNetConnection connection, const std::string& reason, ESteamNetworkingConnectionState oldState) {
@@ -640,6 +679,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_Announced.erase(connection);
+			m_HeldPackets.erase(connection);
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt != m_PeersByConnection.end()) {
 				m_ConnectionsByPeer.erase(peerIt->second);
@@ -951,6 +992,8 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
+		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
+		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 
 		static std::map<HSteamListenSocket, Impl*> s_ListenerOwners;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
