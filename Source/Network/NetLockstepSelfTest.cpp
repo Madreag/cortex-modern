@@ -2352,6 +2352,90 @@ namespace RTE {
 			return true;
 		}
 
+		// A machine that restarts instantly still measured its startup. The publication is the fact the
+		// start carries, never the number, or a 0 ms restart parks a service match in WaitingForStart.
+		bool TestZeroRestartStillPublishesTheStartup(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A38, 2, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A38, 2, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 38;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A38);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48896, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.NoteLocalStartPark(0);
+			client.NoteLocalStartPark(0);
+			for (uint64_t now = 0; now < 400 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!host.IsRunning() || !client.IsRunning()) {
+				*error = std::string("a 0 ms restart never published its startup: host=") + NetLockstepCoordinator::StateName(host.GetState()) +
+				         " client=" + NetLockstepCoordinator::StateName(client.GetState()) +
+				         " effective=" + std::to_string(host.GetStats().effectiveStartFrame);
+				return false;
+			}
+			if (host.GetStats().effectiveStartFrame != hostConfig.startFrame + hostConfig.inputDelayFrames) {
+				*error = "a 0 ms startup shifted the agreed first frame: effective=" +
+				         std::to_string(host.GetStats().effectiveStartFrame) + " expected=" +
+				         std::to_string(hostConfig.startFrame + hostConfig.inputDelayFrames);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS zero_restart_still_publishes_the_startup effective="
+			          << host.GetStats().effectiveStartFrame << std::endl;
+			return true;
+		}
+
+		// A peer whose publication never arrives cannot park the round: the wait gets the round's own answer
+		// budget and the agreed first frame forms on what was published, leaving the seat to the bound.
+		bool TestUnpublishedStartupCannotParkTheRound(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint32_t budgetMs = 400;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A39, 2, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A39, 2, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 39;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = budgetMs;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A39);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48897, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			// Only this machine ever measures its startup; the other never publishes one.
+			host.NoteLocalStartPark(120);
+			uint64_t ranAtMs = 0;
+			for (uint64_t now = 0; now < 4 * budgetMs && ranAtMs == 0; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+				if (host.IsRunning()) ranAtMs = now;
+			}
+			if (ranAtMs == 0) {
+				*error = "an unpublished startup parked the round past its answer budget: state=" +
+				         std::string(NetLockstepCoordinator::StateName(host.GetState())) + " budget=" + std::to_string(budgetMs) + "ms";
+				return false;
+			}
+			if (ranAtMs < budgetMs) {
+				*error = "the round gave up on the missing startup before its answer budget: ran_at=" +
+				         std::to_string(ranAtMs) + "ms budget=" + std::to_string(budgetMs) + "ms";
+				return false;
+			}
+			const uint64_t expected = hostConfig.startFrame + static_cast<uint64_t>(std::ceil(120.0 / hostConfig.simTickMs)) + hostConfig.inputDelayFrames;
+			if (host.GetStats().effectiveStartFrame != expected) {
+				*error = "the agreed first frame ignored the startups that were published: effective=" +
+				         std::to_string(host.GetStats().effectiveStartFrame) + " expected=" + std::to_string(expected);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS unpublished_startup_cannot_park_the_round ran_at=" << ranAtMs
+			          << "ms budget=" << budgetMs << "ms effective=" << host.GetStats().effectiveStartFrame << std::endl;
+			return true;
+		}
+
 		bool TestWorldTailKeepsItsLiveCoordinatorSeparate(std::string* error) {
 			LoopbackTransport wire;
 			if (!wire.StartHost(49474, error)) return false;
@@ -16722,6 +16806,8 @@ namespace RTE {
 		    !TestRejoinWindowClearsTheRestart(&error) ||
 		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||
 		    !TestShiftedFirstFrameAdmitsTheRamp(&error) ||
+		    !TestZeroRestartStillPublishesTheStartup(&error) ||
+		    !TestUnpublishedStartupCannotParkTheRound(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||

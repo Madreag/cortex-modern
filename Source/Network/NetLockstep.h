@@ -142,6 +142,7 @@ namespace RTE {
 		uint64_t roundId = 0; //!< The host's tag for this lockstep round; a client adopts it from the host's start.
 		bool resumeFromSnapshot = false;
 		uint32_t activityRestartMs = 0; //!< This peer's own measured activity restart; 0 until it has one.
+		bool startupPublished = false; //!< Whether that measurement is a reading and not an absence.
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -1149,6 +1150,9 @@ namespace RTE {
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
 		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
 		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
+		/// Whether the wait for every peer's published startup has used the round's answer budget.
+		bool StartupWaitExpired(uint64_t nowMs) const;
+		void TickStartupWait(uint64_t nowMs);
 		void FormAgreedFirstFrame(uint32_t slowestStartupMs, uint64_t nowMs);
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
@@ -1192,6 +1196,9 @@ namespace RTE {
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
 		bool m_RequirePublishedStart = false;
 		bool m_StartWaitAnnounced = false;
+		uint64_t m_StartWaitSinceMs = 0;
+		bool m_LocalStartupPublished = false;
+		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
