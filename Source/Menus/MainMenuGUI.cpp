@@ -958,6 +958,7 @@ bool MainMenuGUI::HandleInputEvents() {
 		           (guiEvent.GetMsg() == GUITextBox::Changed || guiEvent.GetMsg() == GUITextBox::Enter) &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           (guiEvent.GetControl() == m_HostNetSlowBoundBox || guiEvent.GetControl() == m_HostNetMinDelayBox ||
+		            guiEvent.GetControl() == m_HostRecAutosaveIntervalBox ||
 		            std::find(m_HostNetPeerDelayBoxes.begin(), m_HostNetPeerDelayBoxes.end(), guiEvent.GetControl()) != m_HostNetPeerDelayBoxes.end())) {
 			// The refresh rewrites every box the player is not holding, so a typed row commits as it is
 			// typed; waiting for Apply loses it the moment the click moves the focus. The Recovery
