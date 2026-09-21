@@ -210,6 +210,13 @@ namespace {
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
 	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
 
+	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
+		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
+		if (toast.kind != "seat_held") return true;
+		if (toast.text.find("rejoining") != std::string::npos) return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing();
+		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
+		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
+	}
 
 	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
 		uint8_t sender = toast.senderPeerId;
@@ -1178,7 +1185,14 @@ void NetModerationGUI::DrawMatchToasts() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	CreateOverlay();
-	const auto visible = ScenarioRunner::GetVisibleNetUiToasts();
+	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	std::vector<ScenarioRunner::NetUiToastRecord> visible;
+	std::vector<size_t> indices;
+	for (size_t index = 0; index < queued.size(); ++index) {
+		if (!ToastStillApplies(queued[index])) continue;
+		visible.push_back(queued[index]);
+		indices.push_back(index);
+	}
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
@@ -1259,7 +1273,12 @@ void NetModerationGUI::DrawMatchToasts() {
 			FrameRecorder::Instance().RecordEvent("handover_toast peer=" + std::to_string(snapshot.localPeerId) + " longest_ms=" + std::to_string(longest) + " text=" + message);
 		}
 	}
-	ScenarioRunner::NoteNetUiToastsDrawn(firstRow, rowCount);
+	if (rowCount) {
+		const size_t first = indices[firstRow], last = indices[firstRow + rowCount - 1];
+		ScenarioRunner::NoteNetUiToastsDrawn(first, last - first + 1);
+	} else if (visible.empty()) {
+		ScenarioRunner::NoteNetUiToastsDrawn(0, queued.size());
+	}
 	t_simRNGOverride = previousRNG;
 }
 
