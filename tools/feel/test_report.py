@@ -236,6 +236,20 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(raised.exception.fail_line,
                              'FAIL: decided at tick 356; measurement window is 1200 ticks')
 
+    def test_duplicate_canonical_actor_is_a_failed_pin_with_identity(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            dump = Path(folder) / 'sp_trace.json.simdump.txt'
+            actor_line = '1 actor uid=7 Brain Robot pos=0x1.0p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            dump.write_text('1 activity running\n' + actor_line + actor_line +
+                            ''.join(f'{tick} activity running\n' for tick in range(2, 1201)), encoding='utf-8')
+            values = report.canonical_positions(dump, {(1, 7)})
+            duplicate = getattr(report.canonical_positions, 'last_duplicate', None)
+            self.assertEqual(values[(1, 7)][0]['pos'], [1.0, 1.0])
+            self.assertEqual(duplicate['first']['tick'], 1)
+            self.assertEqual(duplicate['first']['actor'], 7)
+            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'MISS')
+
     def test_early_decision_tick_reads_killall_from_the_run_log(self):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
