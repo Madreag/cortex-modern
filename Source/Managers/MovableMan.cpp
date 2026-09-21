@@ -4825,10 +4825,9 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	struct Pending {
 		MovableObject* object = nullptr;
 		size_t cursor = 0;
-		long uniqueID = 0;
 	};
 	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
-		return lhs.uniqueID > rhs.uniqueID;
+		return lhs.object->GetUniqueID() > rhs.object->GetUniqueID();
 	};
 
 	std::vector<Cursor> cursors;
@@ -4838,7 +4837,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		Cursor& cursor = cursors.emplace_back();
 		cursor.state = &luaState;
 		cursor.objects = SortedRegisteredMOs(luaState);
-		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1, cursor.objects.front()->GetUniqueID()});
+		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1});
 	}
 
 	LuaStateWrapper* currentState = nullptr;
@@ -4855,10 +4854,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 			next.object->ResetRequestedSyncedUpdateFlag();
 		}
 		++cursor.next;
-		if (cursor.next < cursor.objects.size()) {
-			MovableObject* object = cursor.objects[cursor.next];
-			pending.push({object, next.cursor, object->GetUniqueID()});
-		}
+		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
 	}
 	g_LuaMan.SetThreadLuaStateOverride(nullptr);
 }
