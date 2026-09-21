@@ -3621,6 +3621,7 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-world] catch-up complete peer=" << static_cast<int>(m_Coordinator->GetConfig().localPeerId)
 			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame << std::endl;
 		}
+		if (m_Coordinator && m_Coordinator->IsRunning()) m_Coordinator->DeferStopsToTickBoundary();
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}
 

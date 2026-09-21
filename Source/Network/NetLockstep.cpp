@@ -6237,9 +6237,9 @@ namespace RTE {
 			}
 		}
 		FlushTimingOutgoing();
-		if (!m_DeferStops) return false;
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (!m_DeferStops) return false;
 		if (!IsRunning()) return false;
 		if (m_MigrationResult.snapshotProviderPeerId == m_Config.localPeerId && completedTick == m_MigrationResult.boundary + 1) {
 			Fail(NetLockstepStopReason::ResyncRequested, completedTick + 1, "successor snapshot provider reached the boundary");

@@ -6258,6 +6258,19 @@ namespace RTE {
 			*error = "arming the private catch-up declared no park on the session the worker holds";
 			return false;
 		}
+		arming.m_Runner = std::make_unique<NetMatchRunner>();
+		arming.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		LoopbackTransport completedWire;
+		NetLockstepConfig completedConfig;
+		completedConfig.localPeerId = 2; completedConfig.peerCount = 2; completedConfig.startFrame = 100;
+		if (!arming.m_Coordinator->StartReplay(completedWire, completedConfig, error)) return false;
+		arming.m_WorldCatchUp.privateMatch = false;
+		arming.DriveWorldJoinClient(3);
+		arming.m_Coordinator->FinishSimulationTick(125);
+		if (arming.m_WorldCatchUp.active || arming.m_Coordinator->GetResumeFrame() != 126) {
+			*error = "a late activation played on while its completed horizon stayed at the activation frame";
+			return false;
+		}
 		return true;
 	}
 
