@@ -1997,8 +1997,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		AudioMan::CheckpointRegistryScope sounds;
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
-		int cursor = g_LuaMan.GetScriptStateCursor();
-		~CaptureAllocationState() { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+		~CaptureAllocationState() { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); }
 	} allocationState;
 	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.frameState = g_FrameMan.SaveCheckpoint();
@@ -2070,7 +2069,6 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 	// Faithful clones keep their identity, but anything the clone chain drew from the counter is undone.
 	MovableObject::PinUniqueIDCounter(counter);
 	out.uniqueIDCounter = counter;
-	out.luaStateCursor = allocationState.cursor;
 	return true;
 	} catch (const std::exception& error) {
 		out.Clear();
@@ -2189,7 +2187,6 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 		return false;
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
-	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	for (Actor* actor: m_Actors) {
 		actor->ResolveFaithfulLinks();
 	}
@@ -2246,7 +2243,6 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	if (Scene* scene = g_SceneMan.GetScene()) {
 		scene->SwapAreas(out.sceneAreas);
 	}
-	out.luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	out.scriptRegistrations.clear();
 	// A throw before the world is held must not leave a pointer into this frame published.
 	struct Publication {
@@ -2472,7 +2468,6 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 		g_LuaMan.GetStateByIndex(static_cast<int>(index)).RunScriptString("_ScriptGraph.releaseObjects()");
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
-	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	if (in.terrain.width) restored = in.terrain.Restore() && restored;
 	restored = g_MusicMan.RestoreCheckpointOwners(in.musicOwners) && restored;
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(in.soundRegistrations));
@@ -2552,10 +2547,8 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
 	struct AllocationState {
 		long uidCounter = MovableObject::GetUniqueIDCounter();
-		int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 		~AllocationState() {
 			MovableObject::PinUniqueIDCounter(uidCounter);
-			g_LuaMan.SetScriptStateCursor(luaStateCursor);
 		}
 	} allocationState;
 	// A receiving peer may never have captured its VM. Detach every old Lua-owned
@@ -4972,6 +4965,152 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	g_LuaMan.SetThreadLuaStateOverride(nullptr);
 }
 
+bool MovableMan::RunLuaStateAssignmentSelfTest() {
+	constexpr int c_ObjectCount = 256;
+	// What a machine spends before a match: a single-player scene's objects taking their script states.
+	constexpr int c_PreMatchObjects = 7;
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_assignment_follows_the_unique_id no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_assignment_follows_the_unique_id live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	std::array<std::string, 2> sharedCounterHashes{};
+	std::array<std::vector<int>, 2> assignments{};
+	std::array<long, 2> firstObjectID{};
+	bool byTheUniqueID = true;
+	bool ready = true;
+
+	// Every object's own field after the pass: the per-state global its state holds, which is the channel
+	// Data/Modding/threaded-determinism.md blesses and the one a shared assignment decides the value of.
+	const auto hashSharedCounters = [](const std::vector<std::unique_ptr<MOPixel>>& objects) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		const auto mix = [&hash](uint64_t value) {
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		};
+		for (const auto& object: objects) {
+			mix(static_cast<uint64_t>(object->GetUniqueID()));
+			mix(static_cast<uint64_t>(object->GetNumberValue("threaded_synced_shared_counter")));
+		}
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
+
+	for (size_t arm = 0; arm < 2 && ready; ++arm) {
+		LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+		states.swap(replacement);
+		for (LuaStateWrapper& state: states) {
+			state.Initialize();
+			InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+		}
+		ThreadedSyncedUpdateSelfTestContext context;
+		s_ThreadedSyncedUpdateSelfTestContext = &context;
+
+		// The second arm played first: its objects took states before the match's own objects did.
+		std::vector<std::unique_ptr<MOPixel>> history;
+		if (arm == 1) {
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 4096);
+			for (int index = 0; index < c_PreMatchObjects; ++index) {
+				auto object = std::make_unique<MOPixel>();
+				if (object->Create() < 0 || object->LoadScript(fixturePath, true) < 0) {
+					ready = false;
+					break;
+				}
+				history.push_back(std::move(object));
+			}
+			for (auto& object: history) object->DestroyScriptState();
+			history.clear();
+		}
+
+		// The match's objects, with the same unique IDs in both arms and no forced placement: what state
+		// each one lands on is the assignment's answer and nothing else.
+		std::vector<std::unique_ptr<MOPixel>> objects;
+		objects.reserve(c_ObjectCount);
+		MovableObject::PinUniqueIDCounter(savedCounter);
+		for (int index = 0; index < c_ObjectCount && ready; ++index) {
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0) {
+				ready = false;
+				break;
+			}
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			objects.push_back(std::move(object));
+			MOPixel* fixtureObject = objects.back().get();
+			const int loadStatus = fixtureObject->LoadScript(fixturePath, true);
+			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
+			if (loadStatus < 0 || adoptStatus < 0) {
+				std::cout << "[script-graph-selftest] lua_state_assignment_fixture_refused index=" << index
+				          << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
+				ready = false;
+			}
+		}
+		for (LuaStateWrapper& state: states) state.Update();
+
+		if (ready && objects.size() == c_ObjectCount) {
+			assignments[arm].reserve(objects.size());
+			for (const auto& object: objects) {
+				const int stateIndex = g_LuaMan.GetStateIndex(object->GetLuaState());
+				assignments[arm].push_back(stateIndex);
+				// The save index is one-based over the threaded states, so the ID's index is one less.
+				byTheUniqueID = byTheUniqueID && stateIndex - 1 == static_cast<int>(g_LuaMan.ScriptStateIndexForObject(object->GetUniqueID()));
+			}
+			firstObjectID[arm] = objects.front()->GetUniqueID();
+			context.order.clear();
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			sharedCounterHashes[arm] = hashSharedCounters(objects);
+		} else {
+			ready = false;
+		}
+
+		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+		for (const auto& object: objects) {
+			m_ValidParticles.erase(object.get());
+			std::erase(m_AddedParticles, object.get());
+			object->DestroyScriptState();
+			object->Destroy();
+		}
+		states.swap(replacement);
+	}
+
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+	const bool sameAssignment = ready && !assignments[0].empty() && assignments[0] == assignments[1];
+	const bool sameSharedCounters = ready && !sharedCounterHashes[0].empty() && sharedCounterHashes[0] == sharedCounterHashes[1];
+	const bool passed = sameAssignment && sameSharedCounters && byTheUniqueID && firstObjectID[0] == firstObjectID[1];
+	size_t firstDifference = assignments[0].size();
+	for (size_t index = 0; index < assignments[0].size() && index < assignments[1].size(); ++index) {
+		if (assignments[0][index] != assignments[1][index]) {
+			firstDifference = index;
+			break;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " lua_state_assignment_follows_the_unique_id states=" << c_LuaStateCount
+	          << " pre_match_objects=0," << c_PreMatchObjects << " objects=" << c_ObjectCount
+	          << " shared_counters=" << sharedCounterHashes[0] << "," << sharedCounterHashes[1]
+	          << " same_assignment=" << (sameAssignment ? 1 : 0) << " by_unique_id=" << (byTheUniqueID ? 1 : 0)
+	          << " first_uid=" << firstObjectID[0] << "," << firstObjectID[1]
+	          << " first_state=" << (assignments[0].empty() ? -1 : assignments[0].front()) << "," << (assignments[1].empty() ? -1 : assignments[1].front())
+	          << (sameAssignment ? "" : " first_difference_at=" + std::to_string(firstDifference))
+	          << (passed ? "" : " (a machine that ran objects before the match put the same objects on other states)") << std::endl;
+	return passed;
+}
+
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	constexpr int c_ObjectCount = 1024;
 	constexpr int c_MeasureRounds = 32;
@@ -4988,7 +5127,6 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	}
 
 	const long savedCounter = MovableObject::GetUniqueIDCounter();
-	const int savedCursor = g_LuaMan.GetScriptStateCursor();
 	LuaStatesArray savedStates;
 	savedStates.swap(states);
 	std::array<std::string, 2> perStateHashes;
@@ -5061,9 +5199,13 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 		return text.str();
 	};
 
+	// The count is a build constant, so the two arms differ in PLACEMENT instead: the second puts every
+	// object c_PlacementShift states along, which is where a round-robin peer with a different pre-match
+	// history would have put it. The global walk orders by unique ID, so both arms must run identically.
+	constexpr size_t c_PlacementShift = 7;
 	for (size_t countIndex = 0; countIndex < 2; ++countIndex) {
-		const int count = countIndex == 0 ? 4 : 32;
-		LuaStatesArray replacement(static_cast<size_t>(count));
+		const size_t shift = countIndex == 0 ? 0 : c_PlacementShift;
+		LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
 		states.swap(replacement);
 		for (LuaStateWrapper& state: states) {
 			state.Initialize();
@@ -5087,7 +5229,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			m_AddedParticles.push_back(object.get());
 			objects.push_back(std::move(object));
 			MOPixel* fixtureObject = objects.back().get();
-			fixtureObject->MoveScriptsToState(states[static_cast<size_t>(index) % states.size()]);
+			fixtureObject->MoveScriptsToState(states[(static_cast<size_t>(index) + shift) % states.size()]);
 			const int loadStatus = fixtureObject->LoadScript(fixturePath, true);
 			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
 			if (loadStatus < 0 || adoptStatus < 0) {
@@ -5166,7 +5308,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				twins.push_back(std::move(object));
 				MOPixel* twinObject = twins.back().get();
 				twinObject->UpdateMOID(moidIndex);
-				twinObject->MoveScriptsToState(states[(twin * 3 + 1) % states.size()]);
+				twinObject->MoveScriptsToState(states[(twin * 3 + 1 + shift) % states.size()]);
 				const int loadStatus = twinObject->LoadScript(fixturePath, true);
 				if (loadStatus < 0 || twinObject->AdoptScriptObject() < 0) fixtureReady = false;
 			}
@@ -5198,9 +5340,9 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 					m_ValidParticles.insert(victim.get());
 					m_AddedParticles.push_back(victim.get());
 					MOPixel* victimObject = victim.get();
-					// One state on from the first object of the walk, at either count, and the highest
+					// One state on from the first object of the walk, at either placement, and the highest
 					// unique ID there is, so the walk reaches it last.
-					victimObject->MoveScriptsToState(states[1 % states.size()]);
+					victimObject->MoveScriptsToState(states[(1 + shift) % states.size()]);
 					const int loadStatus = victimObject->LoadScript(fixturePath, true);
 					if (loadStatus < 0 || victimObject->AdoptScriptObject() < 0) freedAcrossStatesReady = false;
 					victimAddress = victimObject;
@@ -5243,7 +5385,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
 			}
 
-			if (count == 32) {
+			if (shift == c_PlacementShift) {
 				run(false);
 				run(true);
 				std::vector<long long> perStateSamples;
@@ -5274,7 +5416,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				for (int index = 0; index < c_LoadObjectCount; ++index) {
 					auto object = std::make_unique<MOPixel>();
 					if (object->Create() < 0) break;
-					states[static_cast<size_t>(index) % states.size()].RegisterMO(object.get());
+					states[(static_cast<size_t>(index) + shift) % states.size()].RegisterMO(object.get());
 					loadObjects.push_back(std::move(object));
 				}
 				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
@@ -5298,7 +5440,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 					// And again with the liveness lookup engaged: one unregistration means the pass can no
 					// longer take a pointer on trust, so every entry is looked up in its state's set.
 					if (!loadObjects.empty()) {
-						states[(loadObjects.size() - 1) % states.size()].UnregisterMO(loadObjects.back().get());
+						states[(loadObjects.size() - 1 + shift) % states.size()].UnregisterMO(loadObjects.back().get());
 					}
 					for (int round = 0; round < c_MeasureRounds; ++round) {
 						loadAfterDeletionSamples.push_back(measure(true));
@@ -5311,7 +5453,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 					loadGlobalAfterADeletionUs = loadAfterDeletionSamples[loadAfterDeletionSamples.size() / 2];
 				}
 				for (size_t index = 0; index < loadObjects.size(); ++index) {
-					states[index % states.size()].UnregisterMO(loadObjects[index].get());
+					states[(index + shift) % states.size()].UnregisterMO(loadObjects[index].get());
 				}
 				loadObjects.clear();
 
@@ -5330,13 +5472,13 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				context.order.clear();
 				for (const auto& object: objects) object->RequestSyncedUpdate();
 				for (const auto& twin: twins) twin->RequestSyncedUpdate();
-				context.retire = [this, retired, &states] {
+				context.retire = [this, retired, shift, &states] {
 					// What the engine leaves behind when a mid-pass deletion takes an object, short of
 					// freeing the fixture's memory: off the valid sets, out of its Lua state, and its
 					// slot handed to a new object, which is what a re-used allocation reads back as.
 					m_ValidParticles.erase(retired);
 					std::erase(m_AddedParticles, retired);
-					states[c_RetiredIndex % states.size()].UnregisterMO(retired);
+					states[(c_RetiredIndex + shift) % states.size()].UnregisterMO(retired);
 					retired->Create();
 					retired->ResetRequestedSyncedUpdateFlag();
 				};
@@ -5382,7 +5524,6 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	}
 
 	states.swap(savedStates);
-	g_LuaMan.SetScriptStateCursor(savedCursor);
 	MovableObject::PinUniqueIDCounter(savedCounter);
 	const bool perStateRed = perStateHashes[0] != perStateHashes[1];
 	const bool globalGreen = globalHashes[0] == globalHashes[1];
@@ -5401,11 +5542,11 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	                                    freedAcrossStatesHashes[0] == freedAcrossStatesHashes[1] &&
 	                                    freedAcrossStatesSkipped[0] == 1 && freedAcrossStatesSkipped[1] == 1 &&
 	                                    !freedAcrossStatesVictimRan;
-	// One global write per object and one spawn per armed pass, at either count - and the writes land
-	// in exactly as many per-state tables as the peer runs states, which is what keeps the count in the
-	// identity until a fixed state count makes the assignment the same on every peer.
+	// One global write per object and one spawn per armed pass, at either placement, and the writes land
+	// in every state the build runs. Which OBJECTS share a table is what the assignment decides, and that
+	// is the row the assignment fixture owns.
 	const bool permittedWritesGreen = globalWriteTotals[0] == c_ObjectCount && globalWriteTotals[1] == c_ObjectCount &&
-	                                  globalWriteStatesWritten[0] == 4 && globalWriteStatesWritten[1] == 32 &&
+	                                  globalWriteStatesWritten[0] == c_LuaStateCount && globalWriteStatesWritten[1] == c_LuaStateCount &&
 	                                  spawnedInPass[0] == 1 && spawnedInPass[1] == 1;
 	// 150 us was accepted at 1,024 registered MOs; the walk's added cost is per MO, so the budget is too.
 	constexpr long long c_LoadBudgetUs = c_AddedBudgetUs * 5000 / c_ObjectCount;
@@ -5415,49 +5556,54 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	                             loadAddedUs <= c_LoadBudgetUs && loadAddedWithLookupUs <= c_LoadBudgetUs;
 	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen && permittedWritesGreen && loadTimingGreen;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
-	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1]
-	          << (perStateRed ? "" : " (the per-state control ran the same order at both counts, so it detects nothing)") << std::endl;
+	          << " threaded_synced_update_per_state_order_red states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << perStateHashes[0] << " hash_shifted=" << perStateHashes[1]
+	          << (perStateRed ? "" : " (the per-state control ran the same order at both placements, so it detects nothing)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (globalGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_global_moid_order states=4,32 hash4=" << globalHashes[0] << " hash32=" << globalHashes[1] << std::endl;
+	          << " threaded_synced_update_global_moid_order states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << globalHashes[0] << " hash_shifted=" << globalHashes[1] << std::endl;
 	std::cout << "[script-graph-selftest] " << (duplicateGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_duplicate_unique_id_order states=4,32 hash4=" << duplicateHashes[0] << " hash32=" << duplicateHashes[1]
-	          << " pos4=" << duplicatePositions[0][0] << "," << duplicatePositions[0][1]
-	          << " pos32=" << duplicatePositions[1][0] << "," << duplicatePositions[1][1]
-	          << " ids4=" << duplicateIDs[0][0] << "," << duplicateIDs[0][1]
-	          << " ids32=" << duplicateIDs[1][0] << "," << duplicateIDs[1][1]
-	          << " moids4=" << duplicateMOIDs[0][0] << "," << duplicateMOIDs[0][1]
-	          << " moids32=" << duplicateMOIDs[1][0] << "," << duplicateMOIDs[1][1]
-	          << " ran4=" << duplicateOrderLength[0] << " ran32=" << duplicateOrderLength[1]
-	          << (duplicateGreen ? "" : " (the duplicate pair's order follows the state count)") << std::endl;
+	          << " threaded_synced_update_duplicate_unique_id_order states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << duplicateHashes[0] << " hash_shifted=" << duplicateHashes[1]
+	          << " pos_placed=" << duplicatePositions[0][0] << "," << duplicatePositions[0][1]
+	          << " pos_shifted=" << duplicatePositions[1][0] << "," << duplicatePositions[1][1]
+	          << " ids_placed=" << duplicateIDs[0][0] << "," << duplicateIDs[0][1]
+	          << " ids_shifted=" << duplicateIDs[1][0] << "," << duplicateIDs[1][1]
+	          << " moids_placed=" << duplicateMOIDs[0][0] << "," << duplicateMOIDs[0][1]
+	          << " moids_shifted=" << duplicateMOIDs[1][0] << "," << duplicateMOIDs[1][1]
+	          << " ran_placed=" << duplicateOrderLength[0] << " ran_shifted=" << duplicateOrderLength[1]
+	          << (duplicateGreen ? "" : " (the duplicate pair's order follows where the objects were placed)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (unlistedRootRan ? "PASS" : "FAIL")
-	          << " threaded_synced_update_unlisted_root_still_runs states=32"
+	          << " threaded_synced_update_unlisted_root_still_runs states=" << c_LuaStateCount
 	          << (unlistedRootRan ? "" : " (a registered object whose root is outside the valid sets lost its SyncedUpdate)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (retiredGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_deleted_object_not_reread states=32 expected_order=" << retiredExpectedHash
+	          << " threaded_synced_update_deleted_object_not_reread states=" << c_LuaStateCount << " expected_order=" << retiredExpectedHash
 	          << " pass_order=" << retiredActualHash << " expected_length=" << retiredExpectedLength
 	          << " pass_length=" << retiredActualLength << " first_divergence=" << retiredFirstDivergence
 	          << " expected_at=" << retiredExpectedAt << " pass_at=" << retiredActualAt << std::endl;
 	std::cout << "[script-graph-selftest] " << (freedAcrossStatesGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_freed_across_states_is_skipped states=4,32 order4=" << freedAcrossStatesHashes[0]
-	          << " order32=" << freedAcrossStatesHashes[1] << " expected4=" << freedAcrossStatesExpected[0]
-	          << " expected32=" << freedAcrossStatesExpected[1] << " skipped4=" << freedAcrossStatesSkipped[0]
-	          << " skipped32=" << freedAcrossStatesSkipped[1] << " ran4=" << freedAcrossStatesRan[0]
-	          << " ran32=" << freedAcrossStatesRan[1] << " victim4=" << freedAcrossStatesVictimID[0]
-	          << " victim32=" << freedAcrossStatesVictimID[1] << " victim_ran=" << (freedAcrossStatesVictimRan ? 1 : 0)
+	          << " threaded_synced_update_freed_across_states_is_skipped states=" << c_LuaStateCount
+	          << " placement=0," << c_PlacementShift << " order_placed=" << freedAcrossStatesHashes[0]
+	          << " order_shifted=" << freedAcrossStatesHashes[1] << " expected_placed=" << freedAcrossStatesExpected[0]
+	          << " expected_shifted=" << freedAcrossStatesExpected[1] << " skipped_placed=" << freedAcrossStatesSkipped[0]
+	          << " skipped_shifted=" << freedAcrossStatesSkipped[1] << " ran_placed=" << freedAcrossStatesRan[0]
+	          << " ran_shifted=" << freedAcrossStatesRan[1] << " victim_placed=" << freedAcrossStatesVictimID[0]
+	          << " victim_shifted=" << freedAcrossStatesVictimID[1] << " victim_ran=" << (freedAcrossStatesVictimRan ? 1 : 0)
 	          << " poison_over_the_freed_block=" << freedAcrossStatesPoisonHit[0] << "," << freedAcrossStatesPoisonHit[1]
 	          << (freedAcrossStatesGreen ? "" : " (the pass reached an object a script in the same pass had freed)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
+	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=" << c_LuaStateCount << " before_us=" << perStateUs
 	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
 	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
 	std::cout << "[script-graph-selftest] " << (loadTimingGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_pass_timing_under_load registered=" << loadObjectsRegistered
-	          << " states=32 before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs
+	          << " states=" << c_LuaStateCount << " before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs
 	          << " added_us=" << loadAddedUs << " after_a_deletion_us=" << loadGlobalAfterADeletionUs
 	          << " added_with_lookup_us=" << loadAddedWithLookupUs << " budget_us=" << c_LoadBudgetUs
 	          << (loadTimingGreen ? "" : " (the walk costs more per registered MO than 1,024 said it would)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (permittedWritesGreen ? "PASS" : "FAIL")
-	          << " threaded_synced_update_permitted_writes states=4,32 global_writes=" << globalWriteTotals[0]
+	          << " threaded_synced_update_permitted_writes states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " global_writes=" << globalWriteTotals[0]
 	          << "," << globalWriteTotals[1] << " expected=" << c_ObjectCount
 	          << " states_written=" << globalWriteStatesWritten[0] << "," << globalWriteStatesWritten[1]
 	          << " spawned=" << spawnedInPass[0] << "," << spawnedInPass[1]
@@ -6956,7 +7102,7 @@ void MovableMan::RedrawRestoredMOIDs() {
 
 MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :
 	m_OriginalSounds(g_AudioMan.CaptureCheckpointSoundRegistry()), m_SoundCursor(g_AudioMan.GetCheckpointSoundContainerCursor()),
-	m_Counter(MovableObject::GetUniqueIDCounter()), m_Cursor(g_LuaMan.GetScriptStateCursor()) {
+	m_Counter(MovableObject::GetUniqueIDCounter()) {
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
 	{
@@ -6978,7 +7124,6 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 	}
 	g_MovableMan.LoadWorldStructure(m_Structure);
 	MovableObject::PinUniqueIDCounter(m_Counter);
-	g_LuaMan.SetScriptStateCursor(m_Cursor);
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_OriginalSounds));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_SoundCursor);
 }

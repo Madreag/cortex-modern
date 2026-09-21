@@ -535,11 +535,13 @@ namespace RTE {
 		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
 		int GetStateIndex(const LuaStateWrapper* state) const;
 
-		/// Gets the threaded state cursor used by the next unassigned script.
-		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
+		/// The threaded state an object's scripts belong on: its unique ID modulo the state count, the
+		/// master state when there are none. Unlocked, for the restore and the self-tests.
+		/// @param uniqueID The unique ID of the object the state is for.
+		LuaStateWrapper& GetScriptStateForObject(long uniqueID);
 
-		/// Restores the threaded state cursor after a checkpoint.
-		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : cursor % m_ScriptStates.size(); }
+		/// The index into the threaded states an object's unique ID names. Only valid with states present.
+		size_t ScriptStateIndexForObject(long uniqueID) const;
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
@@ -558,10 +560,6 @@ namespace RTE {
 		/// Runs the threaded-write fixture against the currently initialized state set.
 		bool RunThreadedScriptWriteHashSelfTest();
 
-		/// Runs the same fixture in fresh four-state and 32-state sets, then compares the hashes.
-		/// This is a self-test only; it refuses to replace a set that owns live script objects.
-		bool RunThreadedScriptWriteHashSelfTestTwoCounts();
-
 		/// Gets the current thread lua state override that new objects created will be assigned to.
 		/// @return The current lua state to force objects to be assigned to.
 		LuaStateWrapper* GetThreadLuaStateOverride() const;
@@ -575,10 +573,12 @@ namespace RTE {
 		/// @return The current lua state that is running.
 		LuaStateWrapper* GetThreadCurrentLuaState() const;
 
-		/// Returns a free threaded script states to assign a movableobject to.
-		/// This will be locked to our thread and safe to use - ensure that it'll be unlocked after use!
+		/// Returns the threaded script state an object's scripts belong on, locked to our thread and safe
+		/// to use - ensure that it'll be unlocked after use! The state is the object's unique ID modulo the
+		/// state count, so every peer, every restore and every machine puts that object on the same state.
+		/// @param uniqueID The unique ID of the object the state is for.
 		/// @return A script state.
-		LuaStateWrapper* GetAndLockFreeScriptState();
+		LuaStateWrapper* GetAndLockScriptStateForObject(long uniqueID);
 
 		/// Clears internal Lua package tables from all user-defined modules. Those must be reloaded with ReloadAllScripts().
 		void ClearUserModuleCache();
@@ -762,8 +762,6 @@ namespace RTE {
 		std::shared_ptr<LuaPathCallbackContext> m_PathCallbacks; //!< The current world's asynchronous callbacks.
 		std::shared_ptr<LuaPathCallbackContext> m_PathCallbackCapture; //!< The queue view used during graph capture.
 
-		int m_LastAssignedLuaState = 0;
-
 		BS::multi_future<void> m_GarbageCollectionTask;
 
 		/// Clears all the member variables of this LuaMan, effectively resetting the members of this abstraction level only.
@@ -781,7 +779,6 @@ namespace RTE {
 		static inline uint64_t s_PreviewGlobalsUndone = 0;
 		static inline bool s_PreviewGlobalsReported = false;
 		static inline bool s_PreviewFenceWindow = false;
-		static inline int s_PreviewScriptStateCursor = 0;
 	};
 
 	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one
