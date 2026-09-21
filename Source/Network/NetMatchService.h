@@ -921,7 +921,9 @@ namespace RTE {
 		bool WaitForDirectorySession(uint64_t budgetMs, std::string& sessionId, std::string& token) const;
 		/// Host: registers first, pins the GNS identity to the session id, then opens both listens.
 		/// Client: resolves the session id to a row and arms the join. Worker thread.
-		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
+		bool SetUpIceTransport(const NetMatchServiceRequest& request, NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
+		/// Client: applies the host's published worker count on the game thread before activity launch.
+		bool AdoptRemoteLuaStateCountAtBoundary(std::string* error = nullptr);
 		/// Builds the candidate policy from the saved settings and run overrides.
 		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay = {});
 		void UpdateRelayOffer(uint64_t nowMs);

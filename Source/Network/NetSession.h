@@ -209,6 +209,11 @@ namespace RTE {
 
 		NetSessionRole GetRole() const { return m_Role; }
 		const NetSessionConfig& GetConfig() const { return m_Config; }
+		/// The host's published effective Lua worker count, once its hello arrived.
+		bool HasRemoteLuaStateCount() const { return m_HasRemoteLuaStateCount; }
+		uint16_t GetRemoteLuaStateCount() const { return m_RemoteLuaStateCount; }
+		/// Client-side adoption is performed by the sim thread at the pre-activity boundary.
+		bool AdoptHostLuaStateCount(std::string* error = nullptr);
 		NetSessionState GetState() const { return m_State; }
 		uint64_t GetSessionId() const { return m_SessionId; }
 		uint8_t GetLocalPeerId() const { return m_LocalPeerId; }
@@ -368,6 +373,7 @@ namespace RTE {
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
 		uint16_t m_RemoteLuaStateCount = 0;
+		bool m_HasRemoteLuaStateCount = false;
 		// Client mirror of the parked peer state, bounded by its own deadline rather than by the
 		// handshake expiry the host runs.
 		bool m_AwaitingModuleDigests = false;

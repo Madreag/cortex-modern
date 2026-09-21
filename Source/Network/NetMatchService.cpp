@@ -1649,6 +1649,10 @@ static std::string ResyncSaveName() {
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
+		std::string luaRestoreError;
+		if (!NetIdentity::RestoreLocalLuaStateCount(&luaRestoreError) && !luaRestoreError.empty()) {
+			std::cout << "[net-identity] local Lua state restore deferred: " << luaRestoreError << std::endl;
+		}
 		// The round is over here too: an admission file with no checkpoint left behind it goes now.
 		SweepRestartAdmission();
 		m_LanDiscovery.Stop();
@@ -1942,6 +1946,10 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::LeaveMatch(const std::string& result) {
+		std::string luaRestoreError;
+		if (!NetIdentity::RestoreLocalLuaStateCount(&luaRestoreError) && !luaRestoreError.empty()) {
+			std::cout << "[net-identity] local Lua state restore deferred: " << luaRestoreError << std::endl;
+		}
 		std::string displayResult = result;
 		bool handover = false;
 		{
@@ -2348,6 +2356,11 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::ConsumeReadyToLaunch(std::string& outActivityPreset) {
 		Update();
+		std::string luaStateError;
+		if (!AdoptRemoteLuaStateCountAtBoundary(&luaStateError)) {
+			if (!luaStateError.empty()) std::cout << "[net-match] Lua state adoption failed: " << luaStateError << std::endl;
+			return false;
+		}
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_State != NetMatchServiceState::ReadyToLaunch || !m_Coordinator) {
 			return false;
@@ -2476,6 +2489,28 @@ static std::string ResyncSaveName() {
 			                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
 		}
 		CaptureA7SeatView();
+		return true;
+	}
+
+	bool NetMatchService::AdoptRemoteLuaStateCountAtBoundary(std::string* error) {
+		NetSession* session = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (m_IsHost || m_State != NetMatchServiceState::ReadyToLaunch || !m_Session || !m_Session->HasRemoteLuaStateCount()) return true;
+			session = m_Session.get();
+		}
+		std::string adoptionError;
+		if (!session->AdoptHostLuaStateCount(&adoptionError)) {
+			{
+				std::lock_guard<std::mutex> lock(m_Mutex);
+				m_State = NetMatchServiceState::Failed;
+				m_StatusText = "Lua state configuration failed";
+				m_ErrorText = adoptionError;
+			}
+			if (error) *error = adoptionError;
+			return false;
+		}
+		CacheDiagnosticIdentity(session->GetConfig().localIdentity);
 		return true;
 	}
 
@@ -5906,7 +5941,7 @@ static std::string ResyncSaveName() {
 		m_RelayPublishPending = !sent;
 	}
 
-	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
+	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
 		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
 		if (error) *error = "a session-id join needs GameNetworkingSockets";
@@ -5992,6 +6027,29 @@ static std::string ResyncSaveName() {
 			browse.PollList(nowMs);
 			browse.Update(nowMs);
 			if (browse.ListReplies() > 0) {
+				const auto row = std::find_if(browse.Rows().begin(), browse.Rows().end(), [&](const NetDirectorySessionRow& candidate) {
+					return candidate.sessionId == request.sessionId;
+				});
+				if (row != browse.Rows().end() && row->luaStateCount >= 0 &&
+				    (row->luaStateCount != manifest.deterministicConfig.numLuaStates ||
+				     manifest.deterministicConfig.numLuaStatesOverride != row->luaStateCount)) {
+					std::string applyError;
+					if (!NetIdentity::ApplyHostLuaStateCountToManifest(manifest, static_cast<int>(row->luaStateCount), &applyError)) {
+						if (error) *error = "directory host Lua state count refused: " + applyError;
+						return false;
+					}
+					FillDirectoryLocalIdentity(local, manifest);
+					if (worldIdentityBuilt) {
+						std::string worldApplyError;
+						if (!NetIdentity::ApplyHostLuaStateCountToManifest(worldManifest, static_cast<int>(row->luaStateCount), &worldApplyError)) {
+							if (error) *error = "directory world Lua state count refused: " + worldApplyError;
+							return false;
+						}
+						FillDirectoryLocalIdentity(worldLocal, worldManifest);
+					}
+					std::cout << "[net-directory] adopted host Lua state count=" << row->luaStateCount
+					          << " for strict identity admission; VM resize waits for the sim thread" << std::endl;
+				}
 				why = NetIceResolveSessionRow(browse.Rows(), local, request.sessionId, &target, worldIdentityBuilt ? &worldLocal : nullptr, reservedSeat);
 				if (why.empty() || why != "no such session") {
 					break;
@@ -6004,6 +6062,9 @@ static std::string ResyncSaveName() {
 			if (error) *error = "session " + request.sessionId + ": " + why;
 			return false;
 		}
+		// The directory comparison used this host-count manifest; carry it into the wire config.
+		// NetSession performs the guarded VM resize later, on the game thread before launch.
+		sessionConfig.localIdentity = manifest;
 		if (target.persistentWorld && worldIdentityBuilt) {
 			sessionConfig.localIdentity = worldManifest;
 		}
@@ -6347,9 +6408,6 @@ static std::string ResyncSaveName() {
 				error = worldError;
 			}
 		}
-		if (started && !AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest, &error)) {
-			started = false;
-		}
 		NetResyncState resumeState;
 		if (started && request.resumeConfig && request.resumeTick != 0) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -6436,6 +6494,12 @@ static std::string ResyncSaveName() {
 				});
 			}
 #endif
+		}
+		// Directory admission may have rewritten the captured manifest to the host's published Lua
+		// count. Attach the reconnect plane only after that rewrite so its identity is the same one the
+		// strict session handshake will validate; the actual VM resize remains on the game thread.
+		if (started && !AttachAdmissionPlane(*session, request, runnerConfig.matchConfig, runnerConfig.sessionConfig, manifest, &error)) {
+			started = false;
 		}
 		if (started || iceSetupFailed) {
 			if (request.host) ReadRelayOffer(runnerConfig.matchConfig.relay);

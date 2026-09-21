@@ -21,7 +21,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 
@@ -30,6 +33,9 @@ namespace RTE {
 	namespace {
 		using json = nlohmann::json;
 		namespace fs = std::filesystem;
+		std::mutex s_LuaStateAdoptionMutex;
+		std::optional<int> s_SavedLuaStateOverride;
+		std::optional<int> s_SavedLuaStateCount;
 
 		struct CanonicalHasher {
 			uint64_t state = 0xcbf29ce484222325ull;
@@ -397,17 +403,52 @@ namespace RTE {
 		return HashConfig(config);
 	}
 
-	bool NetIdentity::AdoptHostLuaStateCount(NetIdentityManifest& manifest, int count, std::string* error) {
+	bool NetIdentity::ApplyHostLuaStateCountToManifest(NetIdentityManifest& manifest, int count, std::string* error) {
 		if (count < 0 || count > 65535) {
 			if (error) *error = "host Lua state count is outside the wire range";
 			return false;
 		}
-		if (!g_LuaMan.ResizeThreadedStates(count, error)) return false;
-		g_SettingsMan.SetNumberOfLuaStatesOverride(count);
 		manifest.deterministicConfig.numLuaStates = count;
 		manifest.deterministicConfig.numLuaStatesOverride = count;
 		manifest.deterministicConfigHash = HashDeterministicConfig(manifest.deterministicConfig);
 		manifest.sessionIdentityHash = HashIdentity(manifest);
+		return true;
+	}
+
+	bool NetIdentity::AdoptHostLuaStateCount(NetIdentityManifest& manifest, int count, std::string* error) {
+		if (!ApplyHostLuaStateCountToManifest(manifest, count, error)) return false;
+		const int savedOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
+		const int savedCount = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
+		if (!g_LuaMan.ResizeThreadedStates(count, error)) return false;
+		{
+			std::lock_guard<std::mutex> lock(s_LuaStateAdoptionMutex);
+			if (!s_SavedLuaStateOverride.has_value()) {
+				s_SavedLuaStateOverride = savedOverride;
+				s_SavedLuaStateCount = savedCount;
+			}
+		}
+		g_SettingsMan.SetNumberOfLuaStatesOverride(count);
+		return true;
+	}
+
+	bool NetIdentity::RestoreLocalLuaStateCount(std::string* error) {
+		std::optional<int> savedOverride;
+		std::optional<int> savedCount;
+		{
+			std::lock_guard<std::mutex> lock(s_LuaStateAdoptionMutex);
+			savedOverride = s_SavedLuaStateOverride;
+			savedCount = s_SavedLuaStateCount;
+		}
+		if (!savedOverride.has_value() || !savedCount.has_value()) return true;
+		if (!g_LuaMan.ResizeThreadedStates(*savedCount, error)) return false;
+		g_SettingsMan.SetNumberOfLuaStatesOverride(*savedOverride);
+		{
+			std::lock_guard<std::mutex> lock(s_LuaStateAdoptionMutex);
+			s_SavedLuaStateOverride.reset();
+			s_SavedLuaStateCount.reset();
+		}
+		std::cout << "[net-identity] restored local Lua state count=" << *savedCount
+		          << " override=" << *savedOverride << std::endl;
 		return true;
 	}
 

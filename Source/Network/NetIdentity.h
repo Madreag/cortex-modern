@@ -143,8 +143,13 @@ namespace RTE {
 
 		static NetHash32 HashCanonicalText(const std::string& domain, const std::vector<std::pair<std::string, std::string>>& fields);
 		static NetHash32 HashDeterministicConfig(const NetIdentityDeterministicConfig& config);
+		/// Rewrites only the manifest's effective Lua count and identity hashes. Used by the
+		/// directory admission path before the sim thread performs the guarded resize.
+		static bool ApplyHostLuaStateCountToManifest(NetIdentityManifest& manifest, int count, std::string* error = nullptr);
 		/// Applies the host's effective Lua worker count before the match creates any script state.
 		static bool AdoptHostLuaStateCount(NetIdentityManifest& manifest, int count, std::string* error = nullptr);
+		/// Restores the local override and state set saved by a joined match, when teardown is safe.
+		static bool RestoreLocalLuaStateCount(std::string* error = nullptr);
 		static NetHash32 HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules);
 		static NetHash32 HashSessionIdentity(const NetIdentityManifest& manifest);
 		static std::string HashHex(const NetHash32& hash);

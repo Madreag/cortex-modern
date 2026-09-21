@@ -83,6 +83,7 @@ namespace RTE {
 		m_RejectSummary.clear();
 		m_HasRemoteIdentityHash = false;
 		m_RemoteLuaStateCount = 0;
+		m_HasRemoteLuaStateCount = false;
 		m_Stats = {};
 		m_Peers.clear();
 		m_SpentIdentityChallenges.clear();
@@ -132,6 +133,7 @@ namespace RTE {
 		m_RejectSummary.clear();
 		m_HasRemoteIdentityHash = false;
 		m_RemoteLuaStateCount = 0;
+		m_HasRemoteLuaStateCount = false;
 		m_AwaitingModuleDigests = false;
 		m_ModuleDigestsSent = false;
 		m_ModuleDigestDeadlineMs = 0;
@@ -330,6 +332,15 @@ namespace RTE {
 			}
 		}
 		return c_InvalidNetPeerId;
+	}
+
+	bool NetSession::AdoptHostLuaStateCount(std::string* error) {
+		if (m_Role != NetSessionRole::Client || !m_HasRemoteLuaStateCount) return true;
+		const int previous = m_Config.localIdentity.deterministicConfig.numLuaStates;
+		if (!NetIdentity::AdoptHostLuaStateCount(m_Config.localIdentity, m_RemoteLuaStateCount, error)) return false;
+		std::cout << "[net-session] adopted host Lua state count=" << m_RemoteLuaStateCount
+		          << " from local=" << previous << " at the pre-activity boundary" << std::endl;
+		return true;
 	}
 
 	std::vector<NetSessionPeerInfo> NetSession::GetReadyPeers() const {
@@ -1233,19 +1244,7 @@ namespace RTE {
 		}
 		if (const auto* hostHello = std::get_if<NetHostHello>(&message.payload)) {
 			m_RemoteLuaStateCount = hostHello->luaStateCount;
-			if (hostHello->luaStateCount != static_cast<uint16_t>(std::clamp(m_Config.localIdentity.deterministicConfig.numLuaStates, 0, 65535))) {
-				const int previousLuaStates = m_Config.localIdentity.deterministicConfig.numLuaStates;
-				std::string luaError;
-				if (!NetIdentity::AdoptHostLuaStateCount(m_Config.localIdentity, hostHello->luaStateCount, &luaError)) {
-					SetRejected(NetRejectReason::DeterministicConfigMismatch, "num_lua_states", std::to_string(hostHello->luaStateCount),
-					            std::to_string(previousLuaStates), "could not adopt the host Lua state count: " + luaError);
-					Send(peerId, NetDisconnect{static_cast<uint16_t>(NetRejectReason::DeterministicConfigMismatch), luaError});
-					m_Transport->Disconnect(peerId, luaError);
-					return;
-				}
-				std::cout << "[net-session] adopted host Lua state count=" << hostHello->luaStateCount
-				          << " from local=" << previousLuaStates << std::endl;
-			}
+			m_HasRemoteLuaStateCount = true;
 			const NetIdentityMismatch mismatch = ValidateHostHello(*hostHello);
 			if (HasMismatch(mismatch)) {
 				if (mismatch.rejectReason == NetRejectReason::ModuleManifestMismatch && !m_AwaitingModuleDigests && BeginModuleDigestExchange(peerId)) {
@@ -1937,6 +1936,7 @@ namespace RTE {
 				{"scenario_test_module_loaded", m_Config.localIdentity.deterministicConfig.scenarioTestModuleLoaded},
 			}},
 			{"remote_identity_hash", HashJson(m_RemoteIdentityHash, m_HasRemoteIdentityHash)},
+			{"remote_lua_state_count", m_HasRemoteLuaStateCount ? json(m_RemoteLuaStateCount) : json(nullptr)},
 			{"peers", peers},
 			{"admission", admission},
 			{"stats", {
