@@ -75,7 +75,7 @@ def private_settings(run, cap):
     write_json(Path(run.out) / 'runtime.json', manifest)
 
 
-def stage_baseline(run, window_ticks=TICKS):
+def stage_baseline(run, window_ticks=TICKS, humans=2):
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
     script, rewritten = re.subn(r'(?m)^local WINDOW_TICKS = \d+;$', f'local WINDOW_TICKS = {window_ticks};',
@@ -89,7 +89,8 @@ def stage_baseline(run, window_ticks=TICKS):
         '\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n'
         '\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n'
         '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n'
-        '\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n', encoding='utf-8')
+        '\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n' +
+        ('\t\tTeamOfPlayer3 = 2\n\t\tPlayer3IsHuman = 1\n' if humans == 3 else ''), encoding='utf-8')
 
 
 def input_pattern(path):
@@ -123,14 +124,14 @@ TIMING_CASES = (
 )
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2):
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
-                    live_stalls=live_stalls,
+                    live_stalls=live_stalls, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
@@ -176,7 +177,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             private_settings(run, cap)
             if record:
                 (run_out / 'feel').mkdir()
-            stage_baseline(run, final_tick)
+            stage_baseline(run, final_tick, sp_humans if sp else 2)
             run.start()
             if not sp and peer == 'host':
                 time.sleep(.75)
@@ -275,10 +276,13 @@ def reduce_or_fail(run, peer, baseline=None):
         raise
 
 
-def reduce_timing_case(run):
+def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
     peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    if reference is not None:
+        for value in peers.values():
+            apply_tps_call(value, reference)
     proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS))
     pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
@@ -288,7 +292,8 @@ def reduce_timing_case(run):
     proof.update(live_passes=live, live_pass=live_pass)
     proof['pass'] &= live_pass
     write_json(run / 'hash-proof.json', proof)
-    return dict(name=run.name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
+    return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
+                launches_complete=manifest['launches_complete'],
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
 
@@ -300,7 +305,7 @@ def analyze(root, stock=None):
         result = reduce_timing_case(root) if manifest.get('loss_percent') or manifest.get('silent_tick') else reduce_or_fail(root, peer)
         write_json(root / 'feel-report.json', result)
         return [result]
-    baselines = {}
+    baselines, plain_baselines = {}, {}
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
         result = reduce_or_fail(run, 'sp')
@@ -309,6 +314,14 @@ def analyze(root, stock=None):
         baselines[cap_name]['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         result['metrics']['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         write_json(run / 'feel-report.json', result)
+        plain = item9a_gates(root / f'baseline-{cap_name}-off', 'sp')
+        plain_baselines[cap_name] = dict(steady_wall_tps=plain['metrics']['steady_wall_tps'],
+            evidence=plain['metrics']['clock_path'], method='same build, scene, input script, hashes and render cap; recorder off')
+        write_json(root / f'baseline-{cap_name}-off' / 'feel-report.json', plain)
+    three = item9a_gates(root / 'baseline-three-60hz', 'sp')
+    write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
+    three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
+        method='same build, six actors, three human seats, recorder and 60 Hz cap; single process with local seat views')
     results = []
     for lag in (100, 200):
         for cap_name in ('60hz', 'uncapped'):
@@ -321,8 +334,12 @@ def analyze(root, stock=None):
                     evidence=baselines[cap_name]['raw_path'], method='same build, scene, actor count, recorder and render cap'))
             for peer in ('host', 'client'):
                 timing = item9a_gates(off, peer)
+                reference = plain_baselines[cap_name]
                 if stock and cap_name in stock:
-                    apply_tps_call(timing, stock[cap_name])
+                    timing['stock_reference'] = stock[cap_name]
+                    if stock[cap_name]['steady_wall_tps'] < 59.5 or reference['steady_wall_tps'] >= 59.5:
+                        reference = stock[cap_name]
+                apply_tps_call(timing, reference)
                 peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json'),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json'),
@@ -352,7 +369,9 @@ def analyze(root, stock=None):
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
             continue
-        report = reduce_timing_case(run)
+        reference = three_reference if 'silent' in name else dict(steady_wall_tps=baselines['60hz']['steady_wall_tps'],
+            evidence=baselines['60hz']['raw_path'], method='same build, four actors, recorder and 60 Hz cap')
+        report = reduce_timing_case(run, reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
     write_json(root / 'matrix-report.json', results)
@@ -361,7 +380,7 @@ def analyze(root, stock=None):
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
-    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. Two-peer TPS uses the same-machine',
+    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
               'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
               'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
@@ -456,6 +475,9 @@ def main(argv=None):
         input_pattern(script)
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True)
+            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True)
+        launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe['sha256'], args.timeout, sp=True,
+                    window_ticks=2 * TICKS, sp_humans=3)
         port = args.port
         for lag in (100, 200):
             for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
@@ -477,12 +499,15 @@ def main(argv=None):
         return 1
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
-    complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
+    case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
+                     for path in sorted(root.glob('*/manifest.json'))}
+    complete = bool(case_launches) and all(case_launches.values()) and all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
+    completion = dict(finished=stamp(), measurement_complete=complete, launches_complete=bool(case_launches) and all(case_launches.values()),
+                      case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
