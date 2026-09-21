@@ -832,10 +832,6 @@ namespace RTE {
 		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
-		/// Wall-time ramp for a peer admitted after a hold. It covers the sender's delay window and
-		/// one measured round trip before the bounded hold clock can judge the new incarnation.
-		static uint64_t RequiredAdmissionRampMs(uint32_t rttMs, uint32_t jitterMs, uint16_t delayFrames,
-		                                         double simTickMs, uint32_t peerParkMs, uint32_t ownParkMs);
 		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { return m_State; }
