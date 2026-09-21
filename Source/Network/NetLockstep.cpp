@@ -30,6 +30,8 @@ namespace RTE {
 
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
+		// A round configured without an answer budget still bounds a capture park.
+		constexpr uint64_t c_DefaultCaptureParkBudgetMs = 500;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
 		constexpr uint16_t c_RecoveryInputVersion = 4;
 
@@ -4257,6 +4259,8 @@ namespace RTE {
 		m_SynchronizedCaptureBudgetMs = 250.0;
 		m_CaptureParkRevision = 0;
 		m_CaptureParkDeadlineMs = 0;
+		m_CaptureParkPublishedEndFrame = UINT64_MAX;
+		m_PendingCaptureReportMs = 0;
 		m_CaptureParkReportsMs.clear();
 		m_DeferredParkTimings.clear();
 		m_ApplyingDeferredParkTiming = false;
@@ -4314,6 +4318,7 @@ namespace RTE {
 		m_AgreedStartApplied = false;
 		m_AgreedStartRecord.reset();
 		m_StartupHeldSeatStamps.clear();
+		m_LateStartReclaims.clear();
 		m_StartWaitAnnounced = false;
 		m_StartWaitSinceMs = 0;
 		m_LocalStartParkMs = 0;
@@ -4925,7 +4930,7 @@ namespace RTE {
 		std::cout << "[net-lockstep] propose hold peer=" << static_cast<int>(peerId) << " next_frame=" << m_Stats.nextFrame
 		          << " played=" << m_PeersPlayedThisRound.contains(peerId) << " first_missing_ms=" << m_FirstMissingMs
 		          << " now=" << nowMs << " own_park=" << m_Stats.longestOwnParkMs
-		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << std::endl;
+		          << " peer_park=" << m_Stats.peers[peerId].startParkMs << " ready=" << m_ReadyFrames.size() << std::endl;
 		if (!IsRunning() || !UsesBoundedWait() || m_Config.localPeerId != GetHostPeerId() || peerId == GetHostPeerId() ||
 		    !IsKnownRemotePeer(peerId) || m_PeerLeaveFrames.contains(peerId) || m_NextTimingRevision == UINT64_MAX) {
 			if (error) *error = "invalid held peer or authority";
@@ -5136,6 +5141,11 @@ namespace RTE {
 		}
 		m_Stats.holdNoticeBudgetMs = noticeMs;
 		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		// The commit horizon runs a delay window ahead of the simulation, so an idle horizon is what a full
+		// pipeline looks like: committed frames nobody has consumed yet are the round's runway. Judge a seat
+		// only once that runway can no longer carry the decision's notice - until then nothing is waiting.
+		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(m_ReadyFrames.size() * m_Config.simTickMs));
+		if (runwayMs > noticeMs) return false;
 		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
 		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
 		// the seat is still only declared after the bound of missing input, never the instant one is late.
@@ -5305,10 +5315,15 @@ namespace RTE {
 		if (timing.action == NetTimingAction::CapturePark) {
 			if (timing.phase == NetTimingPhase::Status) {
 				if (m_Config.localPeerId != GetHostPeerId() || timing.peerId != timing.senderPeerId) return;
+				// Each park closes on its own reports; a report for a park that is over says nothing about this one.
+				if (timing.applyFrame != m_SynchronizedCaptureStartFrame) return;
 				m_CaptureParkReportsMs[timing.peerId] = std::max(m_CaptureParkReportsMs[timing.peerId], timing.pingMs);
 				PublishCapturePark(timing.applyFrame);
 			} else if (timing.phase == NetTimingPhase::Commit && authority) {
 				ApplyCapturePark(timing);
+			} else if (m_Config.localPeerId != GetHostPeerId()) {
+				std::cout << "[net-lockstep] capture park packet ignored phase=" << static_cast<int>(timing.phase)
+				          << " authority=" << authority << std::endl;
 			}
 			return;
 		}
@@ -6397,28 +6412,61 @@ namespace RTE {
 
 	void NetLockstepCoordinator::BeginSynchronizedCapture(uint64_t completedFrame) {
 		if (m_Playback || completedFrame == UINT64_MAX || m_Config.simTickMs <= 0) return;
-		m_SynchronizedCaptureStartFrame = completedFrame + 1;
+		// Every peer measures its own capture, but the window is one host fact.  A client that opened a window
+		// from its own budget would empty frames the host commits with real input, so it only measures here and
+		// takes the window from the host's publication.
+		if (m_Config.localPeerId != GetHostPeerId()) {
+			m_CaptureParkReportsMs[m_Config.localPeerId] = static_cast<uint32_t>(std::min<double>(UINT32_MAX, m_SynchronizedCaptureBudgetMs));
+			return;
+		}
+		// The park cannot reach back over frames a peer has already accepted: it opens at the first frame no
+		// peer has committed yet.
+		uint64_t start = std::max(completedFrame + 1, m_Stats.nextFrame);
+		for (uint8_t peer: m_RemotePeerIds)
+			if (!IsPeerGoneAtFrame(peer, start)) start = std::max(start, m_Stats.peers[peer].reportedNextFrame);
+		m_SynchronizedCaptureStartFrame = start;
 		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(m_SynchronizedCaptureBudgetMs / m_Config.simTickMs)));
 		m_SynchronizedCaptureEndFrame = m_SynchronizedCaptureStartFrame + ticks;
 		const uint64_t parkNowMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
-		m_CaptureParkDeadlineMs = m_Config.timeoutMs == 0 ? 0 : parkNowMs + m_Config.timeoutMs;
+		// A round configured without an answer budget still bounds the park: waiting forever for one report is
+		// the stall the bound exists to prevent.
+		m_CaptureParkDeadlineMs = parkNowMs + (m_Config.timeoutMs == 0 ? c_DefaultCaptureParkBudgetMs : m_Config.timeoutMs);
 		m_CaptureParkFinalized = false;
 		m_CaptureParkAwaitingReports = true;
+		m_CaptureParkPublishedEndFrame = UINT64_MAX;
+		// Each park closes on its own reports: a previous park's duration is not evidence about this one.
+		m_CaptureParkReportsMs.clear();
 		m_CaptureParkReportsMs[m_Config.localPeerId] = static_cast<uint32_t>(std::min<double>(UINT32_MAX, m_SynchronizedCaptureBudgetMs));
-		if (m_Config.localPeerId == GetHostPeerId() && IsRunning()) PublishCapturePark(m_SynchronizedCaptureStartFrame);
+		std::cout << "[net-lockstep] capture park begin frame=" << m_SynchronizedCaptureStartFrame
+		          << " end=" << m_SynchronizedCaptureEndFrame << " completed=" << completedFrame << std::endl;
+		if (IsRunning()) PublishCapturePark(m_SynchronizedCaptureStartFrame);
 	}
 
 	void NetLockstepCoordinator::CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs) {
 		if (m_Playback || completedFrame == UINT64_MAX || !std::isfinite(captureMs) || captureMs < 0 || m_Config.simTickMs <= 0) return;
 		m_SynchronizedCaptureBudgetMs = std::max(m_SynchronizedCaptureBudgetMs, captureMs);
 		m_CaptureParkReportsMs[m_Config.localPeerId] = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::ceil(captureMs)));
-		if (m_SynchronizedCaptureStartFrame == completedFrame + 1) {
-			const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(captureMs / m_Config.simTickMs)));
-			m_SynchronizedCaptureEndFrame = std::max(m_SynchronizedCaptureEndFrame, m_SynchronizedCaptureStartFrame + ticks);
-		}
 		if (m_Playback || !IsRunning()) return;
 		if (m_Config.localPeerId == GetHostPeerId()) {
+			// The host's own measurement is the first report: a capture longer than the published window
+			// re-opens the park so the extension goes out before any peer reaches the old end.
+			if (m_SynchronizedCaptureStartFrame != UINT64_MAX) {
+				const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(captureMs / m_Config.simTickMs)));
+				const uint64_t end = m_SynchronizedCaptureStartFrame + ticks;
+				if (end > m_SynchronizedCaptureEndFrame) { m_SynchronizedCaptureEndFrame = end; m_CaptureParkFinalized = false; }
+			}
 			PublishCapturePark(m_SynchronizedCaptureStartFrame);
+			return;
+		}
+		m_PendingCaptureReportMs = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::ceil(captureMs)));
+		SendCaptureParkReport();
+	}
+
+	void NetLockstepCoordinator::SendCaptureParkReport() {
+		// A client reports against the park the host named.  Until that publication arrives it has no frame to
+		// key the report to, so the measurement waits and goes out with the window.
+		if (m_Playback || m_PendingCaptureReportMs == 0 || m_Config.localPeerId == GetHostPeerId() || !IsRunning() ||
+		    m_SynchronizedCaptureStartFrame == UINT64_MAX || m_CaptureParkFinalized) {
 			return;
 		}
 		NetLockstepTiming report;
@@ -6431,15 +6479,15 @@ namespace RTE {
 		report.authorityGeneration = m_Config.migrationGeneration;
 		report.applyFrame = m_SynchronizedCaptureStartFrame;
 		report.nextFrame = m_SynchronizedCaptureEndFrame;
-		report.pingMs = static_cast<uint32_t>(std::min<double>(UINT32_MAX, std::ceil(captureMs)));
+		report.pingMs = m_PendingCaptureReportMs;
 		std::string ignored;
-		(void)SendPacket({report}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, GetHostPeerId());
+		if (SendPacket({report}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, GetHostPeerId())) m_PendingCaptureReportMs = 0;
 	}
 
 	void NetLockstepCoordinator::PublishCapturePark(uint64_t startFrame) {
 		if (m_Playback || m_Config.localPeerId != GetHostPeerId() || !IsRunning() || startFrame == UINT64_MAX || m_Config.simTickMs <= 0 || m_CaptureParkFinalized) return;
 		const uint64_t nowMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
-		const bool budgetExpired = m_Config.timeoutMs > 0 && m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs;
+		const bool budgetExpired = m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs;
 		uint32_t slowestMs = 0;
 		for (const auto& [peer, captureMs]: m_CaptureParkReportsMs) {
 			if (peer == m_Config.localPeerId || !IsPeerGoneAtFrame(peer, startFrame)) slowestMs = std::max(slowestMs, captureMs);
@@ -6453,7 +6501,10 @@ namespace RTE {
 		// missing-input bound judges the silent seat.
 		allReports = allReports || budgetExpired;
 		const uint64_t endFrame = startFrame + ticks;
-		if (!allReports && m_CaptureParkRevision != 0 && endFrame <= m_SynchronizedCaptureEndFrame) return;
+		// Republish whenever the window this host holds has grown past the one the peers were given, or they
+		// would reach an end the round has already moved.
+		if (!allReports && m_CaptureParkRevision != 0 && endFrame <= m_SynchronizedCaptureEndFrame &&
+		    m_CaptureParkPublishedEndFrame != UINT64_MAX && m_SynchronizedCaptureEndFrame <= m_CaptureParkPublishedEndFrame) return;
 		if (m_NextTimingRevision == UINT64_MAX) return;
 		NetLockstepTiming timing;
 		timing.senderPeerId = GetHostPeerId();
@@ -6465,7 +6516,9 @@ namespace RTE {
 		timing.revision = m_NextTimingRevision++;
 		timing.authorityGeneration = m_Config.migrationGeneration;
 		timing.applyFrame = startFrame;
-		timing.nextFrame = allReports ? endFrame : m_SynchronizedCaptureEndFrame;
+		// The end only grows: peers have already emptied every frame of the window they were published.
+		timing.nextFrame = std::min(startFrame + CaptureParkCapTicks(),
+		    allReports ? std::max(endFrame, m_SynchronizedCaptureEndFrame) : m_SynchronizedCaptureEndFrame);
 		timing.cutoffFrame = timing.nextFrame;
 		timing.delayFrames = static_cast<uint16_t>(std::min<uint64_t>(NetLockstepCodec::c_MaxInputDelayFrames, ticks));
 		timing.pingMs = allReports ? std::max<uint32_t>(1, slowestMs) : 0;
@@ -6473,6 +6526,7 @@ namespace RTE {
 		for (uint8_t peer: m_RemotePeerIds)
 			if (!IsPeerGoneAtFrame(peer, startFrame)) timing.requiredPeers |= static_cast<uint8_t>(1U << (peer - 1));
 		m_CaptureParkRevision = timing.revision;
+		m_CaptureParkPublishedEndFrame = timing.nextFrame;
 		if (allReports) {
 			m_CaptureParkAwaitingReports = false;
 			m_CaptureParkFinalized = true;
@@ -6485,23 +6539,59 @@ namespace RTE {
 
 	void NetLockstepCoordinator::ApplyCapturePark(const NetLockstepTiming& timing) {
 		if (timing.action != NetTimingAction::CapturePark || timing.applyFrame == UINT64_MAX || timing.nextFrame < timing.applyFrame) return;
-		if (timing.revision < m_CaptureParkRevision || (m_CaptureParkFinalized && timing.pingMs == 0)) return;
-		if (m_SynchronizedCaptureStartFrame == UINT64_MAX || timing.applyFrame < m_SynchronizedCaptureStartFrame)
+		if (timing.revision < m_CaptureParkRevision) return;
+		// A park is named by the frame it opens at, so the next park's provisional opens a new window while a
+		// late provisional for the park we already closed stays stale.
+		const bool newPark = m_SynchronizedCaptureStartFrame == UINT64_MAX || timing.applyFrame != m_SynchronizedCaptureStartFrame;
+		if (m_CaptureParkFinalized && timing.pingMs == 0 && !newPark) return;
+		if (newPark) {
 			m_SynchronizedCaptureStartFrame = timing.applyFrame;
+			m_SynchronizedCaptureEndFrame = timing.applyFrame;
+			m_CaptureParkFinalized = false;
+		}
+		// The end only grows: this peer has already emptied every frame of the window it was published.
+		m_SynchronizedCaptureEndFrame = std::max(m_SynchronizedCaptureEndFrame, timing.nextFrame);
 		if (timing.pingMs == 0) {
-			m_SynchronizedCaptureEndFrame = std::max(m_SynchronizedCaptureEndFrame, timing.nextFrame);
 			m_CaptureParkAwaitingReports = true;
+			std::cout << "[net-lockstep] capture park window peer=" << static_cast<int>(m_Config.localPeerId)
+			          << " frame=" << m_SynchronizedCaptureStartFrame << " end=" << m_SynchronizedCaptureEndFrame << std::endl;
+			SendCaptureParkReport();
 		} else {
-			m_SynchronizedCaptureEndFrame = timing.nextFrame;
 			m_CaptureParkAwaitingReports = false;
 			m_CaptureParkFinalized = true;
 			m_SynchronizedCaptureBudgetMs = std::max(m_SynchronizedCaptureBudgetMs, static_cast<double>(timing.pingMs));
+			std::cout << "[net-lockstep] capture park released frame=" << m_SynchronizedCaptureStartFrame
+			          << " end=" << m_SynchronizedCaptureEndFrame << " capture_ms=" << timing.pingMs << std::endl;
 		}
 		m_CaptureParkRevision = std::max(m_CaptureParkRevision, timing.revision);
 	}
 
+	uint64_t NetLockstepCoordinator::CaptureParkCapTicks() const {
+		// A park is never longer than the capture it covers plus the answer budget it closes on: the window may
+		// be extended while a report is late, never without end.
+		if (m_Config.simTickMs <= 0) return 1;
+		const double budgetMs = m_SynchronizedCaptureBudgetMs + (m_Config.timeoutMs == 0 ? c_DefaultCaptureParkBudgetMs : m_Config.timeoutMs);
+		return static_cast<uint64_t>(std::max(1.0, std::ceil(budgetMs / m_Config.simTickMs)));
+	}
+
+	void NetLockstepCoordinator::RetryLateStartReclaims() {
+		if (m_LateStartReclaims.empty() || m_Config.localPeerId != GetHostPeerId()) return;
+		for (auto it = m_LateStartReclaims.begin(); it != m_LateStartReclaims.end();) {
+			const uint8_t peer = it->first;
+			if (!m_AiHeldSeats.contains(peer) || m_ReclaimTransactions.contains(peer)) { it = m_LateStartReclaims.erase(it); continue; }
+			const uint32_t incarnation = m_Config.peerIncarnations.contains(peer) ? m_Config.peerIncarnations.at(peer) : 0;
+			if (SchedulePeerReclaim(peer, it->second, incarnation + 1, FutureTimingFrame())) {
+				std::cout << "[net-match] late startup reclaim admitted peer " << static_cast<int>(peer) << std::endl;
+				it = m_LateStartReclaims.erase(it);
+			} else ++it;
+		}
+	}
+
 	void NetLockstepCoordinator::FlushDeferredParkTimings() {
 		if (m_ApplyingDeferredParkTiming || IsSynchronizedCapturePark(m_Stats.nextFrame) || m_DeferredParkTimings.empty()) return;
+		// The host's final end is what re-stamps a deferred decision.  Releasing one at a local end would apply
+		// it at the original frame here and at end + 1 on the host: the same decision at two frames.
+		if (m_SynchronizedCaptureStartFrame != UINT64_MAX && !m_CaptureParkFinalized) return;
 		m_ApplyingDeferredParkTiming = true;
 		auto deferred = std::move(m_DeferredParkTimings);
 		m_DeferredParkTimings.clear();
@@ -6575,7 +6665,10 @@ namespace RTE {
 			}
 		}
 		m_Stats.effectiveStartFrame = start.agreedEffectiveStartFrame != 0 ? start.agreedEffectiveStartFrame : firstCommitFrame;
-		m_Stats.nextFrame = m_Stats.effectiveStartFrame;
+		// A seat that rejoined at a later activation frame is already past this boundary: the record is the
+		// round's start fact, never a rewind of a horizon the seat has moved beyond.
+		const bool boundaryPassed = m_Config.startFrame > m_Stats.effectiveStartFrame || m_Stats.nextFrame > m_Stats.effectiveStartFrame;
+		if (!boundaryPassed) m_Stats.nextFrame = m_Stats.effectiveStartFrame;
 		// The host may have received a publication before this packet while a client is still draining its
 		// relay lane. Install a harmless synthetic start for those published seats so their pre-start frames
 		// are released by the same host fact instead of waiting for a second local formation.
@@ -6599,7 +6692,9 @@ namespace RTE {
 			}
 		}
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-			if ((start.heldPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
+			// The startup holds belong to the boundary; a seat that joined past it takes its seat state from
+			// the reclaim it was admitted with, not from a resolution the round already made.
+			if (boundaryPassed || (start.heldPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
 			m_AiHeldSeats[peer] = start.agreedFirstFrame;
 			m_PeerLeaveFrames[peer] = start.agreedFirstFrame;
 			m_DroppedSeats.insert(peer);
@@ -6750,9 +6845,18 @@ namespace RTE {
 		FlushRecoveryInputs(nowMs);
 		DropUnreachablePeers(nowMs);
 		AdjudicateSilentPeers(nowMs);
-		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports &&
-		    m_SynchronizedCaptureStartFrame != UINT64_MAX && m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs)
-			PublishCapturePark(m_SynchronizedCaptureStartFrame);
+		RetryLateStartReclaims();
+		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports && m_SynchronizedCaptureStartFrame != UINT64_MAX) {
+			// A park still waiting for a report must never let the round reach the published end: past it the
+			// survivors stop committing.  The window is extended ahead of the horizon until the park closes.
+			const uint64_t margin = 2ULL * std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame));
+			const uint64_t cap = m_SynchronizedCaptureStartFrame + CaptureParkCapTicks();
+			if (m_Stats.nextFrame + margin >= m_SynchronizedCaptureEndFrame && m_SynchronizedCaptureEndFrame < cap) {
+				m_SynchronizedCaptureEndFrame = std::min(cap, m_Stats.nextFrame + 2 * margin);
+				PublishCapturePark(m_SynchronizedCaptureStartFrame);
+			}
+			if (m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs) PublishCapturePark(m_SynchronizedCaptureStartFrame);
+		}
 		TickTiming(nowMs);
 		FlushDeferredParkTimings();
 		AdvanceReadyFrames(nowMs);
@@ -8186,6 +8290,9 @@ namespace RTE {
 			std::string reclaimError;
 			const uint64_t admissionFrame = FutureTimingFrame();
 			if (!SchedulePeerReclaim(start.localPeerId, fromTransport, currentIncarnation + 1, admissionFrame, &reclaimError)) {
+				// The conditions a reclaim needs - a running round and an activation past the sent horizon - arrive
+				// a few frames later, so the start is remembered and retried until the seat is admitted.
+				m_LateStartReclaims[start.localPeerId] = fromTransport;
 				std::cout << "[net-match] late startup reclaim deferred for peer " << static_cast<int>(start.localPeerId)
 				          << ": " << reclaimError << std::endl;
 			}
