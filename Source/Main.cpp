@@ -2561,6 +2561,7 @@ void RunMenuLoop() {
 		PollSDLEvents();
 
 		g_WindowMan.Update();
+		RTEError::DispatchPendingWorkerMessages();
 
 		g_UInputMan.Update();
 		g_TimerMan.Update();
@@ -5076,6 +5077,8 @@ void RunGameLoop() {
 		PollSDLEvents();
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
+
+		RTEError::DispatchPendingWorkerMessages();
 
 		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() >= s_frameStallTick) {
 			s_frameStallFired = true;

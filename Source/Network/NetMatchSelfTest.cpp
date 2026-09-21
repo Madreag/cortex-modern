@@ -8203,7 +8203,8 @@ namespace RTE {
 			}
 			seatService.m_ReconnectHost.Configure(&seatService.m_SeatAuth, seatWorkerSession->GetSessionId(), seatH4);
 			// The host's own seat and the CPU seat are never offered, so the replacement's offer can
-			// only be seat 0 if the kick handed it back; seat 3 stays free for the kicked identity.
+			// only be seat 0 if the kick handed it back.
+			// Seat 3 stays offerable so the return offer covers the next free seat in table order.
 			seatService.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 2, false, 1, true}, {2, 0, 3, true, 0, false}, {3, 4, 2, false, 4, false}}, NetMatchMode::PvPSkirmish);
 			const auto seatLane = std::filesystem::temp_directory_path() / "cccp-starting-kick-reseat";
 			std::error_code seatCode;
@@ -8289,20 +8290,25 @@ namespace RTE {
 			replacementJoin.displayName = "Replacement";
 			replacementJoin.txId.fill(0x21);
 			seatService.m_ReconnectHost.HandleMessage(replacementConnection, replacementJoin, 0);
-			bool offered = false;
+			uint16_t replacementSeat = UINT16_MAX;
 			std::string replacementRefusal = "nothing";
 			for (NetH4Outbound& outbound : seatService.m_ReconnectHost.TakeOutbound()) {
 				if (outbound.connection != replacementConnection) {
 					continue;
 				}
 				if (const auto* offer = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
-					offered = offer->stableSeat == 0;
+					replacementSeat = offer->stableSeat;
 				} else if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
 					replacementRefusal = std::string(NetProtocol::RejectReasonName(refused->rejectReason)) + "/" + refused->mismatchKey;
 				}
 			}
-			if (!offered) {
+			if (replacementSeat == UINT16_MAX) {
 				*error = "the replacement was not offered the kicked seat: " + replacementRefusal;
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			if (replacementSeat != 0) {
+				*error = "the replacement was offered seat " + std::to_string(replacementSeat) + ", not the kicked seat 0";
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
@@ -8316,6 +8322,7 @@ namespace RTE {
 			returningJoin.txId.fill(0x22);
 			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, 0);
 			bool offeredReturn = false;
+			uint16_t returnSeat = UINT16_MAX;
 			std::string returnAnswer = "nothing";
 			for (NetH4Outbound& outbound : seatService.m_ReconnectHost.TakeOutbound()) {
 				if (outbound.connection != returningConnection) {
@@ -8323,13 +8330,38 @@ namespace RTE {
 				}
 				if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
 					returnAnswer = std::string("refused ") + NetProtocol::RejectReasonName(refused->rejectReason);
-				} else if (std::get_if<NetH4TicketOffer>(&outbound.payload) != nullptr) {
+				} else if (const auto* offer = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
 					offeredReturn = true;
-					returnAnswer = "a ticket offer";
+					returnSeat = offer->stableSeat;
+					returnAnswer = "a ticket offer for seat " + std::to_string(offer->stableSeat);
 				}
 			}
 			if (!offeredReturn) {
 				*error = "the kicked identity's return answered " + returnAnswer;
+				SetNetAuthCryptoForTest(nullptr);
+				return false;
+			}
+			// A return is a fresh join, so the offer has to name a seat open to a joiner: not cpu,
+			// local, committed, closed, already held, or still holding an offer the test saw go out.
+			const std::vector<NetH4Seat> seatRows = seatService.m_ReconnectHost.GetSeatTable();
+			const std::vector<NetH4SeatStatus> seatStatuses = seatService.m_ReconnectHost.GetSeatStatuses();
+			const std::vector<NetH4ModerationSeat> seatView = seatService.m_ReconnectHost.GetModerationView();
+			std::vector<uint16_t> openSeats;
+			for (const NetH4Seat& row : seatRows) {
+				const auto status = std::find_if(seatStatuses.begin(), seatStatuses.end(), [&row](const NetH4SeatStatus& seat) { return seat.stableSeat == row.stableSeat; });
+				const auto view = std::find_if(seatView.begin(), seatView.end(), [&row](const NetH4ModerationSeat& seat) { return seat.stableSeat == row.stableSeat; });
+				if (row.cpu || row.local || row.stableSeat == replacementSeat || status == seatStatuses.end() ||
+				    view == seatView.end() || status->committed || status->closed || view->holderGeneration != 0) {
+					continue;
+				}
+				openSeats.push_back(row.stableSeat);
+			}
+			const uint16_t kickedSeat = 0;
+			const bool onlyOpenIsKicked = openSeats.size() == 1 && openSeats.front() == kickedSeat;
+			if (onlyOpenIsKicked ? returnSeat != kickedSeat
+			                    : std::find(openSeats.begin(), openSeats.end(), returnSeat) == openSeats.end()) {
+				*error = "the kicked identity's return was offered seat " + std::to_string(returnSeat) +
+				         (onlyOpenIsKicked ? ", not the kicked seat that was the only one open" : ", not an open seat");
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
