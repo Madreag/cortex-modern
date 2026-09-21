@@ -3914,8 +3914,9 @@ static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<L
 static thread_local std::unordered_map<lua_State*, std::vector<std::unique_ptr<LuaScriptGraphNativeCaptureScope>>> s_GraphNativeCaptureScopes;
 
 static int ScriptGraphBeginCapture(lua_State* L) {
-	// The walk the index records is the capture itself, so every caller gets one, nested or not.
-	CheckpointGraphIndex::Get().BeginWalk();
+	// The walk the index records is the capture itself, so every caller gets one, nested or not; one
+	// opened by a single state's capture covers that state alone, unless a world walk encloses it.
+	CheckpointGraphIndex::Get().BeginWalk(true, false);
 	if (lua_toboolean(L, 1)) CheckpointGraphIndex::Get().RestartStateWalk(L);
 	s_GraphBarrierPauses[L].push_back(std::make_unique<LuaCheckpointBarrierPause>());
 	s_SerialBeforeCapture[L].push_back(static_cast<uint64_t>(luaL_optnumber(L, 2, static_cast<lua_Number>(luaJIT_state_serial(L)))));

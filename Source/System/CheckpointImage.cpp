@@ -95,7 +95,7 @@ CheckpointGraphIndex& CheckpointGraphIndex::Get() {
 	return index;
 }
 
-void CheckpointGraphIndex::BeginWalk(bool full) {
+void CheckpointGraphIndex::BeginWalk(bool full, bool world) {
 	std::lock_guard lock(m_Mutex);
 	// A capture of every state opens the walk once; each state's own capture nests inside it.
 	if (m_WalkDepth++ > 0) return;
@@ -105,6 +105,7 @@ void CheckpointGraphIndex::BeginWalk(bool full) {
 	m_ReusedRoots.clear();
 	m_Walk = true;
 	m_FullWalk = full;
+	m_WorldWalk = world;
 	m_RootsReused = 0;
 	m_RootsRewritten = 0;
 	m_Root = {};
@@ -165,12 +166,15 @@ void CheckpointGraphIndex::EndWalk() {
 	std::lock_guard lock(m_Mutex);
 	if (!m_Walk || --m_WalkDepth > 0) return;
 	// A walk answers for the states it covered: their rewritten roots leave the index, their reused
-	// ones and every other state's stay, and so does the dirt of a state this walk never read.
+	// ones stay. A world walk covered every state, so a root it never saw belongs to a state that is
+	// gone; a walk of one state leaves the other states' entries and their dirt in place.
 	std::unordered_set<const void*> walked;
 	for (const Root& root: m_WalkingRoots) walked.insert(root.state);
 	for (const Root& root: m_ReusedRoots) walked.insert(root.state);
 	for (const void* state: m_WalkStates) walked.insert(state);
-	const auto rewritten = [&](const Root& root) { return walked.contains(root.state) && !m_ReusedRoots.contains(root); };
+	const bool world = m_WorldWalk;
+	const auto covered = [&](const Root& root) { return world || walked.contains(root.state); };
+	const auto rewritten = [&](const Root& root) { return covered(root) && !m_ReusedRoots.contains(root); };
 	for (auto entry = m_TableRoots.begin(); entry != m_TableRoots.end();) {
 		std::erase_if(entry->second, rewritten);
 		entry = entry->second.empty() ? m_TableRoots.erase(entry) : std::next(entry);
@@ -179,7 +183,7 @@ void CheckpointGraphIndex::EndWalk() {
 		entry = rewritten(entry->second) ? m_ValueRoots.erase(entry) : std::next(entry);
 	}
 	std::erase_if(m_Roots, rewritten);
-	std::erase_if(m_DirtyRoots, [&walked](const Root& root) { return walked.contains(root.state); });
+	std::erase_if(m_DirtyRoots, covered);
 	for (const auto& [table, roots]: m_Walking) {
 		auto& kept = m_TableRoots[table];
 		for (const Root& root: roots) if (std::find(kept.begin(), kept.end(), root) == kept.end()) kept.push_back(root);
@@ -187,17 +191,20 @@ void CheckpointGraphIndex::EndWalk() {
 	for (const auto& [value, root]: m_WalkingValues) m_ValueRoots[value] = root;
 	m_Roots.insert(m_WalkingRoots.begin(), m_WalkingRoots.end());
 	// The unknown table is answered once no state this walk skipped could still own it.
-	const bool skipped = std::any_of(m_Roots.begin(), m_Roots.end(), [&walked](const Root& root) { return !walked.contains(root.state); });
+	const bool skipped = !world && std::any_of(m_Roots.begin(), m_Roots.end(), [&walked](const Root& root) { return !walked.contains(root.state); });
 	if (!skipped) m_UnknownTable = false;
 	m_Walking.clear();
 	m_WalkingValues.clear();
 	m_WalkingRoots.clear();
 	m_ReusedRoots.clear();
-	m_DirtyTables = 0;
-	m_DirtyValues = 0;
+	if (world) {
+		m_DirtyTables = 0;
+		m_DirtyValues = 0;
+	}
 	m_NoteUs = m_WalkNoteUs;
 	m_Walk = false;
 	m_FullWalk = true;
+	m_WorldWalk = true;
 	m_Root = {};
 	m_WalkParts.push_back({0, "index_finish", 0, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), false, {}});
 }
