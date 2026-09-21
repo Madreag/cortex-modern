@@ -469,8 +469,10 @@ namespace RTE {
 		manifest.deterministicConfig.recommendedMoidCount = g_SettingsMan.RecommendedMOIDCount();
 		manifest.deterministicConfig.particleSettling = g_MovableMan.IsParticleSettlingEnabled();
 		manifest.deterministicConfig.moSubtraction = g_MovableMan.IsMOSubtractionEnabled();
-		manifest.deterministicConfig.numLuaStates = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
-		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
+		// The build constant, never the live count: a runtime that cannot run it refuses the match outright
+		// (LocalMatchRefusal), so what admission compares is which build the peers are running.
+		manifest.deterministicConfig.numLuaStates = c_LuaStateCount;
+		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetRetiredLuaStateCountOverride();
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;

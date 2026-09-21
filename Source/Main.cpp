@@ -246,9 +246,8 @@ static std::vector<NetLiveStall> s_netLiveStalls;
 static std::optional<uint64_t> s_netLiveStallActivation;
 static bool s_netPerturbWhenLive = false;
 
-// CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
-static constexpr int c_NetSessionDefaultLuaStates = 4;
-static int s_cliNumLuaStatesOverride = -1;
+// The retired -num-lua-states flag: parsed so old command lines still run, and reported once.
+static bool s_retiredLuaStateCountFlag = false;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
@@ -629,10 +628,10 @@ void InitializeManagers() {
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
 
-	// Apply the CLI -num-lua-states override after SettingsMan loads (so it wins over the file)
-	// and before LuaMan creates its threaded states.
-	if (s_cliNumLuaStatesOverride >= 0) {
-		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
+	// Say once that neither the flag nor the settings line picks the count any more.
+	if (s_retiredLuaStateCountFlag || g_SettingsMan.GetRetiredLuaStateCountOverride() != -1) {
+		std::cout << "[lua] the threaded Lua state count is fixed at " << c_LuaStateCount
+		          << "; -num-lua-states and NumberOfLuaStatesOverride are retired" << std::endl;
 	}
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
@@ -8319,30 +8318,12 @@ int main(int argc, char** argv) {
 		return DeterminismCheck::Run(argc, argv);
 	}
 
-	// Pick up the thread-count override before any init runs. Net-session smoke uses
-	// a fixed default so its traces compare across machines; normal identity admission remains strict.
-	bool explicitLuaStateOverride = false;
-	bool netSessionRequested = false;
-	bool matchServiceRequested = false;
+	// The Lua state count is a build constant, so the flag only reports that it no longer chooses one.
 	for (int i = 1; i < argc; ++i) {
-		if (argv[i] == nullptr) {
-			continue;
-		}
-		const std::string arg = argv[i];
-		if (arg == "-num-lua-states" && i + 1 < argc) {
-			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
-			explicitLuaStateOverride = true;
+		if (argv[i] != nullptr && std::string(argv[i]) == "-num-lua-states" && i + 1 < argc) {
+			s_retiredLuaStateCountFlag = true;
 			++i;
-		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
-			netSessionRequested = true;
-			if (arg == "-net-dedicated") matchServiceRequested = true;
-		} else if (arg == "-net-match-service-e2e" || arg == "-net-persistent-world") {
-			matchServiceRequested = true;
 		}
-	}
-	// Service launches keep the saved VM layout, including a match restarted from this runtime.
-	if (netSessionRequested && !matchServiceRequested && !explicitLuaStateOverride) {
-		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
 	}
 
 	// Decided before LuaMan starts, so its startup line names the collector this run uses.

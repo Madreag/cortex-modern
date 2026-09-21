@@ -37,7 +37,6 @@ namespace RTE {
 			std::string outPath;      // JSON output path; empty = no report
 			uint64_t    seed = 0;     // deterministic seed; 0 = use SeedRNG()'s default
 			uint64_t    maxTicks = 0; // 0 = scenario-default safety cap (1800 ticks / 30 sim seconds)
-			int         numLuaStates = -1; // -num-lua-states override, if supplied
 			std::string controllerLogOutPath; // -controller-log-out path
 			std::string controllerLogInPath; // -controller-log-in path
 			bool        controllerLogCanonicalize = true; // record sim uses encoded->decoded frames

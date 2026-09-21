@@ -22,8 +22,8 @@ namespace RTE {
 		int recommendedMoidCount = 0;
 		bool particleSettling = false;
 		bool moSubtraction = false;
-		int numLuaStates = 0;
-		int numLuaStatesOverride = -1;
+		int numLuaStates = 0; //!< The build's fixed threaded-Lua-state count; hashed, so another build's count refuses.
+		int numLuaStatesOverride = -1; //!< Diagnostic only: the retired settings override an old file may still carry.
 		std::string selectedModule;
 		bool scenarioTestModuleLoaded = false;
 		uint16_t lockstepCodecVersion = 0; //!< Target layout for diagnostics and discovery; agreed through the lobby.

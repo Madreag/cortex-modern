@@ -168,8 +168,8 @@ namespace RTE {
 			return out;
 		}
 
-		// Build the child-process command line. threadCount >= 0 pins the Lua-state count
-		// via -num-lua-states (the thread-matrix lever); -1 leaves the engine default.
+		// Build the child-process command line. The Lua-state count is a build constant now, so the
+		// matrix's threadCount only labels the arm: every child runs the same count.
 		std::string BuildChildCmd(const std::filesystem::path& binary, const Args& args,
 		                          const std::filesystem::path& runOut, int threadCount) {
 			std::ostringstream cmd;
@@ -178,9 +178,7 @@ namespace RTE {
 			    << " -seed " << args.seed
 			    << " -max-ticks " << args.ticks
 			    << " -tick-hashes";
-			if (threadCount >= 0) {
-				cmd << " -num-lua-states " << threadCount;
-			}
+			(void)threadCount;
 			if (args.selftestPerturb) {
 				cmd << " -determinism-selftest-perturb";
 			}

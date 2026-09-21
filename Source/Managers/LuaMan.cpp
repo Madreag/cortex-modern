@@ -6605,12 +6605,10 @@ void LuaMan::Initialize() {
 	LuabindObjectWrapper::SetPreviewDeletionHook(&LuaMan::ForgetPreviewBornWrapper);
 	m_MasterScriptState.Initialize();
 
-	int luaStateCount = std::thread::hardware_concurrency();
-	if (g_SettingsMan.EnableLuaDebugging()) {
-		luaStateCount = 0;
-	} else if (g_SettingsMan.GetNumberOfLuaStatesOverride() != -1) {
-		luaStateCount = g_SettingsMan.GetNumberOfLuaStatesOverride();
-	}
+	// Every machine runs the same number of states, whatever its core count: the assignment is a pure
+	// function of the object, and a different count would group different objects in a per-state global.
+	// Lua debugging is the one exception, and it refuses a network match instead of joining one.
+	const int luaStateCount = g_SettingsMan.EnableLuaDebugging() ? 0 : c_LuaStateCount;
 
 	m_ScriptStates = std::vector<LuaStateWrapper>(luaStateCount);
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
