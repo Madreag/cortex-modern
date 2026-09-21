@@ -2329,6 +2329,7 @@ static std::string ResyncSaveName() {
 		if (m_State != NetMatchServiceState::ReadyToLaunch || !m_Coordinator) {
 			return false;
 		}
+		const uint64_t launchRound = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch ? m_WorldCatchUp.roundId : m_Coordinator->GetRoundId();
 		ScenarioRunner::SetLockstepCoordinator(m_Coordinator.get(), m_PendingResyncState.has_value());
 		m_Coordinator->DeferStopsToTickBoundary();
 		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
@@ -2403,11 +2404,11 @@ static std::string ResyncSaveName() {
 				m_AutosaveMatchId = m_Runner->GetMatchConfig().worldId;
 			} else {
 				// Both peers must be able to name the same checkpoint, so the id is the match, not the machine.
-				m_AutosaveMatchId = m_Runner ? std::format("{:016x}-{:016x}", m_Runner->GetMatchConfig().sessionId, m_Coordinator->GetRoundId()) : "";
+				m_AutosaveMatchId = m_Runner ? std::format("{:016x}-{:016x}", m_Runner->GetMatchConfig().sessionId, launchRound) : "";
 			}
 			m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
 			m_AutosaveIdentity.sessionId = m_Runner ? m_Runner->GetMatchConfig().sessionId : 0;
-			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
+			m_AutosaveIdentity.roundId = launchRound;
 			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
 			m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
 			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
@@ -2422,7 +2423,7 @@ static std::string ResyncSaveName() {
 			m_LastMatchSummary.reset();
 			m_CurrentMatchSummary = {};
 			m_SummarySeats = m_SeatPresence.GetSeats();
-			const auto& config = m_Coordinator->GetConfig().matchConfig;
+			const auto& config = m_Runner ? m_Runner->GetMatchConfig() : m_Coordinator->GetConfig().matchConfig;
 			for (const auto& slot : config.players) {
 				if (slot.cpu) continue;
 				std::string name = slot.displayName;
@@ -2445,8 +2446,12 @@ static std::string ResyncSaveName() {
 		m_PendingHostOptions.reset();
 		m_HostOptionsRequest.Clear();
 		const NetLockstepConfig& config = m_Coordinator->GetConfig();
-		std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
-		                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
+		if (m_WorldCatchUp.active) {
+			std::cout << "[net-match] bootstrap checkpoint=" << m_WorldCatchUp.snapshotTick << " local_peer=" << static_cast<int>(m_LocalPeerId) << std::endl;
+		} else {
+			std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
+			                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
+		}
 		CaptureA7SeatView();
 		return true;
 	}
@@ -3633,7 +3638,13 @@ static std::string ResyncSaveName() {
 			std::cout << "[net-world] catch-up complete peer=" << static_cast<int>(m_Coordinator->GetConfig().localPeerId)
 			          << " at=" << m_WorldCatchUp.activationTick << " input_horizon=" << m_Coordinator->GetStats().nextFrame << std::endl;
 		}
-		if (m_Coordinator && m_Coordinator->IsRunning()) m_Coordinator->DeferStopsToTickBoundary();
+		if (m_Coordinator && m_Coordinator->IsRunning()) {
+			m_Coordinator->DeferStopsToTickBoundary();
+			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
+			const auto& config = m_Coordinator->GetConfig();
+			std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
+			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
+		}
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}
 
