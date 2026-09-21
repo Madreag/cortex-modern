@@ -3766,6 +3766,21 @@ namespace RTE {
 			cancel.store(true);
 		}
 		bool RepairEndsBeforeItsBoundary(std::string* error) {
+			// A service match installs its agreed first frame once every peer publishes the startup its machine
+			// measured, which the sim does on its first frame wait. This fixture has no sim, so it publishes
+			// through the same call.
+			clientCoordinator.NoteLocalStartPark(0);
+			hostCoordinator.NoteLocalStartPark(0);
+			for (int pump = 0; pump < 400 && !hostCoordinator.IsRunning(); ++pump) {
+				PumpClient();
+				hostCoordinator.Tick(NowMs());
+				clientCoordinator.Tick(NowMs());
+			}
+			if (!hostCoordinator.IsRunning()) {
+				*error = "the published startups never installed the agreed first frame: host_state=" +
+				         std::string(NetLockstepCoordinator::StateName(hostCoordinator.GetState()));
+				return false;
+			}
 			struct ActivityScope {
 				std::unique_ptr<Activity> previous = std::make_unique<Activity>();
 				ActivityScope() {

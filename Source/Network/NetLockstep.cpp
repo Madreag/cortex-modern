@@ -426,7 +426,9 @@ namespace RTE {
 			    !AppendString(out, payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error)) {
 				return false;
 			}
-			AppendU32LE(out, payload.activityRestartMs);
+			// The startup reading rides one past itself so that a publication is a fact on the wire and a
+			// machine that restarts in 0 ms still publishes: zero means nothing was measured yet.
+			AppendU32LE(out, payload.startupPublished && payload.activityRestartMs < UINT32_MAX ? payload.activityRestartMs + 1 : 0);
 			return true;
 		}
 
@@ -1433,6 +1435,7 @@ namespace RTE {
 		bool DecodeStart(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error, uint16_t version) {
 			NetLockstepStart payload;
 			uint8_t resume = 0;
+			uint32_t startupReading = 0;
 			if (!ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
 			    !ReadOrTruncated(reader.ReadU64LE(payload.startFrame), reader, error, "start_frame") ||
 			    !ReadOrTruncated(reader.ReadU16LE(payload.inputDelayFrames), reader, error, "input_delay_frames") ||
@@ -1444,11 +1447,13 @@ namespace RTE {
 			    (version >= NetLockstepCodec::c_PlayerBindingsVersion && !ReadOrTruncated(reader.ReadU8(resume), reader, error, "resume_from_snapshot")) || resume > 1 ||
 			    !reader.ReadString(payload.scenario, NetLockstepCodec::c_MaxScenarioBytes, "scenario", error) ||
 			    !reader.ReadString(payload.ownershipPolicy, NetLockstepCodec::c_MaxOwnershipPolicyBytes, "ownership_policy", error) ||
-			    (version >= NetLockstepCodec::c_StartParkVersion && !ReadOrTruncated(reader.ReadU32LE(payload.activityRestartMs), reader, error, "activity_restart_ms")) ||
+			    (version >= NetLockstepCodec::c_StartParkVersion && !ReadOrTruncated(reader.ReadU32LE(startupReading), reader, error, "activity_restart_ms")) ||
 			    !ValidateStart(payload, error)) {
 				return false;
 			}
 			payload.resumeFromSnapshot = resume != 0;
+			payload.startupPublished = startupReading > 0;
+			payload.activityRestartMs = startupReading > 0 ? startupReading - 1 : 0;
 			out = payload;
 			return true;
 		}
@@ -4121,6 +4126,7 @@ namespace RTE {
 		start.roundId = m_RoundId;
 		start.resumeFromSnapshot = m_Config.resumeFromSnapshot;
 		start.activityRestartMs = m_LocalStartParkMs;
+		start.startupPublished = m_LocalStartupPublished;
 		if (const auto admission = m_PeerAdmissions.find(onlyPeerId); admission != m_PeerAdmissions.end()) {
 			start.startFrame = admission->second.frame;
 			start.inputDelayFrames = InputDelayAt(m_Config.localPeerId, start.startFrame);
@@ -4236,6 +4242,8 @@ namespace RTE {
 		m_DroppedAtMs.clear();
 		m_LastHoldHeartbeatMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
+		m_PeerStartupPublished.clear();
+		m_LocalStartupPublished = false;
 		m_StartWaitAnnounced = false;
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
@@ -6188,9 +6196,12 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::NoteLocalStartPark(uint32_t restartMs) {
-		if (restartMs == 0 || restartMs == m_LocalStartParkMs) {
+		if (m_LocalStartupPublished && restartMs == m_LocalStartParkMs) {
 			return;
 		}
+		// A machine that restarts instantly measured its startup too: the publication is the fact,
+		// never the number, or a 0 ms restart parks the round for good.
+		m_LocalStartupPublished = true;
 		// The round's own restart runs before our first Tick, so the tick-gap detector never sees it.
 		m_LocalStartParkMs = restartMs;
 		m_Stats.longestOwnParkMs = std::max<uint64_t>(m_Stats.longestOwnParkMs, restartMs);
@@ -6244,10 +6255,29 @@ namespace RTE {
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 	}
 
+	bool NetLockstepCoordinator::StartupWaitExpired(uint64_t nowMs) const {
+		// A publication that never arrives cannot park the round: the wait gets the same answer budget
+		// the round gives any peer to answer a frame, and the bound judges a seat still silent after it.
+		if (!m_StartWaitAnnounced || m_Config.timeoutMs == 0) return false;
+		return nowMs >= m_StartWaitSinceMs && nowMs - m_StartWaitSinceMs >= m_Config.timeoutMs;
+	}
+
+	void NetLockstepCoordinator::TickStartupWait(uint64_t nowMs) {
+		if (m_State != NetLockstepState::WaitingForStart || !m_RequirePublishedStart || !AllRemoteStartsReceived() ||
+		    !StartupWaitExpired(nowMs)) {
+			return;
+		}
+		uint32_t slowestStartupMs = m_LocalStartParkMs;
+		for (uint8_t peer: m_RemotePeerIds) slowestStartupMs = std::max<uint32_t>(slowestStartupMs, static_cast<uint32_t>(m_Stats.peers[peer].startParkMs));
+		std::cout << "[net-match] starting on the startups published in " << (nowMs - m_StartWaitSinceMs) << "ms" << std::endl;
+		FormAgreedFirstFrame(slowestStartupMs, nowMs);
+	}
+
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
 		if (!m_Transport || m_State == NetLockstepState::Idle) {
 			return;
 		}
+		TickStartupWait(nowMs);
 		ShiftDeadlinesPastOurOwnPark(nowMs);
 		m_TimingNowMs = nowMs;
 		TickMigrationRollCallLinks(nowMs);
@@ -7674,6 +7704,11 @@ namespace RTE {
 			m_Stats.peers[start.localPeerId].startParkMs = start.activityRestartMs;
 		}
 		const bool firstFromThisPeer = m_RemoteStartsReceived.insert(start.localPeerId).second;
+		// The peer published its startup: the flag its start carries, or a measurement from a build
+		// that had no flag. A repeat that answers our own start publishes nothing.
+		if (start.startupPublished || start.activityRestartMs > 0) {
+			m_PeerStartupPublished.insert(start.localPeerId);
+		}
 		if (firstFromThisPeer) {
 			m_RemoteStarts[start.localPeerId] = start;
 			RelayToOtherRemotes({start}, start.localPeerId);
@@ -7681,18 +7716,18 @@ namespace RTE {
 			AnswerRepeatedStart(start.localPeerId, nowMs);
 		}
 		if (m_State == NetLockstepState::WaitingForStart && AllRemoteStartsReceived()) {
-			bool startsPublished = m_LocalStartParkMs > 0;
+			bool startsPublished = m_LocalStartupPublished;
 			uint32_t slowestStartupMs = m_LocalStartParkMs;
 			for (uint8_t peer: m_RemotePeerIds) {
-				const uint32_t peerStartupMs = m_Stats.peers[peer].startParkMs;
-				startsPublished = startsPublished && peerStartupMs > 0;
-				slowestStartupMs = std::max(slowestStartupMs, peerStartupMs);
+				startsPublished = startsPublished && m_PeerStartupPublished.contains(peer);
+				slowestStartupMs = std::max<uint32_t>(slowestStartupMs, static_cast<uint32_t>(m_Stats.peers[peer].startParkMs));
 			}
-			if (m_RequirePublishedStart && !startsPublished) {
+			if (m_RequirePublishedStart && !startsPublished && !StartupWaitExpired(nowMs)) {
 				if (!m_StartWaitAnnounced) {
 					m_StartWaitAnnounced = true;
+				m_StartWaitSinceMs = nowMs;
 					for (uint8_t peer: m_RemotePeerIds) {
-						if (m_Stats.peers[peer].startParkMs == 0) {
+						if (!m_PeerStartupPublished.contains(peer)) {
 							std::cout << "[net-match] waiting for " << DescribePeer(peer) << "'s machine startup before the agreed first frame" << std::endl;
 						}
 					}
