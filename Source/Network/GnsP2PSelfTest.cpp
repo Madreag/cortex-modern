@@ -1201,6 +1201,12 @@ namespace RTE {
 		if (args.size() == 1 && args[0] == "identity-guard") {
 			return RunIdentityGuard();
 		}
+		if (args.size() == 1 && args[0] == "payload-hold") {
+			std::string error;
+			const bool passed = GnsTransport::PayloadHoldSelfTest(&error);
+			std::cout << "[net-p2p-selftest] " << (passed ? "PASS payload_hold_order_and_cap" : "FAIL: " + error) << std::endl;
+			return passed ? 0 : 1;
+		}
 		if (args[0] == "dir-host" || args[0] == "dir-join" || args[0] == "dir-reject" || args[0] == "dir-dup") {
 			const DirectoryCase variant = args[0] == "dir-reject" ? DirectoryCase::Reject : args[0] == "dir-dup" ? DirectoryCase::Dup : DirectoryCase::Plain;
 			const bool plain = variant == DirectoryCase::Plain;
@@ -1211,7 +1217,7 @@ namespace RTE {
 				return RunDirectory(variant, isHost, value, args[at + 1], args[at + 2], args[at + 3], isHost ? args[at + 4] : std::string());
 			}
 		}
-		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard"
+		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;

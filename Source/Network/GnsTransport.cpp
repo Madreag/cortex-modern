@@ -156,6 +156,32 @@ namespace RTE {
 
 		int s_SimulatedLagMs = 0;
 		int s_RendezvousLogLevel = 0;
+		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
+
+		std::string HeldPacketOverflowReason(size_t bytes) {
+			return "too much data before the connection was announced: " + std::to_string(bytes) + " > " + std::to_string(c_MaxHeldBytesBeforeAnnounce);
+		}
+
+#ifdef CCCP_WITH_GNS
+		bool QueueHeldPacket(std::map<HSteamNetConnection, std::vector<NetTransportEvent>>& heldPackets,
+		                    HSteamNetConnection connection, NetTransportEvent&& received) {
+			size_t bytes = received.bytes.size();
+			if (const auto found = heldPackets.find(connection); found != heldPackets.end())
+				for (const NetTransportEvent& event : found->second) bytes += event.bytes.size();
+			if (bytes > c_MaxHeldBytesBeforeAnnounce) return false;
+			heldPackets[connection].push_back(std::move(received));
+			return true;
+		}
+
+		void ReleaseHeldPackets(std::map<HSteamNetConnection, std::vector<NetTransportEvent>>& heldPackets,
+		                      std::vector<NetTransportEvent>& pending, HSteamNetConnection connection, NetPeerId peerId) {
+			pending.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			const auto held = heldPackets.find(connection);
+			if (held == heldPackets.end()) return;
+			for (NetTransportEvent& event : held->second) pending.push_back(std::move(event));
+			heldPackets.erase(held);
+		}
+#endif
 
 		// GNS calls this on its service thread while holding its lock: print, nothing else.
 		void GnsDebugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
@@ -601,34 +627,21 @@ namespace RTE {
 			}
 		}
 
-		// A peer cannot say anything useful before its connection is announced, so the queue only ever
-		// holds a handshake's worth; a connection that buries us in payloads before then is closed.
-		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
-
 		void HoldUntilAnnounced(HSteamNetConnection connection, NetTransportEvent&& received) {
-			std::vector<NetTransportEvent>& held = m_HeldPackets[connection];
 			size_t bytes = received.bytes.size();
-			for (const NetTransportEvent& event : held) bytes += event.bytes.size();
-			if (bytes > c_MaxHeldBytesBeforeAnnounce) {
-				const char* reason = "too much data before the connection was announced";
-				m_Interface->CloseConnection(connection, 0, reason, false);
+			if (const auto found = m_HeldPackets.find(connection); found != m_HeldPackets.end())
+				for (const NetTransportEvent& event : found->second) bytes += event.bytes.size();
+			if (!QueueHeldPacket(m_HeldPackets, connection, std::move(received))) {
+				const std::string reason = HeldPacketOverflowReason(bytes);
+				m_Interface->CloseConnection(connection, 0, reason.c_str(), false);
 				HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
 				return;
 			}
-			held.push_back(std::move(received));
 		}
 
 		void AnnounceConnected(HSteamNetConnection connection, NetPeerId peerId) {
-			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
 			m_Announced.insert(connection);
-			const auto held = m_HeldPackets.find(connection);
-			if (held == m_HeldPackets.end()) {
-				return;
-			}
-			for (NetTransportEvent& event : held->second) {
-				m_PendingEvents.push_back(std::move(event));
-			}
-			m_HeldPackets.erase(held);
+			ReleaseHeldPackets(m_HeldPackets, m_PendingEvents, connection, peerId);
 		}
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
@@ -1163,6 +1176,44 @@ namespace RTE {
 		s_RendezvousLogLevel = level;
 #else
 		(void)level;
+#endif
+	}
+
+	bool GnsTransport::PayloadHoldSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> held;
+		const HSteamNetConnection connection = static_cast<HSteamNetConnection>(41);
+		NetTransportEvent first{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}};
+		NetTransportEvent second{NetTransportEventType::PacketReceived, 2, NetTransportLane::InputUnreliable, {4, 5}, {}};
+		if (!QueueHeldPacket(held, connection, std::move(first)) || !QueueHeldPacket(held, connection, std::move(second))) {
+			if (error) *error = "the payload hold rejected a packet below its cap";
+			return false;
+		}
+		const auto found = held.find(connection);
+		if (found == held.end() || found->second.size() != 2 || found->second[0].bytes != std::vector<uint8_t>({1, 2, 3}) ||
+		    found->second[1].bytes != std::vector<uint8_t>({4, 5})) {
+			if (error) *error = "the payload hold did not preserve pre-announcement order";
+			return false;
+		}
+		NetTransportEvent oversized{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable,
+		                            std::vector<uint8_t>(c_MaxHeldBytesBeforeAnnounce, 0), {}};
+		const size_t attemptedBytes = 5 + oversized.bytes.size();
+		if (QueueHeldPacket(held, connection, std::move(oversized)) || HeldPacketOverflowReason(attemptedBytes).find(std::to_string(attemptedBytes)) == std::string::npos ||
+		    HeldPacketOverflowReason(attemptedBytes).find(std::to_string(c_MaxHeldBytesBeforeAnnounce)) == std::string::npos) {
+			if (error) *error = "the payload hold did not enforce and name its byte cap";
+			return false;
+		}
+		std::vector<NetTransportEvent> pending;
+		ReleaseHeldPackets(held, pending, connection, 2);
+		if (pending.size() != 3 || pending[0].type != NetTransportEventType::PeerConnected || pending[1].bytes != std::vector<uint8_t>({1, 2, 3}) ||
+		    pending[2].bytes != std::vector<uint8_t>({4, 5})) {
+			if (error) *error = "the announcement did not precede and release held packets in order";
+			return false;
+		}
+		return true;
+#else
+		if (error) *error = "GameNetworkingSockets support is not compiled in";
+		return false;
 #endif
 	}
 
