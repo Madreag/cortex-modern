@@ -6502,7 +6502,14 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
+	if (!m_State) {
+		return;
+	}
+	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
+	// registry slot of the state it lives in. Anything still queued for this state has to go now.
+	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	lua_close(m_State);
+	m_State = nullptr;
 }
 
 // During a threaded per-MO hook these draw from the per-MO generator; else this state's RNG.
@@ -6947,6 +6954,15 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (queuedDeletionOrder ? "PASS" : "FAIL")
 	          << " queued_entity_deletion_order states=4,32 order4=" << queuedDeletionOrder4 << " order32=" << queuedDeletionOrder32
 	          << (queuedDeletionOrder ? "" : " (the drain follows the state count, not the unique ID)") << std::endl;
+	// The order fixture opens and closes its own states, so by here a state close has had wrappers of
+	// its own to drain. Nothing may be left naming a state that is gone: deleting one reads a freed VM.
+	const uint64_t drainedAtStateClose = LuabindObjectWrapper::QueuedDeletionsDrainedAtStateClose();
+	const uint64_t namingAClosedState = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
+	const bool queuedDeletionsSafe = namingAClosedState == 0 && drainedAtStateClose > 0;
+	std::cout << "[script-graph-selftest] " << (queuedDeletionsSafe ? "PASS" : "FAIL")
+	          << " queued_deletions_never_outlive_their_lua_state drained_at_state_close=" << drainedAtStateClose
+	          << " naming_a_closed_state=" << namingAClosedState
+	          << (namingAClosedState > 0 ? " (a queued luabind object held a reference into a closed state)" : (drainedAtStateClose == 0 ? " (no state close drained anything, so the row proved nothing)" : "")) << std::endl;
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
 	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
@@ -6956,7 +6972,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && threadedSyncedOrder && queuedDeletionOrder && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && threadedSyncedOrder && queuedDeletionOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
