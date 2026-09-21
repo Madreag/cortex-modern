@@ -28,6 +28,7 @@
 #include "PrimitiveMan.h"
 
 #include "tracy/Tracy.hpp"
+#include <iostream>
 
 using namespace RTE;
 
@@ -3749,9 +3750,23 @@ float AHuman::GetLimbPathTravelSpeed(MovementState movementState) {
 }
 
 void AHuman::SetLimbPathTravelSpeed(MovementState movementState, float newSpeed) {
-	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[FGROUND][movementState].GetTravelSpeed()); });
+	CheckpointChange changed(*this, [this, movementState] { return CheckpointFields(m_Paths[FGROUND][movementState].GetTravelSpeed(), m_Paths[BGROUND][movementState].GetTravelSpeed()); });
 	m_Paths[FGROUND][movementState].SetTravelSpeed(newSpeed);
-	m_Paths[FGROUND][movementState].SetTravelSpeed(newSpeed);
+	m_Paths[BGROUND][movementState].SetTravelSpeed(newSpeed);
+}
+
+bool AHuman::RunLimbPathTravelSpeedSelfTest() {
+	AHuman human;
+	human.GetLimbPathByIndex(WALK)->SetTravelSpeed(3.0F);
+	human.GetLimbPathByIndex(MOVEMENTSTATECOUNT + WALK)->SetTravelSpeed(4.0F);
+	human.SetLimbPathTravelSpeed(WALK, 9.0F);
+	const float fg = human.GetLimbPathByIndex(WALK)->GetTravelSpeed();
+	const float bg = human.GetLimbPathByIndex(MOVEMENTSTATECOUNT + WALK)->GetTravelSpeed();
+	const bool both = fg == 9.0F && bg == 9.0F;
+	std::cout << "[limb-path-selftest] " << (both ? "PASS" : "FAIL")
+	          << " both_layers_take_speed fg=" << fg << " bg=" << bg << std::endl;
+	std::cout << "[limb-path-selftest] " << (both ? "PASS" : "FAIL") << std::endl;
+	return both;
 }
 
 float AHuman::GetLimbPathPushForce(MovementState movementState) {
