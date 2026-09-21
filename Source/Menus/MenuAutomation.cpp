@@ -321,7 +321,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -404,6 +404,12 @@ namespace RTE::MenuAutomation {
 			const auto& toasts = panel->GetToastRect();
 			const auto& seats = panel->GetSeatsPanelRect();
 			int expectedRows = ParseToastBandExpectedRows(args);
+			// The `single` argument counts painted bands, not just the live rect: a band that
+			// moved must not leave its pixels behind on the GUI layer (ENGINE 195's second band).
+			// A non-numeric first token fails the int read; clear() lets the rest of the line parse.
+			args.clear();
+			bool single = false;
+			for (std::string token; args >> token;) single = single || token == "single";
 			int rows = 0;
 			for (int row = 0; row < 3; ++row) {
 				auto* label = panel->GetControl("LabelNetMatchToast" + std::to_string(row));
@@ -415,10 +421,164 @@ namespace RTE::MenuAutomation {
 			const bool clearOfSeats = !toasts.visible || !seats.visible ||
 			                          toasts.y + toasts.height <= seats.y || toasts.y >= seats.y + seats.height ||
 			                          toasts.x + toasts.width <= seats.x || toasts.x >= seats.x + seats.width;
+			// A band that moved must not leave its pixels behind: the panel's own scan finds a
+			// toast-fill run no live rect covers. The local pause menu's backdrop rewrites the
+			// whole layer each frame, so the scan only runs on the game screen.
+			NetModerationGUI::GhostBandHit ghost;
+			if (single && !g_MenuMan.IsLocalPauseMenuOpen()) {
+				ghost = panel->ScanGhostBand(100);
+			}
+			const int ghostRun = ghost.found ? ghost.run : -1;
+			const auto& chat = panel->GetChatRect();
+			const auto& status = panel->GetStatusRect();
+			const auto& roster = panel->GetRosterRect();
 			observation = Json{{"screen", {screen->w, screen->h}}, {"toasts", {toasts.x, toasts.y, toasts.width, toasts.height}},
 				{"toasts_visible", toasts.visible}, {"seats", {seats.x, seats.y, seats.width, seats.height}}, {"seats_visible", seats.visible},
-				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}, {"rows", rows}, {"expected_rows", expectedRows}}.dump();
-			return inside && clearOfSeats && (expectedRows < 0 || rows == expectedRows);
+				{"chat", {chat.x, chat.y, chat.width, chat.height}}, {"chat_visible", chat.visible},
+				{"status", {status.x, status.y, status.width, status.height}}, {"status_visible", status.visible},
+				{"roster", {roster.x, roster.y, roster.width, roster.height}}, {"roster_visible", roster.visible},
+				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}, {"rows", rows}, {"expected_rows", expectedRows},
+				{"single", single}, {"ghost_band", ghostRun < 0 ? Json(nullptr) : Json{{"x", ghost.x}, {"y", ghost.y}, {"run", ghostRun}}}}.dump();
+			return inside && clearOfSeats && (expectedRows < 0 || rows == expectedRows) && ghostRun < 0;
+		}
+		if (command == "ghost_watch") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			std::string mode;
+			args >> mode;
+			if (mode == "start") {
+				// Arms the panel's per-draw scan: every DrawMatchToasts frame counts a stale band,
+				// so a ghost visible only between a band's move and the next wipe is still caught.
+				panel->ArmGhostWatch();
+				observation = "armed";
+				return true;
+			}
+			if (mode == "assert") {
+				const auto& last = panel->GhostWatchLast();
+				const int hits = panel->GhostWatchHits();
+				const int probe = panel->GhostWatchProbe();
+				panel->DisarmGhostWatch();
+				observation = Json{{"hits", hits}, {"probe_pixel", probe},
+					{"last", last.found ? Json{{"x", last.x}, {"y", last.y}, {"run", last.run}} : Json(nullptr)}}.dump();
+				return hits == 0;
+			}
+			observation = Json{{"mode", mode}}.dump();
+			return false;
+		}
+		if (command == "assert_word_wrap") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			auto* font = g_FrameMan.GetSmallFont(true);
+			if (!panel || !font) return false;
+			std::string surface = "roster";
+			args >> surface;
+			std::string source, wrapped;
+			int textWidth = 0, capWidth = 0;
+			if (surface == "probe") {
+				// The same helper and width rule the roster box runs, on a script-chosen text - a
+				// long token exercises the wrap without depending on match state.
+				const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+				const auto start = rest.find_first_not_of(' ');
+				source = start == std::string::npos ? std::string() : rest.substr(start);
+				int boxWidth = 0;
+				const bool textMissing = source.empty();
+				const bool wrapUnavailable = !textMissing && !panel->AutomationWrapLines(source, wrapped, boxWidth);
+				if (textMissing || wrapUnavailable) {
+					observation = Json{{"text_missing", textMissing}, {"wrap_unavailable", wrapUnavailable}, {"source", source}}.dump();
+					return false;
+				}
+				textWidth = boxWidth - 12;
+				capWidth = std::max(0, g_WindowMan.GetResX() - 28);
+			} else {
+				const auto& audit = surface == "status" ? panel->GetStatusWrap() : panel->GetRosterWrap();
+				if (!audit.active) {
+					if (surface == "status") { observation = "status: no wrap surface"; return true; }
+					observation = surface + " wrap surface not active";
+					return false;
+				}
+				source = audit.source;
+				wrapped = audit.wrapped;
+				textWidth = audit.textWidth;
+				capWidth = audit.capWidth;
+			}
+			// A mid-word break leaves a token's fragment on a line of its own; requiring every
+			// whitespace-delimited source token to land inside one wrapped line catches it.
+			std::istringstream lines(wrapped);
+			std::vector<std::string> rows;
+			for (std::string row; std::getline(lines, row);) rows.push_back(row);
+			auto tokenLanded = [&](const std::string& token) {
+				for (const auto& row: rows) {
+					if (row.find(token) != std::string::npos) return true;
+					std::istringstream words(row);
+					for (std::string word; words >> word;) {
+						if (word.size() <= 3 || !word.ends_with("...")) continue;
+						const std::string prefix = word.substr(0, word.size() - 3);
+						if (!prefix.empty() && token.size() > prefix.size() && token.starts_with(prefix)) return true;
+					}
+				}
+				return false;
+			};
+			std::istringstream tokens(source);
+			std::string splitToken;
+			for (std::string token; tokens >> token;) {
+				if (!tokenLanded(token)) { splitToken = token; break; }
+			}
+			int longestWord = 0;
+			tokens.clear();
+			tokens.str(source);
+			for (std::string token; tokens >> token;) longestWord = std::max(longestWord, font->CalculateWidth(token));
+			int widestLine = 0;
+			for (const auto& row: rows) widestLine = std::max(widestLine, font->CalculateWidth(row));
+			const bool capped = textWidth >= capWidth;
+			const bool sized = longestWord <= textWidth || capped;
+			const bool linesFit = widestLine <= textWidth;
+			observation = Json{{"surface", surface}, {"text_width", textWidth}, {"longest_word", longestWord},
+				{"widest_line", widestLine}, {"rows", rows}, {"split_token", splitToken},
+				{"capped", capped}, {"lines_fit", linesFit}, {"source", source}}.dump();
+			return splitToken.empty() && sized && (surface != "status" || linesFit);
+		}
+		if (command == "status_line") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::string text = rest;
+			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+			panel->SetStatusProbeLine(text);
+			observation = "status line " + std::to_string(text.size());
+			return true;
+		}
+		if (command == "assert_roster_fits") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			auto* font = g_FrameMan.GetSmallFont(true);
+			if (!panel || !font) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::string text = rest;
+			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+			std::string wrapped;
+			int boxWidth = 0;
+			if (text.empty() || !panel->AutomationWrapLines(text, wrapped, boxWidth)) {
+				observation = "roster fit text missing or wrap unavailable";
+				return false;
+			}
+			const int column = boxWidth - 12;
+			int widestToken = 0;
+			std::istringstream tokens(wrapped);
+			for (std::string token; tokens >> token;) widestToken = std::max(widestToken, font->CalculateWidth(token));
+			int widestLine = 0;
+			std::istringstream lines(wrapped);
+			for (std::string row; std::getline(lines, row);) widestLine = std::max(widestLine, font->CalculateWidth(row));
+			auto* large = g_FrameMan.GetLargeFont();
+			const int y = std::max(8, (large ? large->GetFontHeight() : 8) + 4);
+			const int height = font->CalculateHeight(wrapped) + 12;
+			const int right = 8 + boxWidth + 1;
+			const int bottom = y + height + 1;
+			const bool inside = right <= g_WindowMan.GetResX() && bottom <= g_WindowMan.GetResY();
+			const auto& live = panel->GetRosterRect();
+			const bool fits = widestToken <= column && widestLine <= column;
+			observation = Json{{"surface", "roster_fits"}, {"widest_token", widestToken}, {"widest_line", widestLine},
+				{"column", column}, {"rect", Json::array({8, y, boxWidth + 1, height + 1})},
+				{"roster_rect", Json::array({live.x, live.y, live.width, live.height})},
+				{"inside", inside}, {"ellipsis", wrapped.find("...") != std::string::npos}, {"drawn", wrapped}}.dump();
+			return fits && inside;
 		}
 		if (command == "assert_no_overlap") {
 			const std::string arguments{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};

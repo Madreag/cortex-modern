@@ -52,6 +52,41 @@ namespace RTE {
 		const OverlayRect& GetChatRect() const { return m_ChatRect; }
 		const OverlayRect& GetRosterRect() const { return m_RosterRect; }
 		const OverlayRect& GetSeatsPanelRect() const { return m_SeatsPanelRect; }
+		/// What a wrapped surface was asked to show on the last frame it drew, so a readback can check
+		/// the wrap held at word boundaries and the panel took its longest word.
+		struct WrapAudit {
+			std::string source;   //!< The text before wrapping.
+			std::string wrapped;  //!< The lines the surface drew (the label's own input for the status box).
+			int textWidth = 0;    //!< The pixel column the text wrapped into.
+			int longestWord = 0;  //!< The widest whitespace-delimited token, measured at draw time.
+			int capWidth = 0;     //!< The widest column the width rule allowed before the screen cap.
+			bool active = false;  //!< Whether the surface drew on the last Draw pass.
+		};
+		const WrapAudit& GetRosterWrap() const { return m_RosterWrap; }
+		const WrapAudit& GetStatusWrap() const { return m_StatusWrap; }
+		/// Extra status line. Empty leaves the box unchanged.
+		void SetStatusProbeLine(const std::string& line) { m_StatusProbeLine = line; }
+		/// A toast-fill run no live overlay rect covers: the pixels a moved band left on a layer
+		/// nothing cleared that frame (ENGINE 195's second band).
+		struct GhostBandHit {
+			bool found = false;
+			int x = 0, y = 0, run = 0;
+			int probePixel = -1;  //!< The raw pixel inside the live toast band, so a blind scan is visible.
+		};
+		/// Scans the GUI layer for a toast-fill run of at least minRunPx that no reported rect covers.
+		GhostBandHit ScanGhostBand(int minRunPx) const;
+		/// Arms a per-draw ghost scan: every DrawMatchToasts call counts a frame whose GUI layer
+		/// still shows a band where nothing drew one, so a stale band caught between renders is seen.
+		void ArmGhostWatch() { m_GhostWatchArmed = true; m_GhostWatchHits = 0; m_GhostWatchLast = {}; }
+		void DisarmGhostWatch() { m_GhostWatchArmed = false; }
+		int GhostWatchHits() const { return m_GhostWatchHits; }
+		const GhostBandHit& GhostWatchLast() const { return m_GhostWatchLast; }
+		int GhostWatchProbe() const { return m_GhostWatchProbe; }
+		/// Wraps a text the way the roster box does - same helper, same width rule - so a script can
+		/// check the wrap on a line the match may never produce.
+		bool AutomationWrapLines(const std::string& text, std::string& wrapped, int& boxWidth) const;
+		/// The roster box's width rule: the stock width, grown to the longest word, capped by the screen.
+		static int RosterBoxWidth(GUIFont* font, const std::string& text);
 		bool IsChatEntryOpen() const { return m_ChatEntryOpen; }
 		int RefreshCount() const { return m_RefreshCount; }
 		int RefreshChangeCount() const { return m_RefreshChangeCount; }
@@ -132,6 +167,14 @@ namespace RTE {
 		OverlayRect m_ChatRect;
 		OverlayRect m_RosterRect;
 		OverlayRect m_SeatsPanelRect; //!< Where the open seats panel sat when the toast band was laid out.
+		WrapAudit m_RosterWrap;   //!< The roster box's last wrap, for the word-boundary check.
+		WrapAudit m_StatusWrap;   //!< The status box's last wrap, for the word-boundary check.
+		std::string m_StatusProbeLine; //!< Extra status line; empty leaves the box unchanged.
+		bool m_GhostWatchArmed = false;  //!< Whether DrawMatchToasts runs the ghost scan after each draw.
+		int m_GhostWatchHits = 0;        //!< Frames the armed watch saw a stale band on.
+		GhostBandHit m_GhostWatchLast;   //!< The last stale run the watch saw.
+		int m_GhostWatchProbe = -1;      //!< The last frame's pixel inside the live band, so a blind scan shows.
+		void GhostWatchTick();
 		long long m_StatusWaitStartedUs = 0;
 		long long m_LastStatusObservationMs = 0;
 		bool m_LastSlowNotice = false;

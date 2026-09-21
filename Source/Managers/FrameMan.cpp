@@ -1376,6 +1376,9 @@ void FrameMan::Draw() {
 	g_PresetMan.GetEntityPreset("Shader", "Background")->Clone(&backgroundShader);
 	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 	clear_to_color(m_BackBuffer8.get(), 0);
+	// The 32-bit GUI layer composites by alpha over the frame, so a pixel kept from last frame
+	// is a pixel still on screen: an overlay that moves must not leave its old band behind.
+	ClearBackBuffer32();
 	m_BackBuffer->Begin(true);
 
 	// Count how many split screens we'll need
