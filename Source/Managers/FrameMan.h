@@ -73,7 +73,7 @@ namespace RTE {
 		static void FeelPreviewSwap(uint64_t adoptionTick, uint64_t swapTick, uint64_t leadTicks, float poseDelta);
 		static void FeelBeginIteration();
 		static void FeelBeforePreview();
-		static void FeelBeginDraw();
+		static bool FeelBeginDraw();
 		static void FeelBeforePresent();
 		void FeelAfterPresent();
 		static void FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS);
