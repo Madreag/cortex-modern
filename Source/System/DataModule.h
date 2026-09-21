@@ -71,6 +71,12 @@ namespace RTE {
 		/// Destroys and resets (through Clear()) the DataModule object.
 		void Destroy();
 
+		/// Two stub non-compliant modules produce one summary ShowMessageBox after LoadAllDataModules.
+		static bool RunVersionGuardSelfTest();
+
+		/// In external-module-validation mode a bad SupportedGameVersion aborts with the reason on the console.
+		static int RunExtValidateVersionSelfTest();
+
 		/// Resets the entire DataModule, including its inherited members, to their default settings or values.
 		void Reset() override { Clear(); }
 #pragma endregion
