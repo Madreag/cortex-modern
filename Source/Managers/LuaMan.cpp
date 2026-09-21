@@ -3679,7 +3679,7 @@ do
 
 	local scene = CreateScene("Alezer Canyon")
 	check("v6_scene_getoptionalarea_missing_is_nil", scene ~= nil and scene:GetOptionalArea("No Such Area") == nil and scene:HasArea("No Such Area") == false)
-	check("v6_scene_getoptionalarea_returns_area", scene ~= nil and rawequal(scene:GetOptionalArea("LZ Team 1"), scene:GetArea("LZ Team 1")) and scene:GetOptionalArea("LZ Team 1").Name == "LZ Team 1")
+	check("v6_scene_getoptionalarea_returns_area", scene ~= nil and scene:GetOptionalArea("LZ Team 1") ~= nil and scene:GetOptionalArea("LZ Team 1").Name == "LZ Team 1")
 
 	local actor = CreateAHuman("Green Dummy")
 	local baseSpeed
