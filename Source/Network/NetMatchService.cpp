@@ -2772,7 +2772,7 @@ static std::string ResyncSaveName() {
 			// The capture this mark stood for has landed, so the next bootstrap may ask for its own.
 			m_WorldCaptureRequestedTick = 0;
 		}
-		std::cout << "[net-world] offer " << EncodeWorldJoinOffer(image) << std::endl;
+		System::PrintDiagnosticLine("[net-world] offer " + EncodeWorldJoinOffer(image));
 	}
 
 	NetPeerId NetMatchService::ResolveWorldReportConnection(const NetWorldJoinHost& host, const std::vector<NetSessionPeerInfo>& readyPeers, uint8_t fromPeer) {

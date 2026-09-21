@@ -244,6 +244,7 @@ static int s_frameStallMs = 0;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
 static std::vector<NetLiveStall> s_netLiveStalls;
 static std::optional<uint64_t> s_netLiveStallActivation;
+static bool s_netPerturbWhenLive = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -913,6 +914,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			i += 2;
 			continue;
 		}
+		if (currentArg == "-net-test-perturb-when-live") { s_netPerturbWhenLive = true; ++i; continue; }
 		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
 			const std::string spec = argValue[++i];
 			const size_t separator = spec.find(':');
@@ -4693,7 +4695,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			System::SetQuit(true);
 		}
 	} else {
-		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+		const uint64_t e2eTickBudget = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+		const uint64_t e2eTickCap = !ScenarioRunner::IsPersistentWorld() && s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
+		    ? e2eTickBudget + s_netMatchE2ETicks.matchFirstFrame - 1 : e2eTickBudget;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
@@ -5198,8 +5202,17 @@ void RunGameLoop() {
 			// gate OR the runtime desync detector sees a guaranteed divergence. One-shot: a resynced
 			// match reuses tick numbers, and the healed round must NOT be re-poisoned.
 			static bool s_perturbFired = false;
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == ScenarioRunner::GetArgs().selftestPerturbTick && !s_perturbFired) {
+			bool perturbDue = simTick == ScenarioRunner::GetArgs().selftestPerturbTick;
+			if (s_netPerturbWhenLive) {
+				perturbDue = simTick >= ScenarioRunner::GetArgs().selftestPerturbTick && simTick % c_DesyncCheckIntervalTicks == 0 && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive();
+				const auto* match = ScenarioRunner::GetLockstepMatchConfig();
+				if (!match) perturbDue = false;
+				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
+					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
+			}
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
+				if (s_netPerturbWhenLive) System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 				for (unsigned k = 0; k < perturbAdvance; ++k) {
