@@ -472,6 +472,7 @@ namespace RTE {
 	};
 
 	void ResetV6CompatMusicState();
+	bool RunModApiShimsSelfTest();
 #pragma endregion
 
 #pragma region TimerMan Lua Adapters

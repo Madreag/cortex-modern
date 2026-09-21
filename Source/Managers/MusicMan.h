@@ -50,6 +50,12 @@ namespace RTE {
 		/// Resets music state, stopping and clearing playing dynamic songs or interrupting music, etc. to make ready for new music.
 		void ResetMusicState();
 
+		/// Applies the activity-start music policy: a live start resets MusicMan, a restore drops only the 6.x compat queue.
+		void PrepareForActivityStart();
+
+		/// Whether the current song is the 6.x compat carrier and has not ended.
+		bool IsCompatCarrierPlaying() const;
+
 		/// Gets whether any music is audible, even if further playback is disabled.
 		/// @return Whether any music is audible or not.
 		bool IsMusicPlaying() const;

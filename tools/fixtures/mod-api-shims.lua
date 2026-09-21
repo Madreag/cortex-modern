@@ -17,14 +17,16 @@ local musicOk, musicErr = pcall(function()
 	AudioMan:PlayMusic("Base.rte/Music/dBSoundworks/cc2g.ogg", 0, -1)
 end)
 check("playmusic", musicOk, musicErr)
-check("ismusicplaying_parity_playing", AudioMan:IsMusicPlaying() == MusicMan:IsMusicPlaying(), "AudioMan=" .. tostring(AudioMan:IsMusicPlaying()) .. " MusicMan=" .. tostring(MusicMan:IsMusicPlaying()))
+check("playmusic_starts_stream", AudioMan:IsMusicPlaying() == true, "AudioMan=" .. tostring(AudioMan:IsMusicPlaying()) .. " MusicMan=" .. tostring(MusicMan:IsMusicPlaying()))
+check("playmusic_musicman_follows_audible_volume", MusicMan:IsMusicPlaying() == (AudioMan.MusicVolume > 0), "MusicMan=" .. tostring(MusicMan:IsMusicPlaying()) .. " volume=" .. tostring(AudioMan.MusicVolume))
 
 local queueOk, queueErr = pcall(function()
 	AudioMan:QueueMusicStream("Base.rte/Music/dBSoundworks/ruinexploration.ogg")
 end)
 check("queuemusicstream", queueOk, queueErr)
 check("clearmusicqueue", pcall(AudioMan.ClearMusicQueue, AudioMan))
-check("ismusicplaying_parity_after_clear", AudioMan:IsMusicPlaying() == MusicMan:IsMusicPlaying(), "AudioMan=" .. tostring(AudioMan:IsMusicPlaying()) .. " MusicMan=" .. tostring(MusicMan:IsMusicPlaying()))
+check("after_clear_stream_still_playing", AudioMan:IsMusicPlaying() == true, "AudioMan=" .. tostring(AudioMan:IsMusicPlaying()))
+check("after_clear_musicman_follows_audible_volume", MusicMan:IsMusicPlaying() == (AudioMan.MusicVolume > 0), "MusicMan=" .. tostring(MusicMan:IsMusicPlaying()) .. " volume=" .. tostring(AudioMan.MusicVolume))
 
 local registered = PresetMan:GetPreset("DynamicSong", "V6CompatMusicQueue", -1)
 check("v6compat_preset_absent", registered == nil, registered)
@@ -41,6 +43,15 @@ local limbOk, limbErr = pcall(function()
 end)
 check("getsetlimpathspeed_methods", limbOk, limbErr)
 check("getsetlimpathspeed_roundtrip", limbOk and type(baseSpeed) == "number" and math.abs(actor:GetLimbPathSpeed(1) - baseSpeed * 0.5) < 0.0001, baseSpeed)
+
+if actor then
+	DeleteEntity(actor)
+	actor = nil
+end
+if scene then
+	DeleteEntity(scene)
+	scene = nil
+end
 
 if #failed > 0 then
 	error(table.concat(failed, "; "))

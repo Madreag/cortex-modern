@@ -700,7 +700,7 @@ namespace {
 			return false;
 		}
 		const std::string full = g_PresetMan.GetFullModulePath(filePath);
-		return std::filesystem::exists(full) || std::filesystem::exists(System::GetWorkingDirectory() + full);
+		return System::PathExistsCaseSensitive(full) || System::PathExistsCaseSensitive(System::GetWorkingDirectory() + full);
 	}
 
 	/// Builds a MUSIC-bus SoundContainer for one queue entry. Length is read from the loaded sound data, not the caller's simulation domain.
@@ -710,6 +710,9 @@ namespace {
 		container.SetPresetName("V6CompatMusic");
 		container.SetBusRouting(SoundContainer::BusRouting::MUSIC);
 		container.SetImmobile(true);
+		if (!CompatMusicFileExists(entry.FilePath)) {
+			return container;
+		}
 		container.GetTopLevelSoundSet().AddSound(g_PresetMan.GetFullModulePath(entry.FilePath));
 		container.SetLoopSetting(entry.Loops);
 		if (entry.Volume >= 0.0F) {
@@ -729,7 +732,7 @@ namespace {
 				}
 			}
 			if (length > 0.0F) {
-				exitTime = length * static_cast<float>(std::max(entry.Loops, 1));
+				exitTime = length * static_cast<float>(entry.Loops + 1);
 			}
 		}
 		container.SetMusicExitTime(exitTime);
@@ -780,6 +783,10 @@ void RTE::ResetV6CompatMusicState() {
 	s_CompatCurrentEntry = {"", 0, -1.0F};
 }
 
+bool RTE::RunModApiShimsSelfTest() {
+	return LuaAdaptersAudioMan::RunModApiShimsSelfTest();
+}
+
 void LuaAdaptersAudioMan::PlayMusic(AudioMan* luaSelfObject, const std::string& filePath, int loops, float volumeOverrideIfNotMuted) {
 	if (!CompatMusicFileExists(filePath)) {
 		g_ConsoleMan.PrintString("ERROR: AudioMan:PlayMusic could not open \"" + filePath + "\"");
@@ -791,7 +798,11 @@ void LuaAdaptersAudioMan::PlayMusic(AudioMan* luaSelfObject, const std::string& 
 }
 
 void LuaAdaptersAudioMan::QueueMusicStream(AudioMan* luaSelfObject, const std::string& filePath) {
-	if (!g_AudioMan.IsMusicPlaying() && !g_MusicMan.IsMusicPlaying()) {
+	if (!CompatMusicFileExists(filePath)) {
+		g_ConsoleMan.PrintString("ERROR: AudioMan:QueueMusicStream could not open \"" + filePath + "\"");
+		return;
+	}
+	if (!g_AudioMan.IsMusicPlaying() && !g_MusicMan.IsCompatCarrierPlaying()) {
 		PlayMusic(luaSelfObject, filePath, -1, -1.0F);
 		return;
 	}
@@ -845,6 +856,18 @@ bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
 	check("compat_exit_time_is_domain_independent", localCount == presentationCount && localCount > 0 && localExit == presentationExit && localExit > 0.0F && localExit < c_CompatInfiniteExitTime,
 	      "local_count=" + std::to_string(localCount) + " presentation_count=" + std::to_string(presentationCount) + " local_exit=" + std::to_string(localExit) + " presentation_exit=" + std::to_string(presentationExit));
 
+	float loops0Exit = -1.0F;
+	float loops1Exit = -1.0F;
+	{
+		SoundSimulationScope presentation(1, 1, SoundExecutionDomain::Presentation);
+		SoundContainer loops0 = MakeCompatMusicContainer({c_CompatMusicFile, 0, -1.0F});
+		SoundContainer loops1 = MakeCompatMusicContainer({c_CompatMusicFile, 1, -1.0F});
+		loops0Exit = loops0.GetMusicExitTime();
+		loops1Exit = loops1.GetMusicExitTime();
+	}
+	check("compat_loops_one_plays_twice", loops0Exit > 0.0F && loops1Exit == loops0Exit * 2.0F,
+	      "once_exit=" + std::to_string(loops0Exit) + " loops1_exit=" + std::to_string(loops1Exit));
+
 	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
 	const Entity* registered = g_PresetMan.GetEntityPreset("DynamicSong", "V6CompatMusicQueue");
 	check("playmusic_does_not_register_preset", registered == nullptr, registered ? "non-nil" : "nil");
@@ -855,12 +878,38 @@ bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
 	check("end_of_song_clears_both_isplaying", !audioPlaying && !musicPlaying, "AudioMan=" + std::string(audioPlaying ? "true" : "false") + " MusicMan=" + std::string(musicPlaying ? "true" : "false"));
 
 	QueueMusicStream(nullptr, c_CompatMusicFile);
-	check("queue_on_idle_plays", g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
+	check("queue_on_idle_plays", g_MusicMan.IsCompatCarrierPlaying() || g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
 
 	g_MusicMan.ResetMusicState();
 	check("reset_clears_compat_queue", s_CompatMusicQueue.empty() && s_CompatCurrentEntry.FilePath.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
 	QueueMusicStream(nullptr, c_CompatMusicFile);
-	check("queue_after_reset_plays", g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
+	check("queue_after_reset_plays", g_MusicMan.IsCompatCarrierPlaying() || g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
+	g_MusicMan.ResetMusicState();
+
+	const float savedMusicVolume = g_AudioMan.GetMusicVolume();
+	g_AudioMan.SetMusicVolume(0.0F);
+	g_MusicMan.ResetMusicState();
+	g_MusicMan.PlayDynamicSong("Generic Ambient Music");
+	const bool volumeZeroPlaying = g_MusicMan.IsMusicPlaying();
+	check("dynamic_song_volume_zero_is_not_playing", !volumeZeroPlaying, "IsMusicPlaying=" + std::string(volumeZeroPlaying ? "true" : "false"));
+	g_AudioMan.SetMusicVolume(savedMusicVolume);
+	g_MusicMan.ResetMusicState();
+
+	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
+	QueueMusicStream(nullptr, c_CompatMusicFile);
+	const size_t queuedBeforeRestore = s_CompatMusicQueue.size();
+	g_MovableMan.SetRestoringSnapshot(true);
+	g_MusicMan.PrepareForActivityStart();
+	const size_t queuedAfterRestore = s_CompatMusicQueue.size();
+	g_MovableMan.SetRestoringSnapshot(false);
+	check("restore_clears_compat_queue", queuedAfterRestore == 0, "queue=" + std::to_string(queuedAfterRestore) + " before=" + std::to_string(queuedBeforeRestore));
+	g_MusicMan.ResetMusicState();
+
+	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
+	QueueMusicStream(nullptr, "");
+	check("empty_queue_does_not_enqueue", s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
+	QueueMusicStream(nullptr, "no-such-file.ogg");
+	check("bad_path_queue_does_not_enqueue", s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
 	g_MusicMan.ResetMusicState();
 
 	const std::filesystem::path exe(System::GetThisExePathAndName());
