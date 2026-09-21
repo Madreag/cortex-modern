@@ -124,22 +124,25 @@ TIMING_CASES = (
 )
 
 
-def peer_lua_state_count(peer, host_lua_states, client_lua_states):
-    # The joining client takes the client count; every other peer takes the host count.
-    return client_lua_states if peer == 'client' else host_lua_states
+def peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history):
+    # What a runtime spent before the match: the joining client takes its own, every other peer the host's.
+    return client_pre_match_history if peer == 'client' else host_pre_match_history
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, host_lua_states=4, client_lua_states=4):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0):
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
+    # The engine's Lua state count is a build constant; the flags are kept, accepted and ignored.
     lua_states = {'host': host_lua_states, 'client': client_lua_states}
+    pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
-                    exe=file_record(REPO / 'Cortex Command.exe'), lua_states=lua_states)
+                    exe=file_record(REPO / 'Cortex Command.exe'), lua_states=lua_states, pre_match_history=pre_match_history,
+                    lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
@@ -149,7 +152,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         for peer in peers:
             run_out = out / peer
             trace = out / f'{peer}_trace.json'
-            flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes', '-num-lua-states', str(peer_lua_state_count(peer, host_lua_states, client_lua_states)),
+            flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes',
                      '-net-live-tick-hashes', str(out / f'{peer}-live.jsonl'),
                      '-out', str(trace), '-input-script', str(script),
                      '-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
@@ -157,6 +160,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                      '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini')]
             if record:
                 flags += ['-feel-measure', str(run_out / 'feel')]
+            if peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history):
+                flags += ['-selftest-prematch-history', str(peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history))]
             if sp:
                 flags += ['-scenario', 'FeelBaseline', '-controller-log-out', str(out / 'controllers.json')]
             else:
@@ -462,7 +467,7 @@ def gates(root, control, timeout):
                '--out', str(out / 'selftests'), '--timeout', str(timeout)]
     with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
         suite = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
-    graph = make_run(REPO, ['-script-graph-selftest', '-num-lua-states', '4'], out / 'script-graph', timeout=timeout, env=env)
+    graph = make_run(REPO, ['-script-graph-selftest'], out / 'script-graph', timeout=timeout, env=env)
     try:
         graph_record = graph.start().finish()
     finally:
@@ -511,8 +516,10 @@ def parse_args(argv=None):
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
     parser.add_argument('--stock-baseline', type=Path, help='same-machine stock measurements, keyed by 60hz and uncapped')
-    parser.add_argument('--host-lua-states', type=int, default=4, help='Lua state count for the host and for every non-client peer')
-    parser.add_argument('--client-lua-states', type=int, default=4, help='Lua state count for the joining client')
+    parser.add_argument('--host-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
+    parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
+    parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
+    parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
     return parser, parser.parse_args(argv)
 
 
@@ -540,11 +547,13 @@ def main(argv=None):
                     scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
-                    lua_states={'host': args.host_lua_states, 'client': args.client_lua_states})
+                    lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
+                    pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
-        counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states)
+        counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
+                      host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
             launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
