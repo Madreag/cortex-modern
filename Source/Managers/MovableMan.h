@@ -953,6 +953,11 @@ namespace RTE {
 		/// @return Size of the objects registry.
 		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }
 
+		/// How many entries the last threaded SyncedUpdate pass left alone because a script in that
+		/// same pass had freed the object. Zero on an ordinary tick.
+		/// @return The count from the last pass.
+		uint64_t GetSyncedPassSkippedDeadEntries() const { return m_SyncedPassSkippedDeadEntries; }
+
 		/// Returns the current sim update frame number
 		/// @return Current sim update frame number.
 		unsigned int GetSimUpdateFrameNumber() const { return m_SimUpdateFrameNumber; }
@@ -1195,6 +1200,8 @@ namespace RTE {
 		/// Ideally we wouldn't need this, but this is all very fragile code and I'd prefer to avoid breaking things.
 		void PreControllerUpdate();
 		void RunThreadedSyncedUpdatePass(bool globalMoidOrder);
+
+		uint64_t m_SyncedPassSkippedDeadEntries = 0; //!< Entries the last threaded synced pass refused to touch because a script in that pass had freed the object.
 
 		// Disallow the use of some implicit methods.
 		MovableMan(const MovableMan& reference) = delete;

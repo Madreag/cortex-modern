@@ -105,9 +105,19 @@ namespace RTE {
 		/// Unregisters an MO as using us.
 		/// @param moToUnregister The MO to unregister as using us. Ownership is NOT transferred!
 		void UnregisterMO(MovableObject* moToUnregister) {
-			m_RegisteredMOs.erase(moToUnregister);
+			if (m_RegisteredMOs.erase(moToUnregister) > 0) {
+				s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
+			}
 			m_AddedRegisteredMOs.erase(moToUnregister);
 		}
+
+		/// Whether this MO is in the live registration set. The pending set is not part of a pass.
+		/// @param mo The MO to look for. Only its address is read, so a freed one is safe to ask about.
+		bool IsRegisteredMO(MovableObject* mo) const { return m_RegisteredMOs.find(mo) != m_RegisteredMOs.end(); }
+
+		/// Counts removals from any state's live registration set, a destroyed MO's included. A pass
+		/// that sees it unchanged since it read the sets knows every pointer it holds is still live.
+		static uint64_t RegisteredMOUnregistrationCount() { return s_RegisteredMOUnregistrations.load(std::memory_order_relaxed); }
 
 		/// A destroyed object leaves the lists a set-aside world will swap back; a detached live one stays.
 		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
@@ -125,6 +135,8 @@ namespace RTE {
 		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
+			// A whole set left the live list, so no snapshot taken before this may skip its liveness check.
+			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
 		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
@@ -132,6 +144,7 @@ namespace RTE {
 			m_AddedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
+			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		void ForgetHeldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			std::erase(m_HeldRegisteredMOs, &registered);
@@ -398,6 +411,8 @@ namespace RTE {
 			std::string scriptPath; //!< The script file the function came from.
 			std::string functionName; //!< The function's name in that file.
 		};
+
+		inline static std::atomic<uint64_t> s_RegisteredMOUnregistrations{0}; //!< Every removal from any state's live registration set, so a pass can tell when nothing it holds can have died.
 
 		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
 		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
