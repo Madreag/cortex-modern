@@ -13,6 +13,28 @@
     {
       "op": "wait",
       "service": "Running",
+      "screen": "Gameplay",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "assert_control",
+      "control": "LabelNetMatchStatus",
+      "equals": {
+        "visible": true
+      },
+      "text_contains": "via relay"
+    },
+    {
+      "op": "menu",
+      "command": "assert_net_label LabelNetMatchStatus via relay"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "wait",
+      "service": "Running",
       "elapsed_ms": 10500
     },
     {
