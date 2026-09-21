@@ -491,6 +491,10 @@ namespace RTE {
 			s_Args.modApiShimsSelfTest = true;
 			return 1;
 		}
+		if (a == "-limb-path-selftest") {
+			s_Args.limbPathSelfTest = true;
+			return 1;
+		}
 		if (a == "-render-window-scripts-selftest") {
 			s_Args.renderWindowScriptsSelfTest = true;
 			return 1;

@@ -554,6 +554,7 @@ namespace RTE {
 		/// @param movementState Which movement state to set the limb path speed for.
 		/// @param newSpeed New speed value in m/s.
 		void SetLimbPathTravelSpeed(MovementState movementState, float newSpeed);
+		static void WriteLimbPathTravelSpeed(LimbPath paths[2][MOVEMENTSTATECOUNT], MovementState movementState, float newSpeed);
 
 		/// Both ground layers take the new travel speed.
 		static bool RunLimbPathTravelSpeedSelfTest();
