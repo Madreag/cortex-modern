@@ -148,6 +148,11 @@ namespace RTE {
 
 		static std::optional<NetIdentityMismatch> Compare(const NetIdentityManifest& expected, const NetIdentityManifest& actual, bool rejectUserdataModules = true);
 
+		/// Why this runtime cannot take part in a network match, or an empty string when it can. A peer
+		/// with no threaded Lua states runs every SyncedUpdate on the master state on its own schedule,
+		/// so it would part from a normal peer on the first tick a mod asks for one.
+		static std::string LocalMatchRefusal(int threadedLuaStateCount);
+
 		/// The loaded modules as the diagnostic digest wire carries them, sorted by file name and cut
 		/// to the entry and byte caps. Diagnostic only - admission still decides on the full hashes.
 		static std::vector<NetModuleDigestEntry> BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated = nullptr);
