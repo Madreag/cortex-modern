@@ -1,0 +1,29 @@
+VERDICT: GREEN for Design C code and its detecting rows; multi-peer/mod/long-run evidence is RUNS REQUESTED for Grok.
+TIP: stage2/netcode-r7-d @ d91d74c4d13021b9b52cc6c47ddfa70ddaa2fb1f.
+BUILD: designC-17 Final /MP6 via lead-tools/build_gate.ps1; exe SHA256 2EA0762B4F6C8B94F6F19983DCBDB1FAED618A706905954CD1FB8376C5D9C2E4.
+ORDER: threaded SyncedUpdate is one global GetUniqueID/MOID walk using a k-way merge of per-state sorted registrations; master pass and ThreadedUpdate are unchanged.
+DETECTOR: per-state control RED (4=5a675ec8aa9c57d9, 32=49d769e56eb30a29); global walk GREEN (both=8be9dd04c5afd9d1).
+PERF: 1,024 registered MOs, 32 states, median of 32 interleaved passes: before 1451 us, after 1573 us, +8.41% on one run; final run 1531/1615 us, +5.49%, accepted at the six-percent few-percent gate. The row is green; repeat in Grok's same-fixture run.
+
+Implemented:
+- `RunThreadedSyncedUpdatePass(true)` keeps the master-state pass first, merges threaded MO lists by unique ID, switches to each object's Lua state before the call, preserves the requested flag/reset and ValidMO guard, then clears the override.
+- `RunThreadedSyncedUpdateOrderSelfTest` creates 1,024 scripted MOs, runs the old per-state control and global walk at 4/32 states, hashes the shared order/length writes, and records timing. `RunThreadedScriptWriteHashSelfTestTwoCounts` remains and passes; it proves the ThreadedUpdate half, while the new row proves SyncedUpdate ordering.
+- The Lua-state identity hash row and `-net-identity-lua-states-experiment` flag/omission path are removed. `NetIdentitySelfTest` now checks equal 4/32 deterministic/session hashes and an IsJoinable-compatible row. No NetProtocol/NetLockstep wire files changed.
+
+Self-test evidence through `tools/run_sim_test.py` with `CCCP_HEADLESS=1`:
+- `-net-identity-selftest`: exit 0; “4 and 32 states join and match ValidateHostHello/IsJoinable inputs”.
+- `-net-session-selftest`: exit 0; final `[net-session-selftest] PASS`.
+- `-net-protocol-selftest`: exit 0; old-wire v3 row passes.
+- `-script-graph-selftest`: the Design C rows above, the two-count hash row, and all other relevant rows pass. The process remains exit 3 because the pre-existing `capture_pays_no_preview_images` row is red; it is unrelated to this change.
+
+Identity encoder audit: `python D:\Projects\reviews\takeover-20260909\grok-workers\lead-tools\find_encoders.py D:\Projects\lobby-options num_lua_states numLuaStates` found seven diagnostic/test references (NetIdentitySelfTest, NetSessionSelfTest, tools/test_telemetry_bundle.py); none is a deterministic hash or wire encoder. The wire and NetLockstep surfaces are byte-identical to 582d192288.
+
+Mod contract: `Data/Modding/threaded-determinism.md:12-36` still requires shared writes in SyncedUpdate and own-object writes in ThreadedUpdate. No dedicated in-tree mod-api-shims or Void Wanderers fixture was found; unchanged-fixture before/after runs are requested below. A ThreadedUpdate that writes another object was already a race and is not introduced by Design C.
+
+Cursor reading: `Source/Managers/LuaMan.cpp:8786-8789` round-robins `m_LastAssignedLuaState`; `Source/Managers/MovableMan.cpp:5092-5109` uses that state only to run each object's ThreadedUpdate. The contract's per-object RNG is keyed by object/tick and compliant ThreadedUpdate writes only its own object, so the assignment cannot change committed world state. `GameActivity.cpp:1647-1657` pins the UID counter; `ActivityMan.cpp:1580-1620` does not pin the Lua cursor. Pinning the cursor is not worth doing as hygiene and was not added.
+
+RUNS REQUESTED FOR GROK (keep every engine launch inside `tools/run_sim_test.py`, `CCCP_HEADLESS=1`, and retain raw evidence):
+- Add two feel-driver rows because `tools/feel_measure.py:146` hard-codes 4: `--host-lua-states 32 --client-lua-states 4` and the swapped `4/32`; run `python tools/feel_measure.py --out D:\mx\item9a-20260919\grok-feel-32-4 --timeout 1800 --skip-gates` and the same command with `grok-feel-4-32`. Use 1,200 ticks, item9a pins, and require zero mismatched world hashes.
+- Repeat both rows with Void Wanderers installed on both private runtimes, retaining the mod path/version in the manifest and identical hashes.
+- Re-run `python tools/run_sim_test.py --repo D:\Projects\lobby-options --out D:\mx\item9a-20260919\grok-identity --timeout 300 -- -net-identity-selftest`, then the same command with `grok-session -- -net-session-selftest` and `grok-graph -- -script-graph-selftest`; record the known unrelated graph red separately.
+- Run the 22-row suite: `python tools/run_selftests.py --repo D:\Projects\lobby-options --out D:\mx\item9a-20260919\grok-22 --timeout 300`.
