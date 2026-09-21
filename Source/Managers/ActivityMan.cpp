@@ -1274,7 +1274,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	SceneMan::SceneSetAside originalScene;
 	g_SceneMan.SetAsideScene(originalScene);
 	SceneMan::SceneSetAside dummyScene;
-	// A capture reads the terrain layers before it reaches the script graph this row refuses on.
+	// Exercise the partial terrain before a graph refusal can bypass its serializer.
 	struct RefusalTerrain : SLTerrain {
 		RefusalTerrain() {
 			m_MainBitmap = create_bitmap_ex(8, 64, 64);
@@ -1285,32 +1285,46 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	dummy->Create(new RefusalTerrain());
 	dummyScene.scene = dummy;
 	g_SceneMan.ReinstateScene(dummyScene);
+	Reader frosting(std::make_unique<std::istringstream>("TerrainFrosting\n\tMinThickness = 3\n\tMaxThickness = 9\n"), "Base.rte/save_refusal_frosting.ini");
+	frosting.SetThrowOnError(true);
+	const bool procedural = dummy->GetTerrain()->ReadProperty("AddTerrainFrosting", frosting) == 0;
+	const auto saveTerrain = [dummy](Writer& writer) { writer.NewPropertyWithValue("Terrain", dummy->GetTerrain()); };
+	auto terrainStream = std::make_unique<std::ostringstream>();
+	auto* terrainOutput = terrainStream.get();
+	Writer terrainWriter(std::move(terrainStream));
+	Writer::SnapshotScope terrainSnapshot(terrainWriter);
+	saveTerrain(terrainWriter);
+	const std::string terrainText = terrainOutput->str();
+	const std::string ownedTerrain = Writer::Capture(saveTerrain).Text();
+	const bool terrainFallback = terrainText.find("BackgroundTexture = ContentFile") != std::string::npos &&
+	                             terrainText.find("AddTerrainFrosting = TerrainFrosting") != std::string::npos &&
+	                             terrainText.find("MinThickness = 3") != std::string::npos && terrainText.find("MaxThickness = 9") != std::string::npos &&
+	                             terrainText.find("BGColorLayer") == std::string::npos && terrainText.find("FGColorLayer") == std::string::npos;
+	check(procedural && terrainFallback && ownedTerrain == terrainText, "partial_terrain_keeps_procedural_inputs",
+	      "sync_bytes=" + std::to_string(terrainText.size()) + " owned_bytes=" + std::to_string(ownedTerrain.size()) + " fallback=" + std::to_string(terrainFallback));
 
 	LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
 	const char* plant =
-	    "local transactionOwner = CreateMOPixel(\"Spark Yellow 1\", \"Base.rte\");"
-	    "MovableMan:AddParticle(transactionOwner);"
+	    "local transactionOwner = newproxy(true);"
 	    "local fn = function() return transactionOwner end;"
 	    "local function Update() return fn() end;"
-	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };"
-	    "_SaveRefusalUID = transactionOwner.UniqueID;";
+	    "_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = { Update = Update };";
 	const bool planted = state.RunScriptString(plant) == 0;
-	lua_State* lua = state.GetLuaState();
-	lua_getglobal(lua, "_SaveRefusalUID");
-	MovableObject* held = planted ? g_MovableMan.FindObjectByUniqueID(static_cast<long>(lua_tonumber(lua, -1))) : nullptr;
-	lua_pop(lua, 1);
-	if (held) g_MovableMan.UnregisterObject(held);
+	const std::string expectedPath = "global[Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua][Update].upvalue[fn].upvalue[transactionOwner]";
+	const std::string expectedProblem = "an unsupported userdata (userdata) at " + expectedPath;
+	const std::string expectedPlayerLine = "Save skipped: mod_failure_continuation.lua Update an unsupported userdata (userdata) (transactionOwner)";
 
 	const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
-	const bool refused = planted && held && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
+	const bool refused = planted && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
 	const std::string screen = g_FrameMan.GetScreenText(0);
 	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
 	const bool hasLive = !m_SaveRefusalRecords.empty();
 	const SaveRefusalRecord live = hasLive ? m_SaveRefusalRecords.back() : SaveRefusalRecord{};
-	const bool consoleKept = console.find("ERROR: the save cannot carry a script value:") != std::string::npos;
-	check(refused && hasLive && live.objectClass == "MOPixel" && live.problem.find("that no longer exists") != std::string::npos,
+	const bool consoleKept = console.find("ERROR: the save cannot carry a script value: " + expectedProblem) != std::string::npos;
+	check(refused && m_SaveRefusalRecords.size() == 1 && live.kind == "autosave" && live.objectClass.empty() && live.problem == expectedProblem &&
+	          live.path == expectedPath && live.scriptFile == "mod_failure_continuation.lua" && live.functionName == "Update" && live.lastSegment == "transactionOwner",
 	      "plant_invalid", hasLive ? live.problem : "no refusal");
-	check(refused && hasLive && !live.playerLine.empty() && screen == live.playerLine, "autosave_ui", screen);
+	check(refused && hasLive && live.playerLine == expectedPlayerLine && screen == expectedPlayerLine, "autosave_ui", screen);
 	std::string consoleDetail;
 	if (!consoleKept) {
 		consoleDetail = console;
@@ -1331,10 +1345,9 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	if (heal.contains("save_refusals") && heal["save_refusals"].is_array()) {
 		for (const auto& row: heal["save_refusals"]) {
 			if (row.value("kind", "") == "autosave" && row.value("script", "") == "mod_failure_continuation.lua" &&
-			    row.value("function", "") == "Update" && row.value("class", "") == "MOPixel" &&
-			    row.value("path", "").find("transactionOwner") != std::string::npos &&
-			    row.value("problem", "").find("that no longer exists") != std::string::npos &&
-			    row.value("player_line", "") == live.playerLine) {
+			    row.value("function", "") == "Update" && row.value("class", "").empty() &&
+			    row.value("path", "") == expectedPath && row.value("problem", "") == expectedProblem &&
+			    row.value("player_line", "") == expectedPlayerLine) {
 				bundleOk = true;
 				bundleDetail = row.dump();
 				break;
@@ -1345,21 +1358,29 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 
 	g_FrameMan.ClearScreenText(0);
 	const bool refusedAgain = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2);
-	check(refusedAgain && g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
+	check(refusedAgain && m_SaveRefusalRecords.size() == 2 && m_SaveRefusalRecords.back().problem == expectedProblem &&
+	          g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
 	      "autosave_dedup", g_FrameMan.GetScreenText(0));
 
-	if (held) g_MovableMan.RegisterObject(held);
+	const char* clear =
+	    "local name, fn = debug.getupvalue(_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"].Update, 1);"
+	    "assert(name == 'fn'); assert(debug.setupvalue(fn, 1, nil) == 'transactionOwner'); assert(fn() == nil);";
 	std::vector<std::string> clearedGraphs;
-	const bool cleared = held && CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, clearedGraphs);
-	if (held) g_MovableMan.UnregisterObject(held);
+	const bool cleared = state.RunScriptString(clear) == 0 && CaptureScriptGraphsOrReportRefusal(SaveKind::Autosave, clearedGraphs);
+	const char* replant =
+	    "local name, fn = debug.getupvalue(_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"].Update, 1);"
+	    "assert(name == 'fn'); assert(debug.setupvalue(fn, 1, newproxy(true)) == 'transactionOwner'); assert(type(fn()) == 'userdata');";
+	const bool replanted = state.RunScriptString(replant) == 0;
 	g_FrameMan.ClearScreenText(0);
-	const bool refusedAfterClear = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
-	check(cleared && refusedAfterClear && g_FrameMan.GetScreenText(0) == live.playerLine,
+	const bool refusedAfterClear = replanted && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
+	check(cleared && refusedAfterClear && m_SaveRefusalRecords.size() == 3 && m_SaveRefusalRecords.back().problem == expectedProblem &&
+	          g_FrameMan.GetScreenText(0) == expectedPlayerLine,
 	      "autosave_returns", g_FrameMan.GetScreenText(0));
 
 	g_FrameMan.ClearScreenText(0);
 	const bool refusedManual = !SaveCurrentGame("save_refusal");
-	check(refusedManual && hasLive && !live.playerLine.empty() && g_FrameMan.GetScreenText(0) == live.playerLine,
+	check(refusedManual && m_SaveRefusalRecords.size() == 4 && m_SaveRefusalRecords.back().kind == "manual" &&
+	          m_SaveRefusalRecords.back().problem == expectedProblem && g_FrameMan.GetScreenText(0) == expectedPlayerLine,
 	      "manual_repeat", g_FrameMan.GetScreenText(0));
 
 	// A scene mid-load has no terrain, and the capture reads its layers first.
@@ -1393,7 +1414,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(toasted, "lockstep_toast", toasts.empty() ? lockstepError : toasts.back().text);
 	ScenarioRunner::SetLockstepCoordinator(nullptr);
 
-	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil; _SaveRefusalUID = nil;");
+	state.RunScriptString("_G[\"Userdata/UserScenes.rte/ScriptState/mod_failure_continuation.lua\"] = nil;");
 	g_LuaMan.CollectGarbageForCheckpoint();
 	g_SceneMan.SetAsideScene(dummyScene);
 	g_SceneMan.ReinstateScene(originalScene);
