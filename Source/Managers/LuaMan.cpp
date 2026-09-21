@@ -17,6 +17,7 @@
 #include "GAScripted.h"
 #include "SceneMan.h"
 #include "Scene.h"
+#include "SLTerrain.h"
 #include "Entity.h"
 #include "Attachable.h"
 #include "AEmitter.h"
@@ -7196,6 +7197,13 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	LoadScriptGraphHelper();
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
+	// The preview statistics a row reads exist only in a timed state, decided when its record is first made.
+#ifdef _WIN32
+	if (!std::getenv("CC_PREVIEW_BARRIER_STATS")) _putenv_s("CC_PREVIEW_BARRIER_STATS", "1");
+#else
+	setenv("CC_PREVIEW_BARRIER_STATS", "1", 0);
+#endif
+	luaJIT_preview_measure(m_State, -1);
 	bool checkpointValues = GUICheckpoint::RunSelfTest();
 	{
 		const uint64_t serialBefore = luaJIT_state_serial(m_State);
@@ -7394,33 +7402,55 @@ end
 	                                    luaJIT_state_serial(m_State) == birthsBeforeWindow;
 	std::cout << "[script-graph-selftest] " << (windowGivesNumbersBack ? "PASS" : "FAIL") << " preview_window_returns_table_numbers" << std::endl;
 	checkpointValues = windowGivesNumbersBack && checkpointValues;
-	// A capture pays no preview images: its own tables are born after the arm and the codec's are skipped.
+	// A capture inside an armed window is refused by name, since the window's rollback would undo
+	// writes the graph recorded; the capture outside it pays no preview images.
 	RunScriptString("_F105PreviewRoot = { probe = { 1, 2, 3 } }");
 	const auto& fenceSkips = LuaStateWrapper::PreviewGlobalFenceSkips();
 	luaJIT_PreviewStats beforeCapture{}, afterCapture{};
-	std::vector<std::string> barrierProblems;
+	std::vector<std::string> insideProblems, outsideProblems;
 	std::string insideWindow, outsideWindow;
 	const bool readBefore = luaJIT_preview_stats(m_State, &beforeCapture) != 0;
 	const bool barrierWindow = luaJIT_preview_begin(m_State, fenceSkips.data(), fenceSkips.size(), 0) != 0;
+	bool insideCaptured = false;
 	if (barrierWindow) {
-		SerializeScriptGraph(insideWindow, barrierProblems);
+		insideCaptured = SerializeScriptGraph(insideWindow, insideProblems);
 		luaJIT_preview_end(m_State);
 	}
-	SerializeScriptGraph(outsideWindow, barrierProblems);
+	const bool outsideCaptured = SerializeScriptGraph(outsideWindow, outsideProblems);
 	const bool readAfter = luaJIT_preview_stats(m_State, &afterCapture) != 0;
 	RunScriptString("_F105PreviewRoot = nil");
-	const bool capturePaidNoImages = barrierWindow && readBefore && readAfter && barrierProblems.empty() &&
-	                                 !insideWindow.empty() && insideWindow == outsideWindow &&
-	                                 afterCapture.saves == beforeCapture.saves;
+	const bool refusedInside = !insideCaptured && insideWindow.empty() && insideProblems.size() == 1 &&
+	                           insideProblems.front() == "a checkpoint capture cannot run inside an armed preview window";
+	const bool capturePaidNoImages = barrierWindow && readBefore && readAfter && refusedInside && outsideCaptured && outsideProblems.empty() &&
+	                                 !outsideWindow.empty() && afterCapture.saves == beforeCapture.saves;
 	std::cout << "[script-graph-selftest] " << (capturePaidNoImages ? "PASS" : "FAIL")
 	          << " capture_pays_no_preview_images saves_before=" << beforeCapture.saves
-	          << " saves_after=" << afterCapture.saves << " inside=" << insideWindow.size()
+	          << " saves_after=" << afterCapture.saves << " refused_inside=" << refusedInside
 	          << " outside=" << outsideWindow.size() << std::endl;
+	for (const std::string& problem: outsideProblems) std::cout << "[script-graph-selftest] capture outside the window: " << problem << std::endl;
 	checkpointValues = capturePaidNoImages && checkpointValues;
-	checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
-	// A Lua class left in a global is what a mod checkpoint has to carry.
-	RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
-	checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+	{
+		// The presentation rows apply deliveries, which land in a scene as they do in a match.
+		SceneMan::SceneSetAside originalScene;
+		g_SceneMan.SetAsideScene(originalScene);
+		SceneMan::SceneSetAside deliveryScene;
+		struct DeliveryTerrain : SLTerrain {
+			DeliveryTerrain() {
+				m_MainBitmap = create_bitmap_ex(8, 64, 64);
+				m_MainBitmapOwned = true;
+			}
+		};
+		auto* scene = new Scene();
+		scene->Create(new DeliveryTerrain());
+		deliveryScene.scene = scene;
+		g_SceneMan.ReinstateScene(deliveryScene);
+		checkpointValues = Activity::RunNetLocalPlayerStateSelfTest() && checkpointValues;
+		// A Lua class left in a global is what a mod checkpoint has to carry; the UI rows move the camera, which needs the scene too.
+		RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
+		checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+		g_SceneMan.SetAsideScene(deliveryScene);
+		g_SceneMan.ReinstateScene(originalScene);
+	}
 	lua_getglobal(m_State, "F82BuiltBase");
 	const auto* reboundClass = luabind::detail::is_class_rep(m_State, -1) ? static_cast<const luabind::detail::class_rep*>(lua_touserdata(m_State, -1)) : nullptr;
 	const bool reboundNamed = reboundClass && std::strcmp(reboundClass->name(), "F82BuiltBase") == 0 && !reboundClass->bases().empty() && reboundClass->bases()[0].base && std::strcmp(reboundClass->bases()[0].base->name(), "Box") == 0;
