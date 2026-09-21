@@ -235,6 +235,15 @@ namespace RTE {
 		LuaCheckpointBarrierPause& operator=(const LuaCheckpointBarrierPause&) = delete;
 	};
 
+	/// Keeps a VM that holds no gameplay state, the checkpoint worker's, out of the barrier's counts.
+	class LuaCheckpointBarrierIgnore {
+	public:
+		LuaCheckpointBarrierIgnore();
+		~LuaCheckpointBarrierIgnore();
+		LuaCheckpointBarrierIgnore(const LuaCheckpointBarrierIgnore&) = delete;
+		LuaCheckpointBarrierIgnore& operator=(const LuaCheckpointBarrierIgnore&) = delete;
+	};
+
 	bool RunCheckpointImageSelfTest();
 
 	/// Runs the checkpoint rows that need a live scene; call from a running match.

@@ -176,6 +176,10 @@ namespace RTE {
 		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
 		bool RunCheckpointCaptureSelfTest(uint64_t tick);
+		/// Waits for every queued checkpoint and reports what the worker refused; whether they all completed.
+		bool WaitForAutosaveVerdict();
+		/// Reports on the simulation thread the refusals the checkpoint worker found off it.
+		void ReportDeferredSaveRefusals();
 		/// Drains checkpoint writes at shutdown, after simulation has ended.
 		void WaitForAutosaveTasks() const;
 		/// The last automatic capture this process published; empty when none has.
@@ -250,7 +254,7 @@ namespace RTE {
 
 		/// Waits for the task that saves the game to complete.
 		/// @return Whether the save completed successfully, or no save was pending.
-		bool WaitForSaveGameTask() const;
+		bool WaitForSaveGameTask();
 
 		/// Returns whether a save is currently in progress.
 		/// @return Whether or not a save is currently in progress.
@@ -419,6 +423,9 @@ namespace RTE {
 		std::function<std::string(const std::vector<uint8_t>&)> m_AutosaveDigest;
 		std::deque<SaveRefusalRecord> m_SaveRefusalRecords;
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
+		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
+		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
+		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;

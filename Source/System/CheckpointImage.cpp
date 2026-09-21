@@ -48,8 +48,10 @@ namespace {
 	std::atomic<int> s_BarrierPaused{0};
 	std::atomic<std::thread::id> s_BarrierPauseOwner{};
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
+	thread_local int s_BarrierIgnored = 0;
 
 	void OnLuaTableWrite(void* table) {
+		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			// The capture's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
@@ -69,6 +71,7 @@ namespace {
 	// does, so it is counted and attributed the same way. The write generation moves too: a capture
 	// that reuses the whole Lua half keys on it.
 	void OnLuaValueWrite(void* value) {
+		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
 			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
 				return;
@@ -518,6 +521,10 @@ RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
 		s_BarrierPauseOwner.store(std::thread::id(), std::memory_order_relaxed);
 	}
 }
+
+RTE::LuaCheckpointBarrierIgnore::LuaCheckpointBarrierIgnore() { ++s_BarrierIgnored; }
+
+RTE::LuaCheckpointBarrierIgnore::~LuaCheckpointBarrierIgnore() { --s_BarrierIgnored; }
 
 uint64_t RTE::LuaCheckpointPausedWrites() {
 	return s_PausedForeignWrites.load(std::memory_order_relaxed);
