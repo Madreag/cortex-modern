@@ -1044,9 +1044,9 @@ def scripts(case, port, root, size="960x540"):
                     {"op": "wait", "service": "Completed", "scope": "menu"},
                     {"op": "signal", "name": "left", "scope": "menu"}, {"op": "finish"}]}})
     elif case == "combo-fit":
-        # Reached by the tab control so the measurement runs on a build that has no page op yet.
-        text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
-                "assert_text_fits ComboPresetResolution\ndump_player_options\nexit\n")
+        # Reached by the tab control so the measurement runs on a build that has no page op yet. Which
+        # resolution box the page shows depends on the display the engine measured, so the dump decides it.
+        text = (OPTIONS + "activate TabVideoSettings\nwait 3\ndump_player_options\nexit\n")
     elif case == "lobby":
         # The host starts the match, so its lobby hides the ready button the joining peers get.
         text = host_lobby(port) + "assert_visible ButtonMultiplayerReady 0\n"
@@ -1759,11 +1759,28 @@ def run_case(options, case, root, failing=None):
             assert not overlap(label, smart) and not overlap(label, unheld), (label["rect"], smart["rect"], unheld["rect"])
             assert not overlap(combo, smart) and not overlap(combo, unheld), (combo["rect"], smart["rect"], unheld["rect"])
         if case == "combo-fit":
-            result["combo_fit"] = [[match[0], [int(v) for v in match[1:5]], [int(v) for v in match[5:7]]]
-                                   for log in logs.values() for match in FIT_LINE.findall(log)]
-            assert result["combo_fit"], "no assert_text_fits observation in the log"
-            for name, rect, available in result["combo_fit"]:
-                assert available[0] <= rect[2] - COMBO_BUTTON, (name, rect, available)
+            assert len(images) == 1, len(images)
+            page = images[0]
+            display = page["display"]
+            rows = {control["name"]: control for control in page["controls"]}
+            combo = rows.get("ComboPresetResolution")
+            assert combo, sorted(rows)
+            # The page shows the preset box on a display whose aspect the window matches, and the custom box
+            # otherwise; a fullscreen window always takes the preset box.
+            matched = abs(display["res_x"] / display["res_y"] - display["max_res_x"] / display["max_res_y"]) < 1e-9
+            expected = bool(display["fullscreen"] or matched)
+            result["display"] = {**display, "aspect_matches_display": matched, "preset_box_expected": expected}
+            assert combo["visible"] == expected, (display, combo["visible"])
+            shown = "CollectionPresetResolution" if expected else "CollectionCustomResolution"
+            assert rows.get(shown, {}).get("visible"), (shown, sorted(name for name, row in rows.items() if row["visible"]))
+            # The measurement this case exists for: the combo's own line fits its box minus the drop-down button.
+            assert combo.get("text"), combo
+            available = re.search(r"available=\[(\d+),\s*(\d+)\]", combo["text_measure"])
+            assert available, combo["text_measure"]
+            available = [int(available.group(1)), int(available.group(2))]
+            result["combo_fit"] = [["ComboPresetResolution", combo["rect"], available]]
+            assert available[0] <= combo["rect"][2] - COMBO_BUTTON, (combo["rect"], available)
+            assert combo["text_fits"], combo
         if case == "network":
             # The page shows the saved name, the page's own edits are saved, and the lobby box starts from them.
             page = [capture for capture in images if capture["settings_page"] == "Network:Player"]
