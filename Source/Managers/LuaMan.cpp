@@ -5783,11 +5783,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 		natives.Capture();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
-		// Below a few hundred pages the dispatch costs more than the copy; above it the pool copies the blocks.
-		image->heap = m_CheckpointHeap->Freeze([](size_t count, const auto& block) {
-			if (count < 256) { block(0, count); return; }
-			g_ThreadMan.GetPriorityThreadPool().parallelize_loop(count, [&block](size_t first, size_t last) { block(first, last); }).wait();
-		});
+		image->heap = m_CheckpointHeap->Freeze();
 		image->native = natives.Finish(image->heap);
 		image->scratch = scratch.values;
 		const size_t bytes = image->heap.ByteCount();
