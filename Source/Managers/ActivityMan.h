@@ -200,6 +200,10 @@ namespace RTE {
 			std::string digest;
 			std::shared_ptr<const std::vector<uint8_t>> archive;
 		};
+		/// What an automatic capture's writer thread decided, in the order the verdicts landed. The
+		/// simulation thread queued the capture a tick or more earlier and takes the verdict here.
+		struct AutosaveVerdict { uint64_t tick = 0; bool archived = false; };
+		std::optional<AutosaveVerdict> TakeAutosaveVerdict();
 		/// The newest archive the writer thread has finished; empty before the first one lands.
 		std::optional<CompletedAutosave> LastCompletedAutosave() const;
 		/// Writer thread: reads the archive it just wrote, hashes it and publishes the entry above.
@@ -429,7 +433,9 @@ namespace RTE {
 		std::unordered_set<std::string> m_ReportedAutosaveKeys;
 		std::mutex m_DeferredRefusalMutex; //!< The checkpoint worker hands its refusals through it.
 		std::vector<std::pair<SaveKind, std::vector<std::string>>> m_DeferredRefusals; //!< Found off the simulation thread, reported on it.
+		std::deque<AutosaveVerdict> m_AutosaveVerdicts; //!< One per finished automatic capture, in the order the writer finished them.
 		void QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems);
+		void NoteAutosaveVerdict(uint64_t tick, bool archived);
 		static constexpr size_t c_SaveRefusalRecordLimit = 16;
 		long long m_LastSaveMainMs = 0;
 		long long m_LastSaveZipMs = 0;
