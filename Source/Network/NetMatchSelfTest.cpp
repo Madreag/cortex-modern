@@ -10680,6 +10680,15 @@ namespace RTE {
 		}
 		{
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_DirectoryRegistered = true;
+			service.m_KeepEndedDirectoryLease = true;
+		}
+		if (!service.ShouldKeepIceDirectoryLease()) {
+			*error = "a completed match with a held seat released its directory lease before the match-over answer";
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_LeftMatch = true;
 		}
 		if (service.NeedsCompletedLobbyPump()) {

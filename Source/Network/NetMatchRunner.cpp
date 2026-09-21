@@ -90,6 +90,7 @@ namespace RTE {
 			const double tickMs = g_TimerMan.GetDeltaTimeMS();
 			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
 			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
+			uint16_t slowestRemoteDelay = delays.front();
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
@@ -97,8 +98,16 @@ namespace RTE {
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
 				    estimate.RequiredFrames(tickMs, floorDelay), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
+				slowestRemoteDelay = std::max(slowestRemoteDelay, neededDelay);
 				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
 				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
+			}
+			// The host's sender window covers the slowest link so its frames do not feed a peer's wait back into its stream.
+			const size_t hostIndex = m_MatchConfig.hostPeerId > 0 && m_MatchConfig.hostPeerId <= m_MatchConfig.peerCount ? m_MatchConfig.hostPeerId - 1 : 0;
+			if (delays[hostIndex] < slowestRemoteDelay) {
+				delays[hostIndex] = slowestRemoteDelay;
+				std::cout << "[net-match] auto input delay: host sender window " << delays[hostIndex]
+				          << " frames (slowest remote link)" << std::endl;
 			}
 			m_MatchConfig.peerInputDelayFrames = std::move(delays);
 		}

@@ -765,6 +765,10 @@ namespace RTE {
 
 		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
 		void NoteLocalStartPark(uint32_t restartMs);
+		/// Marks the agreed autosave tick as a local park while every peer captures the same state.
+		void BeginSynchronizedCapture(uint64_t completedFrame);
+		void CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs);
+		bool IsSynchronizedCapturePark(uint64_t frame) const;
 		void Complete(const std::string& message = "complete");
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
@@ -1224,6 +1228,10 @@ namespace RTE {
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		bool m_DeferStops = false;
 		bool m_ResyncPrimed = false;
+		bool m_ResumeAdmissionPending = false;
+		uint64_t m_SynchronizedCaptureStartFrame = UINT64_MAX;
+		uint64_t m_SynchronizedCaptureEndFrame = 0;
+		double m_SynchronizedCaptureBudgetMs = 250.0;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		std::optional<uint64_t> m_LastCompletedSimulationTick;

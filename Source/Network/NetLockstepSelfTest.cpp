@@ -1508,8 +1508,8 @@ namespace RTE {
 			if (!host.QueueLocalInput(0, {}, {}, error) || !client.QueueLocalInput(0, {}, {}, error)) return false;
 			host.Tick(10); client.Tick(10);
 			NetLockstepReadyFrame frame;
-			if (client.PopReadyFrame(frame)) {
-				*error = "the sender committed an input the host could still fence with a hold";
+			if (!client.PopReadyFrame(frame) || frame.frame != 0) {
+				*error = "the sender did not commit its local input optimistically";
 				return false;
 			}
 			for (const auto& stale: {NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 69, 1, 0x9A70, 0},
@@ -1524,11 +1524,33 @@ namespace RTE {
 			clientWire.loseInput = false;
 			if (!host.QueueLocalInput(1, {}, {}, error) || !client.QueueLocalInput(1, {}, {}, error)) return false;
 			for (uint64_t now = 12; now < 30; ++now) { host.Tick(now); client.Tick(now); }
-			if (!host.PopReadyFrame(frame) || frame.frame != 0 || !client.PopReadyFrame(frame) || frame.frame != 0) {
-				*error = "an accepted retransmission did not release the sender's frame";
+			if (!host.PopReadyFrame(frame) || frame.frame != 0 || !client.PopReadyFrame(frame) || frame.frame != 1) {
+				*error = "an accepted retransmission did not release the host and sender horizons";
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS sender_waits_for_host_acceptance" << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS sender_commits_optimistically_and_retransmits" << std::endl;
+			return true;
+		}
+
+		bool TestSynchronizedCapturePark(std::string* error) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator coordinator;
+			auto config = MakeCoordinatorConfig(1, 1, 0x9A71, 0, NetTransportLane::ControlReliable);
+			config.peerCount = 1;
+			config.remoteTransportPeerIds.clear();
+			config.simTickMs = 1000.0 / 60.0;
+			if (!wire.StartHost(49475, error) || !coordinator.Start(wire, config, error)) return false;
+			coordinator.BeginSynchronizedCapture(100);
+			if (coordinator.IsSynchronizedCapturePark(100) || !coordinator.IsSynchronizedCapturePark(101)) {
+				*error = "the agreed capture park did not begin on the first frame after the completed tick";
+				return false;
+			}
+			coordinator.CompleteSynchronizedCapture(100, 97.0);
+			if (!coordinator.IsSynchronizedCapturePark(106) || coordinator.IsSynchronizedCapturePark(120)) {
+				*error = "the capture park was not bounded by the measured capture duration";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS synchronized_capture_park" << std::endl;
 			return true;
 		}
 
@@ -16349,6 +16371,7 @@ namespace RTE {
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
 		    !TestSenderWaitsForHostAcceptance(&error) ||
+		    !TestSynchronizedCapturePark(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||

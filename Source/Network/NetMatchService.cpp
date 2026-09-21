@@ -688,6 +688,7 @@ static std::string ResyncSaveName() {
 			}
 			m_DirectoryRetracted = false;
 			m_DirectoryHidden = false;
+			m_KeepEndedDirectoryLease = false;
 			m_DirectoryRelistPending = false;
 		}
 		// The mapping request must land before the first directory register: the heartbeat never
@@ -1698,6 +1699,7 @@ static std::string ResyncSaveName() {
 			m_DirectoryRegistered = false;
 			m_DirectoryHidden = false;
 			m_DirectoryRelistPending = false;
+			m_KeepEndedDirectoryLease = false;
 			AccumulateLockstepTotalsLocked();
 			runner = std::move(m_Runner);
 			coordinator = std::move(m_Coordinator);
@@ -1840,6 +1842,8 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::ShouldKeepIceDirectoryLease() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
+		if (m_KeepEndedDirectoryLease)
+			return m_IsHost && !m_DirectoryRetracted && m_DirectoryRegistered;
 		return m_IsHost && m_IceEnabled && !m_DirectoryRetracted && !m_IceBoundSessionId.empty() &&
 		       m_Directory.GetState() == NetDirectoryClient::State::Registered && m_Directory.GetSessionId() == m_IceBoundSessionId;
 	}
@@ -1872,14 +1876,20 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::Complete(const std::string& reason) {
 		std::string displayReason = reason;
+		bool heldSeatNeedsAnswer = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(reason);
 			if (m_LastMatchSummary) displayReason = m_LastMatchSummary->result;
+			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
+			if (heldSeatNeedsAnswer) {
+				m_KeepEndedDirectoryLease = true;
+				m_ReconnectHost.SetMatchEnded();
+			}
 		}
 		// The recording gets its end marker at the match's end, not at process exit.
 		ScenarioRunner::CloseLockstepReplayRecord();
-		if (ShouldKeepIceDirectoryLease()) {
+		if (heldSeatNeedsAnswer || ShouldKeepIceDirectoryLease()) {
 			HideDirectoryListing();
 		} else {
 			RetractDirectoryListing();
@@ -1898,17 +1908,20 @@ static std::string ResyncSaveName() {
 	// Terminal clean end; the session objects stay alive for the next Start or quit.
 	void NetMatchService::FinishMatch(const std::string& result) {
 		std::string displayResult = result;
+		bool heldSeatNeedsAnswer = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
+			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
 			DrainPendingSessionEventsLocked(false);
 		}
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::ResetRetiredChecksumCounters();
 		ScenarioRunner::SetSessionPump(nullptr);
-		if (ShouldKeepIceDirectoryLease()) {
+		if (heldSeatNeedsAnswer || ShouldKeepIceDirectoryLease()) {
 			HideDirectoryListing();
 		} else {
 			RetractDirectoryListing();
@@ -2543,7 +2556,9 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool captureWithinBudget = m_PrivateImageLastCaptureMs <= 50.0;
+		// Zero means no completed capture has been measured yet; only the round's initial base may run
+		// in that state. A held seat never asks for another base after a slow capture.
+		const bool captureWithinBudget = m_PrivateImageLastCaptureMs > 0.0 && m_PrivateImageLastCaptureMs <= 50.0;
 		const bool stale = ((!seatHeld && m_PrivateImageStaleFrom > m_WorldJoin.Image().tick) ||
 		                   (seatHeld && captureWithinBudget)) && !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
@@ -2645,9 +2660,13 @@ static std::string ResyncSaveName() {
 		m_LastAutosaveSimTime = now;
 		if (!joinCapture && now < m_NextAutosaveSimTime) return;
 		if (interval > 0 && now >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
+		const auto captureBegan = std::chrono::steady_clock::now();
 		if (!SaveStampedAutosave(tick)) {
+			if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count());
 			return;
 		}
+		if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, std::max(g_ActivityMan.LastAutosaveCaptureMs(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count()));
 		if (joinCapture) {
 			m_WorldCaptureRequestedTick = tick;
 			m_WorldCapturePending = false;
