@@ -182,11 +182,10 @@ namespace {
 	struct CaptureAllocationState {
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
-		int cursor = g_LuaMan.GetScriptStateCursor();
 		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
 		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
-		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); }
 		~CaptureAllocationState() {
 			RestoreCounters();
 			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
@@ -637,7 +636,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->simUpdateCount = g_TimerMan.GetSimUpdateCount();
 	image->simTimeTicks = g_TimerMan.GetSimTimeTicks();
 	image->uniqueIDCounter = MovableObject::GetUniqueIDCounter();
-	image->luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	image->quarantine = g_MovableMan.GetLockstepJoinQuarantine();
 	image->placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 	image->placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
@@ -782,7 +780,6 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		AudioMan::SoundCheckpointSaveScope carriedSounds;
 		const RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		const long uid = MovableObject::GetUniqueIDCounter();
-		const int cursor = g_LuaMan.GetScriptStateCursor();
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		const auto write = [](const std::function<void(Writer&)>& visit) {
 			auto stream = std::make_unique<std::ostringstream>();
@@ -804,7 +801,6 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 		g_SimRNG = sim; g_RenderRNG = render;
 		MovableObject::PinUniqueIDCounter(uid);
-		g_LuaMan.SetScriptStateCursor(cursor);
 		synchronous.structure = CheckpointText(g_MovableMan.SaveWorldStructure());
 		synchronous.sceneRuntime = CheckpointText(scene->SaveRuntimeCheckpoint());
 		synchronous.globals = CheckpointText(CaptureRuntimeGlobals(carriedSounds.Carried(), false));
@@ -813,7 +809,6 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		synchronous.simUpdateCount = g_TimerMan.GetSimUpdateCount();
 		synchronous.simTimeTicks = g_TimerMan.GetSimTimeTicks();
 		synchronous.uniqueIDCounter = MovableObject::GetUniqueIDCounter();
-		synchronous.luaStateCursor = g_LuaMan.GetScriptStateCursor();
 		synchronous.quarantine = g_MovableMan.GetLockstepJoinQuarantine();
 		synchronous.placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 		synchronous.placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
@@ -990,7 +985,6 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		bool placeObjects = true, placeUnits = true, hasActivity = false, hasScene = false;
 		long long simUpdateCount = -1, simTimeTicks = 0;
 		long uniqueIDCounter = -1;
-		int luaStateCursor = -1;
 		std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 		std::map<size_t, std::string> graphs;
 		std::string runtimeGlobals, worldStructure, sceneRuntime;
@@ -1027,7 +1021,9 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 				// Temporary reader/graph clones must never borrow an incoming object's saved ID.
 				MovableObject::PinUniqueIDCounter(std::max(MovableObject::GetUniqueIDCounter(), uniqueIDCounter));
 			} else if (propName == "LuaStateCursor") {
-				reader >> luaStateCursor;
+				// Retired with the round-robin assignment; read so a save written before it still loads.
+				int retiredCursor = 0;
+				reader >> retiredCursor;
 			} else if (propName == "LockstepJoinQuarantine") {
 				const std::string entry = reader.ReadPropValue();
 				const size_t bar = entry.find('|');
@@ -1098,7 +1094,6 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		out.simUpdateCount = simUpdateCount;
 		out.simTimeTicks = simTimeTicks;
 		out.uniqueIDCounter = uniqueIDCounter;
-		out.luaStateCursor = luaStateCursor;
 		out.joinQuarantine = std::move(joinQuarantine);
 		out.scriptGraphs = std::move(scriptGraphs);
 		out.runtimeGlobals = std::move(runtimeGlobals);
@@ -1413,17 +1408,15 @@ bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded
 	const auto stagedTick = m_PendingCheckpoint.simUpdateCount;
 	const auto stagedTime = m_PendingCheckpoint.simTimeTicks;
 	const auto stagedUID = m_PendingCheckpoint.uniqueIDCounter;
-	const auto stagedCursor = m_PendingCheckpoint.luaStateCursor;
 	const auto stagedGraphs = m_PendingCheckpoint.scriptGraphs;
 	const auto liveUID = MovableObject::GetUniqueIDCounter();
-	const auto liveCursor = g_LuaMan.GetScriptStateCursor();
 	ContentFile material((g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/Save Mat.png").c_str());
 	const int firstPixel = getpixel(material.GetAsBitmap(), 0, 0);
 	const bool loaded = LoadGameToRestart(fileName);
 	const bool preserved = loaded || (m_PendingCheckpoint.scene.get() == stagedScene && m_PendingCheckpoint.activity.get() == stagedActivity && m_StartActivity.get() == configuredStart &&
 		m_Activity.get() == runningActivity && m_PendingCheckpoint.simUpdateCount == stagedTick && m_PendingCheckpoint.simTimeTicks == stagedTime &&
-		m_PendingCheckpoint.uniqueIDCounter == stagedUID && m_PendingCheckpoint.luaStateCursor == stagedCursor && m_PendingCheckpoint.scriptGraphs == stagedGraphs &&
-		MovableObject::GetUniqueIDCounter() == liveUID && g_LuaMan.GetScriptStateCursor() == liveCursor &&
+		m_PendingCheckpoint.uniqueIDCounter == stagedUID && m_PendingCheckpoint.scriptGraphs == stagedGraphs &&
+		MovableObject::GetUniqueIDCounter() == liveUID &&
 		getpixel(material.GetAsBitmap(), 0, 0) == firstPixel && m_RestartRestoresSnapshot && m_ActivityNeedsRestart);
 	const bool restarted = RestartActivity();
 	const bool terrain = restarted && getpixel(g_SceneMan.GetTerrain()->GetBitmap(), 0, 0) == (expectLoaded ? 28 : firstPixel);
@@ -1487,14 +1480,12 @@ bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std
 	PendingCheckpoint candidate;
 	const auto readStart = std::chrono::steady_clock::now();
 	const long uidCounter = MovableObject::GetUniqueIDCounter();
-	const int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	const bool wasRestoring = g_MovableMan.IsRestoringSnapshot();
 	g_MovableMan.SetRestoringSnapshot(true);
 	const bool read = ReadSavedGameArchive(archivePath, fileName, candidate);
 	g_MovableMan.SetRestoringSnapshot(wasRestoring);
 	if (!read) {
 		MovableObject::PinUniqueIDCounter(uidCounter);
-		g_LuaMan.SetScriptStateCursor(luaStateCursor);
 		return false;
 	}
 	m_RestartRestoresSnapshot = true;
@@ -1764,9 +1755,6 @@ bool ActivityMan::RestartActivityCandidate() {
 
 		if (m_PendingCheckpoint.uniqueIDCounter >= 0) {
 			MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
-		}
-		if (m_PendingCheckpoint.luaStateCursor >= 0) {
-			g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
 		}
 	}
 	if (!restoresSnapshot) g_TimerMan.PauseSim(false);
@@ -2074,7 +2062,6 @@ bool ActivityMan::RestartActivity() {
 		}
 		if (restored && !m_PendingCheckpoint.runtimeGlobals.empty()) restored = RestoreRuntimeGlobals(m_PendingCheckpoint.runtimeGlobals);
 		if (restored && m_PendingCheckpoint.uniqueIDCounter >= 0) MovableObject::PinUniqueIDCounter(m_PendingCheckpoint.uniqueIDCounter);
-		if (restored && m_PendingCheckpoint.luaStateCursor >= 0) g_LuaMan.SetScriptStateCursor(m_PendingCheckpoint.luaStateCursor);
 		if (restored && m_PendingCheckpoint.afterRestore) {
 			g_MovableMan.SetRestoringSnapshot(true);
 			restored = m_Activity && m_PendingCheckpoint.afterRestore(*m_Activity);

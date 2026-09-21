@@ -142,6 +142,10 @@ namespace RTE {
 		bool RunPurgeSelfTest();
 		bool RunThreadedSyncedUpdateOrderSelfTest();
 
+		/// The state an object's scripts land on is its unique ID modulo the state count, so a machine that
+		/// ran objects before the match assigns the same objects to the same states as one that did not.
+		bool RunLuaStateAssignmentSelfTest();
+
 		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
 		/// installing an empty one. Leaves the live record as it found it.
 		bool RunLegacyBrainRecordSelfTest(const Actor* seatBrain);
@@ -165,7 +169,6 @@ namespace RTE {
 			std::array<size_t, 4> m_QueueSizes{};
 			std::string m_Structure;
 			long m_Counter;
-			int m_Cursor;
 		};
 
 		/// An in-memory world snapshot for rollback: faithful clones of every resident MO, kept in list order.
@@ -187,7 +190,6 @@ namespace RTE {
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 			std::vector<CheckpointText> luaGraphs; //!< Owned graph values; text is formatted only for a restore.
 			long uniqueIDCounter = 0;
-			int luaStateCursor = 0;
 			WorldSnapshot() = default;
 			WorldSnapshot(const WorldSnapshot&) = delete;
 			WorldSnapshot& operator=(const WorldSnapshot&) = delete;
@@ -267,7 +269,6 @@ namespace RTE {
 			std::deque<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
 			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
 			long uniqueIDCounter = 0;
-			int luaStateCursor = 0;
 			bool held = false;
 
 			/// A record that dies still holding the world hands it back, so no caller can leave a hold nothing can reach.

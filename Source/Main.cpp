@@ -2926,7 +2926,6 @@ static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
 	out << "sound_cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << "\n";
 	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
-	out << "lua_state_cursor=" << g_LuaMan.GetScriptStateCursor() << "\n";
 	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 	out << "queues actors=" << mark.actors << " items=" << mark.items << " particles=" << mark.particles << " alarms=" << mark.alarms << "\n";
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {

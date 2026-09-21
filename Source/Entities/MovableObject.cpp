@@ -283,7 +283,7 @@ LuaStateWrapper& MovableObject::GetAndLockStateForScript(const std::string& scri
 	}
 
 	if (m_ThreadedLuaState == nullptr) {
-		m_ThreadedLuaState = g_LuaMan.GetAndLockFreeScriptState();
+		m_ThreadedLuaState = g_LuaMan.GetAndLockScriptStateForObject(m_UniqueID);
 	} else {
 		m_ThreadedLuaState->GetMutex().lock();
 	}
@@ -501,15 +501,23 @@ void MovableObject::AdoptPersistedUniqueID() {
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	m_PersistedMOIgnoreTimerAnchor.Apply(m_MOIgnoreTimer);
-	if (m_PersistedLuaStateIndex >= 0) {
-		MoveScriptsToState(g_LuaMan.GetStateByIndex(m_PersistedLuaStateIndex));
+	// The state follows the unique ID this object ends up with, so it is settled after the adoption. The
+	// saved index is read and ignored: it recorded where the writing machine's cursor happened to stand.
+	const auto moveScriptsToTheStateTheUniqueIDNames = [this] {
+		const bool saveNamedAState = m_PersistedLuaStateIndex >= 0;
 		m_PersistedLuaStateIndex = -1;
-	}
+		if (m_ForceIntoMasterLuaState || (!saveNamedAState && !m_ThreadedLuaState)) {
+			return;
+		}
+		MoveScriptsToState(g_LuaMan.GetScriptStateForObject(m_UniqueID));
+	};
 	if (m_PersistedUniqueID <= 0) {
+		moveScriptsToTheStateTheUniqueIDNames();
 		return;
 	}
 	if (IsFaithfulClone() && !FaithfulCloneRegisters()) {
 		m_UniqueID = std::exchange(m_PersistedUniqueID, 0);
+		moveScriptsToTheStateTheUniqueIDNames();
 		return;
 	}
 	g_MovableMan.UnregisterObject(this);
@@ -523,6 +531,7 @@ void MovableObject::AdoptPersistedUniqueID() {
 		PinUniqueIDCounter(m_UniqueID);
 	}
 	g_MovableMan.RegisterObject(this);
+	moveScriptsToTheStateTheUniqueIDNames();
 }
 
 void MovableObject::ResolveFaithfulLinks() {

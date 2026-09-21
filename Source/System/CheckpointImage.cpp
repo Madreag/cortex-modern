@@ -537,7 +537,6 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 		writer.NewPropertyWithValue("SimUpdateCount", image.simUpdateCount);
 		writer.NewPropertyWithValue("SimTimeTicks", image.simTimeTicks);
 		writer.NewPropertyWithValue("UniqueIDCounter", image.uniqueIDCounter);
-		writer.NewPropertyWithValue("LuaStateCursor", image.luaStateCursor);
 		for (const auto& [savedTick, uid]: image.quarantine) {
 			writer.NewProperty("LockstepJoinQuarantine");
 			writer << savedTick << "|" << uid;
@@ -802,7 +801,6 @@ end
 	struct BorrowedCounters {
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
-		int cursor = g_LuaMan.GetScriptStateCursor();
 		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
 		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
@@ -810,7 +808,6 @@ end
 			g_SimRNG = sim;
 			g_RenderRNG = render;
 			MovableObject::PinUniqueIDCounter(uid);
-			g_LuaMan.SetScriptStateCursor(cursor);
 			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
 			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
