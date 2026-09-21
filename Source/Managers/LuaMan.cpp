@@ -5807,7 +5807,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
-		image->heap = m_CheckpointHeap->Freeze();
+		// The written pages are copied here into a pooled slab whose pages are already resident.
+		image->heap = m_CheckpointHeap->Freeze({});
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
@@ -5816,6 +5817,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			stats->heapUs += image->heap.FreezeUs();
 			stats->copyUs += image->heap.CopyUs();
 			stats->pages += image->heap.BlockCount();
+			stats->faults += image->heap.PreviousFaults();
+			stats->faultUs += image->heap.PreviousFaultUs();
 			stats->bytes += bytes;
 			stats->userdata += image->native->EntryCount();
 			stats->cached += image->native->CachedCount();
@@ -6725,6 +6728,10 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 		row << " p99_ms=" << stats.p99_ms;
 	}
 	std::cout << row.str() << std::endl;
+}
+
+void LuaStateWrapper::WaitFrozenCopy() {
+	if (m_CheckpointHeap) m_CheckpointHeap->WaitCopy();
 }
 
 void LuaStateWrapper::Destroy() {

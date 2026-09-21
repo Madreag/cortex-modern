@@ -2396,12 +2396,18 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		LuaMan::s_FrozenCaptureStats = &stats;
 		std::vector<std::string> frozenProblems;
 		const bool complete = captureAll(true, frozenProblems);
+		// Every state's page copy has landed before any state may run again.
+		const auto waitStarted = std::chrono::steady_clock::now();
+		g_LuaMan.GetMasterScriptState().WaitFrozenCopy();
+		for (LuaStateWrapper& state: states) state.WaitFrozenCopy();
+		stats.copyUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStarted).count();
 		LuaMan::s_FrozenCaptureStats = nullptr;
 		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
 		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
 		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
 		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
-		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts << std::endl;
+		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts
+		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs << std::endl;
 		if (complete) return true;
 		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;
 	}

@@ -37,6 +37,8 @@ namespace RTE {
 		size_t iterators = 0;
 		size_t owned = 0;
 		int64_t callbacksUs = 0;
+		size_t faults = 0; // The faults the previous snapshots cost the VM's threads while they lived, and their time.
+		int64_t faultUs = 0;
 		int64_t receiversUs = 0, activityUs = 0, asyncUs = 0, cacheUs = 0, objectsUs = 0; // The descriptor's parts.
 		size_t cachedScripts = 0;
 		int64_t rootsUs = 0;
@@ -208,6 +210,8 @@ namespace RTE {
 		bool CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems);
 		/// Whether this state's captures may come off a frozen image; a worker failure on one turns it off.
 		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
+		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
+		void WaitFrozenCopy();
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
