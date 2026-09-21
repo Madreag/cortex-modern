@@ -9,7 +9,7 @@ assert_substate Landing
 settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 video_mark vw-mp-host-setup
-wait_ms 396
+wait_ms 450
 assert_substate HostSetup
 video_mark vw-mp-activity-picker
 dump_host_options
@@ -21,7 +21,7 @@ settext TextHostPort {PORT}
 settext TextHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
-wait_ms 396
+wait_ms 450
 video_mark vw-mp-options-seats
 activate TabHostPageSeats
 wait_ms 660
@@ -53,7 +53,7 @@ wait_ms 660
 assert_visible CollectionBoxHostPageSession 1
 dump_host_options
 activate ButtonHostOptBack
-wait_ms 396
+wait_ms 450
 assert_substate HostSetup
 activate ButtonMultiplayerCreate
 video_mark vw-mp-lobby-host
