@@ -1944,7 +1944,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestPrivateReclaimKeepsRoundRunning(std::string* error) {
+		bool TestPrivateReclaimKeepsRoundRunning(std::string* error, bool boundedReturn = false) {
 			LoopbackTransport hostWire, oldWire, returnWire;
 			NetLockstepCoordinator host, oldClient, returning;
 			auto a = MakeCoordinatorConfig(1, 2, 0x9A32, 0, NetTransportLane::ControlReliable);
@@ -1994,6 +1994,16 @@ namespace RTE {
 			host.InjectEvent(event, 61);
 			std::vector<NetGameCommand> queued;
 			if (host.PeekQueuedCommands(11, 2, queued) && !queued.empty()) { *error = "the fenced transport replayed a stale purchase after reclaim"; return false; }
+			if (boundedReturn) {
+				host.NoteLocalStartPark(1000);
+				if (!host.QueueLocalInput(11, {}, {}, error)) return false;
+				for (uint64_t now = 62; now <= 112; ++now) { host.Tick(now); host.NoteFrameWait(11, now); }
+				if (!host.IsPeerGoneAtFrame(2, 11) || !host.IsRunning()) {
+					*error = "a reclaimed seat received another startup allowance beyond the wait bound";
+					return false;
+				}
+				return true;
+			}
 			if (!host.ProposePeerHold(2, 62, error) || !host.IsPeerGoneAtFrame(2, 11)) {
 				*error = "a previous reclaim prevented the next incarnation from being held"; return false;
 			}
@@ -16234,7 +16244,7 @@ namespace RTE {
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
-		    !TestPrivateReclaimKeepsRoundRunning(&error) ||
+		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
