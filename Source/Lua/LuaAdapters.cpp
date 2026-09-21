@@ -3,6 +3,7 @@
 #include "LuaAdapterDefinitions.h"
 #include "LuabindObjectWrapper.h"
 #include "LuaMan.h"
+#include "SoundSet.h"
 
 #include "lj_obj.h"
 #include "NetGameCommand.h"
@@ -323,13 +324,13 @@ void LuaAdaptersAHuman::ReloadFirearms(AHuman* luaSelfObject) {
 
 float LuaAdaptersAHuman::GetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset) {
 	// 6.x kept one travel speed per SLOW/NORMAL/FAST preset; 7.0 keeps a single travel speed per LimbPath, so every preset maps to the WALK path speed.
-	return luaSelfObject->GetLimbPath(AHuman::FGROUND, AHuman::WALK)->GetTravelSpeed();
+	return luaSelfObject->GetLimbPathByIndex(AHuman::WALK)->GetTravelSpeed();
 }
 
 void LuaAdaptersAHuman::SetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset, float speed) {
-	// 6.x preset speeds applied to the actor's ground movement; both ground layers are updated so the speed survives layer swaps.
-	luaSelfObject->GetLimbPath(AHuman::FGROUND, AHuman::WALK)->SetTravelSpeed(speed);
-	luaSelfObject->GetLimbPath(AHuman::BGROUND, AHuman::WALK)->SetTravelSpeed(speed);
+	// 6.x preset speeds applied to the actor's ground movement; both ground layers are updated so the speed survives layer swaps. The Layer enum is private, so the paths are reached by index (foreground at WALK, background one movement-state block later).
+	luaSelfObject->GetLimbPathByIndex(AHuman::WALK)->SetTravelSpeed(speed);
+	luaSelfObject->GetLimbPathByIndex(AHuman::MOVEMENTSTATECOUNT + AHuman::WALK)->SetTravelSpeed(speed);
 }
 
 float LuaAdaptersSceneObject::GetTotalValue(const SceneObject* luaSelfObject, int nativeModule, float foreignMult) {
@@ -749,13 +750,13 @@ namespace {
 
 	/// Whether the MusicMan's live song is our queue carrier, by the section type it last cycled into.
 	bool CompatSongIsLive() {
-		const std::string& sectionType = g_MusicMan.GetCurrentDynamicSongSectionType();
+		const std::string& sectionType = g_MusicMan.GetCurrentSongSectionType();
 		return sectionType == c_CompatNowSectionType || sectionType == c_CompatNextSectionType || sectionType == c_CompatSilenceSectionType;
 	}
 
 	/// The queue head is consumed once it becomes the playing section; dropped here so rebuilds arm the next pending entry.
 	void ResyncCompatMusicQueue() {
-		if (!s_CompatMusicQueue.empty() && g_MusicMan.GetCurrentDynamicSongSectionType() == c_CompatNextSectionType) {
+		if (!s_CompatMusicQueue.empty() && g_MusicMan.GetCurrentSongSectionType() == c_CompatNextSectionType) {
 			s_CompatMusicQueue.pop_front();
 		}
 	}
