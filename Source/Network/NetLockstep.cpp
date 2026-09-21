@@ -4102,7 +4102,16 @@ namespace RTE {
 		m_ResyncPrimed = !config.resumeFromSnapshot;
 		m_DeferStops = false;
 		m_State = NetLockstepState::WaitingForStart;
+		// The sim can measure its restart before the rematch worker has finished discovering its
+		// transports. Preserve that publication across the round reset so the first start (and its
+		// retransmit once remotes become known) carries the fact instead of silently losing it.
+		const bool preStartPublished = m_LocalStartupPublished;
+		const uint32_t preStartParkMs = m_LocalStartParkMs;
 		ResetRoundState();
+		if (preStartPublished) {
+			m_LocalStartupPublished = true;
+			m_LocalStartParkMs = preStartParkMs;
+		}
 		m_DelayEstimators = config.initialDelaySamples;
 		for (auto& [peer, sample]: m_DelayEstimators) sample.Rebase(NetLockstepNowMs());
 		// A round of our own produces its own input; a round we FOLLOW keeps what we already queued.
