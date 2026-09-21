@@ -707,6 +707,7 @@ namespace RTE {
 		};
 		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
 		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
+		lockstepConfig.requirePublishedStart = m_UseLobbyProtocol && !m_WorldJoinStarting;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
 		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
@@ -787,6 +788,11 @@ namespace RTE {
 				SetFailed(coordinator.GetStats().timeoutReason);
 				if (error) *error = m_SetupError;
 				return false;
+			}
+			// The initial start packets are the lobby handshake. A service match remains
+			// parked until the game thread measures and republishes activity startup.
+			if (coordinator.HasReceivedAllRemoteStarts() && coordinator.GetConfig().requirePublishedStart) {
+				return true;
 			}
 			if (nowMs - startMs > maxWaitMs) {
 				m_HostLostDuringSetup = !m_Config.host;
