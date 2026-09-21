@@ -1243,7 +1243,16 @@ def scripts(case, port, root, size="960x540"):
         if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
-        steps = ([{"op": "wait", "sim_at_least": 150}, {"op": "key_down", "key": "Escape"},
+        steps = ([{"op": "wait", "sim_at_least": 150},
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": True},
+                  menu_step("push_toast info toast-one"), menu_step("push_toast info toast-two"),
+                  menu_step("push_toast info toast-three"),
+                  menu_step("assert_inside_screen NetworkSeats"),
+                  menu_step("dump_refresh_count"), {"op": "wait", "renders": 60},
+                  menu_step("dump_refresh_count"),
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "key_down", "key": "Escape"},
                   {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}] if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
@@ -1257,7 +1266,20 @@ def scripts(case, port, root, size="960x540"):
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
                       {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100}]
         elif case == "input-parity":
-            steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}}]
+            steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}},
+                      menu_step("key Return down"), menu_step("dump_enter_state"),
+                      menu_step("key KPEnter up"), menu_step("dump_enter_state"),
+                      menu_step("key Return up"),
+                      menu_step("post_command ButtonMultiplayerHostGame"),
+                      {"op": "wait", "renders": 3},
+                      menu_step("assert_visible ComboHostSeatType1 1"),
+                      menu_step("focus ComboHostSeatType1"),
+                      menu_step("key Return down"), menu_step("dump_enter_state"),
+                      menu_step("key Return up"),
+                      menu_step("key KPEnter down"), menu_step("dump_enter_state"),
+                      menu_step("key KPEnter up"),
+                      menu_step("post_command ButtonHostBack"),
+                      menu_step("assert_focus TextMultiplayerName")]
             for route in ("key", "pad", "mouse", "post_command"):
                 if route == "post_command":
                     steps += [menu_step("post_command ButtonMultiplayerHostGame")]
@@ -1606,6 +1628,14 @@ def run_case(options, case, root, failing=None):
             assert recorded[0].name in logs["host"], recorded[0].name
             assert not list((runs["client"].cwd / "Userdata/Replays").glob("*.ccreplay")) if (runs["client"].cwd / "Userdata/Replays").exists() else True
             result["replay_recorded"] = recorded[0].name
+            refresh = [json.loads(line.split("[refresh-count] ", 1)[1]) for line in logs["host"].splitlines()
+                       if "[refresh-count] " in line]
+            assert len(refresh) >= 2, refresh
+            delta = refresh[-1]["refresh_count"] - refresh[0]["refresh_count"]
+            changes = refresh[-1]["refresh_changes"] - refresh[0]["refresh_changes"]
+            result["refresh"] = {"before": refresh[0], "after": refresh[-1], "delta": delta, "changes": changes,
+                                 "frames": 60}
+            assert delta < 60, result["refresh"]
         for who in probes:
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
@@ -2184,6 +2214,11 @@ def run_case(options, case, root, failing=None):
             projected = [[{key: control[key] for key in ("name", "rect", "text", "enabled", "visible")}
                           for control in capture["controls"]] for capture in images]
             assert all(value == projected[0] for value in projected[1:]), "activation routes produce different controls"
+            host_log = logs.get("host") or next(iter(logs.values()))
+            enters = [json.loads(line.split("[enter-state] ", 1)[1]) for line in host_log.splitlines()
+                      if "[enter-state] " in line]
+            result["enter_states"] = enters
+            assert enters and all(row.get("name") == "Pushed" for row in enters), enters
         result["pass"] = True
     except Exception as error:
         result["error"] = str(error)

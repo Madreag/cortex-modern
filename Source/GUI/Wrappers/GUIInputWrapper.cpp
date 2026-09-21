@@ -92,7 +92,7 @@ namespace {
 		bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) override {
 			if (!automationDriving) return false;
 			if (device == "key") {
-				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name.c_str());
+				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name == "KPEnter" ? "Keypad Enter" : name.c_str());
 				if (key == SDL_SCANCODE_UNKNOWN) return false;
 				SDL_Event event{};
 				event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
