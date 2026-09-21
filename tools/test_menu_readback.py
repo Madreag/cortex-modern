@@ -368,7 +368,8 @@ def pause_probe(who, root):
                   {"op": "assert_control", "scope": "menu", "control": "LabelLeaveConfirm",
                    "equals": {}, "text_contains": "Leave the match"},
                   menu_step("dump_host_options"), menu_step("activate ButtonLeaveConfirm"),
-                  {"op": "wait", "elapsed_ms": 1500}, {"op": "signal", "name": "left"}]
+                  {"op": "wait", "service": "Completed", "scope": "menu"},
+                  {"op": "signal", "name": "left", "scope": "menu"}]
     else:
         steps += [{"op": "signal", "name": "done"}]
     steps += [{"op": "finish"}]
@@ -603,10 +604,8 @@ def scripts(case, port, root, size="960x540"):
         return ({who: f"wait_file {probe_root(root, who) / 'done.json'} 90\nexit\n" for who in ("host", "client")},
                 {who: repair_probe(who, root, size != "640x360") for who in ("host", "client")})
     if case == "pause":
-        # Each peer's match pause menu is its own local surface, so each peer drives its own probe.
-        # Both peers wait for the leaver's own signal: a peer that quits on its checks records the
-        # e2e completion instead of the leave, on its own side and on its peer's.
-        return ({who: f"wait_file {probe_root(root, 'client') / 'left.json'} 90\nwait_ms 2000\nexit\n"
+        # Keep both peers until the leave has completed.
+        return ({who: f"wait_file {probe_root(root, 'client') / 'left.json'} 90\nexit\n"
                  for who in ("host", "client")},
                 {who: pause_probe(who, root) for who in ("host", "client")})
     probe = None
@@ -911,7 +910,8 @@ def scripts(case, port, root, size="960x540"):
                 "assert_label LabelHostInfo Fredeleig Bunkers - Co-op PvE\ndump_host_options\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
-                "wait_connected 2\nwait 12\n"
+                "wait_label LabelLobbyPlayer1 Joiner\n"
+                f"wait_file {(root / 'client/runtime/ScreenShots/dump_host_options_0.json').as_posix()} 60\n"
                 "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
                 "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
                 "assert_text_fits LabelLobbyMatch\nassert_text_fits LabelLobbyMatchMode\n"
@@ -954,12 +954,10 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostOptApply\nwait 5\ndump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                 "dump_lobby\ndump_host_options\n"
-                # H09/H10: the lobby publishes the seat's admission row, so the press queues a real
-                # selection and the setup worker's pump applies it - the status line carries the
-                # queued word first and then the drained result. It runs last in the script because
-                # the peer it removes has to finish its own read-only pass first.
-                "wait_ms 16000\n"
+                # The client finishes its adopted-config read before the host removes it.
+                f"wait_file {(root / 'client/runtime/ScreenShots/dump_host_options_2.json').as_posix()} 60\n"
                 "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
+                "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                 "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
                 "activate ButtonHostSeatDlgKick\nwait 10\n"
@@ -970,14 +968,17 @@ def scripts(case, port, root, size="960x540"):
                 "wait 10\nassert_label LabelHostSeatName1 Client 2\n"
                 "dump_host_options\n"
                 "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                # The kicked seat is open again, so its lobby row carries the unseated name the
-                # Seats page shows for an open seat, never the removed player's.
-                "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\nwait 600\nexit\n")
+                # Only the host and the CPU remain in the lobby after the human is removed.
+                "dump_lobby\nassert_label LabelLobbyPlayer1 CPU\n"
+                "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
+                "assert_visible LabelLobbyPlayer2 0\nwait 600\nexit\n")
         client = (LANDING + "settext TextMultiplayerName Joiner\n"
                   "activate ButtonMultiplayerJoinGame\nwait 10\n"
                   "settext TextJoinAddress 127.0.0.1\n"
-                  f"settext TextJoinPort {port}\nactivate ButtonMultiplayerConnect\n"
-                  "wait_connected 2\nwait_activity Brain vs Brain\nwait 12\n"
+                  f"settext TextJoinPort {port}\n"
+                  f"wait_file {(probe_root(root, 'host') / 'hosting.json').as_posix()} 60\n"
+                  "activate ButtonMultiplayerConnect\n"
+                  "wait_label LabelLobbyPlayer1 Joiner\nwait_activity Brain vs Brain\nwait 12\n"
                   "assert_substate Lobby\n"
                   "assert_label LabelLobbyMatch Brain vs Brain - Base.rte\n"
                   "assert_label LabelLobbyMatchMode Fredeleig Bunkers - Co-op PvE\n"
@@ -999,17 +1000,17 @@ def scripts(case, port, root, size="960x540"):
                   "assert_enabled ButtonHostOptApply 0\n"
                   "dump_host_options\n"
                   "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
-                  # The host applies its L33 edit near the end of its own script; this wait covers
-                  # the republish so the re-opened Details reads revision N+1's value off the
-                  # client's adopted mirror.
-                  "wait_ms 8000\n"
+                  # The host's dump follows Apply; the client reads the resulting revision.
+                  f"wait_file {(root / 'host/runtime/ScreenShots/dump_host_options_8.json').as_posix()} 60\n"
                   "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\n"
                   "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S\n"
                   "activate TabHostPageRules\nwait 3\nassert_visible CollectionBoxHostPageRules 1\n"
+                  "wait_label ComboHostRulesBrainless End the match\n"
                   "assert_label ComboHostRulesBrainless End the match\n"
                   "dump_host_options\n"
                   # A client's Details dialog is read-only: the host's own seat and every other
                   # seat keep Kick and Ban off - moderation is never the client's call.
+                  "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                   "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                   "assert_enabled ButtonHostSeatDlgKick 0\nassert_enabled ButtonHostSeatDlgBan 0\n"
                   "activate ButtonHostSeatDlgClose\nwait 3\nassert_visible HostSeatDialog 0\n"
@@ -1020,13 +1021,18 @@ def scripts(case, port, root, size="960x540"):
                   "wait_state Failed 60\n"
                   "assert_status The host removed you from this session\n"
                   "dump_lobby\nexit\n")
-        return {"host": host, "client": client}, {}
+        return {"host": host, "client": client}, {
+            "host": {"schema": 1, "timeout_ms": 90000, "steps": [
+                {"op": "wait", "service": "Starting", "scope": "menu"},
+                {"op": "signal", "name": "hosting", "scope": "menu"},
+                {"op": "wait_file", "path": str(root / "host/runtime/ScreenShots/dump_host_options_10.json"), "scope": "menu"},
+                {"op": "finish"}]}}
     elif case == "net-options":
         # Two real peers: the host's saved session options ride the lobby config onto both rosters. A
         # match end quits e2e peers outright, so the host's own pause-menu leave is what pauses the
         # activity and lets its menu loop run the dump while the roster is still up.
-        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'left.json'} 90\nwait_ms 2000\nexit\n",
-                 "client": f"wait_file {probe_root(root, 'host') / 'left.json'} 90\nwait_ms 2000\nexit\n"},
+        return ({"host": f"dump_lobby\nwait_file {probe_root(root, 'host') / 'left.json'} 90\nexit\n",
+                 "client": f"wait_file {probe_root(root, 'host') / 'left.json'} 90\nexit\n"},
                 {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
                     {"op": "wait", "sim_at_least": 150},
                     {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 150},
@@ -1034,8 +1040,9 @@ def scripts(case, port, root, size="960x540"):
                     {"op": "wait", "screen": "Pause"}, menu_step("dump_host_options"),
                     {"op": "signal", "name": "done"},
                     menu_step("activate ButtonLeaveMatch"), {"op": "wait", "screen": "PauseLeaveConfirm"},
-                    menu_step("activate ButtonLeaveConfirm"), {"op": "wait", "elapsed_ms": 1500},
-                    {"op": "signal", "name": "left"}, {"op": "finish"}]}})
+                    menu_step("activate ButtonLeaveConfirm"),
+                    {"op": "wait", "service": "Completed", "scope": "menu"},
+                    {"op": "signal", "name": "left", "scope": "menu"}, {"op": "finish"}]}})
     elif case == "combo-fit":
         # Reached by the tab control so the measurement runs on a build that has no page op yet.
         text = (OPTIONS + "activate TabVideoSettings\nwait 3\nassert_visible ComboPresetResolution 1\n"
@@ -2043,7 +2050,7 @@ def run_case(options, case, root, failing=None):
                       for image in host_setup if any(c["name"] == "ComboHostScene" for c in image["controls"])]
             assert scenes, "ComboHostScene missing from host dumps"
             assert picker[0]["text"] == "Skirmish Defense - Base.rte" and picker[0]["dropped"] is False, picker[0]
-            assert picker[1]["text"] == "P4 Alpha Duel - Base.rte" and picker[1]["dropped"] is True, picker[1]
+            assert picker[1]["text"] == "Persistent World - Base.rte" and picker[1]["dropped"] is True, picker[1]
             assert any(row["text"] == "Brain vs Brain - Base.rte" and row["dropped"] is False for row in picker), picker
             assert any(row["text"] == f"{preset} - {module}" and not row["dropped"] for row in picker), picker
             assert picker[0]["item_count"] > 1, picker[0]
@@ -2152,8 +2159,9 @@ def main():
     options = parser.parse_args()
     if Path("D:/mx/LEAD_FAMILY.lock").exists():
         parser.error("LEAD_FAMILY.lock exists; no engine launch")
-    if not any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190)):
-        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859 and 49180-49199")
+    if not (any(low <= options.port <= low + 9 for low in (48270, 48380, 48390, 48530, 48540, 48550, 48840, 48850, 49180, 49190))
+            or 49470 <= options.port <= 49478):
+        parser.error("this detector owns ports 48270-48279, 48380-48389, 48390-48399, 48530-48539, 48540-48549, 48550-48559, 48840-48849, 48850-48859, 49180-49199 and 49470-49478")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     options.revision = subprocess.check_output(["git", "-C", str(options.repo), "rev-parse", "HEAD"], text=True).strip()
