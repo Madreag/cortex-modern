@@ -369,7 +369,7 @@ namespace RTE {
 		}
 		m_BackoffMs = 0;
 		// The service held a long poll until a signal or the deadline, so an idle gap would
-		// only add latency: re-poll at once. Short polls keep the 500 ms cadence.
+		// only add latency: re-poll at once. Short polls leave half the request budget for admission.
 		m_NextPollMs = m_PollWaitS > 0 ? nowMs : nowMs + c_PollIntervalMs;
 		for (const Signal& signal : inbound) {
 			if (signal.seq <= m_Cursor) {

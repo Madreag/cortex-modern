@@ -2217,6 +2217,19 @@ namespace RTE {
 				return true;
 			}
 
+			bool TestSignalCadenceLeavesAdmissionBudget(std::string* error) {
+				ScriptedChannel s(true);
+				for (int i = 0; i < 200; ++i) s.replies->push_back({200, SignalListBody({}), ""});
+				s.channel.SetPolling(true);
+				for (uint64_t now = 0; now < 60000; ++now) s.channel.Update(now);
+				if (s.sent->size() > 60 || s.sent->size() < 30) {
+					*error = "signalling cadence: idle polls=" + std::to_string(s.sent->size()) + " per minute, expected 30..60 with room for admission";
+					return false;
+				}
+				std::cout << "[net-directory-selftest] PASS signalling_cadence polls_per_minute=" << s.sent->size() << " admission_budget_remaining=" << 120 - s.sent->size() << std::endl;
+				return true;
+			}
+
 			bool TestSignalOrderingAndCursor(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -2231,19 +2244,19 @@ namespace RTE {
 					*error = "signal ordering: poll 1 delivered " + Taken(s) + ", expected 1:one,2:two";
 					return false;
 				}
-				s.channel.Update(499);
+				s.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs - 1);
 				if (s.sent->size() != 1) {
-					*error = "signal ordering: a poll left before the 500 ms interval";
+					*error = "signal ordering: a poll left before the configured poll interval";
 					return false;
 				}
-				s.channel.Update(500);
-				s.channel.Update(500); // poll 2 re-delivers seq 2
+				s.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs);
+				s.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs); // poll 2 re-delivers seq 2
 				if (TakenTwice(s)) {
 					*error = "signal ordering: a re-delivered signal reached the sink twice: " + Taken(s);
 					return false;
 				}
-				s.channel.Update(1000);
-				s.channel.Update(1000);
+				s.channel.Update(2 * NetDirectorySignalChannel::c_PollIntervalMs);
+				s.channel.Update(2 * NetDirectorySignalChannel::c_PollIntervalMs);
 				if (Taken(s) != "1:one,2:two,3:three,4:four") {
 					*error = "signal ordering: the sink took " + Taken(s) + ", expected 1:one,2:two,3:three,4:four";
 					return false;
@@ -2276,7 +2289,7 @@ namespace RTE {
 				s.replies->push_back({200, SignalListBody({{3, "host", me, B64("three")}, {4, "host", me, B64("four")}}), ""});
 
 				s.channel.SetPolling(true);
-				for (const uint64_t now : {0, 0, 500, 500, 1000, 1000}) {
+				for (const uint64_t now : {uint64_t{0}, uint64_t{0}, NetDirectorySignalChannel::c_PollIntervalMs, NetDirectorySignalChannel::c_PollIntervalMs, 2 * NetDirectorySignalChannel::c_PollIntervalMs, 2 * NetDirectorySignalChannel::c_PollIntervalMs}) {
 					s.channel.Update(now);
 				}
 				if (TakenTwice(s) || Taken(s) != "1:one,2:two,3:three,4:four") {
@@ -2334,18 +2347,18 @@ namespace RTE {
 					*error = "signal long-poll clamp: " + (clamped.sent->empty() ? std::string("no poll issued") : *error);
 					return false;
 				}
-				// No wait configured: the poll URL and the 500 ms interval are unchanged.
+				// No wait configured: the poll URL and the 1000 ms interval are unchanged.
 				ScriptedChannel plain(false);
 				plain.replies->push_back({200, SignalListBody({}), ""});
 				plain.channel.SetPolling(true);
 				plain.channel.Update(0);
 				plain.channel.Update(0);
-				plain.channel.Update(499);
+				plain.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs - 1);
 				if (plain.sent->size() != 1 || !RequestIs(plain.sent->at(0), "GET", plain.PollPath(0).c_str(), error)) {
-					*error = "signal long-poll default: the unconfigured poll changed shape or left before the 500 ms interval";
+					*error = "signal long-poll default: the unconfigured poll changed shape or left before the 1000 ms interval";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal long-poll: wait=7 on the wire, the next GET issues right after each return, the wait clamps to " << NetDirectorySignalChannel::c_MaxPollWaitS << " s, unset keeps the 500 ms interval" << std::endl;
+				std::cout << "[net-directory-selftest] signal long-poll: wait=7 on the wire, the next GET issues right after each return, the wait clamps to " << NetDirectorySignalChannel::c_MaxPollWaitS << " s, unset keeps the 1000 ms interval" << std::endl;
 				return true;
 			}
 
@@ -2526,11 +2539,11 @@ namespace RTE {
 					*error = error->empty() ? "signal backoff: the recovered poll delivered " + Taken(s) : *error;
 					return false;
 				}
-				s.channel.Update(35500);
-				s.channel.Update(35500); // a 503 after the success starts the ladder over
-				s.channel.Update(40499);
+				s.channel.Update(36000);
+				s.channel.Update(36000); // a 503 after the success starts the ladder over
+				s.channel.Update(40999);
 				const size_t held = s.sent->size();
-				s.channel.Update(40500);
+				s.channel.Update(41000);
 				if (held != 5 || s.sent->size() != 6) {
 					*error = "signal backoff: after a success the next failure did not wait exactly 5 s";
 					return false;
@@ -2573,8 +2586,8 @@ namespace RTE {
 				}
 				// The codec's 87384-character cap, unpadded, decodes to 65538 bytes: over the signal cap.
 				s.replies->push_back({200, SignalListBody({{2, "host", me, std::string(NetDirectoryLimits::c_MaxPayloadB64Chars, 'A')}}), ""});
-				s.channel.Update(500);
-				s.channel.Update(500);
+				s.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs);
+				s.channel.Update(NetDirectorySignalChannel::c_PollIntervalMs);
 				if (s.taken.size() != 1 || s.channel.GetCursor() != 1) {
 					*error = "signal cap: an inbound payload over 64 KiB reached the sink";
 					return false;
@@ -2714,7 +2727,7 @@ namespace RTE {
 					*error = "signal drain: the closed channel still took or sent a signal";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal drain: one more poll after=2 inside the 500 ms interval took seq 3, then closed; the queued post was dropped" << std::endl;
+				std::cout << "[net-directory-selftest] signal drain: one more poll after=2 inside the 1000 ms interval took seq 3, then closed; the queued post was dropped" << std::endl;
 				return true;
 			}
 		}
@@ -2744,6 +2757,7 @@ namespace RTE {
 			if (!TestMergeGameLists(&error)) return fail(error);
 			if (!TestMergeAcceptsIceRows(&error)) return fail(error);
 			if (!TestListPagination(&error)) return fail(error);
+			if (!TestSignalCadenceLeavesAdmissionBudget(&error)) return fail(error);
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
