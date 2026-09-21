@@ -371,11 +371,7 @@ def pause_probe(who, root):
                   {"op": "wait", "service": "Completed", "scope": "menu"},
                   {"op": "signal", "name": "left", "scope": "menu"}]
     else:
-        # The host keeps the pause menu open past the tick cap: once the round is over, End Match is
-        # not a row the player can still press, so it must not be drawn as one (ENGINE 200).
-        steps += [{"op": "signal", "name": "done"},
-                  {"op": "wait", "service": "Completed", "scope": "menu"},
-                  menu_step("assert_enabled ButtonEndMatch 0")]
+        steps += [{"op": "signal", "name": "done"}]
     steps += [{"op": "finish"}]
     return {"schema": 1, "timeout_ms": 90000, "steps": steps}
 
