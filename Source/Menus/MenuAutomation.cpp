@@ -321,7 +321,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "ghost_watch" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "ghost_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -517,6 +517,40 @@ namespace RTE::MenuAutomation {
 				{"widest_line", widestLine}, {"rows", rows}, {"split_token", splitToken},
 				{"capped", capped}, {"source", source}}.dump();
 			return splitToken.empty() && sized;
+		}
+		if (command == "assert_roster_fits") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			auto* font = g_FrameMan.GetSmallFont(true);
+			if (!panel || !font) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::string text = rest;
+			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+			std::string wrapped;
+			int boxWidth = 0;
+			if (text.empty() || !panel->AutomationWrapLines(text, wrapped, boxWidth)) {
+				observation = "roster fit text missing or wrap unavailable";
+				return false;
+			}
+			const int column = boxWidth - 12;
+			int widestToken = 0;
+			std::istringstream tokens(wrapped);
+			for (std::string token; tokens >> token;) widestToken = std::max(widestToken, font->CalculateWidth(token));
+			int widestLine = 0;
+			std::istringstream lines(wrapped);
+			for (std::string row; std::getline(lines, row);) widestLine = std::max(widestLine, font->CalculateWidth(row));
+			auto* large = g_FrameMan.GetLargeFont();
+			const int y = std::max(8, (large ? large->GetFontHeight() : 8) + 4);
+			const int height = font->CalculateHeight(wrapped) + 12;
+			const int right = 8 + boxWidth + 1;
+			const int bottom = y + height + 1;
+			const bool inside = right <= g_WindowMan.GetResX() && bottom <= g_WindowMan.GetResY();
+			const auto& live = panel->GetRosterRect();
+			const bool fits = widestToken <= column && widestLine <= column;
+			observation = Json{{"surface", "roster_fits"}, {"widest_token", widestToken}, {"widest_line", widestLine},
+				{"column", column}, {"rect", Json::array({8, y, boxWidth + 1, height + 1})},
+				{"roster_rect", Json::array({live.x, live.y, live.width, live.height})},
+				{"inside", inside}, {"ellipsis", wrapped.find("...") != std::string::npos}, {"drawn", wrapped}}.dump();
+			return fits && inside;
 		}
 		if (command == "assert_no_overlap") {
 			const std::string arguments{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};

@@ -197,6 +197,9 @@ INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Connection sets your route. Host Options > Network sets the match's relay."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
+# FontSmall measured 125 glyphs of this alphabet at 502 px. Two hundred stay one token and are wider
+# than the 640x360 roster column (ResX - 28) while the box is still capped by the screen.
+WIDE_ROSTER_NAME = ("PeerExtremelyLongDisplayNameForWrapChecking" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 5)[:200]
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "Pause", "NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
                 "NetworkPathHorizonTicks": "45"}
@@ -300,6 +303,15 @@ def net_page(page):
 
 def menu_step(command):
     return {"op": "menu", "command": command}
+
+
+def roster_fit_observations(observation):
+    found = []
+    for step in observation.get("steps", []):
+        note = step.get("observed", {}).get("menu_observation", "")
+        if isinstance(note, str) and '"surface":"roster_fits"' in note:
+            found.append(json.loads(note))
+    return found
 
 
 def probe_root(root, who):
@@ -1310,7 +1322,8 @@ def scripts(case, port, root, size="960x540"):
                   # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
                   # rule grows the panel to the longest word instead of letting it hang over. The
                   # status box only wraps in its tall layout; the strip path is one FitLine'd line.
-                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row")] +
+                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row"),
+                  menu_step("assert_roster_fits " + WIDE_ROSTER_NAME)] +
                   ([menu_step("assert_word_wrap status")] if size != "640x360" else []) +
                   [{"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False},
@@ -1704,6 +1717,16 @@ def run_case(options, case, root, failing=None):
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
+            if case == "live":
+                fits = roster_fit_observations(observation)
+                assert len(fits) == 1, fits
+                row = fits[0]
+                assert row["widest_token"] <= row["column"] and row["widest_line"] <= row["column"], row
+                assert row["inside"] is True and len(row["rect"]) == 4, row
+                width, height = (int(part) for part in options.size.split("x"))
+                assert row["rect"][0] + row["rect"][2] <= width and row["rect"][1] + row["rect"][3] <= height, row
+                if options.size == "640x360":
+                    assert row["ellipsis"] is True and WIDE_ROSTER_NAME not in row["drawn"], row
         if case in ("host-stun", "host-stun-empty"):
             pages = [{c["name"]: c for c in capture["controls"]} for capture in images
                      if any(c["name"] == "ComboHostNetIce" for c in capture["controls"])]
