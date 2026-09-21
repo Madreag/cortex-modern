@@ -8256,7 +8256,7 @@ namespace RTE {
 			// so earlier committed frames legitimately carry no local entry.
 			if (TimingDecisionPendingAt(m_Stats.nextFrame)) break;
 			const auto localIt = m_LocalFrames.find(m_Stats.nextFrame);
-			if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) {
+			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				break;
 			}
 			if (UsesBoundedWait() && !m_Playback && m_Config.localPeerId != GetHostPeerId() && localIt != m_LocalFrames.end() &&
@@ -8289,47 +8289,47 @@ namespace RTE {
 			ready.frame = m_Stats.nextFrame;
 			if (localIt != m_LocalFrames.end()) {
 				ready.hasLocalInput = true;
-				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);
+				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localFrames = std::move(localIt->second);
 			}
 			// Merge every remote peer's frames in ascending peerId order (std::map iteration) so every
 			// peer builds the byte-identical apply set. This is the one N-peer determinism-sensitive spot.
 			if (remoteIt != m_RemoteFrames.end()) {
 				for (auto& [peerId, frames]: remoteIt->second) {
-					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteFrameCounts.emplace(peerId, frames.size());
 					++m_Stats.peers[peerId].framesContributed;
 					ready.remoteFrames.insert(ready.remoteFrames.end(), std::make_move_iterator(frames.begin()), std::make_move_iterator(frames.end()));
 				}
 			}
 			if (auto localCmdIt = m_LocalCommands.find(ready.frame); localCmdIt != m_LocalCommands.end()) {
-				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localCommands = std::move(localCmdIt->second);
+				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localCommands = std::move(localCmdIt->second);
 				m_LocalCommands.erase(localCmdIt);
 			}
 			if (auto remoteCmdIt = m_RemoteCommands.find(ready.frame); remoteCmdIt != m_RemoteCommands.end()) {
 				for (auto& [peerId, cmds]: remoteCmdIt->second) {
-					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteCommands.insert(ready.remoteCommands.end(), std::make_move_iterator(cmds.begin()), std::make_move_iterator(cmds.end()));
 				}
 				m_RemoteCommands.erase(remoteCmdIt);
 			}
 			if (auto localObsIt = m_LocalObservations.find(ready.frame); localObsIt != m_LocalObservations.end()) {
-				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localObservations = std::move(localObsIt->second);
+				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localObservations = std::move(localObsIt->second);
 				m_LocalObservations.erase(localObsIt);
 			}
 			if (auto remoteObsIt = m_RemoteObservations.find(ready.frame); remoteObsIt != m_RemoteObservations.end()) {
 				for (auto& [peerId, observations]: remoteObsIt->second) {
-					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteObservations.insert(ready.remoteObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteObservations.erase(remoteObsIt);
 			}
 			if (auto localValueIt = m_LocalValueObservations.find(ready.frame); localValueIt != m_LocalValueObservations.end()) {
-				if (!IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localValueObservations = std::move(localValueIt->second);
+				if (m_Playback || !IsSeatReclaimGap(m_Config.localPeerId, ready.frame)) ready.localValueObservations = std::move(localValueIt->second);
 				m_LocalValueObservations.erase(localValueIt);
 			}
 			if (auto remoteValueIt = m_RemoteValueObservations.find(ready.frame); remoteValueIt != m_RemoteValueObservations.end()) {
 				for (auto& [peerId, observations]: remoteValueIt->second) {
-					if (IsSeatReclaimGap(peerId, ready.frame)) continue;
+					if (!m_Playback && IsSeatReclaimGap(peerId, ready.frame)) continue;
 					ready.remoteValueObservations.insert(ready.remoteValueObservations.end(), std::make_move_iterator(observations.begin()), std::make_move_iterator(observations.end()));
 				}
 				m_RemoteValueObservations.erase(remoteValueIt);
