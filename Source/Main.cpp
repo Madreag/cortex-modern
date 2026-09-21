@@ -700,6 +700,10 @@ void DestroyManagers() {
 int ShutDown(int exitCode) {
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
+	if (!MenuAutomation::FinishReadbacks()) {
+		System::PrintDiagnosticErrorLine("[menu-readback] queued snapshot write failed");
+		exitCode = EXIT_FAILURE;
+	}
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_checkpointAudioEffects && !s_checkpointAudioEffectsPassed) exitCode = EXIT_FAILURE;
