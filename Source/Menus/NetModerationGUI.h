@@ -64,6 +64,8 @@ namespace RTE {
 		};
 		const WrapAudit& GetRosterWrap() const { return m_RosterWrap; }
 		const WrapAudit& GetStatusWrap() const { return m_StatusWrap; }
+		/// Extra status line. Empty leaves the box unchanged.
+		void SetStatusProbeLine(const std::string& line) { m_StatusProbeLine = line; }
 		/// A toast-fill run no live overlay rect covers: the pixels a moved band left on a layer
 		/// nothing cleared that frame (ENGINE 195's second band).
 		struct GhostBandHit {
@@ -167,6 +169,7 @@ namespace RTE {
 		OverlayRect m_SeatsPanelRect; //!< Where the open seats panel sat when the toast band was laid out.
 		WrapAudit m_RosterWrap;   //!< The roster box's last wrap, for the word-boundary check.
 		WrapAudit m_StatusWrap;   //!< The status box's last wrap, for the word-boundary check.
+		std::string m_StatusProbeLine; //!< Extra status line; empty leaves the box unchanged.
 		bool m_GhostWatchArmed = false;  //!< Whether DrawMatchToasts runs the ghost scan after each draw.
 		int m_GhostWatchHits = 0;        //!< Frames the armed watch saw a stale band on.
 		GhostBandHit m_GhostWatchLast;   //!< The last stale run the watch saw.

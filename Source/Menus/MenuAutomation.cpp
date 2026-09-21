@@ -321,7 +321,7 @@ namespace RTE::MenuAutomation {
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
-			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "ghost_watch" || command == "assert_list_rows" ||
+			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "status_line" || command == "ghost_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
 	}
 	Json PanelCoverage(GUIControl* control) {
@@ -487,7 +487,11 @@ namespace RTE::MenuAutomation {
 				capWidth = std::max(0, g_WindowMan.GetResX() - 28);
 			} else {
 				const auto& audit = surface == "status" ? panel->GetStatusWrap() : panel->GetRosterWrap();
-				if (!audit.active) { observation = surface + " wrap surface not active"; return false; }
+				if (!audit.active) {
+					if (surface == "status") { observation = "status: no wrap surface"; return true; }
+					observation = surface + " wrap surface not active";
+					return false;
+				}
 				source = audit.source;
 				wrapped = audit.wrapped;
 				textWidth = audit.textWidth;
@@ -498,12 +502,22 @@ namespace RTE::MenuAutomation {
 			std::istringstream lines(wrapped);
 			std::vector<std::string> rows;
 			for (std::string row; std::getline(lines, row);) rows.push_back(row);
+			auto tokenLanded = [&](const std::string& token) {
+				for (const auto& row: rows) {
+					if (row.find(token) != std::string::npos) return true;
+					std::istringstream words(row);
+					for (std::string word; words >> word;) {
+						if (word.size() <= 3 || !word.ends_with("...")) continue;
+						const std::string prefix = word.substr(0, word.size() - 3);
+						if (!prefix.empty() && token.size() > prefix.size() && token.starts_with(prefix)) return true;
+					}
+				}
+				return false;
+			};
 			std::istringstream tokens(source);
 			std::string splitToken;
 			for (std::string token; tokens >> token;) {
-				const bool whole = std::any_of(rows.begin(), rows.end(), [&](const std::string& row) {
-					return row.find(token) != std::string::npos; });
-				if (!whole) { splitToken = token; break; }
+				if (!tokenLanded(token)) { splitToken = token; break; }
 			}
 			int longestWord = 0;
 			tokens.clear();
@@ -513,10 +527,21 @@ namespace RTE::MenuAutomation {
 			for (const auto& row: rows) widestLine = std::max(widestLine, font->CalculateWidth(row));
 			const bool capped = textWidth >= capWidth;
 			const bool sized = longestWord <= textWidth || capped;
+			const bool linesFit = widestLine <= textWidth;
 			observation = Json{{"surface", surface}, {"text_width", textWidth}, {"longest_word", longestWord},
 				{"widest_line", widestLine}, {"rows", rows}, {"split_token", splitToken},
-				{"capped", capped}, {"source", source}}.dump();
-			return splitToken.empty() && sized;
+				{"capped", capped}, {"lines_fit", linesFit}, {"source", source}}.dump();
+			return splitToken.empty() && sized && (surface != "status" || linesFit);
+		}
+		if (command == "status_line") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			const std::string rest{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::string text = rest;
+			if (!text.empty() && text[0] == ' ') text.erase(0, 1);
+			panel->SetStatusProbeLine(text);
+			observation = "status line " + std::to_string(text.size());
+			return true;
 		}
 		if (command == "assert_roster_fits") {
 			auto* panel = g_MenuMan.GetNetworkPanel();

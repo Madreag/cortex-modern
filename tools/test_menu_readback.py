@@ -200,6 +200,8 @@ DISPLAY_NAME_MAX_BYTES = 64
 # FontSmall measured 125 glyphs of this alphabet at 502 px. Two hundred stay one token and are wider
 # than the 640x360 roster column (ResX - 28) while the box is still capped by the screen.
 WIDE_ROSTER_NAME = ("PeerExtremelyLongDisplayNameForWrapChecking" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 5)[:200]
+# 200 of those glyphs measured 807 px. 340 exceeds the 960 and 1280 status columns (ResX - 28).
+WIDE_STATUS_TOKEN = (WIDE_ROSTER_NAME + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 5)[:340]
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "Pause", "NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
                 "NetworkPathHorizonTicks": "45"}
@@ -312,6 +314,15 @@ def roster_fit_observations(observation):
         if isinstance(note, str) and '"surface":"roster_fits"' in note:
             found.append(json.loads(note))
     return found
+
+
+def status_wrap_notes(observation):
+    notes = []
+    for step in observation.get("steps", []):
+        note = step.get("observed", {}).get("menu_observation", "")
+        if isinstance(note, str) and (note == "status: no wrap surface" or '"surface":"status"' in note):
+            notes.append(note)
+    return notes
 
 
 def probe_root(root, who):
@@ -1323,8 +1334,10 @@ def scripts(case, port, root, size="960x540"):
                   # rule grows the panel to the longest word instead of letting it hang over. The
                   # status box only wraps in its tall layout; the strip path is one FitLine'd line.
                   menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row"),
-                  menu_step("assert_roster_fits " + WIDE_ROSTER_NAME)] +
-                  ([menu_step("assert_word_wrap status")] if size != "640x360" else []) +
+                  menu_step("assert_roster_fits " + WIDE_ROSTER_NAME),
+                  menu_step("status_line " + WIDE_STATUS_TOKEN), {"op": "wait", "renders": 3},
+                  menu_step("assert_word_wrap status"),
+                  menu_step("status_line"), {"op": "wait", "renders": 3}] +
                   [{"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False},
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
@@ -1391,7 +1404,7 @@ def scripts(case, port, root, size="960x540"):
                       {"op": "wait", "renders": 3}, menu_step("assert_focus TextMultiplayerName"),
                       menu_step("dump_player_options"), {"op": "input_scope", "enabled": True}]
         steps += [{"op": "signal", "name": "done"}, {"op": "finish"}]
-        probe = {"schema": 1, "timeout_ms": 90000, "steps": steps}
+        probe = {"schema": 1, "timeout_ms": 150000, "steps": steps}
     else:
         raise ValueError(case)
     texts = {"host": text}
@@ -1727,6 +1740,18 @@ def run_case(options, case, root, failing=None):
                 assert row["rect"][0] + row["rect"][2] <= width and row["rect"][1] + row["rect"][3] <= height, row
                 if options.size == "640x360":
                     assert row["ellipsis"] is True and WIDE_ROSTER_NAME not in row["drawn"], row
+                notes = status_wrap_notes(observation)
+                if options.size == "640x360":
+                    assert notes == ["status: no wrap surface"], notes
+                else:
+                    assert len(notes) == 1, notes
+                    status = json.loads(notes[0])
+                    assert status["widest_line"] <= status["text_width"] and status["split_token"] == "", status
+                    drawn = "\n".join(status["rows"])
+                    if WIDE_STATUS_TOKEN not in drawn:
+                        assert "..." in drawn, status
+                    if options.size == "960x540":
+                        assert WIDE_STATUS_TOKEN not in drawn and "..." in drawn, status
         if case in ("host-stun", "host-stun-empty"):
             pages = [{c["name"]: c for c in capture["controls"]} for capture in images
                      if any(c["name"] == "ComboHostNetIce" for c in capture["controls"])]
