@@ -2,6 +2,7 @@
 #include "SettingsMan.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
@@ -93,6 +94,18 @@ namespace RTE {
 		}
 		bool g_GnsInitialized = false;
 		uint32_t g_GnsRefCount = 0;
+		std::atomic<uint64_t> g_GnsLingerUntilMs{0};
+
+		uint64_t GnsNowMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		void KeepGnsForLingeringClose() {
+			const uint64_t deadline = GnsNowMs() + 100;
+			uint64_t prior = g_GnsLingerUntilMs.load();
+			while (prior < deadline && !g_GnsLingerUntilMs.compare_exchange_weak(prior, deadline)) {}
+		}
+
 
 		bool AcquireGns(std::string* error) {
 			if (!g_GnsInitialized) {
@@ -113,6 +126,8 @@ namespace RTE {
 			}
 			--g_GnsRefCount;
 			if (g_GnsRefCount == 0 && g_GnsInitialized) {
+				const uint64_t now = GnsNowMs(), deadline = g_GnsLingerUntilMs.load();
+				if (now < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(deadline - now));
 				GameNetworkingSockets_Kill();
 				g_GnsInitialized = false;
 			}
@@ -347,7 +362,7 @@ namespace RTE {
 			// Bypass the Nagle timer so queued reliable data (e.g. a join-reject) beats the close onto the wire.
 			m_Interface->FlushMessagesOnConnection(connection);
 			m_Interface->CloseConnection(connection, 0, reason.c_str(), true);
-			m_HasLingeringClose = true;
+			KeepGnsForLingeringClose();
 			ForgetConnection(connection);
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
@@ -375,14 +390,8 @@ namespace RTE {
 				// Flush + linger so a queued goodbye (lockstep stop, session close) reaches the peer.
 				m_Interface->FlushMessagesOnConnection(connection);
 				m_Interface->CloseConnection(connection, 0, "transport stopped", true);
-				m_HasLingeringClose = true;
+				KeepGnsForLingeringClose();
 				ForgetConnection(connection);
-			}
-
-			// A lingering close transmits on the GNS service thread; give it a beat before teardown.
-			if (m_HasLingeringClose) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(100));
-				m_HasLingeringClose = false;
 			}
 
 			if (m_ListenSocket != k_HSteamListenSocket_Invalid) {
@@ -906,7 +915,6 @@ namespace RTE {
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
 		int m_P2PMode = -1;
-		bool m_HasLingeringClose = false;
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;

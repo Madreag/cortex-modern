@@ -11576,6 +11576,33 @@ namespace RTE {
 		std::cout << "[net-match-selftest] PASS handover_service_status running=1 host_lost=1 migrating=1" << std::endl; return true;
 	}
 
+	bool TestTransportRetirementDoesNotSleep(std::string* error) {
+		if (!GnsTransport::IsCompiledIn()) return true;
+		GnsTransport host, client;
+		if (!host.StartHost(49495, error) || !client.Connect("127.0.0.1", 49495, error)) return false;
+		NetPeerId hostPeer = 0, clientPeer = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+		while (std::chrono::steady_clock::now() < deadline) {
+			for (const auto& event: host.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostPeer = event.peerId;
+			for (const auto& event: client.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientPeer = event.peerId;
+			if (hostPeer && clientPeer) break;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		if (!hostPeer || !clientPeer || !client.Send(clientPeer, NetTransportLane::ControlReliable, {41, 42})) { *error = "retiring transport did not connect"; return false; }
+		const auto begin = std::chrono::steady_clock::now();
+		client.Stop();
+		const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count();
+		if (elapsed >= 16) { *error = "retiring one transport blocked the live service for " + std::to_string(elapsed) + " ms"; return false; }
+		bool delivered = false;
+		while (std::chrono::steady_clock::now() < deadline && !delivered) {
+			for (const auto& event: host.PollEvents()) delivered |= event.type == NetTransportEventType::PacketReceived && event.bytes == std::vector<uint8_t>{41, 42};
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		if (!delivered) { *error = "retirement lost its queued reliable message"; return false; }
+		std::cout << "[net-match-selftest] PASS transport_retirement ms=" << elapsed << " reliable_delivered=1" << std::endl;
+		return true;
+	}
+
 	bool TestConnectedRouteEvidence(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
 		GnsTransport host, client;
@@ -12173,6 +12200,7 @@ namespace RTE {
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);
 		if (!menuInputs || !routeEvidence) return fail(menuError + "; " + routeError);
+		if (!TestTransportRetirementDoesNotSleep(&error)) return fail(error);
 		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
