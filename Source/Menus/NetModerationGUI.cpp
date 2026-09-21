@@ -188,6 +188,27 @@ namespace {
 		return text + "...";
 	}
 
+	/// A token wider than the column keeps a prefix and "...", so the glyph run stays inside the column.
+	std::string FitTokens(GUIFont* font, const std::string& text, int width) {
+		if (!font || width < 1) return text;
+		std::string fitted, token;
+		auto emit = [&]() {
+			if (token.empty()) return;
+			fitted += FitLine(font, std::move(token), width);
+			token.clear();
+		};
+		for (char c: text) {
+			if (c == ' ' || c == '\n') {
+				emit();
+				fitted += c;
+			} else {
+				token += c;
+			}
+		}
+		emit();
+		return fitted;
+	}
+
 	SDL_Scancode ChatScancode() {
 		const std::string& key = g_SettingsMan.GetNetworkChatKey();
 		if (key == "ENTER" || key == "RETURN") return SDL_SCANCODE_RETURN;
@@ -273,6 +294,21 @@ namespace {
 		return FitLine(font, std::move(text), width);
 	}
 
+	/// The widest whitespace-delimited token, so a panel's wrap column is never narrower than the
+	/// longest word it must show.
+	int LongestWordWidth(GUIFont* font, const std::string& text) {
+		int widest = 0, run = 0;
+		for (char c: text) {
+			if (c == ' ' || c == '\n') {
+				widest = std::max(widest, run);
+				run = 0;
+				continue;
+			}
+			run += font->CalculateWidth(c);
+		}
+		return std::max(widest, run);
+	}
+
 	std::string WrapText(GUIFont* font, const std::string& text, int width) {
 		std::string wrapped, line;
 		for (char c: text) {
@@ -286,10 +322,8 @@ namespace {
 				if (space != std::string::npos && space > 0) {
 					wrapped += line.substr(0, space) + '\n';
 					line.erase(0, space + 1);
-				} else {
-					wrapped += line + '\n';
-					line.clear();
 				}
+				// No boundary on the line: the word runs whole and the panel's width rule holds it.
 			}
 			line += c;
 		}
@@ -523,7 +557,7 @@ void NetModerationGUI::Refresh() {
 			options += "\nRepair match: " + std::string(NetHostRepairEnabled(g_NetMatchService)
 			    ? "Ready - pause menu > Match Options" : NetHostRepairHint(g_NetMatchService));
 		}
-		m_Options->SetText(WrapText(m_LabelFont, options, m_Options->GetWidth()));
+		m_Options->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, options, m_Options->GetWidth()), m_Options->GetWidth()));
 		m_Summary->SetText(snapshot.isHost ? NetHostOptionsApplyText(g_NetMatchService.GetState())
 		                                 : "The host's options for this round.");
 		m_Status->SetVisible(false);
@@ -537,7 +571,7 @@ void NetModerationGUI::Refresh() {
 		return;
 	}
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
-	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
+	m_Status->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()), m_Status->GetWidth()));
 	// A compact panel that lost its rows to the toast reservation has no room for the status line
 	// under a full seat list; the seat rows already carry the same state.
 	const int statusY = 282 - std::max(0, (c_PanelHeight - m_Panel->GetHeight()) - 20);
@@ -550,7 +584,7 @@ void NetModerationGUI::Refresh() {
 				roster += (roster.empty() ? "" : "\n\n") + DisplayName(NetPlayerPresentation::Row(member));
 			}
 		}
-		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));
+		m_Roster->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, roster, m_Roster->GetWidth()), m_Roster->GetWidth()));
 	}
 	for (size_t row = 0; row < m_Seats.size(); ++row) {
 		const bool used = row < m_Model.RowCount();
@@ -561,7 +595,7 @@ void NetModerationGUI::Refresh() {
 		for (auto* action: controls.actions) action->SetVisible(used);
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
-		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()));
+		controls.name->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()), controls.name->GetWidth()));
 		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
@@ -623,7 +657,6 @@ void NetModerationGUI::Update() {
 void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	auto* font = g_FrameMan.GetSmallFont(true);
-	const int width = std::min(412, g_WindowMan.GetResX() - 16);
 	const int y = std::max(8, g_FrameMan.GetLargeFont()->GetFontHeight() + 4);
 	std::string text = "Seats  [F6]";
 	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
@@ -632,11 +665,37 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 		if (member.cpu) continue;
 		text += "\n" + DisplayName(NetPlayerPresentation::Row(member));
 	}
+	// The cap column: a token the box cannot grow past is ellipsized before the width rule measures it.
+	const int column = std::max(1, g_WindowMan.GetResX() - 28);
+	text = FitTokens(font, text, column);
+	const int width = RosterBoxWidth(font, text);
+	m_RosterWrap.source = text;
+	m_RosterWrap.textWidth = width - 12;
+	m_RosterWrap.longestWord = LongestWordWidth(font, text);
+	m_RosterWrap.capWidth = std::max(0, g_WindowMan.GetResX() - 16 - 12);
+	m_RosterWrap.active = true;
 	text = WrapText(font, text, width - 12);
+	m_RosterWrap.wrapped = text;
 	const int height = font->CalculateHeight(text) + 12;
 	m_RosterRect = {8, y, width + 1, height + 1, true};
 	rectfill(g_FrameMan.GetBackBuffer32(), 8, y, width + 8, y + height, makeacol32(20, 22, 27, 255));
 	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
+}
+
+int NetModerationGUI::RosterBoxWidth(GUIFont* font, const std::string& text) {
+	// The stock width, grown so the longest word the box must show lands whole on a line of its own.
+	const int cap = std::max(1, g_WindowMan.GetResX() - 16);
+	return std::min(cap, std::max(std::min(412, cap), LongestWordWidth(font, text) + 12));
+}
+
+bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string& wrapped, int& boxWidth) const {
+	GUIFont* font = g_FrameMan.GetSmallFont(true);
+	if (!font) return false;
+	const int column = std::max(1, g_WindowMan.GetResX() - 28);
+	const std::string fitted = FitTokens(font, text, column);
+	boxWidth = RosterBoxWidth(font, fitted);
+	wrapped = WrapText(font, fitted, boxWidth - 12);
+	return true;
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
@@ -820,51 +879,70 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		freeRight = backbuffer->w;
 		available = backbuffer->w;
 	}
-	const int width = std::max(1, std::min(c_StatusBoxWidth, std::max(1, available - 2 * c_StatusBoxMargin)));
+	const int maxPanelWidth = std::max(1, available - 2 * c_StatusBoxMargin);
 	m_NetStatusBox->SetVisible(true);
 	m_NetStatus->SetFont(font);
+	const auto compose = [&](int textWidth) {
+		std::string composed = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
+		if (m_MatchDelayFrames != m_BaseDelayFrames) {
+			composed += " (base " + std::to_string(m_BaseDelayFrames) + ")";
+		}
+		for (const auto& member: snapshot.members) {
+			if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
+			composed += "\n" + FitLine(font, NetPlayerPresentation::Name(member), textWidth) + " / via " + member.connectedRoute;
+		}
+		composed += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
+		std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
+		composed += metrics;
+		// The slow-machine notice has one surface, the toast band; this panel keeps the pace numbers.
+		if (g_SettingsMan.GetNetworkShowDiagnostics()) {
+			for (const auto& member: snapshot.members) {
+				if (member.cpu) continue;
+				composed += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
+				composed += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
+				if (member.reclaiming || member.aiHeld || !member.connected) composed += " / " + NetPlayerPresentation::State(member);
+			}
+		}
+		if (hostLost) {
+			composed += "\nHost connection lost - choosing a new host...\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
+		} else if (resyncing) {
+			composed += "\nRESYNCING MATCH";
+		} else if (placing) {
+			const int room = textWidth - font->CalculateWidth("Waiting for  to place their brains");
+			composed += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
+			composed += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
+		} else if (holdPause) {
+			const int room = textWidth - font->CalculateWidth("Waiting for  to reconnect");
+			composed += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
+		} else if (missingFrames) {
+			composed += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), textWidth);
+			composed += "\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
+		} else if (paused) {
+			composed += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
+		} else {
+			composed += "\nLIVE";
+		}
+		if (!m_StatusProbeLine.empty()) composed += "\n" + m_StatusProbeLine;
+		return composed;
+	};
+	int width = std::max(1, std::min(c_StatusBoxWidth, maxPanelWidth));
+	std::string text = compose(width - 12);
+	// A word wider than the stock column must not hang over the panel edge: grow to hold it whole.
+	if (const int need = LongestWordWidth(font, text) + 12; need > width && width < maxPanelWidth) {
+		width = std::min(need, maxPanelWidth);
+		text = compose(width - 12);
+	}
 	// Measured at the final width, so the height below is the height these rows really need.
 	m_NetStatus->Resize(width - 12, backbuffer->h);
-	std::string text = std::string("NET STATUS  /  SEATS [F6]\n") + metrics;
-	if (m_MatchDelayFrames != m_BaseDelayFrames) {
-		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
-	}
-	for (const auto& member: snapshot.members) {
-		if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
-		text += "\n" + FitLine(font, NetPlayerPresentation::Name(member), width - 12) + " / via " + member.connectedRoute;
-	}
-	text += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
-	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
-	text += metrics;
-	// The slow-machine notice has one surface, the toast band; this panel keeps the pace numbers.
-	if (g_SettingsMan.GetNetworkShowDiagnostics()) {
-		for (const auto& member: snapshot.members) {
-			if (member.cpu) continue;
-			text += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
-			text += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
-			if (member.reclaiming || member.aiHeld || !member.connected) text += " / " + NetPlayerPresentation::State(member);
-		}
-	}
-	if (hostLost) {
-		text += "\nHost connection lost - choosing a new host...\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
-	} else if (resyncing) {
-		text += "\nRESYNCING MATCH";
-	} else if (placing) {
-		const int room = width - 12 - font->CalculateWidth("Waiting for  to place their brains");
-		text += placementNames.empty() ? "\nAll brains placed" : "\nWaiting for " + FitLine(font, placementNames, room) + " to place their brains";
-		text += "\n" + std::to_string(placed) + " of " + std::to_string(seats) + " placed";
-	} else if (holdPause) {
-		const int room = width - 12 - font->CalculateWidth("Waiting for  to reconnect");
-		text += "\nWaiting for " + FitLine(font, holdName.empty() ? "a player" : holdName, room) + " to reconnect\n" + std::to_string(holdSeconds) + " s left";
-	} else if (missingFrames) {
-		text += "\nWAITING FOR FRAMES\n" + FitLine(font, ScenarioRunner::GetLockstepMissingPeers(), width - 12);
-		text += "\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
-	} else if (paused) {
-		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
-	} else {
-		text += "\nLIVE";
-	}
-	m_NetStatus->SetText(text);
+	const int column = std::max(0, width - 12);
+	const std::string drawn = WrapText(font, FitTokens(font, text, std::max(1, column)), std::max(1, column));
+	m_StatusWrap.source = text;
+	m_StatusWrap.wrapped = drawn;
+	m_StatusWrap.textWidth = column;
+	m_StatusWrap.longestWord = LongestWordWidth(font, text);
+	m_StatusWrap.capWidth = maxPanelWidth - 12;
+	m_StatusWrap.active = true;
+	m_NetStatus->SetText(drawn);
 	// The box grows for a state that needs more rows than the metric ones; those keep the stock height.
 	const int height = std::max(c_StatusBoxHeight, m_NetStatus->GetTextHeight() + 12);
 	// The editor's own top band and picker column are its own, so the box takes the bottom of the rest.
@@ -1286,6 +1364,56 @@ void NetModerationGUI::DrawMatchToasts() {
 		ScenarioRunner::NoteNetUiToastsDrawn(0, queued.size());
 	}
 	t_simRNGOverride = previousRNG;
+	GhostWatchTick();
+}
+
+NetModerationGUI::GhostBandHit NetModerationGUI::ScanGhostBand(const int minRunPx) const {
+	GhostBandHit hit;
+	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
+	if (!backbuffer) {
+		return hit;
+	}
+	// Every overlay surface fills (20,22,27,255); a run of those pixels that no reported rect
+	// covers is a band painted where nothing drew this frame. The seats panel's skin never reaches
+	// that exact colour run-wide, so an uncovered run can only be stale paint.
+	const int bandFill = makeacol32(20, 22, 27, 255);
+	if (m_ToastRect.visible) {
+		hit.probePixel = getpixel(backbuffer, m_ToastRect.x + 2, m_ToastRect.y + 2);
+	}
+	const OverlayRect* rects[] = {&m_ToastRect, &m_SeatsPanelRect, &m_StatusRect, &m_ChatRect, &m_RosterRect};
+	for (int y = 0; y < backbuffer->h && !hit.found; ++y) {
+		int run = 0;
+		for (int x = 0; x < backbuffer->w; ++x) {
+			bool covered = getpixel(backbuffer, x, y) != bandFill;
+			for (const auto* rect: rects) {
+				covered = covered || (rect->visible && x >= rect->x && x < rect->x + rect->width &&
+				                      y >= rect->y && y < rect->y + rect->height);
+			}
+			run = covered ? 0 : run + 1;
+			if (run >= minRunPx) {
+				hit.found = true;
+				hit.x = x - run + 1;
+				hit.y = y;
+				hit.run = run;
+				break;
+			}
+		}
+	}
+	return hit;
+}
+
+void NetModerationGUI::GhostWatchTick() {
+	// The resync overlay paints the whole layer the fill colour - a full fill is a deliberate
+	// screen, not a stale band, so those frames do not count.
+	if (!m_GhostWatchArmed || g_NetMatchService.IsMatchResyncing()) {
+		return;
+	}
+	const GhostBandHit hit = ScanGhostBand(100);
+	m_GhostWatchProbe = hit.probePixel;
+	if (hit.found) {
+		++m_GhostWatchHits;
+		m_GhostWatchLast = hit;
+	}
 }
 
 void NetModerationGUI::Draw() {
@@ -1294,6 +1422,8 @@ void NetModerationGUI::Draw() {
 	m_StatusRect = {};
 	m_ChatRect = {};
 	m_RosterRect = {};
+	m_RosterWrap = {};
+	m_StatusWrap = {};
 	if (m_NetStatusBox) {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);

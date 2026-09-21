@@ -197,6 +197,11 @@ INTERNET_HINT = "host[:port][/path] - https:// is implied"
 INTERNET_REASON = "Connection sets your route. Host Options > Network sets the match's relay."
 # The wire's display-name cap; the landing name box and -net-player-name refuse past it.
 DISPLAY_NAME_MAX_BYTES = 64
+# FontSmall measured 125 glyphs of this alphabet at 502 px. Two hundred stay one token and are wider
+# than the 640x360 roster column (ResX - 28) while the box is still capped by the screen.
+WIDE_ROSTER_NAME = ("PeerExtremelyLongDisplayNameForWrapChecking" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 5)[:200]
+# 200 of those glyphs measured 807 px. 340 exceeds the 960 and 1280 status columns (ResX - 28).
+WIDE_STATUS_TOKEN = (WIDE_ROSTER_NAME + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" * 5)[:340]
 # The host's saved session options steer the match; the client's own copy differs and must not.
 HOST_OPTIONS = {"NetworkSlowPlayerBoundTicks": "7", "NetworkSlowPlayerPolicy": "Pause", "NetworkHostDelayPolicy": "Fixed", "NetworkHostIdleWaitMinutes": "25", "NetworkHostAutoRepair": "0",
                 "NetworkPathHorizonTicks": "45"}
@@ -300,6 +305,24 @@ def net_page(page):
 
 def menu_step(command):
     return {"op": "menu", "command": command}
+
+
+def roster_fit_observations(observation):
+    found = []
+    for step in observation.get("steps", []):
+        note = step.get("observed", {}).get("menu_observation", "")
+        if isinstance(note, str) and '"surface":"roster_fits"' in note:
+            found.append(json.loads(note))
+    return found
+
+
+def status_wrap_notes(observation):
+    notes = []
+    for step in observation.get("steps", []):
+        note = step.get("observed", {}).get("menu_observation", "")
+        if isinstance(note, str) and (note == "status: no wrap surface" or '"surface":"status"' in note):
+            notes.append(note)
+    return notes
 
 
 def probe_root(root, who):
@@ -1223,6 +1246,10 @@ def scripts(case, port, root, size="960x540"):
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
+                 # ENGINE 166: the caption follows the typed interval on the Changed notification,
+                 # before any Apply or focus loss commits it.
+                 "set_text TextHostRecAutosaveInterval 30\nwait_ms 500\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 30 sim seconds - none saved yet\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
@@ -1291,7 +1318,28 @@ def scripts(case, port, root, size="960x540"):
         if case in ("scope-off", "input-parity"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
-        steps = ([{"op": "wait", "sim_at_least": 150},
+        steps = (([{"op": "wait", "sim_at_least": 150},
+                  # ENGINE 195: a band pushed while the panel is closed paints at the bottom of the
+                  # game screen; opening the panel moves it, and `single` fails if the old band's
+                  # pixels stay behind on the GUI layer. The watch arms before the move so a ghost
+                  # that only lives for the frames between the move and the next wipe still counts.
+                  menu_step("push_toast info band-before-panel"), {"op": "wait", "renders": 3},
+                  menu_step("assert_toast_band"),
+                  menu_step("ghost_watch start"),
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": True}, {"op": "wait", "renders": 5},
+                  menu_step("ghost_watch assert"),
+                  menu_step("assert_toast_band single"),
+                  # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
+                  # rule grows the panel to the longest word instead of letting it hang over. The
+                  # status box only wraps in its tall layout; the strip path is one FitLine'd line.
+                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row"),
+                  menu_step("assert_roster_fits " + WIDE_ROSTER_NAME),
+                  menu_step("status_line " + WIDE_STATUS_TOKEN), {"op": "wait", "renders": 3},
+                  menu_step("assert_word_wrap status"),
+                  menu_step("status_line"), {"op": "wait", "renders": 3}] +
+                  [{"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": False},
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": True},
                   menu_step("push_toast info toast-one"), menu_step("push_toast info toast-two"),
@@ -1301,7 +1349,7 @@ def scripts(case, port, root, size="960x540"):
                   menu_step("dump_refresh_count"),
                   {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "key_down", "key": "Escape"},
-                  {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}] if case == "live"
+                  {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}]) if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
             # The match's pause menu opens without pausing the shared sim (L03): the menu is a local
@@ -1356,7 +1404,7 @@ def scripts(case, port, root, size="960x540"):
                       {"op": "wait", "renders": 3}, menu_step("assert_focus TextMultiplayerName"),
                       menu_step("dump_player_options"), {"op": "input_scope", "enabled": True}]
         steps += [{"op": "signal", "name": "done"}, {"op": "finish"}]
-        probe = {"schema": 1, "timeout_ms": 90000, "steps": steps}
+        probe = {"schema": 1, "timeout_ms": 150000, "steps": steps}
     else:
         raise ValueError(case)
     texts = {"host": text}
@@ -1682,6 +1730,28 @@ def run_case(options, case, root, failing=None):
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
+            if case == "live":
+                fits = roster_fit_observations(observation)
+                assert len(fits) == 1, fits
+                row = fits[0]
+                assert row["widest_token"] <= row["column"] and row["widest_line"] <= row["column"], row
+                assert row["inside"] is True and len(row["rect"]) == 4, row
+                width, height = (int(part) for part in options.size.split("x"))
+                assert row["rect"][0] + row["rect"][2] <= width and row["rect"][1] + row["rect"][3] <= height, row
+                if options.size == "640x360":
+                    assert row["ellipsis"] is True and WIDE_ROSTER_NAME not in row["drawn"], row
+                notes = status_wrap_notes(observation)
+                if options.size == "640x360":
+                    assert notes == ["status: no wrap surface"], notes
+                else:
+                    assert len(notes) == 1, notes
+                    status = json.loads(notes[0])
+                    assert status["widest_line"] <= status["text_width"] and status["split_token"] == "", status
+                    drawn = "\n".join(status["rows"])
+                    if WIDE_STATUS_TOKEN not in drawn:
+                        assert "..." in drawn, status
+                    if options.size == "960x540":
+                        assert WIDE_STATUS_TOKEN not in drawn and "..." in drawn, status
         if case in ("host-stun", "host-stun-empty"):
             pages = [{c["name"]: c for c in capture["controls"]} for capture in images
                      if any(c["name"] == "ComboHostNetIce" for c in capture["controls"])]
