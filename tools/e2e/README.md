@@ -161,6 +161,13 @@ With video recording active, it arms the existing native hash path and collector
 trace round two through its cap. `hash_gate` names the two trace peers, first tick and cap; it uses the same complete
 record comparison as the migration gate. The command does not alter a wire flag, hash mask or comparison rule.
 
+`mp-rematch --run rematch` records the ordinary lobby, End Match and second round, with every complete hash record
+compared from tick 1 through 600. Its separate `--run injected-desync` uses the existing
+`-determinism-selftest-perturb -determinism-selftest-perturb-tick 240` seam on the host and
+`-net-match-e2e-resync` on both peers. It never presses Repair Match. Its checklist requires the native divergence,
+snapshot reload and relaunch lines, recorded repair-overlay frames, the visible healed-frame toast and subsequent
+Running gameplay through tick 900. A run of one arm does not prove the other.
+
 An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
 both exact visibility and text without blocking all later capture steps when the expected toast is absent.
 
