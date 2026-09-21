@@ -20,7 +20,6 @@ extern "C" {
 #include <stdexcept>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -115,7 +114,7 @@ namespace RTE::CheckpointLua {
 		friend class HeapOwner;
 	};
 
-	// Owns the VM and the allocator arena from which every recorded block came.
+	// Owns the VM and the allocator every recorded block came from; each block carries its own ledger entry.
 	class HeapOwner {
 	public:
 		static std::unique_ptr<HeapOwner> Create() {
@@ -138,7 +137,7 @@ namespace RTE::CheckpointLua {
 
 		AllocationStats Stats() const {
 			std::lock_guard lock(m_Mutex);
-			return {m_Bytes, m_Blocks.size()};
+			return {m_Bytes, m_Count};
 		}
 
 		// The caller must hold the VM's execution lock throughout the copy.
@@ -154,15 +153,16 @@ namespace RTE::CheckpointLua {
 			data->state = m_State;
 			data->serial = G(m_State)->objserial;
 			data->byteCount = m_Bytes;
-			data->blocks.reserve(m_Blocks.size());
+			data->blocks.reserve(m_Count);
 			data->bytes.reset(new std::byte[m_Bytes]);
 			const auto copyStarted = std::chrono::steady_clock::now();
 			size_t offset = 0;
-			for (const auto& [address, size]: m_Blocks) {
-				if (!address || size > m_Bytes - offset) throw std::runtime_error("the Lua heap allocation ledger is inconsistent");
-				data->blocks.push_back({reinterpret_cast<uintptr_t>(address), size, offset});
-				std::memcpy(data->bytes.get() + offset, address, size);
-				offset += size;
+			for (const Header* header = m_Head.next; header != &m_Head; header = header->next) {
+				if (header->size > m_Bytes - offset) throw std::runtime_error("the Lua heap allocation ledger is inconsistent");
+				const auto* payload = reinterpret_cast<const std::byte*>(header + 1);
+				data->blocks.push_back({reinterpret_cast<uintptr_t>(payload), header->size, offset});
+				std::memcpy(data->bytes.get() + offset, payload, header->size);
+				offset += header->size;
 			}
 			if (offset != m_Bytes) throw std::runtime_error("the Lua heap allocation byte count is inconsistent");
 			data->copyUs = MicrosecondsSince(copyStarted);
@@ -171,13 +171,23 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
-		HeapOwner() = default;
+		// The entry sits before its block, so a block is recorded, moved and released in constant time.
+		struct Header {
+			Header* prev;
+			Header* next;
+			size_t size;
+			size_t reserved;
+		};
+		static_assert(sizeof(Header) == 32, "the ledger entry must keep the block's 16-byte alignment");
+
+		HeapOwner() { m_Head.prev = m_Head.next = &m_Head; }
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
 		lua_Alloc m_Forward = nullptr;
 		void* m_ForwardData = nullptr;
 		mutable std::mutex m_Mutex;
-		std::unordered_map<void*, size_t> m_Blocks;
+		Header m_Head{};
+		size_t m_Count = 0;
 		size_t m_Bytes = 0;
 		std::atomic<const char*> m_TrackingFailure{nullptr};
 
@@ -219,47 +229,41 @@ namespace RTE::CheckpointLua {
 
 		static void* Allocate(void* opaque, void* address, size_t previousSize, size_t size) noexcept {
 			auto& owner = *static_cast<HeapOwner*>(opaque);
-			void* result = nullptr;
-			bool forwarded = false;
-			try {
-				std::lock_guard lock(owner.m_Mutex);
-				auto previous = owner.m_Blocks.end();
-				if (address) {
-					previous = owner.m_Blocks.find(address);
-					if (previous == owner.m_Blocks.end()) {
-						owner.m_TrackingFailure.store("the Lua allocator received an unrecorded allocation");
-					} else if (previous->second != previousSize) {
-						owner.m_TrackingFailure.store("the Lua allocator received an inconsistent allocation size");
-					}
-				}
-				const size_t recordedSize = previous == owner.m_Blocks.end() ? 0 : previous->second;
-				if (size == 0) {
-					result = owner.m_Forward(owner.m_ForwardData, address, previousSize, 0);
-					forwarded = true;
-					if (previous != owner.m_Blocks.end()) owner.m_Blocks.erase(previous);
-					owner.m_Bytes -= recordedSize;
-					return result;
-				}
-				if (size > std::numeric_limits<size_t>::max() - (owner.m_Bytes - recordedSize)) return nullptr;
-				// Reserve the ledger node before realloc can move the old allocation.
-				if (previous == owner.m_Blocks.end()) previous = owner.m_Blocks.emplace(nullptr, 0).first;
-				result = owner.m_Forward(owner.m_ForwardData, address, previousSize, size);
-				forwarded = true;
-				if (!result) {
-					if (!previous->first) owner.m_Blocks.erase(previous);
-					return nullptr;
-				}
-				auto record = owner.m_Blocks.extract(previous);
-				record.key() = result;
-				record.mapped() = size;
-				if (!owner.m_Blocks.insert(std::move(record)).inserted)
-					owner.m_TrackingFailure.store("the Lua allocator returned an overlapping allocation");
-				owner.m_Bytes = owner.m_Bytes - recordedSize + size;
-				return result;
-			} catch (...) {
-				if (forwarded) owner.m_TrackingFailure.store("the Lua allocation ledger could not retain an allocation");
-				return forwarded ? result : nullptr;
+			std::lock_guard lock(owner.m_Mutex);
+			Header* header = address ? static_cast<Header*>(address) - 1 : nullptr;
+			if (header && header->size != previousSize) owner.m_TrackingFailure.store("the Lua allocator received an inconsistent allocation size");
+			if (size == 0) {
+				if (!header) return nullptr;
+				header->prev->next = header->next;
+				header->next->prev = header->prev;
+				owner.m_Bytes -= header->size;
+				--owner.m_Count;
+				owner.m_Forward(owner.m_ForwardData, header, header->size + sizeof(Header), 0);
+				return nullptr;
 			}
+			if (size > std::numeric_limits<size_t>::max() - sizeof(Header)) return nullptr;
+			if (!header) {
+				auto* fresh = static_cast<Header*>(owner.m_Forward(owner.m_ForwardData, nullptr, 0, size + sizeof(Header)));
+				if (!fresh) return nullptr;
+				fresh->size = size;
+				fresh->reserved = 0;
+				fresh->prev = owner.m_Head.prev;
+				fresh->next = &owner.m_Head;
+				owner.m_Head.prev->next = fresh;
+				owner.m_Head.prev = fresh;
+				owner.m_Bytes += size;
+				++owner.m_Count;
+				return fresh + 1;
+			}
+			const size_t recorded = header->size;
+			auto* moved = static_cast<Header*>(owner.m_Forward(owner.m_ForwardData, header, recorded + sizeof(Header), size + sizeof(Header)));
+			if (!moved) return nullptr;
+			// The neighbours follow the block wherever the forwarded allocator put it.
+			moved->prev->next = moved;
+			moved->next->prev = moved;
+			moved->size = size;
+			owner.m_Bytes = owner.m_Bytes - recorded + size;
+			return moved + 1;
 		}
 	};
 }
