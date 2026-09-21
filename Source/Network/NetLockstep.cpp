@@ -4185,6 +4185,10 @@ namespace RTE {
 	void NetLockstepCoordinator::ResetRoundState() {
 		m_PeerAdmissions.clear();
 		m_HostAcceptedLocalFrames.clear();
+		m_ResumeAdmissionPending = m_Config.resumeFromSnapshot;
+		m_SynchronizedCaptureStartFrame = UINT64_MAX;
+		m_SynchronizedCaptureEndFrame = 0;
+		m_SynchronizedCaptureBudgetMs = 250.0;
 		m_AiHeldSeats.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
@@ -4274,6 +4278,7 @@ namespace RTE {
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
 		auto installedTargets = std::move(m_InstalledResyncTargets);
 		auto primeInputs = std::move(m_ResyncPrimeInputs);
+		const bool hadResyncAdmission = m_ResyncPrimed;
 		auto carried = std::move(m_PendingObservations);
 		auto carriedValues = std::move(m_PendingValueObservations);
 		std::map<uint64_t, NetLockstepFrame> ownInputs = m_LocalInputHistory;
@@ -4355,6 +4360,7 @@ namespace RTE {
 				m_ResendFrames.emplace(target, std::move(input));
 			}
 		}
+		if (hadResyncAdmission || !m_ResyncPrimeInputs.empty()) m_ResumeAdmissionPending = false;
 		FlushResendFrames();
 	}
 
@@ -4930,6 +4936,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
 		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId() || missing.empty()) return false;
+		// Autosave is an agreed event: all peers are in the same capture park, so its silence is
+		// not evidence that one seat stopped producing input.
+		if (IsSynchronizedCapturePark(frame)) return false;
 		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		uint64_t noticeMs = 2;
 		for (uint8_t survivor: m_RemotePeerIds) {
@@ -5291,6 +5300,7 @@ namespace RTE {
 		}
 		for (size_t index = 0; index < batches.size(); ++index) if (!QueueInputAtTarget(m_Config.startFrame + index, {}, batches[index], error, {})) return false;
 		m_ResyncPrimed = true;
+		m_ResumeAdmissionPending = false;
 		return true;
 	}
 
@@ -5554,14 +5564,7 @@ namespace RTE {
 			return;
 		}
 		if (ack.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
-			const auto found = m_Config.peerIncarnations.find(m_Config.localPeerId);
-			const uint32_t incarnation = found == m_Config.peerIncarnations.end() ? 1 : found->second;
-			if (ack.senderPeerId == GetHostPeerId() && ack.roundId == m_RoundId && ack.seatIncarnation == incarnation &&
-			    ack.sessionId == m_Config.sessionId && ack.authorityGeneration == m_Config.migrationGeneration &&
-			    ack.highestContiguousFrame >= m_Stats.nextFrame && ack.highestContiguousFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew) {
-				m_HostAcceptedLocalFrames.insert(ack.highestContiguousFrame);
-				AdvanceReadyFrames(m_TimingNowMs);
-			}
+			// Kept as a wire-compatible no-op; local input commits without a per-frame round trip.
 			return;
 		}
 		if (ack.receivedMask & NetLockstepCodec::c_FrameWindowCapabilityMask) {
@@ -5573,12 +5576,8 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame) {
-		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId()) return;
-		const auto found = m_Config.peerIncarnations.find(peerId);
-		NetLockstepAck ack{GetHostPeerId(), frame, NetLockstepCodec::c_InputAcceptedMask, m_RoundId,
-		    found == m_Config.peerIncarnations.end() ? 1 : found->second, m_Config.sessionId, m_Config.migrationGeneration};
-		std::string ignored;
-		(void)SendPacket({ack}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, peerId);
+		(void)peerId;
+		(void)frame;
 	}
 
 	uint8_t NetLockstepCoordinator::ConfiguredWindowTicks() const {
@@ -5860,6 +5859,7 @@ namespace RTE {
 		}
 		m_ResyncPrimeInputs = std::move(encoded);
 		m_ResyncPrimed = true;
+		m_ResumeAdmissionPending = false;
 		FlushRecoveryInputs();
 		return true;
 	}
@@ -6154,6 +6154,26 @@ namespace RTE {
 			std::string ignored;
 			(void)SendStart(&ignored);
 		}
+	}
+
+	void NetLockstepCoordinator::BeginSynchronizedCapture(uint64_t completedFrame) {
+		if (completedFrame == UINT64_MAX || m_Config.simTickMs <= 0) return;
+		m_SynchronizedCaptureStartFrame = completedFrame + 1;
+		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(m_SynchronizedCaptureBudgetMs / m_Config.simTickMs)));
+		m_SynchronizedCaptureEndFrame = m_SynchronizedCaptureStartFrame + ticks;
+	}
+
+	void NetLockstepCoordinator::CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs) {
+		if (completedFrame == UINT64_MAX || !std::isfinite(captureMs) || captureMs < 0 || m_Config.simTickMs <= 0) return;
+		m_SynchronizedCaptureBudgetMs = std::max(m_SynchronizedCaptureBudgetMs, captureMs);
+		if (m_SynchronizedCaptureStartFrame == completedFrame + 1) {
+			const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(captureMs / m_Config.simTickMs)));
+			m_SynchronizedCaptureEndFrame = std::max(m_SynchronizedCaptureEndFrame, m_SynchronizedCaptureStartFrame + ticks);
+		}
+	}
+
+	bool NetLockstepCoordinator::IsSynchronizedCapturePark(uint64_t frame) const {
+		return m_SynchronizedCaptureStartFrame != UINT64_MAX && frame >= m_SynchronizedCaptureStartFrame && frame <= m_SynchronizedCaptureEndFrame;
 	}
 
 	void NetLockstepCoordinator::Tick(uint64_t nowMs) {
@@ -8258,7 +8278,7 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AdvanceReadyFrames(uint64_t nowMs) {
-		if (IsMigrating() || m_State != NetLockstepState::Running || (m_Config.resumeFromSnapshot && !m_ResyncPrimed)) {
+		if (IsMigrating() || m_State != NetLockstepState::Running || (m_Config.resumeFromSnapshot && (m_ResumeAdmissionPending || !m_ResyncPrimed))) {
 			return;
 		}
 		if (AnyDroppedSeatHeld() && !UsesBoundedWait()) {
@@ -8273,9 +8293,7 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && (m_Playback || (m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)))) {
 				break;
 			}
-			if (UsesBoundedWait() && m_Config.resumeFromSnapshot && !m_Playback && m_Config.localPeerId != GetHostPeerId() && localIt != m_LocalFrames.end() &&
-			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !m_HostAcceptedLocalFrames.contains(m_Stats.nextFrame)) break;
-			// Local input commits optimistically during live play; restored rounds retain their admission fence.
+			// Local input commits optimistically after the restored input batch has been admitted.
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
 			// required past its announced last frame.
 			auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);

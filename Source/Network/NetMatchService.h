@@ -1299,6 +1299,7 @@ namespace RTE {
 		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
 		bool m_DirectoryHidden = false;             //!< A natural ICE end keeps the bound row unlisted.
 		bool m_DirectoryRelistPending = false;      //!< The next lobby awaits the hide acknowledgement.
+		bool m_KeepEndedDirectoryLease = false;    //!< A held seat may still need the match-over answer.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
