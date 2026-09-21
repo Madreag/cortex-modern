@@ -4865,7 +4865,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	constexpr int c_ObjectCount = 1024;
-	constexpr int c_MeasureRounds = 12;
+	constexpr int c_MeasureRounds = 32;
 	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
 	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
@@ -4955,13 +4955,16 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			if (count == 32) {
 				run(false);
 				run(true);
-				const auto measure = [&](bool globalOrder) {
-					const auto started = std::chrono::steady_clock::now();
-					for (int round = 0; round < c_MeasureRounds; ++round) run(globalOrder);
-					return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count() / c_MeasureRounds;
-				};
-				perStateUs = measure(false);
-				globalUs = measure(true);
+				for (int round = 0; round < c_MeasureRounds; ++round) {
+					const auto perStateStarted = std::chrono::steady_clock::now();
+					run(false);
+					perStateUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - perStateStarted).count();
+					const auto globalStarted = std::chrono::steady_clock::now();
+					run(true);
+					globalUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - globalStarted).count();
+				}
+				perStateUs /= c_MeasureRounds;
+				globalUs /= c_MeasureRounds;
 			}
 		} else {
 			passed = false;
