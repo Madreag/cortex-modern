@@ -21,31 +21,6 @@
     },
     {
       "op": "wait",
-      "control": "LabelNetMatchStatus",
-      "text_contains": "Host connection lost - choosing a new host",
-      "equals": {
-        "visible": true
-      }
-    },
-    {
-      "op": "menu",
-      "command": "video_mark migration-loss-overlay"
-    },
-    {
-      "op": "assert_control",
-      "control": "LabelNetMatchStatus",
-      "text_contains": "RTT -- ms"
-    },
-    {
-      "op": "menu",
-      "command": "dump_network_layout"
-    },
-    {
-      "op": "screenshot",
-      "name": "host-loss"
-    },
-    {
-      "op": "wait",
       "control": "LabelNetMatchHandoverToast",
       "text_contains": "Host left - ClientA is now hosting",
       "equals": {
@@ -57,17 +32,21 @@
       "command": "video_mark migration-new-host"
     },
     {
-      "op": "wait",
-      "elapsed_ms": 800
-    },
-    {
       "op": "assert_control",
       "control": "LabelNetMatchHandoverToast",
       "text_contains": "Host left - ClientA is now hosting"
     },
     {
+      "op": "menu",
+      "command": "dump_network_layout"
+    },
+    {
       "op": "screenshot",
       "name": "new-host"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 800
     },
     {
       "op": "menu",

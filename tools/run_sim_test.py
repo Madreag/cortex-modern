@@ -22,7 +22,7 @@ else:
         from posix_test_runner import make_run as posix_make_run
 
 
-def prepare_runtime(repo, out):
+def prepare_runtime(repo, out, fixtures=None):
     repo, out = Path(repo).resolve(), Path(out).resolve()
     runtime = out / "runtime"
     runtime.mkdir(parents=True, exist_ok=False)
@@ -38,12 +38,15 @@ def prepare_runtime(repo, out):
         if count == 0:
             settings += f"\n\t{name} = {value}\n"
     (runtime / "Userdata/Settings.ini").write_text(settings, encoding="utf-8")
-    fixture = repo / "tools/fixtures/preview_window_modcompat.lua"
-    if fixture.is_file():
+    staged = [str(name) for name in (fixtures or [])]
+    if staged:
         dest = runtime / "tools/fixtures"
         dest.mkdir(parents=True, exist_ok=True)
-        (dest / fixture.name).write_bytes(fixture.read_bytes())
-    manifest = {"executable": str(repo / "Cortex Command.exe"), "cwd": str(runtime), "data": str(repo / "Data"), "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(), "settings_overrides": values}
+        src_dir = repo / "tools/fixtures"
+        for name in staged:
+            src = src_dir / name
+            (dest / Path(name).name).write_bytes(src.read_bytes())
+    manifest = {"executable": str(repo / "Cortex Command.exe"), "cwd": str(runtime), "data": str(repo / "Data"), "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(), "settings_overrides": values, "fixtures": staged}
     (out / "runtime.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return runtime
 
@@ -60,7 +63,7 @@ def seed_settings(run, values):
     ini.write_text(text, encoding="utf-8")
 
 
-def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=None):
+def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=None, fixtures=None):
     if runtime is not None:
         out, runtime = Path(out).resolve(), Path(runtime).resolve()
         if not runtime.is_dir() or not (runtime / "Userdata/Settings.ini").is_file():
@@ -86,7 +89,7 @@ def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=N
         return posix_make_run(repo, args, out, timeout, env, expected)
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=False)
-    runtime = prepare_runtime(repo, out)
+    runtime = prepare_runtime(repo, out, fixtures=fixtures)
     argv = [str(Path(repo).resolve() / "Cortex Command.exe"), "-headless", *map(str, args)]
     private_env = dict(env or {})
     private_env.update(TEMP=str(runtime / "Temp"), TMP=str(runtime / "Temp"))
@@ -99,12 +102,13 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=120)
     parser.add_argument("--expect", type=Path, action="append", default=[])
+    parser.add_argument("--fixture", action="append", default=[], help="tools/fixtures file to stage for this row")
     parser.add_argument("args", nargs=argparse.REMAINDER)
     options = parser.parse_args()
     args = options.args[1:] if options.args[:1] == ["--"] else options.args
     if not args:
         parser.error("supply explicit game test arguments after --")
-    run = make_run(options.repo, args, options.out, options.timeout, expected=options.expect)
+    run = make_run(options.repo, args, options.out, options.timeout, expected=options.expect, fixtures=options.fixture or None)
     try:
         record = run.start().finish()
     finally:

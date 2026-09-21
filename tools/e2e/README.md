@@ -99,8 +99,11 @@ must be installed as `<repo>/Data/VoidWanderers.rte`; its download page is
 https://mod.io/g/cccp/m/void-wanderers-by-weegee. Verify the installed activity names before capturing that scenario.
 The installed version 6 module names its activity and launcher scene `Void Wanderers` in `MissionActivities.ini`.
 
-The scratch counter excludes symlinks and Windows reparse points. It stops at 5 GB and never removes a run tree.
+The scratch counter excludes symlinks and Windows reparse points. It stops at 5 GB by default and never removes a run tree.
 `--scratch-root` selects the budget root; under `D:/mx` the default is the lane root containing the scenario.
+An explicitly granted allowance can be selected with `--scratch-limit-bytes 8000000000`. The driver checks that
+allowance before launch, while peers run and before media writes; `capture.json` and `manifest.json` retain it.
+Finalization keeps the recorded root and allowance unless an explicit command-line replacement is supplied.
 
 Windows uses `run_sim_test`'s private-desktop runner and its existing fullscreen guard. The Scoop ffmpeg fallback is
 Windows-specific; PATH and the Homebrew/Unix fallbacks are also supported. The POSIX runner selects
@@ -137,9 +140,11 @@ consecutive presented frames and fails the item on a longer hold: a held frame i
 stall, not a dropped frame. Frames stamped with an ignored screen (the game and the loading screens by default) are
 not measured. The evidence names the worst gap and every gap over the bound with its frames and screen.
 
-`forbidden_log_regex` is the negative counterpart of `log_regex`; a matching line fails the item. Required module
-versions are checked before launch through `requires_version`. The installed VW package declares 6.2.2 and is
-blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linked in both VW definitions.
+`forbidden_log_regex` is the negative counterpart of `log_regex`; a matching line fails the item. A scenario can
+require an exact module version through `requires_version`. The Void Wanderers scenarios require the installed
+module but impose no version prerequisite: its 6.2.2 declaration alone does not prevent a capture on 7.0.0.
+Record the actual load and play result. A version warning alone is evidence, while a process abort, failed activity
+start or Lua error is a finding with the exact log line; neither the module nor the engine guard is altered.
 
 The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
 
@@ -155,6 +160,13 @@ simulation counter reset. Rematch probes wait for that record before measuring t
 With video recording active, it arms the existing native hash path and collector for the next round. The recorder's completion action exports that collector before engine shutdown. This lets a rematch capture end round one normally and
 trace round two through its cap. `hash_gate` names the two trace peers, first tick and cap; it uses the same complete
 record comparison as the migration gate. The command does not alter a wire flag, hash mask or comparison rule.
+
+`mp-rematch --run rematch` records the ordinary lobby, End Match and second round, with every complete hash record
+compared from tick 1 through 600. Its separate `--run injected-desync` uses the existing
+`-determinism-selftest-perturb -determinism-selftest-perturb-tick 240` seam on the host and
+`-net-match-e2e-resync` on both peers. It never presses Repair Match. Its checklist requires the native divergence,
+snapshot reload and relaunch lines, recorded repair-overlay frames, the visible healed-frame toast and subsequent
+Running gameplay through tick 900. A run of one arm does not prove the other.
 
 An item's `readback` checks recorded probe observations by step and field path. A toast observation can require
 both exact visibility and text without blocking all later capture steps when the expected toast is absent.
@@ -172,8 +184,9 @@ python tools/e2e_video.py --repo <mac-tree> --scenario mp-host-join-cross --peer
 
 `HOST_ADDRESS` may also come from the environment. This definition uses a plain address on port 49412; it does not
 depend on a directory listing. The address must be reachable from the client and the two binaries must be compatible.
-After transferring the complete Mac capture through the lead's approved evidence workflow, join its contract with
-the host's retained capture:
+Transfer selected evidence files through the approved workflow, preserving their paths relative to the Mac capture
+root: `capture.json`, `manifest.json`, `review.json`, MP4s, sheets, native match-identity files, traces and the logs/probe
+results the review references. No runtime or directory-tree copy is needed. Join the transferred half with the host:
 
 ```text
 python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> --out <merged-contract>
@@ -181,7 +194,15 @@ python tools/e2e_video.py --merge-peer-captures <host-capture> <client-capture> 
 
 The merge reads both halves and writes metadata only. It requires the same checklist, live session, round and
 configuration hash, complementary host/client roles, distinct peer ids, and unchanged MP4/contact-sheet hashes.
-It preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
+Paths inside each original `capture.json` output root resolve beneath the supplied local half; traversal, outside-root
+paths, resolved link escapes and changed files refuse the merge. The input metadata stays untouched. Merged file
+evidence keeps `original_path`; `relocations` lists every mapped reference, and `provenance` retains original commands
+and hashes of the three input metadata files. Review media references must name their verified peer media.
+New cross captures record native identity and trace hashes in each peer's `identity_file` and `trace`, required by
+`cross_auxiliary`; merging checks those files and compares native identity contents with the embedded match identity.
+Older halves explicitly list absent historical auxiliary hashes in `auxiliary_checksum_coverage` and cannot claim
+that verification. Media hashes remain mandatory for both old and new halves.
+The merge preserves each machine's executable hash, source tip, command and timing. A Windows-only pair is labelled
 `local-pair-validation-only`; it is not a Mac capture. Picture review remains pending after a successful merge.
 
 On the Mac, both this definition and `sp-smoke` need Python, `date`, ffmpeg/ffprobe on PATH (or a listed Unix path),

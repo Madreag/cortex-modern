@@ -77,6 +77,9 @@
 #include "SoundSimulation.h"
 #include "AudioCheckpoint.h"
 #include "System.h"
+#include "RTEError.h"
+#include "DataModule.h"
+#include "MenuAutomation.h"
 
 #include "ControllerFrame.h"
 #include "GnsP2PSelfTest.h"
@@ -174,6 +177,10 @@
 
 extern "C" {
 FILE __iob_func[3] = {*stdin, *stdout, *stderr};
+}
+
+namespace RTE {
+	bool RunModApiShimsSelfTest();
 }
 
 using namespace RTE;
@@ -399,6 +406,12 @@ static std::vector<std::string> s_rbProbeFirstDeep;
 static long long s_rbProbeDeepDivergence = -1;
 static bool s_rbProbeRestoreMismatch = false;
 
+/// The longest a completed e2e round waits for a menu probe to read its still-drawn pause menu.
+static constexpr int64_t c_CompletedProbeHoldMs = 12000;
+static int64_t s_netMatchE2ECompletedMs = 0;
+static int64_t SteadyMilliseconds() {
+	return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
 static NetMatchHealWindow s_netMatchHeals;
@@ -700,6 +713,15 @@ void DestroyManagers() {
 int ShutDown(int exitCode) {
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
+	if (!MenuAutomation::FinishReadbacks()) {
+		System::PrintDiagnosticErrorLine("[menu-readback] queued snapshot write failed");
+		exitCode = EXIT_FAILURE;
+	}
+	// An assert a player would have had to dismiss is a failed run, whichever way it was answered.
+	if (RTEError::AssertFired()) {
+		System::PrintDiagnosticErrorLine("[assert] the run continued past an assert; see the RTE Assert line above");
+		exitCode = EXIT_FAILURE;
+	}
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
 	if (s_menuScriptFailed) exitCode = EXIT_FAILURE;
 	if (s_checkpointAudioEffects && !s_checkpointAudioEffectsPassed) exitCode = EXIT_FAILURE;
@@ -2539,6 +2561,7 @@ void RunMenuLoop() {
 		PollSDLEvents();
 
 		g_WindowMan.Update();
+		RTEError::DispatchPendingWorkerMessages();
 
 		g_UInputMan.Update();
 		g_TimerMan.Update();
@@ -3084,7 +3107,7 @@ static void UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	const int centerX = g_WindowMan.GetResX() / 2;
 	const int centerY = g_WindowMan.GetResY() / 2;
-	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - Rejoining..." : "Resyncing the match...", GUIFont::Centre);
+	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, heldRejoin ? "Held - AI in control - rejoining..." : "Resyncing the match...", GUIFont::Centre);
 	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8,
 	    std::to_string(elapsedSeconds) + "s elapsed  /  Seats [F6]", GUIFont::Centre);
 	g_MenuMan.DrawNetworkUI();
@@ -4696,9 +4719,15 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			System::SetQuit(true);
 		} else if (s_netMatchServiceE2E && e2ePeerStoppedAfterCap) {
 			g_NetMatchService.Complete("e2e complete");
-			g_ActivityMan.EndActivity();
-			ScenarioRunner::ClearControllerReplayError();
-			System::SetQuit(true);
+			// A probe still reading the pause menu the round ended under keeps it for a bounded window; the
+			// game loop ends the activity as soon as the probe is done (ENGINE 200).
+			if (NetModerationGUIProbe::Running()) {
+				s_netMatchE2ECompletedMs = SteadyMilliseconds();
+			} else {
+				g_ActivityMan.EndActivity();
+				ScenarioRunner::ClearControllerReplayError();
+				System::SetQuit(true);
+			}
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
@@ -5015,6 +5044,15 @@ void RunGameLoop() {
 
 	while (!System::IsSetToQuit()) {
 		bool returnToMenuAfterNetworkEnd = false;
+		// The completed round's held pause menu ends the moment its probe does, or when the window runs out.
+		if (s_netMatchE2ECompletedMs && (!NetModerationGUIProbe::Running() ||
+		                                 SteadyMilliseconds() - s_netMatchE2ECompletedMs >= c_CompletedProbeHoldMs)) {
+			s_netMatchE2ECompletedMs = 0;
+			g_ActivityMan.EndActivity();
+			ScenarioRunner::ClearControllerReplayError();
+			System::SetQuit(true);
+			break;
+		}
 		static uint64_t lossArmRound = UINT64_MAX;
 		if (ScenarioRunner::IsLockstepControllerSyncActive() && lossArmRound != ScenarioRunner::GetLockstepRoundId()) {
 			lossArmRound = ScenarioRunner::GetLockstepRoundId();
@@ -5039,6 +5077,8 @@ void RunGameLoop() {
 		PollSDLEvents();
 		g_WindowMan.Update();
 		g_WindowMan.ClearBackbuffer();
+
+		RTEError::DispatchPendingWorkerMessages();
 
 		if (s_frameStallArmed && !s_frameStallFired && g_TimerMan.GetSimUpdateCount() >= s_frameStallTick) {
 			s_frameStallFired = true;
@@ -6382,8 +6422,18 @@ void RunGameLoop() {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
-						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
-						g_NetMatchService.Complete("e2e complete");
+						if (!s_netMatchE2ECompletedMs) {
+							(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
+							g_NetMatchService.Complete("e2e complete");
+							s_netMatchE2ECompletedMs = SteadyMilliseconds();
+						}
+						// A player reading the pause menu when the round ends keeps seeing it; a probe that is
+						// still mid-script gets that same window before the harness ends the activity.
+						const int64_t heldMs = SteadyMilliseconds() - s_netMatchE2ECompletedMs;
+						if (NetModerationGUIProbe::Running() && heldMs < c_CompletedProbeHoldMs) {
+							// Leave the update loop for this frame: the drawn pause menu is what the probe reads.
+							break;
+						}
 						(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, c_CappedStopLingerMs);
 						g_ActivityMan.EndActivity();
 						System::SetQuit(true);
@@ -6396,19 +6446,19 @@ void RunGameLoop() {
 				g_TimerMan.PauseSim(true);
 
 				if (!g_ActivityMan.ActivitySetToRestart()) {
-					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
-						s_menuScriptHoldE2ePause = true;
-						g_MenuMan.HandleTransitionIntoMenuLoop();
-						RunMenuLoop();
-						s_menuScriptHoldE2ePause = false;
-						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
-					}
 					// Leaving a running net match: a clean leave lets N-peer survivors keep playing and,
 					// with nobody left, ends their match at once - unlike a drop, which holds the seat
 					// open for its reclaim window. The §7 exchange runs before the link goes down.
 					if (g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 						g_ConsoleMan.PrintString("NETWORK: Match left");
 						g_NetMatchService.LeaveMatch("Match left");
+					}
+					if (s_netMatchServiceE2E && !s_menuScriptPath.empty() && !s_menuScriptComplete && !s_menuScriptFailed) {
+						s_menuScriptHoldE2ePause = true;
+						g_MenuMan.HandleTransitionIntoMenuLoop();
+						RunMenuLoop();
+						s_menuScriptHoldE2ePause = false;
+						if (!s_menuScriptComplete && !System::IsSetToQuit()) continue;
 					}
 					// The e2e has no menu to return to; a leaver's run ends here.
 					if (s_netMatchServiceE2E) {
@@ -8176,6 +8226,22 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-combo-key-selftest") {
 			return GUIManager::RunComboKeyCommitSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-rteerror-selftest") {
+			return RTEError::RunAssertPolicySelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-module-version-selftest") {
+			return DataModule::RunVersionGuardSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-ext-validate-version-selftest") {
+			return DataModule::RunExtValidateVersionSelfTest();
+		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-path-prefix-selftest") {
+			return PresetMan::RunPathPrefixSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
+		// -limb-path-selftest runs after modules load: AHuman/LimbPath construction needs the entity pools.
+		if (argv[i] != nullptr && std::string(argv[i]) == "-menu-automation-selftest") {
+			return MenuAutomation::RunSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-settings-preferences-selftest") {
 			return SettingsMan::RunNetworkPreferencesSelfTest();
 		}
@@ -8600,6 +8666,12 @@ int main(int argc, char** argv) {
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().limbPathSelfTest) {
+		return ShutDown(AHuman::RunLimbPathTravelSpeedSelfTest() ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().modApiShimsSelfTest) {
+		return ShutDown(RunModApiShimsSelfTest() ? 0 : 1);
 	}
 	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
 		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);

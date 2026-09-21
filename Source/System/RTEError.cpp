@@ -6,6 +6,7 @@
 #include "ActivityMan.h"
 #include "System.h"
 
+#include <SDL3/SDL.h>
 #include <SDL3/SDL_messagebox.h>
 
 #ifdef _WIN32
@@ -16,7 +17,10 @@
 #include <atomic>
 #include <cstdio>
 #include <exception>
+#include <iostream>
+#include <mutex>
 #include <regex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -35,11 +39,17 @@
 #include <pthread.h>
 #endif
 
-#if defined(__APPLE__) && defined(__MACH__)
-// Cocoa dispatches message boxes onto the main thread, which deadlocks if a worker fires one while the main thread waits on it.
-static bool IsOnAppMainThread() { return pthread_main_np() != 0; }
+#ifdef _WIN32
+static std::atomic<unsigned long> s_AppMainThreadId{0};
+
+static bool IsOnAppMainThread() {
+	const unsigned long current = GetCurrentThreadId();
+	unsigned long expected = 0;
+	s_AppMainThreadId.compare_exchange_strong(expected, current);
+	return current == s_AppMainThreadId.load();
+}
 #else
-static bool IsOnAppMainThread() { return true; }
+static bool IsOnAppMainThread() { return SDL_IsMainThread(); }
 #endif
 
 #include "backward/backward.hpp"
@@ -49,8 +59,37 @@ using namespace RTE;
 
 bool RTEError::s_CurrentlyAborting = false;
 bool RTEError::s_IgnoreAllAsserts = false;
+bool RTEError::s_AssertFired = false;
+int RTEError::s_ShowMessageBoxCallCount = 0;
+int RTEError::s_AssertMessageBoxCallCount = 0;
+static bool s_ForceAssertDialogPathForTest = false;
 std::string RTEError::s_LastIgnoredAssertDescription = "";
 std::source_location RTEError::s_LastIgnoredAssertLocation = {};
+
+/// What a worker thread leaves for the app main thread to surface at its next frame: the text the
+/// dialog would have shown, plus what a dispatched Abort needs to abort the way AssertFunc would.
+enum class WorkerMessageKind : uint8_t { Assert, Warning, Abort };
+struct PendingWorkerMessage {
+	WorkerMessageKind kind = WorkerMessageKind::Assert;
+	std::string message;
+	std::string description;
+	std::source_location location = {};
+};
+static std::mutex s_PendingWorkerMessageMutex;
+static PendingWorkerMessage s_PendingWorkerMessageRecord;
+static std::atomic<bool> s_PendingWorkerMessage{false};
+static std::atomic<int> s_PendingWorkerMessageDropped{0};
+
+// The first pending record is kept until the main thread takes it; later ones are only counted.
+static void RecordPendingWorkerMessage(WorkerMessageKind kind, const std::string& message, const std::string& description, const std::source_location& location) {
+	std::lock_guard<std::mutex> lock(s_PendingWorkerMessageMutex);
+	if (s_PendingWorkerMessage.load(std::memory_order_relaxed)) {
+		++s_PendingWorkerMessageDropped;
+		return;
+	}
+	s_PendingWorkerMessageRecord = PendingWorkerMessage{kind, message, description, location};
+	s_PendingWorkerMessage.store(true, std::memory_order_release);
+}
 
 #if (defined(__linux__) || (defined(__APPLE__) && defined(__MACH__)))
 backward::SignalHandling sh;
@@ -259,6 +298,9 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 #endif
 
 void RTEError::SetExceptionHandlers() {
+#ifdef _WIN32
+	s_AppMainThreadId.store(GetCurrentThreadId());
+#endif
 	// Basic handling for C++ exceptions. Doesn't give us much meaningful information.
 	[[maybe_unused]] static const std::terminate_handler terminateHandler = []() {
 		std::exception_ptr currentException = std::current_exception();
@@ -294,12 +336,14 @@ void RTEError::SetExceptionHandlers() {
 }
 
 void RTEError::ShowMessageBox(const std::string& message) {
-	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		System::PrintFaultLine("RTE Warning (headless): " + message);
+	s_ShowMessageBoxCallCount++;
+	if (!IsOnAppMainThread()) {
+		RecordPendingWorkerMessage(WorkerMessageKind::Warning, message, "", {});
+		System::PrintFaultLine("RTE Warning (from worker thread): " + message);
 		return;
 	}
-	if (!IsOnAppMainThread()) {
-		System::PrintFaultLine("RTE Warning (from worker thread): " + message);
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		System::PrintFaultLine("RTE Warning (headless): " + message);
 		return;
 	}
 	SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "RTE Warning! (>_<)", message.c_str(), nullptr);
@@ -349,14 +393,23 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	if (!IsOnAppMainThread()) {
-		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
+		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+			s_AssertFired = true;
+		}
 		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
 		return false;
 	}
-	// Headless / automated runs can't dismiss a modal dialog — log + abort to exit.
+	// The headed dialog path, forced or shown: tests count the box here without opening SDL.
+	s_AssertMessageBoxCallCount++;
+	if (s_ForceAssertDialogPathForTest) {
+		return false;
+	}
+	// A headless run answers the dialog the way a player does: Ignore, and carry on. The fired assert is
+	// remembered so the run still ends non-zero and the reviewer reads the line the player would have read.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
-		System::PrintFaultLine("RTE Assert (headless): " + message);
-		return true;
+		s_AssertFired = true;
+		System::PrintFaultLine("RTE Assert (headless, continued like Ignore): " + message);
+		return false;
 	}
 	enum AssertMessageButton {
 		ButtonInvalid,
@@ -496,6 +549,10 @@ void RTEError::AbortFunc(const std::string& description, const std::source_locat
 			SDL_SetWindowFullscreen(g_WindowMan.GetWindow(), 0);
 		}
 
+		// A worker-thread abort still exits here; the record stands in case the process survives it.
+		if (!IsOnAppMainThread()) {
+			RecordPendingWorkerMessage(WorkerMessageKind::Abort, abortMessage, description, srcLocation);
+		}
 		if (ShowAbortMessageBox(abortMessage)) {
 			// Enable restarting in release builds only.
 			// Once this exits the debugger is detached and while there does seem to be a way to programatically re-attach it to the new instance (at least in Windows), it is so incredibly ass and I cannot even begin to can.
@@ -534,18 +591,63 @@ void RTEError::AssertFunc(const std::string& description, const std::source_loca
 		    "Assertion in file '" + fileName + "', line " + lineNum + ",\nin function '" + funcName + "'\nbecause:\n\n" + description + "\n\n" +
 		    "You may choose to ignore this and crash immediately\nor at some unexpected point later on.\n\nProceed at your own risk!";
 
+		if (!IsOnAppMainThread()) {
+			RecordPendingWorkerMessage(WorkerMessageKind::Assert, assertMessage, description, srcLocation);
+		}
 		if (ShowAssertMessageBox(assertMessage)) {
 			AbortFunc(description, srcLocation);
 		} else {
 			storeAssertInfo = true;
 		}
 	} else {
+		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+			s_AssertFired = true;
+		}
 		storeAssertInfo = true;
 	}
 
 	if (storeAssertInfo) {
 		s_LastIgnoredAssertDescription = description;
 		s_LastIgnoredAssertLocation = srcLocation;
+	}
+}
+
+int RTEError::PendingWorkerMessageCount() {
+	return (s_PendingWorkerMessage.load(std::memory_order_acquire) ? 1 : 0) + s_PendingWorkerMessageDropped.load(std::memory_order_acquire);
+}
+
+void RTEError::DispatchPendingWorkerMessages() {
+	if (!IsOnAppMainThread() || !s_PendingWorkerMessage.load(std::memory_order_acquire)) {
+		return;
+	}
+	PendingWorkerMessage record;
+	int dropped = 0;
+	{
+		std::lock_guard<std::mutex> lock(s_PendingWorkerMessageMutex);
+		record = std::move(s_PendingWorkerMessageRecord);
+		s_PendingWorkerMessageRecord = {};
+		dropped = s_PendingWorkerMessageDropped.exchange(0);
+		s_PendingWorkerMessage.store(false, std::memory_order_release);
+	}
+	const char* kindName = record.kind == WorkerMessageKind::Assert ? "Assert" : (record.kind == WorkerMessageKind::Abort ? "Abort" : "Warning");
+	const std::string more = dropped > 0 ? " (+" + std::to_string(dropped) + " more worker messages)" : "";
+	if (SDL_getenv("CCCP_HEADLESS") != nullptr && !s_ForceAssertDialogPathForTest) {
+		// The worker already printed and set AssertFired; the record discharges as one line.
+		System::PrintFaultLine("RTE " + std::string(kindName) + " (worker, dispatched): " + record.message + more);
+		return;
+	}
+	switch (record.kind) {
+		case WorkerMessageKind::Warning:
+			ShowMessageBox(record.message + more);
+			break;
+		case WorkerMessageKind::Abort:
+			AbortFunc(record.description, record.location);
+			break;
+		default:
+			if (ShowAssertMessageBox(record.message + more)) {
+				AbortFunc(record.description, record.location);
+			}
+			break;
 	}
 }
 
@@ -730,4 +832,65 @@ void RTEError::FormatFunctionSignature(std::string& symbolName) {
 			break;
 		}
 	}
+}
+
+bool RTEError::RunAssertPolicySelfTest() {
+	// A static hook selects the headed dialog/Ignore branch without opening SDL.
+	if (!ConsoleMan::IsConstructed()) {
+		ConsoleMan::Construct();
+	}
+#ifdef _WIN32
+	s_AppMainThreadId.store(GetCurrentThreadId());
+#endif
+	s_AssertFired = false;
+	s_ForceAssertDialogPathForTest = true;
+	AssertFunc("dialog-path probe", std::source_location::current());
+	s_ForceAssertDialogPathForTest = false;
+	const bool dialogLeftUnfired = !s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL")
+	          << " dialog_path_leaves_assert_fired_false AssertFired=" << (s_AssertFired ? "true" : "false") << std::endl;
+
+	s_AssertFired = false;
+	SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
+	std::thread worker([] {
+		AssertFunc("worker-thread probe", std::source_location::current());
+	});
+	worker.join();
+	const bool workerFired = s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (workerFired ? "PASS" : "FAIL")
+	          << " worker_thread_headless_sets_assert_fired AssertFired=" << (workerFired ? "true" : "false") << std::endl;
+
+	s_AssertFired = false;
+	s_IgnoreAllAsserts = true;
+	AssertFunc("ignore-all probe", std::source_location::current());
+	s_IgnoreAllAsserts = false;
+	const bool ignoreAllFired = s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (ignoreAllFired ? "PASS" : "FAIL")
+	          << " ignore_all_headless_sets_assert_fired AssertFired=" << (ignoreAllFired ? "true" : "false") << std::endl;
+
+	// A worker-thread assert is recorded and the main thread's next dispatch shows its dialog; the
+	// forced path counts the box without opening one. The forced drain clears what the earlier
+	// worker probe left pending.
+	s_AssertFired = false;
+	s_ForceAssertDialogPathForTest = true;
+	DispatchPendingWorkerMessages();
+	ResetAssertMessageBoxCallCount();
+	std::thread dispatchWorker([] {
+		AssertFunc("worker dispatch probe", std::source_location::current());
+	});
+	dispatchWorker.join();
+	const int pendingBefore = PendingWorkerMessageCount();
+	const int boxesBefore = AssertMessageBoxCallCount();
+	DispatchPendingWorkerMessages();
+	const int pendingAfter = PendingWorkerMessageCount();
+	const int boxesAfter = AssertMessageBoxCallCount();
+	s_ForceAssertDialogPathForTest = false;
+	const bool dispatched = pendingBefore == 1 && boxesBefore == 0 && pendingAfter == 0 && boxesAfter == 1;
+	std::cout << "[rteerror-selftest] " << (dispatched ? "PASS" : "FAIL")
+	          << " worker_assert_reaches_dialog pending=" << pendingBefore << " boxes=" << boxesBefore
+	          << " after_dispatch pending=" << pendingAfter << " boxes=" << boxesAfter << std::endl;
+
+	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired && dispatched;
+	std::cout << "[rteerror-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }

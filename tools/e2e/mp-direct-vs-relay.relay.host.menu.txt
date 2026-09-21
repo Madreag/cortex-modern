@@ -2,7 +2,7 @@ wait_ms 1800
 activate ButtonMainToOptions
 wait_ms 600
 select_settings_page Network
-wait_ms 250
+wait_ms 450
 select_settings_page Network:Connection
 video_mark relay-connection-host
 wait_ms 900
@@ -27,7 +27,7 @@ assert_substate Landing
 settext TextMultiplayerName Host
 activate ButtonMultiplayerHostGame
 video_mark relay-mp-host-setup
-wait_ms 396
+wait_ms 450
 assert_substate HostSetup
 combo_select ComboHostActivity P4 Alpha Duel - Base.rte
 wait_ms 500
@@ -35,7 +35,7 @@ settext TextHostPort {PORT}
 settext TextHostPlayers 2
 wait_ms 495
 activate ButtonHostOptions
-wait_ms 396
+wait_ms 450
 video_mark relay-mp-options-seats
 activate TabHostPageSeats
 wait_ms 660
@@ -79,7 +79,7 @@ wait_ms 660
 assert_visible CollectionBoxHostPageSession 1
 dump_host_options
 activate ButtonHostOptBack
-wait_ms 396
+wait_ms 450
 assert_substate HostSetup
 activate ButtonMultiplayerCreate
 video_mark relay-mp-lobby-host

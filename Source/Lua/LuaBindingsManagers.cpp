@@ -59,6 +59,12 @@ LuaBindingRegisterFunctionDefinitionForType(ManagerLuaBindings, AudioMan) {
 	    .def("IsMusicPlaying", &AudioMan::IsMusicPlaying)
 	    .def("SetMusicPitch", &AudioMan::SetMusicPitch)
 	    .def("SetMusicMuffledState", &AudioMan::SetMusicMuffledState)
+	    /// Compatibility with 6.x AudioMan:PlayMusic(filePath, loops, volumeOverrideIfNotMuted); plays a raw music file through the 7.0 dynamic-music system.
+	    .def("PlayMusic", &LuaAdaptersAudioMan::PlayMusic)
+	    /// Compatibility with 6.x AudioMan:QueueMusicStream(filePath); plays now on an idle channel or queues after the current track.
+	    .def("QueueMusicStream", &LuaAdaptersAudioMan::QueueMusicStream)
+	    /// Compatibility with 6.x AudioMan:ClearMusicQueue(); empties the pending queue without stopping the current track.
+	    .def("ClearMusicQueue", &LuaAdaptersAudioMan::ClearMusicQueue)
 	    .def("PlaySound", (SoundContainer * (AudioMan::*)(const std::string& filePath)) & AudioMan::PlaySound, luabind::adopt(luabind::result))
 	    .def("PlaySound", (SoundContainer * (AudioMan::*)(const std::string& filePath, const Vector& position)) & AudioMan::PlaySound, luabind::adopt(luabind::result))
 	    .def("PlaySound", (SoundContainer * (AudioMan::*)(const std::string& filePath, const Vector& position, int player)) & AudioMan::PlaySound, luabind::adopt(luabind::result));

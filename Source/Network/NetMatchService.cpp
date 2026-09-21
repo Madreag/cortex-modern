@@ -4807,13 +4807,18 @@ static std::string ResyncSaveName() {
 			local.connected = true;
 			snapshot.members.push_back(local);
 		}
+		// An unseated roster slot keeps its open name: presence still remembers the player who held
+		// it, and between rounds that entry is stale - a kicked seat must not read the removed name.
+		const bool persistentWorld = (m_Runner ? m_Runner->GetMatchConfig() : (m_AdoptedMatchConfig.sessionId != 0 ? m_AdoptedMatchConfig : m_MatchConfig)).persistentWorld;
 		for (NetLobbyMember& member: snapshot.members) {
+			const bool unseated = !member.connected && !member.cpu && !member.isLocal &&
+			                      member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
 			const auto current = m_SeatPresence.GetSeats().find(member.peerId);
-			if (current != m_SeatPresence.GetSeats().end() && !current->second.holderName.empty()) member.displayName = current->second.holderName;
-			const NetSeatPresenceState state = m_SeatPresence.StateOf(member.peerId);
+			if (!unseated && current != m_SeatPresence.GetSeats().end() && !current->second.holderName.empty()) member.displayName = current->second.holderName;
+			const NetSeatPresenceState state = unseated ? NetSeatPresenceState::Present : m_SeatPresence.StateOf(member.peerId);
 			member.dropped = state == NetSeatPresenceState::Disconnected || state == NetSeatPresenceState::Reconnecting;
 			member.reclaiming = state == NetSeatPresenceState::Reconnecting;
-			member.statusLine = m_SeatPresence.Line(member.peerId, member.displayName);
+			member.statusLine = unseated ? std::string() : m_SeatPresence.Line(member.peerId, member.displayName);
 			member.connectedRoute = GetConnectedRouteLocked(member.peerId);
 			if (m_Coordinator && m_State == NetMatchServiceState::Running) {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);

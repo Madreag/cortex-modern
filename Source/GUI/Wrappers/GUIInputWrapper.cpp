@@ -59,6 +59,7 @@ namespace {
 		std::function<void()> m_Command;
 		GUIInputWrapper* m_Physical;
 		bool m_HoldsPad = false;
+		bool m_MenuPadHeld = false;
 	public:
 		ScriptedGUIInput(GUIInputWrapper* physical, int player) : GUIInputWrapper(player, physical->GetKeyJoyMouseCursor()), m_Physical(physical) { automationInputs.push_back(this); }
 		~ScriptedGUIInput() override { ReleaseAutomationInput(); std::erase(automationInputs, this); }
@@ -69,6 +70,14 @@ namespace {
 			std::array<bool, SDL_SCANCODE_COUNT> merged{};
 			for (int i = 0; i < count && i < SDL_SCANCODE_COUNT; ++i) merged[i] = physical[i] || m_Keys[i];
 			UpdateWithKeyboard(merged.data());
+			const bool padHeld = GetKeyJoyMouseCursor() && scriptedPadGamepad && SDL_GetGamepadButton(scriptedPadGamepad, SDL_GAMEPAD_BUTTON_SOUTH);
+			if (padHeld) {
+				m_MouseButtonsStates[0] = Down;
+				m_MouseButtonsEvents[0] = m_MenuPadHeld ? Repeat : Pushed;
+			} else if (m_MenuPadHeld && m_MouseButtonsStates[0] != Down) {
+				m_MouseButtonsEvents[0] = Released;
+			}
+			m_MenuPadHeld = padHeld;
 			if (m_Keys[SDL_SCANCODE_LSHIFT] || m_Keys[SDL_SCANCODE_RSHIFT]) m_Modifier |= ModShift;
 			if (m_Keys[SDL_SCANCODE_LCTRL] || m_Keys[SDL_SCANCODE_RCTRL]) m_Modifier |= ModCtrl;
 			if (m_Keys[SDL_SCANCODE_LALT] || m_Keys[SDL_SCANCODE_RALT]) m_Modifier |= ModAlt;
@@ -83,7 +92,7 @@ namespace {
 		bool QueueAutomationInput(const std::string& device, const std::string& name, bool down) override {
 			if (!automationDriving) return false;
 			if (device == "key") {
-				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name.c_str());
+				const SDL_Scancode key = SDL_GetScancodeFromName(name == "KP1" ? "Keypad 1" : name == "KPEnter" ? "Keypad Enter" : name.c_str());
 				if (key == SDL_SCANCODE_UNKNOWN) return false;
 				SDL_Event event{};
 				event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
@@ -283,8 +292,7 @@ void GUIInputWrapper::UpdateKeyboardInput(float keyElapsedTime, const bool* keys
 	ConvertKeyEvent(keys[SDL_SCANCODE_SPACE], ' ', keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_BACKSPACE], GUIInput::Key_Backspace, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_TAB], GUIInput::Key_Tab, keyElapsedTime);
-	ConvertKeyEvent(keys[SDL_SCANCODE_RETURN], GUIInput::Key_Enter, keyElapsedTime);
-	ConvertKeyEvent(keys[SDL_SCANCODE_KP_ENTER], GUIInput::Key_Enter, keyElapsedTime);
+	ConvertKeyEvent(keys[SDL_SCANCODE_RETURN] || keys[SDL_SCANCODE_KP_ENTER], GUIInput::Key_Enter, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_ESCAPE], GUIInput::Key_Escape, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_LEFT], GUIInput::Key_LeftArrow, keyElapsedTime);
 	ConvertKeyEvent(keys[SDL_SCANCODE_RIGHT], GUIInput::Key_RightArrow, keyElapsedTime);

@@ -328,6 +328,10 @@ namespace RTE {
 #pragma region AHuman Lua Adapters
 	struct LuaAdaptersAHuman {
 		static void ReloadFirearms(AHuman* luaSelfObject);
+		/// Compatibility with 6.x AHuman:GetLimbPathSpeed(speedPreset), which read one of the SLOW/NORMAL/FAST preset speeds; 7.0 keeps a single travel speed per LimbPath so every preset reads the WALK path speed.
+		static float GetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset);
+		/// Compatibility with 6.x AHuman:SetLimbPathSpeed(speedPreset, speed); 7.0 keeps a single travel speed per LimbPath so the WALK path speed is set on both ground layers.
+		static void SetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset, float speed);
 	};
 #pragma endregion
 
@@ -454,6 +458,21 @@ namespace RTE {
 		static bool EndDynamicMusic1(MusicMan& musicMan);
 		static bool EndDynamicMusic2(MusicMan& musicMan, bool fadeOutCurrent);
 	};
+#pragma endregion
+
+#pragma region AudioMan Lua Adapters
+	struct LuaAdaptersAudioMan {
+		/// Compatibility with 6.x AudioMan:PlayMusic(filePath, loops, volumeOverrideIfNotMuted) — plays a raw music file now through the 7.0 dynamic-music system, preserving the queued streams.
+		static void PlayMusic(AudioMan* luaSelfObject, const std::string& filePath, int loops, float volumeOverrideIfNotMuted);
+		/// Compatibility with 6.x AudioMan:QueueMusicStream(filePath) — plays the file at once when the music channel is idle, otherwise queues it to play after the current track.
+		static void QueueMusicStream(AudioMan* luaSelfObject, const std::string& filePath);
+		/// Compatibility with 6.x AudioMan:ClearMusicQueue() — empties the pending music queue without stopping the currently playing track.
+		static void ClearMusicQueue(AudioMan* luaSelfObject);
+		static bool RunModApiShimsSelfTest();
+	};
+
+	void ResetV6CompatMusicState();
+	bool RunModApiShimsSelfTest();
 #pragma endregion
 
 #pragma region TimerMan Lua Adapters

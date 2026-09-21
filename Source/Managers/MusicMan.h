@@ -50,6 +50,12 @@ namespace RTE {
 		/// Resets music state, stopping and clearing playing dynamic songs or interrupting music, etc. to make ready for new music.
 		void ResetMusicState();
 
+		/// Applies the activity-start music policy: a live start resets MusicMan, a restore drops only the 6.x compat queue.
+		void PrepareForActivityStart();
+
+		/// Whether the current song is the 6.x compat carrier and has not ended.
+		bool IsCompatCarrierPlaying() const;
+
 		/// Gets whether any music is audible, even if further playback is disabled.
 		/// @return Whether any music is audible or not.
 		bool IsMusicPlaying() const;
@@ -62,6 +68,18 @@ namespace RTE {
 		/// @param smoothFade True is long fade of the previous SoundContainer according to new PreEntry, false is fast fade at the new PreEntry.
 		/// @return Whether the song was successfully started or not.
 		bool PlayDynamicSong(const std::string& songName, const std::string& songSectionType = "Default", bool playImmediately = false, bool playTransition = true, bool smoothFade = false);
+
+		/// Plays a cloned copy of the given song; the by-name overload looks the preset up and calls this.
+		bool PlayDynamicSong(const DynamicSong& song, const std::string& songSectionType = "Default", bool playImmediately = false, bool playTransition = true, bool smoothFade = false);
+
+		/// Ends the dynamic song when the current section's timer expires.
+		void EndDynamicMusicAfterCurrent() { m_EndWhenCurrentEnds = true; }
+
+		/// Stops the current containers and clears playing-dynamic-music state.
+		bool EndPlayingDynamicSong();
+
+		/// Expires the current section timer so Update takes the end-of-song path.
+		void ExpireCurrentSectionForTest();
 
 		/// Switches the next SongSection queued to play.
 		/// @param songSectionType Next SongSectionType to play.
@@ -97,6 +115,7 @@ namespace RTE {
 
 	protected:
 		bool m_IsPlayingDynamicMusic; //!< Whether this is actively playing dynamic music or not.
+		bool m_EndWhenCurrentEnds; //!< End the song instead of cycling when the current section timer expires.
 
 		std::unique_ptr<SoundContainer> m_InterruptingMusicSoundContainer; //!< Current interrupting music being played.
 

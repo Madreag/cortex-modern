@@ -1698,7 +1698,7 @@ int ActivityMan::StartActivity(Activity* activity) {
 	m_StartActivityResumed = false;
 	m_Activity.reset(dynamic_cast<Activity*>(m_StartActivity->Clone()));
 
-	if (!g_MovableMan.IsRestoringSnapshot()) g_MusicMan.ResetMusicState();
+	g_MusicMan.PrepareForActivityStart();
 
 	m_Activity->SetupPlayers();
 	int error = m_Activity->Start();

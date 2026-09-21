@@ -3,6 +3,7 @@
 #include "MenuMan.h"
 #include "MainMenuGUI.h"
 #include "NetModerationGUI.h"
+#include "NetPlayerPresentation.h"
 
 #include "GUI.h"
 #include "GUIDrawRecord.h"
@@ -32,25 +33,113 @@
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
+#include "RTEError.h"
+#include "System.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3_image/SDL_image.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <array>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
+#include <iterator>
 #include <list>
+#include <mutex>
 #include <sstream>
 #include <string_view>
 #include <tuple>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 namespace RTE::MenuAutomation {
 	using Json = nlohmann::json;
 	using Rect = std::array<int, 4>;
+	class ReadbackWriter {
+		struct Dump {
+			std::filesystem::path path;
+			Json controls;
+			std::vector<unsigned char> pixels;
+			int width = 0, height = 0;
+		};
+		std::mutex m_Mutex;
+		std::condition_variable m_Wake;
+		std::deque<Dump> m_Queue;
+		bool m_Stopping = false, m_Failed = false;
+		std::thread m_Worker;
+		void Write() {
+			for (;;) {
+				Dump dump;
+				{
+					std::unique_lock lock(m_Mutex);
+					m_Wake.wait(lock, [&] { return m_Stopping || !m_Queue.empty(); });
+					if (m_Queue.empty()) return;
+					dump = std::move(m_Queue.front());
+					m_Queue.pop_front();
+				}
+				bool saved = false;
+				try {
+					SDL_Surface* image = SDL_CreateSurfaceFrom(dump.width, dump.height, SDL_PIXELFORMAT_RGB24, dump.pixels.data(), dump.width * 3);
+					saved = image && IMG_SavePNG(image, (dump.path.string() + ".png").c_str());
+					if (image) SDL_DestroySurface(image);
+					if (saved) {
+						const std::string temporary = dump.path.string() + ".json.tmp";
+						std::ofstream output(temporary);
+						output << dump.controls.dump(2) << '\n';
+						output.close();
+						saved = output.good();
+						if (saved) std::filesystem::rename(temporary, dump.path.string() + ".json");
+					}
+				} catch (...) { saved = false; }
+				if (!saved) {
+					std::lock_guard lock(m_Mutex);
+					m_Failed = true;
+				}
+			}
+		}
+	public:
+		ReadbackWriter() = default;
+		~ReadbackWriter() { Finish(); }
+		bool Queue(const std::filesystem::path& path, Json controls, BITMAP* bitmap) {
+			if (!bitmap || bitmap_color_depth(bitmap) != 32) return false;
+			Dump dump{path, std::move(controls), {}, bitmap->w, bitmap->h};
+			dump.pixels.resize(static_cast<size_t>(bitmap->w) * bitmap->h * 3);
+			for (int y = 0; y < bitmap->h; ++y) {
+				const auto* source = reinterpret_cast<const uint32_t*>(bitmap->line[y]);
+				auto* target = dump.pixels.data() + static_cast<size_t>(y) * bitmap->w * 3;
+				for (int x = 0; x < bitmap->w; ++x) {
+					target[3 * x] = getr32(source[x]);
+					target[3 * x + 1] = getg32(source[x]);
+					target[3 * x + 2] = getb32(source[x]);
+				}
+			}
+			{
+				std::lock_guard lock(m_Mutex);
+				if (m_Stopping || m_Failed || m_Queue.size() >= 8) return false;
+				m_Queue.push_back(std::move(dump));
+				if (!m_Worker.joinable()) m_Worker = std::thread([this] { Write(); });
+			}
+			m_Wake.notify_one();
+			return true;
+		}
+		bool Finish() {
+			{
+				std::lock_guard lock(m_Mutex);
+				m_Stopping = true;
+			}
+			m_Wake.notify_one();
+			if (m_Worker.joinable()) m_Worker.join();
+			return !m_Failed;
+		}
+	};
+	ReadbackWriter& Writer() { static ReadbackWriter writer; return writer; }
+	bool FinishReadbacks() { return Writer().Finish(); }
 	Rect Rectangle(GUIPanel* panel) {
 		Rect rect{0, 0, g_WindowMan.GetResX(), g_WindowMan.GetResY()};
 		if (panel) panel->GetRect(&rect[0], &rect[1], &rect[2], &rect[3]);
@@ -224,7 +313,8 @@ namespace RTE::MenuAutomation {
 		return fits;
 	}
 	bool Handles(const std::string& command) {
-		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" || command == "assert_no_overlap" ||
+		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" ||
+			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
@@ -232,7 +322,7 @@ namespace RTE::MenuAutomation {
 			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_list_rows" ||
-			command == "assert_net_label" || command == "assert_net_label_absent";
+			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "fire_assert";
 	}
 	Json PanelCoverage(GUIControl* control) {
 		const auto rect = Rectangle(control ? control->GetPanel() : nullptr);
@@ -248,6 +338,33 @@ namespace RTE::MenuAutomation {
 		return {{"rect", rect}, {"uncovered_pixels", uncovered}, {"pixels", rect[2] * rect[3]}};
 	}
 	bool Execute(GUIControlManager* manager, const std::string& screen, const std::string& command, std::istream& args, std::string& observation) {
+		if (command == "dump_seat_state") {
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			Json members = Json::array();
+			for (const auto& member: snapshot.members) members.push_back({{"peer", member.peerId}, {"name", NetPlayerPresentation::Name(member)}, {"state", NetPlayerPresentation::State(member)}, {"route", member.connectedRoute}});
+			observation = Json{{"members", members}, {"private_catch_up", ScenarioRunner::WorldCatchUpActive()},
+				{"resyncing", g_NetMatchService.IsMatchResyncing()}, {"slow_notice", ScenarioRunner::IsLockstepLocalMachineSlow()}}.dump();
+			return true;
+		}
+		if (command == "fire_assert") {
+			if (!FireAssertAllowed()) return false;
+			// The assert seam the harness needs: a scripted run must be able to answer a real assert the way
+			// a player does, and prove the run went on.
+			std::string reason{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			if (reason.empty()) return false;
+			observation = reason;
+			RTEAssert(false, reason);
+			return true;
+		}
+		if (command == "push_toast") {
+			std::string kind, text;
+			args >> kind;
+			std::getline(args >> std::ws, text);
+			if (!FireAssertAllowed() || kind.empty() || text.empty()) return false;
+			ScenarioRunner::PushNetUiToast(kind, text);
+			observation = kind + " " + text;
+			return true;
+		}
 		if (command == "dump_match_identity") {
 			std::string path;
 			args >> std::quoted(path);
@@ -286,6 +403,12 @@ namespace RTE::MenuAutomation {
 			if (!panel) return false;
 			const auto& toasts = panel->GetToastRect();
 			const auto& seats = panel->GetSeatsPanelRect();
+			int expectedRows = ParseToastBandExpectedRows(args);
+			int rows = 0;
+			for (int row = 0; row < 3; ++row) {
+				auto* label = panel->GetControl("LabelNetMatchToast" + std::to_string(row));
+				if (Visible(label)) ++rows;
+			}
 			BITMAP* screen = g_FrameMan.GetBackBuffer32();
 			const bool inside = !toasts.visible || (toasts.x >= 0 && toasts.y >= 0 &&
 			                                        toasts.x + toasts.width <= screen->w && toasts.y + toasts.height <= screen->h);
@@ -294,8 +417,54 @@ namespace RTE::MenuAutomation {
 			                          toasts.x + toasts.width <= seats.x || toasts.x >= seats.x + seats.width;
 			observation = Json{{"screen", {screen->w, screen->h}}, {"toasts", {toasts.x, toasts.y, toasts.width, toasts.height}},
 				{"toasts_visible", toasts.visible}, {"seats", {seats.x, seats.y, seats.width, seats.height}}, {"seats_visible", seats.visible},
-				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}}.dump();
-			return inside && clearOfSeats;
+				{"inside_screen", inside}, {"clear_of_seats", clearOfSeats}, {"rows", rows}, {"expected_rows", expectedRows}}.dump();
+			return inside && clearOfSeats && (expectedRows < 0 || rows == expectedRows);
+		}
+		if (command == "assert_no_overlap") {
+			const std::string arguments{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
+			std::istringstream names(arguments);
+			std::string first, second;
+			names >> first >> second;
+			auto* network = g_MenuMan.GetNetworkPanel();
+			auto find = [&](const std::string& name) {
+				auto* control = manager ? manager->GetControl(name) : nullptr;
+				return control ? control : network ? network->GetControl(name) : nullptr;
+			};
+			auto* aControl = find(first);
+			auto* bControl = find(second);
+			if (!Visible(aControl) || !Visible(bControl)) { observation = "both controls must be visible"; return false; }
+			const auto a = Rectangle(aControl->GetPanel()), b = Rectangle(bControl->GetPanel());
+			observation = first + " " + second + " rect=" + Json(a).dump() + " other=" + Json(b).dump();
+			return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+		}
+		if (command == "assert_inside_screen") {
+			std::string name;
+			args >> name;
+			auto* network = g_MenuMan.GetNetworkPanel();
+			auto* control = manager ? manager->GetControl(name) : nullptr;
+			if (!control && network) control = network->GetControl(name);
+			if (!control || !control->GetPanel()) { observation = name + " missing"; return false; }
+			BITMAP* screen = g_FrameMan.GetBackBuffer32();
+			const auto rect = Rectangle(control->GetPanel());
+			const bool inside = screen && rect[0] >= 0 && rect[1] >= 0 &&
+			                    rect[0] + rect[2] <= screen->w && rect[1] + rect[3] <= screen->h;
+			observation = Json{{"control", name}, {"rect", rect}, {"screen", {screen ? screen->w : 0, screen ? screen->h : 0}}, {"inside", inside}}.dump();
+			return inside;
+		}
+		if (command == "dump_refresh_count") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			observation = Json{{"refresh_count", panel->RefreshCount()}, {"refresh_changes", panel->RefreshChangeCount()}}.dump();
+			System::PrintDiagnosticLine("[refresh-count] " + observation);
+			return true;
+		}
+		if (command == "dump_enter_state") {
+			if (!manager || !manager->GetInput()) return false;
+			const int state = manager->GetInput()->GetAsciiState(static_cast<unsigned char>(GUIInput::Key_Enter));
+			const char* name = state == GUIInput::Pushed ? "Pushed" : state == GUIInput::Released ? "Released" : state == GUIInput::Repeat ? "Repeat" : "None";
+			observation = Json{{"key_enter", state}, {"name", name}}.dump();
+			System::PrintDiagnosticLine("[enter-state] " + observation);
+			return true;
 		}
 		if (command == "assert_vertical_scroll") {
 			std::string name;
@@ -472,7 +641,10 @@ namespace RTE::MenuAutomation {
 			if (command == "dump_host_options" || command == "dump_player_options") {
 				if (!name.empty()) return false;
 				static unsigned int capture = 0;
-				const auto path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
+				std::filesystem::path path;
+				do {
+					path = std::filesystem::path("ScreenShots") / (command + "_" + std::to_string(capture++));
+				} while (std::filesystem::exists(path.string() + ".json") || std::filesystem::exists(path.string() + ".png") || std::filesystem::exists(path.string() + ".json.tmp"));
 				const auto lobby = g_NetMatchService.GetLobbySnapshot();
 				Json table = Json::array();
 				for (const NetHostActivityChoice& activity : NetMatchService::ListHostActivities()) {
@@ -530,6 +702,11 @@ namespace RTE::MenuAutomation {
 					{"activity_preset", lobby.activityPreset}, {"activity_module", lobby.activityModule},
 					{"scene_name", lobby.sceneName}, {"scene_module", lobby.sceneModule},
 					{"activity_table", table}, {"game_activities", loaded}, {"loaded_scenes", loadedScenes},
+					// The video page hides the preset box when the window's aspect is not the display's, so a
+					// reader needs the display the engine itself measured.
+					{"display", {{"res_x", g_WindowMan.GetResX()}, {"res_y", g_WindowMan.GetResY()},
+						{"max_res_x", g_WindowMan.GetMaxResX()}, {"max_res_y", g_WindowMan.GetMaxResY()},
+						{"fullscreen", g_WindowMan.IsFullscreen()}}},
 					{"show_metascenes", g_SettingsMan.ShowMetascenes()}, {"controls", Json::array()}};
 				for (auto* item : *manager->GetControlList()) {
 					const bool dumpHiddenPreset = item->GetName() == "ComboPresetResolution";
@@ -595,11 +772,8 @@ namespace RTE::MenuAutomation {
 					if (!text.empty()) { row["text_fits"] = TextFits(manager, item, measured); row["text_measure"] = measured; }
 					result["controls"].push_back(row);
 				}
-				std::ofstream output(path.string() + ".json");
-				output << result.dump(2) << '\n';
-				output.flush();
 				observation = result.dump();
-				return output.good() && g_FrameMan.SaveBitmapToPNG(g_FrameMan.GetBackBuffer32(), (path.string() + ".png").c_str()) == 0;
+				return Writer().Queue(path, std::move(result), g_FrameMan.GetBackBuffer32());
 			}
 			observation = name + " " + argument;
 			if (!control) { observation += " missing control"; return false; }
@@ -623,13 +797,6 @@ namespace RTE::MenuAutomation {
 				return input && input->QueueAutomationCommand([box] { box->AddEvent(GUIEvent::Notification, GUITextBox::Enter, 0); });
 			}
 			if (command == "assert_text_fits") return argument.empty() && TextFits(manager, control, observation);
-			if (command == "assert_no_overlap") {
-				auto* other = manager->GetControl(argument);
-				if (!Visible(control) || !Visible(other)) return false;
-				const auto a = Rectangle(control->GetPanel()), b = Rectangle(other->GetPanel());
-				observation += " rect=" + Json(a).dump() + " other=" + Json(b).dump();
-				return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
-			}
 			if (command == "assert_rect_inside") {
 				auto* parent = argument == "parent" ? control->GetPanel()->GetParentPanel() : manager->GetControl(argument) ? manager->GetControl(argument)->GetPanel() : nullptr;
 				observation += " rect=" + Json(Rectangle(control->GetPanel())).dump() + " bounds=" + Json(Rectangle(parent)).dump();
@@ -637,5 +804,50 @@ namespace RTE::MenuAutomation {
 			}
 			return false;
 		} catch (const std::exception& error) { observation = error.what(); return false; }
+	}
+
+	int ParseToastBandExpectedRows(std::istream& args) {
+		int expectedRows = -1;
+		if (!(args >> expectedRows)) {
+			expectedRows = -1;
+		}
+		return expectedRows;
+	}
+
+	bool FireAssertAllowed() {
+		return FrameRecorder::Instance().Enabled() || SDL_getenv("CCCP_HEADLESS") != nullptr;
+	}
+
+	bool RunSelfTest() {
+		bool passed = true;
+		const auto check = [&passed](const char* label, bool value, const std::string& detail) {
+			passed = passed && value;
+			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
+		};
+		{
+			std::istringstream missing("");
+			const int rows = ParseToastBandExpectedRows(missing);
+			check("missing_toast_band_arg_is_minus_one", rows == -1, "expectedRows=" + std::to_string(rows));
+		}
+		{
+			std::istringstream present("3");
+			const int rows = ParseToastBandExpectedRows(present);
+			check("toast_band_arg_is_n", rows == 3, "expectedRows=" + std::to_string(rows));
+		}
+		{
+			const char* runner = SDL_getenv("CCCP_HEADLESS");
+			const bool runnerHad = runner != nullptr;
+			const std::string runnerValue = runnerHad ? runner : "";
+			SDL_unsetenv_unsafe("CCCP_HEADLESS");
+			const bool refused = !FireAssertAllowed();
+			check("fire_assert_refused_when_headed", refused, refused ? "refused" : "allowed");
+			check("headless_unset_stays_unset", SDL_getenv("CCCP_HEADLESS") == nullptr,
+			      SDL_getenv("CCCP_HEADLESS") ? "set" : "unset");
+			if (runnerHad) {
+				SDL_setenv_unsafe("CCCP_HEADLESS", runnerValue.c_str(), 1);
+			}
+		}
+		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+		return passed;
 	}
 }

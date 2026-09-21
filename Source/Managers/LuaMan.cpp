@@ -3840,6 +3840,7 @@ do
 end
 _SelfTestShared, _SelfTestMod, _SelfTestKlass = nil, nil, nil
 _G["selftest.lua"] = nil
+
 return table.concat(results, "\n")
 
 )lua";

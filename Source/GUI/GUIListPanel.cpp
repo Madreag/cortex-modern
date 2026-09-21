@@ -1119,6 +1119,7 @@ int GUIListPanel::GetSelectedIndex() {
 }
 
 void GUIListPanel::SetSelectedIndex(int Index) {
+	m_LastSelected = Index >= 0 && Index < static_cast<int>(m_Items.size()) ? Index : -1;
 	// Clear the old selection
 	std::vector<Item*>::iterator it;
 	for (it = m_Items.begin(); it != m_Items.end(); it++) {

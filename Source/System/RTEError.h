@@ -26,6 +26,9 @@ namespace RTE {
 	public:
 		static bool s_CurrentlyAborting; //!< Flag to prevent a potential recursive fault while attempting to save the game when aborting.
 		static bool s_IgnoreAllAsserts; //!< Whether to skip the assert dialog and just let everything burn at whatever point that happens.
+		static bool s_AssertFired; //!< Whether any assert fired this run on the headless-continue path.
+		static int s_ShowMessageBoxCallCount; //!< ShowMessageBox calls this run, including the headless log path.
+		static int s_AssertMessageBoxCallCount; //!< ShowAssertMessageBox calls that reached the app main thread this run, including the forced test path.
 		static std::string s_LastIgnoredAssertDescription; //!< The last ignored assert message.
 		static std::source_location s_LastIgnoredAssertLocation; //!< The last ignored assert call site.
 
@@ -50,6 +53,30 @@ namespace RTE {
 		/// @param description The description of the assertion.
 		/// @param srcLocation std::source_location corresponding to the location of the call site.
 		static void AssertFunc(const std::string& description, const std::source_location& srcLocation);
+
+		/// Whether any assert fired this run: an ignored dialog is still a failed run.
+		static bool AssertFired() { return s_AssertFired; }
+
+		/// How many ShowMessageBox calls have been made this run (headed or headless).
+		static int ShowMessageBoxCallCount() { return s_ShowMessageBoxCallCount; }
+
+		/// Resets the ShowMessageBox counter for a native selftest.
+		static void ResetShowMessageBoxCallCount() { s_ShowMessageBoxCallCount = 0; }
+
+		/// How many ShowAssertMessageBox calls have reached the app main thread this run.
+		static int AssertMessageBoxCallCount() { return s_AssertMessageBoxCallCount; }
+
+		/// Resets the assert message box counter for a native selftest.
+		static void ResetAssertMessageBoxCallCount() { s_AssertMessageBoxCallCount = 0; }
+
+		/// How many worker-thread messages are still waiting for the app main thread to dispatch.
+		static int PendingWorkerMessageCount();
+
+		/// Shows the assert/warning/abort a worker thread recorded since the last frame, once per frame on the app main thread.
+		static void DispatchPendingWorkerMessages();
+
+		/// AssertFunc on the headed dialog/Ignore path leaves AssertFired false; the headless continue path still sets it.
+		static bool RunAssertPolicySelfTest();
 
 		/// Formats function signatures so they're slightly more sane.
 		/// @param funcSig Reference to the function signature to format.
