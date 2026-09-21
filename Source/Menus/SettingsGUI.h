@@ -1,7 +1,6 @@
 #pragma once
 
 #include "MenuAutomation.h"
-#include "MenuPanelVisibility.h"
 #include "SettingsVideoGUI.h"
 #include "SettingsAudioGUI.h"
 #include "SettingsInputGUI.h"
@@ -77,7 +76,6 @@ namespace RTE {
 
 		std::unique_ptr<GUIControlManager> m_GUIControlManager; //!< The GUIControlManager which owns all the GUIControls the SettingsGUI.
 
-		MenuPanelVisibility m_PageVisibility; //!< A page that is not up takes its own controls off the screen.
 		SettingsMenuScreen m_ActiveSettingsMenuScreen; //!< The currently active settings menu that is being updated and drawn to the screen. See SettingsMenuScreen enumeration.
 
 		std::unique_ptr<SettingsVideoGUI> m_VideoSettingsMenu; //!< The video settings sub-menu.

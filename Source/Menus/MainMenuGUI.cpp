@@ -57,8 +57,16 @@
 using namespace RTE;
 
 static std::string PlayerFacingStatus(const std::string& text) {
-	if (text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos) {
-		return text.starts_with("A player could not join:") ? "A banned player was refused." : "You are banned from this session";
+	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
+	const bool refusal = text.starts_with("A player could not join:");
+	if (text.find("removed from this session") != std::string::npos) {
+		// The host's notice never speaks to the player it removed, and the player reads a whole sentence.
+		return refusal ? "A removed player was refused." : "The host removed you from this session";
+	}
+	if (wireReason || text.find("banned") != std::string::npos) {
+		// The host's notice wraps the refused player's own sentence, which is written to that player.
+		if (refusal) return "A banned player was refused.";
+		return wireReason ? "You are banned from this session" : text;
 	}
 	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
 	return text;
@@ -944,6 +952,14 @@ bool MainMenuGUI::HandleInputEvents() {
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           std::find(m_HostRelayBoxes.begin(), m_HostRelayBoxes.end(), guiEvent.GetControl()) != m_HostRelayBoxes.end()) {
 			CommitHostRelay();
+		} else if (guiEvent.GetType() == GUIEvent::Notification &&
+		           (guiEvent.GetMsg() == GUITextBox::Changed || guiEvent.GetMsg() == GUITextBox::Enter) &&
+		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
+		           (guiEvent.GetControl() == m_HostNetSlowBoundBox || guiEvent.GetControl() == m_HostNetMinDelayBox ||
+		            std::find(m_HostNetPeerDelayBoxes.begin(), m_HostNetPeerDelayBoxes.end(), guiEvent.GetControl()) != m_HostNetPeerDelayBoxes.end())) {
+			// The refresh rewrites every box the player is not holding, so a typed row commits as it is
+			// typed; waiting for Apply loses it the moment the click moves the focus.
+			DraftHostOptionsFromControls();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           (guiEvent.GetMsg() == GUITab::UnPushed || guiEvent.GetMsg() == GUIComboBox::Closed ||
@@ -1763,7 +1779,7 @@ void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 void MainMenuGUI::ShowHostOptionsPage(int page) {
 	m_HostOptionsPage = std::clamp(page, 0, c_HostOptionsPageCount - 1);
 	for (int i = 0; i < c_HostOptionsPageCount; ++i) {
-		if (m_HostOptionsPages[i]) m_PanelVisibility.SetPresent(m_HostOptionsPages[i], i == m_HostOptionsPage);
+		if (m_HostOptionsPages[i]) m_HostOptionsPages[i]->SetVisible(i == m_HostOptionsPage);
 		if (m_HostOptionsTabs[i]) m_HostOptionsTabs[i]->SetCheck(i == m_HostOptionsPage);
 	}
 }
@@ -2016,7 +2032,14 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		const NetMatchConfig& adopted = g_NetMatchService.GetLobbyMatchConfig();
 		int seated = 0;
 		for (const NetMatchPlayerSlot& slot : adopted.players) {
-			if (!slot.cpu && slot.peerId != 0) ++seated;
+			if (slot.cpu || slot.peerId == 0) continue;
+			// A seat reserved for a peer that has never arrived is not a seated human; a held one is.
+			for (const NetLobbyMember& member : snapshot.members) {
+				if (member.peerId == slot.peerId && (member.connected || member.dropped || member.reclaiming)) {
+					++seated;
+					break;
+				}
+			}
 		}
 		m_HostNetModeLabel->SetText("Host mode: " + std::string(adopted.dedicated ? "Dedicated" : "Playing") +
 		                            " - capacity " + std::to_string(adopted.peerCount) +
@@ -3035,6 +3058,8 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 		// BuildMatchConfig reads the mode off the request, not the rules block it carries inside.
 		request.mode = m_HostSetupOptions->mode;
 		request.delayPolicy = m_HostSetupOptions->delayPolicy;
+		request.slowPlayerBoundTicks = m_HostSetupOptions->slowPlayerBoundTicks;
+		request.slowPlayerPolicy = m_HostSetupOptions->slowPlayerPolicy;
 		request.idleWaitMinutes = m_HostSetupOptions->idleWaitMinutes;
 		request.automaticRepair = m_HostSetupOptions->automaticRepair;
 		request.autosaveSeconds = m_HostSetupOptions->autosaveEnabled ? m_HostSetupOptions->autosaveIntervalSeconds : 0;
@@ -3074,9 +3099,11 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	m_MultiplayerJoinRequest = request;
 	m_MultiplayerApplyOffered = !host;
 	if (g_NetMatchService.Start(request, &error)) {
-		m_MultiplayerLandingStatusLabel->SetText("");
+		m_MultiplayerLandingStatusLabel->SetText(host ? "" : "Joining the host's lobby...");
 		m_ReconnectStatusShown.clear();
-		m_MultiplayerSubScreen = MultiplayerSubScreen::Lobby;
+		// A joining peer keeps the landing until the host admits it; the refresh switches the screen
+		// the moment the lobby snapshot says the seat is real.
+		m_MultiplayerSubScreen = host ? MultiplayerSubScreen::Lobby : MultiplayerSubScreen::Landing;
 	} else {
 		m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus(error));
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
@@ -3304,16 +3331,16 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetEnabled(summary.has_value());
 	if (!summary) m_LastMatchDetailsLabel->SetText("");
-	// One sub-screen is present at a time: the panel that goes away takes its own controls with it.
-	m_PanelVisibility.SetPresent(m_MultiplayerLandingPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
-	m_PanelVisibility.SetPresent(m_MultiplayerHostPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
-	m_PanelVisibility.SetPresent(m_MultiplayerJoinPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
-	if (m_MultiplayerResumePanel) m_PanelVisibility.SetPresent(m_MultiplayerResumePanel, m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup);
-	m_PanelVisibility.SetPresent(m_MultiplayerLobbyPanel, lobby);
+	// One sub-screen is up at a time; the renderer draws a panel only under visible parents.
+	m_MultiplayerLandingPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::Landing);
+	m_MultiplayerHostPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostSetup);
+	m_MultiplayerJoinPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::JoinSetup);
+	if (m_MultiplayerResumePanel) m_MultiplayerResumePanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ResumeSetup);
+	m_MultiplayerLobbyPanel->SetVisible(lobby);
 	const bool moderating = m_MultiplayerSubScreen == MultiplayerSubScreen::Moderation;
-	m_PanelVisibility.SetPresent(m_MultiplayerModerationPanel, moderating);
-	m_PanelVisibility.SetPresent(m_ReplayBrowserPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
-	m_PanelVisibility.SetPresent(m_HostOptionsPanel, m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions);
+	m_MultiplayerModerationPanel->SetVisible(moderating);
+	m_ReplayBrowserPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::ReplayBrowser);
+	m_HostOptionsPanel->SetVisible(m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions);
 	RefreshGamesList();
 	RefreshReconnectControls();
 	if (moderating) {
@@ -3646,9 +3673,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	}
 	const int screenHeight = contentHeight + backReserve;
 	FitMultiplayerScreen(contentWidth, screenHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerReadyButton]->SetPositionRel(55, 208 + extraHeight);
-	m_MainMenuButtons[MenuButton::MultiplayerStartButton]->SetPositionRel(55, 208 + extraHeight);
-	// Leave 100 + Seats 82 + 8 matches Start Match's 190: Leave keeps the wider half as the exit.
+	// Leave 90 + Seats 74 + Options 74 and two 8 px gaps: the row spans Start Match, and Leave
+	// keeps the widest place on it as the exit.
 	GUIButton* leave = m_MainMenuButtons[MenuButton::MultiplayerLeaveButton];
 	GUIButton* seats = m_MainMenuButtons[MenuButton::MultiplayerModerateButton];
 	GUIButton* options = m_MainMenuButtons[MenuButton::MultiplayerLobbyOptionsButton];
@@ -3662,7 +3688,14 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	if (options->GetWidth() != 74) {
 		options->Resize(74, options->GetHeight());
 	}
-	const int pairLeft = (contentWidth - leave->GetWidth() - pairGap - seats->GetWidth() - pairGap - options->GetWidth()) / 2;
+	const int pairWidth = leave->GetWidth() + pairGap + seats->GetWidth() + pairGap + options->GetWidth();
+	const int pairLeft = (contentWidth - pairWidth) / 2;
+	for (GUIButton* primary: {m_MainMenuButtons[MenuButton::MultiplayerReadyButton], m_MainMenuButtons[MenuButton::MultiplayerStartButton]}) {
+		if (primary->GetWidth() != pairWidth) {
+			primary->Resize(pairWidth, primary->GetHeight());
+		}
+		primary->SetPositionRel(pairLeft, 208 + extraHeight);
+	}
 	leave->SetPositionRel(pairLeft, 236 + extraHeight);
 	LayoutMultiplayerFooter(contentWidth, contentHeight);
 

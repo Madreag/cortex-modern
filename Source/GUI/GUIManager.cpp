@@ -1,4 +1,5 @@
 #include "GUI.h"
+#include "GUIDrawRecord.h"
 #include "Timer.h"
 #include "BuyMenuGUI.h"
 #include "PresetMan.h"
@@ -32,6 +33,8 @@ GUIManager::~GUIManager() {
 }
 
 void GUIManager::Clear() {
+	// The panels this manager drew are gone with it; their addresses can be reused.
+	ClearPanelDrawRecord();
 	m_PanelList.clear();
 	m_CapturedPanel = nullptr;
 	m_MouseOverPanel = nullptr;
@@ -288,6 +291,7 @@ void GUIManager::Draw(GUIScreen* Screen) {
 
 		// Draw the panel
 		if ((!p->IsValid() || !m_UseValidation) && p->_GetVisible()) {
+			RecordPanelDraw(p);
 			p->Draw(Screen);
 		}
 	}
