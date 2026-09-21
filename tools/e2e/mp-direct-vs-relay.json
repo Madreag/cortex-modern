@@ -132,10 +132,21 @@
       "mark": "direct-mp-play-host",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected direct route while both players act.",
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via direct.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
         {
           "step": 3,
           "path": [
@@ -170,10 +181,21 @@
         "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
         "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
       ],
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via direct.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
         {
           "step": 3,
           "path": [
@@ -211,10 +233,21 @@
       "mark": "direct-mp-play-client",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected direct route while both players act.",
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via direct.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
         {
           "step": 3,
           "path": [
@@ -249,10 +282,21 @@
         "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
         "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
       ],
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via direct.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
         {
           "step": 3,
           "path": [
@@ -290,10 +334,21 @@
       "mark": "relay-mp-play-host",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected relay route while both players act.",
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via relay.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
         {
           "step": 3,
           "path": [
@@ -328,10 +383,21 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via relay.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
         {
           "step": 3,
           "path": [
@@ -369,10 +435,21 @@
       "mark": "relay-mp-play-client",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected relay route while both players act.",
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via relay.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
         {
           "step": 3,
           "path": [
@@ -407,10 +484,21 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "events": [
-        "assert_net_label LabelNetMatchStatus.*via relay.* PASS"
-      ],
       "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
         {
           "step": 3,
           "path": [
