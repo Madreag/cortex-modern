@@ -143,6 +143,16 @@ namespace RTE {
 		bool resumeFromSnapshot = false;
 		uint32_t activityRestartMs = 0; //!< This peer's own measured activity restart; 0 until it has one.
 		bool startupPublished = false; //!< Whether that measurement is a reading and not an absence.
+		// A host-authored start boundary. Ordinary starts carry one peer's publication; this record is
+		// the single fact every peer applies, including the host that authored it.
+		bool agreedStartRecord = false;
+		uint64_t agreedFirstFrame = 0;
+		uint64_t agreedEffectiveStartFrame = 0;
+		uint64_t agreedDeadlineMs = 0;
+		uint32_t publishedPeerMask = 0;
+		uint32_t heldPeerMask = 0;
+		std::array<uint64_t, 16> peerEffectiveStartFrames{};
+		std::array<uint32_t, 16> peerStartupParks{};
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -285,7 +295,7 @@ namespace RTE {
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -641,6 +651,9 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		static constexpr uint16_t c_Version = 34;
 		static constexpr uint16_t c_WorldVersion = 35;
+		/// Version 35 carries the host-authored agreed-start record after the ordinary Start fields.
+		/// Older readers reject that packet as trailing bytes; they never interpret the record as a local start.
+		static constexpr uint16_t c_AgreedStartVersion = 35;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
@@ -1164,7 +1177,9 @@ namespace RTE {
 		/// Whether the wait for every peer's published startup has used the round's answer budget.
 		bool StartupWaitExpired(uint64_t nowMs) const;
 		void TickStartupWait(uint64_t nowMs);
-		void FormAgreedFirstFrame(uint32_t slowestStartupMs, uint64_t nowMs);
+		void FormAgreedFirstFrame(uint64_t nowMs);
+		bool SendAgreedStart(uint8_t onlyPeerId = 0);
+		void ApplyAgreedStart(const NetLockstepStart& start, uint64_t nowMs);
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
@@ -1210,6 +1225,8 @@ namespace RTE {
 		uint64_t m_StartWaitSinceMs = 0;
 		bool m_LocalStartupPublished = false;
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
+		bool m_AgreedStartApplied = false;
+		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
