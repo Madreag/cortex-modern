@@ -703,6 +703,9 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	// A quit during the identity walk must not sit through the rest of the disk pass; what it finished
+	// is kept. This runs before the statics are torn down, where the future would wait unasked.
+	NetIdentity::StopManifestPriming();
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
 	if (!s_contractAuditOperation.empty() && !s_contractAuditFinished) exitCode = EXIT_FAILURE;
@@ -8513,6 +8516,9 @@ int main(int argc, char** argv) {
 	}
 
 	g_PresetMan.LoadAllDataModules();
+	// The modules are loaded and will not change under this process: read them once here, off the game
+	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
+	NetIdentity::PrimeManifest();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();
