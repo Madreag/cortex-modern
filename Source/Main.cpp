@@ -8381,6 +8381,7 @@ int main(int argc, char** argv) {
 	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
 	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
 	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
+	FrameMan::ApplyHeadlessPresentationDefault();
 
 	// The managers are up, so the recorder takes the run's own resolution from the first frame on.
 	if (!s_recordVideoDirectory.empty()) {
