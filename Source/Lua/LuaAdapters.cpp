@@ -868,7 +868,7 @@ bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
 	if (!std::filesystem::exists(fixture)) {
 		check("lua_fixture_present", false, fixture.string());
 	} else {
-		const int ran = g_LuaMan.RunScriptFile(fixture.generic_string(), true, false);
+		const int ran = g_LuaMan.GetMasterScriptState().RunScriptFile(fixture.generic_string(), true, false);
 		check("lua_fixture_ran", ran == 0, "status=" + std::to_string(ran));
 	}
 
