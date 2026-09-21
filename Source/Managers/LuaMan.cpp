@@ -3974,6 +3974,22 @@ static int ScriptGraphIteratorFromValues(lua_State* L) {
 	lua_pushinteger(L, 0);
 	lua_pushvalue(L, 3);
 	lua_pushcclosure(L, ScriptGraphValueIteratorNext, 4);
+	// A capture enumerates the live iterators from this weak set instead of walking the heap for them.
+	lua_getfield(L, LUA_REGISTRYINDEX, "_ScriptGraphIterators");
+	if (!lua_istable(L, -1)) {
+		lua_pop(L, 1);
+		lua_newtable(L);
+		lua_newtable(L);
+		lua_pushliteral(L, "k");
+		lua_setfield(L, -2, "__mode");
+		lua_setmetatable(L, -2);
+		lua_pushvalue(L, -1);
+		lua_setfield(L, LUA_REGISTRYINDEX, "_ScriptGraphIterators");
+	}
+	lua_pushvalue(L, -2);
+	lua_pushboolean(L, 1);
+	lua_rawset(L, -3);
+	lua_pop(L, 1);
 	return 1;
 }
 
@@ -5296,14 +5312,14 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 	walk.lua = lua_topointer(state, -1);
 	lua_pop(state, 1);
 	walk.visit = &visit;
-	LuaThreadCodec::VisitUserdata(state, [](void* data, size_t size, const void* metatable, void* raw) {
-		const auto& context = *static_cast<const Walk*>(raw);
-		if (size < sizeof(luabind::detail::object_rep) || (metatable != context.cpp && metatable != context.lua)) return;
-		const auto* rep = static_cast<const luabind::detail::object_rep*>(data);
+	CheckpointLua::ForEachUserdata(state, false, true, [&walk](GCudata* userdata) {
+		const void* metatable = tabref(userdata->metatable);
+		if (userdata->len < sizeof(luabind::detail::object_rep) || (metatable != walk.cpp && metatable != walk.lua)) return;
+		const auto* rep = static_cast<const luabind::detail::object_rep*>(uddata(userdata));
 		if (rep->ptr() && rep->crep() && (rep->flags() & luabind::detail::object_rep::owner) && ClassDerivesFrom(rep->crep(), "MovableObject")) {
-			(*context.visit)(static_cast<MovableObject*>(rep->ptr()));
+			(*walk.visit)(static_cast<MovableObject*>(rep->ptr()));
 		}
-	}, &walk);
+	});
 }
 
 } // namespace
@@ -5735,7 +5751,9 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		auto image = std::make_shared<CheckpointLua::GraphImage>();
 		image->liveSerial = restore.serial;
 		image->rng = CaptureRandomGeneratorCheckpoint();
+		const auto callbacksStarted = std::chrono::steady_clock::now();
 		CaptureScriptCallbacks(restore.serial);
+		const auto rootsStarted = std::chrono::steady_clock::now();
 		lua_newtable(m_State);
 		const int roots = lua_gettop(m_State);
 		std::unordered_set<MovableObject*> objects = m_RegisteredMOs;
@@ -5753,6 +5771,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			lua_settable(m_State, roots);
 		}
 		image->roots = m_State->top[-1];
+		const auto rootsDone = std::chrono::steady_clock::now();
 		setgcVraw(&image->globals, gcref(m_State->env), LJ_TTAB);
 		lua_getglobal(m_State, "_ScriptGraphBaseline"); image->baseline = m_State->top[-1];
 		lua_getglobal(m_State, "package"); image->package = m_State->top[-1];
@@ -5760,17 +5779,37 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		if (lua_pcall(m_State, 0, 1, 0)) throw std::runtime_error(lua_tostring(m_State, -1));
 		image->labels = m_State->top[-1];
 		const auto nativeStarted = std::chrono::steady_clock::now();
-		CheckpointLua::CaptureScope natives(m_State);
+		if (!m_NativeCache) m_NativeCache = std::make_shared<CheckpointLua::NativeCache>(m_State);
+		CheckpointLua::CaptureScope natives(m_State, *m_NativeCache);
 		natives.Capture();
 		const auto nativeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - nativeStarted).count();
-		image->heap = m_CheckpointHeap->Freeze();
+		// Below a few hundred pages the dispatch costs more than the copy; above it the pool copies the blocks.
+		image->heap = m_CheckpointHeap->Freeze([](size_t count, const auto& block) {
+			if (count < 256) { block(0, count); return; }
+			g_ThreadMan.GetPriorityThreadPool().parallelize_loop(count, [&block](size_t first, size_t last) { block(first, last); }).wait();
+		});
 		image->native = natives.Finish(image->heap);
 		image->scratch = scratch.values;
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
-		System::PrintDiagnosticLine(std::format("[frozen-graph] state={} native_us={} heap_us={} freeze_us={} bytes={} blocks={} userdata={} iterators={} owned={}\n",
-		    g_LuaMan.GetStateIndex(this), nativeUs, image->heap.FreezeUs(), frozenUs, bytes, image->heap.BlockCount(),
-		    image->native->EntryCount(), image->native->IteratorCount(), image->native->OwnedCount()));
+		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
+			++stats->states;
+			stats->nativeUs += nativeUs;
+			stats->heapUs += image->heap.FreezeUs();
+			stats->copyUs += image->heap.CopyUs();
+			stats->pages += image->heap.BlockCount();
+			stats->bytes += bytes;
+			stats->userdata += image->native->EntryCount();
+			stats->cached += image->native->CachedCount();
+			stats->iterators += image->native->IteratorCount();
+			stats->owned += image->native->OwnedCount();
+			stats->callbacksUs += std::chrono::duration_cast<std::chrono::microseconds>(rootsStarted - callbacksStarted).count();
+			stats->rootsUs += std::chrono::duration_cast<std::chrono::microseconds>(rootsDone - rootsStarted).count();
+			stats->enumUs += image->native->EnumUs();
+			stats->worldUs += image->native->WorldUs();
+			stats->answerUs += image->native->AnswerUs();
+		}
+		(void)frozenUs;
 		// A refusal is the archive's verdict and travels back whole; any other failure retires this state's frozen path.
 		text = CheckpointText::Deferred([image = std::move(image), unavailable = m_FrozenCaptureUnavailable, index = g_LuaMan.GetStateIndex(this)] {
 			std::unordered_set<uint64_t> carried;
@@ -5970,6 +6009,8 @@ void LuaStateWrapper::ReleaseScriptOwnedObjects() {
 
 bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld) {
 	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
+	m_NativeCache.reset();
 	ScriptCallbackRootScope callbackRoot{m_State};
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
@@ -6082,6 +6123,13 @@ bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::
 
 void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	const int top = lua_gettop(m_State);
+	FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats;
+	auto mark = std::chrono::steady_clock::now();
+	const auto part = [&](int64_t& into) {
+		const auto now = std::chrono::steady_clock::now();
+		if (stats) into += std::chrono::duration_cast<std::chrono::microseconds>(now - mark).count();
+		mark = now;
+	};
 	PushScriptGraphScratchTable(m_State);
 	const int callbacks = lua_gettop(m_State);
 	if (liveSerial != 0) {
@@ -6104,6 +6152,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	}
 	lua_pop(m_State, 1);
 	lua_setfield(m_State, callbacks, "roots");
+	if (stats) part(stats->receiversUs);
 	if (this == &g_LuaMan.GetMasterScriptState()) {
 		if (const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity())) {
 			PushScriptGraphScratchTable(m_State);
@@ -6133,9 +6182,12 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 			lua_setfield(m_State, callbacks, "globals");
 		}
 	}
+	if (stats) part(stats->activityUs);
 	g_LuaMan.PushPathCallbacks(m_State);
 	lua_setfield(m_State, callbacks, "async");
+	if (stats) part(stats->asyncUs);
 	PushScriptGraphScratchTable(m_State);
+	if (stats) stats->cachedScripts += m_ScriptCache.size();
 	for (const auto& [path, cached]: m_ScriptCache) {
 		PushScriptGraphScratchTable(m_State);
 		for (const auto& [name, function]: cached.functionNamesAndObjects) {
@@ -6145,8 +6197,11 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 		lua_setfield(m_State, -2, path.c_str());
 	}
 	lua_setfield(m_State, callbacks, "cache");
+	if (stats) part(stats->cacheUs);
 	PushScriptGraphScratchTable(m_State);
-	for (const MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
+	// One world capture snapshots the known objects once for every state.
+	const std::vector<MovableObject*> known = s_GraphNativeCapture ? std::vector<MovableObject*>() : g_MovableMan.SnapshotKnownObjects();
+	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->knownObjects : known) {
 		if (mo->GetLuaState() != this || mo->IsOriginalPreset() || mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) {
 			continue;
 		}
@@ -6169,6 +6224,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 		lua_setfield(m_State, -2, std::to_string(mo->GetUniqueID()).c_str());
 	}
 	lua_setfield(m_State, callbacks, "objects");
+	if (stats) part(stats->objectsUs);
 	lua_pushliteral(m_State, "_ScriptGraphCallbacks");
 	lua_pushvalue(m_State, callbacks);
 	lua_rawset(m_State, LUA_GLOBALSINDEX);
@@ -6364,6 +6420,7 @@ void LuaStateWrapper::Clear() {
 }
 
 void LuaStateWrapper::Initialize() {
+	m_NativeCache.reset();
 	m_CheckpointHeap = CheckpointLua::HeapOwner::Create();
 	m_State = m_CheckpointHeap->State();
 	luabind::open(m_State);
@@ -6654,6 +6711,7 @@ void LuaStateWrapper::ReportPreviewBarrierStats() {
 
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
+	m_NativeCache.reset();
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
 }
@@ -6794,6 +6852,8 @@ LuaStateWrapper& LuaMan::GetMasterScriptState() {
 LuaStatesArray& LuaMan::GetThreadedScriptStates() {
 	return m_ScriptStates;
 }
+
+thread_local FrozenCaptureStats* LuaMan::s_FrozenCaptureStats = nullptr;
 
 void LuaMan::ArmCheckpointWriteTrap() {
 	const auto arm = [](LuaStateWrapper& state) {
@@ -7166,6 +7226,31 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 			std::cout << "[script-graph-selftest] " << (sameNames ? "PASS" : "FAIL") << " restore_recapture_names_scratch_by_draw_order bytes=" << first.size() << "/" << restored.size() << " equal=" << sameNames << " first_difference=" << offset << std::endl;
 			checkpointValues = sameNames && checkpointValues;
 			for (const std::string& problem: problems) std::cout << "[script-graph-selftest] native restore: " << problem << std::endl;
+		}
+	}
+	{
+		// A capture of one state alone must leave the other states' recorded tables and dirty roots in place.
+		auto& states = g_LuaMan.GetThreadedScriptStates();
+		if (states.empty()) {
+			std::cout << "[script-graph-selftest] SKIP single_state_walk_keeps_other_states_dirty no threaded state" << std::endl;
+		} else {
+			LuaStateWrapper& other = states.front();
+			std::vector<std::string> graphs, problems, again;
+			std::string alone;
+			const bool planted = other.RunScriptString("_F_StaleRow = { value = 1 }") == 0;
+			const bool first = planted && g_MovableMan.SerializeScriptGraphs(graphs, problems);
+			const bool written = first && other.RunScriptString("_F_StaleRow.value = 2") == 0;
+			const bool walkedAlone = written && SerializeScriptGraph(alone, problems);
+			const bool second = walkedAlone && g_MovableMan.SerializeScriptGraphs(graphs, again);
+			const std::string text = second && graphs.size() > 1 ? graphs[1] : std::string();
+			const bool stale = text.find("s5:valuen1;") != std::string::npos;
+			const bool fresh = second && !stale && text.find("s5:valuen2;") != std::string::npos;
+			std::cout << "[script-graph-selftest] " << (fresh ? "PASS" : "FAIL") << " single_state_walk_keeps_other_states_dirty planted=" << planted << " first=" << first
+			          << " alone=" << walkedAlone << " second=" << second << " stale=" << stale << std::endl;
+			for (const std::string& problem: problems) std::cout << "[script-graph-selftest] single-state walk: " << problem << std::endl;
+			for (const std::string& problem: again) std::cout << "[script-graph-selftest] single-state walk: " << problem << std::endl;
+			other.RunScriptString("_F_StaleRow = nil");
+			checkpointValues = fresh && checkpointValues;
 		}
 	}
 	{

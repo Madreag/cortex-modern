@@ -2385,30 +2385,30 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		}
 		return complete;
 	};
-	// The image costs a fixed few milliseconds per state while the live walk scales with the scripts'
-	// content, so past this many states the walk stalls the simulation less.
-	constexpr size_t c_FrozenCaptureStateLimit = 20;
 	// Every state off a frozen image or none: the live walk's index and chunk caches stay coherent
 	// only while a walk covers every state, so one state that cannot freeze sends the whole capture that way.
-	bool frozen = 1 + states.size() <= c_FrozenCaptureStateLimit && g_LuaMan.GetMasterScriptState().FrozenCaptureAvailable();
+	bool frozen = g_LuaMan.GetMasterScriptState().FrozenCaptureAvailable();
 	for (const LuaStateWrapper& state: states) frozen = frozen && state.FrozenCaptureAvailable();
 	const auto started = std::chrono::steady_clock::now();
-	const auto report = [&](const char* path) {
-		std::cout << "[script-graph-capture] path=" << path << " states=" << 1 + states.size() << " us="
-		          << std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count() << std::endl;
-	};
+	const auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); };
 	if (frozen) {
+		FrozenCaptureStats stats;
+		LuaMan::s_FrozenCaptureStats = &stats;
 		std::vector<std::string> frozenProblems;
-		if (captureAll(true, frozenProblems)) {
-			report("frozen");
-			return true;
-		}
+		const bool complete = captureAll(true, frozenProblems);
+		LuaMan::s_FrozenCaptureStats = nullptr;
+		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
+		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
+		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
+		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
+		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts << std::endl;
+		if (complete) return true;
 		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;
 	}
 	CheckpointGraphIndex::Get().BeginWalk();
 	const bool complete = captureAll(false, problems);
 	CheckpointGraphIndex::Get().EndWalk();
-	report("live");
+	std::cout << "[script-graph-capture] path=live states=" << 1 + states.size() << " us=" << elapsed() << std::endl;
 	return complete;
 }
 

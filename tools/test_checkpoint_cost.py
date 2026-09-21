@@ -54,6 +54,7 @@ def main() -> int:
     parser.add_argument("--arm", choices=("match", "world", "all"), default="all")
     parser.add_argument("--port", type=int, default=49520)
     parser.add_argument("--score-existing", action="store_true")
+    parser.add_argument("--lua-states", type=int, help="override the engine's default Lua state count on both peers")
     options = parser.parse_args()
     os.environ["CCCP_HEADLESS"] = "1"
     os.environ["CCCP_CHECKPOINT_SPLIT"] = "1"
@@ -62,7 +63,8 @@ def main() -> int:
         root.mkdir(parents=True, exist_ok=False)
     with (options.repo / "Cortex Command.exe").open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
-    result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "arms": {}}
+    result = {"exe_sha256": digest, "budget_ms": BUDGET_MS, "ticks": 600, "lua_states": options.lua_states, "arms": {}}
+    extra = {who: ["-num-lua-states", str(options.lua_states)] for who in ("host", "client")} if options.lua_states else {}
     for index, arm in enumerate(("match", "world") if options.arm == "all" else (options.arm,)):
         directory = root / arm
         try:
@@ -71,10 +73,10 @@ def main() -> int:
                            for who in ("host", "client")}
                 result["exe_sha256"] = records["host"].get("exe_sha256")
             elif arm == "match":
-                records = run_pair(options.repo, directory, options.port + 2 * index, 600, 1, {})
+                records = run_pair(options.repo, directory, options.port + 2 * index, 600, 1, extra)
             else:
                 directory.mkdir()
-                records = _run_world_round(options.repo, directory, options.port + 2 * index, 600, {})
+                records = _run_world_round(options.repo, directory, options.port + 2 * index, 600, extra)
             peers = measure(directory, records)
             passed = all(peer["record"].get("exit_code") == 0 and not peer["record"].get("timed_out")
                          and peer["captures"] and peer["last_trace_tick"] >= 600

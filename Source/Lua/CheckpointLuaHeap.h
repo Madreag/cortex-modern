@@ -13,6 +13,7 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,10 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/mman.h>
+#endif
+
 namespace RTE::CheckpointLua {
 
 	struct AllocationStats {
@@ -32,14 +37,18 @@ namespace RTE::CheckpointLua {
 
 	class HeapOwner;
 
-	// Addresses identify the source VM; only the copied bytes may be read by the worker.
+	// The VM's memory at one freeze: a page table over copies, shared with the freezes before it for
+	// every page nothing wrote in between. Addresses identify the source VM; only the copies are read.
 	class Snapshot {
 	public:
+		static constexpr size_t c_PageBytes = 4096;
+		struct Page { std::byte bytes[c_PageBytes]; };
+
 		Snapshot() = default;
 		lua_State* State() const { return m_Data ? m_Data->state : nullptr; }
 		uint64_t StateSerial() const { return m_Data ? m_Data->serial : 0; }
-		size_t ByteCount() const { return m_Data ? m_Data->byteCount : 0; }
-		size_t BlockCount() const { return m_Data ? m_Data->blocks.size() : 0; }
+		size_t ByteCount() const { return m_Data ? m_Data->committed : 0; }
+		size_t BlockCount() const { return m_Data ? m_Data->copied : 0; }
 		int64_t FreezeUs() const { return m_Data ? m_Data->freezeUs : 0; }
 		int64_t CopyUs() const { return m_Data ? m_Data->copyUs : 0; }
 
@@ -56,18 +65,20 @@ namespace RTE::CheckpointLua {
 			if (!m_Data) throw std::runtime_error("a Lua heap snapshot is empty");
 			if (size == 0) return {};
 			const uintptr_t source = reinterpret_cast<uintptr_t>(address);
-			if (source == 0 || size > std::numeric_limits<uintptr_t>::max() - source)
-				throw std::runtime_error("a Lua heap read has an invalid address range");
-			BuildAddressIndex();
-			const auto& ranges = m_Data->addressIndex;
-			auto found = std::upper_bound(ranges.begin(), ranges.end(), source,
-			    [](uintptr_t value, const Block& block) { return value < block.source; });
-			if (found == ranges.begin()) throw std::runtime_error("a Lua heap read names an unrecorded allocation");
-			--found;
-			const uintptr_t within = source - found->source;
-			if (within > found->size || size > found->size - within)
-				throw std::runtime_error("a Lua heap read extends beyond its recorded allocation");
-			return {m_Data->bytes.get() + found->offset + static_cast<size_t>(within), size};
+			if (source < m_Data->base || size > m_Data->committed || source - m_Data->base > m_Data->committed - size)
+				throw std::runtime_error("a Lua heap read lies outside the recorded heap");
+			const size_t offset = source - m_Data->base;
+			const size_t first = offset / c_PageBytes, within = offset % c_PageBytes;
+			if (within + size <= c_PageBytes) return {PageBytes(first) + within, size};
+			// A read across pages is assembled once and kept with the snapshot.
+			auto& buffer = m_Data->assembled.emplace_back(size);
+			size_t done = 0;
+			for (size_t page = first, at = within; done < size; ++page, at = 0) {
+				const size_t chunk = std::min(size - done, c_PageBytes - at);
+				std::memcpy(buffer.data() + done, PageBytes(page) + at, chunk);
+				done += chunk;
+			}
+			return {buffer.data(), size};
 		}
 
 		std::string ReadString(const char* address, size_t size) const {
@@ -76,45 +87,34 @@ namespace RTE::CheckpointLua {
 		}
 
 	private:
-		struct Block {
-			uintptr_t source = 0;
-			size_t size = 0;
-			size_t offset = 0;
-		};
 		struct Data {
 			lua_State* state = nullptr;
 			uint64_t serial = 0;
-			size_t byteCount = 0;
+			uintptr_t base = 0;
+			size_t committed = 0;
+			size_t copied = 0;
 			int64_t freezeUs = 0;
 			int64_t copyUs = 0;
-			std::unique_ptr<std::byte[]> bytes;
-			std::vector<Block> blocks;
-			mutable std::once_flag indexed;
-			mutable std::vector<Block> addressIndex;
+			std::vector<std::shared_ptr<const Page>> pages; // One per committed page; empty means never written.
+			mutable std::deque<std::vector<std::byte>> assembled; // Read by the one worker that walks this snapshot.
 		};
 		std::shared_ptr<const Data> m_Data;
 		explicit Snapshot(std::shared_ptr<const Data> data) : m_Data(std::move(data)) {}
 
-		void BuildAddressIndex() const {
-			std::call_once(m_Data->indexed, [data = m_Data] {
-				std::vector<Block> ranges = data->blocks;
-				std::sort(ranges.begin(), ranges.end(), [](const Block& left, const Block& right) { return left.source < right.source; });
-				uintptr_t previousEnd = 0;
-				for (const Block& block: ranges) {
-					if (block.source == 0 || block.source < previousEnd ||
-					    block.size > std::numeric_limits<uintptr_t>::max() - block.source ||
-					    block.offset > data->byteCount || block.size > data->byteCount - block.offset)
-						throw std::runtime_error("a Lua heap snapshot has an invalid allocation index");
-					previousEnd = block.source + block.size;
-				}
-				data->addressIndex = std::move(ranges);
-			});
+		static const Page& ZeroPage() {
+			static const Page zero{};
+			return zero;
+		}
+		const std::byte* PageBytes(size_t index) const {
+			const auto& page = m_Data->pages[index];
+			return page ? page->bytes : ZeroPage().bytes;
 		}
 
 		friend class HeapOwner;
 	};
 
-	// Owns the VM and the allocator every recorded block came from; each block carries its own ledger entry.
+	// Owns the VM and the reservation every block comes from. The kernel keeps the page-written bits,
+	// so a freeze copies the pages written since the freeze before it and shares the rest.
 	class HeapOwner {
 	public:
 		static std::unique_ptr<HeapOwner> Create() {
@@ -127,6 +127,7 @@ namespace RTE::CheckpointLua {
 			// The wrapper keeps lua_close from destroying the bootstrap's shared arena.
 			if (m_State) lua_close(std::exchange(m_State, nullptr));
 			m_Bootstrap.reset();
+			Release();
 		}
 		HeapOwner(const HeapOwner&) = delete;
 		HeapOwner& operator=(const HeapOwner&) = delete;
@@ -135,71 +136,122 @@ namespace RTE::CheckpointLua {
 
 		lua_State* State() const { return m_State; }
 
-		AllocationStats Stats() const {
-			return {m_Bytes, m_Count};
-		}
+		AllocationStats Stats() const { return {m_Bytes, m_Blocks}; }
 
-		// The caller must hold the VM's execution lock throughout the copy.
-		Snapshot Freeze() const {
+		// The caller must hold the VM's execution lock throughout: nothing may write while the pages are read.
+		// The copy runs in blocks through the runner given, which may spread them over other threads and returns when all are done.
+		template<class Parallel> Snapshot Freeze(Parallel&& parallel) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
-			if (const char* error = m_TrackingFailure.load()) throw std::runtime_error(error);
 			void* allocatorData = nullptr;
 			if (lua_getallocf(m_State, &allocatorData) != &Allocate || allocatorData != this)
 				throw std::runtime_error("the Lua heap allocator changed after tracking began");
+			const size_t pageCount = m_Committed / Snapshot::c_PageBytes;
+			m_Pages.resize(pageCount);
+			m_Written.resize(pageCount);
+			const size_t written = WrittenPages();
+			const auto copyStarted = std::chrono::steady_clock::now();
+			// One slab per freeze; every copied page aliases it, so a freeze costs one allocation.
+			const std::shared_ptr<Slab> slab = written ? TakeSlab(written) : nullptr;
+			parallel(written, [&](size_t first, size_t last) {
+				for (size_t index = first; index < last; ++index) {
+					const auto* source = static_cast<const std::byte*>(m_Written[index]);
+					Snapshot::Page& page = slab->pages[index];
+					std::memcpy(page.bytes, source, Snapshot::c_PageBytes);
+					m_Pages[(reinterpret_cast<uintptr_t>(source) - m_Base) / Snapshot::c_PageBytes] = std::shared_ptr<const Snapshot::Page>(slab, &page);
+				}
+			});
 			auto data = std::make_shared<Snapshot::Data>();
 			data->state = m_State;
 			data->serial = G(m_State)->objserial;
-			data->byteCount = m_Bytes;
-			data->blocks.reserve(m_Count);
-			data->bytes.reset(new std::byte[m_Bytes]);
-			const auto copyStarted = std::chrono::steady_clock::now();
-			size_t offset = 0;
-			for (const Header* header = m_Head.next; header != &m_Head; header = header->next) {
-				if (header->size > m_Bytes - offset) throw std::runtime_error("the Lua heap allocation ledger is inconsistent");
-				const auto* payload = reinterpret_cast<const std::byte*>(header + 1);
-				data->blocks.push_back({reinterpret_cast<uintptr_t>(payload), header->size, offset});
-				std::memcpy(data->bytes.get() + offset, payload, header->size);
-				offset += header->size;
-			}
-			if (offset != m_Bytes) throw std::runtime_error("the Lua heap allocation byte count is inconsistent");
+			data->base = m_Base;
+			data->committed = m_Committed;
+			data->copied = written;
+			data->pages = m_Pages;
 			data->copyUs = MicrosecondsSince(copyStarted);
 			data->freezeUs = MicrosecondsSince(started);
 			return Snapshot(std::move(data));
 		}
 
 	private:
-		// The entry sits before its block, so a block is recorded, moved and released in constant time.
-		struct Header {
-			Header* prev;
-			Header* next;
-			size_t size;
-			size_t reserved;
-		};
-		static_assert(sizeof(Header) == 32, "the ledger entry must keep the block's 16-byte alignment");
+		static constexpr size_t c_ReserveBytes = size_t(1) << 32; // Address space only; committed as the VM grows.
+		static constexpr size_t c_CommitStep = size_t(1) << 20;
+		static constexpr size_t c_LargeLimit = size_t(1) << 18; // Above this a block takes whole pages of its own.
+		static constexpr size_t c_ClassCount = 64 + 56 + 62;
 
-		HeapOwner() { m_Head.prev = m_Head.next = &m_Head; }
+		HeapOwner() = default;
 		std::unique_ptr<lua_State, decltype(&lua_close)> m_Bootstrap{nullptr, lua_close};
 		lua_State* m_State = nullptr;
-		lua_Alloc m_Forward = nullptr;
-		void* m_ForwardData = nullptr;
-		Header m_Head{};
-		size_t m_Count = 0;
+		uintptr_t m_Base = 0;
+		size_t m_Committed = 0;
+		size_t m_Used = 0;
 		size_t m_Bytes = 0;
-		std::atomic<const char*> m_TrackingFailure{nullptr};
+		size_t m_Blocks = 0;
+		void* m_Free[c_ClassCount] = {};
+		std::vector<std::pair<void*, size_t>> m_LargeFree; // Whole-page blocks given back, by their rounded size.
+		std::vector<std::shared_ptr<const Snapshot::Page>> m_Pages;
+		std::vector<void*> m_Written;
+
+		// Copy buffers are reused: a fresh one costs a page fault per page, serialized across the process.
+		struct Slab {
+			std::unique_ptr<Snapshot::Page[]> pages;
+			size_t capacity = 0;
+		};
+		struct SlabPool {
+			std::mutex mutex;
+			std::vector<std::unique_ptr<Slab>> idle;
+		};
+		std::shared_ptr<SlabPool> m_Slabs = std::make_shared<SlabPool>();
+		static constexpr size_t c_IdleSlabs = 2;
+
+		std::shared_ptr<Slab> TakeSlab(size_t pages) {
+			std::unique_ptr<Slab> slab;
+			{
+				std::lock_guard lock(m_Slabs->mutex);
+				auto& idle = m_Slabs->idle;
+				const auto fit = std::find_if(idle.begin(), idle.end(), [pages](const auto& candidate) { return candidate->capacity >= pages; });
+				if (fit != idle.end()) {
+					slab = std::move(*fit);
+					idle.erase(fit);
+				}
+			}
+			if (!slab) {
+				slab = std::make_unique<Slab>();
+				slab->capacity = std::max(pages, pages + pages / 4);
+				slab->pages.reset(new Snapshot::Page[slab->capacity]);
+			}
+			// The last page released on any thread gives the buffer back to the pool.
+			return std::shared_ptr<Slab>(slab.release(), [pool = m_Slabs](Slab* done) {
+				std::unique_ptr<Slab> owned(done);
+				std::lock_guard lock(pool->mutex);
+				if (pool->idle.size() < c_IdleSlabs) pool->idle.push_back(std::move(owned));
+			});
+		}
 
 		static int64_t MicrosecondsSince(std::chrono::steady_clock::time_point started) {
 			return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		}
 
+		// Classes: 16-byte steps to 1 KB, 128-byte steps to 8 KB, 4 KB steps to 256 KB.
+		static size_t ClassOf(size_t size) {
+			if (size <= 1024) return (size + 15) / 16 - 1;
+			if (size <= 8192) return 64 + (size - 1024 + 127) / 128 - 1;
+			return 64 + 56 + (size - 8192 + 4095) / 4096 - 1;
+		}
+		static size_t ClassBytes(size_t index) {
+			if (index < 64) return (index + 1) * 16;
+			if (index < 64 + 56) return 1024 + (index - 64 + 1) * 128;
+			return 8192 + (index - 64 - 56 + 1) * 4096;
+		}
+		static size_t RoundPages(size_t size) { return (size + Snapshot::c_PageBytes - 1) / Snapshot::c_PageBytes * Snapshot::c_PageBytes; }
+
 		void Initialize() {
 #if !LJ_GC64
 			throw std::runtime_error("frozen Lua heap capture requires the GC64 allocator interface");
 #else
+			Reserve();
 			m_Bootstrap.reset(luaL_newstate());
 			if (!m_Bootstrap) throw std::runtime_error("could not create the Lua allocator bootstrap");
-			m_Forward = lua_getallocf(m_Bootstrap.get(), &m_ForwardData);
-			if (!m_Forward) throw std::runtime_error("the Lua bootstrap supplied no allocator");
 			const lua_CFunction panic = G(m_Bootstrap.get())->panic;
 #ifndef LUAJIT_DISABLE_VMEVENT
 			lua_getfield(m_Bootstrap.get(), LUA_REGISTRYINDEX, LJ_VMEVENTS_REGKEY);
@@ -224,43 +276,139 @@ namespace RTE::CheckpointLua {
 #endif
 		}
 
+#ifdef _WIN32
+		void Reserve() {
+			void* base = VirtualAlloc(nullptr, c_ReserveBytes, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
+			if (!base) throw std::runtime_error("could not reserve the tracked Lua heap");
+			m_Base = reinterpret_cast<uintptr_t>(base);
+		}
+		bool Commit(size_t bytes) noexcept {
+			return VirtualAlloc(reinterpret_cast<void*>(m_Base + m_Committed), bytes, MEM_COMMIT, PAGE_READWRITE) != nullptr;
+		}
+		void Release() noexcept {
+			if (m_Base) VirtualFree(reinterpret_cast<void*>(m_Base), 0, MEM_RELEASE);
+			m_Base = 0;
+		}
+		// The pages written since the last freeze, and the kernel's bits cleared for the next one.
+		size_t WrittenPages() {
+			if (m_Committed == 0) return 0;
+			ULONG_PTR count = m_Written.size();
+			DWORD granularity = 0;
+			if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, reinterpret_cast<void*>(m_Base), m_Committed,
+			        m_Written.data(), &count, &granularity) != 0 || granularity != Snapshot::c_PageBytes)
+				throw std::runtime_error("the tracked Lua heap's written pages could not be read");
+			return count;
+		}
+#else
+		void Reserve() {
+			void* base = mmap(nullptr, c_ReserveBytes, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+			if (base == MAP_FAILED) throw std::runtime_error("could not reserve the tracked Lua heap");
+			m_Base = reinterpret_cast<uintptr_t>(base);
+		}
+		bool Commit(size_t bytes) noexcept {
+			return mprotect(reinterpret_cast<void*>(m_Base + m_Committed), bytes, PROT_READ | PROT_WRITE) == 0;
+		}
+		void Release() noexcept {
+			if (m_Base) munmap(reinterpret_cast<void*>(m_Base), c_ReserveBytes);
+			m_Base = 0;
+		}
+		// Without page-written bits every committed page is copied; correct, not incremental.
+		size_t WrittenPages() {
+			for (size_t index = 0; index < m_Written.size(); ++index) m_Written[index] = reinterpret_cast<void*>(m_Base + index * Snapshot::c_PageBytes);
+			return m_Written.size();
+		}
+#endif
+
+		void* Bump(size_t bytes) noexcept {
+			if (bytes > c_ReserveBytes - m_Used) return nullptr;
+			if (m_Used + bytes > m_Committed) {
+				const size_t needed = m_Used + bytes - m_Committed;
+				const size_t step = std::max(c_CommitStep, (needed + c_CommitStep - 1) / c_CommitStep * c_CommitStep);
+				if (m_Committed + step > c_ReserveBytes || !Commit(step)) return nullptr;
+				m_Committed += step;
+			}
+			void* result = reinterpret_cast<void*>(m_Base + m_Used);
+			m_Used += bytes;
+			return result;
+		}
+
+		void* Take(size_t size) noexcept {
+			if (size > c_LargeLimit) {
+				const size_t rounded = RoundPages(size);
+				for (auto entry = m_LargeFree.begin(); entry != m_LargeFree.end(); ++entry) {
+					if (entry->second != rounded) continue;
+					void* block = entry->first;
+					*entry = m_LargeFree.back();
+					m_LargeFree.pop_back();
+					return block;
+				}
+				// Whole pages start on a page, so a freed one can be given back as a whole.
+				m_Used = RoundPages(m_Used);
+				return Bump(rounded);
+			}
+			const size_t index = ClassOf(size);
+			if (void* block = m_Free[index]) {
+				m_Free[index] = *static_cast<void**>(block);
+				return block;
+			}
+			return Bump(ClassBytes(index));
+		}
+
+		void Give(void* block, size_t size) noexcept {
+			if (size > c_LargeLimit) {
+				try { m_LargeFree.emplace_back(block, RoundPages(size)); } catch (...) {}
+				return;
+			}
+			const size_t index = ClassOf(size);
+			*static_cast<void**>(block) = m_Free[index];
+			m_Free[index] = block;
+		}
+
 		// The VM calls this on the one thread running it and a freeze holds the VM's lock, so the ledger needs none.
 		static void* Allocate(void* opaque, void* address, size_t previousSize, size_t size) noexcept {
 			auto& owner = *static_cast<HeapOwner*>(opaque);
-			Header* header = address ? static_cast<Header*>(address) - 1 : nullptr;
-			if (header && header->size != previousSize) owner.m_TrackingFailure.store("the Lua allocator received an inconsistent allocation size");
 			if (size == 0) {
-				if (!header) return nullptr;
-				header->prev->next = header->next;
-				header->next->prev = header->prev;
-				owner.m_Bytes -= header->size;
-				--owner.m_Count;
-				owner.m_Forward(owner.m_ForwardData, header, header->size + sizeof(Header), 0);
+				if (address) {
+					owner.Give(address, previousSize);
+					owner.m_Bytes -= previousSize;
+					--owner.m_Blocks;
+				}
 				return nullptr;
 			}
-			if (size > std::numeric_limits<size_t>::max() - sizeof(Header)) return nullptr;
-			if (!header) {
-				auto* fresh = static_cast<Header*>(owner.m_Forward(owner.m_ForwardData, nullptr, 0, size + sizeof(Header)));
-				if (!fresh) return nullptr;
-				fresh->size = size;
-				fresh->reserved = 0;
-				fresh->prev = owner.m_Head.prev;
-				fresh->next = &owner.m_Head;
-				owner.m_Head.prev->next = fresh;
-				owner.m_Head.prev = fresh;
-				owner.m_Bytes += size;
-				++owner.m_Count;
-				return fresh + 1;
+			if (!address) {
+				void* block = owner.Take(size);
+				if (block) { owner.m_Bytes += size; ++owner.m_Blocks; }
+				return block;
 			}
-			const size_t recorded = header->size;
-			auto* moved = static_cast<Header*>(owner.m_Forward(owner.m_ForwardData, header, recorded + sizeof(Header), size + sizeof(Header)));
-			if (!moved) return nullptr;
-			// The neighbours follow the block wherever the forwarded allocator put it.
-			moved->prev->next = moved;
-			moved->next->prev = moved;
-			moved->size = size;
-			owner.m_Bytes = owner.m_Bytes - recorded + size;
-			return moved + 1;
+			const bool sameClass = previousSize <= c_LargeLimit && size <= c_LargeLimit && ClassOf(previousSize) == ClassOf(size);
+			const bool sameLarge = previousSize > c_LargeLimit && size > c_LargeLimit && RoundPages(previousSize) == RoundPages(size);
+			if (sameClass || sameLarge) {
+				owner.m_Bytes = owner.m_Bytes - previousSize + size;
+				return address;
+			}
+			void* block = owner.Take(size);
+			if (!block) return nullptr;
+			std::memcpy(block, address, std::min(previousSize, size));
+			owner.Give(address, previousSize);
+			owner.m_Bytes = owner.m_Bytes - previousSize + size;
+			return block;
 		}
 	};
+
+	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.
+	template<class Visit> void ForEachUserdata(lua_State* state, bool includeFinalized, bool includeQueued, Visit visit) {
+		global_State* global = G(state);
+		for (GCobj* object = gcnext(obj2gco(mainthread(global))); object; object = gcnext(object)) {
+			if (object->gch.gct != ~LJ_TUDATA || (!includeFinalized && (object->gch.marked & LJ_GC_FINALIZED))) continue;
+			visit(gco2ud(object));
+		}
+		// Queued finalizers have the finalized bit set, but their native payload is still alive.
+		if (GCobj* last = includeQueued ? gcref(global->gc.mmudata) : nullptr) {
+			GCobj* object = last;
+			do {
+				object = gcnext(object);
+				if (object->gch.gct == ~LJ_TUDATA) visit(gco2ud(object));
+			} while (object != last);
+		}
+	}
 }
