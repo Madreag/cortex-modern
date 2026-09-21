@@ -2443,7 +2443,87 @@ namespace RTE {
 		// A returning seat's frames reach our decoder long before its new start does, and until that start
 		// lands they sit in the pre-start buffer: nothing it sent can be consumed. Counting those frames as
 		// an answer skipped the seat's allowance and the bound took the seat back at the first frame it owed.
-		bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
+				// A seat that returns on a new connection has no ping samples on it and may have published no
+		// restart: every measurement reads zero. The window the round agreed for that peer is the floor,
+		// or the bound takes the seat back at the first frame it owes with no allowance at all.
+		bool TestReturnOnAFreshLinkKeepsItsWindow(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint16_t delay = 14;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A41, delay, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A41, delay, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 41; a.relayToOtherPeers = true;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+			if (!StartCoordinatorPair(48888, hostWire, clientWire, host, client, a, b, error)) return false;
+			uint64_t now = 0, produced = 0, due = 0, clientProduced = 0, clientDue = 0, committed = 0;
+			bool committedAny = false;
+			NetLockstepReadyFrame ready;
+			const auto seatOf = [&](uint8_t peer) {
+				const auto found = host.GetStats().peers.find(peer);
+				return found == host.GetStats().peers.end() ? NetLockstepPeerStats{} : found->second;
+			};
+			const auto pump = [&](bool clientAlive) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				if (now >= due && (!committedAny || produced <= committed + 1)) {
+					if (host.QueueLocalInput(produced, {}, {}, nullptr)) { ++produced; due = now + 17; }
+				}
+				if (clientAlive && now >= clientDue && client.IsRunning()) {
+					if (client.QueueLocalInput(clientProduced, {}, {}, nullptr)) { ++clientProduced; clientDue = now + 17; }
+				}
+				host.Tick(now);
+				if (clientAlive) client.Tick(now);
+				while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); committed = ready.frame; committedAny = true; }
+				if (clientAlive) { NetLockstepReadyFrame theirs; while (client.PopReadyFrame(theirs)) (void)client.FinishSimulationTick(theirs.frame); }
+				++now;
+			};
+			while (now < 3000 && committed < 40) pump(true);
+			if (committed < 40) { *error = "the pair never settled: frame=" + std::to_string(committed); return false; }
+			if (!host.ProposePeerHold(2, now, error)) return false;
+			const uint64_t holds = seatOf(2).holds;
+			while (now < 5000 && committed < 90) pump(false);
+			LoopbackTransport returnWire;
+			if (!returnWire.Connect("loopback", 48888, error)) return false;
+			for (int step = 0; step < 30; ++step) { returnWire.AdvanceTimeMs(1); returnWire.PollEvents(); pump(false); }
+			const uint64_t activation = std::max(host.GetStats().nextFrame, host.SentInputThrough()) + 5;
+			if (!host.SchedulePeerReclaim(2, 2, 2, activation, error)) return false;
+			while (now < 9000 && committed < activation) pump(false);
+			if (committed < activation) { *error = "the round never reached the activation: frame=" + std::to_string(committed); return false; }
+			const uint64_t activatedAtMs = now;
+			uint64_t owed = activation;
+			while (owed < activation + 4 * delay + 4 && host.IsSeatReclaimGap(2, owed)) ++owed;
+			uint64_t heldAtMs = 0;
+			while (now < 20000 && host.IsRunning() && heldAtMs == 0) {
+				pump(false);
+				if (seatOf(2).holds != holds) heldAtMs = now;
+			}
+			if (heldAtMs == 0) { *error = "the silent returning seat was never judged"; return false; }
+			// Every measurement on the new link is zero here; the agreed window is what is left to give.
+			const uint64_t windowMs = static_cast<uint64_t>(std::llround(delay * a.simTickMs));
+			const uint64_t waited = heldAtMs - activatedAtMs;
+			if (seatOf(2).pingMs != 0 || seatOf(2).startParkMs != 0) {
+				*error = "the fixture's returning link was not the unmeasured one: ping=" + std::to_string(seatOf(2).pingMs) +
+				         " park=" + std::to_string(seatOf(2).startParkMs);
+				return false;
+			}
+			// The round reaches the frame it owes one window after the activation; the allowance is what it
+			// waits after that, not the time the frames themselves took.
+			const uint64_t owedAtMs = activatedAtMs + (owed - activation) * 17;
+			if (heldAtMs < owedAtMs + windowMs) {
+				*error = "a returning seat on an unmeasured link got no allowance: held_at=" + std::to_string(heldAtMs) +
+				         "ms owed_at=" + std::to_string(owedAtMs) + "ms allowance=" + std::to_string(heldAtMs - owedAtMs) +
+				         "ms window=" + std::to_string(windowMs) + "ms owed=" + std::to_string(owed) +
+				         " ping=" + std::to_string(seatOf(2).pingMs) + " park=" + std::to_string(seatOf(2).startParkMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS return_on_a_fresh_link_keeps_its_window waited=" << waited
+			          << "ms window=" << windowMs << "ms owed=" << owed << std::endl;
+			return true;
+		}
+
+bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			LoopbackTransportConfig lagged;
 			lagged.latencyMs = 200;
 			LoopbackTransport hostWire, oldWire, returnWire;
@@ -16939,6 +17019,7 @@ namespace RTE {
 		    !TestZeroRestartStillPublishesTheStartup(&error) ||
 		    !TestUnpublishedStartupCannotParkTheRound(&error) ||
 		    !TestBufferedReturnIsNotAnAnswer(&error) ||
+		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
