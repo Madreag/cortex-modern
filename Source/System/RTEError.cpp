@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdio>
 #include <exception>
+#include <iostream>
 #include <regex>
 #include <utility>
 #include <vector>
@@ -50,6 +51,8 @@ using namespace RTE;
 bool RTEError::s_CurrentlyAborting = false;
 bool RTEError::s_IgnoreAllAsserts = false;
 bool RTEError::s_AssertFired = false;
+int RTEError::s_ShowMessageBoxCallCount = 0;
+static bool s_ForceAssertDialogPathForTest = false;
 std::string RTEError::s_LastIgnoredAssertDescription = "";
 std::source_location RTEError::s_LastIgnoredAssertLocation = {};
 
@@ -295,6 +298,7 @@ void RTEError::SetExceptionHandlers() {
 }
 
 void RTEError::ShowMessageBox(const std::string& message) {
+	s_ShowMessageBoxCallCount++;
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
 		System::PrintFaultLine("RTE Warning (headless): " + message);
 		return;
@@ -349,6 +353,9 @@ bool RTEError::ShowAbortMessageBox(const std::string& message) {
 }
 
 bool RTEError::ShowAssertMessageBox(const std::string& message) {
+	if (s_ForceAssertDialogPathForTest) {
+		return false;
+	}
 	if (!IsOnAppMainThread()) {
 		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
 		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
@@ -357,6 +364,7 @@ bool RTEError::ShowAssertMessageBox(const std::string& message) {
 	// A headless run answers the dialog the way a player does: Ignore, and carry on. The fired assert is
 	// remembered so the run still ends non-zero and the reviewer reads the line the player would have read.
 	if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+		s_AssertFired = true;
 		System::PrintFaultLine("RTE Assert (headless, continued like Ignore): " + message);
 		return false;
 	}
@@ -528,7 +536,6 @@ void RTEError::AssertFunc(const std::string& description, const std::source_loca
 	std::string funcName = srcLocation.function_name();
 
 	g_ConsoleMan.PrintString("ERROR: Assertion in file '" + fileName + "', line " + lineNum + ", in function '" + funcName + "' because: " + description);
-	s_AssertFired = true;
 
 	bool storeAssertInfo = false;
 
@@ -733,4 +740,20 @@ void RTEError::FormatFunctionSignature(std::string& symbolName) {
 			break;
 		}
 	}
+}
+
+bool RTEError::RunAssertPolicySelfTest() {
+	// A static hook selects the headed dialog/Ignore branch without opening SDL.
+	if (!ConsoleMan::IsConstructed()) {
+		ConsoleMan::Construct();
+	}
+	s_AssertFired = false;
+	s_ForceAssertDialogPathForTest = true;
+	AssertFunc("dialog-path probe", std::source_location::current());
+	s_ForceAssertDialogPathForTest = false;
+	const bool dialogLeftUnfired = !s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL")
+	          << " dialog_path_leaves_assert_fired_false AssertFired=" << (s_AssertFired ? "true" : "false") << std::endl;
+	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL") << std::endl;
+	return dialogLeftUnfired;
 }
