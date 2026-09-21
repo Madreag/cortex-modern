@@ -1260,12 +1260,13 @@ end
 
 -- Live nodes keep their births; capture-owned nodes take names in walk order.
 local function birthId(ctx, value, what)
-	if _ScriptGraphScratchValue(value) then
+	local id = _ScriptGraphValueSerial(value)
+	-- Capture scratch is born after the horizon, so only a value above it can be scratch.
+	if id > ctx.base and _ScriptGraphScratchValue(value) then
 		ctx.scratch = ctx.scratch + 1
 		ctx.rootUnwatched = ctx.rootUnwatched or "capture scratch"
 		return ctx.scratch
 	end
-	local id = _ScriptGraphValueSerial(value)
 	if id < 1 or id > ctx.base then
 		problem(ctx, "a " .. what .. " with no birth number (serial=" .. numberText(id) .. ", horizon=" .. numberText(ctx.base) .. ")")
 		return nil

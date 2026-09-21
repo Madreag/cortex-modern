@@ -136,14 +136,12 @@ namespace RTE::CheckpointLua {
 		lua_State* State() const { return m_State; }
 
 		AllocationStats Stats() const {
-			std::lock_guard lock(m_Mutex);
 			return {m_Bytes, m_Count};
 		}
 
 		// The caller must hold the VM's execution lock throughout the copy.
 		Snapshot Freeze() const {
 			const auto started = std::chrono::steady_clock::now();
-			std::lock_guard lock(m_Mutex);
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
 			if (const char* error = m_TrackingFailure.load()) throw std::runtime_error(error);
 			void* allocatorData = nullptr;
@@ -185,7 +183,6 @@ namespace RTE::CheckpointLua {
 		lua_State* m_State = nullptr;
 		lua_Alloc m_Forward = nullptr;
 		void* m_ForwardData = nullptr;
-		mutable std::mutex m_Mutex;
 		Header m_Head{};
 		size_t m_Count = 0;
 		size_t m_Bytes = 0;
@@ -227,9 +224,9 @@ namespace RTE::CheckpointLua {
 #endif
 		}
 
+		// The VM calls this on the one thread running it and a freeze holds the VM's lock, so the ledger needs none.
 		static void* Allocate(void* opaque, void* address, size_t previousSize, size_t size) noexcept {
 			auto& owner = *static_cast<HeapOwner*>(opaque);
-			std::lock_guard lock(owner.m_Mutex);
 			Header* header = address ? static_cast<Header*>(address) - 1 : nullptr;
 			if (header && header->size != previousSize) owner.m_TrackingFailure.store("the Lua allocator received an inconsistent allocation size");
 			if (size == 0) {
