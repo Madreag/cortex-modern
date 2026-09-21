@@ -6130,6 +6130,7 @@ static std::string ResyncSaveName() {
 			if (session->GetRejectReason() == NetRejectReason::ParticipantRemoved) return "The host removed you from this session";
 			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return session->BuildRejectText();
 			if (session->GetRejectSummary() == "Match roster refused") return "Match roster refused";
+			return session->BuildPlayerRefusalText();
 		}
 		if (relayFailed) return "Relay route failed (TURN): check the relay or forward the host's UDP port";
 		return noDirectRoute ? "No direct route (NAT): forward the host's UDP port or use LAN" : "Network setup failed";
@@ -6481,7 +6482,7 @@ static std::string ResyncSaveName() {
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
-				m_ErrorText = error;
+				m_ErrorText = m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
 				                           m_Session->GetMismatchKey() == "live_match";

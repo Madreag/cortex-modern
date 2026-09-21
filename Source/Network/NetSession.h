@@ -231,6 +231,7 @@ namespace RTE {
 		/// e.g. "deterministic config hash does not match (deterministic_config_hash: 4d31cc89.. vs 77ab01ff..)".
 		/// @return The reason text, or an empty string when nothing was rejected.
 		std::string BuildRejectText() const;
+		std::string BuildPlayerRefusalText() const;
 
 		bool IsReady() const { return m_State == NetSessionState::Ready; }
 		bool IsRejected() const { return m_State == NetSessionState::Rejected; }
