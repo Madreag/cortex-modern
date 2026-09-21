@@ -8328,6 +8328,54 @@ namespace RTE {
 		return true;
 	}
 
+	// Create Lobby and the multiplayer landing both build an identity manifest on the game thread, and
+	// the disk walk of every loaded module is what held that frame for over a second. A primed session
+	// does that walk once, off the menu's thread, and the manifest it then builds is the same one.
+	bool TestPrimedManifestSkipsTheDiskWalk(std::string* error) {
+		NetIdentity::DropPrimedManifest();
+		NetIdentityManifest cold;
+		const uint64_t beforeCold = NetIdentity::ModuleContentHashCount();
+		if (!NetIdentity::BuildCurrentManifest(cold, error)) return false;
+		const uint64_t coldHashes = NetIdentity::ModuleContentHashCount() - beforeCold;
+		if (coldHashes == 0) {
+			*error = "the cold build hashed no module content, so this row measures nothing";
+			return false;
+		}
+		NetIdentity::DropPrimedManifest();
+		NetIdentity::PrimeManifest();
+		NetIdentity::WaitForPrimedManifest();
+		const uint64_t afterPriming = NetIdentity::ModuleContentHashCount();
+		NetIdentityManifest primed;
+		if (!NetIdentity::BuildCurrentManifest(primed, error)) return false;
+		const uint64_t primedHashes = NetIdentity::ModuleContentHashCount() - afterPriming;
+		if (primedHashes != 0) {
+			*error = "the primed build still walked the modules on the caller's thread: modules_hashed=" +
+			         std::to_string(primedHashes) + " (the cold build hashed " + std::to_string(coldHashes) + ")";
+			return false;
+		}
+		// The same manifest, or the priming is a different identity and not a faster one.
+		if (primed.sessionIdentityHash != cold.sessionIdentityHash || primed.moduleManifestHash != cold.moduleManifestHash ||
+		    primed.modules.size() != cold.modules.size()) {
+			*error = "the primed manifest is not the one the disk walk produced: session " +
+			         NetIdentity::HashHex(primed.sessionIdentityHash) + " vs " + NetIdentity::HashHex(cold.sessionIdentityHash) +
+			         ", modules " + std::to_string(primed.modules.size()) + " vs " + std::to_string(cold.modules.size());
+			return false;
+		}
+		for (size_t i = 0; i < cold.modules.size(); ++i) {
+			if (primed.modules[i].contentHash == cold.modules[i].contentHash && primed.modules[i].fileCount == cold.modules[i].fileCount &&
+			    primed.modules[i].totalBytes == cold.modules[i].totalBytes) continue;
+			*error = "primed module " + primed.modules[i].fileName + " read differently: files " +
+			         std::to_string(primed.modules[i].fileCount) + " vs " + std::to_string(cold.modules[i].fileCount) + ", bytes " +
+			         std::to_string(primed.modules[i].totalBytes) + " vs " + std::to_string(cold.modules[i].totalBytes) + ", hash " +
+			         NetIdentity::HashHex(primed.modules[i].contentHash) + " vs " + NetIdentity::HashHex(cold.modules[i].contentHash);
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS identity: a primed manifest skips the disk walk - cold hashed " << coldHashes
+		          << " modules, primed hashed " << primedHashes << ", session_identity_hash "
+		          << NetIdentity::HashHex(primed.sessionIdentityHash) << std::endl;
+		return true;
+	}
+
 	// An empty seat is named for the roster it belongs to: a match's seat reads its client id, a
 	// persistent world's seat reads Open, and the world roster the host publishes is unchanged.
 	bool TestUnseatedSlotNameForms(std::string* error) {
@@ -12541,6 +12589,7 @@ namespace RTE {
 		if (!TestLobbyModerationRows(&error)) return fail(error);
 		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
 		if (!TestMatchSurfacesOutliveTheRound(&error)) return fail(error);
+		if (!TestPrimedManifestSkipsTheDiskWalk(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);

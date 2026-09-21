@@ -15,15 +15,20 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
+#include <iostream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <sstream>
+#include <thread>
 
 namespace RTE {
 
@@ -274,11 +279,31 @@ namespace RTE {
 			return true;
 		}
 
+		std::atomic<uint64_t> s_ModuleContentHashes{0};
+
+		/// One module's finished file work, keyed by what it was read for.
+		struct PrimedModule {
+			uint64_t fileCount = 0;
+			uint64_t totalBytes = 0;
+			NetHash32 contentHash{};
+		};
+		std::mutex s_PrimedMutex;
+		std::map<std::string, PrimedModule> s_PrimedModules; // key: index|fileName|root
+		// A future from std::async waits in its own destructor, so process exit cannot meet a joinable
+		// thread and terminate; the pass it waits for is bounded by the modules on disk.
+		std::future<void> s_Priming;
+		bool s_PrimingStarted = false;
+
+		std::string PrimedKey(const NetIdentityModuleEntry& module) {
+			return std::to_string(module.index) + "|" + module.fileName + "|" + module.root;
+		}
+
 		bool HashModuleContent(const NetIdentityModuleEntry& module, const fs::path& root, NetHash32& outHash, std::string* error) {
 			std::vector<ModuleFileRecord> files;
 			if (!CollectModuleFiles(root, files, error)) {
 				return false;
 			}
+			++s_ModuleContentHashes;
 
 			CanonicalHasher hasher;
 			hasher.UpdateLine("NetIdentityModuleContent/v1");
@@ -485,18 +510,34 @@ namespace RTE {
 		// The working directory is fixed at startup, so the file work below reads nothing live.
 		const std::string workingDirectory = System::GetWorkingDirectory();
 		for (NetIdentityModuleEntry& module : manifest.modules) {
-			const fs::path rootAbsolute = fs::path(workingDirectory) / fs::path(module.root);
-			std::vector<ModuleFileRecord> files;
-			if (!CollectModuleFiles(rootAbsolute, files, error)) {
-				return false;
+			// A module already read this session is taken from what that pass measured: the loaded
+			// modules do not change under a running game, and the disk walk is what stalls the menu.
+			bool primed = false;
+			{
+				std::lock_guard<std::mutex> lock(s_PrimedMutex);
+				if (const auto found = s_PrimedModules.find(PrimedKey(module)); found != s_PrimedModules.end()) {
+					module.fileCount = found->second.fileCount;
+					module.totalBytes = found->second.totalBytes;
+					module.contentHash = found->second.contentHash;
+					primed = true;
+				}
 			}
-			module.fileCount = static_cast<uint64_t>(files.size());
-			module.totalBytes = 0;
-			for (const ModuleFileRecord& file : files) {
-				module.totalBytes += file.size;
-			}
-			if (!HashModuleContent(module, rootAbsolute, module.contentHash, error)) {
-				return false;
+			if (!primed) {
+				const fs::path rootAbsolute = fs::path(workingDirectory) / fs::path(module.root);
+				std::vector<ModuleFileRecord> files;
+				if (!CollectModuleFiles(rootAbsolute, files, error)) {
+					return false;
+				}
+				module.fileCount = static_cast<uint64_t>(files.size());
+				module.totalBytes = 0;
+				for (const ModuleFileRecord& file : files) {
+					module.totalBytes += file.size;
+				}
+				if (!HashModuleContent(module, rootAbsolute, module.contentHash, error)) {
+					return false;
+				}
+				std::lock_guard<std::mutex> lock(s_PrimedMutex);
+				s_PrimedModules[PrimedKey(module)] = {module.fileCount, module.totalBytes, module.contentHash};
 			}
 
 			const std::string zipCandidate = module.root + ".zip";
@@ -511,6 +552,36 @@ namespace RTE {
 		manifest.sessionIdentityHash = HashIdentity(manifest);
 		manifest.hashDurationMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
 		return true;
+	}
+
+	void NetIdentity::PrimeManifest() {
+		if (s_PrimingStarted) return;
+		s_PrimingStarted = true;
+		// Only the capture reads the managers, so it stays on this thread; the disk walk does not.
+		auto inputs = std::make_shared<NetIdentityManifest>();
+		NetIdentityBuildOptions options;
+		options.includeUserdataModules = true; // Every module a later build could ask for, read once.
+		if (!CaptureManifestInputs(*inputs, nullptr, options)) return;
+		s_Priming = std::async(std::launch::async, [inputs, options]() {
+			std::string error;
+			NetIdentityManifest work = *inputs;
+			if (!CompleteManifestFromInputs(work, &error, options)) {
+				std::cout << "[net-identity] manifest priming stopped: " << error << std::endl;
+			}
+		});
+	}
+
+	void NetIdentity::WaitForPrimedManifest() {
+		if (s_Priming.valid()) s_Priming.wait();
+	}
+
+	uint64_t NetIdentity::ModuleContentHashCount() { return s_ModuleContentHashes.load(); }
+
+	void NetIdentity::DropPrimedManifest() {
+		WaitForPrimedManifest();
+		std::lock_guard<std::mutex> lock(s_PrimedMutex);
+		s_PrimedModules.clear();
+		s_PrimingStarted = false;
 	}
 
 	bool NetIdentity::BuildCurrentManifest(NetIdentityManifest& outManifest, std::string* error, NetIdentityBuildOptions options) {
