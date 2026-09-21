@@ -554,6 +554,10 @@ namespace RTE {
 		/// @param movementState Which movement state to set the limb path speed for.
 		/// @param newSpeed New speed value in m/s.
 		void SetLimbPathTravelSpeed(MovementState movementState, float newSpeed);
+		static void WriteLimbPathTravelSpeed(LimbPath paths[2][MOVEMENTSTATECOUNT], MovementState movementState, float newSpeed);
+
+		/// Both ground layers take the new travel speed.
+		static bool RunLimbPathTravelSpeedSelfTest();
 
 		/// Shortcut to get the push force of a particular move state's FG (and left side if relevant) limb path.
 		/// @return The push force, in kg * m/s^2.

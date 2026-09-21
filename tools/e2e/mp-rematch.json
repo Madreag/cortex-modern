@@ -1,46 +1,10 @@
 {
   "schema": 1,
   "name": "mp-rematch",
-  "title": "The real lobby starts a match, reconvenes after End Match and starts a second round",
+  "title": "Two rounds with complete equal hashes, followed by an injected desync and automatic repair",
   "port_base": 49462,
   "size": "960x540",
   "timeout_s": 150,
-  "peers": [
-    {
-      "name": "host",
-      "args": [
-        "-input-script",
-        "{INPUT_SCRIPT}",
-        "-out",
-        "{OUT}/host_trace.json",
-        "-max-ticks",
-        "600"
-      ],
-      "input_script": "ui-surfaces.input.txt",
-      "menu_script": "mp-rematch.host.menu.txt",
-      "probe": "mp-rematch.host.probe.json",
-      "gameplay_epochs": 2
-    },
-    {
-      "name": "client",
-      "args": [
-        "-input-script",
-        "{INPUT_SCRIPT}",
-        "-out",
-        "{OUT}/client_trace.json",
-        "-max-ticks",
-        "600"
-      ],
-      "input_script": "ui-surfaces.input.txt",
-      "menu_script": "mp-rematch.client.menu.txt",
-      "probe": "mp-rematch.client.probe.json",
-      "start_when": {
-        "peer": "host",
-        "event": "video_mark host-listening"
-      },
-      "gameplay_epochs": 2
-    }
-  ],
   "checklist": [
     {
       "id": "round1-host",
@@ -49,7 +13,8 @@
       "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "host",
       "mark": "round1-play",
-      "sim_progress": 120
+      "sim_progress": 120,
+      "run": "rematch"
     },
     {
       "id": "round2-host",
@@ -58,7 +23,8 @@
       "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "host",
       "mark": "round2-play",
-      "sim_progress": 120
+      "sim_progress": 120,
+      "run": "rematch"
     },
     {
       "id": "lobby-host",
@@ -66,7 +32,8 @@
       "screen": "MultiplayerScreen",
       "assert": "menu assert_substate Lobby; dump_lobby",
       "peer": "host",
-      "mark": "rematch-lobby"
+      "mark": "rematch-lobby",
+      "run": "rematch"
     },
     {
       "id": "round1-client",
@@ -75,7 +42,8 @@
       "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "client",
       "mark": "round1-play",
-      "sim_progress": 120
+      "sim_progress": 120,
+      "run": "rematch"
     },
     {
       "id": "round2-client",
@@ -84,7 +52,8 @@
       "assert": "probe observes Running gameplay for three seconds in this round",
       "peer": "client",
       "mark": "round2-play",
-      "sim_progress": 120
+      "sim_progress": 120,
+      "run": "rematch"
     },
     {
       "id": "lobby-client",
@@ -92,7 +61,8 @@
       "screen": "MultiplayerScreen",
       "assert": "menu assert_substate Lobby; dump_lobby",
       "peer": "client",
-      "mark": "rematch-lobby"
+      "mark": "rematch-lobby",
+      "run": "rematch"
     },
     {
       "id": "round2-hashes-host",
@@ -100,7 +70,8 @@
       "mark": "round2-play",
       "screen": "game",
       "gate": "round2-hashes",
-      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller."
+      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller.",
+      "run": "rematch"
     },
     {
       "id": "round2-hashes-client",
@@ -108,16 +79,282 @@
       "mark": "round2-play",
       "screen": "game",
       "gate": "round2-hashes",
-      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller."
+      "what": "Round two continues on both peers with every hash record equal through tick 600, including total and controller.",
+      "run": "rematch"
+    },
+    {
+      "id": "injected-before-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "mark": "injected-before",
+      "screen": "game",
+      "sim_progress": 120,
+      "what": "Play advances before the host's one-shot RNG perturbation at tick 240.",
+      "assert": "The probe observes Running play from tick 60 through tick 210 before injection."
+    },
+    {
+      "id": "injected-repair-overlay-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "ResyncOverlay",
+      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence.",
+      "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
+      "log_regex": [
+        "sim state diverged at tick \\d+",
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:"
+      ]
+    },
+    {
+      "id": "injected-repair-complete-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "game",
+      "mark": "injected-repair-complete",
+      "what": "The healed match resumes and the visible toast names the frame restored from the host snapshot.",
+      "assert": "The native relaunch log and the visible Match resynced toast agree that repair completed.",
+      "log_regex": [
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Match resynced (healed at frame "
+        }
+      ]
+    },
+    {
+      "id": "injected-play-resumed-host",
+      "run": "injected-desync",
+      "peer": "host",
+      "screen": "game",
+      "mark": "injected-play-resumed",
+      "sim_progress": 120,
+      "what": "Both peers continue playing through tick 900 after the automatic repair.",
+      "assert": "The probe observes Running gameplay at or after tick 900 following the completion toast.",
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:",
+        "^ERROR:",
+        "RTE Aborted",
+        "Assertion failed"
+      ]
+    },
+    {
+      "id": "injected-before-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "mark": "injected-before",
+      "screen": "game",
+      "sim_progress": 120,
+      "what": "Play advances before the host's one-shot RNG perturbation at tick 240.",
+      "assert": "The probe observes Running play from tick 60 through tick 210 before injection."
+    },
+    {
+      "id": "injected-repair-overlay-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "ResyncOverlay",
+      "what": "The automatic repair displays Resyncing the match after the deliberately injected divergence.",
+      "assert": "Saved ResyncOverlay frames and native divergence/host-snapshot reload lines; no repair button is pressed.",
+      "log_regex": [
+        "sim state diverged at tick \\d+",
+        "\\[net-match\\] resync: reloading from the host snapshot"
+      ],
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:"
+      ]
+    },
+    {
+      "id": "injected-repair-complete-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "game",
+      "mark": "injected-repair-complete",
+      "what": "The healed match resumes and the visible toast names the frame restored from the host snapshot.",
+      "assert": "The native relaunch log and the visible Match resynced toast agree that repair completed.",
+      "log_regex": [
+        "\\[net-match\\] resync: match relaunched from the snapshot"
+      ],
+      "readback": [
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 8,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Match resynced (healed at frame "
+        }
+      ]
+    },
+    {
+      "id": "injected-play-resumed-client",
+      "run": "injected-desync",
+      "peer": "client",
+      "screen": "game",
+      "mark": "injected-play-resumed",
+      "sim_progress": 120,
+      "what": "Both peers continue playing through tick 900 after the automatic repair.",
+      "assert": "The probe observes Running gameplay at or after tick 900 following the completion toast.",
+      "forbidden_log_regex": [
+        "\\[net-match\\] resync failed:",
+        "^ERROR:",
+        "RTE Aborted",
+        "Assertion failed"
+      ]
     }
   ],
-  "hash_gate": {
-    "name": "round2-hashes",
-    "peers": [
-      "host",
-      "client"
-    ],
-    "first_tick": 1,
-    "cap": 600
-  }
+  "runs": [
+    {
+      "name": "rematch",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-max-ticks",
+            "600"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "mp-rematch.host.menu.txt",
+          "probe": "mp-rematch.host.probe.json",
+          "gameplay_epochs": 2
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-max-ticks",
+            "600"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "mp-rematch.client.menu.txt",
+          "probe": "mp-rematch.client.probe.json",
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark host-listening"
+          },
+          "gameplay_epochs": 2
+        }
+      ],
+      "hash_gate": {
+        "name": "round2-hashes",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "first_tick": 1,
+        "cap": 600
+      }
+    },
+    {
+      "name": "injected-desync",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-max-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-host",
+            "-determinism-selftest-perturb",
+            "-determinism-selftest-perturb-tick",
+            "240"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-rematch.injected.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Host"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-max-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-e2e-resync",
+            "-seed",
+            "42",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "input_script": "ui-surfaces.input.txt",
+          "probe": "mp-rematch.injected.probe.json",
+          "settings": {
+            "NetworkDisplayName": "Joiner"
+          },
+          "start_delay_s": 3
+        }
+      ]
+    }
+  ]
 }

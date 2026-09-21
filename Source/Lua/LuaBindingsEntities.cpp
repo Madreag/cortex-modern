@@ -473,6 +473,10 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, AHuman) {
 	    .def("GetLimbPath", &AHuman::GetLimbPath, luabind::return_internal_reference(_1))
 	    .def("GetLimbPathTravelSpeed", &AHuman::GetLimbPathTravelSpeed)
 	    .def("SetLimbPathTravelSpeed", &AHuman::SetLimbPathTravelSpeed)
+	    /// Compatibility with 6.x AHuman:GetLimbPathSpeed(speedPreset); reads the WALK travel speed (7.0 keeps one speed per path).
+	    .def("GetLimbPathSpeed", &LuaAdaptersAHuman::GetLimbPathSpeed)
+	    /// Compatibility with 6.x AHuman:SetLimbPathSpeed(speedPreset, speed); sets the WALK travel speed on both ground layers.
+	    .def("SetLimbPathSpeed", &LuaAdaptersAHuman::SetLimbPathSpeed)
 	    .def("GetLimbPathPushForce", &AHuman::GetLimbPathPushForce)
 	    .def("SetLimbPathPushForce", &AHuman::SetLimbPathPushForce)
 	    .def("GetRotAngleTarget", &AHuman::GetRotAngleTarget)
@@ -1221,6 +1225,8 @@ LuaBindingRegisterFunctionDefinitionForType(EntityLuaBindings, Scene) {
 	    .def("SetArea", &Scene::SetArea)
 	    .def("HasArea", &Scene::HasArea)
 	    .def("GetArea", &Scene::GetArea)
+	    /// Compatibility with 6.x Scene:GetOptionalArea(areaName); GetArea already returns nil for missing areas, matching the 6.x non-required lookup.
+	    .def("GetOptionalArea", &Scene::GetArea)
 	    .def("WithinArea", &Scene::WithinArea)
 	    .def("AddNavigableArea", &Scene::AddNavigableArea)
 	    .def("ClearNavigableAreas", &Scene::ClearNavigableAreas)

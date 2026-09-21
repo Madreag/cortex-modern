@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 from types import SimpleNamespace
+from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
@@ -53,6 +54,81 @@ def check_capture_binary(results, scratch):
             os.environ.pop("CCCP_TEST_BINARY", None)
         else:
             os.environ["CCCP_TEST_BINARY"] = previous
+
+
+def check_scratch_limit(results, scratch):
+    resolver = getattr(driver, "scratch_limit", None)
+    if resolver is None:
+        return row(results, "scratch/selected-limit-is-supported", False)
+    options = SimpleNamespace(scratch_limit_bytes=None)
+    ok = row(results, "scratch/default-five-billion", resolver(options) == 5_000_000_000)
+    retained = {"scratch_limit_bytes": 8_000_000_000}
+    ok &= row(results, "scratch/finalizer-retains-selected-limit", resolver(options, retained) == 8_000_000_000)
+    options.scratch_limit_bytes = 7_000_000_000
+    ok &= row(results, "scratch/explicit-finalizer-limit", resolver(options, retained) == 7_000_000_000)
+    for value in (0, -1, "0", "-1", "1.5", "invalid"):
+        try:
+            driver.positive_bytes(value)
+            rejected = False
+        except argparse.ArgumentTypeError:
+            rejected = True
+        ok &= row(results, f"scratch/rejects-{value}", rejected)
+    ok &= row(results, "scratch/positive-byte-count", driver.positive_bytes("8000000000") == 8_000_000_000)
+    for limit, expected in ((8_000_000_000, False), (6_000_000_000, True), (5_000_000_000, True)):
+        with patch.object(driver, "scratch_bytes", return_value=6_000_000_000):
+            try:
+                driver.check_scratch_budget(scratch, limit)
+                stopped = False
+            except RuntimeError as error:
+                stopped = str(limit) in str(error) and "no cleanup performed" in str(error)
+        ok &= row(results, f"scratch/enforces-{limit}", stopped == expected)
+    return ok
+
+
+def check_module_requirements(results, scratch):
+    repo = scratch / "module-requirements"
+    module = repo / "Data/VoidWanderers.rte"
+    module.mkdir(parents=True)
+    (module / "Index.ini").write_text("DataModule\n\tSupportedGameVersion = 6.2.2\n", encoding="utf-8")
+    ok = True
+    for name in ("mod-void-wanderers", "mod-void-wanderers-multiplayer"):
+        scenario = driver.load_scenario(name)
+        ok &= row(results, f"{name}/version-warning-does-not-block-launch", not driver.requirement_findings(repo, scenario))
+        missing = driver.requirement_findings(repo / "absent", scenario)
+        ok &= row(results, f"{name}/missing-module-still-blocks", len(missing) == 1 and missing[0]["class"] == "data")
+    exact = {"requires_version": [{"module": "VoidWanderers.rte", "version": "7.0.0", "reason": "Exact version required"}]}
+    findings = driver.requirement_findings(repo, exact)
+    ok &= row(results, "requirements/explicit-version-contract-is-preserved", len(findings) == 1 and
+              findings[0]["declared"] == "6.2.2" and findings[0]["required"] == "7.0.0")
+    return ok
+
+
+def check_rematch_contract(results):
+    scenario = driver.load_scenario("mp-rematch")
+    runs = {run["name"]: run for run in scenario.get("runs", [])}
+    ok = row(results, "rematch/two-distinct-runs", set(runs) == {"rematch", "injected-desync"})
+    if not ok:
+        return False
+    regular, injected = runs["rematch"], runs["injected-desync"]
+    ok &= row(results, "rematch/full-second-round-hash-range", regular.get("hash_gate") == {
+        "name": "round2-hashes", "peers": ["host", "client"], "first_tick": 1, "cap": 600})
+    peers = {peer["name"]: peer for peer in injected["peers"]}
+    host_args, client_args = peers["host"]["args"], peers["client"]["args"]
+    ok &= row(results, "rematch/one-sided-existing-perturbation", "-determinism-selftest-perturb" in host_args and
+              "-determinism-selftest-perturb" not in client_args and
+              host_args[host_args.index("-determinism-selftest-perturb-tick") + 1] == "240")
+    ok &= row(results, "rematch/automatic-repair-enabled", all("-net-match-e2e-resync" in peer["args"] and
+              "-net-match-service-e2e" in peer["args"] for peer in peers.values()))
+    probes = [json.loads(driver.scenario_text(scenario, peer["probe"])) for peer in peers.values()]
+    ok &= row(results, "rematch/no-manual-repair-substitution", all("ButtonMatchRepairNow" not in json.dumps(probe) for probe in probes))
+    items = [item for item in scenario["checklist"] if item.get("run") == "injected-desync"]
+    ok &= row(results, "rematch/repair-needs-video-and-native-evidence", all(
+        any(item.get("peer") == name and item.get("screen") == "ResyncOverlay" and
+            any("reloading from the host snapshot" in pattern for pattern in item.get("log_regex", [])) for item in items) and
+        any(item.get("peer") == name and item.get("readback") and
+            any("match relaunched from the snapshot" in pattern for pattern in item.get("log_regex", [])) for item in items)
+        for name in peers))
+    return ok
 
 
 def check_scenarios(results):
@@ -217,8 +293,25 @@ def check_review(results, scratch):
     ok &= row(results, "review/peerless-item-covers-both", len(unpeered) == 2, str(len(unpeered)))
     ok &= row(results, "review/failures-carried",
               document["failures"]["client"] == ["[menu-script] FAILED: assert_substate"])
+    scenario_items = [item for item in document["checklist"] if item["id"] != "no-assert-dialogs"]
     ok &= row(results, "review/no-probe-is-named",
-              all(item.get("probe") == "none" for item in document["checklist"]))
+              all(item.get("probe") == "none" for item in scenario_items))
+    # The dialog row is written for every capture: a player would have had to answer each line it lists.
+    dialog_rows = [item for item in document["checklist"] if item["id"] == "no-assert-dialogs"]
+    ok &= row(results, "review/assert-dialog-row-present",
+              len(dialog_rows) == 1 and dialog_rows[0]["probe"] == "pass" and dialog_rows[0]["assert_dialogs"] == [],
+              str(dialog_rows))
+    (scratch / "host").mkdir(parents=True, exist_ok=True)
+    (scratch / "host/stdout.log").write_text(
+        "[menu-script] loaded 2 steps\nRTE Assert (headless, continued like Ignore): Assertion in file 'X.cpp'\n",
+        encoding="utf-8")
+    fired = driver.review(scenario, capture, out)
+    flagged = [item for item in fired["checklist"] if item["id"] == "no-assert-dialogs"][0]
+    ok &= row(results, "review/assert-dialog-row-reports-the-line",
+              flagged["probe"] == "fail" and "continued like Ignore" in flagged["finding"]["reason"]
+              and flagged["assert_dialogs"][0]["peer"] == "host", str(flagged.get("assert_dialogs")))
+    (scratch / "host/stdout.log").unlink()
+    document = driver.review(scenario, capture, out)
     ok &= row(results, "review/verdict-is-not-a-pass", document["verdict"] == "agent-review-required")
     ok &= row(results, "review/no-mp4-is-not-video-evidence", all(item["frames"] is None for item in document["checklist"]))
     capture["peers"][0]["record"] = {"exit_code": 1, "timed_out": False}
@@ -261,7 +354,8 @@ def check_interruption(results, scratch):
     manifest = driver.scenario_manifest(capture, out, 1)
     review = driver.aggregate_review(capture, out)
     ok = row(results, "interruption/manifest-keeps-saved-frames", manifest["frame_count"] == 12 and manifest["interrupted"] == "test interruption")
-    ok &= row(results, "interruption/unstarted-checklist-retained", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    started_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    ok &= row(results, "interruption/unstarted-checklist-retained", len(started_items) == 2 and started_items[1]["run"] == "second")
     ok &= row(results, "interruption/missing-video-explained", all(item["frames"] is None and item["finding"]["reason"] == "test interruption" for item in review["checklist"]))
     return ok
 
@@ -375,7 +469,8 @@ def check_finalizer(results, scratch):
     scenario = {"name": "finalize", "peers": [{"name": "host"}], "runs": [{"name": "first"}, {"name": "second"}],
                 "checklist": [{"id": "game", "what": "Game is drawn.", "screen": "game"}]}
     capture = {"scenario": "finalize", "scenario_definition": scenario, "runs": [], "source": {"tip": "retained-tip"},
-               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": []}
+               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": [],
+               "scratch_root": str(scratch), "scratch_limit_bytes": 8_000_000_000}
     (out / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
     code = driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
     manifest = json.loads((out / "manifest.json").read_text())
@@ -383,7 +478,18 @@ def check_finalizer(results, scratch):
     saved = json.loads((out / "capture.json").read_text())
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
-    ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    finalized_items = [item for item in review["checklist"] if item["id"] != "no-assert-dialogs"]
+    ok &= row(results, "finalize/names-unstarted-run", len(finalized_items) == 2 and finalized_items[1]["run"] == "second")
+    ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
+              manifest.get("scratch_root") == str(scratch))
+    with patch.object(driver, "scratch_bytes", return_value=6_000_000_000), patch.object(driver, "render") as rendered:
+        driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
+                                            scratch_limit_bytes=None, sheet_every=3))
+        ok &= row(results, "finalize/encodes-below-retained-budget", rendered.call_count == 1)
+    with patch.object(driver, "scratch_bytes", return_value=8_000_000_000), patch.object(driver, "render") as rendered:
+        driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
+                                            scratch_limit_bytes=None, sheet_every=3))
+        ok &= row(results, "finalize/stops-encoding-at-budget", rendered.call_count == 0)
     saved["scenario_definition"]["runs"] = [{"name": "first"}]
     saved.pop("interrupted", None)
     saved["runs"][0].pop("interrupted", None)
@@ -615,6 +721,100 @@ def check_cross_capture(results, scratch):
     return ok
 
 
+def check_cross_transfer(results, scratch):
+    from e2e.cross import CaptureRelocation, merge_halves, select_peer
+    scenario = driver.load_scenario('mp-host-join-cross')
+    identities = {'host': {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 1, 'host': True},
+                  'client': {'session_id': 5, 'round': 7, 'config_hash': 'a' * 64, 'peer_id': 2, 'host': False}}
+    roots, originals = [], {}
+    for name, platform in (('host', 'win32'), ('client', 'darwin')):
+        root = scratch / ('transferred-' + name)
+        (root / 'run0' / (name + '-stage') / 'probe').mkdir(parents=True)
+        roots.append(root)
+        original = str(root) if name == 'host' else '/Users/erol/captures/client-half'
+        originals[name] = original
+        def evidence(relative, data):
+            path = root / relative
+            path.write_bytes(data)
+            return {**driver.file_evidence(path), 'path': original.replace('\\', '/') + '/' + relative}
+        video = evidence(f'run0/{name}.mp4', b'synthetic transferred video')
+        sheet = evidence(f'run0/{name}-sheet.png', b'synthetic transferred sheet')
+        native = evidence(f'run0/{name}-stage/probe/match-identity.json', json.dumps(identities[name]).encode())
+        trace = evidence(f'run0/{name}_trace.json', b'{"synthetic":true,"ticks":[1,2]}')
+        peer = {'peer': name, 'match_identity': identities[name], 'video': video, 'contact_sheet': sheet,
+                'identity_file': native, 'trace': trace}
+        driver.write_json(root / 'capture.json', {'scenario': scenario['name'], 'scenario_definition': select_peer(scenario, name), 'out': original})
+        driver.write_json(root / 'manifest.json', {'platform': platform, 'source': {'tip': 'synthetic-transfer'}, 'frame_count': 2, 'peers': [peer]})
+        driver.write_json(root / 'review.json', {'scenario': scenario['name'], 'command': ['--out', original], 'checklist': [{
+            'id': name, 'peer': name, 'frames': [0, 1], 'probe': 'pass', 'video': video['path'], 'contact_sheet': sheet['path'],
+            'identity_file': native, 'trace': trace, 'readback': [{'path': ['control', 'visible'], 'equals': True}]}]})
+    before = {str(path): path.read_bytes() for root in roots for path in (root / 'capture.json', root / 'manifest.json', root / 'review.json')}
+    ok = row(results, 'cross-transfer/unix-half-relocates', merge_halves(roots, scratch / 'transferred-merged'))
+    manifest = json.loads((scratch / 'transferred-merged/manifest.json').read_text())
+    review = json.loads((scratch / 'transferred-merged/review.json').read_text())
+    peer = next(peer for peer in manifest['peers'] if peer['peer'] == 'client')
+    item = next(item for item in review['checklist'] if item['peer'] == 'client')
+    ok &= row(results, 'cross-transfer/original-media-path-retained', peer['video'].get('original_path') == originals['client'] + '/run0/client.mp4')
+    ok &= row(results, 'cross-transfer/review-media-and-auxiliary-paths', item['video'] == str(roots[1] / 'run0/client.mp4') and
+              item['identity_file']['path'] == str(roots[1] / 'run0/client-stage/probe/match-identity.json') and
+              item['trace']['path'] == str(roots[1] / 'run0/client_trace.json'))
+    ok &= row(results, 'cross-transfer/provenance-and-inputs-unchanged', bool(manifest.get('relocations')) and
+              all(Path(path).read_bytes() == data for path, data in before.items()))
+    ok &= row(results, 'cross-transfer/property-path-is-not-a-file', item['readback'][0]['path'] == ['control', 'visible'])
+    trace_path = roots[1] / 'run0/client_trace.json'
+    trace_bytes = trace_path.read_bytes()
+    trace_path.write_bytes(b'changed trace')
+    ok &= row(results, 'cross-transfer/changed-trace-refused', not merge_halves(roots, scratch / 'transferred-bad-trace'))
+    trace_path.write_bytes(trace_bytes)
+    native_path = roots[1] / 'run0/client-stage/probe/match-identity.json'
+    native_bytes = native_path.read_bytes()
+    native_path.write_bytes(b'{"changed":true}')
+    ok &= row(results, 'cross-transfer/changed-identity-refused', not merge_halves(roots, scratch / 'transferred-bad-identity'))
+    native_path.write_bytes(native_bytes)
+    client_manifest = json.loads((roots[1] / 'manifest.json').read_text())
+    outside = scratch / 'outside-client.mp4'
+    outside.write_bytes(b'synthetic transferred video')
+    saved_video = client_manifest['peers'][0]['video']
+    for variant, escaped in [('outside', str(outside)), ('traversal', originals['client'] + '/../outside-client.mp4')]:
+        client_manifest['peers'][0]['video'] = {**saved_video, 'path': escaped}
+        driver.write_json(roots[1] / 'manifest.json', client_manifest)
+        ok &= row(results, f'cross-transfer/{variant}-refused', not merge_halves(roots, scratch / ('transferred-' + variant)))
+    client_manifest['peers'][0]['video'] = saved_video
+    saved_trace = client_manifest['peers'][0].pop('trace')
+    client_manifest['cross_auxiliary'] = {'schema': 1, 'required': ['identity_file', 'trace']}
+    driver.write_json(roots[1] / 'manifest.json', client_manifest)
+    ok &= row(results, 'cross-transfer/fresh-capture-requires-auxiliary-hashes', not merge_halves(roots, scratch / 'transferred-missing-required-trace'))
+    client_manifest['peers'][0]['trace'] = saved_trace
+    driver.write_json(roots[1] / 'manifest.json', client_manifest)
+    client_review = json.loads((roots[1] / 'review.json').read_text())
+    client_review['checklist'][0]['video'] = str(outside)
+    driver.write_json(roots[1] / 'review.json', client_review)
+    ok &= row(results, 'cross-transfer/review-path-outside-refused', not merge_halves(roots, scratch / 'transferred-review-outside'))
+    relocation = CaptureRelocation(originals['client'], roots[1])
+    with patch.object(Path, 'resolve', return_value=scratch / 'outside-resolved-file'):
+        try:
+            relocation.path(originals['client'] + '/run0/client.mp4', 'video')
+            rejected = False
+        except ValueError:
+            rejected = True
+    ok &= row(results, 'cross-transfer/resolved-link-escape-refused', rejected)
+    produced = scratch / 'cross-producer'
+    (produced / 'probe').mkdir(parents=True)
+    driver.write_json(produced / 'probe/match-identity.json', identities['host'])
+    (produced / 'host_trace.json').write_text('{"synthetic":true}')
+    native_peer = {'peer': 'host', 'root': str(produced), 'record': {}, 'index': [], 'manifest': {},
+                   'probe_dir': str(produced / 'probe'), 'args': ['-out', str(produced / 'host_trace.json')]}
+    capture = {'scenario': scenario['name'], 'scenario_definition': select_peer(scenario, 'host'),
+               'source': {'tip': 'synthetic'}, 'exe': {}, 'started': driver.stamp(), 'fps': 6,
+               'runs': [{'name': 'run0', 'size': '640x360', 'peers': [native_peer]}]}
+    produced_manifest = driver.scenario_manifest(capture, produced, 1)
+    ok &= row(results, 'cross-transfer/producer-hashes-native-identity-and-trace',
+              produced_manifest.get('cross_auxiliary', {}).get('required') == ['identity_file', 'trace'] and
+              produced_manifest['peers'][0]['identity_file']['sha256'] == driver.file_evidence(produced / 'probe/match-identity.json')['sha256'] and
+              produced_manifest['peers'][0]['trace']['sha256'] == driver.file_evidence(produced / 'host_trace.json')['sha256'])
+    return ok
+
+
 def check_migration_timing(results, scratch):
     from e2e.timing import migration_timing
     root = scratch / 'timing'
@@ -651,6 +851,9 @@ def main():
         scratch = Path(temporary)
         ok = check_scenarios(results)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_scratch_limit(results, scratch)
+        ok &= check_module_requirements(results, scratch)
+        ok &= check_rematch_contract(results)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)
@@ -667,6 +870,7 @@ def main():
         ok &= check_drop_receipts(results, scratch)
         ok &= check_gameplay_epochs(results, scratch)
         ok &= check_cross_capture(results, scratch)
+        ok &= check_cross_transfer(results, scratch)
         ok &= check_migration_timing(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",

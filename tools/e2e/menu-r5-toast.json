@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "name": "menu-r5-toast",
+  "title": "Live toast geometry on three window sizes",
+  "port_base": 49450,
+  "size": "960x540",
+  "timeout_s": 45,
+  "runs": [
+    {
+      "name": "640x360",
+      "size": "640x360",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "settings": {
+            "NetworkDisplayName": "host",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "probe": "menu-r5-toast.probe.json"
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        }
+      ]
+    },
+    {
+      "name": "960x540",
+      "size": "960x540",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "settings": {
+            "NetworkDisplayName": "host",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "probe": "menu-r5-toast.probe.json"
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        }
+      ]
+    },
+    {
+      "name": "1280x720",
+      "size": "1280x720",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host"
+          ],
+          "settings": {
+            "NetworkDisplayName": "host",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "menu_script": "wait-for-probe.txt",
+          "start_delay_s": 0,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "probe": "menu-r5-toast.probe.json"
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-autosave-seconds",
+            "0",
+            "-num-lua-states",
+            "4",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-join",
+            "127.0.0.1"
+          ],
+          "settings": {
+            "NetworkDisplayName": "client",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkShowDiagnostics": "0"
+          },
+          "input_script": "ui-surfaces.input.txt",
+          "start_delay_s": 3,
+          "kill_when": {
+            "peer": "host",
+            "probe_complete": true
+          },
+          "menu_script": "menu-r5-observer.menu.txt"
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "toast-closed",
+      "run": "640x360",
+      "peer": "host",
+      "mark": "toast-closed",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    },
+    {
+      "id": "toast-open",
+      "run": "640x360",
+      "peer": "host",
+      "mark": "toast-open",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    },
+    {
+      "id": "toast-closed",
+      "run": "960x540",
+      "peer": "host",
+      "mark": "toast-closed",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    },
+    {
+      "id": "toast-open",
+      "run": "960x540",
+      "peer": "host",
+      "mark": "toast-open",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    },
+    {
+      "id": "toast-closed",
+      "run": "1280x720",
+      "peer": "host",
+      "mark": "toast-closed",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    },
+    {
+      "id": "toast-open",
+      "run": "1280x720",
+      "peer": "host",
+      "mark": "toast-open",
+      "what": "Three complete toast lines stay inside the screen, clear of the seats panel.",
+      "assert": "assert_toast_band 3"
+    }
+  ]
+}

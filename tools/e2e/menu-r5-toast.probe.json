@@ -1,0 +1,71 @@
+{
+  "schema": 1,
+  "timeout_ms": 30000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 120
+    },
+    {
+      "op": "menu",
+      "command": "push_toast capture_notice Capture notice 1"
+    },
+    {
+      "op": "menu",
+      "command": "push_toast capture_notice Capture notice 2"
+    },
+    {
+      "op": "menu",
+      "command": "push_toast capture_notice Capture notice 3"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "video_mark toast-closed"
+    },
+    {
+      "op": "menu",
+      "command": "assert_toast_band 3"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "key_down",
+      "key": "F6"
+    },
+    {
+      "op": "key_up",
+      "key": "F6"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450,
+      "panel_open": true
+    },
+    {
+      "op": "menu",
+      "command": "video_mark toast-open"
+    },
+    {
+      "op": "menu",
+      "command": "assert_toast_band 3"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

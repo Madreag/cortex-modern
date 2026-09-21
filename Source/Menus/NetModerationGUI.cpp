@@ -7,6 +7,7 @@
 #include "NetMatchService.h"
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "WindowMan.h"
@@ -37,6 +38,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -209,11 +211,24 @@ namespace {
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
 	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
 
+	bool ToastStillApplies(const ScenarioRunner::NetUiToastRecord& toast) {
+		if (toast.kind == "slow_machine") return ScenarioRunner::IsLockstepLocalMachineSlow();
+		if (toast.kind != "seat_held") return true;
+		if (toast.text.find("rejoining") != std::string::npos) return ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing();
+		const uint8_t peer = toast.senderPeerId ? toast.senderPeerId : ScenarioRunner::GetLockstepLocalPeerId();
+		return ScenarioRunner::IsLockstepSeatUnderAI(peer, ScenarioRunner::GetLockstepCompletedFrame());
+	}
+
 	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
 		uint8_t sender = toast.senderPeerId;
 		if (ToastNamesNobody(toast.kind)) return toast.text;
 		if (ToastNamesTheSeat(toast.kind)) {
-			return sender ? g_NetMatchService.GetPeerDisplayName(sender) + ": " + toast.text : toast.text;
+			if (!sender) return toast.text;
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const auto& row) { return row.peerId == sender; });
+			const std::string state = member != snapshot.members.end() ? NetPlayerPresentation::State(*member) : std::string("Held - AI in control");
+			return NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) + ": " +
+			    (toast.text.find("rejoining") != std::string::npos ? "Held - AI in control - rejoining" : state);
 		}
 		if (toast.kind == "resumed" && sender == 0) {
 			const auto& events = ScenarioRunner::GetNetUiToastLog();
@@ -227,7 +242,13 @@ namespace {
 				}
 			}
 		}
-		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
+		std::string text = toast.text;
+		for (const auto& [peer, name]: NetPlayerPresentation::names) {
+			for (const std::string prefix: {"Client " + std::to_string(peer), "Player " + std::to_string(peer)}) {
+				if (text.starts_with(prefix + " ")) text.replace(0, prefix.size(), name);
+			}
+		}
+		return text + (sender ? " by " + NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) : std::string());
 	}
 
 	// The player_* toasts read "<name> <verb>"; on a short line the name elides, never the verb.
@@ -411,13 +432,14 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	const int top = PanelTop(screenHeight);
 	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight >= c_CompactMaxHeight) {
-		// Only the plain placement can reach past the bottom edge; the solver never returns one that does.
-		return {top + height > screenHeight - c_PanelGap ? std::max(0, screenHeight - c_PanelGap - height) : top, height};
+		const int fittedTop = std::max(top, reservedTop);
+		return {fittedTop, std::max(minHeight, std::min(height, screenHeight - c_PanelGap - fittedTop))};
 	}
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
 	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
 	// An open chat entry's run sits above the panel too, so its reservation is a floor for the top.
-	const int highestTop = std::max({top, c_StripBandBottom + rowHeight + c_PanelGap, reservedTop});
+	int highestTop = std::max({top, c_StripBandBottom + rowHeight + c_PanelGap, reservedTop});
+	highestTop = std::min(highestTop, screenHeight - c_PanelGap - minHeight);
 	// A seat's message owns its own rows and the toast row under them, wherever on the screen it sits.
 	std::vector<PanelBand> bands;
 	for (const PanelBand& band: textBands) {
@@ -438,10 +460,12 @@ void NetModerationGUI::LayoutPanel() {
 		textBands.push_back({band.y, band.y + band.h});
 	}
 	// The panel gives up rows to its compact form before an open entry's history gives up its last one.
-	int reservedTop = 0;
+	const int toastRows = static_cast<int>(std::min<size_t>(3, ScenarioRunner::GetVisibleNetUiToasts().size()));
+	const int statusBottom = m_StatusRect.visible ? m_StatusRect.y + m_StatusRect.height : c_StripBandBottom;
+	int reservedTop = statusBottom + c_PanelGap + (toastRows ? toastRows * rowHeight + c_PanelGap : 0);
 	if (m_ChatEntryOpen && g_SettingsMan.GetNetworkChatVisible()) {
 		const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
-		reservedTop = ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap;
+		reservedTop = std::max(reservedTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
 	}
 	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands, reservedTop);
 	const int top = placed.top;
@@ -523,9 +547,7 @@ void NetModerationGUI::Refresh() {
 		std::string roster;
 		for (const auto& member: snapshot.members) {
 			if (!member.cpu) {
-				roster += (roster.empty() ? "" : "\n\n") +
-				    (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
-				if (!member.dropped && !member.reclaiming && !member.aiHeld && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
+				roster += (roster.empty() ? "" : "\n\n") + DisplayName(NetPlayerPresentation::Row(member));
 			}
 		}
 		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));
@@ -539,13 +561,8 @@ void NetModerationGUI::Refresh() {
 		for (auto* action: controls.actions) action->SetVisible(used);
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
-		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(seat.view.displayName), controls.name->GetWidth()));
-		const bool departed = !seat.view.reclaiming && !seat.view.dropped;
-		const bool departedAI = departed && ScenarioRunner::IsLockstepPeerGone(seat.lockstepPeerId, ScenarioRunner::GetLockstepCompletedFrame());
-		controls.detail->SetText(departed ? (departedAI ? "Left - AI in control" : "Left") :
-		    std::string(seat.view.reclaiming ? "Reconnecting" : "Disconnected") + "  /  away " +
-		    std::to_string(seat.view.droppedForMs / 1000) + "s  /  sim hold " +
-		    std::to_string(NetSeatPresence::HoldSeconds(seat.view.holdFramesRemaining)) + "s");
+		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()));
+		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		for (size_t action = 0; action < controls.actions.size(); ++action) {
@@ -582,15 +599,16 @@ void NetModerationGUI::HandleEvents() {
 
 void NetModerationGUI::Update() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
 	const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
 	if (frame < m_DepartureFrame || snapshot.serviceState != "Running") m_AnnouncedAISeats.clear();
 	m_DepartureFrame = frame;
 	if (snapshot.serviceState == "Running") {
 		for (const auto& member: snapshot.members) {
-			if (member.cpu || member.dropped || member.reclaiming || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
+			if (member.cpu || !NetPlayerPresentation::Seated(member.peerId) || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
 			if (std::find(m_AnnouncedAISeats.begin(), m_AnnouncedAISeats.end(), member.peerId) != m_AnnouncedAISeats.end()) continue;
 			m_AnnouncedAISeats.push_back(member.peerId);
-			ScenarioRunner::PushNetUiToast("seat_left_ai", DisplayName(member.displayName) + " left - AI in control");
+			ScenarioRunner::PushNetUiToast("seat_left_ai", DisplayName(NetPlayerPresentation::Name(member)) + ": " + NetPlayerPresentation::State(member));
 		}
 	}
 	if (m_Open && snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch") SetOpen(false);
@@ -612,10 +630,7 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
 		if (member.cpu) continue;
-		// Every row names its player first: a state word never stands in for the name.
-		const std::string name = DisplayName(member.displayName);
-		const std::string state = member.statusLine.empty() ? std::string("Connected") : DisplayName(member.statusLine);
-		text += "\n" + (state.rfind(name, 0) == 0 ? state : name + "  /  " + state);
+		text += "\n" + DisplayName(NetPlayerPresentation::Row(member));
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;
@@ -705,35 +720,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
-	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics()) {
+	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
 		const int fullHeight = font->GetFontHeight() + 7;
 		int height = fullHeight;
-		int y = editor.editing ? backbuffer->h - height - 2 : 2;
+		int y = editor.editing && !m_Open ? backbuffer->h - height - 2 : 2;
 		bool topBand = false;
-		if (m_Open) {
-			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
-			// above it - shrinking to a bare line of them when that is all the room there is. The toast
-			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it,
-			// and the editor's own seat message bands lower it further still.
-			int panelX, panelTop, panelWidth, panelHeight;
-			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-			const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
-			int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
-			if (editor.editing) {
-				for (const auto& band: editor.textBands) {
-					if (band.y < ceiling) ceiling = band.y;
-				}
-			}
-			if (y < panelTop + panelHeight && y + height > ceiling) {
-				y = ceiling - height;
-				if (y < 0) {
-					y = 0;
-					height = std::min(height, ceiling);
-				}
-			}
-		}
+
 		int freeLeft = 152, freeRight = backbuffer->w - 40;
 		if (editor.editing) {
 			editor.FreeSpan(y, y + height, backbuffer->w, freeLeft, freeRight);
@@ -835,6 +829,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (m_MatchDelayFrames != m_BaseDelayFrames) {
 		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
 	}
+	for (const auto& member: snapshot.members) {
+		if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
+		text += "\n" + FitLine(font, NetPlayerPresentation::Name(member), width - 12) + " / via " + member.connectedRoute;
+	}
 	text += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
 	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
@@ -844,7 +842,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			if (member.cpu) continue;
 			text += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
 			text += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
-			if (member.reclaiming || member.aiHeld) text += member.reclaiming ? " / Rejoining..." : " / held - AI in control";
+			if (member.reclaiming || member.aiHeld || !member.connected) text += " / " + NetPlayerPresentation::State(member);
 		}
 	}
 	if (hostLost) {
@@ -873,20 +871,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// A collapsed span takes the window's top band instead of a zero-width box.
 	const int x = topBand ? std::max(0, (backbuffer->w - width) / 2) :
 	    (editor.editing ? freeLeft + std::max(0, (available - width) / 2) : backbuffer->w - width - c_StatusBoxMargin);
-	int y = topBand ? 2 : (editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
-	if (m_Open) {
-		// The same rule the compact strip follows: an open seats panel owns its rows, so a box crossing
-		// them lifts above it.
-		int panelX, panelTop, panelWidth, panelHeight;
-		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		const int panelBottom = panelTop + panelHeight;
-		if (y < panelBottom && y + height > panelTop) {
-			// Above the panel when that band holds the box, below it when the lower band does.
-			if (panelTop >= height) y = panelTop - height;
-			else if (backbuffer->h - panelBottom >= height) y = panelBottom;
-			else y = std::max(0, panelTop - height);
-		}
-	}
+	int y = topBand ? 2 : (editor.editing && !m_Open ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
+
 	m_NetStatusBox->Move(x, y);
 	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 	m_NetStatus->Move(x + 6, y + 6);
@@ -1205,7 +1191,14 @@ void NetModerationGUI::DrawMatchToasts() {
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	CreateOverlay();
-	const auto visible = ScenarioRunner::GetVisibleNetUiToasts();
+	const auto queued = ScenarioRunner::GetVisibleNetUiToasts();
+	std::vector<ScenarioRunner::NetUiToastRecord> visible;
+	std::vector<size_t> indices;
+	for (size_t index = 0; index < queued.size(); ++index) {
+		if (!ToastStillApplies(queued[index])) continue;
+		visible.push_back(queued[index]);
+		indices.push_back(index);
+	}
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
@@ -1286,12 +1279,18 @@ void NetModerationGUI::DrawMatchToasts() {
 			FrameRecorder::Instance().RecordEvent("handover_toast peer=" + std::to_string(snapshot.localPeerId) + " longest_ms=" + std::to_string(longest) + " text=" + message);
 		}
 	}
-	ScenarioRunner::NoteNetUiToastsDrawn(firstRow, rowCount);
+	if (rowCount) {
+		const size_t first = indices[firstRow], last = indices[firstRow + rowCount - 1];
+		ScenarioRunner::NoteNetUiToastsDrawn(first, last - first + 1);
+	} else if (visible.empty()) {
+		ScenarioRunner::NoteNetUiToastsDrawn(0, queued.size());
+	}
 	t_simRNGOverride = previousRNG;
 }
 
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
 	m_StatusRect = {};
 	m_ChatRect = {};
 	m_RosterRect = {};
@@ -1308,12 +1307,35 @@ void NetModerationGUI::Draw() {
 	} else {
 		DrawRoster(snapshot);
 	}
-	if (m_Open) m_Controls->Draw();
-	// Opening the panel is one of the status widget's triggers, so the status draws over it: a screen too
-	// short for both still owes the player the reading it just asked for.
 	if (inMatch && MatchStatusWanted()) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
+	}
+	if (m_Open) {
+		uint64_t hash = std::hash<std::string>{}(snapshot.serviceState);
+		hash ^= std::hash<std::string>{}(snapshot.statusText) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+		hash ^= std::hash<bool>{}(snapshot.isHost) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+		for (const auto& member: snapshot.members) {
+			hash ^= std::hash<unsigned>{}(member.peerId) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.dropped) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.reclaiming) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<bool>{}(member.connected) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+			hash ^= std::hash<std::string>{}(member.connectedRoute);
+			hash ^= std::hash<std::string>{}(member.statusLine);
+		}
+		const long long nowMs = static_cast<long long>(SDL_GetTicks());
+		const bool changed = hash != m_LastRefreshHash;
+		const bool due = m_LastRefreshMs == 0 || (nowMs - m_LastRefreshMs) >= 100;
+		if (changed || due) {
+			if (changed) {
+				++m_RefreshChangeCount;
+			}
+			m_LastRefreshHash = hash;
+			m_LastRefreshMs = nowMs;
+			++m_RefreshCount;
+			Refresh();
+		}
+		m_Controls->Draw();
 	}
 	if (inMatch) {
 		DrawMatchChat(snapshot);

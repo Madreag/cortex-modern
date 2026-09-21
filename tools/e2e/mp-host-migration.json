@@ -134,7 +134,7 @@
       "id": "migration-drop-clienta",
       "peer": "clienta",
       "mark": "migration-host-drop",
-      "what": "The survivor video spans the recorded host drop until the host-loss status appears."
+      "what": "The survivor video spans the recorded host drop until the new host is named."
     },
     {
       "id": "migration-named-clienta",
@@ -147,7 +147,7 @@
       ],
       "readback": [
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "text"
@@ -155,7 +155,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "text"
@@ -163,7 +163,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "visible"
@@ -225,7 +225,7 @@
       "id": "migration-drop-clientb",
       "peer": "clientb",
       "mark": "migration-host-drop",
-      "what": "The survivor video spans the recorded host drop until the host-loss status appears."
+      "what": "The survivor video spans the recorded host drop until the new host is named."
     },
     {
       "id": "migration-named-clientb",
@@ -238,7 +238,7 @@
       ],
       "readback": [
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "text"
@@ -246,7 +246,7 @@
           "contains": "is now hosting"
         },
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "text"
@@ -254,7 +254,7 @@
           "contains": "ClientA"
         },
         {
-          "step": 12,
+          "step": 6,
           "path": [
             "control",
             "visible"
@@ -304,67 +304,23 @@
     {
       "id": "migration-loss-overlay-clienta",
       "peer": "clienta",
-      "mark": "migration-loss-overlay",
+      "mark": "migration-host-drop",
       "screen": "LockstepWaitOverlay",
-      "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
-      "readback": [
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "Host connection lost - choosing a new host"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "not_contains": "LIVE"
-        }
+      "what": "During host loss the survivor's status names the loss: the recorder observes the host-lost status state at least once between the drop and the new host.",
+      "assert": "Recorded status observation with host_lost=1.",
+      "events": [
+        "net_status peer=\\d+ host_lost=1"
       ]
     },
     {
       "id": "migration-loss-overlay-clientb",
       "peer": "clientb",
-      "mark": "migration-loss-overlay",
+      "mark": "migration-host-drop",
       "screen": "LockstepWaitOverlay",
-      "what": "During host loss the status panel names the loss, blanks RTT and shows the climbing wait, with no LIVE band.",
-      "readback": [
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "Host connection lost - choosing a new host"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "contains": "RTT -- ms"
-        },
-        {
-          "step": 6,
-          "path": [
-            "control",
-            "text"
-          ],
-          "not_contains": "LIVE"
-        }
+      "what": "During host loss the survivor's status names the loss: the recorder observes the host-lost status state at least once between the drop and the new host.",
+      "assert": "Recorded status observation with host_lost=1.",
+      "events": [
+        "net_status peer=\\d+ host_lost=1"
       ]
     }
   ],

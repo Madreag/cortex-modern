@@ -1,8 +1,10 @@
 #include "MainMenuGUI.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
+#include "FrameRecorder.h"
 #include "MenuMan.h"
 #include "ActivityMan.h"
 #include "UInputMan.h"
@@ -195,10 +197,10 @@ static bool IsLoopbackAddress(const std::string& address) {
 /// A seat the roster has not named yet shows the local player their own name, never the internal default.
 static std::string LobbyRowName(const NetLobbyMember& member, const std::string& localName) {
 	if (!member.isLocal || localName.empty()) {
-		return member.displayName;
+		return NetPlayerPresentation::Name(member);
 	}
 	const bool unnamed = member.displayName.empty() || member.displayName == "Client " + std::to_string(member.peerId);
-	return unnamed ? localName : member.displayName;
+	return unnamed ? localName : NetPlayerPresentation::Name(member);
 }
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
@@ -1894,6 +1896,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				}
 			}
 		}
+		if (member && (member->connected || member->dropped || member->reclaiming)) m_HostSeatNameLabels[row]->SetText(NetPlayerPresentation::Name(*member));
 		// The delay column reads the agreed per-sender value; automatic reads "Auto" since each
 		// sender's own link decides its figure there.
 		std::string delay = "--";
@@ -1912,12 +1915,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			state = "CPU / Skill " + std::to_string(m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0].aiSkill);
 		} else {
 			const std::string line = member ? member->statusLine : std::string();
-			if (line.size() >= 5 && line.compare(line.size() - 5, 5, ": left") == 0) {
-				state = "AI in control";
-			} else if (line.find("reconnecting") != std::string::npos) {
-				state = "Reclaiming";
-			} else if (line.find("disconnected") != std::string::npos) {
-				state = "Held";
+			if (member && (member->aiHeld || member->dropped || member->reclaiming || line.ends_with(": left"))) {
+				state = NetPlayerPresentation::State(*member);
 			} else if (member && member->connected) {
 				state = member->ready ? "Ready" : "Not ready";
 				if (member->isLocal) state += " (you)";
@@ -3098,7 +3097,16 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	std::string error;
 	m_MultiplayerJoinRequest = request;
 	m_MultiplayerApplyOffered = !host;
-	if (g_NetMatchService.Start(request, &error)) {
+	const auto start = std::chrono::steady_clock::now();
+	const bool started = g_NetMatchService.Start(request, &error);
+	if (FrameRecorder::Instance().Enabled()) {
+		const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count();
+		const std::string event = "menu_start host=" + std::to_string(host) + " elapsed_us=" + std::to_string(elapsed) +
+		    " budget_us=16667 within_one_frame=" + std::to_string(elapsed <= 16667);
+		FrameRecorder::Instance().RecordEvent(event);
+		System::PrintDiagnosticLine("[video-ui] " + event);
+	}
+	if (started) {
 		m_MultiplayerLandingStatusLabel->SetText(host ? "" : "Joining the host's lobby...");
 		m_ReconnectStatusShown.clear();
 		// A joining peer keeps the landing until the host admits it; the refresh switches the screen
@@ -3321,6 +3329,7 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 }
 
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
+	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 	const bool savingDiagnostics = TelemetryBundle::IsBusy();
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
@@ -3434,8 +3443,15 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyMatchModeLabel->SetText(matchMode);
 	}
 	std::vector<const NetLobbyMember*> visibleMembers;
+	// A kicked or emptied seat stays on the roster under its unseated name ("Client N", "Open" in a
+	// persistent world): it renders like any seat nobody holds yet, and a joiner re-takes it.
+	const bool persistentWorld = g_NetMatchService.GetLobbyMatchConfig().persistentWorld;
+	const auto isOpenSeat = [persistentWorld](const NetLobbyMember& member) {
+		return !member.connected && !member.cpu && !member.isLocal &&
+		       member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
+	};
 	for (const auto& member: snapshot.members) {
-		if (member.connected || member.cpu || member.isLocal) visibleMembers.push_back(&member);
+		if (member.connected || member.cpu || member.isLocal || isOpenSeat(member)) visibleMembers.push_back(&member);
 	}
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
@@ -3459,8 +3475,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
-		lobbyRowName[i] = LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
-		                                           ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
+		// An open seat wears its unseated name, never the remembered name of the player who held it.
+		lobbyRowName[i] = isOpenSeat(member) ? member.displayName
+		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
+		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
 		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
 		// The row drops connection metrics before shortening the seat state.

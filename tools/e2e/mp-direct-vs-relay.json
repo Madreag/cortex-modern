@@ -4,9 +4,8 @@
   "port_base": 49474,
   "size": "960x540",
   "timeout_s": 190,
-  "title": "Direct and relay UI with actual transport proof pending ENGINE 143",
-  "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg.",
-  "capture_policy": "The direct run captures its UI half. Actual route items and the relay run remain blocked by ENGINE 143.",
+  "title": "Direct and relay connections proved by the transport and visible diagnostics",
+  "capture_policy": "Every route item requires visible connected-route diagnostics and the native selected-candidate and RouteAllowed lines. Preferences alone are not route proof.",
   "requires_tokens": [
     "TURN_SERVER",
     "TURN_USER",
@@ -61,7 +60,6 @@
     },
     {
       "name": "relay",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference. GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip; supplied TURN tokens are supported and validated by the driver.",
       "peers": [
         {
           "name": "host",
@@ -112,8 +110,7 @@
             "timeout_s": 90
           }
         }
-      ],
-      "blocker_class": "engine"
+      ]
     }
   ],
   "checklist": [
@@ -135,7 +132,43 @@
       "mark": "direct-mp-play-host",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected direct route while both players act.",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via direct"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
+        "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "direct-candidate-host",
@@ -148,7 +181,39 @@
         "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
         "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via direct"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "direct-connection-client",
@@ -168,7 +233,43 @@
       "mark": "direct-mp-play-client",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected direct route while both players act.",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via direct"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
+        "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "direct-candidate-client",
@@ -181,7 +282,39 @@
         "\\[net-ice\\].*selected.*candidate=.*(host|srflx|prflx)",
         "\\[net-route\\].*RouteAllowed.*route=direct.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via direct"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via direct"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "relay-connection-host",
@@ -201,7 +334,43 @@
       "mark": "relay-mp-play-host",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected relay route while both players act.",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "relay-candidate-host",
@@ -214,7 +383,39 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "relay-connection-client",
@@ -234,7 +435,43 @@
       "mark": "relay-mp-play-client",
       "screen": "game",
       "what": "The diagnostics overlay names the actual connected relay route while both players act.",
-      "blocked_by": "The running diagnostics widget has no transport route control: NetModerationGUI draws RTT/delay/stalls/sim speed/LIVE only. Expose the selected direct/relay route from the connected transport, not the settings preference."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "log_regex": [
+        "\\[net-ice\\].*selected.*candidate=.*relay",
+        "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     },
     {
       "id": "relay-candidate-client",
@@ -247,7 +484,39 @@
         "\\[net-ice\\].*selected.*candidate=.*relay",
         "\\[net-route\\].*RouteAllowed.*route=relay.*allowed=1"
       ],
-      "blocked_by": "GnsTransport::RouteAllowed returns the policy decision without logging it, and the video scenario cannot observe the selected ICE candidate or accepted route. Add transport candidate and RouteAllowed evidence without credentials before capturing this leg. ENGINE 143 remains open on the pinned tip."
+      "readback": [
+        {
+          "step": 4,
+          "path": [
+            "accepted"
+          ],
+          "equals": true
+        },
+        {
+          "step": 4,
+          "path": [
+            "menu_observation"
+          ],
+          "contains": "via relay"
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "visible"
+          ],
+          "equals": true
+        },
+        {
+          "step": 3,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "via relay"
+        }
+      ],
+      "assert": "Visible LabelNetMatchStatus connected-route readback, recorded assert_net_label, and both native transport lines."
     }
   ],
   "directory_port": 49478

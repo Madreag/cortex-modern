@@ -3,12 +3,22 @@
 #include "LuaAdapterDefinitions.h"
 #include "LuabindObjectWrapper.h"
 #include "LuaMan.h"
+#include "SoundSet.h"
+#include "SoundSimulation.h"
+#include "System.h"
 
 #include "lj_obj.h"
 #include "NetGameCommand.h"
 
+#include <algorithm>
 #include <atomic>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <memory>
+#include <sstream>
+#include <vector>
 
 using namespace RTE;
 
@@ -316,6 +326,17 @@ void LuaAdaptersScene::CalculatePathAsync(Scene* luaSelfObject, const luabind::o
 
 void LuaAdaptersAHuman::ReloadFirearms(AHuman* luaSelfObject) {
 	luaSelfObject->ReloadFirearms(false);
+}
+
+float LuaAdaptersAHuman::GetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset) {
+	// 6.x kept one travel speed per SLOW/NORMAL/FAST preset; 7.0 keeps a single travel speed per LimbPath, so every preset maps to the WALK path speed.
+	return luaSelfObject->GetLimbPathByIndex(AHuman::WALK)->GetTravelSpeed();
+}
+
+void LuaAdaptersAHuman::SetLimbPathSpeed(AHuman* luaSelfObject, int speedPreset, float speed) {
+	// 6.x preset speeds applied to the actor's ground movement; both ground layers are updated so the speed survives layer swaps. The Layer enum is private, so the paths are reached by index (foreground at WALK, background one movement-state block later).
+	luaSelfObject->GetLimbPathByIndex(AHuman::WALK)->SetTravelSpeed(speed);
+	luaSelfObject->GetLimbPathByIndex(AHuman::MOVEMENTSTATECOUNT + AHuman::WALK)->SetTravelSpeed(speed);
 }
 
 float LuaAdaptersSceneObject::GetTotalValue(const SceneObject* luaSelfObject, int nativeModule, float foreignMult) {
@@ -653,6 +674,261 @@ bool LuaAdaptersMusicMan::EndDynamicMusic1(MusicMan& musicMan) {
 
 bool LuaAdaptersMusicMan::EndDynamicMusic2(MusicMan& musicMan, bool fadeOutCurrent) {
 	return musicMan.EndDynamicMusic(fadeOutCurrent);
+}
+
+namespace {
+	/// A single pending stream in the 6.x-style raw-file music queue.
+	struct CompatMusicQueueEntry {
+		std::string FilePath;
+		int Loops;
+		float Volume;
+	};
+
+	/// Section type holding the track that is playing now.
+	constexpr const char* c_CompatNowSectionType = "V6CompatNow";
+	/// Section type holding the head of the pending queue.
+	constexpr const char* c_CompatNextSectionType = "V6CompatNext";
+	/// Exit time used for infinitely looping queue entries, so the section never cedes its slot on its own (one day, in ms).
+	constexpr float c_CompatInfiniteExitTime = 86400000.0F;
+	constexpr const char* c_CompatMusicFile = "Base.rte/Music/dBSoundworks/cc2g.ogg";
+
+	std::deque<CompatMusicQueueEntry> s_CompatMusicQueue;
+	CompatMusicQueueEntry s_CompatCurrentEntry {"", 0, -1.0F};
+
+	bool CompatMusicFileExists(const std::string& filePath) {
+		if (filePath.empty()) {
+			return false;
+		}
+		const std::string full = g_PresetMan.GetFullModulePath(filePath);
+		return System::PathExistsCaseSensitive(full) || System::PathExistsCaseSensitive(System::GetWorkingDirectory() + full);
+	}
+
+	/// Builds a MUSIC-bus SoundContainer for one queue entry. Length is read from the loaded sound data, not the caller's simulation domain.
+	SoundContainer MakeCompatMusicContainer(const CompatMusicQueueEntry& entry) {
+		SoundSimulationScope presentation(1, 1, SoundExecutionDomain::Presentation);
+		SoundContainer container;
+		container.SetPresetName("V6CompatMusic");
+		container.SetBusRouting(SoundContainer::BusRouting::MUSIC);
+		container.SetImmobile(true);
+		if (!CompatMusicFileExists(entry.FilePath)) {
+			return container;
+		}
+		container.GetTopLevelSoundSet().AddSound(g_PresetMan.GetFullModulePath(entry.FilePath));
+		container.SetLoopSetting(entry.Loops);
+		if (entry.Volume >= 0.0F) {
+			container.SetVolume(entry.Volume);
+		}
+		float exitTime = c_CompatInfiniteExitTime;
+		if (entry.Loops >= 0) {
+			container.UpdateSoundProperties();
+			std::vector<const SoundData*> flattenedSoundData;
+			container.GetTopLevelSoundSet().GetFlattenedSoundData(flattenedSoundData, false);
+			float length = 0.0F;
+			for (const SoundData* soundData : flattenedSoundData) {
+				if (soundData->SoundObject) {
+					unsigned int lengthMs = 0;
+					soundData->SoundObject->getLength(&lengthMs, FMOD_TIMEUNIT_MS);
+					length = std::max(length, static_cast<float>(lengthMs));
+				}
+			}
+			if (length > 0.0F) {
+				exitTime = length * static_cast<float>(entry.Loops + 1);
+			}
+		}
+		container.SetMusicExitTime(exitTime);
+		return container;
+	}
+
+	DynamicSong MakeCompatSong() {
+		DynamicSong song;
+		song.SetPresetName("V6CompatMusic");
+		DynamicSongSection nowSection;
+		nowSection.SetSectionType(c_CompatNowSectionType);
+		nowSection.AddSoundContainer(MakeCompatMusicContainer(s_CompatCurrentEntry));
+		song.AddSongSection(nowSection);
+		if (!s_CompatMusicQueue.empty()) {
+			DynamicSongSection nextSection;
+			nextSection.SetSectionType(c_CompatNextSectionType);
+			nextSection.AddSoundContainer(MakeCompatMusicContainer(s_CompatMusicQueue.front()));
+			song.AddSongSection(nextSection);
+		}
+		return song;
+	}
+
+	bool CompatSongIsLive() {
+		const std::string& sectionType = g_MusicMan.GetCurrentSongSectionType();
+		return sectionType == c_CompatNowSectionType || sectionType == c_CompatNextSectionType;
+	}
+
+	void ResyncCompatMusicQueue() {
+		if (!s_CompatMusicQueue.empty() && g_MusicMan.GetCurrentSongSectionType() == c_CompatNextSectionType) {
+			s_CompatMusicQueue.pop_front();
+		}
+	}
+
+	void PlayCompatSongNow() {
+		DynamicSong song = MakeCompatSong();
+		g_MusicMan.EndInterruptingMusic();
+		g_MusicMan.PlayDynamicSong(song, c_CompatNowSectionType, true, false, false);
+		if (s_CompatMusicQueue.empty()) {
+			g_MusicMan.EndDynamicMusicAfterCurrent();
+		} else {
+			g_MusicMan.SetNextDynamicSongSection(c_CompatNextSectionType, false, false, false);
+		}
+	}
+}
+
+void RTE::ResetV6CompatMusicState() {
+	s_CompatMusicQueue.clear();
+	s_CompatCurrentEntry = {"", 0, -1.0F};
+}
+
+bool RTE::RunModApiShimsSelfTest() {
+	return LuaAdaptersAudioMan::RunModApiShimsSelfTest();
+}
+
+void LuaAdaptersAudioMan::PlayMusic(AudioMan* luaSelfObject, const std::string& filePath, int loops, float volumeOverrideIfNotMuted) {
+	if (!CompatMusicFileExists(filePath)) {
+		g_ConsoleMan.PrintString("ERROR: AudioMan:PlayMusic could not open \"" + filePath + "\"");
+		return;
+	}
+	ResyncCompatMusicQueue();
+	s_CompatCurrentEntry = {filePath, loops, volumeOverrideIfNotMuted};
+	PlayCompatSongNow();
+}
+
+void LuaAdaptersAudioMan::QueueMusicStream(AudioMan* luaSelfObject, const std::string& filePath) {
+	if (!CompatMusicFileExists(filePath)) {
+		g_ConsoleMan.PrintString("ERROR: AudioMan:QueueMusicStream could not open \"" + filePath + "\"");
+		return;
+	}
+	if (!g_AudioMan.IsMusicPlaying() && !g_MusicMan.IsCompatCarrierPlaying()) {
+		PlayMusic(luaSelfObject, filePath, -1, -1.0F);
+		return;
+	}
+	ResyncCompatMusicQueue();
+	s_CompatMusicQueue.push_back({filePath, -1, -1.0F});
+	if (s_CompatMusicQueue.size() > 1) {
+		return;
+	}
+	DynamicSong song = MakeCompatSong();
+	g_MusicMan.PlayDynamicSong(song, c_CompatNowSectionType, false, false, false);
+	g_MusicMan.SetNextDynamicSongSection(c_CompatNextSectionType, false, false, false);
+}
+
+void LuaAdaptersAudioMan::ClearMusicQueue(AudioMan* luaSelfObject) {
+	s_CompatMusicQueue.clear();
+	if (CompatSongIsLive()) {
+		g_MusicMan.EndDynamicMusicAfterCurrent();
+	}
+}
+
+bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
+	bool passed = true;
+	const auto check = [&passed](const char* label, bool value, const std::string& detail) {
+		passed = passed && value;
+		std::cout << "[mod-api-shims-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
+	};
+
+	PlayMusic(nullptr, "", 0, -1.0F);
+	check("empty_playmusic_does_not_dereference", !g_MusicMan.IsMusicPlaying() && s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
+
+	float localExit = -1.0F;
+	float presentationExit = -1.0F;
+	size_t localCount = 0;
+	size_t presentationCount = 0;
+	{
+		SoundSimulationScope local(1, 1, SoundExecutionDomain::LocalSimulation);
+		SoundContainer localContainer = MakeCompatMusicContainer({c_CompatMusicFile, 0, -1.0F});
+		std::vector<const SoundData*> flattened;
+		localContainer.GetTopLevelSoundSet().GetFlattenedSoundData(flattened, false);
+		localCount = flattened.size();
+		localExit = localContainer.GetMusicExitTime();
+	}
+	{
+		SoundSimulationScope presentation(1, 1, SoundExecutionDomain::Presentation);
+		SoundContainer presentationContainer = MakeCompatMusicContainer({c_CompatMusicFile, 0, -1.0F});
+		std::vector<const SoundData*> flattened;
+		presentationContainer.GetTopLevelSoundSet().GetFlattenedSoundData(flattened, false);
+		presentationCount = flattened.size();
+		presentationExit = presentationContainer.GetMusicExitTime();
+	}
+	check("compat_exit_time_is_domain_independent", localCount == presentationCount && localCount > 0 && localExit == presentationExit && localExit > 0.0F && localExit < c_CompatInfiniteExitTime,
+	      "local_count=" + std::to_string(localCount) + " presentation_count=" + std::to_string(presentationCount) + " local_exit=" + std::to_string(localExit) + " presentation_exit=" + std::to_string(presentationExit));
+
+	float loops0Exit = -1.0F;
+	float loops1Exit = -1.0F;
+	{
+		SoundSimulationScope presentation(1, 1, SoundExecutionDomain::Presentation);
+		SoundContainer loops0 = MakeCompatMusicContainer({c_CompatMusicFile, 0, -1.0F});
+		SoundContainer loops1 = MakeCompatMusicContainer({c_CompatMusicFile, 1, -1.0F});
+		loops0Exit = loops0.GetMusicExitTime();
+		loops1Exit = loops1.GetMusicExitTime();
+	}
+	check("compat_loops_one_plays_twice", loops0Exit > 0.0F && loops1Exit == loops0Exit * 2.0F,
+	      "once_exit=" + std::to_string(loops0Exit) + " loops1_exit=" + std::to_string(loops1Exit));
+
+	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
+	const Entity* registered = g_PresetMan.GetEntityPreset("DynamicSong", "V6CompatMusicQueue");
+	check("playmusic_does_not_register_preset", registered == nullptr, registered ? "non-nil" : "nil");
+
+	g_MusicMan.ExpireCurrentSectionForTest();
+	const bool audioPlaying = g_AudioMan.IsMusicPlaying();
+	const bool musicPlaying = g_MusicMan.IsMusicPlaying();
+	check("end_of_song_clears_both_isplaying", !audioPlaying && !musicPlaying, "AudioMan=" + std::string(audioPlaying ? "true" : "false") + " MusicMan=" + std::string(musicPlaying ? "true" : "false"));
+
+	QueueMusicStream(nullptr, c_CompatMusicFile);
+	check("queue_on_idle_plays", g_MusicMan.IsCompatCarrierPlaying() || g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
+
+	g_MusicMan.ResetMusicState();
+	check("reset_clears_compat_queue", s_CompatMusicQueue.empty() && s_CompatCurrentEntry.FilePath.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
+	QueueMusicStream(nullptr, c_CompatMusicFile);
+	check("queue_after_reset_plays", g_MusicMan.IsCompatCarrierPlaying() || g_MusicMan.IsMusicPlaying() || g_AudioMan.IsMusicPlaying(), "section=" + g_MusicMan.GetCurrentSongSectionType());
+	g_MusicMan.ResetMusicState();
+
+	const float savedMusicVolume = g_AudioMan.GetMusicVolume();
+	g_AudioMan.SetMusicVolume(0.0F);
+	g_MusicMan.ResetMusicState();
+	g_MusicMan.PlayDynamicSong("Generic Ambient Music");
+	const bool volumeZeroPlaying = g_MusicMan.IsMusicPlaying();
+	check("dynamic_song_volume_zero_is_not_playing", !volumeZeroPlaying, "IsMusicPlaying=" + std::string(volumeZeroPlaying ? "true" : "false"));
+	g_AudioMan.SetMusicVolume(savedMusicVolume);
+	g_MusicMan.ResetMusicState();
+
+	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
+	QueueMusicStream(nullptr, c_CompatMusicFile);
+	const size_t queuedBeforeRestore = s_CompatMusicQueue.size();
+	g_MovableMan.SetRestoringSnapshot(true);
+	g_MusicMan.PrepareForActivityStart();
+	const size_t queuedAfterRestore = s_CompatMusicQueue.size();
+	g_MovableMan.SetRestoringSnapshot(false);
+	check("restore_clears_compat_queue", queuedAfterRestore == 0, "queue=" + std::to_string(queuedAfterRestore) + " before=" + std::to_string(queuedBeforeRestore));
+	g_MusicMan.ResetMusicState();
+
+	PlayMusic(nullptr, c_CompatMusicFile, 0, -1.0F);
+	QueueMusicStream(nullptr, "");
+	check("empty_queue_does_not_enqueue", s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
+	QueueMusicStream(nullptr, "no-such-file.ogg");
+	check("bad_path_queue_does_not_enqueue", s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
+	g_MusicMan.ResetMusicState();
+
+	const std::filesystem::path exe(System::GetThisExePathAndName());
+	std::filesystem::path fixture = exe.parent_path() / "tools" / "fixtures" / "mod-api-shims.lua";
+	if (!std::filesystem::exists(fixture)) {
+		fixture = std::filesystem::path(System::GetWorkingDirectory()) / "tools" / "fixtures" / "mod-api-shims.lua";
+	}
+	if (!std::filesystem::exists(fixture)) {
+		check("lua_fixture_present", false, fixture.string());
+	} else {
+		std::ifstream in(fixture);
+		std::ostringstream body;
+		body << in.rdbuf();
+		const int ran = g_LuaMan.GetMasterScriptState().RunScriptString(body.str(), true);
+		check("lua_fixture_ran", ran == 0, "status=" + std::to_string(ran) + " path=" + fixture.string());
+	}
+
+	std::cout << "[mod-api-shims-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }
 
 double LuaAdaptersTimerMan::GetDeltaTimeTicks(const TimerMan& timerMan) {

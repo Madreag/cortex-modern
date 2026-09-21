@@ -13,7 +13,7 @@
     {
       "op": "wait",
       "service": "Running",
-      "elapsed_ms": 10500
+      "sim_at_least": 650
     },
     {
       "op": "key_down",
@@ -100,6 +100,10 @@
     {
       "op": "wait",
       "screen": "Gameplay"
+    },
+    {
+      "op": "signal",
+      "name": "options-complete"
     },
     {
       "op": "wait_file",

@@ -505,6 +505,101 @@
       "probe_steps": [
         7
       ]
+    },
+    {
+      "id": "announced-roster-names",
+      "run": "announced",
+      "peer": "survivor",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The F6 roster names host, leaver and survivor beside their states.",
+      "probe_steps": [
+        9
+      ],
+      "readback": [
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "leaver"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "host"
+        },
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "survivor"
+        }
+      ]
+    },
+    {
+      "id": "announced-roster-state",
+      "run": "announced",
+      "peer": "survivor",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departed row uses the same Left - AI in control phrase as the seat detail.",
+      "probe_steps": [
+        9
+      ],
+      "readback": [
+        {
+          "step": 9,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "Left - AI in control"
+        }
+      ]
+    },
+    {
+      "id": "announced-toast-state",
+      "run": "announced",
+      "peer": "host",
+      "screen": "game",
+      "mark": "survivor-after-leave",
+      "what": "The departure toast names the player and uses Left - AI in control.",
+      "probe_steps": [
+        2
+      ],
+      "readback": [
+        {
+          "step": 2,
+          "path": [
+            "control",
+            "text"
+          ],
+          "contains": "leaver: Left - AI in control"
+        }
+      ]
+    },
+    {
+      "id": "held-survivor-not-held",
+      "run": "held",
+      "peer": "survivor",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        1200
+      ],
+      "what": "The unimpaired survivor keeps playing without being held.",
+      "assert": "No hold for peer 3 in the survivor log.",
+      "forbidden_log_regex": [
+        "hold peer=3 frame=",
+        "PeerHeld:"
+      ]
     }
   ]
 }

@@ -17,4 +17,8 @@ namespace RTE::NetModerationGUIProbe {
 	/// passed. A hold that waits on another peer's probe ends at one of these, so a watchdog that
 	/// times the wait can count from the last one instead of from the start of the hold.
 	uint64_t RendezvousCount();
+
+	/// Whether a loaded probe still has steps to run: a harness teardown waits for it the way a player's
+	/// own pause menu waits for the player.
+	bool Running();
 }

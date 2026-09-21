@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "timeout_ms": 30000,
+  "steps": [
+    {
+      "op": "wait",
+      "service": "Running",
+      "sim_at_least": 120
+    },
+    {
+      "op": "key_down",
+      "key": "F6"
+    },
+    {
+      "op": "key_up",
+      "key": "F6"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450,
+      "panel_open": true
+    },
+    {
+      "op": "menu",
+      "command": "video_mark status-open"
+    },
+    {
+      "op": "menu",
+      "command": "assert_no_overlap BoxNetMatchStatus NetworkSeats"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 450
+    },
+    {
+      "op": "signal",
+      "name": "done"
+    },
+    {
+      "op": "finish"
+    }
+  ]
+}

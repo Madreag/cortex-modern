@@ -17,6 +17,10 @@ from pathlib import Path
 import re
 import sys
 
+SELFTEST_FIXTURES = {
+    "mod-api-shims": ["mod-api-shims.lua"],
+}
+
 SELFTESTS = [
     "controller-frame",
     "net-protocol",
@@ -35,8 +39,16 @@ SELFTESTS = [
     "frame-recorder",
     "float-text",
     "combo-key",
+    "rteerror",
+    "module-version",
+    "ext-validate-version",
+    "path-prefix",
+    "limb-path",
+    "menu-automation",
+    "mod-api-shims",
     "settings-preferences",
     "single-module-harness",
+    "headless-assert-continues",
     "render-window-scripts",
     "text-wrap",
     "save-refusal-diagnosis",
@@ -76,6 +88,8 @@ def sha256_of(path: Path) -> str:
 def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
     """PASS only with exit 0, no timeout, no FATAL, at least one [tag] PASS, no [tag] FAIL, last suite token PASS."""
     fatal = FATAL.findall(stdout or "")
+    if name == "rteerror-selftest":
+        fatal = [line for line in fatal if "RTE Assert (from worker thread)" not in line]
     pass_matches = list(SUITE_PASS.finditer(stdout or ""))
     fail_matches = list(SUITE_FAIL.finditer(stdout or ""))
     pass_lines = [m.group(0) for m in pass_matches]
@@ -159,7 +173,17 @@ def main():
     results = {}
     for name in SELFTESTS:
         case = out / f"{name}-selftest"
-        if name == "single-module-harness":
+        if name == "headless-assert-continues":
+            from test_headless_assert import run_case as assert_case  # noqa: PLC0415
+
+            scored = assert_case(options.repo, case, options.timeout)
+            scored["binary"] = scored.get("exe_sha256")
+        elif name == "ext-validate-version":
+            from test_ext_validate_version import run_case as ext_case  # noqa: PLC0415
+
+            scored = ext_case(options.repo, case, options.timeout)
+            scored["binary"] = scored.get("exe_sha256")
+        elif name == "single-module-harness":
             from test_single_module_harness import run_case, score_detect  # noqa: PLC0415
 
             case_data = run_case(options.repo, case, options.timeout, ["-module", "Tests.rte"])
@@ -172,7 +196,7 @@ def main():
             scored = score_detect(case_data)
             scored["binary"] = case_data.get("exe_sha256")
         else:
-            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout)
+            run = make_run(options.repo, [f"-{name}-selftest"], case, options.timeout, fixtures=SELFTEST_FIXTURES.get(name))
             try:
                 record = run.start().finish()
             finally:

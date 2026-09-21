@@ -1,0 +1,2 @@
+wait_file {PROBE_DIR_host}/done.json 40
+exit
