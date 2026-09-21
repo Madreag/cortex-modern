@@ -360,7 +360,7 @@ namespace RTE::MenuAutomation {
 			std::string kind, text;
 			args >> kind;
 			std::getline(args >> std::ws, text);
-			if (!FrameRecorder::Instance().Enabled() || kind.empty() || text.empty()) return false;
+			if (!FireAssertAllowed() || kind.empty() || text.empty()) return false;
 			ScenarioRunner::PushNetUiToast(kind, text);
 			observation = kind + " " + text;
 			return true;
