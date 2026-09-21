@@ -5021,7 +5021,13 @@ namespace RTE {
 					// can be read at all: the answer needs that handshake's trip on top. The window
 					// buys the frames; this buys the trip, once, and only until its stream is flowing. Only that
 					// peer's own published restart counts here: our park is our machine's work, not its.
-					const uint64_t ramp = 2 * static_cast<uint64_t>(peerStats.pingMs) + peerStats.jitterMs + peerStats.startParkMs;
+					// A seat that returns on a new connection has no samples on it yet and may have published no
+					// restart: ping, jitter and park all read zero and the allowance would be none at all. The
+					// window the round agreed for that peer was sized from its link, so it is the floor.
+					const uint64_t windowMs = static_cast<uint64_t>(std::max<long long>(0, std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)));
+					const uint64_t windowMs = static_cast<uint64_t>(std::max<long long>(0, std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)));
+					const uint64_t ramp = std::max<uint64_t>(windowMs,
+					    2 * static_cast<uint64_t>(peerStats.pingMs) + peerStats.jitterMs + peerStats.startParkMs);
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
 					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
