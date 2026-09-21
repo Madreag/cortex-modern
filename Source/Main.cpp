@@ -8214,9 +8214,7 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-path-prefix-selftest") {
 			return PresetMan::RunPathPrefixSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
-		if (argv[i] != nullptr && std::string(argv[i]) == "-limb-path-selftest") {
-			return AHuman::RunLimbPathTravelSpeedSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
-		}
+		// -limb-path-selftest runs after modules load: AHuman/LimbPath construction needs the entity pools.
 		if (argv[i] != nullptr && std::string(argv[i]) == "-menu-automation-selftest") {
 			return MenuAutomation::RunSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE;
 		}
@@ -8643,6 +8641,9 @@ int main(int argc, char** argv) {
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);
+	}
+	if (ScenarioRunner::GetArgs().limbPathSelfTest) {
+		return ShutDown(AHuman::RunLimbPathTravelSpeedSelfTest() ? 0 : 1);
 	}
 	if (ScenarioRunner::GetArgs().modApiShimsSelfTest) {
 		return ShutDown(LuaAdaptersAudioMan::RunModApiShimsSelfTest() ? 0 : 1);
