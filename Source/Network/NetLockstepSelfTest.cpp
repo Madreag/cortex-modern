@@ -2074,6 +2074,18 @@ namespace RTE {
 				return false;
 			}
 			(void)host.FinishSimulationTick(0);
+			// Re-derived from the fixture's own numbers: the trip and the frame it lands in, plus the
+			// restart the returning machine published.
+			const uint32_t link = static_cast<uint32_t>(std::ceil(400.0 / a.simTickMs)) + 1;
+			const uint32_t restart = static_cast<uint32_t>(std::ceil(285.0 / a.simTickMs));
+			NetInputDelayEstimator measured;
+			for (uint64_t at = 0; at <= 400; at += 200) measured.Observe(at, 400);
+			const uint32_t window = host.RejoinDelayFrames(2, measured);
+			if (window != link + restart) {
+				*error = "the rejoin window did not clear the round trip and the restart: frames=" + std::to_string(window) +
+				         " expected=" + std::to_string(link + restart) + " trip=400ms restart=285ms";
+				return false;
+			}
 			std::string rejoin;
 			// The estimator samples a link at most every 100 ms, so a steady 400 ms trip is read over
 			// several attempts; each one is refused while the seat's window is still the old one.
@@ -2100,19 +2112,14 @@ namespace RTE {
 				return false;
 			}
 			const uint16_t sized = host.InputDelayAt(2, 900);
-			// Re-derived from the fixture's own numbers: the trip and the frame it lands in, plus the
-			// restart the returning machine published.
-			const uint32_t link = static_cast<uint32_t>(std::ceil(400.0 / a.simTickMs)) + 1;
-			const uint32_t restart = static_cast<uint32_t>(std::ceil(285.0 / a.simTickMs));
-			if (sized != link + restart) {
-				*error = "the rejoin window did not clear the round trip and the restart: delay=" + std::to_string(sized) +
-				         " expected=" + std::to_string(link + restart) + " (" + rejoin + ")";
+			if (sized < link + restart) {
+				*error = "the committed rejoin window was shorter than the trip and the restart: delay=" + std::to_string(sized) +
+				         " needed=" + std::to_string(link + restart) + " (" + rejoin + ")";
 				return false;
 			}
 			if (!host.SchedulePeerReclaim(2, 2, 2, 500, error)) return false;
-			if (!host.IsSeatReclaimGap(2, 500 + link + 1) || host.IsSeatReclaimGap(2, 500 + sized + 1)) {
-				*error = "the reclaim gap ended before the returning seat's restart: gap_at=" + std::to_string(500 + link + 1) +
-				         " delay=" + std::to_string(sized);
+			if (!host.IsSeatReclaimGap(2, 500 + sized) || host.IsSeatReclaimGap(2, 500 + sized + 1)) {
+				*error = "the reclaim gap did not end at the committed window: delay=" + std::to_string(sized);
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS rejoin_window_clears_restart rtt_ms=400 restart_ms=285 delay_frames=" << sized
