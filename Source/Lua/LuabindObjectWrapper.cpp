@@ -32,8 +32,15 @@ namespace {
 	struct OwnedDeletion {
 		void* object = nullptr;
 		void (*destructor)(void*) = nullptr;
-		long uniqueID = 0; //!< The sim's identity, read while the object is still alive.
+		//!< The object's MovableObject base, worked out from luabind's class metadata at handover
+		//!< without reading a single sim field. Null for what is not a MovableObject.
+		const RTE::MovableObject* movableObject = nullptr;
+		//!< The order the collectors handed objects over in, for what carries no unique ID. One
+		//!< global counter, so the per-state queue an object sat in never decides anything.
+		uint64_t handoverSerial = 0;
 	};
+
+	std::atomic<uint64_t> s_NextHandoverSerial{0};
 
 	struct SimThreadDeletionQueue {
 		std::mutex mutex;
@@ -77,16 +84,17 @@ namespace {
 		return -1;
 	}
 
-	// A handed-over object's unique ID, read while it is still alive: the drain has to run in one order
-	// on every peer, and by then the queue holds nothing but a pointer. 0 for what is not a MovableObject.
-	long QueuedDeletionKey(lua_State* luaState, luabind::detail::object_rep* object) {
+	// A handed-over object's MovableObject base, or null. Pointer arithmetic over luabind's own class
+	// metadata: nothing of the sim is read here, on the collecting thread. The unique ID itself is read
+	// at the drain, on the sim thread, while the object is still alive.
+	const RTE::MovableObject* QueuedDeletionMovableObject(lua_State* luaState, luabind::detail::object_rep* object) {
 		luabind::detail::class_registry* registry = luabind::detail::class_registry::get_registry(luaState);
 		const luabind::detail::class_rep* movableObject = registry ? registry->find_class(LUABIND_TYPEID(RTE::MovableObject)) : nullptr;
 		const int offset = movableObject ? BaseClassOffset(object->crep(), movableObject) : -1;
 		if (offset < 0 || !object->ptr()) {
-			return 0;
+			return nullptr;
 		}
-		return reinterpret_cast<const RTE::MovableObject*>(static_cast<const char*>(object->ptr()) + offset)->GetUniqueID();
+		return reinterpret_cast<const RTE::MovableObject*>(static_cast<const char*>(object->ptr()) + offset);
 	}
 
 	// __gc for every luabind instance metatable: a Lua-owned engine object collected off the sim thread is handed to it instead of deleted here.
@@ -104,9 +112,10 @@ namespace {
 				const char* held = static_cast<const char*>(object->ptr());
 				const bool separate = held < storage || held > storage + lua_objlen(luaState, -1);
 				if (queue && destructor && separate) {
-					const long uniqueID = QueuedDeletionKey(luaState, object);
+					const RTE::MovableObject* asMovableObject = QueuedDeletionMovableObject(luaState, object);
+					const uint64_t serial = s_NextHandoverSerial.fetch_add(1, std::memory_order_relaxed);
 					std::lock_guard<std::mutex> lock(queue->mutex);
-					queue->pending.push_back({object->ptr(), destructor, uniqueID});
+					queue->pending.push_back({object->ptr(), destructor, asMovableObject, serial});
 					object->set_flags(object->flags() & ~luabind::detail::object_rep::owner);
 				} else {
 					++s_OffSimThreadDeletions;
@@ -167,10 +176,26 @@ void LuabindObjectWrapper::ApplyQueuedEntityDeletions() {
 		pending.insert(pending.end(), queue->pending.begin(), queue->pending.end());
 		queue->pending.clear();
 	}
-	// Stable, so what carries no unique ID keeps the order it was handed over in.
-	std::stable_sort(pending.begin(), pending.end(), [](const OwnedDeletion& lhs, const OwnedDeletion& rhs) { return lhs.uniqueID < rhs.uniqueID; });
-	for (const auto& [object, destructor, uniqueID]: pending) {
-		destructor(object);
+	// Every key is read here, on the sim thread, with the object still alive: the sim's unique ID where
+	// there is one, the handover serial for the rest. Both are counts of the world, never of the queues.
+	struct KeyedDeletion {
+		long uniqueID = 0;
+		uint64_t handoverSerial = 0;
+		OwnedDeletion entry;
+	};
+	std::vector<KeyedDeletion> keyed;
+	keyed.reserve(pending.size());
+	for (const OwnedDeletion& entry: pending) {
+		keyed.push_back({entry.movableObject ? entry.movableObject->GetUniqueID() : 0, entry.handoverSerial, entry});
+	}
+	std::sort(keyed.begin(), keyed.end(), [](const KeyedDeletion& lhs, const KeyedDeletion& rhs) {
+		if (lhs.uniqueID != rhs.uniqueID) {
+			return lhs.uniqueID < rhs.uniqueID;
+		}
+		return lhs.handoverSerial < rhs.handoverSerial;
+	});
+	for (const KeyedDeletion& keyedEntry: keyed) {
+		keyedEntry.entry.destructor(keyedEntry.entry.object);
 		++(s_OnSimThread ? s_SimThreadDeletions : s_OffSimThreadDeletions);
 	}
 }
@@ -178,16 +203,29 @@ void LuabindObjectWrapper::ApplyQueuedEntityDeletions() {
 namespace {
 	std::vector<long> s_QueuedDeletionSelfTestOrder;
 
-	// Stands in for a handed-over object's destructor: records which one ran, and deletes nothing.
+	// Stands in for a handed-over object's destructor: records which one ran, and deletes nothing. The
+	// pointer it is handed is the object, so the row reads the same identity the drain sorted on.
 	void RecordQueuedDeletionSelfTestOrder(void* object) {
-		s_QueuedDeletionSelfTestOrder.push_back(static_cast<long>(reinterpret_cast<intptr_t>(object)));
+		s_QueuedDeletionSelfTestOrder.push_back(static_cast<RTE::MovableObject*>(object)->GetUniqueID());
 	}
 } // namespace
 
 std::string LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(int stateCount) {
-	// Eight objects whose unique-ID order is not their queue order, spread over the states the way the
-	// collector spreads them: the drain order must come out the same however many queues there are.
+	// Eight real objects whose unique-ID order is not their queue order, spread over the states the way
+	// the collector spreads them: the drain order must come out the same however many queues there are,
+	// and the key has to be read here, at the drain, off the object rather than stored at handover.
 	constexpr int c_Objects = 8;
+	const long savedCounter = RTE::MovableObject::GetUniqueIDCounter();
+	std::vector<std::unique_ptr<RTE::MOPixel>> objects;
+	objects.reserve(c_Objects);
+	for (int object = 0; object < c_Objects; ++object) {
+		auto created = std::make_unique<RTE::MOPixel>();
+		if (created->Create() < 0) {
+			return "";
+		}
+		objects.push_back(std::move(created));
+	}
+	const long firstUniqueID = objects.front()->GetUniqueID();
 	std::vector<std::unique_ptr<SimThreadDeletionQueue>> saved;
 	{
 		std::lock_guard<std::mutex> lock(s_QueuesMutex);
@@ -198,8 +236,9 @@ std::string LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(int stateCount)
 		}
 	}
 	for (int object = 0; object < c_Objects; ++object) {
-		const long uniqueID = c_Objects - object;
-		s_Queues[static_cast<size_t>(object % stateCount)]->pending.push_back({reinterpret_cast<void*>(static_cast<intptr_t>(uniqueID)), &RecordQueuedDeletionSelfTestOrder, uniqueID});
+		// Handed over highest unique ID first, and spread over the queues by the state count.
+		RTE::MOPixel* handed = objects[static_cast<size_t>(c_Objects - 1 - object)].get();
+		s_Queues[static_cast<size_t>(object % stateCount)]->pending.push_back({handed, &RecordQueuedDeletionSelfTestOrder, handed, static_cast<uint64_t>(object)});
 	}
 	s_QueuedDeletionSelfTestOrder.clear();
 	const uint64_t savedSimThreadDeletions = s_SimThreadDeletions.load();
@@ -209,13 +248,16 @@ std::string LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(int stateCount)
 	s_OffSimThreadDeletions.store(savedOffSimThreadDeletions);
 	std::string order;
 	for (long uniqueID: s_QueuedDeletionSelfTestOrder) {
-		order += (order.empty() ? "" : ",") + std::to_string(uniqueID);
+		// Named 1..8 by creation, so the row reads the same however many objects the run made before it.
+		order += (order.empty() ? "" : ",") + std::to_string(uniqueID - firstUniqueID + 1);
 	}
 	s_QueuedDeletionSelfTestOrder.clear();
 	{
 		std::lock_guard<std::mutex> lock(s_QueuesMutex);
 		s_Queues.swap(saved);
 	}
+	objects.clear();
+	RTE::MovableObject::PinUniqueIDCounter(savedCounter);
 	return order;
 }
 
