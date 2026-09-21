@@ -405,6 +405,8 @@ namespace RTE {
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+		// Service matches wait for every peer's measured activity startup before the agreed first frame.
+		bool requirePublishedStart = false;
 	};
 
 	enum class NetHostMigrationPhase : uint8_t {
@@ -838,6 +840,7 @@ namespace RTE {
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
+		bool HasReceivedAllRemoteStarts() const { return AllRemoteStartsReceived(); }
 		bool IsFailed() const { return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
@@ -1184,6 +1187,8 @@ namespace RTE {
 		uint64_t m_ConsumerWaitStartMs = 0;
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
+		bool m_RequirePublishedStart = false;
+		bool m_StartWaitAnnounced = false;
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;

@@ -63,6 +63,7 @@ extern "C" {
 #undef LoadBitmap
 
 #include <atomic>
+#include <algorithm>
 #include <cmath>
 #include <charconv>
 #include <cstdlib>
@@ -6684,7 +6685,7 @@ static std::string LuaStateTickHash() {
 	return found == result.per_subsystem.end() ? std::string("-") : SimChecksum::HashHex(found->second);
 }
 
-static bool RunThreadedScriptWriteHashSelfTest() {
+static bool RunThreadedScriptWriteHashSelfTestForCurrentStates(std::string* hashOut) {
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
 	if (states.empty()) {
 		std::cout << "[script-graph-selftest] FAIL lua_state_sees_threaded_script_writes no threaded Lua states" << std::endl;
@@ -6735,7 +6736,48 @@ static bool RunThreadedScriptWriteHashSelfTest() {
 	const bool layoutFree = single == spread;
 	std::cout << "[script-graph-selftest] " << (seen ? "PASS" : "FAIL") << " lua_state_sees_threaded_script_writes states=" << states.size() << " before=" << before << " after=" << spread << std::endl;
 	std::cout << "[script-graph-selftest] " << (layoutFree ? "PASS" : "FAIL") << " lua_state_same_writes_hash_the_same_on_one_state_and_spread states=" << states.size() << " one_state=" << single << " spread=" << spread << std::endl;
+	if (hashOut) *hashOut = spread;
 	return seen && layoutFree;
+}
+
+bool LuaMan::RunThreadedScriptWriteHashSelfTest() {
+	return RunThreadedScriptWriteHashSelfTestForCurrentStates(nullptr);
+}
+
+bool LuaMan::RunThreadedScriptWriteHashSelfTestTwoCounts() {
+	const auto hasLiveScriptObjects = [](const LuaStateWrapper& state) {
+		return !state.GetRegisteredMOs().empty() || !state.GetPendingRegisteredMOs().empty();
+	};
+	if (g_MovableMan.GetMOIDCount() != 0 || hasLiveScriptObjects(m_MasterScriptState) || std::any_of(m_ScriptStates.begin(), m_ScriptStates.end(), hasLiveScriptObjects)) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash live movable/script objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+	WaitForAsyncGarbageCollection();
+
+	LuaStatesArray savedStates;
+	savedStates.swap(m_ScriptStates);
+	const int savedCursor = m_LastAssignedLuaState;
+	std::array<std::string, 2> hashes;
+	const std::array<int, 2> counts{4, 32};
+	bool passed = true;
+	for (size_t countIndex = 0; countIndex < counts.size(); ++countIndex) {
+		LuaStatesArray replacement(static_cast<size_t>(counts[countIndex]));
+		m_ScriptStates.swap(replacement);
+		for (LuaStateWrapper& state: m_ScriptStates) state.Initialize();
+		m_LastAssignedLuaState = 0;
+		passed = RunThreadedScriptWriteHashSelfTestForCurrentStates(&hashes[countIndex]) && passed;
+		m_ScriptStates.swap(replacement);
+	}
+	m_ScriptStates.swap(savedStates);
+	m_LastAssignedLuaState = savedCursor;
+
+	const bool equal = passed && hashes[0] == hashes[1];
+	if (equal) {
+		std::cout << "[script-graph-selftest] PASS lua_state_two_count_hash states=4,32 hash=" << hashes[0] << std::endl;
+	} else {
+		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash states=4,32 hash4=" << hashes[0] << " hash32=" << hashes[1] << std::endl;
+	}
+	return equal;
 }
 
 static bool RunTickEndCollectionSelfTest() {
@@ -6897,6 +6939,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
+	const bool threadedWritesTwoCounts = RunThreadedScriptWriteHashSelfTestTwoCounts();
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
 	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
@@ -6906,7 +6949,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {

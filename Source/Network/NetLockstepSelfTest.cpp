@@ -1872,6 +1872,51 @@ namespace RTE {
 			return play(48898, 0x9A0C, 250, 0, 300, error);
 		}
 
+		bool TestFirstStartWaitsForPublishedStartup(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A0D, 1, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A0D, 8, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 28;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.peerInputDelayFrames = clientConfig.peerInputDelayFrames = {{1, 1}, {2, 8}};
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0D);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48899, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.DeferStopsToTickBoundary(); client.DeferStopsToTickBoundary();
+			host.NoteLocalStartPark(1000);
+			for (uint64_t now = 0; now < 200; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+				if (host.IsRunning() || client.IsRunning() || host.GetStats().peers.at(2).holds != 0) {
+					*error = "a starting peer was judged before its published startup: running=" + std::to_string(host.IsRunning()) +
+					         " holds=" + std::to_string(host.GetStats().peers.at(2).holds);
+					return false;
+				}
+			}
+			client.NoteLocalStartPark(200);
+			for (uint64_t now = 200; now < 500 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const uint64_t expectedAgreedFrame = 1 + static_cast<uint64_t>(std::ceil(1000.0 / hostConfig.simTickMs));
+			if (!host.IsRunning() || !client.IsRunning() || host.GetStats().peers.at(2).startParkMs != 200 ||
+			    host.GetStats().peers.at(2).holds != 0 || host.GetStats().effectiveStartFrame < expectedAgreedFrame) {
+				*error = std::string("the agreed first frame did not include the slowest published startup: state=") + NetLockstepCoordinator::StateName(host.GetState()) +
+				         " effective=" + std::to_string(host.GetStats().effectiveStartFrame) + " expected_at_least=" + std::to_string(expectedAgreedFrame) +
+				         " peer_start_ms=" + std::to_string(host.GetStats().peers.at(2).startParkMs) +
+				         " holds=" + std::to_string(host.GetStats().peers.at(2).holds);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS first_start_waits_for_published_startup startup_ms=1000 peer_start_ms=200 agreed_frame_at_least="
+			          << expectedAgreedFrame << std::endl;
+			return true;
+		}
+
 		bool TestTimingAcknowledgementLossIsBounded(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -16378,6 +16423,14 @@ namespace RTE {
 		return passed ? 0 : 1;
 	}
 
+	int NetLockstepSelfTest::RunFirstStart() {
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		std::string error;
+		const bool passed = TestFirstStartWaitsForPublishedStartup(&error);
+		std::cout << "[net-lockstep-first-start-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
+		return passed ? 0 : 1;
+	}
+
 	int NetLockstepSelfTest::RunHoldHeartbeat() {
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
 		std::string error;
@@ -16471,6 +16524,7 @@ namespace RTE {
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
 		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
+		    !TestFirstStartWaitsForPublishedStartup(&error) ||
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||

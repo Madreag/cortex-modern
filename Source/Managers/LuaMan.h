@@ -535,6 +535,13 @@ namespace RTE {
 		/// Runs the script graph's contract tests in the master state and prints their lines; true when all pass.
 		bool RunScriptGraphSelfTest();
 
+		/// Runs the threaded-write fixture against the currently initialized state set.
+		bool RunThreadedScriptWriteHashSelfTest();
+
+		/// Runs the same fixture in fresh four-state and 32-state sets, then compares the hashes.
+		/// This is a self-test only; it refuses to replace a set that owns live script objects.
+		bool RunThreadedScriptWriteHashSelfTestTwoCounts();
+
 		/// Gets the current thread lua state override that new objects created will be assigned to.
 		/// @return The current lua state to force objects to be assigned to.
 		LuaStateWrapper* GetThreadLuaStateOverride() const;
