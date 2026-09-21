@@ -2334,7 +2334,16 @@ static std::string ResyncSaveName() {
 		m_Coordinator->SetSeatStateSource(&NetMatchService::QuerySeatState, this);
 		// The lockstep wait parks the sim thread; without this the plane could not answer a leave or a
 		// reclaim while the round waits on the very peer that sent it.
-		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); });
+		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); }, [this] {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_Coordinator) return false;
+			const uint64_t completed = m_Coordinator->GetResumeFrame();
+			for (const auto& session: m_WorldJoin.Sessions()) {
+				if ((session.phase == NetWorldJoinPhase::SnapshotTransfer || session.phase == NetWorldJoinPhase::CatchingUp) &&
+				    session.acknowledgedThrough + 1 < completed) return true;
+			}
+			return false;
+		});
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.

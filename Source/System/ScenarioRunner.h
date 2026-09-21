@@ -301,7 +301,7 @@ namespace RTE {
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.
-		static void SetSessionPump(std::function<void()> pump);
+		static void SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail = {});
 		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.
