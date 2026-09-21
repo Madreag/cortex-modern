@@ -1364,6 +1364,19 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(refused && m_SaveRefusalRecords.size() == 1 && live.kind == "autosave" && live.objectClass.empty() && live.problem == expectedProblem &&
 	          live.path == expectedPath && live.scriptFile == "mod_failure_continuation.lua" && live.functionName == "Update" && live.lastSegment == "transactionOwner",
 	      "plant_invalid", hasLive ? live.problem : "no refusal");
+	// The frozen image refuses the same value with the same words, from the writer's walk of the copy.
+	{
+		CheckpointText frozenText;
+		std::vector<std::string> frozenProblems, deferred;
+		const bool frozenCaptured = state.CaptureScriptGraph(frozenText, frozenProblems, true);
+		try {
+			if (frozenCaptured) std::async(std::launch::async, [frozenText] { return frozenText.Text(); }).get();
+		} catch (const ScriptGraphRefusal& refusal) {
+			deferred = refusal.problems;
+		}
+		check(frozenCaptured && frozenProblems.empty() && deferred.size() == 1 && deferred.front() == expectedProblem, "frozen_image_refuses_identically",
+		      !deferred.empty() ? deferred.front() : (frozenProblems.empty() ? "no refusal" : frozenProblems.front()));
+	}
 	check(refused && hasLive && live.playerLine == expectedPlayerLine && screen == expectedPlayerLine, "autosave_ui", screen);
 	std::string consoleDetail;
 	if (!consoleKept) {
