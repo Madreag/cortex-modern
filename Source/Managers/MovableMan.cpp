@@ -4848,7 +4848,9 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 			g_LuaMan.SetThreadLuaStateOverride(&luaState);
 			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
-				if (ValidMO(mo->GetRootParent()) && mo->HasRequestedSyncedUpdate()) {
+				// The request flag alone, as the threaded loop has always had it: the master pass owns
+				// the ValidMO rule, and a threaded object that asked for a SyncedUpdate still gets one.
+				if (mo->HasRequestedSyncedUpdate()) {
 					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 					mo->ResetRequestedSyncedUpdateFlag();
 				}
@@ -4893,7 +4895,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 			currentState = cursor.state;
 		}
 		MovableObject* mo = next.entry.object;
-		if (ValidMO(mo->GetRootParent()) && mo->HasRequestedSyncedUpdate()) {
+		if (mo->HasRequestedSyncedUpdate()) {
 			mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
 			mo->ResetRequestedSyncedUpdateFlag();
 		}
