@@ -4939,7 +4939,7 @@ namespace RTE {
 				// the start message's own trip and each peer's activity restart, and the sender's delay
 				// window is the budget that fill was agreed to take. The window is the few frames from its
 				// own start; after them it is judged like any other.
-				if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
+				if (!m_PeerAdmissions.contains(peer) && (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks)) {
 					// Our own longest park is the start work this machine did; a peer that has not produced
 					// yet is doing the same, so it is allowed as much before its silence means anything.
 					const uint64_t park = std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
@@ -5216,7 +5216,7 @@ namespace RTE {
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
 					// A peer still filling its pipeline owes its delay window before it counts as silent, and a
 					// peer still starting cannot acknowledge anything: its own start work is part of the ramp.
-					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) ? 0 :
+					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer) ? 0 :
 					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
 					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
