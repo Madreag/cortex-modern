@@ -4940,6 +4940,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				break;
 			}
 		}
+		for (LuaStateWrapper& state: states) state.Update();
 
 		const auto run = [&](bool globalOrder) {
 			context.order.clear();
