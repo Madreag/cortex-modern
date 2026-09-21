@@ -6130,7 +6130,7 @@ static std::string ResyncSaveName() {
 			if (session->GetRejectReason() == NetRejectReason::ParticipantRemoved) return "The host removed you from this session";
 			if (session->GetRejectReason() == NetRejectReason::ParticipantBanned) return session->BuildRejectText();
 			if (session->GetRejectSummary() == "Match roster refused") return "Match roster refused";
-			return session->BuildPlayerRefusalText();
+			if (!noDirectRoute && !relayFailed) return session->BuildPlayerRefusalText();
 		}
 		if (relayFailed) return "Relay route failed (TURN): check the relay or forward the host's UDP port";
 		return noDirectRoute ? "No direct route (NAT): forward the host's UDP port or use LAN" : "Network setup failed";
