@@ -3,6 +3,7 @@
 #include "NetIdentity.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
+#include "NetDirectoryCodec.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
@@ -355,6 +356,23 @@ namespace RTE {
 				*error = "the Lua state count stopped being carried in the manifest";
 				return false;
 			}
+			NetDirectorySessionRow row;
+			row.networkProtocolVersion = four.networkProtocolVersion;
+			row.lockstepCodecVersion = four.lockstepCodecVersion;
+			row.controllerFrameVersion = four.controllerFrameVersion;
+			row.sessionIdentityHash = NetIdentity::HashHex(identityThirtyTwo);
+			row.moduleManifestHash = NetIdentity::HashHex(manifestThirtyTwo.moduleManifestHash);
+			NetDirectoryLocalIdentity local;
+			local.networkProtocolVersion = thirtyTwo.networkProtocolVersion;
+			local.lockstepCodecVersion = thirtyTwo.lockstepCodecVersion;
+			local.controllerFrameVersion = thirtyTwo.controllerFrameVersion;
+			local.sessionIdentityHash = NetIdentity::HashHex(identityFour);
+			local.moduleManifestHash = NetIdentity::HashHex(manifestFour.moduleManifestHash);
+			std::string joinReason;
+			if (!NetDirectoryCodec::IsJoinable(row, local, &joinReason)) {
+				*error = "4 and 32 Lua-state identities are not joinable: " + joinReason;
+				return false;
+			}
 
 			// The identity must still move for the config fields the sim does depend on.
 			NetIdentityDeterministicConfig slowerAi = four;
@@ -379,7 +397,7 @@ namespace RTE {
 				*error = "session_identity_hash stopped reacting to session_rules_hash";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] PASS lua state count leaves identity: 4 and 32 states join and match hash="
+			std::cout << "[net-identity-selftest] PASS lua state count leaves identity: 4 and 32 states join and match ValidateHostHello/IsJoinable inputs hash="
 			          << NetIdentity::HashHex(configFour) << std::endl;
 			return true;
 		}
