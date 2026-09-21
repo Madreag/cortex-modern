@@ -66,8 +66,13 @@ namespace RTE {
 		/// @param stateIndex The state's LuaMan index, which fixes its place in the drain order.
 		static void InstallSimThreadDeletion(lua_State* luaState, int stateIndex);
 
-		/// Deletes what the collecting threads handed over, state by state in index order and in finalizer order within a state.
+		/// Deletes what the collecting threads handed over, in the sim's unique-ID order across every state's queue.
 		static void ApplyQueuedEntityDeletions();
+
+		/// Drains a synthetic queue set of the given width and reports the order the drain ran, for the self-test.
+		/// @param stateCount How many per-state queues the synthetic set is spread over.
+		/// @return The drained keys, in the order their destructors ran.
+		static std::string RunQueuedDeletionOrderSelfTest(int stateCount);
 
 		/// The number of Lua-owned engine objects destructed on the sim thread.
 		static uint64_t SimThreadDeletionCount();
