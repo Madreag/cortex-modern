@@ -8371,27 +8371,27 @@ namespace RTE {
 	}
 
 	// The menu-loop arm: the rematch lobby a completed match leaves is the screen its peers stand in,
-	// and it draws the same surfaces with no activity at all. The pump the lobby still owes is the arm's
-	// match half; the lobby menu being up is its menu half - title and settings never draw them.
+	// and it draws the same surfaces with no activity at all. The lobby still standing on this peer is
+	// the arm's match half; the lobby menu being up is its menu half - title and settings never draw them.
 	bool TestPostMatchLobbySurfacesDraw(std::string* error) {
 		const auto say = [](bool drawn) { return drawn ? "drawn" : "gone"; };
-		// Completed, no activity: the pair the menu loop cannot supply is the pump and the lobby menu.
-		const auto gate = [](bool pump, bool lobbyMenu) {
-			return NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true, false, pump, lobbyMenu);
+		// Completed, no activity: the pair the menu loop cannot supply is the lobby's standing and its menu.
+		const auto gate = [](bool postMatchLobby, bool lobbyMenu) {
+			return NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true, false, postMatchLobby, lobbyMenu);
 		};
 		if (!gate(true, true)) {
 			*error = "the completed match's lobby surfaces read " + std::string(say(gate(true, true))) +
-			         ": pump=1 lobby_menu=1 ended=1 activity_in_match=0";
+			         ": post_match_lobby=1 lobby_menu=1 ended=1 activity_in_match=0";
 			return false;
 		}
 		if (gate(false, true)) {
-			*error = "a lobby with no pump owed read " + std::string(say(gate(false, true))) +
-			         ": pump=0 lobby_menu=1 ended=1 activity_in_match=0";
+			*error = "a lobby the peer does not stand in read " + std::string(say(gate(false, true))) +
+			         ": post_match_lobby=0 lobby_menu=1 ended=1 activity_in_match=0";
 			return false;
 		}
 		if (gate(true, false)) {
-			*error = "the pump on the title or settings screen read " + std::string(say(gate(true, false))) +
-			         ": pump=1 lobby_menu=0 ended=1 activity_in_match=0";
+			*error = "the standing lobby on the title or settings screen read " + std::string(say(gate(true, false))) +
+			         ": post_match_lobby=1 lobby_menu=0 ended=1 activity_in_match=0";
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS overlay: the menu-loop arm draws the completed match's lobby surfaces" << std::endl;

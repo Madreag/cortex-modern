@@ -429,9 +429,9 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
-bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool completedLobbyPump, bool lobbyMenuActive) {
+bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool postMatchLobby, bool lobbyMenuActive) {
 	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch) ||
-	    (completedLobbyPump && lobbyMenuActive);
+	    (postMatchLobby && lobbyMenuActive);
 }
 
 namespace {
@@ -442,6 +442,15 @@ namespace {
 		const MainMenuGUI* mainMenu = g_MenuMan.GetMainMenu();
 		return g_MenuMan.GetIsInMenuScreen() && g_MenuMan.IsMainMenuInteractive() && mainMenu &&
 		    mainMenu->AutomationActiveScreenName() == "MultiplayerScreen";
+	}
+
+	/// The finished match's lobby on this peer: owed its pump while the peers settle, then standing on
+	/// the snapshot's own playedAMatch mark until the peer leaves or relaunches. The pump alone cannot
+	/// say it - its marker clears the moment the lobby seats, and on a Failed landing at once.
+	bool PostMatchLobbyAlive() {
+		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+		return g_NetMatchService.NeedsCompletedLobbyPump() ||
+		    (snapshot.playedAMatch && snapshot.active && !snapshot.leftMatch);
 	}
 
 	/// The lobby screen's box is the one column the menu-loop surfaces lay out beside - the same rule
@@ -457,7 +466,7 @@ namespace {
 }
 
 bool NetModerationGUI::PostMatchLobbySurfaces() {
-	return g_NetMatchService.NeedsCompletedLobbyPump() && LobbyMenuUp();
+	return LobbyMenuUp() && PostMatchLobbyAlive();
 }
 
 bool NetModerationGUI::ActivityInMatch() {
@@ -989,7 +998,7 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
 	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(),
 	    snapshot.serviceState == "Completed" && ActivityInMatch(), ActivityInMatch(),
-	    g_NetMatchService.NeedsCompletedLobbyPump(), LobbyMenuUp());
+	    PostMatchLobbyAlive(), LobbyMenuUp());
 	if (!inMatch) {
 		m_MatchChatLines.clear();
 		if (m_ChatEntryOpen) {
@@ -1049,7 +1058,8 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	const SDL_Scancode chatKey = ChatScancode();
-	const bool keyChat = !m_ChatEntryOpen && !consoleOpen && g_UInputMan.KeyPressed(chatKey);
+	// In the lobby the lobby's own chat box is the entry; the overlay's would only steal its keys.
+	const bool keyChat = !m_ChatEntryOpen && !consoleOpen && !PostMatchLobbySurfaces() && g_UInputMan.KeyPressed(chatKey);
 	if ((scriptChat || keyChat) && !m_ChatKeysHeld && !m_ChatEntryOpen && !consoleOpen) {
 		CreateOverlay();
 		m_ChatEntryOpen = true;
@@ -1070,7 +1080,8 @@ void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
 
 	if (!m_ChatEntryOpen) return;
 
-	if (g_UInputMan.KeyPressed(SDL_SCANCODE_ESCAPE)) {
+	// An entry that outlived its match holds the lobby's keys hostage; it closes the same way Escape does.
+	if (g_UInputMan.KeyPressed(SDL_SCANCODE_ESCAPE) || PostMatchLobbySurfaces()) {
 		m_ChatEntryOpen = false;
 		if (m_MatchChatInput) {
 			m_MatchChatInput->SetText("");
@@ -1387,7 +1398,7 @@ void NetModerationGUI::Draw() {
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
 	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch(),
-	    g_NetMatchService.NeedsCompletedLobbyPump(), LobbyMenuUp());
+	    PostMatchLobbyAlive(), LobbyMenuUp());
 	if (inMatch) {
 		CreateOverlay();
 	} else {
