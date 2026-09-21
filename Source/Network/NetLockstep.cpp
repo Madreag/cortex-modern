@@ -4636,6 +4636,33 @@ namespace RTE {
 		return true;
 	}
 
+	void NetLockstepCoordinator::NoteSeatReclaimed(uint8_t peerId) {
+		// The seat is back. What it waited while it was away is the round's record, not the reading the
+		// surfaces owe the player from here on.
+		auto& stats = m_Stats.peers[peerId];
+		stats.waitsSinceReclaim = 0;
+		stats.longestWaitMsSinceReclaim = 0;
+		if (peerId != m_Config.localPeerId) return;
+		++m_LocalSeatReclaims;
+		// The lateness that named this machine slow was measured before the seat came back, against a
+		// production baseline that belongs to the round we left.
+		m_Stats.consecutiveLateInputs = 0;
+		m_Stats.localComputeDebtMs = 0;
+		m_Stats.localProductionLateMs = 0;
+		m_Stats.localMachineSlow = false;
+		m_ProductionBaseFrame.reset();
+	}
+
+	uint32_t NetLockstepCoordinator::WaitsSinceReclaim(uint8_t peerId) const {
+		const auto peer = m_Stats.peers.find(peerId);
+		return peer == m_Stats.peers.end() ? 0 : peer->second.waitsSinceReclaim;
+	}
+
+	uint64_t NetLockstepCoordinator::LongestWaitMsSinceReclaim(uint8_t peerId) const {
+		const auto peer = m_Stats.peers.find(peerId);
+		return peer == m_Stats.peers.end() ? 0 : peer->second.longestWaitMsSinceReclaim;
+	}
+
 	uint16_t NetLockstepCoordinator::InputDelayAt(uint8_t peerId, uint64_t producedFrame) const {
 		const auto peer = m_DelayChanges.find(peerId);
 		if (peer != m_DelayChanges.end()) {
@@ -5048,8 +5075,9 @@ namespace RTE {
 			if (!awaitingAck && (!IsRemoteRequiredForFrame(peer, frame) || (remote != m_RemoteFrames.end() && remote->second.contains(peer)))) continue;
 			missing.push_back(peer);
 			auto& stats = m_Stats.peers[peer];
-			if (first) ++stats.waits;
+			if (first) { ++stats.waits; ++stats.waitsSinceReclaim; }
 			stats.longestWaitMs = std::max(stats.longestWaitMs, elapsed);
+			stats.longestWaitMsSinceReclaim = std::max(stats.longestWaitMsSinceReclaim, elapsed);
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
 		const uint64_t firstMissing = m_FirstMissingFrame == frame ? std::min(m_FirstMissingMs, m_ConsumerWaitStartMs) : m_ConsumerWaitStartMs;
@@ -6493,6 +6521,7 @@ namespace RTE {
 				m_PeerAdmissions[reclaim->peerId] = {outFrame.frame, reclaim->delayFrames};
 				outFrame.reclaimedPeerIds.push_back(reclaim->peerId);
 				++m_Stats.peers[reclaim->peerId].rejoins;
+				NoteSeatReclaimed(reclaim->peerId);
 			}
 		}
 		for (const auto& [peer, frame]: m_AiHeldSeats) {

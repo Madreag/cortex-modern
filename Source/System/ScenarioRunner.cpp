@@ -818,6 +818,19 @@ namespace RTE {
 		s_NetUiToasts.clear();
 	}
 
+	void ScenarioRunner::NoteLocalSeatReclaimed() {
+		// The rejoin is done: the held banner and the slow-machine notice it stood beside describe a
+		// state this peer has left, and a toast never drawn while the round was stopped has no lifetime
+		// to run out.
+		std::erase_if(s_NetUiToasts, [](const NetUiToast& toast) { return toast.record.kind == "seat_held" || toast.record.kind == "slow_machine"; });
+		s_SlowMachineNoticeUntilMs = 0;
+		s_SlowMachineLastNoticeMs.reset();
+	}
+
+	uint32_t ScenarioRunner::GetLockstepSeatReclaimEpoch() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->LocalSeatReclaims() : 0;
+	}
+
 	bool ScenarioRunner::IsLockstepLocalMachineSlow(uint64_t nowMs) {
 		if (nowMs == UINT64_MAX) nowMs = NetLockstepNowMs();
 		const bool unhealthy = (s_LockstepCoordinator && !s_LockstepCoordinator->IsMigrating() && s_LockstepCoordinator->GetStats().localMachineSlow) ||
