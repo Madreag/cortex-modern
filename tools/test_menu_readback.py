@@ -1310,7 +1310,7 @@ def scripts(case, port, root, size="960x540"):
                   # ENGINE 210: the corner roster box wraps at word boundaries only, and its width
                   # rule grows the panel to the longest word instead of letting it hang over. The
                   # status box only wraps in its tall layout; the strip path is one FitLine'd line.
-                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row")] +
+                  menu_step("assert_word_wrap probe Seats [F6] Input delay: 15 (auto, re-sized live) PeerExtremelyLongDisplayNameForWrapChecking0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 sits row")] +
                   ([menu_step("assert_word_wrap status")] if size != "640x360" else []) +
                   [{"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
                   {"op": "wait", "panel_open": False},

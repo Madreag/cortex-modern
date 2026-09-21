@@ -456,8 +456,9 @@ namespace RTE::MenuAutomation {
 			if (mode == "assert") {
 				const auto& last = panel->GhostWatchLast();
 				const int hits = panel->GhostWatchHits();
+				const int probe = panel->GhostWatchProbe();
 				panel->DisarmGhostWatch();
-				observation = Json{{"hits", hits},
+				observation = Json{{"hits", hits}, {"probe_pixel", probe},
 					{"last", last.found ? Json{{"x", last.x}, {"y", last.y}, {"run", last.run}} : Json(nullptr)}}.dump();
 				return hits == 0;
 			}

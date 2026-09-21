@@ -301,10 +301,8 @@ namespace {
 				if (space != std::string::npos && space > 0) {
 					wrapped += line.substr(0, space) + '\n';
 					line.erase(0, space + 1);
-				} else {
-					wrapped += line + '\n';
-					line.clear();
 				}
+				// No boundary on the line: the word runs whole and the panel's width rule holds it.
 			}
 			line += c;
 		}
@@ -661,7 +659,9 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 }
 
 int NetModerationGUI::RosterBoxWidth(GUIFont* font, const std::string& text) {
-	return std::min(412, g_WindowMan.GetResX() - 16);
+	// The stock width, grown so the longest word the box must show lands whole on a line of its own.
+	const int cap = std::max(1, g_WindowMan.GetResX() - 16);
+	return std::min(cap, std::max(std::min(412, cap), LongestWordWidth(font, text) + 12));
 }
 
 bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string& wrapped, int& boxWidth) const {
@@ -900,6 +900,11 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	};
 	int width = std::max(1, std::min(c_StatusBoxWidth, maxPanelWidth));
 	std::string text = compose(width - 12);
+	// A word wider than the stock column must not hang over the panel edge: grow to hold it whole.
+	if (const int need = LongestWordWidth(font, text) + 12; need > width && width < maxPanelWidth) {
+		width = std::min(need, maxPanelWidth);
+		text = compose(width - 12);
+	}
 	// Measured at the final width, so the height below is the height these rows really need.
 	m_NetStatus->Resize(width - 12, backbuffer->h);
 	m_StatusWrap.source = text;
@@ -1343,6 +1348,9 @@ NetModerationGUI::GhostBandHit NetModerationGUI::ScanGhostBand(const int minRunP
 	// covers is a band painted where nothing drew this frame. The seats panel's skin never reaches
 	// that exact colour run-wide, so an uncovered run can only be stale paint.
 	const int bandFill = makeacol32(20, 22, 27, 255);
+	if (m_ToastRect.visible) {
+		hit.probePixel = getpixel(backbuffer, m_ToastRect.x + 2, m_ToastRect.y + 2);
+	}
 	const OverlayRect* rects[] = {&m_ToastRect, &m_SeatsPanelRect, &m_StatusRect, &m_ChatRect, &m_RosterRect};
 	for (int y = 0; y < backbuffer->h && !hit.found; ++y) {
 		int run = 0;
@@ -1372,6 +1380,7 @@ void NetModerationGUI::GhostWatchTick() {
 		return;
 	}
 	const GhostBandHit hit = ScanGhostBand(100);
+	m_GhostWatchProbe = hit.probePixel;
 	if (hit.found) {
 		++m_GhostWatchHits;
 		m_GhostWatchLast = hit;
