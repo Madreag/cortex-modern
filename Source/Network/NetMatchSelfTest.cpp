@@ -59,6 +59,7 @@
 namespace RTE {
 
 	namespace {
+
 		bool TestConnectionCallbacksReachTheirListener(std::string* error) {
 			if (!GnsTransport::IsCompiledIn()) return true;
 			GnsTransport first, other, client;
@@ -2838,6 +2839,11 @@ namespace RTE {
 				*error = "repeated notes of one tick total=" + std::to_string(once.Total()) + " wanted 1";
 				return false;
 			}
+			NetMatchE2ETickClock resumed;
+			resumed.NoteSimTick(362);
+			resumed.OnResyncRelaunch(362);
+			resumed.NoteSimTick(962);
+			if (resumed.Total() != 601) { *error = "a private return changed the resumed match's tick-budget origin"; return false; }
 			return true;
 		}
 
@@ -2985,6 +2991,32 @@ namespace RTE {
 				*error = "own count 3000 with match tick 50 was not a setup failure";
 				return false;
 			}
+			return true;
+		}
+
+		bool TestBootstrapWaitsForReceivingLobby(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetPeerId hostRemote = 0, clientRemote = 0;
+			if (!StartLoopbackTransports(49472, hostWire, clientWire, hostRemote, clientRemote, error)) return false;
+			NetLobbySession host, client;
+			NetLobbySessionConfig config;
+			config.host = true; config.localPeerId = 1; config.remotePeerId = 2; config.remoteTransportPeerId = hostRemote;
+			config.matchConfig = MakeConfig();
+			if (!host.Start(hostWire, config, error) || !host.BindWorldTransferRemote(2, hostRemote, error)) return false;
+			const std::vector<uint8_t> state(100000, 0x6D);
+			if (!host.BeginStateTransferTo(2, state)) return false;
+			host.PumpOutgoingChunks(); hostWire.AdvanceTimeMs(10); clientWire.AdvanceTimeMs(10);
+			const auto early = clientWire.PollEvents();
+			for (const auto& event: early) {
+				const auto decoded = NetLobbyProtocol::Decode(event.bytes);
+				if (decoded.ok && std::holds_alternative<NetLobbyStateChunk>(decoded.message.payload)) {
+					*error = "a bootstrap sent checkpoint chunks before its receiving lobby was up"; return false;
+				}
+			}
+			config.host = false; config.localPeerId = 2; config.remotePeerId = 1; config.remoteTransportPeerId = clientRemote;
+			if (!client.Start(clientWire, config, error)) return false;
+			for (const auto& event: early) client.HandleTransportEvent(event, 10);
+			if (!DriveLobbyPair(hostWire, clientWire, host, client, error) || client.TakeReceivedState() != state) return false;
 			return true;
 		}
 
@@ -12113,6 +12145,7 @@ namespace RTE {
 		if (!TestWorldLobbyRequiresPlayersInsteadOfCapacity(&error)) return fail(error);
 		if (!TestLobbyStartsWithoutRemoteHumanSeats(&error)) return fail(error);
 		if (!TestAiOnlyHostSeatsNoJoiner(&error)) return fail(error);
+		if (!TestBootstrapWaitsForReceivingLobby(&error)) return fail(error);
 		if (!TestLobbyStateTransfer(&error)) return fail(error);
 		if (!TestLobbyStateChunkBounds(&error)) return fail(error);
 		if (!TestLobbyStateChunkConsistency(&error)) return fail(error);

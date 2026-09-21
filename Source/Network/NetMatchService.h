@@ -54,9 +54,11 @@ namespace RTE {
 		uint64_t firstTick = UINT64_MAX;
 		uint64_t lastTick = UINT64_MAX;
 		uint64_t priorTicks = 0;
+		uint64_t matchFirstFrame = UINT64_MAX;
 		uint64_t segmentFirstFrame = 0; // The frame this segment resumed at; 0 when only the observed ticks are known.
 
 		void NoteSimTick(uint64_t nowTick) {
+			if (matchFirstFrame == UINT64_MAX) matchFirstFrame = nowTick;
 			if (firstTick == UINT64_MAX) {
 				firstTick = nowTick;
 			}
@@ -69,16 +71,17 @@ namespace RTE {
 			const uint64_t origin = segmentFirstFrame > 0 ? segmentFirstFrame : firstTick;
 			return lastTick >= origin ? lastTick - origin + 1 : 0;
 		}
-		// The healed round replays from resumeFrame, so the frames before it are the round's and are
-		// counted once: the clock stays the round's frame number whatever the relaunch cost each peer.
+		// A private return retains the original run budget, including disk-resumed rounds.
 		void OnResyncRelaunch(uint64_t resumeFrame = 0) {
-			priorTicks = resumeFrame > 0 ? resumeFrame - 1 : priorTicks + SegmentTicks();
+			if (matchFirstFrame == UINT64_MAX && resumeFrame > 0) matchFirstFrame = resumeFrame;
+			priorTicks = resumeFrame > 0 ? (resumeFrame > matchFirstFrame ? resumeFrame - matchFirstFrame : 0) : priorTicks + SegmentTicks();
 			segmentFirstFrame = resumeFrame;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
 		void OnNewMatch() {
 			priorTicks = 0;
+			matchFirstFrame = UINT64_MAX;
 			segmentFirstFrame = 0;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
