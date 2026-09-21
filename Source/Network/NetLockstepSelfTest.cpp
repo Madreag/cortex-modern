@@ -2284,6 +2284,74 @@ namespace RTE {
 			return true;
 		}
 
+		// The agreed first frame sits past the round's start frame, so both peers' ramp keeps producing
+		// targets below their own admission. Those are frames the round never requires; refusing one
+		// killed every service match at tick 1.
+		bool TestShiftedFirstFrameAdmitsTheRamp(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A37, 1, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A37, 8, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 37;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.peerInputDelayFrames = clientConfig.peerInputDelayFrames = {{1, 1}, {2, 8}};
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A37);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48894, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.NoteLocalStartPark(100);
+			client.NoteLocalStartPark(50);
+			uint64_t now = 0;
+			for (; now < 500 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const uint64_t agreed = 1 + static_cast<uint64_t>(std::ceil(100.0 / hostConfig.simTickMs));
+			if (!host.IsRunning() || !client.IsRunning() || host.GetStats().effectiveStartFrame < agreed) {
+				*error = "the shifted first frame never formed: host_running=" + std::to_string(host.IsRunning()) +
+				         " client_running=" + std::to_string(client.IsRunning()) +
+				         " effective=" + std::to_string(host.GetStats().effectiveStartFrame) +
+				         " agreed=" + std::to_string(agreed);
+				return false;
+			}
+			// The sim free-runs every tick below the effective start and produces input for tick+delay all
+			// the way, exactly as ScenarioRunner does: not one of those ticks may be refused.
+			uint64_t hostCommitted = 0, clientCommitted = 0;
+			for (uint64_t tick = hostConfig.startFrame; tick <= agreed + 24; ++tick) {
+				std::string queueError;
+				if (!host.QueueLocalInput(tick, {}, {}, &queueError)) {
+					*error = "the host's ramp input was refused at tick " + std::to_string(tick) + ": " + queueError +
+					         " (agreed=" + std::to_string(agreed) + " effective=" + std::to_string(host.GetStats().effectiveStartFrame) + ")";
+					return false;
+				}
+				if (!client.QueueLocalInput(tick, {}, {}, &queueError)) {
+					*error = "the client's ramp input was refused at tick " + std::to_string(tick) + ": " + queueError +
+					         " (agreed=" + std::to_string(agreed) + " effective=" + std::to_string(client.GetStats().effectiveStartFrame) + ")";
+					return false;
+				}
+				for (int step = 0; step < 4; ++step, ++now) {
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+					host.Tick(now); client.Tick(now);
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); hostCommitted = ready.frame; }
+					while (client.PopReadyFrame(ready)) { (void)client.FinishSimulationTick(ready.frame); clientCommitted = ready.frame; }
+				}
+			}
+			const uint64_t owed = host.GetStats().effectiveStartFrame;
+			if (hostCommitted < owed || clientCommitted < owed || !host.IsRunning() || !client.IsRunning()) {
+				*error = "the round never committed its first required frame: host_frame=" + std::to_string(hostCommitted) +
+				         " client_frame=" + std::to_string(clientCommitted) + " first_required=" + std::to_string(owed) +
+				         " host_running=" + std::to_string(host.IsRunning()) + " client_running=" + std::to_string(client.IsRunning());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS shifted_first_frame_admits_the_ramp agreed=" << agreed
+			          << " first_required=" << owed << " host_frame=" << hostCommitted << " client_frame=" << clientCommitted
+			          << " delays=1,8" << std::endl;
+			return true;
+		}
+
 		bool TestWorldTailKeepsItsLiveCoordinatorSeparate(std::string* error) {
 			LoopbackTransport wire;
 			if (!wire.StartHost(49474, error)) return false;
@@ -16653,6 +16721,7 @@ namespace RTE {
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestRejoinWindowClearsTheRestart(&error) ||
 		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||
+		    !TestShiftedFirstFrameAdmitsTheRamp(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||
