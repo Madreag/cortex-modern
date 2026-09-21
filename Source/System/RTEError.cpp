@@ -6,6 +6,7 @@
 #include "ActivityMan.h"
 #include "System.h"
 
+#include <SDL3/SDL.h>
 #include <SDL3/SDL_messagebox.h>
 
 #ifdef _WIN32
@@ -18,6 +19,7 @@
 #include <exception>
 #include <iostream>
 #include <regex>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -36,11 +38,17 @@
 #include <pthread.h>
 #endif
 
-#if defined(__APPLE__) && defined(__MACH__)
-// Cocoa dispatches message boxes onto the main thread, which deadlocks if a worker fires one while the main thread waits on it.
-static bool IsOnAppMainThread() { return pthread_main_np() != 0; }
+#ifdef _WIN32
+static std::atomic<unsigned long> s_AppMainThreadId{0};
+
+static bool IsOnAppMainThread() {
+	const unsigned long current = GetCurrentThreadId();
+	unsigned long expected = 0;
+	s_AppMainThreadId.compare_exchange_strong(expected, current);
+	return current == s_AppMainThreadId.load();
+}
 #else
-static bool IsOnAppMainThread() { return true; }
+static bool IsOnAppMainThread() { return SDL_IsMainThread(); }
 #endif
 
 #include "backward/backward.hpp"
@@ -263,6 +271,9 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 #endif
 
 void RTEError::SetExceptionHandlers() {
+#ifdef _WIN32
+	s_AppMainThreadId.store(GetCurrentThreadId());
+#endif
 	// Basic handling for C++ exceptions. Doesn't give us much meaningful information.
 	[[maybe_unused]] static const std::terminate_handler terminateHandler = []() {
 		std::exception_ptr currentException = std::current_exception();
@@ -357,7 +368,9 @@ bool RTEError::ShowAssertMessageBox(const std::string& message) {
 		return false;
 	}
 	if (!IsOnAppMainThread()) {
-		// Return false (Ignore-once) so the worker can unwind; the main thread sees the assert on its next pass.
+		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+			s_AssertFired = true;
+		}
 		System::PrintFaultLine("RTE Assert (from worker thread): " + message);
 		return false;
 	}
@@ -550,6 +563,9 @@ void RTEError::AssertFunc(const std::string& description, const std::source_loca
 			storeAssertInfo = true;
 		}
 	} else {
+		if (SDL_getenv("CCCP_HEADLESS") != nullptr) {
+			s_AssertFired = true;
+		}
 		storeAssertInfo = true;
 	}
 
@@ -747,6 +763,9 @@ bool RTEError::RunAssertPolicySelfTest() {
 	if (!ConsoleMan::IsConstructed()) {
 		ConsoleMan::Construct();
 	}
+#ifdef _WIN32
+	s_AppMainThreadId.store(GetCurrentThreadId());
+#endif
 	s_AssertFired = false;
 	s_ForceAssertDialogPathForTest = true;
 	AssertFunc("dialog-path probe", std::source_location::current());
@@ -754,6 +773,26 @@ bool RTEError::RunAssertPolicySelfTest() {
 	const bool dialogLeftUnfired = !s_AssertFired;
 	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL")
 	          << " dialog_path_leaves_assert_fired_false AssertFired=" << (s_AssertFired ? "true" : "false") << std::endl;
-	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL") << std::endl;
-	return dialogLeftUnfired;
+
+	s_AssertFired = false;
+	SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
+	std::thread worker([] {
+		AssertFunc("worker-thread probe", std::source_location::current());
+	});
+	worker.join();
+	const bool workerFired = s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (workerFired ? "PASS" : "FAIL")
+	          << " worker_thread_headless_sets_assert_fired AssertFired=" << (workerFired ? "true" : "false") << std::endl;
+
+	s_AssertFired = false;
+	s_IgnoreAllAsserts = true;
+	AssertFunc("ignore-all probe", std::source_location::current());
+	s_IgnoreAllAsserts = false;
+	const bool ignoreAllFired = s_AssertFired;
+	std::cout << "[rteerror-selftest] " << (ignoreAllFired ? "PASS" : "FAIL")
+	          << " ignore_all_headless_sets_assert_fired AssertFired=" << (ignoreAllFired ? "true" : "false") << std::endl;
+
+	const bool passed = dialogLeftUnfired && workerFired && ignoreAllFired;
+	std::cout << "[rteerror-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+	return passed;
 }
