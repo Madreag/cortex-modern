@@ -591,6 +591,7 @@ def scripts(case, port, root, size="960x540"):
                       # The lobby box's rect lands next to the net_ui rects in the same observation,
                       # so the overlay's placement against the lobby's own controls is on record.
                       {"op": "assert_control", "scope": "menu", "control": "MultiplayerLobbyPanel", "equals": {}},
+                      {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
                       {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 45000, "steps": steps}
         return ({who: text + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
@@ -884,6 +885,7 @@ def scripts(case, port, root, size="960x540"):
             "client": {"schema": 1, "timeout_ms": 90000, "steps": [
             {"op": "wait", "scope": "menu", "service": "Failed"},
             {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
+            {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
             {"op": "finish"}]}}
     elif case == "net-activity":
         # Fresh host setup uses Skirmish Defense; the keyboard anchor is the row above the picked one.
