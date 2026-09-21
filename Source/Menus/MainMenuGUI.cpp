@@ -3443,8 +3443,15 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 		m_MultiplayerLobbyMatchModeLabel->SetText(matchMode);
 	}
 	std::vector<const NetLobbyMember*> visibleMembers;
+	// A kicked or emptied seat stays on the roster under its unseated name ("Client N", "Open" in a
+	// persistent world): it renders like any seat nobody holds yet, and a joiner re-takes it.
+	const bool persistentWorld = g_NetMatchService.GetLobbyMatchConfig().persistentWorld;
+	const auto isOpenSeat = [persistentWorld](const NetLobbyMember& member) {
+		return !member.connected && !member.cpu && !member.isLocal &&
+		       member.displayName == NetMatchConfigUtil::UnseatedSlotName(member.peerId, persistentWorld);
+	};
 	for (const auto& member: snapshot.members) {
-		if (member.connected || member.cpu || member.isLocal) visibleMembers.push_back(&member);
+		if (member.connected || member.cpu || member.isLocal || isOpenSeat(member)) visibleMembers.push_back(&member);
 	}
 	std::array<std::string, 4> lobbyRowName;
 	std::array<std::string, 4> lobbyRowTailFull;
@@ -3468,8 +3475,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			if (!member.cpu && withMetrics) tail += " - Ping " + std::to_string(member.pingMs) + " ms - delay " + std::to_string(member.inputDelayFrames) + " frames";
 			return tail;
 		};
-		lobbyRowName[i] = LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
-		                                           ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
+		// An open seat wears its unseated name, never the remembered name of the player who held it.
+		lobbyRowName[i] = isOpenSeat(member) ? member.displayName
+		                                     : LobbyRowName(member, m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty()
+		                                                            ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 		lobbyRowTailFull[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine);
 		lobbyRowTailWithoutMetrics[i] = buildTail(member.statusLine.empty() ? seatMark : " - " + member.statusLine, false);
 		// The row drops connection metrics before shortening the seat state.
