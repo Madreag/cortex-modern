@@ -3064,6 +3064,9 @@ namespace RTE {
 		host.NoteRejoinLinkFit(42, true);
 		if (!host.NoteCatchUpProgress(42, 621, 1, 5, 631, &activation, &error) || activation <= 900)
 			return Fail("reclaim did not wait beyond every old input after proving capacity");
+		if (!host.HasBootstrapInFlight()) return Fail("an unfinished private return did not protect its checkpoint");
+		if (!host.CompleteActivation(42, activation, &error)) return Fail(error);
+		if (host.HasBootstrapInFlight()) return Fail("an active returned member prevented every later private checkpoint refresh");
 		return 0;
 	}
 

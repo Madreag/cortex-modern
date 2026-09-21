@@ -557,6 +557,7 @@ namespace RTE {
 		size_t ReleaseLostConnections(const std::vector<NetPeerId>& liveConnections);
 
 		const std::vector<NetWorldJoinSession>& Sessions() const { return m_Sessions; }
+		bool HasBootstrapInFlight() const;
 		const NetWorldJoinSession* FindSession(NetPeerId connection) const;
 		NetWorldMembership& Membership() { return m_Membership; }
 		const NetWorldMembership& Membership() const { return m_Membership; }

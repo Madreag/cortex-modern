@@ -2525,7 +2525,8 @@ static std::string ResyncSaveName() {
 		// base waits for the cadence, so a longer private replay is paid by the peer that is rejoining.
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = m_PrivateImageStaleFrom != 0 && !seatHeld && m_WorldJoin.Sessions().empty() &&
+		const bool stale = m_PrivateImageStaleFrom != 0 && !seatHeld && !m_WorldJoin.HasBootstrapInFlight() &&
+		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
 		                   !m_PrivateImageTask.valid() && m_WorldJoin.Image().tick < m_PrivateImageStaleFrom && cadenceOpen;
 		if (m_PrivateImageRound == round && !stale) return;
 		m_PrivateImageStaleFrom = 0;
