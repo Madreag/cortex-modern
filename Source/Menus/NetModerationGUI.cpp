@@ -827,6 +827,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (m_MatchDelayFrames != m_BaseDelayFrames) {
 		text += " (base " + std::to_string(m_BaseDelayFrames) + ")";
 	}
+	for (const auto& member: snapshot.members) {
+		if (member.cpu || member.isLocal || member.connectedRoute.empty()) continue;
+		text += "\n" + FitLine(font, NetPlayerPresentation::Name(member), width - 12) + " / via " + member.connectedRoute;
+	}
 	text += "\nRTT " + (!hostLost && ping ? std::to_string(*ping) : "--") + " ms / " + (hostLost ? "host lost" : snapshot.isHost ? "max peer" : "host link");
 	std::snprintf(metrics, sizeof(metrics), "\nPACE %.1f tps", s_paceTps);
 	text += metrics;
