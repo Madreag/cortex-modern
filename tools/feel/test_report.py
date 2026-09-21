@@ -7,6 +7,9 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
+from contextlib import nullcontext
+import stat
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,6 +28,45 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
+    def test_compressed_records_keep_the_original_bytes_and_detector(self):
+        from tempfile import TemporaryDirectory
+        from feel.records import compress_case_records, open_record
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            dump = root / 'host_trace.json.simdump.txt'
+            original = b'1 activity active\n2 activity active\n'
+            dump.write_bytes(original)
+            records = compress_case_records(root)
+            self.assertEqual(records[0]['original_bytes'], len(original))
+            with open_record(dump, 'rb') as stream:
+                self.assertEqual(stream.read(), original)
+            self.assertEqual(report.early_decision_tick(root, 'host'), 2)
+
+    def test_matrix_footprint_has_its_own_limit(self):
+        import feel_measure
+        entry = SimpleNamespace(stat=lambda **kwargs: SimpleNamespace(st_mode=stat.S_IFREG, st_size=7_000_000_000,
+                                                                      st_file_attributes=0))
+        with patch.object(Path, 'exists', return_value=True), patch.object(feel_measure.os, 'scandir', return_value=nullcontext([entry])):
+            self.assertEqual(feel_measure.scratch_bytes(Path('matrix'), feel_measure.MATRIX_BYTE_LIMIT), 7_000_000_000)
+        with patch.object(Path, 'exists', return_value=True), patch.object(feel_measure.os, 'scandir', return_value=nullcontext([entry])):
+            with self.assertRaisesRegex(RuntimeError, '5000000000 byte limit'):
+                feel_measure.scratch_bytes(Path('one-case'))
+
+    def test_live_hash_comparison_keeps_every_replayed_pass(self):
+        from tempfile import TemporaryDirectory
+        from feel.retained_resume import compare_live_hashes
+        with TemporaryDirectory() as folder:
+            host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
+            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 61)]
+            host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
+            repeated = copy.deepcopy(rows[:40] + rows[20:])
+            repeated[12]['subsystems']['controller'] = 'different'
+            client.write_text('\n'.join(map(json.dumps, repeated)), encoding='utf-8')
+            compared = compare_live_hashes(host, client, 1)
+            self.assertEqual([row['compared_ticks'] for row in compared], [40, 40])
+            self.assertEqual([row['mismatched_ticks'] for row in compared], [1, 0])
+            self.assertEqual(compared[0]['first_mismatches'], [13])
+
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
@@ -51,6 +93,24 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'MISS')
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
         self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'MISS')
+
+    def test_same_machine_tps_ruling_retains_block_limits(self):
+        reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
+        measured = self.item9a(wall_ms=900000 / 54)
+        report.apply_tps_call(measured, reference)
+        self.assertTrue(measured['pass_check'])
+        self.assertEqual(measured['tps_call']['absolute']['status'], 'MISS')
+        self.assertFalse(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        blocked = self.item9a(wall_ms=900000 / 54, waits='[net-frame-wait] frame=600 wait_ms=51')
+        report.apply_tps_call(blocked, reference)
+        self.assertFalse(blocked['pass_check'])
+        too_slow = self.item9a(wall_ms=900000 / 52)
+        report.apply_tps_call(too_slow, reference)
+        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'MISS')
+        fast_box = self.item9a(wall_ms=900000 / 59)
+        report.apply_tps_call(fast_box, dict(steady_wall_tps=60, evidence='stock.jsonl'))
+        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertNotIn('required', fast_box['pins']['item9a_confirmed_horizon_lag'])
 
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
