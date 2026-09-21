@@ -40,6 +40,19 @@ namespace RTE {
 #pragma region Destruction
 		static void ApplyQueuedDeletions();
 
+		/// Deletes every queued luabind object while the state that is about to close is still open: a
+		/// queued object holds a registry reference into its own state and unrefs it when it is deleted.
+		/// @param luaState The state about to be closed.
+		/// @return How many queued objects belonged to that state, i.e. how many the drain rescued.
+		static uint64_t DrainQueuedDeletionsBeforeStateClose(lua_State* luaState);
+
+		/// How many queued luabind objects were drained by a state close that would otherwise have outlived it.
+		static uint64_t QueuedDeletionsDrainedAtStateClose();
+
+		/// How many queued luabind objects the drain found naming a state that is already closed. Always 0
+		/// while every close drains first; anything else is a use-after-free the drain refused to run.
+		static uint64_t QueuedDeletionsNamingAClosedState();
+
 		/// Destructor method used to clean up a LuabindObjectWrapper object before deletion from system memory.
 		~LuabindObjectWrapper();
 #pragma endregion
