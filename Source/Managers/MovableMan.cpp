@@ -70,6 +70,7 @@ extern "C" {
 #include <cstdint>
 #include <execution>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <map>
 #include <memory>
@@ -241,6 +242,8 @@ struct MOUniqueIDLess {
 
 struct ThreadedSyncedUpdateSelfTestContext {
 	std::vector<long> order;
+	// Armed by the deleted-object row; the first SyncedUpdate of the pass retires another state's object.
+	std::function<void()> retire;
 };
 
 ThreadedSyncedUpdateSelfTestContext* s_ThreadedSyncedUpdateSelfTestContext = nullptr;
@@ -256,6 +259,13 @@ int ReadThreadedSyncedUpdateSelfTestOrderLength(lua_State* state) {
 	return 1;
 }
 
+int RunThreadedSyncedUpdateSelfTestRetire(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext && s_ThreadedSyncedUpdateSelfTestContext->retire) {
+		std::exchange(s_ThreadedSyncedUpdateSelfTestContext->retire, nullptr)();
+	}
+	return 0;
+}
+
 void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
 	lua_State* luaState = state.GetLuaState();
@@ -263,6 +273,33 @@ void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateAppend");
 	lua_pushcfunction(luaState, ReadThreadedSyncedUpdateSelfTestOrderLength);
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateLength");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestRetire);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateRetire");
+}
+
+// A registered MO beside the identity the synced pass orders on, read once when the pass snapshots the
+// state. A script earlier in the same pass can delete an object still held in the snapshot, so nothing
+// after the snapshot may read the object to order it.
+struct SyncedUpdateEntry {
+	MovableObject* object = nullptr;
+	long uniqueID = 0;
+};
+
+// The snapshot order: unique ID, which the sim assigns identically on every peer.
+static bool SyncedUpdateEntryEarlier(const SyncedUpdateEntry& lhs, const SyncedUpdateEntry& rhs) {
+	return lhs.uniqueID < rhs.uniqueID;
+}
+
+// A Lua state's registered-MO set copied into canonical order with each object's identity read once.
+static std::vector<SyncedUpdateEntry> SnapshotRegisteredMOs(const LuaStateWrapper& state) {
+	const auto& registered = state.GetRegisteredMOs();
+	std::vector<SyncedUpdateEntry> snapshot;
+	snapshot.reserve(registered.size());
+	for (MovableObject* mo: registered) {
+		snapshot.push_back({mo, mo->GetUniqueID()});
+	}
+	std::sort(snapshot.begin(), snapshot.end(), SyncedUpdateEntryEarlier);
+	return snapshot;
 }
 
 // A Lua state's registered-MO set copied into canonical unique-ID order (the set itself is unordered).
@@ -4819,15 +4856,17 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 
 	struct Cursor {
 		LuaStateWrapper* state = nullptr;
-		std::vector<MovableObject*> objects;
+		std::vector<SyncedUpdateEntry> objects;
 		size_t next = 0;
 	};
 	struct Pending {
-		MovableObject* object = nullptr;
+		SyncedUpdateEntry entry;
 		size_t cursor = 0;
 	};
+	// Orders on the identity stored at snapshot time, never on the object: an earlier script in this
+	// same pass may have deleted it.
 	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
-		return lhs.object->GetUniqueID() > rhs.object->GetUniqueID();
+		return SyncedUpdateEntryEarlier(rhs.entry, lhs.entry);
 	};
 
 	std::vector<Cursor> cursors;
@@ -4836,7 +4875,7 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
 		Cursor& cursor = cursors.emplace_back();
 		cursor.state = &luaState;
-		cursor.objects = SortedRegisteredMOs(luaState);
+		cursor.objects = SnapshotRegisteredMOs(luaState);
 		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1});
 	}
 
@@ -4849,9 +4888,10 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 			g_LuaMan.SetThreadLuaStateOverride(cursor.state);
 			currentState = cursor.state;
 		}
-		if (ValidMO(next.object->GetRootParent()) && next.object->HasRequestedSyncedUpdate()) {
-			next.object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-			next.object->ResetRequestedSyncedUpdateFlag();
+		MovableObject* mo = next.entry.object;
+		if (ValidMO(mo->GetRootParent()) && mo->HasRequestedSyncedUpdate()) {
+			mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+			mo->ResetRequestedSyncedUpdateFlag();
 		}
 		++cursor.next;
 		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
@@ -4882,7 +4922,34 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	std::array<std::string, 2> globalHashes;
 	long long perStateUs = 0;
 	long long globalUs = 0;
+	std::array<std::string, 2> duplicateHashes;
+	std::array<std::array<long, 2>, 2> duplicatePositions{};
+	std::array<std::array<long, 2>, 2> duplicateIDs{};
+	std::array<std::array<long, 2>, 2> duplicateMOIDs{};
+	std::array<long, 2> duplicateOrderLength{};
+	long retiredExpectedAt = 0;
+	long retiredActualAt = 0;
+	size_t retiredExpectedLength = 0;
+	size_t retiredActualLength = 0;
+	std::string retiredExpectedHash;
+	std::string retiredActualHash;
+	size_t retiredFirstDivergence = 0;
+	bool unlistedRootRan = false;
 	bool passed = true;
+
+	const auto hashOrder = [](const std::vector<long>& order) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		for (long uniqueID: order) {
+			const auto value = static_cast<uint64_t>(uniqueID);
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		}
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
 
 	const auto hashFixture = [](const ThreadedSyncedUpdateSelfTestContext& context, const std::vector<std::unique_ptr<MOPixel>>& objects) {
 		uint64_t hash = 0xcbf29ce484222325ULL;
@@ -4913,6 +4980,7 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 
 		ThreadedSyncedUpdateSelfTestContext context;
 		std::vector<std::unique_ptr<MOPixel>> objects;
+		std::vector<std::unique_ptr<MOPixel>> twins;
 		objects.reserve(c_ObjectCount);
 		MovableObject::PinUniqueIDCounter(savedCounter);
 		s_ThreadedSyncedUpdateSelfTestContext = &context;
@@ -4948,6 +5016,41 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 		if (fixtureReady && objects.size() == c_ObjectCount) {
 			perStateHashes[countIndex] = run(false);
 			globalHashes[countIndex] = run(true);
+
+			// Two live objects can share a unique ID: a faithful clone copies the source's, and a
+			// restored object adopts a persisted one. A pair of those, on two states, must run in the
+			// same order however many states there are. Their MOIDs come from the sim's own index.
+			const long sharedUniqueID = savedCounter + c_ObjectCount + 1;
+			std::vector<MovableObject*> moidIndex;
+			for (size_t twin = 0; twin < 2 && fixtureReady; ++twin) {
+				auto object = std::make_unique<MOPixel>();
+				MovableObject::PinUniqueIDCounter(sharedUniqueID - 1);
+				if (object->Create() < 0) {
+					fixtureReady = false;
+					break;
+				}
+				m_ValidParticles.insert(object.get());
+				m_AddedParticles.push_back(object.get());
+				twins.push_back(std::move(object));
+				MOPixel* twinObject = twins.back().get();
+				twinObject->UpdateMOID(moidIndex);
+				twinObject->MoveScriptsToState(states[(twin * 3 + 1) % states.size()]);
+				const int loadStatus = twinObject->LoadScript(fixturePath, true);
+				if (loadStatus < 0 || twinObject->AdoptScriptObject() < 0) fixtureReady = false;
+			}
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+			for (LuaStateWrapper& state: states) state.Update();
+			context.order.clear();
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			for (const auto& twin: twins) twin->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			duplicatePositions[countIndex] = {static_cast<long>(twins[0]->GetNumberValue("threaded_synced_order_length")),
+			                                  static_cast<long>(twins[1]->GetNumberValue("threaded_synced_order_length"))};
+			duplicateIDs[countIndex] = {twins[0]->GetUniqueID(), twins[1]->GetUniqueID()};
+			duplicateMOIDs[countIndex] = {static_cast<long>(twins[0]->GetID()), static_cast<long>(twins[1]->GetID())};
+			duplicateHashes[countIndex] = hashOrder({duplicatePositions[countIndex][0], duplicatePositions[countIndex][1]});
+			duplicateOrderLength[countIndex] = static_cast<long>(context.order.size());
+
 			if (count == 32) {
 				run(false);
 				run(true);
@@ -4967,6 +5070,53 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 				std::sort(globalSamples.begin(), globalSamples.end());
 				perStateUs = perStateSamples[perStateSamples.size() / 2];
 				globalUs = globalSamples[globalSamples.size() / 2];
+
+				// The first object of the pass deletes another state's later object, which the pass has
+				// already snapshotted. The merge must order that entry by the identity it read at
+				// snapshot time; reading the object again picks up whatever took its place.
+				constexpr size_t c_RetiredIndex = 500;
+				MOPixel* retired = objects[c_RetiredIndex].get();
+				std::vector<long> expectedOrder;
+				expectedOrder.reserve(objects.size() + twins.size() - 1);
+				for (const auto& object: objects) {
+					if (object.get() != retired) expectedOrder.push_back(object->GetUniqueID());
+				}
+				for (const auto& twin: twins) expectedOrder.push_back(twin->GetUniqueID());
+				std::sort(expectedOrder.begin(), expectedOrder.end());
+				context.order.clear();
+				for (const auto& object: objects) object->RequestSyncedUpdate();
+				for (const auto& twin: twins) twin->RequestSyncedUpdate();
+				context.retire = [this, retired, &states] {
+					// What the engine leaves behind when a mid-pass deletion takes an object, short of
+					// freeing the fixture's memory: off the valid sets, out of its Lua state, and its
+					// slot handed to a new object, which is what a re-used allocation reads back as.
+					m_ValidParticles.erase(retired);
+					std::erase(m_AddedParticles, retired);
+					states[c_RetiredIndex % states.size()].UnregisterMO(retired);
+					retired->Create();
+					retired->ResetRequestedSyncedUpdateFlag();
+				};
+				RunThreadedSyncedUpdatePass(true);
+				context.retire = nullptr;
+				retiredExpectedHash = hashOrder(expectedOrder);
+				retiredActualHash = hashOrder(context.order);
+				retiredExpectedLength = expectedOrder.size();
+				retiredActualLength = context.order.size();
+				const auto divergence = std::mismatch(expectedOrder.begin(), expectedOrder.end(), context.order.begin(), context.order.end());
+				retiredFirstDivergence = static_cast<size_t>(divergence.first - expectedOrder.begin());
+				retiredExpectedAt = retiredFirstDivergence < expectedOrder.size() ? expectedOrder[retiredFirstDivergence] : 0;
+				retiredActualAt = retiredFirstDivergence < context.order.size() ? context.order[retiredFirstDivergence] : 0;
+
+				// The threaded pass ran on the request flag alone before the global walk, so a
+				// registered object whose root is outside the valid sets kept getting its SyncedUpdate.
+				constexpr size_t c_UnlistedRootIndex = 7;
+				MOPixel* unlisted = objects[c_UnlistedRootIndex].get();
+				m_ValidParticles.erase(unlisted);
+				context.order.clear();
+				for (const auto& object: objects) object->RequestSyncedUpdate();
+				RunThreadedSyncedUpdatePass(true);
+				unlistedRootRan = std::find(context.order.begin(), context.order.end(), unlisted->GetUniqueID()) != context.order.end();
+				m_ValidParticles.insert(unlisted);
 			}
 		} else {
 			passed = false;
@@ -4974,11 +5124,13 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 		}
 
 		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
-		for (const auto& object: objects) {
-			m_ValidParticles.erase(object.get());
-			std::erase(m_AddedParticles, object.get());
-			object->DestroyScriptState();
-			object->Destroy();
+		for (auto* group: {&objects, &twins}) {
+			for (const auto& object: *group) {
+				m_ValidParticles.erase(object.get());
+				std::erase(m_AddedParticles, object.get());
+				object->DestroyScriptState();
+				object->Destroy();
+			}
 		}
 		states.swap(replacement);
 	}
@@ -4990,11 +5142,31 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	const bool globalGreen = globalHashes[0] == globalHashes[1];
 	const double deltaPercent = perStateUs == 0 ? 0.0 : (100.0 * static_cast<double>(globalUs - perStateUs) / static_cast<double>(perStateUs));
 	const bool timingGreen = std::abs(deltaPercent) <= 6.0;
-	passed = passed && perStateRed && globalGreen && timingGreen;
+	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
+	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
+	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
 	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1] << std::endl;
 	std::cout << "[script-graph-selftest] " << (globalGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_global_moid_order states=4,32 hash4=" << globalHashes[0] << " hash32=" << globalHashes[1] << std::endl;
+	std::cout << "[script-graph-selftest] " << (duplicateGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_duplicate_unique_id_order states=4,32 hash4=" << duplicateHashes[0] << " hash32=" << duplicateHashes[1]
+	          << " pos4=" << duplicatePositions[0][0] << "," << duplicatePositions[0][1]
+	          << " pos32=" << duplicatePositions[1][0] << "," << duplicatePositions[1][1]
+	          << " ids4=" << duplicateIDs[0][0] << "," << duplicateIDs[0][1]
+	          << " ids32=" << duplicateIDs[1][0] << "," << duplicateIDs[1][1]
+	          << " moids4=" << duplicateMOIDs[0][0] << "," << duplicateMOIDs[0][1]
+	          << " moids32=" << duplicateMOIDs[1][0] << "," << duplicateMOIDs[1][1]
+	          << " ran4=" << duplicateOrderLength[0] << " ran32=" << duplicateOrderLength[1]
+	          << (duplicateGreen ? "" : " (the duplicate pair's order follows the state count)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (unlistedRootRan ? "PASS" : "FAIL")
+	          << " threaded_synced_update_unlisted_root_still_runs states=32"
+	          << (unlistedRootRan ? "" : " (a registered object whose root is outside the valid sets lost its SyncedUpdate)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (retiredGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_deleted_object_not_reread states=32 expected_order=" << retiredExpectedHash
+	          << " pass_order=" << retiredActualHash << " expected_length=" << retiredExpectedLength
+	          << " pass_length=" << retiredActualLength << " first_divergence=" << retiredFirstDivergence
+	          << " expected_at=" << retiredExpectedAt << " pass_at=" << retiredActualAt << std::endl;
 	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
 	          << " after_us=" << globalUs << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
