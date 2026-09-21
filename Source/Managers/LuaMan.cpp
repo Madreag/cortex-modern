@@ -7538,6 +7538,39 @@ assert(({_ScriptGraphNative(_ScriptGraphGcProbe)})[1] == "entity", "the probe is
 	}
 
 	{
+		// What a capture anchors in the registry may not be reachable by a ref number. luabind hands
+		// out registry refs from a counter of its own beside luaL_ref's, so a number can be given to a
+		// second owner whose release leaves a free-list number where the capture's table was, and the
+		// next capture writes to that number. The row is the release, done by hand.
+		CheckpointText anchorImage;
+		std::vector<std::string> anchorProblems;
+		const bool anchored = CaptureScriptGraph(anchorImage, anchorProblems, true);
+		const void* anchor = nullptr;
+		if (m_NativeCache) {
+			m_NativeCache->PushRetained(m_State);
+			anchor = lua_topointer(m_State, -1);
+			lua_pop(m_State, 1);
+		}
+		int freed = 0;
+		for (int slot = 1; anchor && slot <= 8192; ++slot) {
+			lua_rawgeti(m_State, LUA_REGISTRYINDEX, slot);
+			const bool addressable = lua_topointer(m_State, -1) == anchor;
+			lua_pop(m_State, 1);
+			if (addressable) {
+				luaL_unref(m_State, LUA_REGISTRYINDEX, slot);
+				++freed;
+			}
+		}
+		CheckpointText afterImage;
+		const bool again = CaptureScriptGraph(afterImage, anchorProblems, true);
+		const bool anchorsHeld = anchored && again && anchor != nullptr && freed == 0;
+		std::cout << "[script-graph-selftest] " << (anchorsHeld ? "PASS" : "FAIL") << " capture_anchors_are_not_registry_refs freed="
+		          << freed << " anchored=" << (anchor != nullptr) << " first=" << anchored << " second=" << again << std::endl;
+		for (const std::string& problem: anchorProblems) std::cout << "[script-graph-selftest] anchor probe: " << problem << std::endl;
+		checkpointValues = anchorsHeld && checkpointValues;
+	}
+
+	{
 		// The capture walks userdata by the live walk's rule: a finalizer that already ran left a
 		// destroyed native payload behind, and the answers are read through that payload.
 		RunScriptString(R"lua(
