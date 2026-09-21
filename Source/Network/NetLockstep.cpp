@@ -4926,15 +4926,6 @@ namespace RTE {
 		return false;
 	}
 
-	uint64_t NetLockstepCoordinator::RequiredAdmissionRampMs(uint32_t rttMs, uint32_t jitterMs, uint16_t delayFrames,
-	                                                         double simTickMs, uint32_t peerParkMs, uint32_t ownParkMs) {
-		if (!std::isfinite(simTickMs) || simTickMs <= 0) return UINT64_MAX;
-		const double senderWindowMs = static_cast<double>(delayFrames) * simTickMs;
-		const double ramp = senderWindowMs + static_cast<double>(rttMs) + static_cast<double>(jitterMs) +
-		                    static_cast<double>(std::max(peerParkMs, ownParkMs));
-		return static_cast<uint64_t>(std::max(0.0, std::ceil(ramp)));
-	}
-
 	std::vector<uint8_t> NetLockstepCoordinator::ResumePeerIds() const {
 		std::vector<uint8_t> peers;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
@@ -4971,24 +4962,12 @@ namespace RTE {
 				// the start message's own trip and each peer's activity restart, and the sender's delay
 				// window is the budget that fill was agreed to take. The window is the few frames from its
 				// own start; after them it is judged like any other.
-				if (m_PeerAdmissions.contains(peer)) {
-					// A reclaimed seat has already played this round, so it cannot use the normal
-					// first-start branch below. Give its new transport the measured delay window,
-					// RTT, jitter and startup park before the hold clock judges it again.
-					const uint64_t ramp = RequiredAdmissionRampMs(peerStats.pingMs, peerStats.jitterMs,
-					                                             InputDelayAt(peer, frame), m_Config.simTickMs,
-					                                             peerStats.startParkMs, m_Stats.longestOwnParkMs);
-					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
-					std::cout << "[net-lockstep] bound judged admitted peer " << static_cast<int>(peer) << " at frame " << frame
-					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
-					          << "ms admission_ramp=" << ramp << "ms" << std::endl;
-				} else if (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks) {
+				if (!m_PeerAdmissions.contains(peer) && (!m_PeersPlayedThisRound.contains(peer) || frame <= EffectiveStartOf(peer) + m_Config.slowPlayerBoundTicks)) {
 					// Our own longest park is the start work this machine did; a peer that has not produced
 					// yet is doing the same, so it is allowed as much before its silence means anything.
 					const uint64_t park = std::max(peerStats.startParkMs, m_Stats.longestOwnParkMs);
-					const uint64_t ramp = RequiredAdmissionRampMs(peerStats.pingMs, peerStats.jitterMs,
-					                                             InputDelayAt(peer, frame), m_Config.simTickMs,
-					                                             peerStats.startParkMs, m_Stats.longestOwnParkMs);
+					const uint64_t ramp = static_cast<uint64_t>(std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)) +
+					    peerStats.pingMs + peerStats.jitterMs + park;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged peer " << static_cast<int>(peer) << " at frame " << frame
 					          << " starting: since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
