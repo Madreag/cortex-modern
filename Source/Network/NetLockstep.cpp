@@ -5052,12 +5052,22 @@ namespace RTE {
 					// restart: ping, jitter and park all read zero and the allowance would be none at all. The
 					// window the round agreed for that peer was sized from its link, so it is the floor.
 					const uint64_t windowMs = static_cast<uint64_t>(std::max<long long>(0, std::llround(InputDelayAt(peer, frame) * m_Config.simTickMs)));
+					// A link this round has never measured borrows the slowest one it has: the seat's answer still
+					// has to cross a real network, and zero is the one reading it cannot have.
+					uint32_t linkMs = peerStats.pingMs, linkJitterMs = peerStats.jitterMs;
+					if (linkMs == 0) {
+						for (const auto& [other, otherStats]: m_Stats.peers) {
+							if (other == m_Config.localPeerId || otherStats.pingMs <= linkMs) continue;
+							linkMs = otherStats.pingMs;
+							linkJitterMs = std::max(linkJitterMs, otherStats.jitterMs);
+						}
+					}
 					const uint64_t ramp = std::max<uint64_t>(windowMs,
-					    2 * static_cast<uint64_t>(peerStats.pingMs) + peerStats.jitterMs + peerStats.startParkMs);
+					    2 * static_cast<uint64_t>(linkMs) + linkJitterMs + peerStats.startParkMs);
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
 					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
-					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms jitter=" << peerStats.jitterMs
+					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
 					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << peerStats.startParkMs
 					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
 				} else if (peerStats.lastProgressMs >= firstMissingMs &&
@@ -5287,8 +5297,10 @@ namespace RTE {
 				const uint32_t ping = m_Transport->GetPeerPingMs(transport);
 				estimator.Observe(nowMs, ping);
 				auto& stats = m_Stats.peers[peer];
-				stats.pingMs = ping;
-				stats.jitterMs = estimator.JitterMs();
+				// A connection with no samples on it yet reports nothing, which is not a reading of an instant
+				// link: a seat that comes back on a new transport keeps what its link last measured.
+				if (ping > 0 || stats.pingMs == 0) stats.pingMs = ping;
+				if (const uint32_t jitter = estimator.JitterMs(); jitter > 0 || stats.jitterMs == 0) stats.jitterMs = jitter;
 				stats.delayFrames = InputDelayAt(peer, m_Stats.nextFrame);
 				if (host && m_Config.adaptiveInputDelay) {
 					if (const auto delay = estimator.Change(nowMs, stats.delayFrames, m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames))
