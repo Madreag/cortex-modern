@@ -297,9 +297,11 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
     afterwards, so the named one can only survive by being pinned."""
     ticks, perturb_at = 1400, 700
     records = run_pair(repo, root, port, ticks, 2,
-                       {"host": ["-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
+                       {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                                  "-net-match-e2e-resync"],
                         "client": ["-net-match-e2e-resync"]})
+    injection = re.search(r"\[net-test\] live perturb frame=(\d+)", peer_log(root, "host"))
+    assert injection and int(injection[1]) >= perturb_at, "the live-peer perturbation was never injected"
     anchors, captures = {}, {}
     for who in ("host", "client"):
         log = peer_log(root, who)
@@ -330,7 +332,7 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
         pinned = {int(row[2]) for row in RETAINED.findall(log)}
         assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
     return {"match_id": match_id, "tick": tick, "host": sorted(held["host"]), "client": sorted(held["client"]),
-            "captures": captures, "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
+            "captures": captures, "perturbed_tick": int(injection[1]), "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
 
 
 def arm_resume(repo: Path, root: Path, port: int) -> dict:
@@ -589,6 +591,11 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     return records
 
 
+def world_offers(log: str) -> list[dict]:
+    decoder = json.JSONDecoder()
+    return [decoder.raw_decode(log[mark.end():])[0] for mark in re.finditer(r"\[net-world\] offer ", log)]
+
+
 def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick: int) -> dict:
     """Compare every tick the joiner can simulate, from its agreed checkpoint to the planned end."""
     host_rows = read_live_hashes(root / "host-live.jsonl")
@@ -598,7 +605,7 @@ def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick
     assert host_rows[0]["tick"] == resumed_tick + 1, (host_rows[0]["tick"], resumed_tick)
     assert first_tick >= resumed_tick + 1, (first_tick, resumed_tick)
     if first_tick != resumed_tick + 1:
-        offers = [json.loads(line) for line in re.findall(r"(?m)^\[net-world\] offer (\{.*\})$", peer_log(root, "host"))]
+        offers = world_offers(peer_log(root, "host"))
         assert any(offer["world_id"] == world_id and offer["tick"] + 1 == first_tick for offer in offers), \
             f"the joiner's first tick {first_tick} follows no world checkpoint offer"
     assert last_tick - first_tick + 1 >= 100, "the world shared fewer than 100 planned ticks"
@@ -730,6 +737,13 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
 
 
 class WorldRestartOracleTests(unittest.TestCase):
+    def test_world_offer_has_its_own_record_boundary(self):
+        expected = {"world_id": "retained", "tick": 367}
+        text = '[autosave] tick=367 graph_[net-world] offer ' + json.dumps(expected) + '\npart=callbacks\n'
+        self.assertEqual(world_offers(text), [expected])
+        with self.assertRaises(json.JSONDecodeError):
+            world_offers('[net-world] offer {"tick":')
+
     def test_live_window_checks_earlier_replays_and_missing_ticks(self):
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
