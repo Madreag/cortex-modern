@@ -188,6 +188,27 @@ namespace {
 		return text + "...";
 	}
 
+	/// A token wider than the column keeps a prefix and "...", so the glyph run stays inside the column.
+	std::string FitTokens(GUIFont* font, const std::string& text, int width) {
+		if (!font || width < 1) return text;
+		std::string fitted, token;
+		auto emit = [&]() {
+			if (token.empty()) return;
+			fitted += FitLine(font, std::move(token), width);
+			token.clear();
+		};
+		for (char c: text) {
+			if (c == ' ' || c == '\n') {
+				emit();
+				fitted += c;
+			} else {
+				token += c;
+			}
+		}
+		emit();
+		return fitted;
+	}
+
 	SDL_Scancode ChatScancode() {
 		const std::string& key = g_SettingsMan.GetNetworkChatKey();
 		if (key == "ENTER" || key == "RETURN") return SDL_SCANCODE_RETURN;
@@ -536,7 +557,7 @@ void NetModerationGUI::Refresh() {
 			options += "\nRepair match: " + std::string(NetHostRepairEnabled(g_NetMatchService)
 			    ? "Ready - pause menu > Match Options" : NetHostRepairHint(g_NetMatchService));
 		}
-		m_Options->SetText(WrapText(m_LabelFont, options, m_Options->GetWidth()));
+		m_Options->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, options, m_Options->GetWidth()), m_Options->GetWidth()));
 		m_Summary->SetText(snapshot.isHost ? NetHostOptionsApplyText(g_NetMatchService.GetState())
 		                                 : "The host's options for this round.");
 		m_Status->SetVisible(false);
@@ -550,7 +571,7 @@ void NetModerationGUI::Refresh() {
 		return;
 	}
 	m_Summary->SetText(snapshot.isHost ? m_Model.GetSummaryText() : "Only the host can approve a substitute.");
-	m_Status->SetText(WrapText(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()));
+	m_Status->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, m_Model.GetStatusText(), m_Status->GetWidth()), m_Status->GetWidth()));
 	// A compact panel that lost its rows to the toast reservation has no room for the status line
 	// under a full seat list; the seat rows already carry the same state.
 	const int statusY = 282 - std::max(0, (c_PanelHeight - m_Panel->GetHeight()) - 20);
@@ -563,7 +584,7 @@ void NetModerationGUI::Refresh() {
 				roster += (roster.empty() ? "" : "\n\n") + DisplayName(NetPlayerPresentation::Row(member));
 			}
 		}
-		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));
+		m_Roster->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, roster, m_Roster->GetWidth()), m_Roster->GetWidth()));
 	}
 	for (size_t row = 0; row < m_Seats.size(); ++row) {
 		const bool used = row < m_Model.RowCount();
@@ -574,7 +595,7 @@ void NetModerationGUI::Refresh() {
 		for (auto* action: controls.actions) action->SetVisible(used);
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
-		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()));
+		controls.name->SetText(WrapText(m_LabelFont, FitTokens(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()), controls.name->GetWidth()));
 		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
@@ -644,6 +665,9 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 		if (member.cpu) continue;
 		text += "\n" + DisplayName(NetPlayerPresentation::Row(member));
 	}
+	// The cap column: a token the box cannot grow past is ellipsized before the width rule measures it.
+	const int column = std::max(1, g_WindowMan.GetResX() - 28);
+	text = FitTokens(font, text, column);
 	const int width = RosterBoxWidth(font, text);
 	m_RosterWrap.source = text;
 	m_RosterWrap.textWidth = width - 12;
@@ -667,8 +691,10 @@ int NetModerationGUI::RosterBoxWidth(GUIFont* font, const std::string& text) {
 bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string& wrapped, int& boxWidth) const {
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	if (!font) return false;
-	boxWidth = RosterBoxWidth(font, text);
-	wrapped = WrapText(font, text, boxWidth - 12);
+	const int column = std::max(1, g_WindowMan.GetResX() - 28);
+	const std::string fitted = FitTokens(font, text, column);
+	boxWidth = RosterBoxWidth(font, fitted);
+	wrapped = WrapText(font, fitted, boxWidth - 12);
 	return true;
 }
 
