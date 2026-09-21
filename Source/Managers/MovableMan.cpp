@@ -4931,7 +4931,10 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 			objects.push_back(std::move(object));
 			MOPixel* fixtureObject = objects.back().get();
 			fixtureObject->MoveScriptsToState(states[static_cast<size_t>(index) % states.size()]);
-			if (fixtureObject->LoadScript(std::string(c_Fixture), true) < 0 || fixtureObject->AdoptScriptObject() < 0) {
+			const int loadStatus = fixtureObject->LoadScript(std::string(c_Fixture), true);
+			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
+			if (loadStatus < 0 || adoptStatus < 0) {
+				std::cout << "[script-graph-selftest] threaded_synced_update_fixture_refused index=" << index << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
 				fixtureReady = false;
 				break;
 			}
