@@ -654,6 +654,16 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->scene = scene->CaptureSavedScene(fileName);
 	}
 	image->sceneUs = since(sceneStart);
+	// The counters are read against their values at the freeze, before anything puts them back.
+	CaptureEffects effects;
+	const auto effectsSoFar = [&] {
+		effects.uidsAllocated += MovableObject::GetUniqueIDCounter() - allocation.uid;
+		effects.simDraws += g_SimRNG.GetDrawCount() - allocation.sim.GetDrawCount();
+		effects.renderDraws += g_RenderRNG.GetDrawCount() - allocation.render.GetDrawCount();
+		effects.cursorMoves += g_LuaMan.GetScriptStateCursor() != allocation.cursor;
+		effects.soundCursorMoves += g_AudioMan.GetCheckpointSoundContainerCursor() != liveSoundCursor;
+	};
+	effectsSoFar();
 	g_AudioMan.SetCheckpointSoundContainerCursor(liveSoundCursor);
 	allocation.RestoreCounters();
 	const auto structureStart = std::chrono::steady_clock::now();
@@ -665,6 +675,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto globalsStart = std::chrono::steady_clock::now();
 	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts); });
 	image->globalsUs = since(globalsStart);
+	effectsSoFar();
+	m_LastCaptureEffects = effects;
 	image->activityName = activity->GetPresetName();
 	image->originalScenePresetName = scene->GetPresetName();
 	image->simUpdateCount = g_TimerMan.GetSimUpdateCount();
