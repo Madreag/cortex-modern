@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 from types import SimpleNamespace
+from unittest.mock import patch
 
 TOOLS = Path(__file__).resolve().parent
 if str(TOOLS) not in sys.path:
@@ -53,6 +54,35 @@ def check_capture_binary(results, scratch):
             os.environ.pop("CCCP_TEST_BINARY", None)
         else:
             os.environ["CCCP_TEST_BINARY"] = previous
+
+
+def check_scratch_limit(results, scratch):
+    resolver = getattr(driver, "scratch_limit", None)
+    if resolver is None:
+        return row(results, "scratch/selected-limit-is-supported", False)
+    options = SimpleNamespace(scratch_limit_bytes=None)
+    ok = row(results, "scratch/default-five-billion", resolver(options) == 5_000_000_000)
+    retained = {"scratch_limit_bytes": 8_000_000_000}
+    ok &= row(results, "scratch/finalizer-retains-selected-limit", resolver(options, retained) == 8_000_000_000)
+    options.scratch_limit_bytes = 7_000_000_000
+    ok &= row(results, "scratch/explicit-finalizer-limit", resolver(options, retained) == 7_000_000_000)
+    for value in (0, -1, "0", "-1", "1.5", "invalid"):
+        try:
+            driver.positive_bytes(value)
+            rejected = False
+        except argparse.ArgumentTypeError:
+            rejected = True
+        ok &= row(results, f"scratch/rejects-{value}", rejected)
+    ok &= row(results, "scratch/positive-byte-count", driver.positive_bytes("8000000000") == 8_000_000_000)
+    for limit, expected in ((8_000_000_000, False), (6_000_000_000, True), (5_000_000_000, True)):
+        with patch.object(driver, "scratch_bytes", return_value=6_000_000_000):
+            try:
+                driver.check_scratch_budget(scratch, limit)
+                stopped = False
+            except RuntimeError as error:
+                stopped = str(limit) in str(error) and "no cleanup performed" in str(error)
+        ok &= row(results, f"scratch/enforces-{limit}", stopped == expected)
+    return ok
 
 
 def check_scenarios(results):
@@ -375,7 +405,8 @@ def check_finalizer(results, scratch):
     scenario = {"name": "finalize", "peers": [{"name": "host"}], "runs": [{"name": "first"}, {"name": "second"}],
                 "checklist": [{"id": "game", "what": "Game is drawn.", "screen": "game"}]}
     capture = {"scenario": "finalize", "scenario_definition": scenario, "runs": [], "source": {"tip": "retained-tip"},
-               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": []}
+               "exe": {"sha256": "retained-exe"}, "fps": 3, "started": driver.stamp(), "command": [],
+               "scratch_root": str(scratch), "scratch_limit_bytes": 8_000_000_000}
     (out / "capture.json").write_text(json.dumps(capture), encoding="utf-8")
     code = driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=True, scratch_root=scratch, sheet_every=3))
     manifest = json.loads((out / "manifest.json").read_text())
@@ -384,6 +415,16 @@ def check_finalizer(results, scratch):
     ok = row(results, "finalize/keeps-provenance-and-frames", code == 1 and manifest["frame_count"] == 1 and manifest["source"]["tip"] == "retained-tip")
     ok &= row(results, "finalize/does-not-invent-process-exit", saved["runs"][0]["peers"][0]["record"]["exit_code"] is None)
     ok &= row(results, "finalize/names-unstarted-run", len(review["checklist"]) == 2 and review["checklist"][1]["run"] == "second")
+    ok &= row(results, "finalize/manifest-retains-budget", manifest.get("scratch_limit_bytes") == 8_000_000_000 and
+              manifest.get("scratch_root") == str(scratch))
+    with patch.object(driver, "scratch_bytes", return_value=6_000_000_000), patch.object(driver, "render") as rendered:
+        driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
+                                            scratch_limit_bytes=None, sheet_every=3))
+        ok &= row(results, "finalize/encodes-below-retained-budget", rendered.call_count == 1)
+    with patch.object(driver, "scratch_bytes", return_value=8_000_000_000), patch.object(driver, "render") as rendered:
+        driver.finalize_only(SimpleNamespace(finalize_only=out, metadata_only=False, scratch_root=None,
+                                            scratch_limit_bytes=None, sheet_every=3))
+        ok &= row(results, "finalize/stops-encoding-at-budget", rendered.call_count == 0)
     saved["scenario_definition"]["runs"] = [{"name": "first"}]
     saved.pop("interrupted", None)
     saved["runs"][0].pop("interrupted", None)
@@ -651,6 +692,7 @@ def main():
         scratch = Path(temporary)
         ok = check_scenarios(results)
         ok &= check_capture_binary(results, scratch)
+        ok &= check_scratch_limit(results, scratch)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)

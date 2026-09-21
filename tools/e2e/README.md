@@ -99,8 +99,11 @@ must be installed as `<repo>/Data/VoidWanderers.rte`; its download page is
 https://mod.io/g/cccp/m/void-wanderers-by-weegee. Verify the installed activity names before capturing that scenario.
 The installed version 6 module names its activity and launcher scene `Void Wanderers` in `MissionActivities.ini`.
 
-The scratch counter excludes symlinks and Windows reparse points. It stops at 5 GB and never removes a run tree.
+The scratch counter excludes symlinks and Windows reparse points. It stops at 5 GB by default and never removes a run tree.
 `--scratch-root` selects the budget root; under `D:/mx` the default is the lane root containing the scenario.
+An explicitly granted allowance can be selected with `--scratch-limit-bytes 8000000000`. The driver checks that
+allowance before launch, while peers run and before media writes; `capture.json` and `manifest.json` retain it.
+Finalization keeps the recorded root and allowance unless an explicit command-line replacement is supplied.
 
 Windows uses `run_sim_test`'s private-desktop runner and its existing fullscreen guard. The Scoop ffmpeg fallback is
 Windows-specific; PATH and the Homebrew/Unix fallbacks are also supported. The POSIX runner selects

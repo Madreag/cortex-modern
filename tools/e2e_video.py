@@ -49,6 +49,28 @@ FFMPEG_CANDIDATES = (
 SCRATCH_LIMIT = 5_000_000_000
 
 
+def positive_bytes(value):
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("scratch limit must be a positive integer byte count") from None
+    if result <= 0:
+        raise argparse.ArgumentTypeError("scratch limit must be a positive integer byte count")
+    return result
+
+
+def scratch_limit(options, capture=None):
+    selected = getattr(options, "scratch_limit_bytes", None)
+    return positive_bytes(selected if selected is not None else (capture or {}).get("scratch_limit_bytes", SCRATCH_LIMIT))
+
+
+def check_scratch_budget(root, limit):
+    footprint = scratch_bytes(root)
+    if footprint >= limit:
+        raise RuntimeError(f"scratch footprint {footprint} bytes reaches {limit}; no cleanup performed")
+    return footprint
+
+
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
@@ -848,9 +870,7 @@ def run_one(options, scenario, run, run_index, out):
             for thread in threads:
                 thread.join(.1)
             if time.monotonic() >= next_size_check:
-                footprint = scratch_bytes(options.scratch_root)
-                if footprint >= SCRATCH_LIMIT:
-                    raise RuntimeError(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
+                check_scratch_budget(options.scratch_root, scratch_limit(options))
                 next_size_check = time.monotonic() + 10
     except (KeyboardInterrupt, Exception) as error:
         interrupted = f"{type(error).__name__}: {error}"
@@ -888,17 +908,21 @@ def run_one(options, scenario, run, run_index, out):
     return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": collected, "interrupted": interrupted, "stop_finding": stop_finding}
 
 
-def render(capture_run, fps, every):
+def render(capture_run, fps, every, scratch_root=None, scratch_limit_bytes=SCRATCH_LIMIT):
     """Encodes missing media while preserving a completed peer's retained output."""
     ffmpeg = find_ffmpeg()
     for peer in capture_run["peers"]:
         if peer.get("video") and Path(peer["video"]).is_file() and peer.get("contact_sheet") and Path(peer["contact_sheet"]).is_file():
             continue
+        if scratch_root is not None:
+            check_scratch_budget(scratch_root, scratch_limit_bytes)
         root = Path(peer["root"])
         video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
-        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
         peer["video"] = video.get("path") if video.get("encoded") else None
         peer["encode"] = video
+        if scratch_root is not None:
+            check_scratch_budget(scratch_root, scratch_limit_bytes)
+        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg)
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
     capture_run["ffmpeg"] = ffmpeg
@@ -971,11 +995,17 @@ def finalize_only(options):
     if incomplete and not capture.get("interrupted"):
         capture["interrupted"] = "Finalized after the capture owner ended; unstarted runs remain findings"
     capture["finalized"] = stamp()
-    budget = options.scratch_root or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
-    metadata_only = options.metadata_only or scratch_bytes(budget) >= SCRATCH_LIMIT
+    budget = options.scratch_root or capture.get("scratch_root") or next((parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
+    limit = scratch_limit(options, capture)
+    capture.update(scratch_root=str(budget), scratch_limit_bytes=limit)
+    metadata_only = options.metadata_only or scratch_bytes(budget) >= limit
     for run in recovered:
         if not metadata_only:
-            render(run, capture["fps"], options.sheet_every)
+            try:
+                render(run, capture["fps"], options.sheet_every, budget, limit)
+            except RuntimeError as error:
+                metadata_only = True
+                capture["interrupted"] = str(error)
         review(scenario, run, Path(run["root"]))
     start = datetime.strptime(capture["started"], "%Y-%m-%d %H:%M:%S MST")
     end = datetime.strptime(capture["finalized"], "%Y-%m-%d %H:%M:%S MST")
@@ -1010,6 +1040,7 @@ def scenario_manifest(capture, out, elapsed):
                 "frame_count": sum(peer["frames"] for peer in peers), "peers": peers,
                 "skipped_runs": [{"run": run["name"], **run["skip_finding"]} for run in capture["runs"] if run.get("skip_finding")],
                 "requires_findings": capture.get("requires_findings", []),
+                "scratch_root": capture.get("scratch_root"), "scratch_limit_bytes": capture.get("scratch_limit_bytes", SCRATCH_LIMIT),
                 "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
@@ -1180,6 +1211,8 @@ def main():
     parser.add_argument("--finalize-only", type=Path)
     parser.add_argument("--metadata-only", action="store_true")
     parser.add_argument("--scratch-root", type=Path)
+    parser.add_argument("--scratch-limit-bytes", type=positive_bytes,
+                        help=f"positive byte allowance; default {SCRATCH_LIMIT}, or the retained allowance when finalizing")
     parser.add_argument("--list", action="store_true")
     options = parser.parse_args()
 
@@ -1228,9 +1261,11 @@ def main():
     out.mkdir(parents=True, exist_ok=False)
     options.scratch_root = options.scratch_root or next(
         (parent for parent in out.parents if parent.parent == Path("D:/mx")), out)
-    footprint = scratch_bytes(options.scratch_root)
-    if footprint >= SCRATCH_LIMIT:
-        raise SystemExit(f"scratch footprint {footprint} bytes reaches {SCRATCH_LIMIT}; no cleanup performed")
+    options.scratch_limit_bytes = scratch_limit(options)
+    try:
+        check_scratch_budget(options.scratch_root, options.scratch_limit_bytes)
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from None
     started = time.monotonic()
     source = source_evidence(options.repo)
     exe = file_evidence(capture_binary(options.repo))
@@ -1239,6 +1274,7 @@ def main():
         parser.error("--run names an unknown run")
     capture = {"schema": 1, "scenario": scenario["name"], "repo": str(Path(options.repo).resolve()), "out": str(out), "platform": sys.platform,
                "fps": options.fps, "size": options.size, "runs": [], "source": source, "exe": exe,
+               "scratch_root": str(options.scratch_root), "scratch_limit_bytes": options.scratch_limit_bytes,
                "started": stamp(), "command": [sys.executable, *sys.argv], "scenario_definition": scenario}
     missing = requirement_findings(options.repo, scenario)
     if missing:
@@ -1293,9 +1329,9 @@ def main():
             write_json(out / "capture.json", capture)
             if captured.get("interrupted"):
                 capture["interrupted"] = captured["interrupted"]
-            if scratch_bytes(options.scratch_root) < SCRATCH_LIMIT:
+            if scratch_bytes(options.scratch_root) < options.scratch_limit_bytes:
                 feel_probes({**scenario, **run}, captured, source)
-                render(captured, options.fps, options.sheet_every)
+                render(captured, options.fps, options.sheet_every, options.scratch_root, options.scratch_limit_bytes)
             review(scenario, captured, Path(captured["root"]))
             for peer in captured["peers"]:
                 complete &= peer_completed(peer)
