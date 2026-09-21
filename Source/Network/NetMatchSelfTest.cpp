@@ -3457,7 +3457,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestRunnerStateTransferProgress(std::string* error) {
+		bool TestRunnerStateTransferProgress(std::string* error, bool returned = false) {
 			for (const bool stalled: {false, true}) {
 				LoopbackTransport hostTransport, clientTransport;
 				StateTransferTap tap(hostTransport);
@@ -3548,6 +3548,10 @@ namespace RTE {
 				if (!runner.Start(tap, hostSession, hostCoordinator, config, error) || !clientCoordinator.IsRunning()) {
 					*error = "state transfer runner setup failed: " + *error + "; peer=" + peerError;
 					return false;
+				}
+				if (returned) {
+					auto prior = hostCoordinator.GetConfig(); prior.authorityPeerId = hostCoordinator.GetHostPeerId();
+					runner.ConfigurePrivateJoin(prior);
 				}
 				hostCoordinator.Complete("state transfer test round");
 				tap.beforePoll();
@@ -12158,6 +12162,7 @@ namespace RTE {
 		if (!TestLobbyStateTransferRestart(&error)) return fail(error);
 		if (!TestLobbyStateTransferBackpressure(&error)) return fail(error);
 		if (!TestRunnerStateTransferProgress(&error)) return fail(error);
+		if (!TestRunnerStateTransferProgress(&error, true)) return fail("resync after private return: " + error);
 		// The host options transaction: each arm reports its own verdict so one red cannot hide another.
 		std::string republishError, staleOptionsError, seatingWaitError, hostDefaultsError, stagedRematchError;
 		if (!TestLobbyRepublishesHostOptionsRevision(&republishError)) {
