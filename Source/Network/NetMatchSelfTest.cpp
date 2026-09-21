@@ -11576,6 +11576,34 @@ namespace RTE {
 		std::cout << "[net-match-selftest] PASS handover_service_status running=1 host_lost=1 migrating=1" << std::endl; return true;
 	}
 
+	bool TestRenderGatePrimesRestoredInputs(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		if (!hostWire.StartHost(49496, error) || !clientWire.Connect("loopback", 49496, error)) return false;
+		const auto hostEvents = hostWire.PollEvents(), clientEvents = clientWire.PollEvents();
+		if (hostEvents.empty() || clientEvents.empty()) { *error = "restored render gate did not connect"; return false; }
+		NetLockstepConfig hc;
+		hc.sessionId = 215; hc.roundId = 215; hc.localPeerId = 1; hc.peerCount = 2; hc.startFrame = 41;
+		hc.remoteTransportPeerIds = {{2, hostEvents.front().peerId}}; hc.relayToOtherPeers = true;
+		hc.resumeFromSnapshot = true; hc.inputDelayFrames = 3; hc.peerInputDelayFrames = {{1, 3}, {2, 3}};
+		hc.substituteSlowPeers = true; hc.simTickMs = g_TimerMan.GetDeltaTimeMS(); hc.timeoutMs = 0;
+		auto cc = hc; cc.localPeerId = 2; cc.roundId = 0; cc.relayToOtherPeers = false; cc.remoteTransportPeerIds = {{1, clientEvents.front().peerId}};
+		NetLockstepCoordinator host, client;
+		if (!host.Start(hostWire, hc, error) || !client.Start(clientWire, cc, error)) return false;
+		for (int i = 0; i < 8; ++i) { host.Tick(NetLockstepNowMs()); client.Tick(NetLockstepNowMs()); }
+		if (!host.IsRunning() || !client.IsRunning()) { *error = "restored render gate did not start"; return false; }
+		ScenarioRunner::SetLockstepCoordinator(&host);
+		(void)ScenarioRunner::PollLockstepSimulationTick(41);
+		ScenarioRunner::SetLockstepCoordinator(&client);
+		(void)ScenarioRunner::PollLockstepSimulationTick(41);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (host.NeedsResyncPriming() || client.NeedsResyncPriming()) { *error = "the render gate waited before priming restored input"; return false; }
+		for (int i = 0; i < 8; ++i) { host.Tick(NetLockstepNowMs()); client.Tick(NetLockstepNowMs()); }
+		NetLockstepReadyFrame a, b;
+		if (!host.PopReadyFrame(a) || !client.PopReadyFrame(b) || a.frame != 41 || b.frame != 41) { *error = "the restored render gate did not release the agreed first frame"; return false; }
+		std::cout << "[net-match-selftest] PASS render_gate_restore primed_frames=3 first_frame=41" << std::endl;
+		return true;
+	}
+
 	bool TestTransportRetirementDoesNotSleep(std::string* error) {
 		if (!GnsTransport::IsCompiledIn()) return true;
 		GnsTransport host, client;
@@ -12201,6 +12229,7 @@ namespace RTE {
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);
 		if (!menuInputs || !routeEvidence) return fail(menuError + "; " + routeError);
 		if (!TestTransportRetirementDoesNotSleep(&error)) return fail(error);
+		if (!TestRenderGatePrimesRestoredInputs(&error)) return fail(error);
 		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
 		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);

@@ -5132,6 +5132,10 @@ void RunGameLoop() {
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
 				break;
 			}
+			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {
+				if (ScenarioRunner::HasControllerReplayError()) HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
+				break;
+			}
 			ZoneScopedN("Simulation Update");
 
 			// The probe's sim-rate keys land before the update that reads them; SDL events only arrive per frame.

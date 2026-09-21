@@ -444,6 +444,8 @@ namespace RTE {
 		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
+		/// Pumps a delayed tick before simulation mutation, leaving rendering free while input is owed.
+		static bool PollLockstepSimulationTick(uint64_t tick);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// The local frames already queued for a future lockstep tick (the input-delay pipeline).
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
