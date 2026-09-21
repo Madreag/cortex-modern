@@ -840,6 +840,21 @@ static std::string ResyncSaveName() {
 
 	uint64_t NetLobbyLastStateTransferMs();
 
+	// A client's session has exactly one remote - the host. Its loss is the host's departure unless the
+	// host's own record says it removed or refused this seat, which keeps its own text.
+	static bool ClientSessionLossIsHostDeparture(const NetSession& session) {
+		if (session.IsReady()) return false;
+		if (!session.HasReject()) return true;
+		switch (session.GetRejectReason()) {
+			case NetRejectReason::SessionEnded:
+			case NetRejectReason::Timeout:
+			case NetRejectReason::InternalError:
+				return true;
+			default:
+				return false;
+		}
+	}
+
 	bool NetMatchService::CanResyncLocked(std::string* error) {
 		if (m_State != NetMatchServiceState::Running || !ActiveWireLocked() || !m_Session || !m_Runner) {
 			if (error) *error = "no live match to resync";
@@ -847,8 +862,13 @@ static std::string ResyncSaveName() {
 		}
 		if (!m_Session->IsReady()) {
 			m_State = NetMatchServiceState::Failed;
-			m_StatusText = "Resync unavailable";
-			m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the session was lost";
+			if (!m_IsHost && ClientSessionLossIsHostDeparture(*m_Session)) {
+				m_StatusText = "The host left the match";
+				m_ErrorText = m_StatusText;
+			} else {
+				m_StatusText = "Resync unavailable";
+				m_ErrorText = m_Session->HasReject() ? m_Session->BuildRejectText() : "the session was lost";
+			}
 			if (error) *error = m_ErrorText;
 			return false;
 		}
@@ -1192,8 +1212,11 @@ static std::string ResyncSaveName() {
 				m_ErrorText.clear();
 			} else {
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = "Resync failed";
-				m_ErrorText = error;
+				// A resync that died with the host's session is the departure itself, not a resync fault.
+				const bool lostHost = !m_IsHost &&
+				    (m_Runner->DidLoseHostDuringSetup() || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+				m_StatusText = lostHost ? "The host left the match" : "Resync failed";
+				m_ErrorText = lostHost ? m_StatusText : error;
 			}
 			m_WorkerDone = true;
 		}
@@ -1809,8 +1832,14 @@ static std::string ResyncSaveName() {
 			m_State = NetMatchServiceState::Failed;
 			m_PendingLobbyEvents.clear();
 			m_PendingLobbyBytes = 0;
-			m_StatusText = "Match stopped";
-			m_ErrorText = error;
+			// A worker that already named the host's departure keeps that verdict; the caller's bare
+			// pump error would demote it back to a generic fault.
+			if (m_ErrorText == "The host left the match") {
+				m_StatusText = m_ErrorText;
+			} else {
+				m_StatusText = "Match stopped";
+				m_ErrorText = error;
+			}
 			m_LobbySnapshot = {};
 			m_InputDelayText.clear();
 			EndAdmissionSession();
@@ -6452,8 +6481,12 @@ static std::string ResyncSaveName() {
 				m_Coordinator = std::move(coordinator);
 				m_Runner = std::move(runner);
 				m_State = NetMatchServiceState::Failed;
-				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
-				m_ErrorText = error;
+				// A start that died with the host's session is the departure itself, not a start fault.
+				const bool lostHost = !request.host &&
+				    (m_Runner->DidLoseHostDuringSetup() || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
+				m_StatusText = lostHost ? "The host left the match"
+				                        : SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
+				m_ErrorText = lostHost ? m_StatusText : error;
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
 				                           m_Session->GetMismatchKey() == "live_match";
