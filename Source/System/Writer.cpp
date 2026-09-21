@@ -547,8 +547,10 @@ void Writer::NewLine(bool toIndent, int lineCount) const {
 
 bool RTE::RunOwnedCheckpointSelfTest() {
 	bool passed = true;
-	const auto check = [&passed](bool result, const char* name) {
-		std::cout << "[script-graph-selftest] " << (result ? "PASS" : "FAIL") << " " << name << std::endl;
+	const auto check = [&passed](bool result, const char* name, const std::string& detail = {}) {
+		std::cout << "[script-graph-selftest] " << (result ? "PASS" : "FAIL") << " " << name;
+		if (!result && !detail.empty()) std::cout << " " << detail;
+		std::cout << std::endl;
 		passed = result && passed;
 	};
 	try {
@@ -650,20 +652,33 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			const auto secondImage = second.BindSimTime(secondTicks);
 			const auto secondReference = synchronous();
 			check(first.SameValues(fresh) && timerCache.Reused() == 1 && timelessCalls->load() == 0,
-			      "owned_checkpoint_caches_timer_values_without_formatting_or_binding");
+			      "owned_checkpoint_caches_timer_values_without_formatting_or_binding",
+			      "same_values=" + std::to_string(first.SameValues(fresh)) + " reused=" + std::to_string(timerCache.Reused()) +
+			          " timeless_calls=" + std::to_string(timelessCalls->load()));
 			auto firstText = std::async(std::launch::async, [firstImage] { return firstImage.Text(); });
 			auto secondText = std::async(std::launch::async, [secondImage] { return secondImage.Text(); });
-			check(firstText.get() == firstReference && secondText.get() == secondReference && firstReference != secondReference &&
+			const std::string firstBound = firstText.get();
+			const std::string secondBound = secondText.get();
+			check(firstBound == firstReference && secondBound == secondReference && firstReference != secondReference &&
 			          past.GetStartSimTimeMS() < 0 && signedElapsed && future.GetElapsedSimTimeMS() > 0,
-			      "owned_checkpoint_binds_signed_timers_to_each_image_tick");
+			      "owned_checkpoint_binds_signed_timers_to_each_image_tick",
+			      "first_bound=\"" + firstBound + "\" first_reference=\"" + firstReference + "\" second_bound=\"" + secondBound +
+			          "\" second_reference=\"" + secondReference + "\" start_ms=" + std::to_string(past.GetStartSimTimeMS()) +
+			          " signed_elapsed=" + std::to_string(signedElapsed) + " future_ms=" + std::to_string(future.GetElapsedSimTimeMS()));
 			check(firstImage.Text() == firstReference && first.Text() == firstReference && fresh.Text() == secondReference && timelessCalls->load() == 1,
-			      "owned_checkpoint_timer_images_preserve_prior_text_and_timeless_sharing");
+			      "owned_checkpoint_timer_images_preserve_prior_text_and_timeless_sharing",
+			      "first_image=\"" + firstImage.Text() + "\" first=\"" + first.Text() + "\" first_reference=\"" + firstReference +
+			          "\" fresh=\"" + fresh.Text() + "\" second_reference=\"" + secondReference + "\" timeless_calls=" +
+			          std::to_string(timelessCalls->load()));
 			CheckpointBuffer prior; prior.Raw("prior|"); prior.Child(first);
 			CheckpointBuffer current; current.Raw("current|"); current.Child(fresh);
 			const auto reusedTimers = current.Finish().ReuseChildren(prior.Finish());
-			check(reusedTimers.BindSimTime(secondTicks).Text() == "current|" + secondReference &&
-			          first.Base64().BindSimTime(secondTicks).Text() == base64_encode(secondReference, true),
-			      "owned_checkpoint_binds_reused_and_encoded_timer_children");
+			const std::string reusedText = reusedTimers.BindSimTime(secondTicks).Text();
+			const std::string encodedText = first.Base64().BindSimTime(secondTicks).Text();
+			check(reusedText == "current|" + secondReference && encodedText == base64_encode(secondReference, true),
+			      "owned_checkpoint_binds_reused_and_encoded_timer_children",
+			      "reused=\"" + reusedText + "\" expected=\"current|" + secondReference + "\" encoded=\"" + encodedText +
+			          "\" expected_encoded=\"" + base64_encode(secondReference, true) + "\"");
 		}
 
 		{
