@@ -2011,15 +2011,26 @@ def run_case(options, case, root, failing=None):
                 rules = report["service"]["runner"]["match_config"]["rules"]
                 result["match_rules"][who] = {name: rules[name] for name in MATCH_RULES}
                 assert result["match_rules"][who] == MATCH_RULES, (who, result["match_rules"][who])
-            # The announced delay text is host-authored and synced: the host's post-leave menu loop is
-            # the only pump a script gets before a match end quits e2e peers, so it is where the
-            # (fixed) branch is read. Each report records the same leave from its own side.
+            # The host's post-leave menu reads the adopted delay; the survivor takes over the match.
             lobby = [line for line in logs["host"].splitlines() if "[menu-script] dump_lobby" in line]
             assert lobby and 'input_delay="Input delay: 3 (fixed)"' in lobby[-1], lobby
             reports = {who: json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
                        for who in ("host", "client")}
             assert reports["host"]["service"]["status"] == "Match left", reports["host"]["service"]["status"]
-            assert reports["client"]["service"]["status"] == "The other player left the match", reports["client"]["service"]["status"]
+            handovers = re.findall(r"\[net-match\] Host left - Client is now hosting; boundary=(\d+) round=(\d+)", logs["client"])
+            assert len(handovers) == 1, handovers
+            boundary, round_id = map(int, handovers[0])
+            survivor = reports["client"]
+            service = survivor["service"]
+            lockstep = service["runner"]["lockstep"]
+            assert service["is_host"] is True and service["local_peer_id"] == lockstep["host_peer_id"] == 2, service
+            assert lockstep["migration_boundary"] == boundary and lockstep["round_id"] == round_id, lockstep
+            assert lockstep["migration_generation"] == 1 and 0 < boundary < 400, lockstep
+            assert survivor["frames_planned"] == 400 and survivor["running_ticks"] >= 400, survivor["running_ticks"]
+            assert lockstep["completed_simulation_tick"] >= 400, lockstep["completed_simulation_tick"]
+            assert service["status"] == "e2e complete", service["status"]
+            result["host_departure"] = {"boundary": boundary, "round_id": round_id,
+                "new_host_peer_id": service["local_peer_id"], "completed_tick": lockstep["completed_simulation_tick"]}
         if case == "net-host-left":
             status = [control["text"] for capture in images if capture["peer"] == "client"
                       for control in capture["controls"] if control["name"] == "LabelMultiplayerLandingStatus"]
