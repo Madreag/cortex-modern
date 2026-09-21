@@ -2996,13 +2996,13 @@ static void PollStallEventsForCapture() {
 }
 
 static void DrawFrameWithPreviews() {
+	if (!FrameMan::FeelBeginDraw()) return;
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
-	FrameMan::FeelBeginDraw();
 	std::array<bool, c_MaxScreenCount> hudDisabled;
 	const bool localPause = g_MenuMan.IsLocalPauseMenuOpen();
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
