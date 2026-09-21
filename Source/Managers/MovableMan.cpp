@@ -5147,7 +5147,12 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	const bool perStateRed = perStateHashes[0] != perStateHashes[1];
 	const bool globalGreen = globalHashes[0] == globalHashes[1];
 	const double deltaPercent = perStateUs == 0 ? 0.0 : (100.0 * static_cast<double>(globalUs - perStateUs) / static_cast<double>(perStateUs));
-	const bool timingGreen = std::abs(deltaPercent) <= 6.0;
+	// The accepted cost of the global walk over the per-state walk, as time rather than as a share of
+	// whatever the per-state walk happened to take: 0.15 ms of a 16.7 ms tick, at 1,024 registered MOs
+	// across 32 states, median of 32 interleaved passes.
+	constexpr long long c_AddedBudgetUs = 150;
+	const long long addedUs = globalUs - perStateUs;
+	const bool timingGreen = perStateUs > 0 && addedUs <= c_AddedBudgetUs;
 	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
 	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
 	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan;
@@ -5175,7 +5180,8 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	          << " expected_at=" << retiredExpectedAt << " pass_at=" << retiredActualAt << std::endl;
 	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=32 before_us=" << perStateUs
-	          << " after_us=" << globalUs << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
+	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
+	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
 	return passed;
 }
 
