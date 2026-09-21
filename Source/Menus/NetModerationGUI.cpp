@@ -7,6 +7,7 @@
 #include "NetMatchService.h"
 #include "NetSession.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
 #include "ScenarioRunner.h"
 #include "SettingsMan.h"
 #include "WindowMan.h"
@@ -209,11 +210,17 @@ namespace {
 	bool ToastNamesTheSeat(const std::string& kind) { return kind == "seat_held"; }
 	bool ToastNamesNobody(const std::string& kind) { return kind == "slow_machine"; }
 
+
 	std::string ToastText(const ScenarioRunner::NetUiToastRecord& toast) {
 		uint8_t sender = toast.senderPeerId;
 		if (ToastNamesNobody(toast.kind)) return toast.text;
 		if (ToastNamesTheSeat(toast.kind)) {
-			return sender ? g_NetMatchService.GetPeerDisplayName(sender) + ": " + toast.text : toast.text;
+			if (!sender) return toast.text;
+			const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+			const auto member = std::find_if(snapshot.members.begin(), snapshot.members.end(), [&](const auto& row) { return row.peerId == sender; });
+			const std::string state = member != snapshot.members.end() ? NetPlayerPresentation::State(*member) : std::string("Held - AI in control");
+			return NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) + ": " +
+			    (toast.text.find("rejoining") != std::string::npos ? "Held - AI in control - rejoining" : state);
 		}
 		if (toast.kind == "resumed" && sender == 0) {
 			const auto& events = ScenarioRunner::GetNetUiToastLog();
@@ -227,7 +234,13 @@ namespace {
 				}
 			}
 		}
-		return toast.text + (sender ? " by " + g_NetMatchService.GetPeerDisplayName(sender) : std::string());
+		std::string text = toast.text;
+		for (const auto& [peer, name]: NetPlayerPresentation::names) {
+			for (const std::string prefix: {"Client " + std::to_string(peer), "Player " + std::to_string(peer)}) {
+				if (text.starts_with(prefix + " ")) text.replace(0, prefix.size(), name);
+			}
+		}
+		return text + (sender ? " by " + NetPlayerPresentation::Name(sender, g_NetMatchService.GetPeerDisplayName(sender)) : std::string());
 	}
 
 	// The player_* toasts read "<name> <verb>"; on a short line the name elides, never the verb.
@@ -525,9 +538,7 @@ void NetModerationGUI::Refresh() {
 		std::string roster;
 		for (const auto& member: snapshot.members) {
 			if (!member.cpu) {
-				roster += (roster.empty() ? "" : "\n\n") +
-				    (member.statusLine.empty() ? DisplayName(member.displayName) + "  /  Connected" : DisplayName(member.statusLine));
-				if (!member.dropped && !member.reclaiming && !member.aiHeld && ScenarioRunner::IsLockstepPeerGone(member.peerId, ScenarioRunner::GetLockstepCompletedFrame())) roster += " - AI in control";
+				roster += (roster.empty() ? "" : "\n\n") + DisplayName(NetPlayerPresentation::Row(member));
 			}
 		}
 		m_Roster->SetText(WrapText(m_LabelFont, roster, m_Roster->GetWidth()));
@@ -541,13 +552,8 @@ void NetModerationGUI::Refresh() {
 		for (auto* action: controls.actions) action->SetVisible(used);
 		if (!used) continue;
 		const auto& seat = m_Model.GetRow(row);
-		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(seat.view.displayName), controls.name->GetWidth()));
-		const bool departed = !seat.view.reclaiming && !seat.view.dropped;
-		const bool departedAI = departed && ScenarioRunner::IsLockstepPeerGone(seat.lockstepPeerId, ScenarioRunner::GetLockstepCompletedFrame());
-		controls.detail->SetText(departed ? (departedAI ? "Left - AI in control" : "Left") :
-		    std::string(seat.view.reclaiming ? "Reconnecting" : "Disconnected") + "  /  away " +
-		    std::to_string(seat.view.droppedForMs / 1000) + "s  /  sim hold " +
-		    std::to_string(NetSeatPresence::HoldSeconds(seat.view.holdFramesRemaining)) + "s");
+		controls.name->SetText(WrapText(m_LabelFont, "Seat " + std::to_string(seat.stableSeat) + "  /  " + DisplayName(NetPlayerPresentation::Name(seat.lockstepPeerId, seat.view.displayName)), controls.name->GetWidth()));
+		controls.detail->SetText(NetPlayerPresentation::State(seat.lockstepPeerId, false, seat.view.dropped, seat.view.reclaiming));
 		controls.applicant->SetText(DisplayName(seat.applicantText));
 		controls.applicant->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		for (size_t action = 0; action < controls.actions.size(); ++action) {
@@ -584,15 +590,16 @@ void NetModerationGUI::HandleEvents() {
 
 void NetModerationGUI::Update() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
 	const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
 	if (frame < m_DepartureFrame || snapshot.serviceState != "Running") m_AnnouncedAISeats.clear();
 	m_DepartureFrame = frame;
 	if (snapshot.serviceState == "Running") {
 		for (const auto& member: snapshot.members) {
-			if (member.cpu || member.dropped || member.reclaiming || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
+			if (member.cpu || g_NetMatchService.GetSeatPresence().StateOf(member.peerId) != NetSeatPresenceState::Left || !ScenarioRunner::IsLockstepPeerGone(member.peerId, frame)) continue;
 			if (std::find(m_AnnouncedAISeats.begin(), m_AnnouncedAISeats.end(), member.peerId) != m_AnnouncedAISeats.end()) continue;
 			m_AnnouncedAISeats.push_back(member.peerId);
-			ScenarioRunner::PushNetUiToast("seat_left_ai", DisplayName(member.displayName) + " left - AI in control");
+			ScenarioRunner::PushNetUiToast("seat_left_ai", DisplayName(NetPlayerPresentation::Name(member)) + ": " + NetPlayerPresentation::State(member));
 		}
 	}
 	if (m_Open && snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch") SetOpen(false);
@@ -614,10 +621,7 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
 	for (const auto& member: snapshot.members) {
 		if (member.cpu) continue;
-		// Every row names its player first: a state word never stands in for the name.
-		const std::string name = DisplayName(member.displayName);
-		const std::string state = member.statusLine.empty() ? std::string("Connected") : DisplayName(member.statusLine);
-		text += "\n" + (state.rfind(name, 0) == 0 ? state : name + "  /  " + state);
+		text += "\n" + DisplayName(NetPlayerPresentation::Row(member));
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;
@@ -825,7 +829,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			if (member.cpu) continue;
 			text += "\nP" + std::to_string(member.peerId) + ": Ping " + (hostLost && member.peerId == snapshot.hostPeerId ? "--" : std::to_string(member.pingMs)) + " ms / delay " + std::to_string(member.inputDelayFrames) + " frames";
 			text += "\nWaits " + std::to_string(member.waits) + " / longest " + std::to_string(member.longestWaitMs) + " ms";
-			if (member.reclaiming || member.aiHeld) text += member.reclaiming ? " / Rejoining..." : " / held - AI in control";
+			if (member.reclaiming || member.aiHeld || !member.connected) text += " / " + NetPlayerPresentation::State(member);
 		}
 	}
 	if (hostLost) {
@@ -1261,6 +1265,7 @@ void NetModerationGUI::DrawMatchToasts() {
 
 void NetModerationGUI::Draw() {
 	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
 	m_StatusRect = {};
 	m_ChatRect = {};
 	m_RosterRect = {};

@@ -1,5 +1,6 @@
 #include "MainMenuGUI.h"
 #include "NetHostOptionsText.h"
+#include "NetPlayerPresentation.h"
 
 #include "WindowMan.h"
 #include "FrameMan.h"
@@ -195,10 +196,10 @@ static bool IsLoopbackAddress(const std::string& address) {
 /// A seat the roster has not named yet shows the local player their own name, never the internal default.
 static std::string LobbyRowName(const NetLobbyMember& member, const std::string& localName) {
 	if (!member.isLocal || localName.empty()) {
-		return member.displayName;
+		return NetPlayerPresentation::Name(member);
 	}
 	const bool unnamed = member.displayName.empty() || member.displayName == "Client " + std::to_string(member.peerId);
-	return unnamed ? localName : member.displayName;
+	return unnamed ? localName : NetPlayerPresentation::Name(member);
 }
 
 bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string* error);
@@ -1894,6 +1895,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 				}
 			}
 		}
+		if (member && (member->connected || member->dropped || member->reclaiming)) m_HostSeatNameLabels[row]->SetText(NetPlayerPresentation::Name(*member));
 		// The delay column reads the agreed per-sender value; automatic reads "Auto" since each
 		// sender's own link decides its figure there.
 		std::string delay = "--";
@@ -1912,12 +1914,8 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			state = "CPU / Skill " + std::to_string(m_HostOptionsDraft.teamRules[slot.team < 4 ? slot.team : 0].aiSkill);
 		} else {
 			const std::string line = member ? member->statusLine : std::string();
-			if (line.size() >= 5 && line.compare(line.size() - 5, 5, ": left") == 0) {
-				state = "AI in control";
-			} else if (line.find("reconnecting") != std::string::npos) {
-				state = "Reclaiming";
-			} else if (line.find("disconnected") != std::string::npos) {
-				state = "Held";
+			if (member && (member->aiHeld || member->dropped || member->reclaiming || line.ends_with(": left"))) {
+				state = NetPlayerPresentation::State(*member);
 			} else if (member && member->connected) {
 				state = member->ready ? "Ready" : "Not ready";
 				if (member->isLocal) state += " (you)";
@@ -3321,6 +3319,7 @@ void MainMenuGUI::LayoutMultiplayerFooter(int width, int y) {
 }
 
 void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snapshot) {
+	NetPlayerPresentation::Remember(snapshot, m_MultiplayerNameTextBox ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName());
 	const bool savingDiagnostics = TelemetryBundle::IsBusy();
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetEnabled(!savingDiagnostics);
 	m_MainMenuButtons[MenuButton::SaveDiagnosticsButton]->SetText(savingDiagnostics ? "Saving..." : "Save Diagnostics");
