@@ -85,6 +85,24 @@ def check_scratch_limit(results, scratch):
     return ok
 
 
+def check_module_requirements(results, scratch):
+    repo = scratch / "module-requirements"
+    module = repo / "Data/VoidWanderers.rte"
+    module.mkdir(parents=True)
+    (module / "Index.ini").write_text("DataModule\n\tSupportedGameVersion = 6.2.2\n", encoding="utf-8")
+    ok = True
+    for name in ("mod-void-wanderers", "mod-void-wanderers-multiplayer"):
+        scenario = driver.load_scenario(name)
+        ok &= row(results, f"{name}/version-warning-does-not-block-launch", not driver.requirement_findings(repo, scenario))
+        missing = driver.requirement_findings(repo / "absent", scenario)
+        ok &= row(results, f"{name}/missing-module-still-blocks", len(missing) == 1 and missing[0]["class"] == "data")
+    exact = {"requires_version": [{"module": "VoidWanderers.rte", "version": "7.0.0", "reason": "Exact version required"}]}
+    findings = driver.requirement_findings(repo, exact)
+    ok &= row(results, "requirements/explicit-version-contract-is-preserved", len(findings) == 1 and
+              findings[0]["declared"] == "6.2.2" and findings[0]["required"] == "7.0.0")
+    return ok
+
+
 def check_scenarios(results):
     """Every scenario parses, names peers, points at scripts that exist and keeps its own port slice."""
     ok = True
@@ -693,6 +711,7 @@ def main():
         ok = check_scenarios(results)
         ok &= check_capture_binary(results, scratch)
         ok &= check_scratch_limit(results, scratch)
+        ok &= check_module_requirements(results, scratch)
         ok &= check_substitution(results)
         ok &= check_launch_contract(results, scratch)
         ok &= check_index_and_checklist(results, scratch)

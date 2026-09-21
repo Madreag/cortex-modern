@@ -319,13 +319,5 @@
     "VoidWanderers.rte"
   ],
   "extends_scenario": "mod-void-wanderers",
-  "extension_note": "Keep both existing mod-void-wanderers runs unchanged. This separate one-run scenario adds the real-picker multiplayer leg without editing the owned scenario or exceeding its two-run limit.",
-  "requires_version": [
-    {
-      "module": "VoidWanderers.rte",
-      "version": "7.0.0",
-      "reason": "VoidWanderers.rte was developed for Cortex Command v6.2.2, so this version of Cortex Command (v7.0.0) may not support it.",
-      "log": "D:/mx/e2e-video-set-v2-20260919/mod-void-wanderers-multiplayer-2/run0/host/stdout.log:10"
-    }
-  ]
+  "extension_note": "The real activity-picker multiplayer leg complements the single and direct-pair runs of mod-void-wanderers."
 }

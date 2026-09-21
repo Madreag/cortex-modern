@@ -140,9 +140,11 @@ consecutive presented frames and fails the item on a longer hold: a held frame i
 stall, not a dropped frame. Frames stamped with an ignored screen (the game and the loading screens by default) are
 not measured. The evidence names the worst gap and every gap over the bound with its frames and screen.
 
-`forbidden_log_regex` is the negative counterpart of `log_regex`; a matching line fails the item. Required module
-versions are checked before launch through `requires_version`. The installed VW package declares 6.2.2 and is
-blocked by the upstream 7.0.0 compatibility guard; its retained refusal is linked in both VW definitions.
+`forbidden_log_regex` is the negative counterpart of `log_regex`; a matching line fails the item. A scenario can
+require an exact module version through `requires_version`. The Void Wanderers scenarios require the installed
+module but impose no version prerequisite: its 6.2.2 declaration alone does not prevent a capture on 7.0.0.
+Record the actual load and play result. A version warning alone is evidence, while a process abort, failed activity
+start or Lua error is a finding with the exact log line; neither the module nor the engine guard is altered.
 
 The capture driver records assertions and frame ranges. Independent picture review remains a separate step.
 

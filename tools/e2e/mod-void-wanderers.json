@@ -161,13 +161,5 @@
         "Assertion failed"
       ]
     }
-  ],
-  "requires_version": [
-    {
-      "module": "VoidWanderers.rte",
-      "version": "7.0.0",
-      "reason": "VoidWanderers.rte was developed for Cortex Command v6.2.2, so this version of Cortex Command (v7.0.0) may not support it.",
-      "log": "D:/mx/e2e-video-set-v2-20260919/mod-void-wanderers-multiplayer-2/run0/host/stdout.log:10"
-    }
   ]
 }
