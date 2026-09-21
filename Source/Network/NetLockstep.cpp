@@ -1262,6 +1262,16 @@ namespace RTE {
 			AppendU16LE(out, 0);
 			AppendU64LE(out, payload.highestContiguousFrame);
 			AppendU32LE(out, payload.receivedMask);
+			if (payload.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
+				if (payload.roundId == 0 || payload.seatIncarnation == 0 || payload.sessionId == 0) {
+					SetError(error, NetLockstepErrorCode::InvalidValue, 0, "input acceptance requires a round and seat incarnation");
+					return false;
+				}
+				AppendU64LE(out, payload.roundId);
+				AppendU32LE(out, payload.seatIncarnation);
+				AppendU64LE(out, payload.sessionId);
+				AppendU64LE(out, payload.authorityGeneration);
+			}
 			return true;
 		}
 
@@ -2341,7 +2351,7 @@ namespace RTE {
 			return true;
 		}
 
-		bool DecodeAck(ByteReader& reader, NetLockstepPayload& out, NetLockstepError* error) {
+		bool DecodeAck(ByteReader& reader, uint16_t version, NetLockstepPayload& out, NetLockstepError* error) {
 			NetLockstepAck payload;
 			uint8_t reserved0 = 0;
 			uint16_t reserved16 = 0;
@@ -2356,6 +2366,13 @@ namespace RTE {
 			if (reserved0 != 0 || reserved16 != 0) {
 				SetError(error, NetLockstepErrorCode::ReservedFieldNonZero, 1, "ack reserved fields must be zero");
 				return false;
+			}
+			if (version >= NetLockstepCodec::c_InputAcceptanceVersion && payload.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
+				if (!ReadOrTruncated(reader.ReadU64LE(payload.roundId), reader, error, "round_id") ||
+				    !ReadOrTruncated(reader.ReadU32LE(payload.seatIncarnation), reader, error, "seat_incarnation") ||
+				    !ReadOrTruncated(reader.ReadU64LE(payload.sessionId), reader, error, "session_id") ||
+				    !ReadOrTruncated(reader.ReadU64LE(payload.authorityGeneration), reader, error, "authority_generation") ||
+				    payload.roundId == 0 || payload.seatIncarnation == 0 || payload.sessionId == 0) return false;
 			}
 			out = payload;
 			return true;
@@ -2742,7 +2759,7 @@ namespace RTE {
 				payloadOk = DecodeFrame(payloadReader, payload, &payloadError, controllerFrameVersion, version, tables);
 				break;
 			case NetLockstepPacketType::Ack:
-				payloadOk = DecodeAck(payloadReader, payload, &payloadError);
+				payloadOk = DecodeAck(payloadReader, version, payload, &payloadError);
 				break;
 			case NetLockstepPacketType::Stop:
 				payloadOk = DecodeStop(payloadReader, payload, &payloadError);
@@ -4167,6 +4184,7 @@ namespace RTE {
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
 	void NetLockstepCoordinator::ResetRoundState() {
 		m_PeerAdmissions.clear();
+		m_HostAcceptedLocalFrames.clear();
 		m_AiHeldSeats.clear();
 		m_HoldTransactions.clear();
 		m_ReclaimTransactions.clear();
@@ -5521,12 +5539,32 @@ namespace RTE {
 		if (!IsKnownRemotePeer(ack.senderPeerId) || !SenderOwnsTransport(ack.senderPeerId, fromTransport)) {
 			return;
 		}
+		if (ack.receivedMask == NetLockstepCodec::c_InputAcceptedMask) {
+			const auto found = m_Config.peerIncarnations.find(m_Config.localPeerId);
+			const uint32_t incarnation = found == m_Config.peerIncarnations.end() ? 1 : found->second;
+			if (ack.senderPeerId == GetHostPeerId() && ack.roundId == m_RoundId && ack.seatIncarnation == incarnation &&
+			    ack.sessionId == m_Config.sessionId && ack.authorityGeneration == m_Config.migrationGeneration &&
+			    ack.highestContiguousFrame >= m_Stats.nextFrame && ack.highestContiguousFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew) {
+				m_HostAcceptedLocalFrames.insert(ack.highestContiguousFrame);
+				AdvanceReadyFrames(m_TimingNowMs);
+			}
+			return;
+		}
 		if (ack.receivedMask & NetLockstepCodec::c_FrameWindowCapabilityMask) {
 			m_RemoteFrameWindow.insert(ack.senderPeerId);
 			if (m_RelayHost) {
 				AdvertiseFrameWindow();
 			}
 		}
+	}
+
+	void NetLockstepCoordinator::AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame) {
+		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId()) return;
+		const auto found = m_Config.peerIncarnations.find(peerId);
+		NetLockstepAck ack{GetHostPeerId(), frame, NetLockstepCodec::c_InputAcceptedMask, m_RoundId,
+		    found == m_Config.peerIncarnations.end() ? 1 : found->second, m_Config.sessionId, m_Config.migrationGeneration};
+		std::string ignored;
+		(void)SendPacket({ack}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, peerId);
 	}
 
 	uint8_t NetLockstepCoordinator::ConfiguredWindowTicks() const {
@@ -5622,6 +5660,7 @@ namespace RTE {
 			return;
 		}
 		if (frame.targetFrame < m_Stats.nextFrame) {
+			AcknowledgeAcceptedInput(frame.senderPeerId, frame.targetFrame);
 			if (windowCopy) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
@@ -5639,6 +5678,7 @@ namespace RTE {
 		}
 		auto& peerFrames = m_RemoteFrames[frame.targetFrame];
 		if (peerFrames.find(frame.senderPeerId) != peerFrames.end()) {
+			AcknowledgeAcceptedInput(frame.senderPeerId, frame.targetFrame);
 			if (windowCopy) {
 				++m_Stats.windowCopiesSkipped;
 				++peerStats.windowCopiesSkipped;
@@ -5676,6 +5716,7 @@ namespace RTE {
 		if (!frame.valueObservations.empty()) {
 			m_RemoteValueObservations[frame.targetFrame][frame.senderPeerId] = frame.valueObservations;
 		}
+		AcknowledgeAcceptedInput(frame.senderPeerId, frame.targetFrame);
 		AdvanceReadyFrames(nowMs);
 	}
 
@@ -8218,6 +8259,8 @@ namespace RTE {
 			if (localIt == m_LocalFrames.end() && m_Stats.nextFrame >= EffectiveStartOf(m_Config.localPeerId) && !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame)) {
 				break;
 			}
+			if (UsesBoundedWait() && !m_Playback && m_Config.localPeerId != GetHostPeerId() && localIt != m_LocalFrames.end() &&
+			    !IsSeatReclaimGap(m_Config.localPeerId, m_Stats.nextFrame) && !m_HostAcceptedLocalFrames.contains(m_Stats.nextFrame)) break;
 			// Advance only when every REQUIRED remote's frame is in — a cleanly-left peer stops being
 			// required past its announced last frame.
 			auto remoteIt = m_RemoteFrames.find(m_Stats.nextFrame);
@@ -8322,6 +8365,7 @@ namespace RTE {
 				m_ReadyHistory.erase(m_ReadyHistory.begin());
 			}
 			m_ReadyFrames.push_back(std::move(ready));
+			m_HostAcceptedLocalFrames.erase(m_Stats.nextFrame);
 			++m_Stats.framesAccepted;
 			++m_Stats.nextFrame;
 			m_WaitingFrame = m_Stats.nextFrame;

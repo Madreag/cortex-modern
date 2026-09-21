@@ -1095,7 +1095,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x20, 0x00,
+				0x22, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1483,6 +1483,53 @@ namespace RTE {
 			for (size_t i = 0; i < peers.size(); ++i) *error += " peer=" + std::to_string(i + 1) + " applied=" + std::to_string(applied[i]) +
 			    " produced=" + std::to_string(produced[i]) + " queue=" + queueError[i] + " state=" + peers[i].BuildReportJson();
 			return false;
+		}
+
+		bool TestSenderWaitsForHostAcceptance(std::string* error) {
+			class LostInputWire final : public LoopbackTransport {
+			public:
+				bool loseInput = true;
+				bool Send(NetPeerId peer, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* reason = nullptr, bool* congested = nullptr) override {
+					if (loseInput && bytes.size() > 8 && bytes[8] == static_cast<uint8_t>(NetLockstepPacketType::Frame)) return true;
+					return LoopbackTransport::Send(peer, lane, bytes, reason, congested);
+				}
+			} clientWire;
+			LoopbackTransport hostWire;
+			NetLockstepCoordinator host, client;
+			auto hc = MakeCoordinatorConfig(1, 2, 0x9A70, 0, NetTransportLane::ControlReliable);
+			auto cc = MakeCoordinatorConfig(2, 1, 0x9A70, 0, NetTransportLane::ControlReliable);
+			hc.roundId = cc.roundId = 70;
+			hc.substituteSlowPeers = cc.substituteSlowPeers = true;
+			hc.frameRedundancyTicks = cc.frameRedundancyTicks = 4;
+			hc.simTickMs = cc.simTickMs = 1000.0 / 60.0;
+			hc.relayToOtherPeers = true;
+			if (!StartCoordinatorPair(49474, hostWire, clientWire, host, client, hc, cc, error)) return false;
+			for (uint64_t now = 0; now < 10; ++now) { host.Tick(now); client.Tick(now); }
+			if (!host.QueueLocalInput(0, {}, {}, error) || !client.QueueLocalInput(0, {}, {}, error)) return false;
+			host.Tick(10); client.Tick(10);
+			NetLockstepReadyFrame frame;
+			if (client.PopReadyFrame(frame)) {
+				*error = "the sender committed an input the host could still fence with a hold";
+				return false;
+			}
+			for (const auto& stale: {NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 69, 1, 0x9A70, 0},
+			                         NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 70, 2, 0x9A70, 0},
+			                         NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 70, 1, 0x9A71, 0},
+			                         NetLockstepAck{1, 0, NetLockstepCodec::c_InputAcceptedMask, 70, 1, 0x9A70, 1}}) {
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({stale}, bytes)) return false;
+				client.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 11);
+				if (client.PopReadyFrame(frame)) { *error = "a stale round or incarnation acknowledged the sender's input"; return false; }
+			}
+			clientWire.loseInput = false;
+			if (!host.QueueLocalInput(1, {}, {}, error) || !client.QueueLocalInput(1, {}, {}, error)) return false;
+			for (uint64_t now = 12; now < 30; ++now) { host.Tick(now); client.Tick(now); }
+			if (!host.PopReadyFrame(frame) || frame.frame != 0 || !client.PopReadyFrame(frame) || frame.frame != 0) {
+				*error = "an accepted retransmission did not release the sender's frame";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS sender_waits_for_host_acceptance" << std::endl;
+			return true;
 		}
 
 		bool TestBoundedHoldKeepsCommitting(std::string* error) {
@@ -5914,7 +5961,7 @@ namespace RTE {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x20, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x22, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -16173,6 +16220,7 @@ namespace RTE {
 		    !TestTimingBeforeStartIsRetained(&error) ||
 		    !TestLiveDelayChangesAtOneFrame(&error) ||
 		    !TestAutomaticDelayKeepsFourPeersCommitting(&error) ||
+		    !TestSenderWaitsForHostAcceptance(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
