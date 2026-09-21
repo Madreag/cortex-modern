@@ -468,7 +468,10 @@ namespace RTE {
 		static void QueueMusicStream(AudioMan* luaSelfObject, const std::string& filePath);
 		/// Compatibility with 6.x AudioMan:ClearMusicQueue() — empties the pending music queue without stopping the currently playing track.
 		static void ClearMusicQueue(AudioMan* luaSelfObject);
+		static bool RunModApiShimsSelfTest();
 	};
+
+	void ResetV6CompatMusicState();
 #pragma endregion
 
 #pragma region TimerMan Lua Adapters

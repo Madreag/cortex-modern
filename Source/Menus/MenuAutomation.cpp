@@ -33,6 +33,8 @@
 #include "TimerMan.h"
 #include "UInputMan.h"
 #include "WindowMan.h"
+#include "RTEError.h"
+#include "System.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -45,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iostream>
 #include <iterator>
 #include <list>
 #include <mutex>
@@ -310,7 +313,8 @@ namespace RTE::MenuAutomation {
 		return fits;
 	}
 	bool Handles(const std::string& command) {
-		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_text_fits" || command == "assert_no_overlap" ||
+		return command == "assert_visible" || command == "assert_focus" || command == "assert_rect_inside" || command == "assert_inside_screen" || command == "assert_text_fits" || command == "assert_no_overlap" ||
+			command == "dump_refresh_count" || command == "dump_enter_state" ||
 			command == "dump_host_options" || command == "dump_player_options" || command == "focus_next" || command == "focus_previous" || command == "key" || command == "pad" ||
 			command == "key_down" || command == "key_up" || command == "focus" ||
 			command == "set_text" || command == "set_share_address" || command == "combo_drop" || command == "combo_select" ||
@@ -343,6 +347,7 @@ namespace RTE::MenuAutomation {
 			return true;
 		}
 		if (command == "fire_assert") {
+			if (!FireAssertAllowed()) return false;
 			// The assert seam the harness needs: a scripted run must be able to answer a real assert the way
 			// a player does, and prove the run went on.
 			std::string reason{std::istreambuf_iterator<char>(args), std::istreambuf_iterator<char>()};
@@ -355,7 +360,7 @@ namespace RTE::MenuAutomation {
 			std::string kind, text;
 			args >> kind;
 			std::getline(args >> std::ws, text);
-			if (!FrameRecorder::Instance().Enabled() || kind.empty() || text.empty()) return false;
+			if (!FireAssertAllowed() || kind.empty() || text.empty()) return false;
 			ScenarioRunner::PushNetUiToast(kind, text);
 			observation = kind + " " + text;
 			return true;
@@ -398,8 +403,7 @@ namespace RTE::MenuAutomation {
 			if (!panel) return false;
 			const auto& toasts = panel->GetToastRect();
 			const auto& seats = panel->GetSeatsPanelRect();
-			int expectedRows = -1;
-			args >> expectedRows;
+			int expectedRows = ParseToastBandExpectedRows(args);
 			int rows = 0;
 			for (int row = 0; row < 3; ++row) {
 				auto* label = panel->GetControl("LabelNetMatchToast" + std::to_string(row));
@@ -432,6 +436,35 @@ namespace RTE::MenuAutomation {
 			const auto a = Rectangle(aControl->GetPanel()), b = Rectangle(bControl->GetPanel());
 			observation = first + " " + second + " rect=" + Json(a).dump() + " other=" + Json(b).dump();
 			return a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+		}
+		if (command == "assert_inside_screen") {
+			std::string name;
+			args >> name;
+			auto* network = g_MenuMan.GetNetworkPanel();
+			auto* control = manager ? manager->GetControl(name) : nullptr;
+			if (!control && network) control = network->GetControl(name);
+			if (!control || !control->GetPanel()) { observation = name + " missing"; return false; }
+			BITMAP* screen = g_FrameMan.GetBackBuffer32();
+			const auto rect = Rectangle(control->GetPanel());
+			const bool inside = screen && rect[0] >= 0 && rect[1] >= 0 &&
+			                    rect[0] + rect[2] <= screen->w && rect[1] + rect[3] <= screen->h;
+			observation = Json{{"control", name}, {"rect", rect}, {"screen", {screen ? screen->w : 0, screen ? screen->h : 0}}, {"inside", inside}}.dump();
+			return inside;
+		}
+		if (command == "dump_refresh_count") {
+			auto* panel = g_MenuMan.GetNetworkPanel();
+			if (!panel) return false;
+			observation = Json{{"refresh_count", panel->RefreshCount()}, {"refresh_changes", panel->RefreshChangeCount()}}.dump();
+			System::PrintDiagnosticLine("[refresh-count] " + observation);
+			return true;
+		}
+		if (command == "dump_enter_state") {
+			if (!manager || !manager->GetInput()) return false;
+			const int state = manager->GetInput()->GetAsciiState(static_cast<unsigned char>(GUIInput::Key_Enter));
+			const char* name = state == GUIInput::Pushed ? "Pushed" : state == GUIInput::Released ? "Released" : state == GUIInput::Repeat ? "Repeat" : "None";
+			observation = Json{{"key_enter", state}, {"name", name}}.dump();
+			System::PrintDiagnosticLine("[enter-state] " + observation);
+			return true;
 		}
 		if (command == "assert_vertical_scroll") {
 			std::string name;
@@ -771,5 +804,49 @@ namespace RTE::MenuAutomation {
 			}
 			return false;
 		} catch (const std::exception& error) { observation = error.what(); return false; }
+	}
+
+	int ParseToastBandExpectedRows(std::istream& args) {
+		int expectedRows = -1;
+		if (!(args >> expectedRows)) {
+			expectedRows = -1;
+		}
+		return expectedRows;
+	}
+
+	bool FireAssertAllowed() {
+		return FrameRecorder::Instance().Enabled() || SDL_getenv("CCCP_HEADLESS") != nullptr;
+	}
+
+	bool RunSelfTest() {
+		bool passed = true;
+		const auto check = [&passed](const char* label, bool value, const std::string& detail) {
+			passed = passed && value;
+			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
+		};
+		{
+			std::istringstream missing("");
+			const int rows = ParseToastBandExpectedRows(missing);
+			check("missing_toast_band_arg_is_minus_one", rows == -1, "expectedRows=" + std::to_string(rows));
+		}
+		{
+			std::istringstream present("3");
+			const int rows = ParseToastBandExpectedRows(present);
+			check("toast_band_arg_is_n", rows == 3, "expectedRows=" + std::to_string(rows));
+		}
+		{
+			const char* previous = SDL_getenv("CCCP_HEADLESS");
+			SDL_setenv_unsafe("CCCP_HEADLESS", "", 1);
+			SDL_unsetenv_unsafe("CCCP_HEADLESS");
+			const bool refused = !FireAssertAllowed();
+			if (previous) {
+				SDL_setenv_unsafe("CCCP_HEADLESS", previous, 1);
+			} else {
+				SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
+			}
+			check("fire_assert_refused_when_headed", refused, refused ? "refused" : "allowed");
+		}
+		std::cout << "[menu-automation-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
+		return passed;
 	}
 }

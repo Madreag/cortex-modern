@@ -1282,15 +1282,35 @@ def scripts(case, port, root, size="960x540"):
                 "focus_previous\nassert_focus TextMultiplayerName\nfocus_next\n"
                 "pad south down\npad south up\nwait 3\nassert_substate HostSetup\n"
                 "dump_host_options\nexit\n")
-    elif case in ("live", "disabled", "scope-off", "input-parity"):
+    elif case == "input-parity":
+        text = (RESET_INPUT + "activate ButtonMainToMultiplayer\nwait 8\n"
+                "assert_visible TextMultiplayerName 1\nfocus_next\nassert_focus TextMultiplayerName\n"
+                "key Return down\ndump_enter_state\nkey Return up\n"
+                "key KPEnter down\ndump_enter_state\nkey KPEnter up\n"
+                "activate ButtonMultiplayerHostGame\nwait 5\nassert_substate HostSetup\n"
+                "assert_visible ComboHostActivity 1\nfocus ComboHostActivity\n"
+                "key Return down\ndump_enter_state\nkey Return up\n"
+                "key KPEnter down\ndump_enter_state\nkey KPEnter up\n"
+                "dump_host_options\ndump_host_options\ndump_host_options\ndump_host_options\n"
+                "exit\n")
+    elif case in ("live", "disabled", "scope-off"):
         text = ("wait 12\nassert_screen Pause\nassert_visible ButtonSettings 1\n" if case == "live"
                 else RESET_INPUT + host_lobby(port) if case == "disabled"
-                else RESET_INPUT + LANDING if case == "input-parity" else LANDING)
+                else LANDING)
         text += "assert_visible root 1\n"
-        if case in ("scope-off", "input-parity"):
+        if case == "scope-off":
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
-        steps = ([{"op": "wait", "sim_at_least": 150}, {"op": "key_down", "key": "Escape"},
+        steps = ([{"op": "wait", "sim_at_least": 150},
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "wait", "panel_open": True},
+                  menu_step("push_toast info toast-one"), menu_step("push_toast info toast-two"),
+                  menu_step("push_toast info toast-three"),
+                  menu_step("assert_inside_screen NetworkSeats"),
+                  menu_step("dump_refresh_count"), {"op": "wait", "renders": 60},
+                  menu_step("dump_refresh_count"),
+                  {"op": "key_down", "key": "F6"}, {"op": "key_up", "key": "F6"},
+                  {"op": "key_down", "key": "Escape"},
                   {"op": "key_up", "key": "Escape"}, {"op": "wait", "screen": "Pause"}] if case == "live"
                  else [{"op": "wait", "screen": "MultiplayerScreen"}])
         if case == "live":
@@ -1303,23 +1323,6 @@ def scripts(case, port, root, size="960x540"):
                       menu_step("post_command ButtonBackToMainMenu"), {"op": "wait", "screen": "Pause"},
                       menu_step("assert_visible ButtonSettings 1"), menu_step("dump_host_options"),
                       {"op": "assert", "equals": {"service": "Running", "paused": False}, "sim_at_least": 100}]
-        elif case == "input-parity":
-            steps += [{"op": "wait", "scope": "menu", "control": "TextMultiplayerName", "equals": {"focus": True}}]
-            for route in ("key", "pad", "mouse", "post_command"):
-                if route == "post_command":
-                    steps += [menu_step("post_command ButtonMultiplayerHostGame")]
-                else:
-                    steps += [{"op": "mouse_move", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
-                    for edge in ("down", "up"):
-                        steps += ([{"op": f"mouse_{edge}", "scope": "menu", "control": "ButtonMultiplayerHostGame"}]
-                                  if route == "mouse" else [menu_step(f"{route} {'KP1' if route == 'key' else 'south'} {edge}")])
-                        if edge == "down":
-                            steps += [menu_step("assert_focus ButtonMultiplayerHostGame")]
-                steps += [menu_step("assert_visible TextHostPort 1"), menu_step("dump_host_options"),
-                          menu_step("post_command ButtonHostBack"), menu_step("assert_visible ButtonMultiplayerHostGame 1")]
-                if route != "post_command":
-                    steps += [menu_step("focus_previous")]
-                steps += [menu_step("assert_focus TextMultiplayerName")]
         elif case == "disabled":
             steps += [{"op": "wait", "scope": "menu", "control": "ButtonMultiplayerStart",
                        "equals": {"visible": True, "enabled": False}},
@@ -1653,6 +1656,14 @@ def run_case(options, case, root, failing=None):
             assert recorded[0].name in logs["host"], recorded[0].name
             assert not list((runs["client"].cwd / "Userdata/Replays").glob("*.ccreplay")) if (runs["client"].cwd / "Userdata/Replays").exists() else True
             result["replay_recorded"] = recorded[0].name
+            refresh = [json.loads(line.split("[refresh-count] ", 1)[1]) for line in logs["host"].splitlines()
+                       if "[refresh-count] " in line]
+            assert len(refresh) >= 2, refresh
+            delta = refresh[-1]["refresh_count"] - refresh[0]["refresh_count"]
+            changes = refresh[-1]["refresh_changes"] - refresh[0]["refresh_changes"]
+            result["refresh"] = {"before": refresh[0], "after": refresh[-1], "delta": delta, "changes": changes,
+                                 "frames": 60}
+            assert delta < 60, result["refresh"]
         for who in probes:
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
@@ -2231,6 +2242,11 @@ def run_case(options, case, root, failing=None):
             projected = [[{key: control[key] for key in ("name", "rect", "text", "enabled", "visible")}
                           for control in capture["controls"]] for capture in images]
             assert all(value == projected[0] for value in projected[1:]), "activation routes produce different controls"
+            host_log = logs.get("host") or next(iter(logs.values()))
+            enters = [json.loads(line.split("[enter-state] ", 1)[1]) for line in host_log.splitlines()
+                      if "[enter-state] " in line]
+            result["enter_states"] = enters
+            assert enters and all(row.get("name") == "Pushed" for row in enters), enters
         result["pass"] = True
     except Exception as error:
         result["error"] = str(error)
