@@ -1698,12 +1698,27 @@ def run_case(options, case, root, failing=None):
             assert len(confirm) == 1 and confirm[0]["peer"] == "client", confirm
             drawn = {control["name"] for control in confirm[0]["controls"]}
             assert {"LeaveConfirmBox", "LabelLeaveConfirm", "ButtonLeaveConfirm", "ButtonLeaveCancel"} <= drawn, sorted(drawn)
-            # The clean leave, read from each side's own match report: the survivor's match ends
-            # complete, not broken, and the leaver's records its leave, not a crash.
+            # An acknowledged leave hands the seat to the AI while the host keeps playing.
             reports = {who: json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
                        for who in ("host", "client")}
-            assert reports["host"]["service"]["status"] == "The other player left the match", reports["host"]["service"]["status"]
             assert reports["client"]["service"]["status"] == "Match left", reports["client"]["service"]["status"]
+            leave = reports["client"]["service"]["reconnect"]
+            assert leave["client_leave_acks"] == 1 and leave["client_unacknowledged_leaves"] == 0, leave
+            assert leave["client_state"] == "Left" and leave["ticket_stored"] is False, leave
+            assert "[net-reconnect] leave: Left (ticket cleared)" in logs["client"], logs["client"][-2000:]
+            announcements = re.findall(r"\[net-lockstep\] a leave becomes a hold for peer 2 at frame (\d+): Match left", logs["host"])
+            assert len(announcements) == 1, announcements
+            leave_frame = int(announcements[0])
+            assert f"[net-match] hold peer=2 frame={leave_frame} AI in control" in logs["host"], leave_frame
+            host = reports["host"]
+            lockstep = host["service"]["runner"]["lockstep"]
+            assert lockstep["peer_leave_frames"] == {"2": leave_frame} and 0 < leave_frame < 400, lockstep
+            assert host["service"]["is_host"] is True and lockstep["host_peer_id"] == 1, host["service"]["is_host"]
+            assert host["frames_planned"] == 400 and host["running_ticks"] >= 400, host["running_ticks"]
+            assert lockstep["completed_simulation_tick"] >= 400, lockstep["completed_simulation_tick"]
+            assert host["service"]["status"] == "e2e complete", host["service"]["status"]
+            result["announced_leave"] = {"peer_id": 2, "frame": leave_frame, "leave_acks": leave["client_leave_acks"],
+                "ticket_cleared": not leave["ticket_stored"], "completed_tick": lockstep["completed_simulation_tick"]}
         if case == "pages":
             # The network page reports its selector's page ("Network:Player"); the top name is the prefix.
             assert [capture["settings_page"].split(":")[0] for capture in images] == list(PAGES), [c["settings_page"] for c in images]
