@@ -717,6 +717,10 @@ namespace RTE {
 	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
 		PeerState* peer = FindPeer(peerId);
 		if (!peer || !IsActive(peer->state)) {
+			// A transport that hands us a payload before it announces the connection loses it here.
+			if (!peer)
+				System::PrintDiagnosticLine(std::string("[net-session] dropped ") + NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload)) +
+				                            " from unannounced transport peer " + std::to_string(peerId));
 			return;
 		}
 		if (const auto* chat = std::get_if<NetChat>(&message.payload)) {
