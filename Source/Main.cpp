@@ -2996,13 +2996,13 @@ static void PollStallEventsForCapture() {
 }
 
 static void DrawFrameWithPreviews() {
+	if (!FrameMan::FeelBeginDraw()) return;
 	RandomGenerator* prevSimRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	g_SceneMan.SetRenderDrawContext(true);
 	LocalPredictionHudSelfTest::SampleBeforeRender();
 	LocalPrediction::BeginRender();
 	LocalPredictionHudSelfTest::SampleDuringRender();
-	FrameMan::FeelBeginDraw();
 	std::array<bool, c_MaxScreenCount> hudDisabled;
 	const bool localPause = g_MenuMan.IsLocalPauseMenuOpen();
 	for (int screen = 0; screen < c_MaxScreenCount; ++screen) {
@@ -8404,6 +8404,7 @@ int main(int argc, char** argv) {
 	const auto* gpu = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
 	TelemetryBundle::SetGpuDescription(gpu ? gpu : "unavailable");
 	if (!mainArgsValid) return ShutDown(EXIT_FAILURE);
+	FrameMan::ApplyHeadlessPresentationDefault();
 
 	// The managers are up, so the recorder takes the run's own resolution from the first frame on.
 	if (!s_recordVideoDirectory.empty()) {
