@@ -546,6 +546,8 @@ namespace RTE {
 		uint32_t holds = 0;
 		uint32_t substitutions = 0;
 		uint32_t rejoins = 0;
+		uint64_t longestWaitMsSinceReclaim = 0; //!< What this seat has waited since it was last reclaimed; the match record above keeps the round's totals.
+		uint32_t waitsSinceReclaim = 0;
 	};
 
 	struct NetLockstepStats {
@@ -822,6 +824,14 @@ namespace RTE {
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
 		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
+		/// What a seat has waited SINCE it was last reclaimed: what the player is shown, while the
+		/// match record in GetStats()/BuildReportJson keeps the round's totals.
+		uint32_t WaitsSinceReclaim(uint8_t peerId) const;
+		uint64_t LongestWaitMsSinceReclaim(uint8_t peerId) const;
+		/// Counts reclaims applied to the local seat; the surfaces restart their own clocks when it moves.
+		uint32_t LocalSeatReclaims() const { return m_LocalSeatReclaims; }
+		/// Restarts a returning seat's presentation readings at the frame its reclaim commits.
+		void NoteSeatReclaimed(uint8_t peerId);
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
 		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
@@ -1189,6 +1199,7 @@ namespace RTE {
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
+		uint32_t m_LocalSeatReclaims = 0;
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;

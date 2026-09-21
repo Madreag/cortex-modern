@@ -975,6 +975,7 @@ void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const st
 			actor->TouchCheckpoint(); ++reclaimed;
 		}
 		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peer, false, ready.frame);
+		if (peer == ScenarioRunner::GetLockstepLocalPeerId()) ScenarioRunner::NoteLocalSeatReclaimed();
 		std::cout << "[net-match] seat-reclaimed peer=" << static_cast<int>(peer) << " frame=" << ready.frame << " live_actors=" << reclaimed << std::endl;
 	}
 }

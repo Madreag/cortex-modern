@@ -317,6 +317,10 @@ namespace RTE {
 		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
+		/// A reclaimed local seat ends the rejoin banners and the wait clocks that ran while it was away.
+		static void NoteLocalSeatReclaimed();
+		/// Reclaims of the local seat so far; a surface restarts its own reading when this moves.
+		static uint32_t GetLockstepSeatReclaimEpoch();
 		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.

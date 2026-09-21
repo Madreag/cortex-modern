@@ -8294,6 +8294,40 @@ namespace RTE {
 		return true;
 	}
 
+	// The in-match net surfaces belong to the match, not to the running round: a peer whose lockstep
+	// completed or stopped is still in its match and still needs its status box, roster and toasts.
+	bool TestMatchSurfacesOutliveTheRound(std::string* error) {
+		const auto say = [](bool drawn) { return drawn ? "drawn" : "gone"; };
+		// A running round draws, as it always did.
+		if (!NetModerationGUI::MatchSurfacesDrawn(true, false, false, true, true)) {
+			*error = "a running round's surfaces read gone";
+			return false;
+		}
+		// The round completed or stopped on this peer; the activity is still up and the coordinator attached.
+		if (!NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, true)) {
+			*error = "a completed or stopped round's surfaces read gone while the match activity is still up: "
+			         "sync=0 resync=0 host_lost=0 attached=1 activity=1 -> " +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, true)));
+			return false;
+		}
+		// A resync and a lost host keep drawing with no coordinator of their own.
+		if (!NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, true) ||
+		    !NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false)) {
+			*error = "a resyncing or host-lost peer's surfaces read gone";
+			return false;
+		}
+		// Out of a match nothing in-match draws: the lobby and the main menu are not a match.
+		if (NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true) ||
+		    NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false)) {
+			*error = "the in-match surfaces drew outside a match: no_coordinator=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true))) + " no_activity=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false)));
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS overlay: the in-match surfaces outlive the round that stopped" << std::endl;
+		return true;
+	}
+
 	// An empty seat is named for the roster it belongs to: a match's seat reads its client id, a
 	// persistent world's seat reads Open, and the world roster the host publishes is unchanged.
 	bool TestUnseatedSlotNameForms(std::string* error) {
@@ -12506,6 +12540,7 @@ namespace RTE {
 		if (!TestUnreadableBanListHoldsAdmission(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);
 		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
+		if (!TestMatchSurfacesOutliveTheRound(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);
 		if (!TestKickedSeatReadsOpen(&error)) return fail(error);
 		if (!TestFinishMatchDrainsFencedDisconnect(&error)) return fail(error);

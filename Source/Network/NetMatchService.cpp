@@ -4860,7 +4860,9 @@ static std::string ResyncSaveName() {
 				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_Coordinator->GetConfig().matchConfig, member.peerId);
 				if (const auto stats = m_Coordinator->GetStats().peers.find(member.peerId); stats != m_Coordinator->GetStats().peers.end()) {
 					member.pingMs = stats->second.pingMs;
-					member.waits = stats->second.waits; member.longestWaitMs = stats->second.longestWaitMs;
+					// The panel shows this seat's current standing, not the totals a rejoined seat left behind.
+					member.waits = m_Coordinator->WaitsSinceReclaim(member.peerId);
+					member.longestWaitMs = m_Coordinator->LongestWaitMsSinceReclaim(member.peerId);
 				}
 				member.aiHeld = m_Coordinator->IsSeatUnderAI(member.peerId, m_Coordinator->GetResumeFrame());
 				if (member.aiHeld) member.statusLine = member.reclaiming ? "Rejoining..." : "held - AI in control";
