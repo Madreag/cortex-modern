@@ -411,8 +411,8 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	const int top = PanelTop(screenHeight);
 	const int height = std::max(minHeight, std::min(c_PanelHeight, screenHeight - c_PanelGap - top));
 	if (screenHeight >= c_CompactMaxHeight) {
-		// Only the plain placement can reach past the bottom edge; the solver never returns one that does.
-		return {top + height > screenHeight - c_PanelGap ? std::max(0, screenHeight - c_PanelGap - height) : top, height};
+		const int fittedTop = std::max(top, reservedTop);
+		return {fittedTop, std::max(minHeight, std::min(height, screenHeight - c_PanelGap - fittedTop))};
 	}
 	// A compact screen keeps the strip band and one toast row above the panel's top: the panel sits
 	// under them and loses the rows off its height, so its bottom edge - and the roster - stay put.
@@ -438,10 +438,12 @@ void NetModerationGUI::LayoutPanel() {
 		textBands.push_back({band.y, band.y + band.h});
 	}
 	// The panel gives up rows to its compact form before an open entry's history gives up its last one.
-	int reservedTop = 0;
+	const int toastRows = static_cast<int>(std::min<size_t>(3, ScenarioRunner::GetVisibleNetUiToasts().size()));
+	const int statusBottom = m_StatusRect.visible ? m_StatusRect.y + m_StatusRect.height : c_StripBandBottom;
+	int reservedTop = statusBottom + c_PanelGap + (toastRows ? toastRows * rowHeight + c_PanelGap : 0);
 	if (m_ChatEntryOpen && g_SettingsMan.GetNetworkChatVisible()) {
 		const int lineHeight = ChatLineHeight(g_SettingsMan.GetNetworkChatTextSize() == SettingsMan::NetworkChatTextSize::Large);
-		reservedTop = ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap;
+		reservedTop = std::max(reservedTop, ChatTopLimit(area, screenHeight) + ChatEntryMinimum(lineHeight) + c_PanelGap);
 	}
 	const PanelPlacement placed = PlaceSeatsPanelOnScreen(screenHeight, rowHeight, textBands, reservedTop);
 	const int top = placed.top;
@@ -705,35 +707,14 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const EditorArea editor = FreeArea(backbuffer->w);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
-	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics()) {
+	if (backbuffer->h < c_CompactMaxHeight && (m_Open || !g_SettingsMan.GetNetworkShowDiagnostics())) {
 		// The short-screen layout is one line in the gap between the funds block and the controller icon;
 		// while the editor holds the world it takes the widest column-free gap, or the top band when none fits.
 		const int fullHeight = font->GetFontHeight() + 7;
 		int height = fullHeight;
-		int y = editor.editing ? backbuffer->h - height - 2 : 2;
+		int y = editor.editing && !m_Open ? backbuffer->h - height - 2 : 2;
 		bool topBand = false;
-		if (m_Open) {
-			// An open seats panel reaches the top of a compact screen, so a strip crossing its rows lifts
-			// above it - shrinking to a bare line of them when that is all the room there is. The toast
-			// row the panel's band reserves sits under the strip, so a live toast lowers the ceiling to it,
-			// and the editor's own seat message bands lower it further still.
-			int panelX, panelTop, panelWidth, panelHeight;
-			m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-			const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
-			int ceiling = ScenarioRunner::GetVisibleNetUiToasts().empty() ? panelTop : panelTop - 4 - rowHeight;
-			if (editor.editing) {
-				for (const auto& band: editor.textBands) {
-					if (band.y < ceiling) ceiling = band.y;
-				}
-			}
-			if (y < panelTop + panelHeight && y + height > ceiling) {
-				y = ceiling - height;
-				if (y < 0) {
-					y = 0;
-					height = std::min(height, ceiling);
-				}
-			}
-		}
+
 		int freeLeft = 152, freeRight = backbuffer->w - 40;
 		if (editor.editing) {
 			editor.FreeSpan(y, y + height, backbuffer->w, freeLeft, freeRight);
@@ -873,20 +854,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// A collapsed span takes the window's top band instead of a zero-width box.
 	const int x = topBand ? std::max(0, (backbuffer->w - width) / 2) :
 	    (editor.editing ? freeLeft + std::max(0, (available - width) / 2) : backbuffer->w - width - c_StatusBoxMargin);
-	int y = topBand ? 2 : (editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
-	if (m_Open) {
-		// The same rule the compact strip follows: an open seats panel owns its rows, so a box crossing
-		// them lifts above it.
-		int panelX, panelTop, panelWidth, panelHeight;
-		m_Panel->GetControlRect(&panelX, &panelTop, &panelWidth, &panelHeight);
-		const int panelBottom = panelTop + panelHeight;
-		if (y < panelBottom && y + height > panelTop) {
-			// Above the panel when that band holds the box, below it when the lower band does.
-			if (panelTop >= height) y = panelTop - height;
-			else if (backbuffer->h - panelBottom >= height) y = panelBottom;
-			else y = std::max(0, panelTop - height);
-		}
-	}
+	int y = topBand ? 2 : (editor.editing && !m_Open ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
+
 	m_NetStatusBox->Move(x, y);
 	if (m_NetStatusBox->GetWidth() != width || m_NetStatusBox->GetHeight() != height) m_NetStatusBox->Resize(width, height);
 	m_NetStatus->Move(x + 6, y + 6);
@@ -1308,12 +1277,13 @@ void NetModerationGUI::Draw() {
 	} else {
 		DrawRoster(snapshot);
 	}
-	if (m_Open) m_Controls->Draw();
-	// Opening the panel is one of the status widget's triggers, so the status draws over it: a screen too
-	// short for both still owes the player the reading it just asked for.
 	if (inMatch && MatchStatusWanted()) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
+	}
+	if (m_Open) {
+		Refresh();
+		m_Controls->Draw();
 	}
 	if (inMatch) {
 		DrawMatchChat(snapshot);
