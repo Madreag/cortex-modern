@@ -71,11 +71,11 @@ extern "C" {
 #include <execution>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <string>
 #include <sstream>
-#include <unordered_map>
 #include <tuple>
 #include <unordered_set>
 #include <vector>
@@ -4817,26 +4817,47 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		return;
 	}
 
-	std::unordered_map<MovableObject*, LuaStateWrapper*> owners;
-	size_t registeredCount = 0;
-	for (const LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) registeredCount += luaState.GetRegisteredMOs().size();
-	owners.reserve(registeredCount);
+	struct Pending {
+		MovableObject* object = nullptr;
+		LuaStateWrapper* state = nullptr;
+	};
+	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
+		return lhs.object->GetUniqueID() < rhs.object->GetUniqueID();
+	};
+	std::vector<std::vector<Pending>> runs;
+	runs.reserve(g_LuaMan.GetThreadedScriptStates().size());
 	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-		for (MovableObject* mo: luaState.GetRegisteredMOs()) owners.emplace(mo, &luaState);
+		std::vector<MovableObject*> objects = SortedRegisteredMOs(luaState);
+		auto& run = runs.emplace_back();
+		run.reserve(objects.size());
+		for (MovableObject* mo: objects) run.push_back({mo, &luaState});
+	}
+	while (runs.size() > 1) {
+		std::vector<std::vector<Pending>> merged;
+		merged.reserve((runs.size() + 1) / 2);
+		for (size_t index = 0; index < runs.size(); index += 2) {
+			if (index + 1 == runs.size()) {
+				merged.push_back(std::move(runs[index]));
+				continue;
+			}
+			auto& output = merged.emplace_back();
+			output.reserve(runs[index].size() + runs[index + 1].size());
+			std::merge(runs[index].begin(), runs[index].end(), runs[index + 1].begin(), runs[index + 1].end(), std::back_inserter(output), earlier);
+		}
+		runs.swap(merged);
 	}
 
 	LuaStateWrapper* currentState = nullptr;
-	for (const auto& [uniqueID, object]: m_KnownObjects) {
-		(void)uniqueID;
-		const auto owner = owners.find(object);
-		if (owner == owners.end()) continue;
-		if (currentState != owner->second) {
-			g_LuaMan.SetThreadLuaStateOverride(owner->second);
-			currentState = owner->second;
-		}
-		if (ValidMO(object->GetRootParent()) && object->HasRequestedSyncedUpdate()) {
-			object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-			object->ResetRequestedSyncedUpdateFlag();
+	if (!runs.empty()) {
+		for (const Pending& next: runs.front()) {
+			if (currentState != next.state) {
+				g_LuaMan.SetThreadLuaStateOverride(next.state);
+				currentState = next.state;
+			}
+			if (ValidMO(next.object->GetRootParent()) && next.object->HasRequestedSyncedUpdate()) {
+				next.object->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+				next.object->ResetRequestedSyncedUpdateFlag();
+			}
 		}
 	}
 	g_LuaMan.SetThreadLuaStateOverride(nullptr);
