@@ -980,6 +980,7 @@ namespace RTE {
 		friend bool TestRelayOfferRefresh(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestHandoverSnapshotStatus(std::string* error);
+		friend bool TestDiscoveryOccupancy(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);

@@ -627,7 +627,7 @@ static std::string ResyncSaveName() {
 			m_ResyncOnDesync = request.resyncOnDesync;
 			m_PendingResyncLoad.clear();
 			m_BeaconGamePort = request.port;
-			m_BeaconMaxPlayers = request.dedicated ? static_cast<uint8_t>(std::max(1, static_cast<int>(request.peerCount) - 1)) : request.peerCount;
+			m_BeaconMaxPlayers = static_cast<uint8_t>(std::max(1, m_HumanSeats - (request.dedicated ? 1 : 0)));
 			m_LocalName = request.playerName.empty() ? (request.host ? "Host" : "Client") : request.playerName;
 			m_JoinRefusedByLiveMatch = false;
 			if (request.host) {
@@ -2038,7 +2038,7 @@ static std::string ResyncSaveName() {
 					// The roster lists every configured slot, so an open seat is a non-CPU slot no
 					// peer has connected into yet.
 					for (const NetLobbyMember& member : m_LobbySnapshot.members) {
-						if (!member.cpu && !member.connected) {
+						if (!member.cpu && !member.connected && !member.dropped && !member.reclaiming) {
 							++directorySeatsFree;
 						}
 					}
@@ -2067,7 +2067,11 @@ static std::string ResyncSaveName() {
 			                                 m_LocalName.empty() ? "Host" : m_LocalName,
 			                                 snapshot.activityPreset.empty() ? m_ActivityPreset : snapshot.activityPreset,
 			                                 snapshot.modeName,
-			                                 static_cast<uint8_t>(std::max<size_t>(snapshot.members.size(), 1)),
+			                                 static_cast<uint8_t>(snapshot.members.empty() ? (m_Dedicated ? 0 : 1) :
+			                                     std::count_if(snapshot.members.begin(), snapshot.members.end(), [&](const NetLobbyMember& member) {
+				                                     return !member.cpu && !(m_Dedicated && member.isLocal) &&
+				                                            (member.connected || member.dropped || member.reclaiming);
+			                                     })),
 			                                 m_BeaconMaxPlayers, &beaconCompat, &ignored);
 			m_LanDiscovery.Tick(nowMs);
 		} else {

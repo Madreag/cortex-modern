@@ -11504,6 +11504,59 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestDiscoveryOccupancy(std::string* error) {
+		const std::string directory = g_SettingsMan.GetSessionDirectoryUrl();
+		g_SettingsMan.SetSessionDirectoryUrl("");
+		struct RestoreDirectory { std::string value; ~RestoreDirectory() { g_SettingsMan.SetSessionDirectoryUrl(value); } } restore{directory};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_BeaconGamePort = 49473;
+		service.m_BeaconMaxPlayers = 3;
+		service.m_LocalName = "OccupancyHost";
+		NetLobbyMember host, second, third;
+		host.peerId = 1; host.connected = true; host.isLocal = true;
+		second.peerId = 2; third.peerId = 3;
+		service.m_LobbySnapshot.members = {host, second, third};
+		NetLanDiscovery browser;
+		if (!browser.StartBrowser(error)) return false;
+		uint64_t sampleNow = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		const auto read = [&](const std::string& expected) {
+			service.m_LastUpdateMs = 0;
+			service.Update();
+			sampleNow += 1001;
+			service.m_LanDiscovery.Tick(sampleNow);
+			for (int spin = 0; spin < 100; ++spin) {
+				browser.Tick(sampleNow);
+				for (const auto& entry : browser.GetHosts(sampleNow)) {
+					if (entry.port != 49473 || entry.hostName != "OccupancyHost" || entry.lastSeenMs != sampleNow) continue;
+					const auto rows = NetDirectoryClient::MergeGameLists({entry}, {}, {});
+					if (rows.front().players != expected) {
+						*error = "discovery occupancy: expected " + expected + " received " + rows.front().players;
+						return false;
+					}
+					return true;
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			*error = "discovery occupancy: beacon was not received";
+			return false;
+		};
+		if (!read("1/3")) return false;
+		service.m_LobbySnapshot.members[1].connected = true;
+		if (!read("2/3")) return false;
+		service.m_LobbySnapshot.members[1].connected = false;
+		service.m_LobbySnapshot.members[1].dropped = true;
+		NetLobbyMember cpu; cpu.peerId = 4; cpu.cpu = true; cpu.connected = true;
+		service.m_LobbySnapshot.members.push_back(cpu);
+		if (!read("2/3")) return false;
+		service.m_LobbySnapshot.members[1].dropped = false;
+		service.m_LobbySnapshot.members[1].reclaiming = true;
+		if (!read("2/3")) return false;
+		std::cout << "[net-match-selftest] PASS discovery_occupancy one=1/3 two=2/3 held=2/3 reclaiming=2/3 cpu_excluded=1" << std::endl;
+		return true;
+	}
+
 	bool TestHandoverSnapshotStatus(std::string* error) {
 		LoopbackTransport hostWire, clientWire;
 		if (!hostWire.StartHost(49461, error) || !clientWire.Connect("loopback", 49461, error)) return false;
@@ -12121,6 +12174,7 @@ namespace RTE {
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);
 		if (!menuInputs || !routeEvidence) return fail(menuError + "; " + routeError);
 		if (!TestHandoverSnapshotStatus(&error)) return fail(error);
+		if (!TestDiscoveryOccupancy(&error)) return fail(error);
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
