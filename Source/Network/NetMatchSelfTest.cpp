@@ -6243,6 +6243,7 @@ namespace RTE {
 		}
 		// The arm itself: WorkerMain holds the session in a local before it hands it to the service, so
 		// nothing the game thread drives can reach it and the replay may never return to the pump.
+		LoopbackTransport completedWire;
 		NetMatchService arming;
 		arming.m_IsHost = false;
 		arming.m_State = NetMatchServiceState::Starting;
@@ -6260,7 +6261,6 @@ namespace RTE {
 		}
 		arming.m_Runner = std::make_unique<NetMatchRunner>();
 		arming.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
-		LoopbackTransport completedWire;
 		NetLockstepConfig completedConfig;
 		completedConfig.localPeerId = 2; completedConfig.peerCount = 2; completedConfig.startFrame = 100;
 		if (!arming.m_Coordinator->StartReplay(completedWire, completedConfig, error)) return false;
@@ -6271,6 +6271,19 @@ namespace RTE {
 			*error = "a late activation played on while its completed horizon stayed at the activation frame";
 			return false;
 		}
+		arming.m_Session = std::make_unique<NetSession>();
+		NetSessionConfig connectionConfig; connectionConfig.port = 49473;
+		if (!arming.m_Session->StartHost(completedWire, connectionConfig, error)) return false;
+		arming.m_Session->InjectEvent({NetTransportEventType::LocalTransportFault, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "host connection lost"}, 4);
+		if (!arming.m_Session->IsFailed()) { *error = "the catch-up fixture did not lose its connection"; return false; }
+		arming.m_WorldCatchUp.active = true;
+		ScenarioRunner::ClearControllerReplayError();
+		arming.DriveWorldJoinClient(4);
+		if (!ScenarioRunner::HasControllerReplayError()) {
+			*error = "a world catch-up ignored the loss of its host connection";
+			return false;
+		}
+		ScenarioRunner::ClearControllerReplayError();
 		return true;
 	}
 
