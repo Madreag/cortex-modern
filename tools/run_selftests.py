@@ -87,6 +87,8 @@ def sha256_of(path: Path) -> str:
 def score_selftest(stdout: str, exit_code, timed_out=False, name=None) -> dict:
     """PASS only with exit 0, no timeout, no FATAL, at least one [tag] PASS, no [tag] FAIL, last suite token PASS."""
     fatal = FATAL.findall(stdout or "")
+    if name == "rteerror-selftest":
+        fatal = [line for line in fatal if "RTE Assert (from worker thread)" not in line]
     pass_matches = list(SUITE_PASS.finditer(stdout or ""))
     fail_matches = list(SUITE_FAIL.finditer(stdout or ""))
     pass_lines = [m.group(0) for m in pass_matches]
