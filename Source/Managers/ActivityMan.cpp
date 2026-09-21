@@ -470,6 +470,20 @@ void ActivityMan::QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::strin
 	m_DeferredRefusals.emplace_back(kind, std::move(problems));
 }
 
+// The writer thread's verdict on an automatic capture, taken by the simulation thread a tick or more later.
+void ActivityMan::NoteAutosaveVerdict(uint64_t tick, bool archived) {
+	std::lock_guard lock(m_DeferredRefusalMutex);
+	m_AutosaveVerdicts.push_back(AutosaveVerdict{tick, archived});
+}
+
+std::optional<ActivityMan::AutosaveVerdict> ActivityMan::TakeAutosaveVerdict() {
+	std::lock_guard lock(m_DeferredRefusalMutex);
+	if (m_AutosaveVerdicts.empty()) return std::nullopt;
+	const AutosaveVerdict verdict = m_AutosaveVerdicts.front();
+	m_AutosaveVerdicts.pop_front();
+	return verdict;
+}
+
 // The worker walks the graph off the simulation thread, so its refusal reaches the player a tick later.
 void ActivityMan::ReportDeferredSaveRefusals() {
 	std::vector<std::pair<SaveKind, std::vector<std::string>>> refusals;
@@ -613,6 +627,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// A walk that recorded its tables and saw none of them or their values written can be reused whole.
 	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && beforeWalk.dirtyValues == 0 && !beforeWalk.unknownTable;
 	const auto graphStart = std::chrono::steady_clock::now();
+	bool frozenGraphs = false;
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
 	// Compiled table stores only mark while the trap is armed; it is re-armed before the freeze protects the heap.
 	g_LuaMan.ArmCheckpointWriteTrap();
@@ -620,7 +635,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else {
-		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems)) {
+		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs)) {
 			// Every refused script value reaches the player the same way a manual save reports it.
 			ReportScriptGraphSaveRefusal(kind, problems);
 			return false;
@@ -634,9 +649,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// The walk is what the freeze paid for the graph; the worker's formatting is timed where it runs.
 	image->graphWalkUs = image->luaReused ? 0 : image->graphUs;
 	image->graphSerial = g_LuaMan.GetTableBirthCount();
-	// A skipped capture reused every root; a capture that ran reports what its chunks did.
-	image->graphRootsReused = image->luaReused ? image->graph.roots : image->graph.rootsReused;
-	image->graphRootsRewritten = image->luaReused ? 0 : image->graph.rootsRewritten;
+	// A skipped capture reused every root; a capture that ran reports what its chunks did. A frozen walk
+	// feeds no index and reuses no root, so it reports neither rather than the last live walk's sample.
+	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
+	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
 	const auto sceneStart = std::chrono::steady_clock::now();
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();
@@ -784,7 +800,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 				System::PrintDiagnosticLine(std::format("[autosave-globals] tick={} part={} capture_us={}\n", tick, part, micros));
 			}
 			// The archive exists only now. What a world publishes is this output, never a guess at the file.
-			if (automatic) PublishCompletedAutosave(tick, path);
+			if (automatic) {
+				PublishCompletedAutosave(tick, path);
+				NoteAutosaveVerdict(tick, true);
+			}
 			if (matchId.empty()) g_ConsoleMan.PrintString("SYSTEM: Game saved to \"" + fileName + "\"!");
 			const char* metrics = std::getenv("CCCP_CHECKPOINT_METRICS");
 			const std::string metricsPath = metrics && *metrics ? std::string(metrics) : System::GetWorkingDirectory() + "Autosaves/checkpoint-metrics.json";
@@ -799,11 +818,13 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");
 			QueueDeferredSaveRefusal(kind, refusal.problems);
+			if (automatic) NoteAutosaveVerdict(tick, false);
 			image.reset();
 			return false;
 		} catch (const std::exception& error) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n");
+			if (automatic) NoteAutosaveVerdict(tick, false);
 			image.reset();
 			return false;
 		}
