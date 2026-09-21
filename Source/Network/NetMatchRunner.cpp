@@ -854,9 +854,7 @@ namespace RTE {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
-		// because a wait loop would hold the sim update it runs inside. The deadline counts those
-		// updates; this runs inside the tick, where a wall clock is a per-machine decision.
+		// The joiner handshakes while replaying toward its agreed activation frame.
 		m_WorldJoinStarting = true;
 		m_WorldJoinStartTicks = 0;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {

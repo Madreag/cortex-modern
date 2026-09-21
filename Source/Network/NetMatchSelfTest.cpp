@@ -6329,6 +6329,12 @@ namespace RTE {
 		completedConfig.localPeerId = 2; completedConfig.peerCount = 2; completedConfig.startFrame = 100;
 		if (!arming.m_Coordinator->StartReplay(completedWire, completedConfig, error)) return false;
 		arming.m_WorldCatchUp.privateMatch = false;
+		arming.m_WorldCatchUp.activationTick = 100;
+		arming.m_WorldCatchUp.activationCommitted = true;
+		arming.m_WorldCatchUp.appliedThrough = 98;
+		arming.DriveWorldJoinClient(3);
+		if (!arming.m_WorldCatchUp.active) { *error = "a ready handshake released catch-up before the activation boundary"; return false; }
+		arming.m_WorldCatchUp.appliedThrough = 99;
 		arming.DriveWorldJoinClient(3);
 		arming.m_Coordinator->FinishSimulationTick(125);
 		if (arming.m_WorldCatchUp.active || arming.m_Coordinator->GetResumeFrame() != 126) {
