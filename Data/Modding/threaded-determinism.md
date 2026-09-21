@@ -25,6 +25,9 @@ A script asks for a `SyncedUpdate` by calling `self:RequestSyncedUpdate()`; the
 hook then runs that frame. This was always the designed boundary — this work
 makes it the one to rely on for determinism.
 
+`SyncedUpdate` runs the objects in one global order by unique ID across every Lua
+state, so there is no per-state grouping for a script to sequence its shared writes on.
+
 **Rule of thumb: if your script changes state that is not its own object, do it
 in `SyncedUpdate`, not `ThreadedUpdate`.** A `ThreadedUpdate` that mutates shared
 state was always a latent data race — two objects' `ThreadedUpdate`s run at the
