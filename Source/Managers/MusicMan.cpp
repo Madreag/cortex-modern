@@ -83,6 +83,9 @@ void MusicMan::Update() {
 }
 
 bool MusicMan::IsMusicPlaying() const {
+	if (m_IsPlayingDynamicMusic) {
+		return true;
+	}
 	bool interruptingMusicSoundContainerPlaying = m_InterruptingMusicSoundContainer != nullptr && m_InterruptingMusicSoundContainer->GetAudibleVolume() > 0.0F;
 	bool previousSoundContainerPlaying = m_PreviousSoundContainer != nullptr && m_PreviousSoundContainer->GetAudibleVolume() > 0.0F;
 	bool currentSoundContainerPlaying = m_CurrentSoundContainer != nullptr && m_CurrentSoundContainer->GetAudibleVolume() > 0.0F;
