@@ -167,6 +167,7 @@ namespace RTE {
 		m_PollArmed = false;
 		m_PollWindows.clear();
 		m_Channel.SetSink([this](const NetDirectorySignalChannel::Signal& signal) { return Deliver(signal); });
+		m_Channel.SetPollWait(2);
 		if (m_Role == Role::Host) {
 			m_Channel.ConfigureHost(config.baseUrl, config.installKey, config.certPinSha256, config.sessionId, config.sessionToken);
 		} else {

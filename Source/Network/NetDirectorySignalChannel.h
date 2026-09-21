@@ -108,7 +108,7 @@ namespace RTE {
 		void ScheduleRetry(uint64_t nowMs); //!< Transport error, bad body or 5xx: every request waits 5s,10s,20s..60s.
 		void StartRequest(RequestKind kind, const NetDirectoryClient::Request& request);
 		void IssuePost();
-		void IssuePoll();
+		void IssuePoll(uint64_t nowMs);
 		void HandlePostReply(const NetDirectoryClient::Reply& reply, uint64_t nowMs);
 		void HandlePollReply(const NetDirectoryClient::Reply& reply, uint64_t nowMs);
 		/// 429 holds every request for retry_after_s, queue_full backs the posts off, 5xx backs everything
@@ -132,6 +132,7 @@ namespace RTE {
 		int64_t m_Cursor = 0;          //!< The highest seq the sink took; the next poll reads after it.
 		int m_PollWaitS = 0;           //!< Long-poll seconds on the wire; 0 = a plain GET every c_PollIntervalMs.
 		uint64_t m_NextPollMs = 0;
+		uint64_t m_PollStartedMs = 0;
 		uint64_t m_NextAttemptMs = 0;  //!< Every request waits for this slot after a transport error, 5xx or 429.
 		uint64_t m_BackoffMs = 0;
 		uint64_t m_NextPostMs = 0;     //!< Only posts wait for this slot after queue_full, so polling goes on.
