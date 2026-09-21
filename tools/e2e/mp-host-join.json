@@ -191,6 +191,20 @@
       "assert": "recorded menu/probe assertions in this marked interval"
     },
     {
+      "id": "mp-end-match-enabled",
+      "peer": "host",
+      "mark": "mp-pause-host",
+      "screen": "Pause",
+      "what": "End Match is offered only while the round is running: the recorded pause rows never show it enabled after the service completed.",
+      "assert": "Recorded pause_end_match rows; none reads service=Completed enabled=1.",
+      "log_regex": [
+        "\\[video-ui\\] pause_end_match service=\\w+ enabled=[01]"
+      ],
+      "forbidden_log_regex": [
+        "\\[video-ui\\] pause_end_match service=Completed enabled=1"
+      ]
+    },
+    {
       "id": "mp-match-options-host",
       "peer": "host",
       "screen": "PauseMatchOptions",
