@@ -25,7 +25,14 @@ def run_case(repo: Path, out: Path, timeout: float = 60.0) -> dict:
         run.close()
     stdout = (out / "run/stdout.log").read_text(encoding="utf-8", errors="replace") if (out / "run/stdout.log").is_file() else ""
     reason = next((line for line in stdout.splitlines() if REASON in line), "")
-    dialog = any("RTE Warning" in line and "message box" in line.lower() for line in stdout.splitlines())
+    boxes = 0
+    for line in stdout.splitlines():
+        if REASON in line and "boxes=" in line:
+            try:
+                boxes = int(line.rsplit("boxes=", 1)[1].split()[0])
+            except ValueError:
+                boxes = -1
+    dialog = boxes > 0
     exit_code = record.get("exit_code")
     result = {
         "selftest": "ext-validate-version",

@@ -2651,9 +2651,7 @@ end
 -- The script graph's contracts, run inside the engine's master state by -script-graph-selftest.
 local results = {}
 local function check(name, ok, detail)
-	local extra = ""
-	if not ok and detail ~= nil then extra = " " .. tostring(detail) end
-	results[#results + 1] = string.format("[script-graph-selftest] %s %s%s", ok and "PASS" or "FAIL", name, extra)
+	results[#results + 1] = string.format("[script-graph-selftest] %s %s%s", ok and "PASS" or "FAIL", name, detail and (" " .. tostring(detail)) or "")
 	if _ScriptGraphProgress then _ScriptGraphProgress(results[#results]) end
 end
 local function resumed(co, ...)

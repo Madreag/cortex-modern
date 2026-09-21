@@ -524,7 +524,7 @@ void DataModule::CheckSupportedGameVersion() const {
 		return;
 	}
 	if (System::IsInExternalModuleValidationMode()) {
-		System::PrintFaultToCLI("[module] " + message);
+		System::PrintFaultToCLI("[module] " + message + " boxes=" + std::to_string(RTEError::ShowMessageBoxCallCount()));
 		RTEAbort(message);
 	}
 	System::PrintDiagnosticLine("[module] WARNING: " + message);
@@ -555,6 +555,10 @@ bool DataModule::RunVersionGuardSelfTest() {
 	std::cout << "[module-version-selftest] " << (oneSummary ? "PASS" : "FAIL")
 	          << " one_summary_box boxes=" << boxes << std::endl;
 	std::cout << "[module-version-selftest] " << (oneSummary ? "PASS" : "FAIL") << std::endl;
+	delete first.m_SupportedGameVersion;
+	first.m_SupportedGameVersion = nullptr;
+	delete second.m_SupportedGameVersion;
+	second.m_SupportedGameVersion = nullptr;
 	return oneSummary;
 }
 

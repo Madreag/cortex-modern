@@ -180,9 +180,7 @@ FILE __iob_func[3] = {*stdin, *stdout, *stderr};
 }
 
 namespace RTE {
-	struct LuaAdaptersAudioMan {
-		static bool RunModApiShimsSelfTest();
-	};
+	bool RunModApiShimsSelfTest();
 }
 
 using namespace RTE;
@@ -8646,7 +8644,7 @@ int main(int argc, char** argv) {
 		return ShutDown(AHuman::RunLimbPathTravelSpeedSelfTest() ? 0 : 1);
 	}
 	if (ScenarioRunner::GetArgs().modApiShimsSelfTest) {
-		return ShutDown(LuaAdaptersAudioMan::RunModApiShimsSelfTest() ? 0 : 1);
+		return ShutDown(RunModApiShimsSelfTest() ? 0 : 1);
 	}
 	if (ScenarioRunner::GetArgs().saveRefusalDiagnosisSelfTest) {
 		return ShutDown(g_ActivityMan.RunSaveRefusalDiagnosisSelfTest() ? EXIT_SUCCESS : EXIT_FAILURE);
