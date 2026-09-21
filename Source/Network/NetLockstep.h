@@ -1144,6 +1144,8 @@ namespace RTE {
 		static bool IsFrameWaiver(const NetLockstepStop& stop);
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
+		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
+		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
