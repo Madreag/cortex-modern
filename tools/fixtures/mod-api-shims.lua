@@ -9,6 +9,9 @@ local function check(name, ok, detail)
 	end
 end
 
+MusicMan:ResetMusicState()
+check("ismusicplaying_parity_idle", AudioMan:IsMusicPlaying() == MusicMan:IsMusicPlaying() and AudioMan:IsMusicPlaying() == false, "AudioMan=" .. tostring(AudioMan:IsMusicPlaying()) .. " MusicMan=" .. tostring(MusicMan:IsMusicPlaying()))
+
 local musicOk, musicErr = pcall(function()
 	AudioMan:ClearMusicQueue()
 	AudioMan:PlayMusic("Base.rte/Music/dBSoundworks/cc2g.ogg", 0, -1)
