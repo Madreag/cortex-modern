@@ -241,14 +241,29 @@ class ReportTests(unittest.TestCase):
         with TemporaryDirectory() as folder:
             dump = Path(folder) / 'sp_trace.json.simdump.txt'
             actor_line = '1 actor uid=7 Brain Robot pos=0x1.0p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
-            dump.write_text('1 activity running\n' + actor_line + actor_line +
+            moved_line = '1 actor uid=7 Brain Robot pos=0x1.8p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            dump.write_text('1 activity running\n' + actor_line + moved_line +
                             ''.join(f'{tick} activity running\n' for tick in range(2, 1201)), encoding='utf-8')
             values = report.canonical_positions(dump, {(1, 7)})
             duplicate = getattr(report.canonical_positions, 'last_duplicate', None)
             self.assertEqual(values[(1, 7)][0]['pos'], [1.0, 1.0])
             self.assertEqual(duplicate['first']['tick'], 1)
             self.assertEqual(duplicate['first']['actor'], 7)
+            self.assertEqual(duplicate['first']['first_line'], 2)
             self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'MISS')
+
+    def test_repeated_identical_canonical_record_is_not_a_duplicate(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            dump = Path(folder) / 'sp_trace.json.simdump.txt'
+            actor_line = '1 actor uid=7 Brain Robot pos=0x1.0p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            # A resync re-writes the epoch it restarted from; the record is the same one.
+            dump.write_text('1 activity running\n' + actor_line + actor_line +
+                            ''.join(f'{tick} activity running\n' for tick in range(2, 1201)), encoding='utf-8')
+            values = report.canonical_positions(dump, {(1, 7)})
+            self.assertEqual(values[(1, 7)][0]['pos'], [1.0, 1.0])
+            self.assertIsNone(getattr(report.canonical_positions, 'last_duplicate', None))
+            self.assertEqual(getattr(report.canonical_positions, 'last_repeats', 0), 1)
 
     def test_early_decision_tick_reads_killall_from_the_run_log(self):
         from tempfile import TemporaryDirectory
