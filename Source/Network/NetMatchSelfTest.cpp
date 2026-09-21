@@ -7341,6 +7341,329 @@ namespace RTE {
 		return true;
 	}
 
+	// A lobby kick is not a ban: the seat goes back to open under its unseated name, the kicked
+	// identity is never written to the ban list, and its own rejoin is admitted. Only a real ban
+	// refuses the re-admission, with ParticipantBanned.
+	bool TestServiceKickRejoin(std::string* error) {
+		class ScriptedAuthCrypto : public NetAuthCrypto {
+		public:
+			bool IsRealCrypto() const override { return false; }
+			bool RandomBytes(uint8_t* buffer, size_t count) override {
+				if (buffer == nullptr) {
+					return false;
+				}
+				for (size_t i = 0; i < count; ++i) {
+					m_Counter = static_cast<uint8_t>(m_Counter * 37U + 149U);
+					buffer[i] = m_Counter;
+				}
+				return true;
+			}
+			bool HmacSha256(const uint8_t* key, size_t keyCount, const uint8_t* message, size_t messageCount, uint8_t (&mac)[32]) override {
+				if (key == nullptr || keyCount == 0) {
+					return false;
+				}
+				uint64_t fold = 1469598103934665603ull;
+				const auto mix = [&fold](uint8_t byte) { fold = (fold ^ byte) * 1099511628211ull; };
+				for (size_t i = 0; i < keyCount; ++i) {
+					mix(key[i]);
+				}
+				mix(static_cast<uint8_t>(messageCount));
+				for (size_t i = 0; i < messageCount; ++i) {
+					mix(message[i]);
+				}
+				for (size_t i = 0; i < sizeof(mac); ++i) {
+					mix(static_cast<uint8_t>(i));
+					mac[i] = static_cast<uint8_t>(fold >> 32);
+				}
+				return true;
+			}
+		private:
+			uint8_t m_Counter = 1;
+		};
+
+		ScriptedAuthCrypto crypto;
+		SetNetAuthCryptoForTest(&crypto);
+		const uint16_t port = 43249;
+		LoopbackTransport hostTransport, clientTransport;
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Starting;
+		service.m_AdmissionAttached = true;
+		// The setup worker owns the session for the whole of Start, like TestStartingKickMarshals.
+		std::unique_ptr<NetSession> workerSession = std::make_unique<NetSession>();
+		NetSession client;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 1;
+		hostConfig.heartbeatIntervalMs = 25;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "service-kick-rejoin-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Client";
+		++clientConfig.localNonce;
+		if (!workerSession->StartHost(hostTransport, hostConfig, error) ||
+		    !client.StartClient(clientTransport, "loopback", clientConfig, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		uint64_t now = 0;
+		for (; now <= 2000 && workerSession->GetReadyPeerCount() != 1; now += 10) {
+			workerSession->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (workerSession->GetReadyPeerCount() != 1) {
+			*error = "the kick-rejoin fixture never seated the client";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const NetPeerId transport = workerSession->GetReadyPeers().front().transportPeerId;
+		const uint8_t clientPeerId = static_cast<uint8_t>(workerSession->GetReadyPeers().front().assignedPeerId + 1);
+		if (!service.m_SeatAuth.BeginHostedSession()) {
+			*error = "the kick-rejoin fixture could not arm reconnect auth";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		NetH4Identity h4;
+		h4.controllerFrameVersion = ControllerFrame::c_Version;
+		h4.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		h4.gameVersion = "7.0.0-test";
+		h4.buildId = "service-kick-rejoin-selftest";
+		for (size_t i = 0; i < h4.deterministicConfigHash.size(); ++i) {
+			h4.deterministicConfigHash[i] = static_cast<uint8_t>(1 + i);
+			h4.moduleManifestHash[i] = static_cast<uint8_t>(33 + i);
+			h4.sessionRulesHash[i] = static_cast<uint8_t>(65 + i);
+			h4.sessionIdentityHash[i] = static_cast<uint8_t>(97 + i);
+		}
+		service.m_ReconnectHost.Configure(&service.m_SeatAuth, workerSession->GetSessionId(), h4);
+		// One joinable seat: the host's own seat and the CPU seat are never offered, so the kicked
+		// seat is the only one a rejoin can take.
+		service.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 2, false, 1, true}, {2, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+		const auto lane = std::filesystem::temp_directory_path() / "cccp-service-kick-rejoin";
+		std::error_code code;
+		std::filesystem::remove_all(lane, code);
+		std::filesystem::create_directories(lane, code);
+		service.m_BanStore.SetPath((lane / "NetworkBans").string());
+		service.m_ReconnectHost.SetBanStore(&service.m_BanStore);
+		NetAuthBytes32 kickedId{};
+		for (size_t i = 0; i < kickedId.size(); ++i) {
+			kickedId[i] = static_cast<uint8_t>(0xA0 + i);
+		}
+		service.m_ReconnectHost.BindParticipantId(transport, kickedId);
+		NetReconnectTicketStore store;
+		store.SetPath((lane / "kick.ticket").string());
+		NetReconnectClient admission;
+		admission.Configure(&store, h4, "Client");
+		uint64_t unixNow = 1'700'000'000'000ULL;
+		admission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &unixNow);
+		if (!admission.BeginNewJoin(0, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const auto pump = [](NetReconnectHost& host, NetReconnectClient& joining, NetPeerId connection) {
+			for (uint32_t round = 0; round < 16; ++round) {
+				host.Tick(0);
+				joining.Tick(0);
+				bool moved = false;
+				for (NetH4Outbound& outbound : host.TakeOutbound()) {
+					moved = true;
+					if (outbound.connection == connection) {
+						joining.HandleMessage(outbound.payload, 0);
+					}
+				}
+				host.TakeCommits();
+				for (NetH4Outbound& outbound : joining.TakeOutbound()) {
+					moved = true;
+					host.HandleMessage(connection, outbound.payload, 0);
+				}
+				if (!moved) {
+					break;
+				}
+			}
+		};
+		pump(service.m_ReconnectHost, admission, transport);
+		if (admission.GetState() != NetH4ClientState::Joined) {
+			*error = "the kick-rejoin fixture did not commit the H4 seat";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+
+		// The lobby the roster rows read: after the kick its slot has to carry the unseated name.
+		NetMatchRunner runner;
+		NetLobbySession& lobby = runner.GetLobbySession();
+		NetMatchConfig matchConfig = MakeConfig();
+		matchConfig.peerCount = 2;
+		matchConfig.sessionId = workerSession->GetSessionId();
+		matchConfig.players.resize(2);
+		matchConfig.players[0] = NetMatchPlayerSlot{1, 0, false, "Host"};
+		matchConfig.players[1] = NetMatchPlayerSlot{clientPeerId, 1, false, "Client"};
+		NetLobbySessionConfig lobbyConfig;
+		lobbyConfig.host = true;
+		lobbyConfig.localPeerId = 1;
+		lobbyConfig.remoteTransportPeerIds.emplace(clientPeerId, transport);
+		lobbyConfig.matchConfig = matchConfig;
+		lobbyConfig.session = workerSession.get();
+		lobbyConfig.sessionNowMs = [&now]() { return now; };
+		lobbyConfig.displayName = "Host";
+		lobbyConfig.platform = "test";
+		lobbyConfig.autoStart = false;
+		if (!lobby.Start(hostTransport, lobbyConfig, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		const auto slotName = [&lobby](uint8_t peerId) {
+			for (const NetMatchPlayerSlot& slot : lobby.GetMatchConfig().players) {
+				if (slot.peerId == peerId) return slot.displayName;
+			}
+			return std::string("no slot");
+		};
+		const auto slotCpu = [&lobby](uint8_t peerId) {
+			for (const NetMatchPlayerSlot& slot : lobby.GetMatchConfig().players) {
+				if (slot.peerId == peerId) return slot.cpu;
+			}
+			return true;
+		};
+		if (slotName(clientPeerId) != "Client" || slotCpu(clientPeerId)) {
+			*error = "the kick-rejoin fixture never seated the client on slot " + std::to_string(clientPeerId) +
+			         ": it reads '" + slotName(clientPeerId) + "'";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+
+		NetModerationSelection selected{};
+		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
+			if (seat.stableSeat == 0) {
+				selected = NetSelectModerationSeat(seat);
+			}
+		}
+		const uint32_t releasedBefore = service.m_ReconnectHost.GetStats().seatsReleased;
+		if (service.RemoveParticipant(selected, NetParticipantRemovalAction::Kick) != NetKickBanResult::Queued) {
+			*error = std::string("the lobby kick answered ") + NetKickBanResultName(service.GetLastKickBanResult()) + " instead of queueing";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		NetMatchRunnerConfig pumpConfig;
+		service.AttachHostPump(pumpConfig);
+		pumpConfig.pumpHost(*workerSession);
+		if (service.GetLastKickBanResult() != NetKickBanResult::Ok) {
+			*error = std::string("the drained lobby kick reported ") + NetKickBanResultName(service.GetLastKickBanResult());
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		// The seat is open again: released to the pool, not closed, and never CPU.
+		if (service.m_ReconnectHost.IsSeatClosed(0) ||
+		    service.m_ReconnectHost.GetStats().seatsReleased != releasedBefore + 1) {
+			*error = std::string("the lobby kick did not hand the seat back to the pool: closed=") +
+			         (service.m_ReconnectHost.IsSeatClosed(0) ? "1" : "0") + " seatsReleased=" +
+			         std::to_string(service.m_ReconnectHost.GetStats().seatsReleased) + " from " + std::to_string(releasedBefore);
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		for (const uint64_t until = now + 500; now <= until; now += 10) {
+			lobby.Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(10);
+			clientTransport.AdvanceTimeMs(10);
+		}
+		if (slotCpu(clientPeerId) || slotName(clientPeerId) != NetMatchConfigUtil::UnseatedSlotName(clientPeerId, false)) {
+			*error = "the kicked seat reads '" + slotName(clientPeerId) + "' cpu=" + (slotCpu(clientPeerId) ? "1" : "0") +
+			         ", not the open '" + NetMatchConfigUtil::UnseatedSlotName(clientPeerId, false) + "'";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		// The kicked identity is not the ban list's business.
+		if (!service.m_BanStore.List().empty()) {
+			*error = "the lobby kick wrote " + std::to_string(service.m_BanStore.List().size()) + " ban records";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+
+		// The same identity comes back on a new link and is admitted to the seat it just left.
+		service.m_ReconnectHost.TakeOutbound();
+		const NetPeerId returnConnection = 77;
+		service.m_ReconnectHost.BindParticipantId(returnConnection, kickedId);
+		NetReconnectClient returnAdmission;
+		returnAdmission.Configure(&store, h4, "Client");
+		returnAdmission.SetUnixClock([](void* context) { return *static_cast<uint64_t*>(context); }, &unixNow);
+		if (!returnAdmission.BeginNewJoin(0, error)) {
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		pump(service.m_ReconnectHost, returnAdmission, returnConnection);
+		if (returnAdmission.GetState() != NetH4ClientState::Joined) {
+			*error = std::string("the kicked identity's rejoin answered ") + NetReconnectClientStateName(returnAdmission.GetState()) +
+			         " reason=" + (returnAdmission.HasLastRejectReason() ? NetProtocol::RejectReasonName(returnAdmission.GetLastRejectReason()) : "none");
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+
+		// A ban is the only refusal: the re-seated holder is banned, the store names its identity,
+		// and the same identity's next join is refused with ParticipantBanned.
+		NetModerationSelection banned{};
+		for (const auto& seat : service.m_ReconnectHost.GetModerationView()) {
+			if (seat.stableSeat == 0) {
+				banned = NetSelectModerationSeat(seat);
+			}
+		}
+		if (service.RemoveParticipant(banned, NetParticipantRemovalAction::BanSession) != NetKickBanResult::Queued) {
+			*error = std::string("the lobby ban answered ") + NetKickBanResultName(service.GetLastKickBanResult()) + " instead of queueing";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		pumpConfig.pumpHost(*workerSession);
+		if (service.GetLastKickBanResult() != NetKickBanResult::Ok) {
+			*error = std::string("the drained lobby ban reported ") + NetKickBanResultName(service.GetLastKickBanResult());
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		bool banRecorded = false;
+		for (const NetHostBanRecord& record : service.m_BanStore.List()) {
+			banRecorded = banRecorded || record.identity == kickedId;
+		}
+		if (!banRecorded) {
+			*error = "the lobby ban never wrote the kicked identity into the ban list";
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		service.m_ReconnectHost.TakeOutbound();
+		const NetPeerId bannedConnection = 78;
+		service.m_ReconnectHost.BindParticipantId(bannedConnection, kickedId);
+		NetH4NewJoin bannedJoin;
+		bannedJoin.identity = h4;
+		bannedJoin.displayName = "Client";
+		bannedJoin.txId.fill(0x33);
+		service.m_ReconnectHost.HandleMessage(bannedConnection, bannedJoin, 0);
+		bool refusedBan = false;
+		std::string banAnswer = "nothing";
+		for (NetH4Outbound& outbound : service.m_ReconnectHost.TakeOutbound()) {
+			if (outbound.connection != bannedConnection) {
+				continue;
+			}
+			if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
+				refusedBan = refused->rejectReason == NetRejectReason::ParticipantBanned;
+				banAnswer = NetProtocol::RejectReasonName(refused->rejectReason);
+			} else if (std::get_if<NetH4TicketOffer>(&outbound.payload) != nullptr) {
+				banAnswer = "a ticket offer";
+			}
+		}
+		if (!refusedBan) {
+			*error = "the banned identity's rejoin answered " + banAnswer;
+			SetNetAuthCryptoForTest(nullptr);
+			return false;
+		}
+		SetNetAuthCryptoForTest(nullptr);
+		std::filesystem::remove_all(lane, code);
+		std::cout << "[net-match-selftest] PASS kick: a lobby kick opens the seat for the same identity and only a ban refuses it" << std::endl;
+		return true;
+	}
+
 	bool TestStartingKickMarshals(std::string* error) {
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -7790,7 +8113,7 @@ namespace RTE {
 		}
 
 		// The admission plane after a Starting kick: the seat is back in the pool for the next joiner,
-		// and it is the kicked identity - not the seat - that the removal holds out of the session.
+		// and the kicked identity itself may take an open seat - only the ban list holds one out.
 		{
 			ScriptedAuthCrypto seatCrypto;
 			SetNetAuthCryptoForTest(&seatCrypto);
@@ -7851,9 +8174,9 @@ namespace RTE {
 				seatH4.sessionIdentityHash[i] = static_cast<uint8_t>(97 + i);
 			}
 			seatService.m_ReconnectHost.Configure(&seatService.m_SeatAuth, seatWorkerSession->GetSessionId(), seatH4);
-			// One joinable seat: the host's own seat and the CPU seat are never offered, so a replacement
-			// can only be seated if the kick handed seat 0 back.
-			seatService.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 2, false, 1, true}, {2, 0, 3, true, 0, false}}, NetMatchMode::PvPSkirmish);
+			// The host's own seat and the CPU seat are never offered, so the replacement's offer can
+			// only be seat 0 if the kick handed it back; seat 3 stays free for the kicked identity.
+			seatService.m_ReconnectHost.SetSeatTable({{0, 1, 1, false, 2, false}, {1, 0, 2, false, 1, true}, {2, 0, 3, true, 0, false}, {3, 4, 2, false, 4, false}}, NetMatchMode::PvPSkirmish);
 			const auto seatLane = std::filesystem::temp_directory_path() / "cccp-starting-kick-reseat";
 			std::error_code seatCode;
 			std::filesystem::remove_all(seatLane, seatCode);
@@ -7955,7 +8278,8 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			// The kicked player's own identity is what the removal holds out, on any link it comes back on.
+			// A kick is not a ban: the kicked identity's own return is offered an open seat like any
+			// joiner, on whatever link it comes back on.
 			const NetPeerId returningConnection = 78;
 			seatService.m_ReconnectHost.BindParticipantId(returningConnection, kickedId);
 			NetH4NewJoin returningJoin;
@@ -7963,27 +8287,27 @@ namespace RTE {
 			returningJoin.displayName = "Kicked";
 			returningJoin.txId.fill(0x22);
 			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, 0);
-			bool refusedReturn = false;
+			bool offeredReturn = false;
 			std::string returnAnswer = "nothing";
 			for (NetH4Outbound& outbound : seatService.m_ReconnectHost.TakeOutbound()) {
 				if (outbound.connection != returningConnection) {
 					continue;
 				}
 				if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
-					refusedReturn = refused->rejectReason == NetRejectReason::ParticipantBanned;
-					returnAnswer = NetProtocol::RejectReasonName(refused->rejectReason);
+					returnAnswer = std::string("refused ") + NetProtocol::RejectReasonName(refused->rejectReason);
 				} else if (std::get_if<NetH4TicketOffer>(&outbound.payload) != nullptr) {
+					offeredReturn = true;
 					returnAnswer = "a ticket offer";
 				}
 			}
-			if (!refusedReturn) {
+			if (!offeredReturn) {
 				*error = "the kicked identity's return answered " + returnAnswer;
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
 			SetNetAuthCryptoForTest(nullptr);
 			std::filesystem::remove_all(seatLane, seatCode);
-			std::cout << "[net-match-selftest] PASS kick: a Starting kick opens the seat for a replacement and refuses the kicked identity" << std::endl;
+			std::cout << "[net-match-selftest] PASS kick: a Starting kick opens the seat for a replacement and re-admits the kicked identity" << std::endl;
 		}
 		return true;
 	}
@@ -12168,6 +12492,7 @@ namespace RTE {
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
+		if (!TestServiceKickRejoin(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
 		if (!TestUnreadableBanListHoldsAdmission(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);
