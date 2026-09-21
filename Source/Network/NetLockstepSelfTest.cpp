@@ -12560,6 +12560,49 @@ namespace RTE {
 
 		// A rejoining peer replays its private tail through TakeWorldCatchUpReadyFrame instead of the
 		// round's wait, so the reclaim gap the survivors fence has to be fenced on that path too.
+		bool TestCatchUpFencesTheHoldGap(std::string* error) {
+			EnsureSwitchTestManagers();
+			const auto timer = g_TimerMan.SaveCheckpoint();
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A38; config.roundId = 38; config.localPeerId = 2; config.peerCount = 2; config.startFrame = 41;
+			config.inputDelayFrames = 3; config.peerInputDelayFrames = {{1, 3}, {2, 3}};
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.inputDelayFrames = 3;
+			if (!replay.StartReplay(wire, config, error)) return false;
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			const auto finish = [&](const char* failure) {
+				ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr);
+				NetActorOwnership::ClearSeededOwners(); g_TimerMan.LoadCheckpoint(timer);
+				if (failure) { *error = failure; return false; }
+				return true;
+			};
+			Actor* actor = MakeSwitchTestActor(Activity::TeamTwo);
+			if (!actor) return finish("hold-gap actor creation failed");
+			AddSwitchTestActor(actor);
+			const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
+			NetActorOwnership::SeedOwner(uid, 2, Activity::TeamTwo);
+			ScenarioRunner::SetLockstepControlOverride(uid, 1);
+			for (uint64_t tick = 41; tick <= 45; ++tick) {
+				NetLockstepFrame record; record.targetFrame = tick;
+				record.frames = {MakeFrame(uid, uint64_t{1} << PRESS_PRIMARY)};
+				if (tick == 41) record.commands = {{1, NetGameSeatHold{2, 0, 1, 1, 41}}};
+				if (tick == 41) { if (!ScenarioRunner::InstallWorldCatchUp(40, {record}, error)) return finish("hold-gap tail install failed"); }
+				else ScenarioRunner::AppendWorldCatchUp({record});
+				NetLockstepReadyFrame ready;
+				if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(tick, ready, error)) return finish("hold-gap replay lost its frame");
+				if (ready.localFrames.size() + ready.remoteFrames.size() != (tick <= 44 ? 0 : 1))
+					return finish("the hold applied old input before the AI producer's delay pipeline filled");
+				if (tick == 41) {
+					actor->GetController()->ApplyWireMode(Controller::CIM_PLAYER, 1);
+					ApplyLockstepLeaveHandoffs(ready, {actor}, false);
+					if (actor->GetController()->GetInputMode() != Controller::CIM_AI)
+						return finish("a restored held seat kept player control at its hold frame");
+				}
+			}
+			return finish(nullptr);
+		}
+
 		bool TestCatchUpFencesTheReclaimGap(std::string* error) {
 			const char* name = "catch_up_fences_the_reclaim_gap";
 			EnsureSwitchTestManagers();
@@ -16281,6 +16324,7 @@ namespace RTE {
 		    !TestRecordedHoldReplaysAtItsFrame(&error) ||
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
+		    !TestCatchUpFencesTheHoldGap(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||

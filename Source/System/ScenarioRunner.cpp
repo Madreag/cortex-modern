@@ -1381,8 +1381,15 @@ namespace RTE {
 		return seeded != 0 && s_LockstepCoordinator->IsSeatReclaimGap(seeded, frame) ? seeded : owner;
 	}
 
+	uint8_t ScenarioRunner::GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		if (!s_LockstepCoordinator || owner != GetLockstepHostPeerId()) return owner;
+		const uint8_t seeded = NetActorOwnership::GetSeededOwner(actorUniqueID);
+		return seeded != 0 && s_LockstepCoordinator->IsSeatHoldGap(seeded, frame) ? seeded : owner;
+	}
+
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
-		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) || !MovableMan::IsConstructed()) return;
+		if (!s_LockstepCoordinator || (!s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) && !s_LockstepCoordinator->HasSeatHoldGap(ready.frame)) || !MovableMan::IsConstructed()) return;
 		size_t seen = 0, fenced = 0;
 		const auto suppressed = [&](const ControllerFrame& input) {
 			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
@@ -1390,7 +1397,8 @@ namespace RTE {
 			if (!actor) return false;
 			const uint8_t seat = GetLockstepReclaimSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
 			++seen;
-			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame);
+			const uint8_t heldSeat = GetLockstepHeldSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
+			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame) || s_LockstepCoordinator->IsSeatHoldGap(heldSeat, ready.frame);
 			if (gap) ++fenced;
 			return gap;
 		};
@@ -1406,7 +1414,7 @@ namespace RTE {
 			}
 		} else std::erase_if(ready.remoteFrames, suppressed);
 		// Every peer fences the same actors at the same frame: a count that disagrees is the desync.
-		std::cout << "[net-lockstep] reclaim gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
+		std::cout << "[net-lockstep] " << (s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) ? "reclaim" : "hold") << " gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
 		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
 	}
 

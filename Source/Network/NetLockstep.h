@@ -818,6 +818,8 @@ namespace RTE {
 		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
+		bool HasSeatHoldGap(uint64_t frame) const { for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }

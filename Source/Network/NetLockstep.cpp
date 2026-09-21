@@ -4873,6 +4873,20 @@ namespace RTE {
 		return true;
 	}
 
+	bool NetLockstepCoordinator::IsSeatHoldGap(uint8_t peerId, uint64_t frame) const {
+		const auto held = m_AiHeldSeats.find(peerId);
+		if (held == m_AiHeldSeats.end() || frame < held->second) return false;
+		uint16_t delay = InputDelayAt(GetHostPeerId(), held->second);
+		if (m_Playback) {
+			delay = NetMatchConfigUtil::PeerInputDelay(m_OpeningMatchConfig, GetHostPeerId());
+			if (const auto changes = m_DelayChanges.find(GetHostPeerId()); changes != m_DelayChanges.end()) {
+				const auto at = changes->second.upper_bound(held->second);
+				if (at != changes->second.begin()) delay = std::prev(at)->second;
+			}
+		}
+		return frame - held->second <= delay;
+	}
+
 	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
 		const auto found = m_ReclaimTransactions.find(peerId);
 		if (found == m_ReclaimTransactions.end()) return false;
