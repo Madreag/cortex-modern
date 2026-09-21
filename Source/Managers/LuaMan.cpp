@@ -2306,16 +2306,18 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		for key, value in pairs(saved.entries) do rawset(saved.object, key, value) end
 		setmetatable(saved.object, saved.meta)
 	end
+	-- Tables the module anchoring below installs into package.loaded shadow the stashed live module,
+	-- so a path that names one of its members has to keep walking the stash past the anchor.
+	local anchoredShadow = {}
 	-- A key a script added to a library table is named by path, and the wipe above has just taken it.
 	local function wipedPath(segments)
 		local value = _G
 		for _, segment in ipairs(segments) do
 			if type(value) ~= "table" and type(value) ~= "userdata" then return nil end
 			local found = value[segment]
-			if found == nil then
-				local gone = wiped[value]
-				found = gone and gone[segment]
-			end
+			local gone = wiped[value]
+			local stashed = gone and gone[segment]
+			if stashed ~= nil and (found == nil or anchoredShadow[found]) then found = stashed end
 			value = found
 		end
 		return value
@@ -2327,7 +2329,18 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		local t = token.t
 		if t == "nil" then return nil
 		elseif t == "bool" or t == "num" or t == "str" then return token.v
-		elseif t == "ref" then return objects[token.id]
+		elseif t == "ref" then
+			local value = objects[token.id]
+			if value == nil then
+				-- A named value deferred below may be reachable already once its module table filled.
+				local node = graph.nodes[token.id]
+				if node and node.kind == "U" and node.value and node.value.t == "path" then
+					value = resolvePath(node.value.segments)
+					if value == nil then value = wipedPath(node.value.segments) end
+					if value ~= nil then objects[token.id] = value end
+				end
+			end
+			return value
 		elseif t == "path" then
 			local value = resolvePath(token.segments)
 			if value == nil then value = wipedPath(token.segments) end
@@ -2465,6 +2478,9 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		return nil
 	end
 	-- Allocate every table and function first, so references resolve in any order.
+	-- A named value that lives on a module table cannot resolve until that table is filled below;
+	-- those ids wait here for the second pass at the end of the restore.
+	local deferredPaths = {}
 	local ids = {}
 	for id in pairs(graph.nodes) do ids[#ids + 1] = id end
 	table.sort(ids)
@@ -2487,6 +2503,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 				if type(object) ~= "table" then object = {} end
 				package.loaded[loadedNames[id]] = object
 				anchored[id] = object
+				anchoredShadow[object] = true
 			end
 		end
 	end
@@ -2524,7 +2541,13 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 				end
 				if not reuseHeld and objects[id] and not _ScriptGraphNativeResolve(objects[id]) then fail("a native runtime reference is missing") end
 			elseif objects[id] == nil then
-				objects[id] = resolve(node.value)
+				if node.value and node.value.t == "path" then
+					local value = resolvePath(node.value.segments)
+					if value == nil then value = wipedPath(node.value.segments) end
+					if value == nil then deferredPaths[#deferredPaths + 1] = id else objects[id] = value end
+				else
+					objects[id] = resolve(node.value)
+				end
 			elseif reuseHeld and node.value and (node.value.t == "vector" or node.value.t == "timer" or node.value.t == "alarm" or node.value.t == "controller-value" or node.value.t == "path-request") then
 				objects[id] = resolve(node.value, objects[id])
 			end
@@ -2685,6 +2708,11 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		for _, change in ipairs(patch.pairs) do rawset(object, resolve(change[1]), resolve(change[2])) end
 		setmetatable(object, resolve(patch.meta))
 	end
+	-- Every table is filled and every global placed now: a named value that named a module member
+	-- resolves here, and one that still does not is reported missing by the same path as before.
+	for _, id in ipairs(deferredPaths) do
+		if objects[id] == nil then objects[id] = resolve(graph.nodes[id].value) end
+	end
 	local roots = {}
 	for _, root in ipairs(graph.roots) do roots[root.uid] = resolve(root.value) end
 	for id, value in pairs(objects) do keyLabels[value] = id end
@@ -2744,6 +2772,10 @@ local function resumed(co, ...)
 	local ok, value = coroutine.resume(co, ...)
 	return tostring(ok) .. "/" .. tostring(value) .. "/" .. coroutine.status(co)
 end
+-- The SG6 header's S is the live birth horizon at the capture, so rows compare the graph body and
+-- the horizon separately: scratch never moves it and only a live birth does.
+local function graphHorizon(graph) return tonumber(string.match(graph, "^SG6;S(%d+);")) end
+local function horizonless(graph) return (string.gsub(graph, "^SG6;S%d+;", "SG6;", 1)) end
 
 _SelfTestShared = { count = 7 }
 _SelfTestVector = Vector(11, 12)
@@ -3007,18 +3039,24 @@ if #restoreProblems ~= 0 then return table.concat(results, "\n") end
 local ra, rb = restored["11"], restored["22"]
 check("roots_present", ra ~= nil and rb ~= nil)
 local text2, problems2 = _ScriptGraph.serialize({ ["11"] = ra, ["22"] = rb })
-check("canonical_reserialize", text2 == text, string.format("len %d vs %d, problems %d %s", #text2, #text, #problems2, table.concat(problems2, " | ")))
-if text2 ~= text then
+-- The restored roots count on from the archive horizon; the roots table literal born for this call
+-- is the one live birth between the captures, so S moves by exactly one and nothing else changes.
+local horizonOne, horizonTwo = graphHorizon(text), graphHorizon(text2)
+local strippedOne, strippedTwo = horizonless(text), horizonless(text2)
+check("canonical_reserialize", strippedTwo == strippedOne and horizonOne ~= nil and horizonTwo == horizonOne + 1, string.format("len %d vs %d, horizon %s vs %s, problems %d %s", #text2, #text, tostring(horizonOne), tostring(horizonTwo), #problems2, table.concat(problems2, " | ")))
+if strippedTwo ~= strippedOne then
 	local f1 = io.open("script_graph_selftest_capture.txt", "wb")
 	if f1 then f1:write(text) f1:close() end
 	local f2 = io.open("script_graph_selftest_restored.txt", "wb")
 	if f2 then f2:write(text2) f2:close() end
-	for i = 1, math.min(#text, #text2) do
-		if string.byte(text, i) ~= string.byte(text2, i) then
-			check("first_difference", false, string.format("at %d: %q vs %q", i, string.sub(text, i, i + 80), string.sub(text2, i, i + 80)))
+	local difference
+	for i = 1, math.min(#strippedOne, #strippedTwo) do
+		if string.byte(strippedOne, i) ~= string.byte(strippedTwo, i) then
+			difference = string.format("at %d: %q vs %q", i, string.sub(strippedOne, i, i + 80), string.sub(strippedTwo, i, i + 80))
 			break
 		end
 	end
+	check("first_difference", false, difference or string.format("length %d vs %d", #strippedOne, #strippedTwo))
 end
 check("closure_counter_rewound", ra.step() == 1)
 check("shared_upvalue_between_closures", ra.peek() == 1)
@@ -3578,15 +3616,19 @@ do
 	if not patchOk then
 		patchText, patchProblems, patchCount, patchRestoreProblems, patchAgain = "", { tostring(patchText) }, 0, {}, ""
 	end
+	-- Same horizon rule as every reserialize: the second serialize's roots literal is the one live
+	-- birth since the restore counted on from the archive horizon, so S moves by exactly one.
+	local patchStripped, patchAgainStripped = horizonless(patchText), horizonless(patchAgain)
+	local patchHorizon, patchAgainHorizon = graphHorizon(patchText), graphHorizon(patchAgain)
 	local patchDifference = ""
-	if patchAgain ~= patchText then
+	if patchAgainStripped ~= patchStripped then
 		local at = 1
-		while at <= #patchText and at <= #patchAgain and string.byte(patchText, at) == string.byte(patchAgain, at) do at = at + 1 end
-		patchDifference = string.format(" again_equal=false at %d: %q vs %q", at, string.sub(patchText, at, at + 60), string.sub(patchAgain, at, at + 60))
+		while at <= #patchStripped and at <= #patchAgainStripped and string.byte(patchStripped, at) == string.byte(patchAgainStripped, at) do at = at + 1 end
+		patchDifference = string.format(" again_equal=false at %d: %q vs %q", at, string.sub(patchStripped, at, at + 60), string.sub(patchAgainStripped, at, at + 60))
 	end
 	check("sg6_engine_patch_round_trips", patchOk and #patchProblems == 0 and #patchRestoreProblems == 0 and patchCount > 0 and
-	      string.sub(patchText, 1, 4) == "SG6;" and patchAgain == patchText,
-	      "patches=" .. patchCount .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | ") .. patchDifference)
+	      string.sub(patchText, 1, 4) == "SG6;" and patchHorizon ~= nil and patchAgainHorizon == patchHorizon + 1 and patchAgainStripped == patchStripped,
+	      "patches=" .. patchCount .. " horizon=" .. tostring(patchHorizon) .. "->" .. tostring(patchAgainHorizon) .. " " .. table.concat(patchProblems, " | ") .. " / " .. table.concat(patchRestoreProblems, " | ") .. patchDifference)
 	local constructed, message = pcall(function() return MOPixel() end)
 	check("negative_unregistered_constructor_fails", not constructed and string.find(tostring(message), "has no Lua constructor", 1, true) ~= nil)
 	local file = io.tmpfile()
@@ -8708,12 +8750,39 @@ _PrimitiveQueueCapture = nil
 		g_LuaMan.CollectGarbageForCheckpoint();
 		const bool hostGone = uid > 0 && g_MovableMan.FindObjectByUniqueID(uid) == nullptr;
 		// Read the graphs once the window's own object is gone: what is left is the state the load moved.
-		const bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, graphProblems) && graphsAfter == graphsBefore;
+		// The header's S is the live birth horizon: the window's own births move it, so a state is
+		// "as found" when its graph body is unchanged and the horizon only counted up.
+		const auto splitHorizon = [](const std::string& text, std::string& body) -> long {
+			body = text;
+			if (!text.starts_with("SG6;S")) return -1;
+			const size_t end = text.find(';', 5);
+			if (end == std::string::npos) return -1;
+			body.erase(4, end - 4 + 1);
+			return std::strtol(text.c_str() + 5, nullptr, 10);
+		};
+		// The callbacks table carries the same horizon as liveSerial: it too may only count up.
+		const auto splitLiveSerial = [](std::string& body) -> long {
+			const std::string marker = "s10:liveSerialn";
+			const size_t at = body.find(marker);
+			if (at == std::string::npos) return -1;
+			const size_t digits = at + marker.size();
+			const size_t end = body.find(';', digits);
+			if (end == std::string::npos) return -1;
+			const long serial = std::strtol(body.c_str() + digits, nullptr, 10);
+			body.erase(digits, end - digits);
+			return serial;
+		};
+		bool graphsKept = observed && g_MovableMan.SerializeScriptGraphs(graphsAfter, graphProblems) && graphsAfter.size() == graphsBefore.size();
 		std::string graphDelta;
 		for (size_t index = 0; index < std::max(graphsBefore.size(), graphsAfter.size()); ++index) {
-			const std::string first = index < graphsBefore.size() ? graphsBefore[index] : std::string();
-			const std::string second = index < graphsAfter.size() ? graphsAfter[index] : std::string();
-			if (first == second) {
+			std::string first, second;
+			const long horizonBefore = index < graphsBefore.size() ? splitHorizon(graphsBefore[index], first) : -1;
+			const long horizonAfter = index < graphsAfter.size() ? splitHorizon(graphsAfter[index], second) : -1;
+			const long liveBefore = splitLiveSerial(first);
+			const long liveAfter = splitLiveSerial(second);
+			const bool stateKept = horizonBefore >= 0 && horizonAfter >= horizonBefore && liveAfter >= liveBefore && first == second;
+			graphsKept = graphsKept && stateKept;
+			if (stateKept) {
 				continue;
 			}
 			size_t at = 0;

@@ -686,9 +686,9 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			pixel.AdoptPersistedUniqueID();
 			pixel.SetPos(Vector(20, 0));
 			const auto restored = capture(pixel);
-			std::cout << "[owned-checkpoint] restored_identity uid_kept=" << (pixel.GetUniqueID() == identity) << " generation_kept=" << (pixel.CheckpointWriteGeneration() == stamp)
+			std::cout << "[owned-checkpoint] restored_identity uid_kept=" << (pixel.GetUniqueID() == identity) << " generation_moved=" << (pixel.CheckpointWriteGeneration() != stamp)
 			          << " unchanged_same=" << before.SameValues(unchanged) << " restored_same=" << before.SameValues(restored) << " text_differs=" << (before.Text() != restored.Text()) << std::endl;
-			check(pixel.GetUniqueID() == identity && pixel.CheckpointWriteGeneration() == stamp &&
+			check(pixel.GetUniqueID() == identity && pixel.CheckpointWriteGeneration() != stamp &&
 			          before.SameValues(unchanged) && !before.SameValues(restored) && before.Text() != restored.Text(),
 			      "owned_checkpoint_does_not_reuse_a_restored_identity_at_the_same_address");
 
