@@ -250,6 +250,12 @@ namespace RTE::CheckpointLua {
 	public:
 		explicit NativeCache(lua_State* state) : m_State(state) {
 			lua_newtable(state);
+			// Each userdata keys its own answers, and the table holds its keys weakly, so what a
+			// descriptor named is collected with the object it describes and not one cycle later.
+			lua_newtable(state);
+			lua_pushliteral(state, "k");
+			lua_setfield(state, -2, "__mode");
+			lua_setmetatable(state, -2);
 			m_Retained = luaL_ref(state, LUA_REGISTRYINDEX);
 		}
 		~NativeCache() {
@@ -267,12 +273,10 @@ namespace RTE::CheckpointLua {
 		};
 		std::unordered_map<const void*, Reference> references;
 		int RetainedTable() const { return m_Retained; }
-		int NextRetained() { return ++m_RetainedCount; }
 
 	private:
 		lua_State* m_State;
 		int m_Retained = LUA_NOREF;
-		int m_RetainedCount = 0;
 	};
 
 	// The caller holds the VM lock and keeps carried sound observations enabled.
@@ -292,7 +296,11 @@ namespace RTE::CheckpointLua {
 			auto& references = m_Cache.references;
 			ForEachCapturedUserdata(State(), [&](GCudata* data) {
 				GCobj* object = obj2gco(data);
-				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) { ++m_Image->m_CachedClasses; return; }
+				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) {
+					m_SeenClasses.insert(object);
+					++m_Image->m_CachedClasses;
+					return;
+				}
 				if (const auto known = references.find(object); known != references.end() && known->second.entry.serial == data->serial) {
 					const auto& reference = known->second;
 					const auto* rep = static_cast<const luabind::detail::object_rep*>(uddata(data));
@@ -342,19 +350,17 @@ namespace RTE::CheckpointLua {
 				else CaptureIterator(value);
 			}
 			m_Image->m_AnswerUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - answerStarted).count();
-			if (m_Histogram) {
-				for (const auto& [name, count]: *m_Histogram) {
-					std::cout << "[frozen-kinds] state=" << reinterpret_cast<const void*>(State()) << " " << name << " count=" << count.first << " us=" << count.second << std::endl;
-				}
-			}
 			m_Captured = true;
 		}
 
 		std::shared_ptr<const NativeImage> Finish(lua_State* state) {
 			CheckThread();
 			if (!m_Captured || !m_Image || state != State()) throw std::logic_error("native results require the same frozen Lua heap");
-			if (!m_NewClasses.empty()) {
+			// Descriptors this walk neither reused nor made again describe userdata that are gone.
+			const bool retired = m_SeenClasses.size() != m_Cache.classes->entries.size();
+			if (!m_NewClasses.empty() || retired) {
 				auto merged = std::make_shared<NativeImage::ClassEntries>(*m_Cache.classes);
+				if (retired) std::erase_if(merged->entries, [this](const auto& entry) { return !m_SeenClasses.contains(entry.first); });
 				for (auto& [address, entry]: m_NewClasses) merged->entries[address] = std::move(entry);
 				m_Cache.classes = std::move(merged);
 			}
@@ -411,8 +417,9 @@ namespace RTE::CheckpointLua {
 		std::unordered_map<const void*, NativeImage::Entry> m_NewClasses;
 		std::unordered_map<const void*, NativeCache::Reference> m_NewReferences;
 		std::unordered_set<const void*> m_Kept;
+		std::unordered_set<const void*> m_SeenClasses;
+		TValue m_Subject{};
 		bool m_Persist = false;
-		std::optional<std::map<std::string, std::pair<size_t, int64_t>>> m_Histogram = std::getenv("CCCP_FROZEN_KINDS") ? std::optional<std::map<std::string, std::pair<size_t, int64_t>>>(std::in_place) : std::nullopt;
 		std::shared_ptr<NativeImage> m_Image = std::make_shared<NativeImage>();
 		std::unordered_set<const void*> m_Queued;
 		std::vector<TValue> m_Queue;
@@ -434,23 +441,44 @@ namespace RTE::CheckpointLua {
 			lua_pushvalue(State(), index);
 			lua_rawseti(State(), -2, ++m_References.count);
 			lua_pop(State(), 1);
-			// A cached descriptor's values must outlive this capture: the state keeps them for every later freeze.
+			// A cached descriptor's values must outlive this capture: the subject keeps them for every later freeze.
 			if (m_Persist) {
-				lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+				const int bucket = PushRetainedBucket();
 				lua_pushvalue(State(), index);
-				lua_rawseti(State(), -2, m_Cache.NextRetained());
-				lua_pop(State(), 1);
+				lua_rawseti(State(), bucket, static_cast<int>(lua_objlen(State(), bucket)) + 1);
+				lua_pop(State(), 2);
 			}
 		}
-		// The heap values a cached answer names stay alive in the state's retained table.
+		// The subject's own bucket in the retained table; it and every answer in it die with the subject.
+		int PushRetainedBucket() {
+			lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+			Push(m_Subject);
+			lua_rawget(State(), -2);
+			if (lua_isnil(State(), -1)) {
+				lua_pop(State(), 1);
+				lua_newtable(State());
+				Push(m_Subject);
+				lua_pushvalue(State(), -2);
+				lua_rawset(State(), -4);
+			}
+			return lua_gettop(State());
+		}
+		// A subject answered again names new values; what the last capture kept for it goes.
+		void ReleaseRetained(const TValue& subject) {
+			lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
+			Push(subject);
+			lua_pushnil(State());
+			lua_rawset(State(), -3);
+			lua_pop(State(), 1);
+		}
+		// The heap values a cached answer names stay alive in the subject's bucket of the retained table.
 		void Retain(const NativeImage::Entry& entry) {
 			const auto keep = [&](const NativeImage::Result& result) {
 				for (const NativeImage::Value& item: result.values) {
 					if (item.text || !tvisgcv(&item.token)) continue;
+					const int bucket = PushRetainedBucket();
 					Push(item.token);
-					lua_rawgeti(State(), LUA_REGISTRYINDEX, m_Cache.RetainedTable());
-					lua_pushvalue(State(), -2);
-					lua_rawseti(State(), -2, m_Cache.NextRetained());
+					lua_rawseti(State(), bucket, static_cast<int>(lua_objlen(State(), bucket)) + 1);
 					lua_pop(State(), 2);
 				}
 			};
@@ -486,16 +514,6 @@ namespace RTE::CheckpointLua {
 		}
 
 		template<class Arguments> NativeImage::Result Invoke(lua_CFunction function, const char* name, Arguments arguments, bool observesNative = false) {
-			const auto invokeStarted = std::chrono::steady_clock::now();
-			struct Timed {
-				CaptureScope& scope; const char* name; std::chrono::steady_clock::time_point started;
-				~Timed() {
-					if (!scope.m_Histogram) return;
-					auto& bucket = (*scope.m_Histogram)[std::string("call=") + name];
-					++bucket.first;
-					bucket.second += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
-				}
-			} timed{*this, name, invokeStarted};
 			const int top = lua_gettop(State());
 			struct RestoreStack { lua_State* state; int top; ~RestoreStack() { lua_settop(state, top); } } stack{State(), top};
 			std::optional<AudioMan::SoundCheckpointSaveScope> notes;
@@ -556,9 +574,10 @@ namespace RTE::CheckpointLua {
 		}
 
 		void CaptureUserdata(const TValue& value) {
-			const auto started = std::chrono::steady_clock::now();
 			std::string className;
 			bool detached = false;
+			m_Subject = value;
+			ReleaseRetained(value);
 			Push(value);
 			// Only a luabind instance can change its answers; a class descriptor or a plain userdata is answered once.
 			const auto* object = luabind::detail::is_class_object(State(), -1);
@@ -632,13 +651,6 @@ namespace RTE::CheckpointLua {
 				m_NewReferences[gcval(&value)] = std::move(reference);
 				m_Kept.insert(gcval(&value));
 				Retain(entry);
-			}
-			if (m_Histogram) {
-				std::string kindNames;
-				for (const auto& kind: kinds) kindNames += (kindNames.empty() ? "" : "|") + kind;
-				auto& bucket = (*m_Histogram)["class=" + (className.empty() ? std::string("<class_rep>") : className) + " kind=" + kindNames];
-				++bucket.first;
-				bucket.second += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 			}
 		}
 

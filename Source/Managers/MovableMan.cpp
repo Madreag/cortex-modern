@@ -2360,7 +2360,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
-bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const {
+bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
 	LuaScriptGraphNativeCaptureScope nativeCapture;
@@ -2396,7 +2396,8 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		LuaMan::s_FrozenCaptureStats = &stats;
 		std::vector<std::string> frozenProblems;
 		const bool complete = captureAll(true, frozenProblems);
-		// Every state's page copy has landed before any state may run again.
+		// Every state's page copy has landed before any state may run again. The capture path copies
+		// inline, so this is where a copy given a thread of its own would be waited for.
 		const auto waitStarted = std::chrono::steady_clock::now();
 		g_LuaMan.GetMasterScriptState().WaitFrozenCopy();
 		for (LuaStateWrapper& state: states) state.WaitFrozenCopy();
@@ -2408,7 +2409,10 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
 		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts
 		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs << std::endl;
-		if (complete) return true;
+		if (complete) {
+			if (fromAnImage) *fromAnImage = true;
+			return true;
+		}
 		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;
 	}
 	CheckpointGraphIndex::Get().BeginWalk();

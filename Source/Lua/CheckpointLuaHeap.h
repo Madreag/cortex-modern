@@ -102,7 +102,7 @@ namespace RTE::CheckpointLua {
 			int64_t freezeUs = 0;
 			std::atomic<int64_t> copyUs{0};
 			std::vector<std::shared_ptr<const Page>> pages; // One per committed page; empty means never written.
-			std::shared_future<void> ready; // The copy of this freeze's written pages, run off the simulation thread.
+			std::shared_future<void> ready; // Set only when a freeze was given somewhere to run its copy.
 			mutable std::atomic<bool> copiedFlag{false};
 			mutable std::deque<std::vector<std::byte>> assembled; // Read by the one worker that walks this snapshot.
 			void WaitCopied() const {
@@ -155,7 +155,8 @@ namespace RTE::CheckpointLua {
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
 		// The caller must hold the VM's execution lock from the freeze until WaitCopy returns: the written
-		// pages are read by the copy this submits, and nothing may write them before it is done.
+		// pages are read by the copy, and nothing may write them before it is done. Without a Submit the
+		// copy runs here, on the caller's thread, which is what the capture path does today.
 		Snapshot Freeze(const Submit& submit) {
 			const auto started = std::chrono::steady_clock::now();
 			if (!m_State) throw std::runtime_error("a Lua heap capture has no state");
@@ -177,7 +178,8 @@ namespace RTE::CheckpointLua {
 			if (written) {
 				std::shared_ptr<Slab> slab = TakeSlab(written);
 				std::vector<void*> addresses(m_Written.begin(), m_Written.begin() + written);
-				// Both page tables take the copies as they land; the simulation thread waits once, at the end of the world capture.
+				// Both page tables take the copies as they land, so a submitted copy is waited for once, at
+				// the end of the world capture, and an unsubmitted one is already done when Freeze returns.
 				auto copy = [this, data, slab, addresses = std::move(addresses)] {
 					const auto copyStarted = std::chrono::steady_clock::now();
 					for (size_t index = 0; index < addresses.size(); ++index) {
@@ -477,6 +479,6 @@ namespace RTE::CheckpointLua {
 	// The one rule every capture walks userdata by: a finalizer that already ran left its native payload
 	// destroyed, and a queued one has not run yet, so the first is skipped and the second is visited.
 	template<class Visit> void ForEachCapturedUserdata(lua_State* state, Visit visit) {
-		ForEachUserdata(state, true, false, visit);
+		ForEachUserdata(state, false, true, visit);
 	}
 }

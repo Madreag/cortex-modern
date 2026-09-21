@@ -1550,7 +1550,12 @@ local function visitFunction(value, ctx)
 		local cellId = ctx.cells[cellKey]
 		if not cellId then
 			cellId = _ScriptGraphUpvalueSerial(value, i)
-			if cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
+			-- A cell the capture's own closure was born with takes a walk-order name in the band above
+			-- every birth, exactly as the closure holding it does.
+			if cellId > ctx.base and id > SCRATCH_BAND then
+				ctx.scratch = ctx.scratch + 1
+				cellId = SCRATCH_BAND + ctx.scratch
+			elseif cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
 			-- A store into this cell reports nothing, so the chunk that carries it is rewritten every capture.
 			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
@@ -2110,7 +2115,10 @@ local function parse(text)
 			node.cells = {}
 			for i = 1, reader:count() do
 				reader:expect("c")
-				node.cells[i] = reader:integer(reader:readUntil(";"), 1, idLimit)
+				-- A capture-owned cell is named in the band above every birth, like the nodes around it.
+				local cell = reader:integer(reader:readUntil(";"), 1)
+				if cell > idLimit and not (explicit and cell > SCRATCH_BAND and cell <= SCRATCH_BAND + count) then reader:bad("invalid integer") end
+				node.cells[i] = cell
 			end
 		elseif kind == "B" then
 			node.factory = reader:readString()
@@ -5436,7 +5444,7 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 	walk.lua = lua_topointer(state, -1);
 	lua_pop(state, 1);
 	walk.visit = &visit;
-	CheckpointLua::ForEachUserdata(state, false, true, [&walk](GCudata* userdata) {
+	CheckpointLua::ForEachCapturedUserdata(state, [&walk](GCudata* userdata) {
 		const void* metatable = tabref(userdata->metatable);
 		if (userdata->len < sizeof(luabind::detail::object_rep) || (metatable != walk.cpp && metatable != walk.lua)) return;
 		const auto* rep = static_cast<const luabind::detail::object_rep*>(uddata(userdata));
@@ -8860,7 +8868,12 @@ _PrimitiveQueueCapture = nil
 			const long horizonAfter = index < graphsAfter.size() ? splitHorizon(graphsAfter[index], second) : -1;
 			const long liveBefore = splitLiveSerial(first);
 			const long liveAfter = splitLiveSerial(second);
-			const bool stateKept = horizonBefore >= 0 && horizonAfter >= horizonBefore && liveAfter >= liveBefore && first == second;
+			// Only the state this row ran its own chunks in and the state the load took may have counted
+			// up; every other state's horizon is the number it had, to the digit.
+			const bool moved = static_cast<int>(index) == g_LuaMan.GetStateIndex(this) || static_cast<int>(index) == stateTaken;
+			const bool horizonKept = moved ? horizonAfter >= horizonBefore && liveAfter >= liveBefore
+			                               : horizonAfter == horizonBefore && liveAfter == liveBefore;
+			const bool stateKept = horizonBefore >= 0 && horizonKept && first == second;
 			graphsKept = graphsKept && stateKept;
 			if (stateKept) {
 				continue;
@@ -8869,7 +8882,9 @@ _PrimitiveQueueCapture = nil
 			while (at < first.size() && at < second.size() && first[at] == second[at]) {
 				++at;
 			}
-			graphDelta += " state " + std::to_string(index) + ": " + std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + first.substr(at, 40) + "' vs '" + second.substr(at, 40) + "'";
+			graphDelta += " state " + std::to_string(index) + ": horizon " + std::to_string(horizonBefore) + "->" + std::to_string(horizonAfter) +
+			              " live " + std::to_string(liveBefore) + "->" + std::to_string(liveAfter) + " may_move=" + std::to_string(moved) + " bytes " +
+			              std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + first.substr(at, 40) + "' vs '" + second.substr(at, 40) + "'";
 		}
 		std::cout << "[preview-late-script] staged=" << staged << " loaded=" << loaded << " state=" << stateTaken
 		          << " cursor " << cursorBefore << "->" << cursorAfter << " bindings_kept=" << bindingsKept
