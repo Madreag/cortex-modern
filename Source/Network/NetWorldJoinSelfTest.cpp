@@ -3053,7 +3053,13 @@ namespace RTE {
 		if (DecodeWorldJoinOffer(EncodeWorldJoinOffer(badPause), decoded, &error)) return Fail("private checkpoint accepted more paused frames than committed frames");
 		if (DecodeWorldJoinOffer(R"({"schema":1,"private_session_id":"bad"})", decoded, &error)) return Fail("private offer accepted a mistyped identity");
 		host.PublishImage(image);
+		auto replacement = image; replacement.tick = 45;
+		host.PublishImage(replacement);
+		if (host.FindSession(42)->snapshotTick != 45) return Fail("an unstarted return kept the replaced checkpoint boundary");
 		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		replacement.tick = 50;
+		host.PublishImage(replacement);
+		if (host.FindSession(42)->snapshotTick != 45) return Fail("a replaying return changed its checkpoint boundary");
 		host.NoteRejoinLinkFit(42, true);
 		uint64_t activation = 0;
 		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 600, 120, 2000, 610, &activation, &error) || activation != 0)

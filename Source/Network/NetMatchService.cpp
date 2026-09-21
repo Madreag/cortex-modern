@@ -2515,20 +2515,17 @@ static std::string ResyncSaveName() {
 		    !m_Coordinator->UsesBoundedWait() || m_Coordinator->IsPersistentWorldRound() || m_Coordinator->IsMigrating() || !g_ActivityMan.ActivityRunning()) return;
 		const uint64_t round = m_Coordinator->GetRoundId();
 		if (round == 0) return;
-		// The base a hold replays from is taken once per round, so a second hold would replay the whole
-		// match again. It is taken again once every held seat is back and nothing is bootstrapping: the
-		// capture freezes the sim, so it never runs while a seat is held or an image is in flight.
+		// A held or returned seat refreshes the base at the bounded cadence.
 		const bool seatHeld = m_Coordinator->AnyHeldAISeat();
 		if (m_PrivateImageSeatHeld && !seatHeld) m_PrivateImageStaleFrom = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		m_PrivateImageSeatHeld = seatHeld;
-		// The capture freezes the sim for 160-200 ms, and no survivor may feel one per rejoin: a refreshed
-		// base waits for the cadence, so a longer private replay is paid by the peer that is rejoining.
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = m_PrivateImageStaleFrom != 0 && !seatHeld && !m_WorldJoin.HasBootstrapInFlight() &&
+		const bool stale = (seatHeld || m_PrivateImageStaleFrom > m_WorldJoin.Image().tick) && !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
-		                   !m_PrivateImageTask.valid() && m_WorldJoin.Image().tick < m_PrivateImageStaleFrom && cadenceOpen;
-		if (m_PrivateImageRound == round && !stale) return;
+		                   !m_PrivateImageTask.valid() && cadenceOpen;
+		const bool initial = m_PrivateImageRound != round;
+		if (!initial && !stale) return;
 		m_PrivateImageStaleFrom = 0;
 		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
 		StartSnapshotLoadKeepalive();
@@ -2539,11 +2536,12 @@ static std::string ResyncSaveName() {
 		} finishCapture{*this, ownsKeepalive};
 		m_PrivateImageRound = round;
 		m_PrivateImageTakenMs = nowMs;
-		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_PrivateJoinError.clear();
+		if (initial) { m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); }
+		m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
 		std::string error;
 		auto admissionConfig = config.matchConfig; admissionConfig.hostPeerId = m_Coordinator->GetHostPeerId();
-		if (!m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) { m_PrivateJoinError = error; return; }
+		if (initial && !m_WorldJoin.ConfigureMatchRejoins(admissionConfig, round, config.simTickMs, &error)) { m_PrivateJoinError = error; return; }
 		const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 		NetResyncState state;
 		if (!ScenarioRunner::CaptureNetResyncState(tick, state, &error)) { m_PrivateJoinError = error; return; }
@@ -2567,7 +2565,7 @@ static std::string ResyncSaveName() {
 		image.heldState = ResumeHex(side);
 		const std::string name = "p5join_base_" + std::to_string(System::GetProcessID()) + "_" + std::to_string(round);
 		image.path = g_PresetMan.GetFullModulePath(c_UserScriptedSavesModuleName) + "/" + name + ".ccsave";
-		m_WorldJoin.Tail().EnableJournal(image.path + ".inputs");
+		if (initial) m_WorldJoin.Tail().EnableJournal(image.path + ".inputs");
 		const auto began = std::chrono::steady_clock::now();
 		if (!g_ActivityMan.SaveCurrentGame(name)) { m_PrivateJoinError = "the initial private checkpoint could not be captured"; return; }
 		image.captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - began).count();
@@ -2835,6 +2833,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::StartJoinerImageTransfer(const NetWorldJoinSession& session, std::string* error, bool* outUnstartable) {
 		if (outUnstartable) *outUnstartable = false;
+		if (m_WorldJoin.IsPrivateMatch() && m_PrivateImageTask.valid()) return false;
 		if (m_WorldJoin.IsPrivateMatch() && !m_PrivateJoinError.empty()) {
 			if (error) *error = m_PrivateJoinError;
 			if (outUnstartable) *outUnstartable = true;

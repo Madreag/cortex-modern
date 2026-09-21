@@ -1642,7 +1642,7 @@ namespace RTE {
 		m_Image = image;
 		m_Metrics.NoteCapture(image.captureMs, image.bytes);
 		for (NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && session.snapshotTick == 0) {
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {
 				session.snapshotTick = image.tick;
 				session.deliveredThrough = image.tick;
 				session.acknowledgedThrough = image.tick;
@@ -1865,6 +1865,12 @@ namespace RTE {
 	bool NetWorldJoinHost::HasBootstrapInFlight() const {
 		return std::any_of(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
 			return session.phase != NetWorldJoinPhase::Active && session.phase != NetWorldJoinPhase::Spectating && session.phase != NetWorldJoinPhase::Failed;
+		});
+	}
+
+	bool NetWorldJoinHost::HasImageTransferInFlight() const {
+		return std::any_of(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
+			return session.phase == NetWorldJoinPhase::SnapshotTransfer;
 		});
 	}
 

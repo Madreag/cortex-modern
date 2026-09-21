@@ -558,6 +558,7 @@ namespace RTE {
 
 		const std::vector<NetWorldJoinSession>& Sessions() const { return m_Sessions; }
 		bool HasBootstrapInFlight() const;
+		bool HasImageTransferInFlight() const;
 		const NetWorldJoinSession* FindSession(NetPeerId connection) const;
 		NetWorldMembership& Membership() { return m_Membership; }
 		const NetWorldMembership& Membership() const { return m_Membership; }
