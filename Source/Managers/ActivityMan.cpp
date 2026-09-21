@@ -555,7 +555,8 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		m_LastAutosaveTick = tick;
 		m_LastAutosaveBytes = bytes;
 		m_LastAutosaveCaptureMs = captureMs;
-		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
+		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={} uids_allocated={} sim_draws={} render_draws={} cursor_moves={} sound_cursor_moves={}\n", tick, captureMs, bytes,
+		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.cursorMoves, m_LastCaptureEffects.soundCursorMoves) << std::flush;
 		return true;
 	} catch (const std::exception& error) {
 		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
