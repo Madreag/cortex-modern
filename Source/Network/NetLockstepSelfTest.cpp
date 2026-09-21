@@ -2010,6 +2010,43 @@ namespace RTE {
 			return host.IsRunning();
 		}
 
+		bool TestWorldTailKeepsItsLiveCoordinatorSeparate(std::string* error) {
+			LoopbackTransport wire;
+			if (!wire.StartHost(49474, error)) return false;
+			NetLockstepCoordinator live;
+			NetLockstepConfig config; config.sessionId = 0x9A40; config.roundId = 40; config.localPeerId = config.peerCount = 1; config.startFrame = 100;
+			if (!live.Start(wire, config, error)) return false;
+			live.Tick(0);
+			if (!live.IsRunning()) { *error = "the future live coordinator did not start"; return false; }
+			ScenarioRunner::SetLockstepCoordinator(&live);
+			NetLockstepFrame frame; frame.targetFrame = 41; frame.frames = {MakeFrame(789, uint64_t{1} << PRESS_PRIMARY)};
+			const bool installed = ScenarioRunner::InstallWorldCatchUp(40, {frame}, error);
+			NetLockstepReadyFrame ready;
+			const bool applied = installed && ScenarioRunner::TakeWorldCatchUpReadyFrame(41, ready, error);
+			ScenarioRunner::ReleaseWorldCatchUp(); ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (!applied || ready.remoteFrames.size() != 1 || ControllerFrameCodec::Encode(ready.remoteFrames.front()) != ControllerFrameCodec::Encode(frame.frames.front()) || live.GetStats().nextFrame != 100) {
+				*error = "a world tail was queued into its already-started live coordinator"; return false;
+			}
+			return true;
+		}
+
+		bool TestLateStartPreservesHoldBoundary(std::string* error) {
+			LoopbackTransport wire, hostWire;
+			if (!hostWire.StartHost(49474, error) || !wire.Connect("loopback", 49474, error)) return false;
+			NetLockstepCoordinator joined;
+			auto config = MakeCoordinatorConfig(3, 1, 0x9A39, 1, NetTransportLane::ControlReliable);
+			config.peerCount = 3; config.startFrame = 100; config.roundId = 39; config.joinsRunningRound = true;
+			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.activePeerIds = {1, 3}; config.remoteTransportPeerIds = {{1, 1}};
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 3;
+			config.matchConfig.players.push_back({3, 2, false, "Returning"});
+			config.initialPeerLeaves[2] = 40; config.initialSeatHolds[2] = {2, 0, 1, 1, 40};
+			if (!joined.Start(wire, config, error)) return false;
+			if (joined.GetPeerLeaveFrames().at(2) != 40 || !joined.IsSeatUnderAI(2, 40) || joined.IsSeatHoldGap(2, 100)) {
+				*error = "a late start restamped another seat's old hold as a new transition"; return false;
+			}
+			return true;
+		}
+
 		bool TestPrivateCheckpointKeepsDepartures(std::string* error) {
 			LoopbackTransport wire;
 			NetLockstepCoordinator replay;
@@ -16325,6 +16362,8 @@ namespace RTE {
 		    !TestCommittedCatchUpKeepsSharedState(&error) ||
 		    !TestCatchUpFencesTheReclaimGap(&error) ||
 		    !TestCatchUpFencesTheHoldGap(&error) ||
+		    !TestWorldTailKeepsItsLiveCoordinatorSeparate(&error) ||
+		    !TestLateStartPreservesHoldBoundary(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
