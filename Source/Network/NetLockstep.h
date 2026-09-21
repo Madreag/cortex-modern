@@ -650,11 +650,11 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 34;
+		static constexpr uint16_t c_Version = 35;
 		static constexpr uint16_t c_WorldVersion = 35;
 		/// Version 35 carries the host-authored agreed-start record after the ordinary Start fields.
 		/// Older readers reject that packet as trailing bytes; they never interpret the record as a local start.
-		static constexpr uint16_t c_AgreedStartVersion = 35;
+		static constexpr uint16_t c_AgreedStartVersion = c_Version;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
@@ -762,7 +762,10 @@ namespace RTE {
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
+		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
 		bool IsReplayPlayback() const { return m_Playback; }
+		const std::optional<NetLockstepStart>& GetAgreedStartRecord() const { return m_AgreedStartRecord; }
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
 		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
@@ -1231,6 +1234,7 @@ namespace RTE {
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
+		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
@@ -1283,10 +1287,12 @@ namespace RTE {
 		uint64_t m_SynchronizedCaptureEndFrame = 0;
 		double m_SynchronizedCaptureBudgetMs = 250.0;
 		uint64_t m_CaptureParkRevision = 0;
+		uint64_t m_CaptureParkDeadlineMs = 0;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		bool m_ApplyingDeferredParkTiming = false;
 		bool m_CaptureParkAwaitingReports = false;
+		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		std::optional<uint64_t> m_LastCompletedSimulationTick;

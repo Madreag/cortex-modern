@@ -123,15 +123,20 @@ TIMING_CASES = (
     ('200ms-loss5-silent600', 200, 5, 600),
 )
 
+AUTOSAVE_CASES = (
+    ('autosave-100ms', 100, 1),
+    ('autosave-200ms', 200, 1),
+)
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2):
+
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None):
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
-    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
+    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
-                    live_stalls=live_stalls, baseline_humans=sp_humans if sp else None,
+                    live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
@@ -161,6 +166,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on',
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
+                if autosave_seconds is not None and peer == 'host':
+                    flags += ['-net-autosave-seconds', str(autosave_seconds)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
@@ -248,7 +255,7 @@ def summarize_case(report, out):
             cells.append(f'{value_text(value)} / {row["status"]}')
         lines.append(f'| {key} | {cells[0]} | {cells[1]} |')
     lines += ['', f'Measurement complete: {report["measurement_complete"]}. Off-wire proof: {report["off_wire_pass"]}.',
-              f'RTT and D selection: {json.dumps(peers["client"]["metrics"]["auto_picks"], separators=(",", ":"))}',
+              f'RTT and D selection: {json.dumps(peers.get("client", {}).get("metrics", {}).get("auto_picks", []), separators=(",", ":"))}',
               '', 'Raw files and their hashes are in feel-report.json. Per-edge matches, every kinematic residual,',
               'all commit comparisons and firing matches are under each peer/analysis directory.', '',
               'The presentation boundary is UploadFrame return on the private desktop. Audio times are conservative',
@@ -434,11 +441,19 @@ def analyze(root, stock=None):
         report = reduce_timing_case(run, reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
+    for name, _, _ in AUTOSAVE_CASES:
+        run = root / name
+        if not run.is_dir():
+            results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
+            continue
+        report = reduce_timing_case(run, three_reference)
+        write_json(run / 'feel-report.json', report)
+        results.append(report)
     write_json(root / 'matrix-report.json', results)
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
-        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES} else f'{report["name"]}-on/summary.md'
+        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
     lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
               'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
@@ -529,7 +544,10 @@ def main(argv=None):
                     ports=list(range(args.port, args.port + 10)), ticks=TICKS,
                     scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
-                    captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame')
+                    captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
+                    arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
+                         [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
+                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES])
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
@@ -548,6 +566,9 @@ def main(argv=None):
         for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
             launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
                         loss_percent=loss, silent_tick=silent)
+        for index, (name, lag, autosave_seconds) in enumerate(AUTOSAVE_CASES):
+            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
+                        window_ticks=2 * TICKS, autosave_seconds=autosave_seconds)
     try:
         stock = json.loads(args.stock_baseline.read_text(encoding='utf-8')) if args.stock_baseline else None
         results = analyze(root, stock)

@@ -329,6 +329,48 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestReplayCarriesAgreedStart(std::string* error) {
+			const auto directory = std::filesystem::temp_directory_path() / ("cc-replay-agreed-start-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+			if (!std::filesystem::create_directory(directory)) { *error = "could not create agreed-start replay directory"; return false; }
+			const auto path = directory / "shifted.ccreplay";
+			struct Cleanup { std::filesystem::path path; ~Cleanup() { std::error_code ignored; std::filesystem::remove(path, ignored); std::filesystem::remove(path.parent_path(), ignored); } } cleanup{path};
+			NetMatchConfig match = MakeConfig(); match.sessionId = 0x5048413441475231ULL;
+			NetLockstepStart agreed;
+			agreed.sessionId = match.sessionId; agreed.startFrame = 1; agreed.localPeerId = 1; agreed.peerCount = 2; agreed.roundId = 0xA671;
+			agreed.controllerFrameVersion = ControllerFrame::c_Version; agreed.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			agreed.scenario = "LockstepSelfTest"; agreed.ownershipPolicy = "unique-id-split"; agreed.agreedStartRecord = true;
+			agreed.agreedFirstFrame = 7; agreed.agreedEffectiveStartFrame = 7; agreed.publishedPeerMask = 3;
+			agreed.peerEffectiveStartFrames[0] = agreed.peerEffectiveStartFrames[1] = 7;
+			ControllerFrame firstFrame; firstFrame.actorUniqueID = 100; firstFrame.stateMask = 7;
+			ControllerFrame secondFrame = firstFrame; secondFrame.stateMask = 8;
+			NetMatchReplayWriter writer;
+			if (!writer.Open(path.string(), match, error) || !writer.SetAgreedStart(agreed, error) ||
+			    !writer.WriteFrame(7, {firstFrame}, {}, error) || !writer.WriteFrame(8, {secondFrame}, {}, error)) return false;
+			writer.Close();
+			NetMatchReplayReader reader;
+			if (!reader.Open(path.string(), error) || !reader.GetAgreedStart() || *reader.GetAgreedStart() != agreed || reader.GetStartFrame() != 7) {
+				*error = "the replay reader lost the shifted agreed-start record"; return false;
+			}
+			LoopbackTransport wire;
+			NetLockstepCoordinator playback;
+			NetLockstepConfig replayConfig;
+			replayConfig.sessionId = match.sessionId; replayConfig.roundId = agreed.roundId; replayConfig.startFrame = 1; replayConfig.localPeerId = 1; replayConfig.peerCount = 2;
+			replayConfig.scenario = agreed.scenario; replayConfig.ownershipPolicy = agreed.ownershipPolicy; replayConfig.matchConfig = match;
+			if (!playback.StartReplay(wire, replayConfig, error) || !playback.ApplyReplayAgreedStart(*reader.GetAgreedStart(), error)) return false;
+			NetLockstepFrame record; bool eof = false; std::vector<uint64_t> committed;
+			for (uint64_t frame = 7; frame <= 8; ++frame) {
+				if (!reader.ReadFrame(record, eof, error) || record.targetFrame != frame || !playback.QueueReplayFrame(record.targetFrame, record.frames, record.commands, error)) return false;
+				playback.Tick(frame);
+				NetLockstepReadyFrame ready;
+				while (playback.PopReadyFrame(ready)) committed.push_back(ready.frame);
+			}
+			if (committed != std::vector<uint64_t>{7, 8} || playback.GetStats().effectiveStartFrame != 7) {
+				*error = "playback did not commit the recorded frames at the agreed first frame"; return false;
+			}
+			std::cout << "[net-match-selftest] PASS replay_carries_agreed_start first=7 committed=7,8" << std::endl;
+			return true;
+		}
+
 		template <typename Config>
 		bool TestMigrationConfigOrder(std::string* error) {
 			Config config = NetMatchConfigUtil::MakeDefault(45791);
@@ -5460,7 +5502,10 @@ namespace RTE {
 			const uint16_t stableSeat = mover->reconnect.GetRecord().stableSeat;
 			for (int shrink = 1; shrink <= shrinks; ++shrink) {
 				RematchPeer* leaver = fixture.Client(shrink == 1 ? 3 : 2);
-				if (!leaver || !LeaveRematchRound(fixture, *leaver, &step) || !PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) {
+				if (!leaver || !LeaveRematchRound(fixture, *leaver, &step)) {
+					return fail("clean leave " + std::to_string(shrink) + " did not settle");
+				}
+				if (!PlayRematchTicks(fixture, 2) || !FinishRematchRound(fixture, &step)) {
 					return fail("clean leave " + std::to_string(shrink) + " did not settle");
 				}
 				if (!RematchFixtureRound(fixture, &step)) return fail("rematch " + std::to_string(shrink) + " did not relaunch");
@@ -10812,6 +10857,18 @@ namespace RTE {
 				peer.m_State = NetMatchServiceState::Running;
 				peer.m_LocalPeerId = static_cast<uint8_t>(index + 1);
 				peer.AttachCoordinatorSessionSink();
+				// The service fixture has no ScenarioRunner activity restart to measure. Publish the
+				// zero-ms startup fact before exercising the lockstep stream, as the real sim does.
+				if (!peer.m_Coordinator->IsRunning()) {
+					peer.m_Coordinator->NoteLocalStartPark(0);
+				}
+			}
+			for (int spin = 0; spin < 20; ++spin) {
+				for (auto& peer: peers) if (!peer.m_Coordinator->IsRunning()) peer.m_Coordinator->Tick(NetLockstepNowMs());
+				if (std::all_of(peers.begin(), peers.end(), [](const auto& peer) { return peer.m_Coordinator->IsRunning(); })) break;
+			}
+			for (size_t index = 0; index < peers.size(); ++index) {
+				auto& peer = peers[index];
 				if (peer.m_Mux.get() != bound[index] || !peer.m_Coordinator->IsRunning() ||
 				    !NetMuxTransport::IsP2P(peer.m_Session->GetReadyPeers().front().transportPeerId)) return false;
 			}
@@ -11041,8 +11098,8 @@ namespace RTE {
 		    persistent.capturedMatchConfig != NetMatchConfigUtil::c_PersistentWorldVersion ||
 		    persistent.completedLockstep != NetLockstepCodec::c_WorldVersion ||
 		    ordinary.capturedLockstep != NetLockstepCodec::c_Version || ordinary.capturedMatchConfig != NetMatchConfigUtil::c_Version ||
-		    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
-		        {"supported_lockstep_codec_version", 34}, {"supported_world_lockstep_codec_version", 35},
+			    persistent.supported != ordinary.supported || persistent.supported != nlohmann::json{
+			        {"supported_lockstep_codec_version", 35}, {"supported_world_lockstep_codec_version", 35},
 		        {"supported_match_config_version", 6}, {"supported_world_match_config_version", 7}} ||
 		    persistent.configHash.empty() || persistent.configHash != ordinary.configHash) {
 			if (error) *error = "captured world identity: world=" + seen(persistent) + " ordinary=" + seen(ordinary);
@@ -12550,6 +12607,7 @@ namespace RTE {
 		if (!TestCPURosterValidation(&error)) return fail(error);
 		if (!TestCPURosterHash(&error)) return fail(error);
 		if (!TestReplayCommandSenders(&error)) return fail(error);
+		if (!TestReplayCarriesAgreedStart(&error)) return fail(error);
 		if (!TestOwnershipPolicies(&error)) return fail(error);
 		if (!TestLockstepCoordinatorUsesMatchOwnership(&error)) return fail(error);
 		if (!TestLobbyCodecRoundTrips(&error)) return fail(error);

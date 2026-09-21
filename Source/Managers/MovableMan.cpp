@@ -388,10 +388,11 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 // An actor no frame was committed for this tick (its first D ticks in the world, the ticks after a
 // pause or an ownership change) runs on neutral input on every peer, not on its owner's fresh sample.
-static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, const std::unordered_set<int64_t>& applied) {
+static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, const std::unordered_set<int64_t>& applied, bool canonicalStartup = false) {
 	for (Actor* actor: actors) {
 		if (applied.find(static_cast<int64_t>(actor->GetUniqueID())) == applied.end()) {
 			actor->GetController()->ApplyWireNeutral();
+			if (canonicalStartup) actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
 		}
 	}
 }
@@ -5616,7 +5617,8 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		NeutralizeUnframedLockstepActors(m_Actors, applied);
+		NeutralizeUnframedLockstepActors(m_Actors, applied,
+		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame());
 		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
