@@ -411,6 +411,10 @@ void ActivityMan::Clear() {
 	m_AutosaveTasks.clear();
 	m_SaveRefusalRecords.clear();
 	m_ReportedAutosaveKeys.clear();
+	{
+		std::lock_guard lock(m_DeferredRefusalMutex);
+		m_DeferredRefusals.clear();
+	}
 	m_InActivity = false;
 	m_ActivityNeedsRestart = false;
 	m_ActivityNeedsResume = false;
@@ -437,12 +441,43 @@ bool ActivityMan::ForceAbortSave() {
 	return SaveCurrentGame("AbortSave") && WaitForSaveGameTask();
 }
 
-bool ActivityMan::WaitForSaveGameTask() const {
+bool ActivityMan::WaitForSaveGameTask() {
+	bool saved = false;
 	try {
-		return !m_SaveGameTask.valid() || m_SaveGameTask.get();
+		saved = !m_SaveGameTask.valid() || m_SaveGameTask.get();
 	} catch (const std::exception&) {
-		return false;
 	}
+	ReportDeferredSaveRefusals();
+	return saved;
+}
+
+bool ActivityMan::WaitForAutosaveVerdict() {
+	bool completed = true;
+	for (const auto& task: m_AutosaveTasks) {
+		try {
+			completed = task.get() && completed;
+		} catch (const std::exception&) {
+			completed = false;
+		}
+	}
+	m_AutosaveTasks.clear();
+	ReportDeferredSaveRefusals();
+	return completed;
+}
+
+void ActivityMan::QueueDeferredSaveRefusal(SaveKind kind, std::vector<std::string> problems) {
+	std::lock_guard lock(m_DeferredRefusalMutex);
+	m_DeferredRefusals.emplace_back(kind, std::move(problems));
+}
+
+// The worker walks the graph off the simulation thread, so its refusal reaches the player a tick later.
+void ActivityMan::ReportDeferredSaveRefusals() {
+	std::vector<std::pair<SaveKind, std::vector<std::string>>> refusals;
+	{
+		std::lock_guard lock(m_DeferredRefusalMutex);
+		refusals.swap(m_DeferredRefusals);
+	}
+	for (const auto& [kind, problems]: refusals) ReportScriptGraphSaveRefusal(kind, problems);
 }
 
 bool ActivityMan::SaveCurrentGame(const std::string& fileName, SaveCompression compression) {
@@ -573,19 +608,17 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const size_t luaStateCount = 1 + g_LuaMan.GetThreadedScriptStates().size();
 	auto& graphIndex = CheckpointGraphIndex::Get();
 	const GraphDirt beforeWalk = graphIndex.Sample();
-	// A walk that recorded its tables and saw none of them written can be reused whole.
-	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && !beforeWalk.unknownTable;
+	// A walk that recorded its tables and saw none of them or their values written can be reused whole.
+	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && beforeWalk.dirtyValues == 0 && !beforeWalk.unknownTable;
 	const auto graphStart = std::chrono::steady_clock::now();
+	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
 	if (cow.LuaUnchanged(LuaCheckpointWriteGeneration(), luaStateCount) || (graphClean && cow.HasLua(luaStateCount))) {
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else {
-		graphIndex.BeginWalk();
-		const bool captured = g_MovableMan.CaptureScriptGraphs(image->graphs, problems);
-		graphIndex.EndWalk();
-		if (!captured) {
+		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems)) {
 			// Every refused script value reaches the player the same way a manual save reports it.
-			ReportScriptGraphSaveRefusal(matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave, problems);
+			ReportScriptGraphSaveRefusal(kind, problems);
 			return false;
 		}
 		image->luaReused = false;
@@ -704,7 +737,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		manifest.sideState = identity->sideState;
 	}
 	// Nothing writes the image once it is published, so the worker keeps its own buffers.
-	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel,
+	task = AutosaveWriter().Submit([this, image, layerNames, palette, fileName, path, matchId, tick, simThread, zipLevel, kind,
 	                                automatic, descriptor, manifest, pinnedCheckpointSource, sceneCache, previousImage,
 	                                retired = std::move(retired), retiredLayers = std::move(retiredLayers)]() mutable {
 		const auto start = std::chrono::steady_clock::now();
@@ -748,6 +781,12 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			CheckpointCow::Get().WriteMetricsJson(metricsPath);
 			image.reset();
 			return true;
+		} catch (const ScriptGraphRefusal& refusal) {
+			CheckpointCow::Get().RecordWorker(sinceStart());
+			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=capture refused\n");
+			QueueDeferredSaveRefusal(kind, refusal.problems);
+			image.reset();
+			return false;
 		} catch (const std::exception& error) {
 			CheckpointCow::Get().RecordWorker(sinceStart());
 			System::PrintDiagnosticLine("[autosave] failed tick=" + std::to_string(tick) + " reason=" + error.what() + "\n");
@@ -1315,7 +1354,8 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	const std::string expectedPlayerLine = "Save skipped: mod_failure_continuation.lua Update an unsupported userdata (userdata) (transactionOwner)";
 
 	const size_t toastsBefore = ScenarioRunner::GetNetUiToastLog().size();
-	const bool refused = planted && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1);
+	// The worker walks the graph, so its verdict is waited for before the refusal is read.
+	const bool refused = planted && !(SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 1) && WaitForAutosaveVerdict());
 	const std::string screen = g_FrameMan.GetScreenText(0);
 	const std::string console = g_ConsoleMan.CopyLogTail(16 * 1024);
 	const bool hasLive = !m_SaveRefusalRecords.empty();
@@ -1357,7 +1397,7 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	check(bundleOk, "bundle_json", bundleDetail);
 
 	g_FrameMan.ClearScreenText(0);
-	const bool refusedAgain = !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2);
+	const bool refusedAgain = !(SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 2) && WaitForAutosaveVerdict());
 	check(refusedAgain && m_SaveRefusalRecords.size() == 2 && m_SaveRefusalRecords.back().problem == expectedProblem &&
 	          g_FrameMan.GetScreenText(0).empty() && ScenarioRunner::GetNetUiToastLog().size() == toastsBefore,
 	      "autosave_dedup", g_FrameMan.GetScreenText(0));
@@ -1372,13 +1412,13 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	    "assert(name == 'fn'); assert(debug.setupvalue(fn, 1, newproxy(true)) == 'transactionOwner'); assert(type(fn()) == 'userdata');";
 	const bool replanted = state.RunScriptString(replant) == 0;
 	g_FrameMan.ClearScreenText(0);
-	const bool refusedAfterClear = replanted && !SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3);
+	const bool refusedAfterClear = replanted && !(SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000001", 3) && WaitForAutosaveVerdict());
 	check(cleared && refusedAfterClear && m_SaveRefusalRecords.size() == 3 && m_SaveRefusalRecords.back().problem == expectedProblem &&
 	          g_FrameMan.GetScreenText(0) == expectedPlayerLine,
 	      "autosave_returns", g_FrameMan.GetScreenText(0));
 
 	g_FrameMan.ClearScreenText(0);
-	const bool refusedManual = !SaveCurrentGame("save_refusal");
+	const bool refusedManual = !(SaveCurrentGame("save_refusal") && WaitForSaveGameTask());
 	check(refusedManual && m_SaveRefusalRecords.size() == 4 && m_SaveRefusalRecords.back().kind == "manual" &&
 	          m_SaveRefusalRecords.back().problem == expectedProblem && g_FrameMan.GetScreenText(0) == expectedPlayerLine,
 	      "manual_repeat", g_FrameMan.GetScreenText(0));
@@ -1881,6 +1921,7 @@ void ActivityMan::EndLockstepRelaunch() {
 }
 
 void ActivityMan::Update() {
+	ReportDeferredSaveRefusals();
 	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ActivityUpdate);
 	if (m_Activity) {
 		static const uint64_t soundPhase = Hash("Activity");

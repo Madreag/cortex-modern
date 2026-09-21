@@ -2363,19 +2363,40 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
+	LuaScriptGraphNativeCaptureScope nativeCapture;
 	struct PathCapture {
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
 	} pathCapture;
-	graphs.clear();
-	const auto capture = [&](LuaStateWrapper& state) {
-		CheckpointText text;
-		const bool complete = state.CaptureScriptGraph(text, problems);
-		graphs.push_back(std::move(text));
+	auto& states = g_LuaMan.GetThreadedScriptStates();
+	const auto captureAll = [&](bool frozen, std::vector<std::string>& into) {
+		graphs.clear();
+		const auto capture = [&](LuaStateWrapper& state) {
+			CheckpointText text;
+			const bool complete = state.CaptureScriptGraph(text, into, frozen);
+			graphs.push_back(std::move(text));
+			return complete;
+		};
+		// The live walk collects every state's refusals; a frozen capture stops at the first state it cannot freeze.
+		bool complete = capture(g_LuaMan.GetMasterScriptState());
+		for (LuaStateWrapper& state: states) {
+			if (frozen && !complete) break;
+			complete = capture(state) && complete;
+		}
 		return complete;
 	};
-	bool complete = capture(g_LuaMan.GetMasterScriptState());
-	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) complete = capture(state) && complete;
+	// Every state off a frozen image or none: the live walk's index and chunk caches stay coherent
+	// only while a walk covers every state, so one state that cannot freeze sends the whole capture that way.
+	bool frozen = g_LuaMan.GetMasterScriptState().FrozenCaptureAvailable();
+	for (const LuaStateWrapper& state: states) frozen = frozen && state.FrozenCaptureAvailable();
+	if (frozen) {
+		std::vector<std::string> frozenProblems;
+		if (captureAll(true, frozenProblems)) return true;
+		for (const std::string& problem: frozenProblems) std::cout << "[frozen-graph] fallback: " << problem << std::endl;
+	}
+	CheckpointGraphIndex::Get().BeginWalk();
+	const bool complete = captureAll(false, problems);
+	CheckpointGraphIndex::Get().EndWalk();
 	return complete;
 }
 
@@ -2385,6 +2406,11 @@ bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::ve
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
 	} pathCapture;
+	// One walk over every state: a state's walk that ended alone would clear the others' dirty roots.
+	struct IndexWalk {
+		IndexWalk() { CheckpointGraphIndex::Get().BeginWalk(); }
+		~IndexWalk() { CheckpointGraphIndex::Get().EndWalk(); }
+	} indexWalk;
 	graphs.clear();
 	bool complete = true;
 	graphs.emplace_back();
