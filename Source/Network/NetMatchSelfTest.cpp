@@ -7596,10 +7596,38 @@ namespace RTE {
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
-		pump(service.m_ReconnectHost, returnAdmission, returnConnection);
-		if (returnAdmission.GetState() != NetH4ClientState::Joined) {
-			*error = std::string("the kicked identity's rejoin answered ") + NetReconnectClientStateName(returnAdmission.GetState()) +
-			         " reason=" + (returnAdmission.HasLastRejectReason() ? NetProtocol::RejectReasonName(returnAdmission.GetLastRejectReason()) : "none");
+		bool returnOffered = false;
+		std::string returnAnswer = "nothing";
+		for (uint32_t round = 0; round < 16; ++round) {
+			service.m_ReconnectHost.Tick(0);
+			returnAdmission.Tick(0);
+			bool moved = false;
+			for (NetH4Outbound& outbound : service.m_ReconnectHost.TakeOutbound()) {
+				moved = true;
+				if (outbound.connection != returnConnection) {
+					continue;
+				}
+				if (const auto* offer = std::get_if<NetH4TicketOffer>(&outbound.payload)) {
+					returnOffered = true;
+					returnAnswer = "a ticket offer for seat " + std::to_string(offer->stableSeat);
+				} else if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
+					returnAnswer = std::string("refused ") + NetProtocol::RejectReasonName(refused->rejectReason);
+				}
+				returnAdmission.HandleMessage(outbound.payload, 0);
+			}
+			service.m_ReconnectHost.TakeCommits();
+			for (NetH4Outbound& outbound : returnAdmission.TakeOutbound()) {
+				moved = true;
+				service.m_ReconnectHost.HandleMessage(returnConnection, outbound.payload, 0);
+			}
+			if (!moved) {
+				break;
+			}
+		}
+		if (!returnOffered || returnAdmission.GetState() != NetH4ClientState::Joined) {
+			*error = "the kicked identity's rejoin answered " + returnAnswer +
+			         " client=" + NetReconnectClientStateName(returnAdmission.GetState()) +
+			         (returnAdmission.HasLastRejectReason() ? std::string(" reason=") + NetProtocol::RejectReasonName(returnAdmission.GetLastRejectReason()) : "");
 			SetNetAuthCryptoForTest(nullptr);
 			return false;
 		}
