@@ -695,7 +695,9 @@ namespace {
 	/// Builds a MUSIC-bus SoundContainer for one queue entry, with the entry's loop count baked into the exit time so the MusicMan update timer ends the section exactly when the 6.x stream would have ended.
 	SoundContainer MakeCompatMusicContainer(const CompatMusicQueueEntry& entry, bool silent = false) {
 		SoundContainer container;
+		container.SetPresetName("V6CompatMusic");
 		container.SetBusRouting(SoundContainer::BusRouting::MUSIC);
+		container.SetImmobile(true); // Music is non-positional; a mobile container would take the 3D command path and error on the 2D-routed stream.
 		container.GetTopLevelSoundSet().AddSound(g_PresetMan.GetFullModulePath(entry.FilePath));
 		container.SetLoopSetting(entry.Loops);
 		if (silent) {
