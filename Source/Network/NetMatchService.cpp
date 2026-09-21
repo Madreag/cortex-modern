@@ -2543,7 +2543,9 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = (seatHeld || m_PrivateImageStaleFrom > m_WorldJoin.Image().tick) && !m_WorldJoin.HasImageTransferInFlight() &&
+		const bool captureWithinBudget = m_WorldJoin.Image().captureMs <= 50.0;
+		const bool stale = ((!seatHeld && m_PrivateImageStaleFrom > m_WorldJoin.Image().tick) ||
+		                   (seatHeld && captureWithinBudget)) && !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
 		                   !m_PrivateImageTask.valid() && cadenceOpen;
 		const bool initial = m_PrivateImageRound != round;
