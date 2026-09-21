@@ -4928,9 +4928,9 @@ namespace RTE {
 		const auto reclaim = m_ReclaimTransactions.find(peerId);
 		if (reclaim == m_ReclaimTransactions.end()) return false;
 		const auto stats = m_Stats.peers.find(peerId);
-		// Everything heard from the seat is still inside the window it was admitted on, so the first
-		// frame it owes has not been answered yet.
-		return stats == m_Stats.peers.end() || stats->second.highestTargetFrame <=
+		// Nothing the seat sent is consumable past the window it was admitted on. A frame that only
+		// reached our decoder is not an answer: until its new start lands, its input sits buffered.
+		return stats == m_Stats.peers.end() || stats->second.acceptedThroughFrame <=
 		    std::max(reclaim->second.neutralThroughFrame, reclaim->second.activationFrame + reclaim->second.delayFrames);
 	}
 
@@ -5017,10 +5017,11 @@ namespace RTE {
 				} else if (IsReturningSeatBeforeItsFirstInput(peer)) {
 					// The round reaches the first frame a returning seat owes one window after the
 					// activation, but that seat only hears of the activation a trip later and pays its
-					// restart before its first tick, so its answer needs the trip back on top. The window
+					// restart before its first tick, and its new start has to reach us before anything it sends
+					// can be read at all: the answer needs that handshake's trip on top. The window
 					// buys the frames; this buys the trip, once, and only until its stream is flowing. Only that
 					// peer's own published restart counts here: our park is our machine's work, not its.
-					const uint64_t ramp = peerStats.pingMs + peerStats.jitterMs + peerStats.startParkMs;
+					const uint64_t ramp = 2 * static_cast<uint64_t>(peerStats.pingMs) + peerStats.jitterMs + peerStats.startParkMs;
 					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
 					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
@@ -5766,6 +5767,7 @@ namespace RTE {
 			++peerStats.windowCopiesApplied;
 		}
 		peerFrames[frame.senderPeerId] = frame.frames;
+		peerStats.acceptedThroughFrame = std::max(peerStats.acceptedThroughFrame, frame.targetFrame);
 		static const auto observeTarget = TestFrameFromEnvironment("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
 		if (observeTarget && frame.targetFrame == *observeTarget) {
 			std::cout << "[lockstep-test] received peer=" << static_cast<int>(frame.senderPeerId)
