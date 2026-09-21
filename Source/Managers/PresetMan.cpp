@@ -18,8 +18,11 @@
 #include "LoadingScreen.h"
 #include "SettingsMan.h"
 #include "System.h"
+#include "RTEError.h"
+#include "RTETools.h"
 
 #include <array>
+#include <iostream>
 
 using namespace RTE;
 
@@ -43,6 +46,7 @@ void PresetMan::Clear() {
 	m_TotalGroupRegister.clear();
 	m_LastReloadedEntityPresetInfo.fill("");
 	m_ReloadEntityPresetCalledThisUpdate = false;
+	m_NonCompliantModules.clear();
 }
 
 /*
@@ -186,7 +190,29 @@ bool PresetMan::LoadAllDataModules() {
 		std::chrono::milliseconds moduleLoadElapsedTime = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - moduleLoadTimerStart);
 		g_ConsoleMan.PrintString("Module load duration is: " + std::to_string(moduleLoadElapsedTime.count()) + "ms");
 	}
+	WarnNonCompliantModules();
 	return true;
+}
+
+void PresetMan::NoteNonCompliantModule(const std::string& moduleName, const std::string& version) {
+	m_NonCompliantModules.emplace_back(moduleName, version);
+}
+
+void PresetMan::WarnNonCompliantModules() {
+	if (m_NonCompliantModules.empty()) {
+		return;
+	}
+	std::string listed;
+	for (const auto& [name, version]: m_NonCompliantModules) {
+		if (!listed.empty()) {
+			listed += ", ";
+		}
+		listed += name + " (" + version + ")";
+	}
+	const std::string message = std::to_string(m_NonCompliantModules.size()) +
+	                            " mods were written for an older game version and may not work: " + listed;
+	RTEError::ShowMessageBox(message);
+	m_NonCompliantModules.clear();
 }
 
 const DataModule* PresetMan::GetDataModule(int whichModule) {
@@ -258,7 +284,7 @@ std::string PresetMan::GetModuleNameFromPath(const std::string& dataPath) const 
 	std::string moduleName = (slashPos != std::string::npos) ? dataPath.substr(0, slashPos + 1) : dataPath;
 
 	// Check if path starts with Data/ or the Mods/Userdata dir names and remove that part to get to the actual module name.
-	if (moduleName == System::GetDataDirectory() || moduleName == System::GetModDirectory() || moduleName == System::GetUserdataDirectory()) {
+	if (StringsEqualCaseInsensitive(moduleName, System::GetDataDirectory()) || StringsEqualCaseInsensitive(moduleName, System::GetModDirectory()) || StringsEqualCaseInsensitive(moduleName, System::GetUserdataDirectory())) {
 		std::string shortenPath = dataPath.substr(slashPos + 1);
 		slashPos = shortenPath.find_first_of("/\\");
 		moduleName = shortenPath.substr(0, slashPos + 1);
@@ -308,15 +334,29 @@ std::string PresetMan::GetFullModulePath(const std::string& modulePath) const {
 		// Bundled non-official modules (the determinism Tests.rte) ship in Data/, not Mods/.
 		moduleTopDir = System::GetDataDirectory();
 	}
-	if (pathTopDir == moduleTopDir) {
-		return modulePathGeneric;
+	if (StringsEqualCaseInsensitive(pathTopDir, moduleTopDir)) {
+		return moduleTopDir + modulePathGeneric.substr(pathTopDir.size());
 	}
 	// A path that already names a top directory keeps its module, not its prefix: a mod written when mods lived
 	// in Mods/ reads its own files from wherever the module is actually installed.
-	if (pathTopDir == System::GetDataDirectory() || pathTopDir == System::GetModDirectory() || pathTopDir == System::GetUserdataDirectory()) {
+	if (StringsEqualCaseInsensitive(pathTopDir, System::GetDataDirectory()) || StringsEqualCaseInsensitive(pathTopDir, System::GetModDirectory()) || StringsEqualCaseInsensitive(pathTopDir, System::GetUserdataDirectory())) {
 		return moduleTopDir + modulePathGeneric.substr(pathTopDir.size());
 	}
 	return moduleTopDir + modulePathGeneric;
+}
+
+bool PresetMan::RunPathPrefixSelfTest() {
+	if (!PresetMan::IsConstructed()) {
+		PresetMan::Construct();
+	}
+	const std::string lowered = g_PresetMan.GetFullModulePath("mods/X.rte/Foo.png");
+	const std::string canonical = g_PresetMan.GetFullModulePath("Mods/X.rte/Foo.png");
+	const bool same = lowered == canonical;
+	const bool doubled = lowered.find("Mods/mods/") != std::string::npos;
+	std::cout << "[path-prefix-selftest] " << (same && !doubled ? "PASS" : "FAIL")
+	          << " case_insensitive_top_dir lowered=" << lowered << " canonical=" << canonical << std::endl;
+	std::cout << "[path-prefix-selftest] " << (same && !doubled ? "PASS" : "FAIL") << std::endl;
+	return same && !doubled;
 }
 
 bool PresetMan::AddEntityPreset(Entity* pEntToAdd, int whichModule, bool overwriteSame, const std::string& readFromFile) {

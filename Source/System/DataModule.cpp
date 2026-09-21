@@ -4,8 +4,10 @@
 #include "LuaMan.h"
 #include "GameVersion.h"
 #include "System.h"
+#include "RTEError.h"
 
 #include <System/Semver200/semver200.h>
+#include <iostream>
 
 using namespace RTE;
 
@@ -492,45 +494,80 @@ bool DataModule::AddToTypeMap(Entity* entityToAdd) {
 }
 
 void DataModule::CheckSupportedGameVersion() const {
-	static const std::string contactAuthor = "Please contact the mod author or ask for help in the CCCP discord server.";
-
-	// The version a module declares for itself is information the player reads once, never a refusal to load:
-	// a mod written for an older game keeps working here, exactly as it does when a player dismisses the box.
-	const auto warn = [this](const std::string& message) {
-		System::PrintDiagnosticLine("[module] WARNING: " + message);
-		RTEError::ShowMessageBox(message + "\n\n" + contactAuthor);
+	const auto reason = [this]() -> std::string {
+		if (!m_SupportedGameVersion) {
+			return m_FileName + " does not specify a supported Cortex Command version, so it is not compatible with this version of Cortex Command (" + c_GameVersion.str() + ")";
+		}
+		if (*m_SupportedGameVersion == c_GameVersion) {
+			return {};
+		}
+		const bool modulePrereleaseVersionMismatch = !m_SupportedGameVersion->prerelease().empty();
+		const bool moduleBuildVersionMismatch = !m_SupportedGameVersion->build().empty();
+		if (modulePrereleaseVersionMismatch || moduleBuildVersionMismatch) {
+			return m_FileName + " was developed for pre-release build of Cortex Command v" + m_SupportedGameVersion->str() + ", so this game version (v" + c_GameVersion.str() + ") may not support it.";
+		}
+		const bool gamePrereleaseVersionMismatch = !c_GameVersion.prerelease().empty();
+		const bool gameBuildVersionMismatch = !c_GameVersion.build().empty();
+		if (gamePrereleaseVersionMismatch || gameBuildVersionMismatch) {
+			return m_FileName + " was developed for Cortex Command v" + m_SupportedGameVersion->str() + ", so this pre-release version of the game (v" + c_GameVersion.str() + ") may not support it.";
+		}
+		const bool majorVersionMatch = c_GameVersion.major() == m_SupportedGameVersion->major();
+		const bool minorVersionInRange = m_SupportedGameVersion->inc_minor() <= c_GameVersion.inc_minor();
+		if (!majorVersionMatch || !minorVersionInRange) {
+			return m_FileName + " was developed for Cortex Command v" + m_SupportedGameVersion->str() + ", so this version of Cortex Command (v" + c_GameVersion.str() + ") may not support it.";
+		}
+		return {};
 	};
 
-	if (!m_SupportedGameVersion) {
-		warn(m_FileName + " does not specify a supported Cortex Command version, so it is not compatible with this version of Cortex Command (" + c_GameVersion.str() + ")");
+	const std::string message = reason();
+	if (message.empty()) {
 		return;
 	}
-
-	if (*m_SupportedGameVersion == c_GameVersion) {
-		return;
+	if (System::IsInExternalModuleValidationMode()) {
+		System::PrintFaultToCLI("[module] " + message);
+		RTEAbort(message);
 	}
+	System::PrintDiagnosticLine("[module] WARNING: " + message);
+	const std::string version = m_SupportedGameVersion ? m_SupportedGameVersion->str() : "unspecified";
+	g_PresetMan.NoteNonCompliantModule(m_FileName, version);
+}
 
-	bool modulePrereleaseVersionMismatch = !m_SupportedGameVersion->prerelease().empty();
-	bool moduleBuildVersionMismatch = !m_SupportedGameVersion->build().empty();
-	if (modulePrereleaseVersionMismatch || moduleBuildVersionMismatch) {
-		warn(m_FileName + " was developed for pre-release build of Cortex Command v" + m_SupportedGameVersion->str() + ", so this game version (v" + c_GameVersion.str() + ") may not support it.");
-		return;
+bool DataModule::RunVersionGuardSelfTest() {
+	if (!PresetMan::IsConstructed()) {
+		PresetMan::Construct();
 	}
+	RTEError::ResetShowMessageBoxCallCount();
+	g_PresetMan.ClearNonCompliantModules();
 
-	bool gamePrereleaseVersionMismatch = !c_GameVersion.prerelease().empty();
-	bool gameBuildVersionMismatch = !c_GameVersion.build().empty();
-	if (gamePrereleaseVersionMismatch || gameBuildVersionMismatch) {
-		warn(m_FileName + " was developed for Cortex Command v" + m_SupportedGameVersion->str() + ", so this pre-release version of the game (v" + c_GameVersion.str() + ") may not support it.");
-		return;
+	DataModule first;
+	first.m_FileName = "StubA.rte";
+	first.m_SupportedGameVersion = new version::Semver200_version("6.2.2");
+	first.CheckSupportedGameVersion();
+
+	DataModule second;
+	second.m_FileName = "StubB.rte";
+	second.m_SupportedGameVersion = new version::Semver200_version("6.1.0");
+	second.CheckSupportedGameVersion();
+
+	g_PresetMan.WarnNonCompliantModules();
+	const int boxes = RTEError::ShowMessageBoxCallCount();
+	const bool oneSummary = boxes == 1;
+	std::cout << "[module-version-selftest] " << (oneSummary ? "PASS" : "FAIL")
+	          << " one_summary_box boxes=" << boxes << std::endl;
+	std::cout << "[module-version-selftest] " << (oneSummary ? "PASS" : "FAIL") << std::endl;
+	return oneSummary;
+}
+
+int DataModule::RunExtValidateVersionSelfTest() {
+	if (!PresetMan::IsConstructed()) {
+		PresetMan::Construct();
 	}
-
-	// Game engine is the same major version as the Module
-	bool majorVersionMatch = c_GameVersion.major() == m_SupportedGameVersion->major();
-	// Game engine is at least the minor version the Module requires (allow patch mismatch)
-	bool minorVersionInRange = m_SupportedGameVersion->inc_minor() <= c_GameVersion.inc_minor();
-
-	if (!majorVersionMatch || !minorVersionInRange) {
-		warn(m_FileName + " was developed for Cortex Command v" + m_SupportedGameVersion->str() + ", so this version of Cortex Command (v" + c_GameVersion.str() + ") may not support it.");
-	}
+	System::EnableExternalModuleValidationMode();
+	DataModule stub;
+	stub.m_FileName = "StubBad.rte";
+	stub.m_SupportedGameVersion = new version::Semver200_version("6.1.0");
+	stub.CheckSupportedGameVersion();
+	std::cout << "[ext-validate-version-selftest] FAIL continued after bad version boxes=" << RTEError::ShowMessageBoxCallCount() << std::endl;
+	return 0;
 }
 

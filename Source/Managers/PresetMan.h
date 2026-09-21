@@ -12,6 +12,7 @@
 #include <list>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #define g_PresetMan PresetMan::Instance()
@@ -65,6 +66,18 @@ namespace RTE {
 		/// Loads all the official data modules individually with LoadDataModule, then proceeds to look for any non-official modules and loads them as well.
 		/// @return
 		bool LoadAllDataModules();
+
+		/// Records a non-compliant unofficial module for the single post-load summary.
+		void NoteNonCompliantModule(const std::string& moduleName, const std::string& version);
+
+		/// Shows one headed summary of every recorded non-compliant module, or one headless line.
+		void WarnNonCompliantModules();
+
+		/// Clears the recorded non-compliant module list.
+		void ClearNonCompliantModules() { m_NonCompliantModules.clear(); }
+
+		/// Data/Mods/Userdata top-directory matches are case-insensitive and rewrite to the canonical case.
+		static bool RunPathPrefixSelfTest();
 
 		/// Sets the single module to be loaded after the official modules. This will be the ONLY non-official module to be loaded.
 		/// @param moduleName Name of the module to load.
@@ -363,6 +376,8 @@ namespace RTE {
 		int m_OfficialModuleCount;
 
 		std::string m_SingleModuleToLoad; //!< Name of the single module to load after the official modules.
+
+		std::vector<std::pair<std::string, std::string>> m_NonCompliantModules; //!< Unofficial modules whose SupportedGameVersion does not match.
 
 		// List of all Entity groups ever registered, all uniques
 		// This is just a handy total of all the groups registered in all the individual DataModule:s
