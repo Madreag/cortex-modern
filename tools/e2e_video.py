@@ -1042,6 +1042,9 @@ def scenario_manifest(capture, out, elapsed):
                 "requires_findings": capture.get("requires_findings", []),
                 "scratch_root": capture.get("scratch_root"), "scratch_limit_bytes": capture.get("scratch_limit_bytes", SCRATCH_LIMIT),
                 "peer_selection": capture.get("scenario_definition", {}).get("peer_selection"), "platform": capture.get("platform", sys.platform)}
+    if capture.get("scenario_definition", {}).get("cross_machine"):
+        from e2e.cross import record_auxiliary_evidence
+        manifest["cross_auxiliary"] = record_auxiliary_evidence(capture, peers)
     write_json(Path(out) / "manifest.json", manifest)
     return manifest
 
