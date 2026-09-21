@@ -9,6 +9,7 @@
 #include "TimerMan.h"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -345,8 +346,8 @@ namespace RTE {
 
 			const NetHash32 identityFour = NetIdentity::HashSessionIdentity(manifestFour);
 			const NetHash32 identityThirtyTwo = NetIdentity::HashSessionIdentity(manifestThirtyTwo);
-			if (configFour != configThirtyTwo || identityFour != identityThirtyTwo) {
-				*error = "the identity still depends on the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
+			if (configFour == configThirtyTwo || identityFour == identityThirtyTwo) {
+				*error = "the identity does not pin the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
 				         " vs 32 states " + NetIdentity::HashHex(configThirtyTwo) + ", session_identity_hash 4 states " + NetIdentity::HashHex(identityFour) +
 				         " vs 32 states " + NetIdentity::HashHex(identityThirtyTwo);
 				return false;
@@ -354,6 +355,13 @@ namespace RTE {
 
 			if (manifestFour.deterministicConfig.numLuaStates != 4 || manifestThirtyTwo.deterministicConfig.numLuaStates != 32) {
 				*error = "the Lua state count stopped being carried in the manifest";
+				return false;
+			}
+			// Admission names the refusal on the config hash, and the directory refuses the published row.
+			const std::optional<NetIdentityMismatch> countMismatch = NetIdentity::Compare(manifestFour, manifestThirtyTwo);
+			if (!countMismatch || countMismatch->key != "deterministic_config_hash" || countMismatch->summary != "deterministic config hash does not match") {
+				*error = "a 4-state host and a 32-state client are not refused on deterministic_config_hash: " +
+				         (countMismatch ? countMismatch->key + " / " + countMismatch->summary : std::string("the manifests compared equal"));
 				return false;
 			}
 			NetDirectorySessionRow row;
@@ -369,8 +377,8 @@ namespace RTE {
 			local.sessionIdentityHash = NetIdentity::HashHex(identityFour);
 			local.moduleManifestHash = NetIdentity::HashHex(manifestFour.moduleManifestHash);
 			std::string joinReason;
-			if (!NetDirectoryCodec::IsJoinable(row, local, &joinReason)) {
-				*error = "4 and 32 Lua-state identities are not joinable: " + joinReason;
+			if (NetDirectoryCodec::IsJoinable(row, local, &joinReason)) {
+				*error = "a 32-state session row is joinable by a 4-state local identity";
 				return false;
 			}
 
@@ -397,8 +405,9 @@ namespace RTE {
 				*error = "session_identity_hash stopped reacting to session_rules_hash";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] PASS lua state count leaves identity: 4 and 32 states join and match ValidateHostHello/IsJoinable inputs hash="
-			          << NetIdentity::HashHex(configFour) << std::endl;
+			std::cout << "[net-identity-selftest] PASS lua state count pinned: 4 and 32 states reject with distinct deterministic_config_hash values hash4="
+			          << NetIdentity::HashHex(configFour) << " hash32=" << NetIdentity::HashHex(configThirtyTwo)
+			          << " hello_refusal=" << countMismatch->summary << " directory_refusal=" << joinReason << std::endl;
 			return true;
 		}
 

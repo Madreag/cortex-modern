@@ -137,6 +137,9 @@ namespace RTE {
 			AppendInt(hasher, "recommended_moid_count", static_cast<uint64_t>(config.recommendedMoidCount));
 			AppendBool(hasher, "particle_settling", config.particleSettling);
 			AppendBool(hasher, "mo_subtraction", config.moSubtraction);
+			// Lua globals are per state and the round-robin assignment decides which objects share one,
+			// so the threaded-state count is a simulation input and peers that differ on it may not join.
+			AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			// Admission checks supported layouts; the lobby agrees on the host's selected layout.
