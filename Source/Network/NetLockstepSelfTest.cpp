@@ -2127,6 +2127,118 @@ namespace RTE {
 			return true;
 		}
 
+		// The 200 ms arms' second hold. The round reaches the first frame a returning seat owes one
+		// delay window after the activation frame, but that seat only hears of the activation a trip
+		// later, pays its restart, and its answer needs the trip back: on a 400 ms link the first input
+		// lands after the window has passed. The seat must not be held before its answer can exist.
+		bool TestReturningSeatSurvivesItsFirstTrip(std::string* error) {
+			LoopbackTransportConfig lagged;
+			lagged.latencyMs = 200;
+			LoopbackTransport hostWire, oldWire, returnWire;
+			hostWire.SetFaultConfig(lagged); oldWire.SetFaultConfig(lagged); returnWire.SetFaultConfig(lagged);
+			NetLockstepCoordinator host, oldClient;
+			const uint16_t delay = 25; // ceil(400ms / 16.67ms) + 1: the window a 400 ms link is admitted on.
+			const uint32_t restartMs = 285; // The restart the 200 ms arms' machines published.
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A36, delay, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A36, delay, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 36; a.relayToOtherPeers = true;
+			a.substituteSlowPeers = b.substituteSlowPeers = true;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			a.peerIncarnations = b.peerIncarnations = {{1, 1}, {2, 1}};
+			if (!StartCoordinatorPair(48893, hostWire, oldWire, host, oldClient, a, b, error)) return false;
+			oldClient.NoteLocalStartPark(restartMs);
+			uint64_t now = 0, hostProduced = 0, hostDue = 0, clientProduced = 0, clientDue = 0, committed = 0;
+			bool hostHasCommitted = false;
+			NetLockstepReadyFrame ready;
+			const auto seatOf = [&](uint8_t peer) {
+				const auto found = host.GetStats().peers.find(peer);
+				return found == host.GetStats().peers.end() ? NetLockstepPeerStats{} : found->second;
+			};
+			const auto pump = [&](bool clientAlive) {
+				hostWire.AdvanceTimeMs(1); oldWire.AdvanceTimeMs(1); returnWire.AdvanceTimeMs(1);
+				if (now >= hostDue && (!hostHasCommitted || hostProduced <= committed + 1)) {
+					if (host.QueueLocalInput(hostProduced, {}, {}, nullptr)) { ++hostProduced; hostDue = now + 17; }
+				}
+				if (clientAlive && now >= clientDue && oldClient.IsRunning()) {
+					if (oldClient.QueueLocalInput(clientProduced, {}, {}, nullptr)) { ++clientProduced; clientDue = now + 17; }
+				}
+				host.Tick(now);
+				if (clientAlive) oldClient.Tick(now);
+				while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); committed = ready.frame; hostHasCommitted = true; }
+				if (clientAlive) { NetLockstepReadyFrame theirs; while (oldClient.PopReadyFrame(theirs)) (void)oldClient.FinishSimulationTick(theirs.frame); }
+				++now;
+			};
+			while (now < 2000 && committed < 60) pump(true);
+			if (committed < 60) {
+				*error = "the lagged pair never reached its steady state: host_frame=" + std::to_string(committed) +
+				         " now=" + std::to_string(now) + "ms";
+				return false;
+			}
+			if (seatOf(2).startParkMs != restartMs) {
+				*error = "the returning machine's restart never reached the host: peer_park=" +
+				         std::to_string(seatOf(2).startParkMs) + "ms";
+				return false;
+			}
+			if (!host.ProposePeerHold(2, now, error)) return false;
+			const uint64_t holds = seatOf(2).holds;
+			while (now < 4000 && committed < 130) pump(false);
+			if (!host.IsRunning() || !host.IsSeatUnderAI(2, committed)) {
+				*error = "the held round did not keep committing without the client: running=" + std::to_string(host.IsRunning()) +
+				         " frame=" + std::to_string(committed);
+				return false;
+			}
+			if (!returnWire.Connect("loopback", 48893, error)) return false;
+			for (int step = 0; step < 30; ++step) { returnWire.AdvanceTimeMs(1); returnWire.PollEvents(); pump(false); }
+			// The seat is admitted at a frame past everything the host has already sent input for.
+			const uint64_t activation = std::max(host.GetStats().nextFrame, host.SentInputThrough()) + 5;
+			if (!host.SchedulePeerReclaim(2, 2, 2, activation, error)) return false;
+			while (now < 8000 && committed < activation) pump(false);
+			if (committed < activation) {
+				*error = "the round never reached the activation frame: frame=" + std::to_string(committed) +
+				         " activation=" + std::to_string(activation);
+				return false;
+			}
+			const uint64_t activatedAtMs = now;
+			// The first frame the seat owes: the window it is admitted on is fenced, and its answer starts
+			// at the frame after it.
+			uint64_t owed = activation;
+			while (owed < activation + 4 * delay + 4 && host.IsSeatReclaimGap(2, owed)) ++owed;
+			// The earliest its answer can exist here: the activation reaches that machine a trip after the
+			// round passed it, it pays the restart it published, and the answer makes the trip back.
+			const uint64_t earliestAnswerMs = activatedAtMs + 2 * lagged.latencyMs + restartMs;
+			uint64_t heldAtMs = 0;
+			while (now < 20000 && host.IsRunning() && heldAtMs == 0) {
+				pump(false);
+				if (seatOf(2).holds != holds) heldAtMs = now;
+			}
+			if (heldAtMs == 0) {
+				*error = "the silent returning seat was never judged: frame=" + std::to_string(committed) +
+				         " owed_frame=" + std::to_string(owed) + " now=" + std::to_string(now) + "ms";
+				return false;
+			}
+			if (heldAtMs < earliestAnswerMs) {
+				*error = "the returning seat was held before its first input could arrive: held_at=" + std::to_string(heldAtMs) +
+				         "ms earliest_answer=" + std::to_string(earliestAnswerMs) + "ms activation=" + std::to_string(activation) +
+				         " owed_frame=" + std::to_string(owed) + " reached=" + std::to_string(committed) +
+				         " rtt=" + std::to_string(2 * lagged.latencyMs) + "ms restart=" + std::to_string(restartMs) +
+				         "ms ping=" + std::to_string(seatOf(2).pingMs) + "ms park=" + std::to_string(seatOf(2).startParkMs) + "ms";
+				return false;
+			}
+			// The survivors are never left waiting on a seat that does not come back: it is still judged.
+			const uint64_t waited = heldAtMs - activatedAtMs;
+			if (waited > 2 * earliestAnswerMs - 2 * activatedAtMs) {
+				*error = "the returning seat's allowance outgrew the trip it covers: waited=" + std::to_string(waited) +
+				         "ms trip=" + std::to_string(earliestAnswerMs - activatedAtMs) + "ms";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS returning_seat_survives_its_first_trip rtt_ms=" << 2 * lagged.latencyMs
+			          << " restart_ms=" << restartMs << " delay_frames=" << delay << " activation=" << activation
+			          << " owed=" << owed << " held_at=" << heldAtMs << "ms earliest_answer=" << earliestAnswerMs
+			          << "ms waited=" << waited << "ms" << std::endl;
+			return true;
+		}
+
 		bool TestWorldTailKeepsItsLiveCoordinatorSeparate(std::string* error) {
 			LoopbackTransport wire;
 			if (!wire.StartHost(49474, error)) return false;
@@ -16486,6 +16598,7 @@ namespace RTE {
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestRejoinWindowClearsTheRestart(&error) ||
+		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
 		    !TestAIWaypointAddsCrossTheWire(&error) ||

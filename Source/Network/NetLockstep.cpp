@@ -4906,6 +4906,16 @@ namespace RTE {
 		    (!m_ReclaimTransactions.contains(peerId) || frame < m_ReclaimTransactions.at(peerId).activationFrame);
 	}
 
+	bool NetLockstepCoordinator::IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const {
+		const auto reclaim = m_ReclaimTransactions.find(peerId);
+		if (reclaim == m_ReclaimTransactions.end()) return false;
+		const auto stats = m_Stats.peers.find(peerId);
+		// Everything heard from the seat is still inside the window it was admitted on, so the first
+		// frame it owes has not been answered yet.
+		return stats == m_Stats.peers.end() || stats->second.highestTargetFrame <=
+		    std::max(reclaim->second.neutralThroughFrame, reclaim->second.activationFrame + reclaim->second.delayFrames);
+	}
+
 	uint32_t NetLockstepCoordinator::RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const {
 		const uint32_t linkFrames = estimate.RequiredFrames(m_Config.simTickMs, m_Config.matchConfig.inputDelayFrames);
 		const auto stats = m_Stats.peers.find(peerId);
@@ -4986,6 +4996,19 @@ namespace RTE {
 					          << " starting: since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
 					          << "ms ramp=" << ramp << "ms own_park=" << m_Stats.longestOwnParkMs
 					          << "ms peer_park=" << peerStats.startParkMs << "ms played=" << m_PeersPlayedThisRound.contains(peer) << std::endl;
+				} else if (IsReturningSeatBeforeItsFirstInput(peer)) {
+					// The round reaches the first frame a returning seat owes one window after the
+					// activation, but that seat only hears of the activation a trip later and pays its
+					// restart before its first tick, so its answer needs the trip back on top. The window
+					// buys the frames; this buys the trip, once, and only until its stream is flowing. Only that
+					// peer's own published restart counts here: our park is our machine's work, not its.
+					const uint64_t ramp = peerStats.pingMs + peerStats.jitterMs + peerStats.startParkMs;
+					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
+					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
+					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms jitter=" << peerStats.jitterMs
+					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << peerStats.startParkMs
+					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
 				} else if (peerStats.lastProgressMs >= firstMissingMs &&
 				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
 					// A sender still feeding the round every tick is not stalled, it is behind: the round
