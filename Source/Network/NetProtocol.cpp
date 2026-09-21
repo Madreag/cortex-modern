@@ -317,10 +317,10 @@ namespace RTE {
 			AppendHash(out, payload.sessionRulesHash);
 			AppendHash(out, payload.sessionIdentityHash);
 			AppendBool(out, payload.hasUserdataModules);
-			AppendU16LE(out, payload.luaStateCount);
-			for (int i = 0; i < 5; ++i) {
+			for (int i = 0; i < 7; ++i) {
 				AppendU8(out, 0);
 			}
+			AppendU16LE(out, payload.luaStateCount);
 			return true;
 		}
 
@@ -344,10 +344,10 @@ namespace RTE {
 			AppendHash(out, payload.sessionRulesHash);
 			AppendHash(out, payload.sessionIdentityHash);
 			AppendBool(out, payload.hasUserdataModules);
-			AppendU16LE(out, payload.luaStateCount);
-			for (int i = 0; i < 5; ++i) {
+			for (int i = 0; i < 7; ++i) {
 				AppendU8(out, 0);
 			}
+			AppendU16LE(out, payload.luaStateCount);
 			return true;
 		}
 
@@ -713,15 +713,15 @@ namespace RTE {
 				return false;
 			}
 			payload.hasUserdataModules = hasUserdataModules != 0U;
-			if (!ReadOrTruncated(reader.ReadU16LE(payload.luaStateCount), reader, error, "lua_state_count")) {
-				return false;
-			}
-			for (int i = 0; i < 5; ++i) {
+			for (int i = 0; i < 7; ++i) {
 				uint8_t reserved = 0;
 				if (!ReadOrTruncated(reader.ReadU8(reserved), reader, error, "client reserved") || reserved != 0U) {
 					SetError(error, NetProtocolErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "client reserved field is nonzero");
 					return false;
 				}
+			}
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.luaStateCount), reader, error, "lua_state_count")) {
+				return false;
 			}
 			if (payload.minProtocolVersion > payload.maxProtocolVersion) {
 				SetError(error, NetProtocolErrorCode::InvalidValue, reader.Offset(), "client protocol range is invalid");
@@ -766,15 +766,15 @@ namespace RTE {
 				return false;
 			}
 			payload.hasUserdataModules = hasUserdataModules != 0U;
-			if (!ReadOrTruncated(reader.ReadU16LE(payload.luaStateCount), reader, error, "lua_state_count")) {
-				return false;
-			}
-			for (int i = 0; i < 5; ++i) {
+			for (int i = 0; i < 7; ++i) {
 				uint8_t reservedHostIdentity = 0;
 				if (!ReadOrTruncated(reader.ReadU8(reservedHostIdentity), reader, error, "host identity reserved") || reservedHostIdentity != 0U) {
 					SetError(error, NetProtocolErrorCode::ReservedFieldNonZero, reader.Offset() - 1, "host identity reserved field is nonzero");
 					return false;
 				}
+			}
+			if (!ReadOrTruncated(reader.ReadU16LE(payload.luaStateCount), reader, error, "lua_state_count")) {
+				return false;
 			}
 			return true;
 		}
