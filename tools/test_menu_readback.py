@@ -588,6 +588,9 @@ def scripts(case, port, root, size="960x540"):
                           menu_step("assert_enabled ButtonEndMatch 1"), menu_step("activate ButtonEndMatch")]
             steps += [{"op": "wait", "service": "Starting", "scope": "menu"},
                       {"op": "assert", "equals": {"service": "Starting"}, "scope": "menu"},
+                      # The lobby box's rect lands next to the net_ui rects in the same observation,
+                      # so the overlay's placement against the lobby's own controls is on record.
+                      {"op": "assert_control", "scope": "menu", "control": "MultiplayerLobbyPanel", "equals": {}},
                       {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
             probes[who] = {"schema": 1, "timeout_ms": 45000, "steps": steps}
         return ({who: text + f"wait_file {probe_root(root, who) / 'done.json'} 60\nassert_substate Lobby\nexit\n"
@@ -875,7 +878,13 @@ def scripts(case, port, root, size="960x540"):
             {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonLeaveMatch"),
             {"op": "wait", "screen": "PauseLeaveConfirm"}, menu_step("activate ButtonLeaveConfirm"),
             {"op": "wait", "scope": "menu", "elapsed_ms": 500},
-            {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]}}
+            {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]},
+            # The survivor lands on the multiplayer landing once the dead rematch lobby reports Failed;
+            # its panel rect sits beside the net_ui rects in that observation.
+            "client": {"schema": 1, "timeout_ms": 90000, "steps": [
+            {"op": "wait", "scope": "menu", "service": "Failed"},
+            {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
+            {"op": "finish"}]}}
     elif case == "net-activity":
         # Fresh host setup uses Skirmish Defense; the keyboard anchor is the row above the picked one.
         # A vanished pick needs a module unload the menu harness cannot drive; the native
@@ -1498,6 +1507,11 @@ def run_case(options, case, root, failing=None):
             args = ["-menu-script", str(script)]
             if case == "net-host-left":
                 args += ["-input-script", str(inputs)]
+            if case in ("local-end-match", "net-host-left"):
+                # The post-match lobby's status surfaces report into this run's events.jsonl.
+                video = root / f"{who}-video"
+                video.mkdir()
+                args += ["-record-video", str(video)]
             if case == "landing":
                 # The flag takes the same over-cap name the box gets below: one console refusal.
                 args += ["-net-player-name", "F" * (DISPLAY_NAME_MAX_BYTES + 1)]
