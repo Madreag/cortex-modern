@@ -597,7 +597,7 @@ def reduce_peer(run, peer, baseline=None):
     if peer == 'sp':
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
-    elif peer == 'host':
+    elif network:
         pins.update(network['pins'])
     if network:
         metrics.update(network['metrics'])

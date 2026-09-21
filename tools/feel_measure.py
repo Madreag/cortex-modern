@@ -297,6 +297,19 @@ def reduce_timing_case(run, reference=None):
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
 
+def item9a_evidence_complete(report):
+    """Require network pins for every measured peer while retaining presentation findings separately."""
+    peers = report.get('peers') or {}
+    if not peers:
+        return False
+    for peer in peers.values():
+        pins = peer.get('pins', {})
+        names = [name for name in pins if name.startswith('item9a_')]
+        if not names or any(pin.get('value') is None for name, pin in pins.items() if name.startswith('item9a_')):
+            return False
+    return True
+
+
 def analyze(root, stock=None):
     root = Path(root)
     peer = single_case_peer(root)
@@ -501,12 +514,13 @@ def main(argv=None):
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
                      for path in sorted(root.glob('*/manifest.json'))}
-    complete = bool(case_launches) and all(case_launches.values()) and all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
+    complete = bool(case_launches) and all(case_launches.values()) and all(item9a_evidence_complete(row) for row in results)
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
                   for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, launches_complete=bool(case_launches) and all(case_launches.values()),
+    completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
+                      launches_complete=bool(case_launches) and all(case_launches.values()),
                       case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
                       scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
