@@ -287,5 +287,36 @@ class ReportTests(unittest.TestCase):
         self.assertFalse(result['once'])
 
 
+class EarlyDecidedArmTest(unittest.TestCase):
+    """An arm whose peer stopped early is a failed pin on that arm, not the end of the matrix."""
+
+    @staticmethod
+    def arm(folder, last_tick):
+        run = Path(folder) / '200ms-60hz-on'
+        (run / 'client').mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps(dict(ticks=1200, launches_complete=False, mode='two-peer')), encoding='utf-8')
+        lines = ['%d activity running' % tick for tick in range(1, last_tick + 1) if tick % 22]
+        (run / 'client_trace.json.simdump.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (run / 'client-live.jsonl').write_text(''.join(
+            json.dumps(dict(tick=tick, wall_ms=1000 + tick * 19)) + '\n' for tick in range(1, last_tick + 1)), encoding='utf-8')
+        (run / 'client' / 'stdout.log').write_text('[net-match] recovery requested tick=1148\n', encoding='utf-8')
+        return run
+
+    def test_an_early_decided_peer_is_a_failed_pin_and_the_other_arms_still_measure(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1147)
+            result = feel_measure.reduce_or_fail(run, 'client')
+            pinned = result['pins']['item9a_measurement_window']
+            self.assertEqual(pinned['status'], 'MISS')
+            self.assertEqual(pinned['value'], 1147)
+            self.assertEqual(pinned['detail'], 'FAIL: decided at tick 1147; measurement window is 1200 ticks')
+            self.assertEqual(result['early_decision']['tick'], 1147)
+            self.assertIn('client_trace.json.simdump.txt', result['early_decision']['evidence'])
+            self.assertFalse(result['measurement_complete'])
+            self.assertFalse(result['pass_check'])
+
+
 if __name__ == '__main__':
     unittest.main()
