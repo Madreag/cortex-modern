@@ -5723,6 +5723,71 @@ namespace RTE {
 		return true;
 	}
 
+	// A frozen capture's refusal arrives a tick or more after the simulation queued it, so the world
+	// bookkeeping it stood for follows that verdict: a refused capture leaves the request pending and
+	// opens no segment, and only an archive that landed clears it.
+	bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error) {
+		WorldSegmentScratch scratch;
+		const std::string worldId = "aaaaaaaa-0000-0000-0000-0000000000c6";
+		const NetMatchConfig config = MakeStoredWorldConfig(worldId);
+		const std::filesystem::path armed = scratch.store / "verdict-armed.ccreplay";
+		const std::filesystem::path first = AutosaveStore::SegmentPath(scratch.store, worldId, 900);
+		scratch.Note(armed);
+		scratch.Note(first);
+		ScenarioRunner::ArmLockstepReplayRecord(armed.string());
+		if (!ScenarioRunner::BeginLockstepReplayRecord(config, error)) return false;
+
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000003";
+		service.m_WorldCapturePending = true;
+		service.m_WorldCaptureRequestedTick = 0;
+		service.m_RestartAdmissionDue.store(false);
+
+		// The refused capture: its segment was armed at the capture tick and holds frames until a verdict.
+		ScenarioRunner::ArmLockstepWorldSegment(MakeSegmentHeader(worldId, 900, 4242, 2, std::string(64, 'd')), first.string());
+		if (!ScenarioRunner::HasPendingLockstepWorldSegment()) {
+			*error = "world-verdict-armed-nothing: the capture at tick 900 left no segment waiting";
+			return false;
+		}
+		service.ApplyAutosaveVerdict(900, true, false);
+		if (!service.m_WorldCapturePending) {
+			*error = "world-verdict-consumed-the-request: a refused capture cleared the pending world capture";
+			return false;
+		}
+		if (service.m_WorldCaptureRequestedTick != 0) {
+			*error = "world-verdict-stamped-a-refused-tick: the request stands on tick " +
+			         std::to_string(service.m_WorldCaptureRequestedTick);
+			return false;
+		}
+		if (ScenarioRunner::HasPendingLockstepWorldSegment()) {
+			*error = "world-verdict-kept-a-refused-segment: tick " +
+			         std::to_string(ScenarioRunner::GetPendingLockstepWorldSegmentTick()) + " still waits for an archive that never lands";
+			return false;
+		}
+		if (service.m_RestartAdmissionDue.load()) {
+			*error = "world-verdict-owed-an-admission: a refused capture asked for an admission file beside it";
+			return false;
+		}
+
+		// The capture that landed: the request is answered and the admission file is owed.
+		ScenarioRunner::ArmLockstepWorldSegment(MakeSegmentHeader(worldId, 1800, 4242, 2, std::string(64, 'e')), first.string());
+		service.ApplyAutosaveVerdict(1800, true, true);
+		if (service.m_WorldCapturePending || service.m_WorldCaptureRequestedTick != 1800 || !service.m_RestartAdmissionDue.load()) {
+			*error = "world-verdict-lost-a-landed-capture: pending=" + std::to_string(service.m_WorldCapturePending) +
+			         " requested=" + std::to_string(service.m_WorldCaptureRequestedTick) +
+			         " admission=" + std::to_string(service.m_RestartAdmissionDue.load());
+			return false;
+		}
+		if (!ScenarioRunner::HasPendingLockstepWorldSegment()) {
+			*error = "world-verdict-dropped-a-landed-segment: the archive at tick 1800 left no segment to seal";
+			return false;
+		}
+		ScenarioRunner::DropPendingLockstepWorldSegment("the verdict row is done");
+		ScenarioRunner::CloseLockstepReplayRecord();
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6266,6 +6331,11 @@ namespace RTE {
 			std::string error;
 			return TestWorldRecorderRollsAtCheckpoint(&error) ? 0 : Fail(error);
 		}
+		if (std::strcmp(name, "capture-verdict") == 0 || std::strcmp(name, "-net-world-capture-verdict-selftest") == 0) {
+			s_FailTag = "net-world-capture-verdict-selftest";
+			std::string error;
+			return TestWorldCaptureFollowsTheDeferredVerdict(&error) ? 0 : Fail(error);
+		}
 		if (std::strcmp(name, "segment-resume") == 0 || std::strcmp(name, "-net-world-segment-resume-selftest") == 0) {
 			s_FailTag = "net-world-segment-resume-selftest";
 			std::string error;
@@ -6463,6 +6533,7 @@ namespace RTE {
 			if (!TestWorldReturnWatchKeysOnWorldId(&error)) return Fail(error);
 			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
+			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
 			if (!TestHealCapIsAWindow(&error)) return Fail(error);

@@ -2595,8 +2595,36 @@ static std::string ResyncSaveName() {
 		return true;
 	}
 
+	// The capture's verdict comes from the writer thread a tick or more after the simulation queued it.
+	// A world capture's bookkeeping follows that verdict, so nothing stands on an archive that never lands.
+	void NetMatchService::ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived) {
+		if (!archived) {
+			if (joinCapture) m_WorldCapturePending = true;
+			ScenarioRunner::DropPendingLockstepWorldSegment("the checkpoint at tick " + std::to_string(tick) + " was refused");
+			return;
+		}
+		if (joinCapture) {
+			m_WorldCaptureRequestedTick = tick;
+			m_WorldCapturePending = false;
+		}
+		// Every checkpoint wants a current admission file beside it; the pump writes it.
+		m_RestartAdmissionDue.store(true);
+	}
+
+	void NetMatchService::TakeAutosaveVerdicts() {
+		while (const std::optional<ActivityMan::AutosaveVerdict> verdict = g_ActivityMan.TakeAutosaveVerdict()) {
+			const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
+			                                  [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
+			if (awaited == m_AwaitedAutosaves.end()) continue;
+			const bool joinCapture = awaited->joinCapture;
+			m_AwaitedAutosaves.erase(awaited);
+			ApplyAutosaveVerdict(verdict->tick, joinCapture, verdict->archived);
+		}
+	}
+
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
+		TakeAutosaveVerdicts();
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
@@ -2622,12 +2650,10 @@ static std::string ResyncSaveName() {
 		if (!SaveStampedAutosave(tick)) {
 			return;
 		}
-		if (joinCapture) {
-			m_WorldCaptureRequestedTick = tick;
-			m_WorldCapturePending = false;
-		}
-		// Every checkpoint wants a current admission file beside it; the pump writes it.
-		m_RestartAdmissionDue.store(true);
+		// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
+		m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
+		// The segment holds this tick's frames from here; it opens when the archive validates and is
+		// dropped with it when the capture is refused.
 		RollWorldReplaySegment(tick);
 		if (m_WorldJoin.IsConfigured()) {
 			// The image is published when the writer thread has finished this archive, from the pump.
