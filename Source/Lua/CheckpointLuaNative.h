@@ -290,7 +290,7 @@ namespace RTE::CheckpointLua {
 			// The class descriptors were answered by an earlier capture; everything else is asked again.
 			const auto& classes = m_Cache.classes->entries;
 			auto& references = m_Cache.references;
-			ForEachUserdata(State(), true, false, [&](GCudata* data) {
+			ForEachCapturedUserdata(State(), [&](GCudata* data) {
 				GCobj* object = obj2gco(data);
 				if (const auto known = classes.find(object); known != classes.end() && known->second.serial == data->serial) { ++m_Image->m_CachedClasses; return; }
 				if (const auto known = references.find(object); known != references.end() && known->second.entry.serial == data->serial) {

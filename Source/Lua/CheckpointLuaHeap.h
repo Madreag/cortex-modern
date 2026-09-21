@@ -473,4 +473,10 @@ namespace RTE::CheckpointLua {
 			} while (object != last);
 		}
 	}
+
+	// The one rule every capture walks userdata by: a finalizer that already ran left its native payload
+	// destroyed, and a queued one has not run yet, so the first is skipped and the second is visited.
+	template<class Visit> void ForEachCapturedUserdata(lua_State* state, Visit visit) {
+		ForEachUserdata(state, true, false, visit);
+	}
 }
