@@ -210,6 +210,7 @@ namespace {
 		observed["net_ui"] = {{"status", panel ? OverlayRect(panel->GetStatusRect()) : Rect(0, 0, 0, 0, false)},
 		    {"toasts", panel ? OverlayRect(panel->GetToastRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat", panel ? OverlayRect(panel->GetChatRect()) : Rect(0, 0, 0, 0, false)},
+		    {"roster", panel ? OverlayRect(panel->GetRosterRect()) : Rect(0, 0, 0, 0, false)},
 		    {"chat_entry_open", panel && panel->IsChatEntryOpen()},
 		    {"chat_rows", chatBand.rows},
 		    {"chat_row_height", chatBand.rowHeight},

@@ -430,7 +430,8 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 }
 
 bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool completedLobbyPump, bool lobbyMenuActive) {
-	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch);
+	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch) ||
+	    (completedLobbyPump && lobbyMenuActive);
 }
 
 namespace {
@@ -441,6 +442,17 @@ namespace {
 		const MainMenuGUI* mainMenu = g_MenuMan.GetMainMenu();
 		return g_MenuMan.GetIsInMenuScreen() && g_MenuMan.IsMainMenuInteractive() && mainMenu &&
 		    mainMenu->AutomationActiveScreenName() == "MultiplayerScreen";
+	}
+
+	/// The lobby screen's box is the one column the menu-loop surfaces lay out beside - the same rule
+	/// the editor's picker column follows - so the roster, the status and the bands keep off its controls.
+	void LobbyMenuColumn(EditorArea& area) {
+		const MainMenuGUI* menu = g_MenuMan.GetMainMenu();
+		GUIControlManager* controls = menu ? menu->AutomationManager() : nullptr;
+		GUIControl* screen = controls ? controls->GetControl("MultiplayerScreen") : nullptr;
+		int x = 0, y = 0, w = 0, h = 0;
+		if (screen) screen->GetControlRect(&x, &y, &w, &h);
+		if (w > 0 && h > 0) area.columns.push_back({x - 2, y - 2, w + 4, h + 4});
 	}
 }
 
@@ -633,8 +645,20 @@ void NetModerationGUI::Update() {
 void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	AllegroBitmap bitmap(g_FrameMan.GetBackBuffer32());
 	auto* font = g_FrameMan.GetSmallFont(true);
-	const int width = std::min(412, g_WindowMan.GetResX() - 16);
-	const int y = std::max(8, g_FrameMan.GetLargeFont()->GetFontHeight() + 4);
+	const bool menuLobby = PostMatchLobbySurfaces();
+	int x = 8;
+	int width = std::min(412, g_WindowMan.GetResX() - 16);
+	if (menuLobby) {
+		// In the menu loop the lobby's own box is the column: the seats reading takes the widest
+		// gutter beside it rather than the screen's corner.
+		EditorArea area;
+		LobbyMenuColumn(area);
+		int freeLeft = 0, freeRight = g_WindowMan.GetResX();
+		area.FreeSpan(0, g_WindowMan.GetResY(), g_WindowMan.GetResX(), freeLeft, freeRight);
+		x = freeLeft + 8;
+		width = std::min(width, std::max(120, freeRight - freeLeft - 16));
+	}
+	const int y = std::max(menuLobby ? c_StripBandBottom + c_PanelGap : 8, g_FrameMan.GetLargeFont()->GetFontHeight() + 4);
 	std::string text = "Seats  [F6]";
 	// The announced input delay rides the corner box so the HUD shows what the lobby showed.
 	if (!snapshot.inputDelayText.empty()) text += "\n" + snapshot.inputDelayText;
@@ -647,9 +671,9 @@ void NetModerationGUI::DrawRoster(const NetLobbySnapshot& snapshot) {
 	}
 	text = WrapText(font, text, width - 12);
 	const int height = font->CalculateHeight(text) + 12;
-	m_RosterRect = {8, y, width + 1, height + 1, true};
-	rectfill(g_FrameMan.GetBackBuffer32(), 8, y, width + 8, y + height, makeacol32(20, 22, 27, 255));
-	font->DrawAligned(&bitmap, 14, y + 6, text, GUIFont::Left, GUIFont::Top);
+	m_RosterRect = {x, y, width + 1, height + 1, true};
+	rectfill(g_FrameMan.GetBackBuffer32(), x, y, x + width + 8, y + height, makeacol32(20, 22, 27, 255));
+	font->DrawAligned(&bitmap, x + 6, y + 6, text, GUIFont::Left, GUIFont::Top);
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
@@ -719,12 +743,15 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// The seats that still owe the synchronized setup editor a brain: the world is held while they place.
 	std::string placementNames;
 	int placed = 0, seats = 0;
-	const auto* setupActivity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+	// The lobby arm has no coordinator: the lockstep reads are dead there, so the status line shows
+	// the service's own text instead of a wait the match no longer owes.
+	const bool menuLobby = PostMatchLobbySurfaces();
+	const auto* setupActivity = menuLobby ? nullptr : dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
 	const bool placing = !resyncing && setupActivity && setupActivity->DescribeLockstepPlacementWait(placementNames, placed, seats);
-	const bool holdPause = !resyncing && !placing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
-	const bool missingFrames = !resyncing && !placing && !holdPause && (hostLost ||
+	const bool holdPause = !menuLobby && !resyncing && !placing && ScenarioRunner::DescribeLockstepHoldPause(holdName, holdSeconds);
+	const bool missingFrames = !menuLobby && !resyncing && !placing && !holdPause && (hostLost ||
 	    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) > ScenarioRunner::GetLockstepCompletedFrame());
-	const bool paused = !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
+	const bool paused = !menuLobby && !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
 	const bool waiting = resyncing || placing || holdPause || missingFrames;
 	// A wait that began before this seat was reclaimed is not the wait the player is in now: the round
@@ -736,7 +763,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	if (!waiting) m_StatusWaitStartedUs = 0;
 	else if (m_StatusWaitStartedUs == 0) m_StatusWaitStartedUs = paceNowUs;
 	const long long currentWaitMs = waiting ? (paceNowUs - m_StatusWaitStartedUs) / 1000 : 0;
-	const EditorArea editor = FreeArea(backbuffer->w);
+	EditorArea editor = FreeArea(backbuffer->w);
+	if (menuLobby) LobbyMenuColumn(editor);
 	const std::string countOnly = std::to_string(placed) + " of " + std::to_string(seats);
 	const int countNeed = font->CalculateWidth(countOnly) + 14;
 	if (backbuffer->h < c_CompactMaxHeight && !g_SettingsMan.GetNetworkShowDiagnostics()) {
@@ -769,7 +797,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		int freeLeft = 152, freeRight = backbuffer->w - 40;
-		if (editor.editing) {
+		if (editor.editing || menuLobby) {
 			editor.FreeSpan(y, y + height, backbuffer->w, freeLeft, freeRight);
 			freeLeft += 4;
 			freeRight -= 4;
@@ -787,7 +815,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		std::snprintf(tail, sizeof(tail), " / delay %u / RTT %s ms / PACE %.1f tps", static_cast<unsigned>(m_MatchDelayFrames), pingText.c_str(), s_paceTps);
 		auto compose = [&](const std::string& metrics, bool shortenNames) {
 			std::string line = "NET [F6] / ";
-			if (hostLost) {
+			if (menuLobby) {
+				const int room = maxTextWidth - font->CalculateWidth(line + metrics);
+				line += FitLine(font, snapshot.statusText.empty() ? "LOBBY" : snapshot.statusText, std::max(0, room));
+			} else if (hostLost) {
 				line += "HOST LOST / CHOOSING A NEW HOST / " + std::to_string(currentWaitMs) + " ms";
 			} else if (resyncing) {
 				line += "RESYNCING MATCH";
@@ -854,7 +885,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	int freeLeft = 0, freeRight = backbuffer->w;
 	editor.FreeSpan(0, backbuffer->h, backbuffer->w, freeLeft, freeRight);
 	int available = freeRight - freeLeft;
-	bool topBand = editor.editing && available < countNeed;
+	bool topBand = (editor.editing || menuLobby) && available < countNeed;
 	if (topBand) {
 		freeLeft = 0;
 		freeRight = backbuffer->w;
@@ -897,6 +928,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		text += "\nCurrent wait " + std::to_string(currentWaitMs) + " ms";
 	} else if (paused) {
 		text += countdown > 0 ? "\nResuming in " + std::to_string((countdown + 59) / 60) + " s" : "\nPAUSED / P to resume";
+	} else if (menuLobby) {
+		text += "\n" + FitLine(font, snapshot.statusText.empty() ? "LOBBY" : snapshot.statusText, width - 12);
 	} else {
 		text += "\nLIVE";
 	}
@@ -906,8 +939,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// The editor's own top band and picker column are its own, so the box takes the bottom of the rest.
 	// A collapsed span takes the window's top band instead of a zero-width box.
 	const int x = topBand ? std::max(0, (backbuffer->w - width) / 2) :
-	    (editor.editing ? freeLeft + std::max(0, (available - width) / 2) : backbuffer->w - width - c_StatusBoxMargin);
-	int y = topBand ? 2 : (editor.editing ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
+	    (editor.editing || menuLobby ? freeLeft + std::max(0, (available - width) / 2) : backbuffer->w - width - c_StatusBoxMargin);
+	// In the lobby the box takes the bottom of the gutter the lobby's own box leaves, the same bottom
+	// slot it takes beside the editor's column.
+	int y = topBand ? 2 : (editor.editing || menuLobby ? backbuffer->h - height - c_StatusBoxMargin : c_StatusBoxTop);
 	if (m_Open) {
 		// The same rule the compact strip follows: an open seats panel owns its rows, so a box crossing
 		// them lifts above it.
@@ -1100,6 +1135,7 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 	if (!font) font = g_FrameMan.GetSmallFont(true);
 	int lineH = std::max(12, font->GetFontHeight()) + 4;
 	EditorArea area = FreeArea(backbuffer->w);
+	if (PostMatchLobbySurfaces()) LobbyMenuColumn(area);
 	if (m_StatusRect.visible) {
 		area.occupiers.push_back({m_StatusRect.x, m_StatusRect.y, m_StatusRect.width, m_StatusRect.height});
 	}
@@ -1232,7 +1268,8 @@ void NetModerationGUI::DrawMatchChat(const NetLobbySnapshot& snapshot) {
 void NetModerationGUI::DrawMatchToasts() {
 	m_ToastRect = {};
 	m_SeatsPanelRect = {};
-	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing()) {
+	const bool menuLobby = PostMatchLobbySurfaces();
+	if (!ScenarioRunner::IsLockstepControllerSyncActive() && !g_NetMatchService.IsMatchResyncing() && !menuLobby) {
 		for (GUILabel* label: m_Toasts) {
 			if (label) {
 				label->SetVisible(false);
@@ -1248,7 +1285,8 @@ void NetModerationGUI::DrawMatchToasts() {
 	BITMAP* backbuffer = g_FrameMan.GetBackBuffer32();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
 	const int rowHeight = std::max(12, font->GetFontHeight()) + 8;
-	const EditorArea editor = FreeArea(backbuffer->w);
+	EditorArea editor = FreeArea(backbuffer->w);
+	if (menuLobby) LobbyMenuColumn(editor);
 	// The status widget takes the bottom while the editor holds the world, so the rows stack above it.
 	int bottom = editor.editing && m_StatusRect.visible ? m_StatusRect.y - 4 : backbuffer->h - 8;
 	// The stack never crosses a seat's own message band, which owns the rows it draws in.
@@ -1339,10 +1377,12 @@ void NetModerationGUI::Draw() {
 		m_NetStatus->SetVisible(false);
 	}
 	// A completed round's peer is still in its match until the activity is over, and it still needs its
-	// surfaces to read the result and leave.
+	// surfaces to read the result and leave. The menu-loop arm is the lobby's own version of that:
+	// the rematch lobby keeps the surfaces while the pump is owed.
 	const bool matchEnded = snapshot.serviceState == "Completed" && ActivityInMatch();
+	const bool menuLobby = PostMatchLobbySurfaces();
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" &&
-	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open) return;
+	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open && !menuLobby) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
@@ -1353,10 +1393,12 @@ void NetModerationGUI::Draw() {
 	} else {
 		DrawRoster(snapshot);
 	}
+	// The lobby arm sits inside inMatch: the rematch lobby keeps the seats reading beside its own box.
+	if (menuLobby) DrawRoster(snapshot);
 	if (m_Open) m_Controls->Draw();
 	// Opening the panel is one of the status widget's triggers, so the status draws over it: a screen too
-	// short for both still owes the player the reading it just asked for.
-	if (inMatch && MatchStatusWanted()) {
+	// short for both still owes the player the reading it just asked for. The lobby always wants it.
+	if (inMatch && (menuLobby || MatchStatusWanted())) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}
