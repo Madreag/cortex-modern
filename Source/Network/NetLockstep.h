@@ -791,6 +791,7 @@ namespace RTE {
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		bool HasReadyFrame(uint64_t frame) const { return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame; }
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
