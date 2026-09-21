@@ -1741,7 +1741,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		for address, link in pairs(ctx.areaBoxes) do
 			if defines[ctx.ids[link.owner]] then areas[address] = setmetatable({ owner = link.owner, index = link.index }, { __mode = "v" }) end
 		end
-		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched,
+		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
 		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, envs = setmetatable({}, { __mode = "v" }) }
 		chunks[key] = written
@@ -1886,7 +1886,8 @@ end
 
 function Graph.cacheState(uid, part)
 	local kept = graphCache and graphCache.chunks[uid .. ":" .. (part or "")]
-	return kept and kept.reused == true or false, kept and kept.cacheable == true or false
+	-- Third: what the chunk holds that no write barrier watches, which is why it is rewritten.
+	return kept and kept.reused == true or false, kept and kept.cacheable == true or false, kept and kept.unwatched or nil
 end
 
 function Graph.serialize(roots, liveSerial)
@@ -3502,10 +3503,15 @@ do
 	local cacheThird = _ScriptGraph.serialize(cacheRoots)
 	local keptChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:one")
 	check("root_cache_keeps_the_untouched_root_bytes", keptChunk ~= nil and string.find(cacheSecond, keptChunk, 1, true) ~= nil, tostring(keptChunk))
-	local movedSecond, movedFirst = string.find(cacheSecond, "s5:moved", 1, true) ~= nil, string.find(cacheFirst, "s5:moved", 1, true) ~= nil
-	local tagAt = string.find(cacheSecond, "s3:tag", 1, true)
-	check("root_cache_rewrites_the_root_that_moved", movedSecond and not movedFirst,
-	      "second_has_moved=" .. tostring(movedSecond) .. " first_has_moved=" .. tostring(movedFirst) .. " second_tag=" .. tostring(tagAt and string.sub(cacheSecond, math.max(1, tagAt - 30), tagAt + 30)))
+	-- The moved root is named by its own chunk: a state this far into the run holds other tables that
+	-- carry the same short string, so only this root's bytes answer for this root.
+	local movedChunk = string.match(cacheSecond, "T%d+;P%-;Mz;k1;s3:tags5:moved")
+	local twoChunk = string.match(cacheFirst, "T%d+;P%-;Mz;k1;s3:tags3:two")
+	local strayAt = string.find(cacheFirst, "s5:moved", 1, true)
+	check("root_cache_rewrites_the_root_that_moved",
+	      movedChunk ~= nil and twoChunk ~= nil and string.find(cacheFirst, movedChunk, 1, true) == nil,
+	      "moved_chunk=" .. tostring(movedChunk) .. " two_chunk=" .. tostring(twoChunk) ..
+	      " stray_moved_in_first=" .. tostring(strayAt and string.sub(cacheFirst, math.max(1, strayAt - 40), strayAt + 20)))
 	check("root_cache_repeats_byte_for_byte", cacheSecond == cacheThird)
 )lua"
     R"lua(
@@ -3586,14 +3592,15 @@ do
 		local dirty = _ScriptGraphDirtyRoots().roots["0"]
 		local third = _ScriptGraph.serialize(graphRoots)
 		check("a_global_write_rewrites_the_globals_root", dirty and not _ScriptGraph.cacheState("0", "global:CheckpointGlobalCacheProbe") and third ~= second)
-		local engineKept = _ScriptGraph.cacheState("0", "engine")
+		local engineKept, engineCacheable, engineUnwatched = _ScriptGraph.cacheState("0", "engine")
 		local previousPatch = rawget(string, "CheckpointCacheProbe")
 		rawset(string, "CheckpointCacheProbe", 73)
 		local patched = _ScriptGraph.serialize(graphRoots)
 		local patchedState = _ScriptGraph.cacheState("0", "engine")
 		local patchFound = string.find(patched, "s20:CheckpointCacheProben73;", 1, true) ~= nil
 		check("engine_patches_rederive_only_on_a_library_write", engineKept and not patchedState and patchFound,
-		      "engine_kept=" .. tostring(engineKept) .. " engine_reused_after_write=" .. tostring(patchedState) .. " patch_found=" .. tostring(patchFound))
+		      "engine_kept=" .. tostring(engineKept) .. " engine_cacheable=" .. tostring(engineCacheable) ..
+		      " engine_unwatched=" .. tostring(engineUnwatched) .. " engine_reused_after_write=" .. tostring(patchedState) .. " patch_found=" .. tostring(patchFound))
 		rawset(string, "CheckpointCacheProbe", previousPatch)
 		local restored, errors = _ScriptGraph.deserialize(second)
 		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse", keptAlias and #errors == 0 and
