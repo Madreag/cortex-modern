@@ -1346,6 +1346,7 @@ namespace RTE {
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
 		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
+		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: measured capture cost used to gate another refresh.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
 		bool m_PrivateImageSeatHeld = false;
 		std::string m_PrivateJoinError;
