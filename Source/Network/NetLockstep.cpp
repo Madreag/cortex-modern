@@ -7664,6 +7664,13 @@ namespace RTE {
 
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
 		++m_Stats.startPacketsReceived;
+		// Our own start, forwarded back to us: a relay that still holds a stale transport for this seat sends
+		// it where it came from. It carries nothing we do not know and it is not a broken build.
+		if (start.localPeerId == m_Config.localPeerId) {
+			++m_Stats.staleRoundPackets;
+			std::cout << "[lockstep] ignored our own start returned to us for peer " << static_cast<int>(start.localPeerId) << std::endl;
+			return;
+		}
 		const auto hostTransport = m_RemoteTransports.find(GetHostPeerId());
 		const bool worldRosterMessage = IsPersistentWorldRound() && !m_RelayHost && hostTransport != m_RemoteTransports.end() &&
 		    fromTransport == hostTransport->second && start.localPeerId != GetHostPeerId() && start.localPeerId != m_Config.localPeerId &&

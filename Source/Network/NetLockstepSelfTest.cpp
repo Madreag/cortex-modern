@@ -2546,7 +2546,48 @@ namespace RTE {
 		// A returning seat's frames reach our decoder long before its new start does, and until that start
 		// lands they sit in the pre-start buffer: nothing it sent can be consumed. Counting those frames as
 		// an answer skipped the seat's allowance and the bound took the seat back at the first frame it owed.
-				// A link the round has measured must survive the connection that measured it: a peer that comes
+				// A relay holding a stale transport for a seat forwards that seat's own start back to it. Failing
+		// the round on it killed clients late in a rejoin with "lockstep start mismatch (unknown_peer)".
+		bool TestOwnStartReturnedDoesNotFailTheRound(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A43, 2, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A43, 2, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 43; a.relayToOtherPeers = true;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			if (!StartCoordinatorPair(48886, hostWire, clientWire, host, client, a, b, error)) return false;
+			uint64_t now = 0;
+			for (; now < 400 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!client.IsRunning()) { *error = "the pair never started"; return false; }
+			NetLockstepStart mine;
+			mine.sessionId = b.sessionId; mine.roundId = 43; mine.localPeerId = 2; mine.peerCount = 2;
+			mine.startFrame = b.startFrame; mine.inputDelayFrames = 2;
+			mine.controllerFrameVersion = ControllerFrame::c_Version;
+			mine.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			mine.scenario = b.scenario; mine.ownershipPolicy = b.ownershipPolicy;
+			NetTransportEvent event;
+			event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+			if (!NetLockstepCodec::Encode({mine}, event.bytes)) { *error = "the echoed start would not encode"; return false; }
+			client.InjectEvent(event, now);
+			for (uint64_t until = now + 50; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!client.IsRunning()) {
+				*error = std::string("a seat's own start returned to it stopped the round: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS own_start_returned_does_not_fail_the_round stale_packets="
+			          << client.GetStats().staleRoundPackets << std::endl;
+			return true;
+		}
+
+		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
 		bool TestReturnKeepsTheLinkItLastMeasured(std::string* error) {
@@ -17171,6 +17212,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestBufferedReturnIsNotAnAnswer(&error) ||
 		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
 		    !TestReturnKeepsTheLinkItLastMeasured(&error) ||
+		    !TestOwnStartReturnedDoesNotFailTheRound(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
