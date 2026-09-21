@@ -241,6 +241,9 @@ static bool s_frameStallArmed = false;
 static bool s_frameStallFired = false;
 static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
+struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
+static std::vector<NetLiveStall> s_netLiveStalls;
+static std::optional<uint64_t> s_netLiveStallActivation;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
@@ -908,6 +911,20 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				System::PrintDiagnosticLine(line.str());
 			}
 			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[++i];
+			const size_t separator = spec.find(':');
+			NetLiveStall stall{};
+			if (separator != std::string::npos) {
+				const auto tick = std::from_chars(spec.data(), spec.data() + separator, stall.tick);
+				const auto duration = std::from_chars(spec.data() + separator + 1, spec.data() + spec.size(), stall.milliseconds);
+				if (tick.ec == std::errc{} && tick.ptr == spec.data() + separator && duration.ec == std::errc{} &&
+				    duration.ptr == spec.data() + spec.size() && stall.tick > 0 && stall.milliseconds > 0 && stall.milliseconds <= 20000)
+					s_netLiveStalls.push_back(stall);
+			}
+			++i;
 			continue;
 		}
 		if (currentArg == "-selftest-frame-stall" && i + 1 < argCount) {
@@ -4742,6 +4759,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running)) {
 			const bool heldRejoin = error.find("PeerHeld:") != std::string::npos;
+			System::PrintDiagnosticLine("[net-match] recovery requested tick=" + std::to_string(matchTick) +
+			    " catch_up=" + std::to_string(ScenarioRunner::WorldCatchUpActive()) + " reason=" + error);
 			static unsigned int traceRecoveryCount = 0;
 			const std::string traceGapKey = observeTraceRecovery ? "menu_trace_gap_" + std::to_string(++traceRecoveryCount) : std::string();
 			if (observeTraceRecovery) {
@@ -5049,6 +5068,17 @@ void RunGameLoop() {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 		}
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
+			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
+				const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
+				if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
+				stall.fired = true;
+				s_netLiveStallActivation = activation;
+				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds));
+				std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				break;
+			}
+		}
 
 		g_TimerMan.Update();
 
@@ -5158,7 +5188,7 @@ void RunGameLoop() {
 			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
-			const bool liveHashTick = !s_netLiveTickHashPath.empty() && ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool liveHashTick = !s_netLiveTickHashPath.empty() && (ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsActive());
 			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick || liveHashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
@@ -5640,6 +5670,7 @@ void RunGameLoop() {
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
 					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
+					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}}.dump() << '\n';

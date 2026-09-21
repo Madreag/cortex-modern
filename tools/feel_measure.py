@@ -15,7 +15,9 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, item9a_gates, write_json
+from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, item9a_gates, apply_tps_call, write_json
+from feel.retained_resume import compare_live_hashes
+from feel.records import compress_case_records, record_path
 from run_sim_test import make_run
 from run_selftests import SELFTESTS
 from compare_sim_traces import strict_compare
@@ -26,13 +28,14 @@ HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
 SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
 BYTE_LIMIT = 5_000_000_000
+MATRIX_BYTE_LIMIT = 10_000_000_000
 
 
 def stamp():
     return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
 
 
-def scratch_bytes(root):
+def scratch_bytes(root, limit=BYTE_LIMIT):
     total, pending = 0, [Path(root)]
     while pending:
         directory = pending.pop()
@@ -47,8 +50,8 @@ def scratch_bytes(root):
                     pending.append(Path(entry.path))
                 elif stat.S_ISREG(info.st_mode):
                     total += info.st_size
-    if total >= BYTE_LIMIT:
-        raise RuntimeError(f'scratch footprint {total} bytes reaches the {BYTE_LIMIT} byte limit; no cleanup performed')
+    if total >= limit:
+        raise RuntimeError(f'scratch footprint {total} bytes reaches the {limit} byte limit; no cleanup performed')
     return total
 
 
@@ -120,13 +123,14 @@ TIMING_CASES = (
 )
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None):
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None):
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = 2 * TICKS if silent_tick else TICKS
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
+                    live_stalls=live_stalls,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
@@ -139,6 +143,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             run_out = out / peer
             trace = out / f'{peer}_trace.json'
             flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes', '-num-lua-states', '4',
+                     '-net-live-tick-hashes', str(out / f'{peer}-live.jsonl'),
                      '-out', str(trace), '-input-script', str(script),
                      '-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
                      '-controller-debug-ticks', f'1-{final_tick}',
@@ -160,7 +165,11 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
             if peer == 'client' and silent_tick:
-                flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
+                if live_stalls:
+                    for tick, duration in live_stalls:
+                        flags += ['-net-test-live-stall', f'{tick}:{duration}']
+                else:
+                    flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
             run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
                            expected=[trace, Path(str(trace) + '.simdump.txt'), out / f'{peer}_controller.jsonl'])
             runs[peer] = run
@@ -183,6 +192,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         write_json(out / 'run-result.json', records)
     if any(record.get('exe_sha256') != exe_hash for record in records.values()):
         raise RuntimeError('the executable changed during the matrix')
+    compress_case_records(out)
     manifest.update(finished=stamp(), scratch_bytes=scratch_bytes(out),
                     launches_complete=all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values()))
     write_json(out / 'manifest.json', manifest)
@@ -270,11 +280,19 @@ def reduce_timing_case(run):
     silent = bool(manifest.get('silent_tick'))
     peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
     proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS))
+    pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
+    live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
+            for left, right in pairs}
+    live_pass = all(passes and all(row['compared_ticks'] >= 30 and row['mismatched_ticks'] == 0 for row in passes)
+                    for passes in live.values())
+    proof.update(live_passes=live, live_pass=live_pass)
+    proof['pass'] &= live_pass
+    write_json(run / 'hash-proof.json', proof)
     return dict(name=run.name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
 
-def analyze(root):
+def analyze(root, stock=None):
     root = Path(root)
     peer = single_case_peer(root)
     if peer:
@@ -287,6 +305,9 @@ def analyze(root):
         run = root / f'baseline-{cap_name}'
         result = reduce_or_fail(run, 'sp')
         baselines[cap_name] = dict(result['metrics'], raw_path=result['raw_path'])
+        timing = item9a_gates(run, 'sp')
+        baselines[cap_name]['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
+        result['metrics']['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         write_json(run / 'feel-report.json', result)
     results = []
     for lag in (100, 200):
@@ -295,6 +316,14 @@ def analyze(root):
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
             peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
+            for value in peers.values():
+                apply_tps_call(value, dict(steady_wall_tps=baselines[cap_name]['steady_wall_tps'],
+                    evidence=baselines[cap_name]['raw_path'], method='same build, scene, actor count, recorder and render cap'))
+            for peer in ('host', 'client'):
+                timing = item9a_gates(off, peer)
+                if stock and cap_name in stock:
+                    apply_tps_call(timing, stock[cap_name])
+                peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json'),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json'),
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
@@ -312,8 +341,8 @@ def analyze(root):
                           reducer=file_record(HELPERS / 'report.py'), driver=file_record(Path(__file__)),
                           peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values()),
                           measurement_complete=manifest['launches_complete'] and all(row['measurement_complete'] for row in peers.values()),
-                          raw_files=[file_record(path) for path in raw_paths if path.is_file()],
-                          missing_raw_files=[str(path) for path in raw_paths if not path.is_file()])
+                          raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
+                          missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
             report['measurement_complete'] &= not report['missing_raw_files']
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
@@ -332,7 +361,9 @@ def analyze(root):
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
         link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
-    lines += ['', 'Item 9a adds the 59.5 tps, 50 ms and one-percent wait gates. Missing records and failed',
+    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. Two-peer TPS uses the same-machine',
+              'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
+              'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return results
@@ -394,6 +425,7 @@ def parse_args(argv=None):
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
+    parser.add_argument('--stock-baseline', type=Path, help='same-machine stock measurements, keyed by 60hz and uncapped')
     return parser, parser.parse_args(argv)
 
 
@@ -401,12 +433,12 @@ def main(argv=None):
     parser, args = parse_args(argv)
     root = args.out.resolve()
     if not 48231 <= args.port <= 48240:
-        parser.error('the ten match ports must stay within 48231..48249')
+        parser.error('the ten match ports must stay within 48231..48240')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    scratch_bytes(root)
+    scratch_bytes(root, MATRIX_BYTE_LIMIT)
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
@@ -416,6 +448,7 @@ def main(argv=None):
                     commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                     source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
                     ports=list(range(args.port, args.port + 10)), ticks=TICKS,
+                    scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame')
         write_json(root / 'matrix-plan.json', plan)
@@ -430,22 +463,27 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
                     port += 1
-        for name, lag, loss, silent in TIMING_CASES:
-            launch_case(root, name, lag, 60, True, port, script, exe['sha256'], args.timeout, loss_percent=loss, silent_tick=silent)
-            port += 1
+        for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
+            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
+                        loss_percent=loss, silent_tick=silent)
     try:
-        results = analyze(root)
-    except EarlyDecision:
+        stock = json.loads(args.stock_baseline.read_text(encoding='utf-8')) if args.stock_baseline else None
+        results = analyze(root, stock)
+    except EarlyDecision as error:
+        write_json(root / 'completion.json', dict(finished=stamp(), measurement_complete=False,
+                   item9a_pass=False, gates_pass=False, gates_unverified=True, failure=error.fail_line,
+                   evidence=str(error.path)))
+        print(error.fail_line, flush=True)
         return 1
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
     complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
-                  for name, pin in peer['pins'].items() if name.startswith('item9a_')]
+                  for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
     completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root), gates_unverified=skip_gates)
+                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')
