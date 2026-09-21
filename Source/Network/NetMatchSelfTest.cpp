@@ -10660,6 +10660,77 @@ namespace RTE {
 		return true;
 	}
 
+	// A match that ends while a seat is under AI keeps its directory listing alive, because the held
+	// player's resync still has to find the host for the match-over answer. An end with every seat
+	// live lets the listing go.
+	bool TestEndMatchWithHeldSeatKeepsItsLease(std::string* error) {
+		LoopbackTransport hostTransport, clientTransport;
+		if (!hostTransport.StartHost(43225, error) || !clientTransport.Connect("loopback", 43225, error)) return false;
+		NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+		for (const NetTransportEvent& event: hostTransport.PollEvents())
+			if (event.type == NetTransportEventType::PeerConnected) hostRemotePeer = event.peerId;
+		for (const NetTransportEvent& event: clientTransport.PollEvents())
+			if (event.type == NetTransportEventType::PeerConnected) clientRemotePeer = event.peerId;
+		if (hostRemotePeer == c_InvalidNetPeerId || clientRemotePeer == c_InvalidNetPeerId) {
+			*error = "the hold-at-end fixture did not connect the loopback pair";
+			return false;
+		}
+		auto cfg = [&](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay) {
+			NetLockstepConfig config;
+			config.sessionId = 0x484F4C4445443031ULL;
+			config.timeoutMs = 2000;
+			config.localPeerId = local;
+			config.peerCount = 2;
+			config.remoteTransportPeerIds = std::move(transports);
+			config.relayToOtherPeers = relay;
+			config.substituteSlowPeers = true;
+			config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.scenario = "LockstepSelfTest";
+			config.ownershipPolicy = "unique-id-split";
+			return config;
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_MatchWasRunning = true;
+		service.m_DirectoryRegistered = true;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		NetLockstepCoordinator client;
+		if (!service.m_Coordinator->Start(hostTransport, cfg(1, {{2, hostRemotePeer}}, true), error) ||
+		    !client.Start(clientTransport, cfg(2, {{1, clientRemotePeer}}, false), error)) {
+			return false;
+		}
+		for (uint64_t now = 0; now < 80; now += 5) {
+			service.m_Coordinator->Tick(now);
+			client.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (!service.m_Coordinator->IsRunning() || !service.m_Coordinator->ProposePeerHold(2, 80, error)) return false;
+		if (!service.m_Coordinator->AnyHeldAISeat()) {
+			*error = "the hold-at-end fixture did not put the seat under AI";
+			return false;
+		}
+		service.FinishMatch("match over");
+		if (!service.m_KeepEndedDirectoryLease || !service.ShouldKeepIceDirectoryLease() || !service.m_DirectoryHidden || service.m_DirectoryRetracted) {
+			*error = "a match that ended with a held seat did not keep its listing: keep_ended=" + std::to_string(service.m_KeepEndedDirectoryLease) +
+			         " hidden=" + std::to_string(service.m_DirectoryHidden) + " retracted=" + std::to_string(service.m_DirectoryRetracted);
+			return false;
+		}
+		NetMatchService live;
+		live.m_IsHost = true;
+		live.m_State = NetMatchServiceState::Running;
+		live.m_MatchWasRunning = true;
+		live.m_DirectoryRegistered = true;
+		live.FinishMatch("match over");
+		if (live.m_KeepEndedDirectoryLease || live.ShouldKeepIceDirectoryLease()) {
+			*error = "a match that ended with every seat live kept its listing: keep_ended=" + std::to_string(live.m_KeepEndedDirectoryLease);
+			return false;
+		}
+		std::cout << "PASS end_match_hold_resync_keeps_lease held=1 keep_ended=1 hidden=1 no_hold_keep_ended=0" << std::endl;
+		return true;
+	}
+
 	// The menus route a recovery pump to the title screen and keep it alive past Back; an ordinary
 	// match end is not one, so it must answer the lobby pump's read instead.
 	bool TestCompletedLobbyIsNotARecovery(std::string* error) {
@@ -10689,8 +10760,6 @@ namespace RTE {
 			         " state=" + std::to_string(static_cast<int>(service.m_State));
 			return false;
 		}
-		std::cout << "PASS end_match_hold_resync_keeps_lease held=1 state=Completed keep_ended="
-		          << service.m_KeepEndedDirectoryLease << std::endl;
 		{
 			std::lock_guard<std::mutex> lock(service.m_Mutex);
 			service.m_LeftMatch = true;
@@ -12454,6 +12523,7 @@ namespace RTE {
 		if (!TestIceSettingsOverrideIsNotPersisted(&error)) return fail(error);
 		if (!TestP2PJoinSpecRidesTheSessionConfig(&error)) return fail(error);
 		if (!TestServiceDirectoryIceLeaseKeepsIdentity(&error)) return fail(error);
+		if (!TestEndMatchWithHeldSeatKeepsItsLease(&error)) return fail(error);
 		if (!TestCompletedLobbyIsNotARecovery(&error)) return fail(error);
 		if (!TestCompletedLobbyExpires(&error)) return fail(error);
 		if (!TestCapturedWorldIdentityKeepsTheWorldStamp(&error)) return fail(error);
