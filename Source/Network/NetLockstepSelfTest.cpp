@@ -2028,6 +2028,28 @@ namespace RTE {
 			    ready.reclaimedPeerIds != std::vector<uint8_t>{2} || !replay.IsSeatReclaimGap(2, 45) || replay.IsSeatReclaimGap(2, 46)) {
 				*error = "private catch-up revived a departed host or lost the current authority's reclaim"; return false;
 			}
+			replay.Tick(1);
+			if (replay.PopReadyFrame(ready)) { *error = "private replay invented a frame inside its local reclaim gap"; return false; }
+			for (uint64_t frame = 42; frame <= 46; ++frame) {
+				const std::vector<ControllerFrame> inputs{MakeFrame(987, frame)};
+				if (!replay.QueueReplayFrame(frame, inputs, {}, error)) return false;
+				replay.Tick(frame);
+				if (!replay.PopReadyFrame(ready) || ready.frame != frame || ready.remoteFrames.size() != 1 ||
+				    ControllerFrameCodec::Encode(ready.remoteFrames.front()) != ControllerFrameCodec::Encode(inputs.front())) {
+					*error = "private replay lost the other seats' input during a reclaim gap"; return false;
+				}
+			}
+			config.localPeerId = 1;
+			if (!replay.StartReplay(wire, config, error)) return false;
+			for (uint64_t frame = 41; frame <= 46; ++frame) {
+				const std::vector<ControllerFrame> inputs{MakeFrame(987, frame)};
+				if (!replay.QueueReplayFrame(frame, inputs, frame == 41 ? std::vector<NetGameCommand>{reclaim} : std::vector<NetGameCommand>{}, error)) return false;
+				replay.Tick(frame);
+				if (!replay.PopReadyFrame(ready) || ready.frame != frame || ready.remoteFrames.size() != 1 ||
+				    ControllerFrameCodec::Encode(ready.remoteFrames.front()) != ControllerFrameCodec::Encode(inputs.front())) {
+					*error = "the replay bucket was mistaken for the reclaimed sender"; return false;
+				}
+			}
 			return true;
 		}
 

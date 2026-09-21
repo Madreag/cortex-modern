@@ -5557,6 +5557,7 @@ void MovableMan::UpdateControllers() {
 		std::string error;
 		NetLockstepReadyFrame readyFrame;
 		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			if (!error.empty()) ScenarioRunner::SetControllerReplayError("private replay tick " + std::to_string(simTick) + ": " + error);
 			return;
 		}
 		std::unordered_set<int64_t> applied;
