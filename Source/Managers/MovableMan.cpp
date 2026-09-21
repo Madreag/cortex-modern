@@ -5157,7 +5157,8 @@ bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
 	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan;
 	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
-	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1] << std::endl;
+	          << " threaded_synced_update_per_state_order_red states=4,32 hash4=" << perStateHashes[0] << " hash32=" << perStateHashes[1]
+	          << (perStateRed ? "" : " (the per-state control ran the same order at both counts, so it detects nothing)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (globalGreen ? "PASS" : "FAIL")
 	          << " threaded_synced_update_global_moid_order states=4,32 hash4=" << globalHashes[0] << " hash32=" << globalHashes[1] << std::endl;
 	std::cout << "[script-graph-selftest] " << (duplicateGreen ? "PASS" : "FAIL")
