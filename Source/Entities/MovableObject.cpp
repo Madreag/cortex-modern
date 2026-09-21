@@ -506,7 +506,9 @@ void MovableObject::AdoptPersistedUniqueID() {
 	const auto moveScriptsToTheStateTheUniqueIDNames = [this] {
 		const bool saveNamedAState = m_PersistedLuaStateIndex >= 0;
 		m_PersistedLuaStateIndex = -1;
-		if (m_ForceIntoMasterLuaState || (!saveNamedAState && !m_ThreadedLuaState)) {
+		// A running script object lives in its state's VM and is rekeyed there, never moved: the ID names
+		// the state the next load takes, which is every object a restore rebuilds.
+		if (m_ForceIntoMasterLuaState || ObjectScriptsInitialized() || (!saveNamedAState && !m_ThreadedLuaState)) {
 			return;
 		}
 		MoveScriptsToState(g_LuaMan.GetScriptStateForObject(m_UniqueID));
