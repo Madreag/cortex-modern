@@ -840,6 +840,41 @@ namespace RTE {
 			}, error);
 		}
 
+		/// A rejoining seat's handshake suspends that peer's own silence window and nothing else: every other
+		/// watchdog on the session keeps its own clock while the rejoin works.
+		bool TestARejoinPhaseSuspendsOnlyItsOwnSilence(std::string* error) {
+			const uint16_t port = 42251;
+			LoopbackTransport hostTransport;
+			LoopbackTransport rawClient;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 1051, "Host");
+			hostConfig.timeoutMs = 50;
+			if (!host.StartHost(hostTransport, hostConfig, error) || !rawClient.Connect("loopback", port, error)) {
+				return false;
+			}
+			host.SetRejoinPhase(NetSession::RejoinPhase::Loading);
+			if (!host.IsAdmissionSuspended()) {
+				*error = "the rejoin phase did not suspend this peer's own silence";
+				return false;
+			}
+			for (uint64_t now = 0; now <= 400; now += 10) {
+				host.Tick(now);
+				if (host.GetStats().timeouts > 0) {
+					break;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				rawClient.AdvanceTimeMs(10);
+			}
+			if (!host.HasReject() || host.GetRejectReason() != NetRejectReason::Timeout || host.GetStats().timeouts != 1) {
+				*error = "a rejoin phase suspended a stalled handshake's own watchdog: timeouts=" +
+				         std::to_string(host.GetStats().timeouts);
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS a_rejoin_phase_suspends_only_its_own_silence timeouts="
+			          << host.GetStats().timeouts << std::endl;
+			return true;
+		}
+
 		bool TestLobbyMembership(std::string* error) {
 			constexpr uint16_t port = 42208;
 			LoopbackTransport hostTransport;
@@ -1937,6 +1972,7 @@ namespace RTE {
 		if (!TestPeerTimeoutDoesNotStopHost(&error)) return fail(error);
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
+		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
 		if (!TestAdmissionRefusalIsLogged(&error)) return fail(error);

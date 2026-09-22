@@ -1350,9 +1350,16 @@ namespace RTE {
 		const uint64_t a7EvaluationGap = m_NowMs >= m_LastTimeoutCheckMs ? m_NowMs - m_LastTimeoutCheckMs : 0;
 		m_TimeoutsEvaluated = true;
 		m_LastTimeoutCheckMs = m_NowMs;
+		// A rejoin phase is this peer's own handshake, so its silence window starts again every evaluation -
+		// and nothing else on the session is suspended: a stalled transfer and a silent peer keep their own
+		// watchdogs and their own clocks.
+		if (m_AdmissionSuspended) {
+			m_LastReceiveMs = m_NowMs;
+			m_ResumedWithoutTraffic = false;
+		}
 		// A park the engine declared is not silence from anyone: the round held this peer's own pump. The
 		// windows start again here, and the next full budget without a word still ends the peer.
-		if (m_PumpParked || m_SilenceSuspended || m_AdmissionSuspended) {
+		if (m_PumpParked || m_SilenceSuspended) {
 			m_PumpParked = false;
 			m_LastReceiveMs = m_NowMs;
 			m_ResumedWithoutTraffic = false;
