@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / 'tools'))
 from compare_sim_traces import strict_compare
 from launched_exe import apply_launched_exe
-from run_sim_test import make_run
+from run_sim_test import make_run, seed_settings
 
 ROOT = Path('D:/Projects/stage2_p4/recovery_runs') / (datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:8])
 EXE = REPO / 'Cortex Command.exe'
@@ -203,12 +203,12 @@ LANES = {
     "mismatch_control": dict(
         port=43440,
         delay=0,
-        host=["-num-lua-states", "4", "-net-match-e2e-join-rejection"],
-        client=["-num-lua-states", "8"],
+        host=["-net-match-e2e-join-rejection"],
+        client_settings={"AIUpdateInterval": 3},
         mode="mismatch",
         traced=False,
         timeout=120,
-        what="POSITIVE CONTROL: a deliberate identity mismatch (nls 4 vs 8) MUST be rejected with the reason on both peers",
+        what="POSITIVE CONTROL: a deliberate identity mismatch (the client's AI update interval) MUST be rejected with the reason on both peers",
     ),
     "brain_spawn": dict(
         port=43450,
@@ -310,6 +310,9 @@ def lane(name: str, spec: dict):
         timeout,
         [client_report] + ([client_trace] if traced else []),
     )
+    # A lane that needs the peers to disagree seeds the difference in the client's own settings file.
+    if spec.get("client_settings"):
+        seed_settings(client, spec["client_settings"])
     records = {}
 
     def drive(run, key):
@@ -361,7 +364,8 @@ def lane(name: str, spec: dict):
             service_error = str(rep.get("service", {}).get("error", ""))
             rich = any(
                 w in (setup_error + service_error).lower()
-                for w in ("mismatch", "does not match", "lua", "identity", "reject")
+                # The engine's own words for a refused deterministic config, whichever field differs.
+                for w in ("mismatch", "does not match", "do not match", "simulation settings", "identity", "reject")
             )
             check(
                 f"{key}_rejected_with_reason",
