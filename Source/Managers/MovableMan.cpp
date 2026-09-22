@@ -1163,8 +1163,14 @@ namespace {
 			const Vector cursor = controller->GetAnalogCursor();
 			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
 			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			// The seat's input mode and player are routing, not input: the seat that owns an actor is CIM_PLAYER
+			// with its player number on its OWN machine and CIM_NETWORK/NoPlayer on every other one, so they are
+			// per-peer by construction and belong beside the applied input, never inside it.
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			g_SimChecksum.Update("controller_route", &controllerID, sizeof(controllerID));
+			g_SimChecksum.Update("controller_route", &inputMode, sizeof(inputMode));
+			const int32_t controllerPlayer = controller->GetPlayer();
+			g_SimChecksum.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
 		});
