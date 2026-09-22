@@ -4759,6 +4759,11 @@ namespace RTE {
 		auto& stats = m_Stats.peers[peerId];
 		stats.waitsSinceReclaim = 0;
 		stats.longestWaitMsSinceReclaim = 0;
+		// A returning seat owes its first input from the frame it was admitted at, so its allowance is measured
+		// from that moment; the horizon may have gone dry long before, while the seat was still away.
+		stats.reclaimAdmittedMs = m_TimingNowMs;
+		// Its restart cost belongs to the incarnation that is coming back, not to the one that left.
+		stats.startParkMs = 0;
 		if (peerId != m_Config.localPeerId) return;
 		++m_LocalSeatReclaims;
 		// The lateness that named this machine slow was measured before the seat came back, against a
@@ -4838,6 +4843,10 @@ namespace RTE {
 			if (timing.phase == NetTimingPhase::Status)
 				std::erase_if(queue, [&](const auto& pending) { return pending.phase == NetTimingPhase::Status && pending.peerId == timing.peerId; });
 			else std::erase_if(queue, [&](const auto& pending) { return pending.phase == timing.phase && pending.revision == timing.revision; });
+			// The withdrawal travels ahead of anything still queued for the revision it replaces, so a peer sees
+			// proposal then commit, or proposal then withdrawal, but never a commit after a withdrawal.
+			if (timing.supersededRevision != 0)
+				std::erase_if(queue, [&](const auto& pending) { return pending.revision == timing.supersededRevision; });
 			if (std::find(queue.begin(), queue.end(), timing) == queue.end()) queue.push_back(timing);
 		}
 	}
@@ -5206,13 +5215,18 @@ namespace RTE {
 							linkJitterMs = std::max(linkJitterMs, otherStats.jitterMs);
 						}
 					}
-					const uint64_t ramp = std::max<uint64_t>(windowMs,
-					    2 * static_cast<uint64_t>(linkMs) + linkJitterMs + peerStats.startParkMs);
-					if (nowMs - firstMissingMs < declarationDeadline + ramp) continue;
+					// A seat that has not published its restart yet borrows the slowest one this round has seen:
+					// the returning machine pays that work too, and zero is the one reading it cannot have.
+					uint64_t restartMs = peerStats.startParkMs;
+					if (restartMs == 0) for (const auto& [other, otherStats]: m_Stats.peers) restartMs = std::max(restartMs, otherStats.startParkMs);
+					const uint64_t ramp = std::max<uint64_t>(windowMs, 2 * static_cast<uint64_t>(linkMs) + linkJitterMs + restartMs);
+					// The clock starts at the admission, never at a dryness that began while the seat was away.
+					const uint64_t since = nowMs - std::max(firstMissingMs, peerStats.reclaimAdmittedMs);
+					if (nowMs < peerStats.reclaimAdmittedMs || since < declarationDeadline + ramp) continue;
 					std::cout << "[net-lockstep] bound judged returning peer " << static_cast<int>(peer) << " at frame " << frame
-					          << ": since_missing=" << (nowMs - firstMissingMs) << "ms deadline=" << declarationDeadline
+					          << ": since_missing=" << since << "ms deadline=" << declarationDeadline
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
-					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << peerStats.startParkMs
+					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << restartMs
 					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
 				} else if (peerStats.lastProgressMs >= firstMissingMs &&
 				           nowMs - peerStats.lastProgressMs < declarationDeadline) {

@@ -553,6 +553,7 @@ namespace RTE {
 		uint64_t acceptedThroughFrame = 0; //!< The newest tick of this sender's the round could consume.
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
+		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
@@ -995,6 +996,17 @@ namespace RTE {
 		/// Whether this relay host still owes a peer a forward it has not managed to send. The star's
 		/// hub cannot leave while this is true: a client waiting on that frame loses the round.
 		bool HasPendingRelayWork() const { return m_RelayHost && (!m_RelayBacklog.empty() || !m_RecoveryOutgoing.empty()); }
+		/// Whether a live remote has not reported reaching the frame this peer has committed to. A peer merely
+		/// behind owes nothing to the relay queues, so the goodbye drain would leave while it still needs us.
+		bool HasPeerBehindOurHorizon() const {
+			if (!IsRunning()) return false;
+			for (uint8_t peer: m_RemotePeerIds) {
+				if (IsPeerGoneAtFrame(peer, m_Stats.nextFrame)) continue;
+				const auto stats = m_Stats.peers.find(peer);
+				if (stats == m_Stats.peers.end() || stats->second.reportedNextFrame < m_Stats.nextFrame) return true;
+			}
+			return false;
+		}
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.
