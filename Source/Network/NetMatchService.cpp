@@ -830,6 +830,61 @@ static std::string ResyncSaveName() {
 		Complete(text);
 	}
 
+	std::string NetMatchService::MatchOverGoodbyeText(uint64_t finalFrame) {
+		return finalFrame == 0 ? std::string("match over") : "match over through frame " + std::to_string(finalFrame);
+	}
+
+	void NetMatchService::SayGoodbyeToRejoinersLocked() {
+		if (!m_IsHost || !m_Coordinator) return;
+		const uint64_t resume = m_Coordinator->GetResumeFrame();
+		m_CompletedRoundFinalFrame = resume > 0 ? resume - 1 : 0;
+		m_HostGoodbyeSeen = true;
+		// Only a held seat can still be handshaking its way back; a member reads the round's own Stop and a
+		// lobby peer is owed the next round.
+		if (!m_Coordinator->AnyHeldAISeat()) return;
+		m_GoodbyeOwedToRejoiners = true;
+		// That seat is not a member, so the Stop never reaches it. Told the round is over and where it ended,
+		// it finishes its match instead of timing out on a host that is on its way out.
+		RefuseEndedPeersLocked(MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
+	}
+
+	bool NetMatchService::NoteHostGoodbyeLocked(const NetSession* session) {
+		if (!session || !session->HasReject() || session->GetRejectReason() != NetRejectReason::SessionEnded) return m_HostGoodbyeSeen;
+		const std::string& summary = session->GetRejectSummary();
+		if (summary.rfind("match over", 0) != 0) return m_HostGoodbyeSeen;
+		m_HostGoodbyeSeen = true;
+		const size_t space = summary.find_last_of(' ');
+		uint64_t parsed = 0;
+		bool digits = false;
+		for (size_t i = space == std::string::npos ? summary.size() : space + 1; i < summary.size(); ++i) {
+			if (summary[i] < '0' || summary[i] > '9') { digits = false; break; }
+			parsed = parsed * 10 + static_cast<uint64_t>(summary[i] - '0');
+			digits = true;
+		}
+		if (digits) m_CompletedRoundFinalFrame = parsed;
+		return true;
+	}
+
+	bool NetMatchService::HostGoodbyeSeen(uint64_t& finalFrame) const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		finalFrame = m_CompletedRoundFinalFrame;
+		return m_HostGoodbyeSeen;
+	}
+
+	uint64_t NetMatchService::RejoinProgressSum() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		uint64_t sum = 0;
+		for (const auto& session: m_WorldJoin.Sessions()) {
+			// Every step a rejoin takes counts: it was admitted, it moved a phase, an image was staged for it,
+			// it acknowledged another chunk, it consumed another tail frame.
+			sum += 1 + static_cast<uint64_t>(session.phase) + session.incarnation + session.snapshotTick +
+			       (session.transferStarted ? 1 : 0) + session.ackedChunks + session.deliveredThrough +
+			       session.acknowledgedThrough + session.catchUpTicks + session.acknowledgedActivation +
+			       (session.activationCommitted ? 1 : 0);
+		}
+		return sum;
+	}
+
 	void NetMatchService::RefuseEndedPeersLocked(const std::string& reason) {
 		if (!m_IsHost || !m_Session || !m_Coordinator) return;
 		for (const NetSessionPeerInfo& peer : m_Session->GetReadyPeers()) {
@@ -1912,6 +1967,7 @@ static std::string ResyncSaveName() {
 		DrainPendingSessionEventsLocked(false);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(reason);
+			SayGoodbyeToRejoinersLocked();
 		}
 		if (m_State == NetMatchServiceState::Running) {
 			m_StatusText = displayReason.empty() ? "Match complete" : displayReason;
@@ -1943,6 +1999,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		if (m_Coordinator) {
 			m_Coordinator->Complete(result.empty() ? "match over" : result);
+			SayGoodbyeToRejoinersLocked();
 		}
 		if (m_State == NetMatchServiceState::Running) {
 			m_State = NetMatchServiceState::Completed;
@@ -2379,7 +2436,7 @@ static std::string ResyncSaveName() {
 				    session.acknowledgedThrough + 1 < completed) return true;
 			}
 			return false;
-		});
+		}, [this] { return RejoinProgressSum(); });
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
@@ -3588,7 +3645,8 @@ static std::string ResyncSaveName() {
 		if (m_Session && (m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected)) {
 			// A host that reached its own last tick says goodbye; a seat that is still catching up must read that
 			// as the round ending, not as a link to rejoin, or it spends its rejoin on a match that is over.
-			if (!g_ActivityMan.ActivityRunning() || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver())) {
+			if (NoteHostGoodbyeLocked(m_Session.get()) || !g_ActivityMan.ActivityRunning() ||
+			    (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver())) {
 				ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
 				return;
 			}
@@ -4723,6 +4781,11 @@ static std::string ResyncSaveName() {
 		DriveWorldJoinClient(nowMs);
 		if (events.empty()) {
 			return;
+		}
+		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,
+		// never left to measure a host that is on its way out.
+		if (m_IsHost && m_GoodbyeOwedToRejoiners) {
+			RefuseEndedPeersLocked(MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
 		}
 		// A transport peer that reached session-Ready but carries no lockstep remote is a
 		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
@@ -6534,6 +6597,8 @@ static std::string ResyncSaveName() {
 				m_State = NetMatchServiceState::Failed;
 				m_StatusText = SetupFailureStatus(m_Session.get(), noDirectRoute, (m_RelayAttempted && noDirectRoute) || error.starts_with("Relay "));
 				m_ErrorText = m_Session && m_Session->HasReject() ? m_Session->BuildPlayerRefusalText() : error;
+				// A refusal that says the round is over is an answer, not a lost link: the seat completes.
+				(void)NoteHostGoodbyeLocked(m_Session.get());
 				// §9b: a live match is the one refusal a joiner can answer, by applying for a seat.
 				m_JoinRefusedByLiveMatch = !request.host && m_Session && m_Session->HasReject() &&
 				                           m_Session->GetMismatchKey() == "live_match";
