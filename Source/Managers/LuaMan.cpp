@@ -6916,6 +6916,19 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	std::cout << "[script-graph-selftest] " << (queuedDeletionOrder ? "PASS" : "FAIL")
 	          << " queued_entity_deletion_order states=4,32 order4=" << queuedDeletionOrder4 << " order32=" << queuedDeletionOrder32
 	          << (queuedDeletionOrder ? "" : " (the drain follows the state count, not the unique ID)") << std::endl;
+	// What carries no unique ID at all: twice at one count, so a key that raced would show it here.
+	const std::string queuedTagOrderFirst = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(c_LuaStateCount);
+	const std::string queuedTagOrderAgain = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(c_LuaStateCount);
+	const std::string queuedTagOrderFour = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(4);
+	// At the build's count each tag sits alone in its own queue, so the drain prints them in queue order;
+	// at four queues the same handover fills each queue twice, and the drain prints each queue's two in
+	// the order that queue took them. Both are the (queue, place in queue) rule, spelled out.
+	const bool queuedTagOrder = queuedTagOrderFirst == "1,2,3,4,5,6,7,8" && queuedTagOrderFirst == queuedTagOrderAgain &&
+	                            queuedTagOrderFour == "5,1,6,2,7,3,8,4";
+	std::cout << "[script-graph-selftest] " << (queuedTagOrder ? "PASS" : "FAIL")
+	          << " queued_deletion_order_without_a_unique_id states=" << c_LuaStateCount << ",4 order=" << queuedTagOrderFirst
+	          << " again=" << queuedTagOrderAgain << " order4=" << queuedTagOrderFour << " expected4=5,1,6,2,7,3,8,4"
+	          << (queuedTagOrder ? "" : " (what has no unique ID drains in the order the collectors raced to hand it over)") << std::endl;
 	// The order fixture opens and closes its own states, so by here a state close has had wrappers of
 	// its own to drain. Nothing may be left naming a state that is gone: deleting one reads a freed VM.
 	const uint64_t drainedAtStateClose = LuabindObjectWrapper::QueuedDeletionsDrainedAtStateClose();
@@ -6934,7 +6947,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && threadedSyncedOrder && queuedDeletionOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {

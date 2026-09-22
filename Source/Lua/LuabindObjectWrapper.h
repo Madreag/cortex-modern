@@ -87,6 +87,10 @@ namespace RTE {
 		/// @return The drained keys, in the order their destructors ran.
 		static std::string RunQueuedDeletionOrderSelfTest(int stateCount);
 
+		/// The drain order of handed-over objects that carry no unique ID: their queue, then their place
+		/// in it. Everything ties at ID 0, which the MovableObject row never reaches.
+		static std::string RunQueuedDeletionOrderSelfTestNoUniqueID(int stateCount);
+
 		/// The number of Lua-owned engine objects destructed on the sim thread.
 		static uint64_t SimThreadDeletionCount();
 
