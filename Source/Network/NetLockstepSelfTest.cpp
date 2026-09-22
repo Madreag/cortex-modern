@@ -1606,32 +1606,50 @@ namespace RTE {
 			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
 			if (!StartCoordinatorPair(49476, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
-			if (!host.QueueLocalInput(0, {}, {}, error) || !client.QueueLocalInput(0, {}, {}, error)) return false;
+			// The park opens past every peer's in-flight horizon, so the round keeps producing all the way
+			// through it; what the park drops is what this row is about.
+			uint64_t queued = 0;
+			auto feed = [&](uint64_t through) {
+				for (; queued <= through; ++queued)
+					if (!host.QueueLocalInput(queued, {}, {}, error) || !client.QueueLocalInput(queued, {}, {}, error)) return false;
+				return true;
+			};
+			if (!feed(9)) return false;
 			for (uint64_t now = 0; now < 200; ++now) {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 				NetLockstepReadyFrame ready;
-				while (host.PopReadyFrame(ready)) { if (ready.frame != 0) { *error = "the pre-park frame advanced out of order"; return false; } (void)host.FinishSimulationTick(ready.frame); }
-				while (client.PopReadyFrame(ready)) { if (ready.frame != 0) { *error = "the client pre-park frame advanced out of order"; return false; } (void)client.FinishSimulationTick(ready.frame); }
-				if (host.GetStats().nextFrame > 0 && client.GetStats().nextFrame > 0) break;
+				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+				while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
+				if (host.GetStats().nextFrame > 3 && client.GetStats().nextFrame > 3) break;
 			}
-			if (host.GetStats().nextFrame != 1 || client.GetStats().nextFrame != 1) { *error = "the two peers did not commit the pre-park frame"; return false; }
-			host.BeginSynchronizedCapture(0); client.BeginSynchronizedCapture(0);
+			if (host.GetStats().nextFrame < 4 || client.GetStats().nextFrame < 4) { *error = "the two peers did not commit the pre-park frames"; return false; }
+			const uint64_t completed = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame) - 1;
+			host.BeginSynchronizedCapture(completed); client.BeginSynchronizedCapture(completed);
 			// The two machines cost different amounts to capture: the window both commit is still the host's one.
-			host.CompleteSynchronizedCapture(0, 700.0); client.CompleteSynchronizedCapture(0, 250.0);
-			std::vector<uint64_t> hostFrames, clientFrames;
-			for (uint64_t now = 200; now < 1200 && (host.GetStats().nextFrame <= 44 || client.GetStats().nextFrame <= 44); ++now) {
+			host.CompleteSynchronizedCapture(completed, 700.0); client.CompleteSynchronizedCapture(completed, 250.0);
+			std::vector<std::pair<uint64_t, bool>> hostFrames, clientFrames;
+			for (uint64_t now = 200; now < 2000 && (host.GetStats().nextFrame <= 70 || client.GetStats().nextFrame <= 70); ++now) {
+				if (!feed(std::max(host.GetStats().nextFrame, client.GetStats().nextFrame) + 8)) return false;
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 				NetLockstepReadyFrame ready;
-				while (host.PopReadyFrame(ready)) { hostFrames.push_back(ready.frame); if (!ready.localFrames.empty() || !ready.remoteFrames.empty()) { *error = "the capture park applied noncanonical input"; return false; } (void)host.FinishSimulationTick(ready.frame); }
-				while (client.PopReadyFrame(ready)) { clientFrames.push_back(ready.frame); if (!ready.localFrames.empty() || !ready.remoteFrames.empty()) { *error = "the client capture park applied noncanonical input"; return false; } (void)client.FinishSimulationTick(ready.frame); }
+				while (host.PopReadyFrame(ready)) { hostFrames.emplace_back(ready.frame, ready.hasLocalInput || !ready.remoteFrames.empty()); (void)host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) { clientFrames.emplace_back(ready.frame, ready.hasLocalInput || !ready.remoteFrames.empty()); (void)client.FinishSimulationTick(ready.frame); }
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
 			}
-			if (host.GetStats().nextFrame <= 43 || client.GetStats().nextFrame <= 43 || hostFrames != clientFrames || hostFrames.size() < 40) {
-				*error = "the capture park gate froze or peers committed different empty frames: host_next=" + std::to_string(host.GetStats().nextFrame) +
-				         " client_next=" + std::to_string(client.GetStats().nextFrame) + " host_frames=" + std::to_string(hostFrames.size()) + " client_frames=" + std::to_string(clientFrames.size());
+			if (hostFrames != clientFrames || hostFrames.size() < 40) {
+				*error = "the two peers did not commit the same frames through the park: host_next=" + std::to_string(host.GetStats().nextFrame) +
+				         " client_next=" + std::to_string(client.GetStats().nextFrame) + " host_frames=" + std::to_string(hostFrames.size()) +
+				         " client_frames=" + std::to_string(clientFrames.size());
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames through=" << (host.GetStats().nextFrame - 1) << std::endl;
+			uint64_t parked = 0;
+			for (const auto& [frame, hadInput]: hostFrames) {
+				if (!host.IsSynchronizedCapturePark(frame)) continue;
+				++parked;
+				if (hadInput) { *error = "the capture park applied noncanonical input at frame " + std::to_string(frame); return false; }
+			}
+			if (parked < 10) { *error = "the capture park committed only " + std::to_string(parked) + " frames"; return false; }
+			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames parked=" << parked << " through=" << (host.GetStats().nextFrame - 1) << std::endl;
 			return true;
 		}
 
@@ -1650,16 +1668,19 @@ namespace RTE {
 			host.BeginSynchronizedCapture(0); client.BeginSynchronizedCapture(0);
 			host.CompleteSynchronizedCapture(0, 250.0); client.CompleteSynchronizedCapture(0, 250.0);
 			for (uint64_t now = 0; now < 400; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
-			for (uint64_t frame = 1; frame <= 80; ++frame) {
-				if (host.IsSynchronizedCapturePark(frame) == client.IsSynchronizedCapturePark(frame)) continue;
-				*error = "the two peers park different frames: frame=" + std::to_string(frame) + " host=" +
-				         std::to_string(host.IsSynchronizedCapturePark(frame)) + " client=" + std::to_string(client.IsSynchronizedCapturePark(frame));
-				return false;
+			uint64_t first = 0, last = 0;
+			for (uint64_t frame = 1; frame <= 160; ++frame) {
+				if (host.IsSynchronizedCapturePark(frame) != client.IsSynchronizedCapturePark(frame)) {
+					*error = "the two peers park different frames: frame=" + std::to_string(frame) + " host=" +
+					         std::to_string(host.IsSynchronizedCapturePark(frame)) + " client=" + std::to_string(client.IsSynchronizedCapturePark(frame));
+					return false;
+				}
+				if (!host.IsSynchronizedCapturePark(frame)) continue;
+				if (first == 0) first = frame;
+				last = frame;
 			}
-			if (!host.IsSynchronizedCapturePark(1)) { *error = "the capture park never opened on the host"; return false; }
-			uint64_t last = 0;
-			for (uint64_t frame = 1; frame <= 80; ++frame) if (host.IsSynchronizedCapturePark(frame)) last = frame;
-			std::cout << "[net-lockstep-selftest] PASS capture_park_window_is_the_hosts_alone through=" << last << std::endl;
+			if (first == 0) { *error = "the capture park never opened on the host"; return false; }
+			std::cout << "[net-lockstep-selftest] PASS capture_park_window_is_the_hosts_alone first=" << first << " through=" << last << std::endl;
 			return true;
 		}
 

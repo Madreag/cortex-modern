@@ -6424,20 +6424,25 @@ namespace RTE {
 			m_CaptureParkReportsMs[m_Config.localPeerId] = static_cast<uint32_t>(std::min<double>(UINT32_MAX, m_SynchronizedCaptureBudgetMs));
 			return;
 		}
-		// The park cannot reach back over frames a peer has already accepted: it opens at the first frame no
-		// peer has committed yet.
+		// The park cannot reach back over frames a peer has already accepted, and a peer accepts more while this
+		// window is in flight: the reported horizons are one trip old and the commit costs another, so the
+		// opening frame clears both.  A park that opened on the host's own horizon emptied a frame the client
+		// had already committed with real input, which is one tick of divergence per park.
 		uint64_t start = std::max(completedFrame + 1, m_Stats.nextFrame);
-		for (uint8_t peer: m_RemotePeerIds)
-			if (!IsPeerGoneAtFrame(peer, start)) start = std::max(start, m_Stats.peers[peer].reportedNextFrame);
-		m_SynchronizedCaptureStartFrame = start;
-		// The window is published once and covers both the capture and the trip its reports need: a window that
-		// had to be extended later would stop every survivor at an end the round has already moved.
-		double reportTripMs = 0.0;
+		double linkMs = 0.0;
+		bool live = false;
 		for (uint8_t peer: m_RemotePeerIds) {
 			if (IsPeerGoneAtFrame(peer, start)) continue;
 			const auto& stats = m_Stats.peers[peer];
-			reportTripMs = std::max(reportTripMs, static_cast<double>(stats.pingMs) + stats.jitterMs);
+			start = std::max(start, stats.reportedNextFrame);
+			linkMs = std::max(linkMs, static_cast<double>(stats.pingMs) + stats.jitterMs);
+			live = true;
 		}
+		if (live) start += static_cast<uint64_t>(std::ceil(2.0 * linkMs / m_Config.simTickMs)) + 1;
+		m_SynchronizedCaptureStartFrame = start;
+		// The window is published once and covers both the capture and the trip its reports need: a window that
+		// had to be extended later would stop every survivor at an end the round has already moved.
+		const double reportTripMs = linkMs;
 		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil((m_SynchronizedCaptureBudgetMs + reportTripMs) / m_Config.simTickMs)));
 		m_SynchronizedCaptureEndFrame = m_SynchronizedCaptureStartFrame + ticks;
 		const uint64_t parkNowMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
