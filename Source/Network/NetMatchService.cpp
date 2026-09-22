@@ -2439,6 +2439,9 @@ static std::string ResyncSaveName() {
 		ScenarioRunner::SetSessionPump([this] { PumpSessionEvents(); }, [this] {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_IsHost || !m_Coordinator) return false;
+			// A seat we hold has not been told the round ended: its return is still owed the goodbye, and the
+			// drain's idle budget is what bounds the wait for it.
+			if (m_GoodbyeOwedToRejoiners) return true;
 			const uint64_t completed = m_Coordinator->GetResumeFrame();
 			for (const auto& session: m_WorldJoin.Sessions()) {
 				if ((session.phase == NetWorldJoinPhase::SnapshotTransfer || session.phase == NetWorldJoinPhase::CatchingUp) &&
@@ -4793,8 +4796,13 @@ static std::string ResyncSaveName() {
 		}
 		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,
 		// never left to measure a host that is on its way out.
-		if (m_IsHost && m_GoodbyeOwedToRejoiners) {
-			RefuseEndedPeersLocked(MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
+		if (m_IsHost && m_GoodbyeOwedToRejoiners && m_Session && m_Coordinator) {
+			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
+				if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) continue;
+				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded,
+				                               MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
+				m_GoodbyeOwedToRejoiners = false;
+			}
 		}
 		// A transport peer that reached session-Ready but carries no lockstep remote is a
 		// reconnector: the host ends the round so everyone reconvenes around its snapshot.
