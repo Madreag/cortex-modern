@@ -3325,6 +3325,36 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		/// A replayed round has no peers to report a capture and no budget to close one: a park opened on
+		/// playback would wedge the replay at the frame it opened.
+		bool TestPlaybackNeverOpensACapturePark(std::string* error) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A42; config.roundId = 42; config.localPeerId = 1; config.peerCount = 2; config.startFrame = 41;
+			config.simTickMs = 1000.0 / 60.0;
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 2;
+			if (!replay.StartReplay(wire, config, error)) return false;
+			replay.BeginSynchronizedCapture(41);
+			NetLockstepReadyFrame ready;
+			for (uint64_t frame = 41; frame <= 44; ++frame) {
+				const std::vector<ControllerFrame> inputs{MakeFrame(987, frame)};
+				std::string queueError;
+				if (!replay.QueueReplayFrame(frame, inputs, {}, &queueError)) {
+					*error = "a capture park refused the replayed frame " + std::to_string(frame) + ": " + queueError; return false;
+				}
+				replay.Tick(frame);
+				if (replay.IsSynchronizedCapturePark(frame)) {
+					*error = "playback opened a capture park at frame " + std::to_string(frame); return false;
+				}
+				if (!replay.PopReadyFrame(ready) || ready.frame != frame) {
+					*error = "a capture park wedged the replay at frame " + std::to_string(frame); return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS playback_never_opens_a_capture_park frames=41..44" << std::endl;
+			return true;
+		}
+
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto timer = g_TimerMan.SaveCheckpoint();
@@ -17681,6 +17711,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
+		    !TestPlaybackNeverOpensACapturePark(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestRejoinWindowClearsTheRestart(&error) ||
 		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||
