@@ -849,7 +849,9 @@ static std::string ResyncSaveName() {
 	}
 
 	bool NetMatchService::NoteHostGoodbyeLocked(const NetSession* session) {
-		if (!session || !session->HasReject() || session->GetRejectReason() != NetRejectReason::SessionEnded) return m_HostGoodbyeSeen;
+		if (!session || !session->HasReject()) return m_HostGoodbyeSeen;
+		// The host's own words are the goodbye. A transport that carries the refusal as a plain disconnect
+		// reports its own reason code, so the text is what identifies a finished round.
 		const std::string& summary = session->GetRejectSummary();
 		if (summary.rfind("match over", 0) != 0) return m_HostGoodbyeSeen;
 		m_HostGoodbyeSeen = true;
@@ -874,6 +876,13 @@ static std::string ResyncSaveName() {
 	uint64_t NetMatchService::RejoinProgressSum() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		uint64_t sum = 0;
+		// A rejoin begins as a connection in its handshake and becomes a seat the coordinator does not yet
+		// use: both are the admission arriving, before any world-join session exists to measure.
+		if (m_Session) {
+			sum += m_Session->GetHandshakingPeerCount();
+			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers())
+				if (!m_Coordinator || !m_Coordinator->UsesTransportPeer(peer.transportPeerId)) sum += 1;
+		}
 		for (const auto& session: m_WorldJoin.Sessions()) {
 			// Every step a rejoin takes counts: it was admitted, it moved a phase, an image was staged for it,
 			// it acknowledged another chunk, it consumed another tail frame.
