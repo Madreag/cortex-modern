@@ -318,6 +318,8 @@ namespace RTE {
 		uint64_t authorityGeneration = 0;
 		uint64_t cutoffFrame = 0;
 		uint64_t neutralThroughFrame = 0;
+		/// The proposal this decision replaces; every peer drops that revision when it applies this one.
+		uint64_t supersededRevision = 0;
 		std::array<uint32_t, 4> seatIncarnations{};
 		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetLockstepTiming&) const = default;
@@ -650,11 +652,13 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 35;
-		static constexpr uint16_t c_WorldVersion = 35;
+		static constexpr uint16_t c_Version = 36;
+		static constexpr uint16_t c_WorldVersion = 36;
 		/// Version 35 carries the host-authored agreed-start record after the ordinary Start fields.
 		/// Older readers reject that packet as trailing bytes; they never interpret the record as a local start.
-		static constexpr uint16_t c_AgreedStartVersion = c_Version;
+		static constexpr uint16_t c_AgreedStartVersion = 35;
+		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
+		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
@@ -818,6 +822,13 @@ namespace RTE {
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		//! The timing proposals this peer is holding, by revision.
+		std::vector<uint64_t> PendingTimingRevisions() const {
+			std::vector<uint64_t> revisions;
+			for (const auto& [revision, decision]: m_TimingDecisions) revisions.push_back(revision);
+			return revisions;
+		}
+
 		//! Frames committed and not yet consumed: the round's runway.
 		size_t ReadyFrameCount() const { return m_ReadyFrames.size(); }
 		bool HasReadyFrame(uint64_t frame) const { return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame; }

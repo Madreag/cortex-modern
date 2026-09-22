@@ -1111,7 +1111,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x23, 0x00,
+				0x24, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -1650,6 +1650,60 @@ namespace RTE {
 			}
 			if (parked < 10) { *error = "the capture park committed only " + std::to_string(parked) + " frames"; return false; }
 			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames parked=" << parked << " through=" << (host.GetStats().nextFrame - 1) << std::endl;
+			return true;
+		}
+
+		bool TestARestampWithdrawsItsProposal(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A78, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A78, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A78;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49482, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			// The host proposes a boundary and the client stores it.
+			if (!host.ProposeInputDelay(2, 3, 40, error)) return false;
+			bool held = false;
+			for (uint64_t now = 0; now < 400 && !held; now += 2) {
+				hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now);
+				held = !client.PendingTimingRevisions().empty();
+			}
+			if (!held) { *error = "the client never stored the host's proposal"; return false; }
+			const std::vector<uint64_t> before = client.PendingTimingRevisions();
+			if (before.size() != 1) {
+				*error = "the client stored " + std::to_string(before.size()) + " proposals for one boundary";
+				return false;
+			}
+			// The re-stamp names the proposal it replaces, so the client must hold exactly the new one.
+			NetLockstepTiming restamped;
+			restamped.senderPeerId = 1; restamped.peerId = 2;
+			restamped.action = NetTimingAction::Delay; restamped.phase = NetTimingPhase::Propose;
+			restamped.sessionId = hostConfig.sessionId; restamped.roundId = hostConfig.roundId;
+			restamped.revision = before.front() + 7;
+			restamped.supersededRevision = before.front();
+			restamped.applyFrame = 60; restamped.cutoffFrame = 0; restamped.nextFrame = 0;
+			restamped.delayFrames = 3; restamped.requiredPeers = 0x03;
+			restamped.authorityGeneration = hostConfig.migrationGeneration;
+			std::vector<uint8_t> bytes;
+			NetLockstepError encodeError;
+			if (!NetLockstepCodec::Encode({restamped}, bytes, &encodeError)) {
+				*error = "the re-stamped proposal did not encode: " + encodeError.message;
+				return false;
+			}
+			client.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 500);
+			const std::vector<uint64_t> after = client.PendingTimingRevisions();
+			if (!client.IsRunning()) { *error = "the re-stamped proposal stopped the client: " + client.GetStats().timeoutReason; return false; }
+			if (after.size() != 1 || after.front() != restamped.revision) {
+				std::string seen;
+				for (uint64_t revision: after) seen += (seen.empty() ? "" : ",") + std::to_string(revision);
+				*error = "the withdrawn proposal is still held: pending=[" + seen + "] withdrawn=" +
+				         std::to_string(restamped.supersededRevision) + " restamped=" + std::to_string(restamped.revision);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_restamp_withdraws_its_proposal withdrawn=" << restamped.supersededRevision
+			          << " pending=" << after.front() << std::endl;
 			return true;
 		}
 
@@ -7069,7 +7123,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x23, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x24, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -17382,6 +17436,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			!TestSenderWaitsForHostAcceptance(&error) ||
 			!TestSynchronizedCapturePark(&error) ||
 			!TestCaptureParkCommitsCanonicalEmptyFrames(&error) ||
+		    !TestARestampWithdrawsItsProposal(&error) ||
 		    !TestCaptureParkWindowIsTheHostsAlone(&error) ||
 		    !TestAgreedStartKeepsARejoinedHorizon(&error) ||
 		    !TestOverdueBoundWaitsForTheCommittedRunway(&error) ||
