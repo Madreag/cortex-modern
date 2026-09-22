@@ -2682,8 +2682,16 @@ namespace RTE {
 			if (s_SessionPump) s_SessionPump();
 		};
 		pump();
-		while (pending() && elapsed() < budgetMs) {
+		// The budget is an IDLE bound, not a fixed spend: a peer whose rejoin is still advancing keeps the door
+		// open, and a peer that has stopped answering closes it after one budget.  The total is capped so an
+		// unattended run always ends.
+		constexpr uint32_t c_TotalDrainCapMs = 90000;
+		uint64_t progress = s_LockstepCoordinator->RemoteProgressSum();
+		uint32_t idleFrom = elapsed();
+		while (pending() && elapsed() - idleFrom < budgetMs && elapsed() < c_TotalDrainCapMs) {
 			pump();
+			const uint64_t now = s_LockstepCoordinator->RemoteProgressSum();
+			if (now != progress) { progress = now; idleFrom = elapsed(); }
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 		const bool drained = !pending();
