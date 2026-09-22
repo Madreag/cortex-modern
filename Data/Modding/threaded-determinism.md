@@ -32,10 +32,24 @@ state, so there is no per-state grouping for a script to sequence its shared wri
 
 Every Lua state has its own globals, so a global table written in `SyncedUpdate` is
 shared by the objects that sit on the same state — not by every object in the world.
-Which state an object sits on is its `UniqueID` modulo the number of threaded states,
-and that number is the same on every machine (32, a build constant — it is no longer a
-setting or a command-line option). So two players in the same match group the same
-objects in the same table, whatever either machine did before the match started.
+The number of states is the same on every machine (32, a build constant — it is no
+longer a setting or a command-line option), and which state an object sits on is the
+same on every machine too, so two players in the same match group the same objects in
+the same table, whatever either machine did before the match started.
+
+The rule an object's state follows, in full:
+
+- normally, and for anything spawned from `SyncedUpdate`, it is the object's `UniqueID`
+  modulo the number of states;
+- an object spawned from `ThreadedUpdate` takes the *spawner's* state instead — that hook
+  runs in parallel, one thread per state, and a new object cannot be handed a state another
+  thread is using. It is the same answer on every peer, but it is not the object's own; one
+  more reason to spawn from `SyncedUpdate`;
+- a preset with `ForceIntoMasterLuaState = 1` (the Base.rte automovers) is always on the
+  master state;
+- an object restored from a save or received in a join goes back to the state the image
+  recorded for it, which is where its own saved fields are — the same state the peers that
+  stayed in the match have it on.
 
 What a mod author needs to know: a global written in `SyncedUpdate` is visible to the
 objects whose unique IDs land on the writer's state, identically on every peer. If your
