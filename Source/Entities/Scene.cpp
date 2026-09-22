@@ -1546,6 +1546,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const int luaState = g_LuaMan.GetStateIndex(movableObjectToSave->GetLuaState()); luaState >= 0) {
 			writer.NewPropertyWithValue("LuaState", luaState);
 		}
+		// The place this object took in the registration order: a restoring peer keeps it, so two copies
+		// of one identity walk in the order this machine had.
+		if (const long serial = movableObjectToSave->GetScriptRegistrationSerial(); serial > 0) {
+			writer.NewPropertyWithValue("ScriptRegistrationSerial", serial);
+		}
 		writer.NewPropertyWithValue("SpecialBehaviour_MOID", movableObjectToSave->GetID());
 		writer.NewPropertyWithValue("SpecialBehaviour_RootMOID", movableObjectToSave->GetRootID());
 		writer.NewPropertyWithValue("SpecialBehaviour_MOIDFootprint", movableObjectToSave->GetMOIDFootprint());

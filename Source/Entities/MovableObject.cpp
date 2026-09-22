@@ -697,6 +697,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	MatchProperty("ScriptsRestored", { reader >> m_ScriptStateRestored; });
 	MatchProperty("ScriptState", { reader >> m_PersistedScriptState; });
 	MatchProperty("LuaState", { reader >> m_PersistedLuaStateIndex; });
+	MatchProperty("ScriptRegistrationSerial", { reader >> m_ScriptRegistrationSerial; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
 	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
 	MatchProperty("SpecialBehaviour_VelOscillations", {
@@ -873,7 +874,7 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 }
 
 std::string MovableObject::SaveMovableObjectRuntime() const {
-	CheckpointWriter archive("MovableObjectRuntime1");
+	CheckpointWriter archive("MovableObjectRuntime2");
 	archive(static_cast<const Entity&>(*this), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
 	archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
 		m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
@@ -881,6 +882,7 @@ std::string MovableObject::SaveMovableObjectRuntime() const {
 		m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
 		m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
 		m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+	archive(m_ScriptRegistrationSerial);
 	archive(static_cast<bool>(m_RequestedSyncedUpdate), m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile,
 		m_pScreenEffect != nullptr, m_ScreenEffectHash, m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength,
 		m_EffectAlwaysShows, CheckpointEffectRotAngle(), m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
@@ -893,7 +895,10 @@ std::string MovableObject::SaveMovableObjectRuntime() const {
 
 bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "MovableObjectRuntime1", validateOnly);
+		// The registration serial joined the blob in version 2; a version 1 image still loads, and its
+		// objects draw a serial in registration order as they always did.
+		const bool carriesRegistrationSerial = CheckpointTypeName(text) == "MovableObjectRuntime2";
+		CheckpointReader archive(text, carriesRegistrationSerial ? "MovableObjectRuntime2" : "MovableObjectRuntime1", validateOnly);
 		std::string identity;
 		archive.Value(identity);
 		if (!Entity::LoadCheckpoint(identity, true)) return false;
@@ -905,6 +910,9 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 			m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
 			m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
 			m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+		if (carriesRegistrationSerial) {
+			archive(m_ScriptRegistrationSerial);
+		}
 		bool requested, hasEffect;
 		archive.Value(requested);
 		archive(m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile);
@@ -1202,8 +1210,14 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		return 0;
 	}
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
-	// The place this object takes in the registration order, drawn where the sim registers it.
-	m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+	// The place this object takes in the registration order: the image's when it carried one, so a
+	// restored peer keeps the writer's order, otherwise the next one this machine draws.
+	if (m_ScriptRegistrationSerial > 0) {
+		long counter = s_ScriptRegistrationSerial.load(std::memory_order_relaxed);
+		while (counter < m_ScriptRegistrationSerial && !s_ScriptRegistrationSerial.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
+	} else {
+		m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+	}
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);
 	if (m_ThreadedLuaState->RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; " + m_ScriptObjectName + " = To" + GetClassName() + "(LuaMan.TempEntity); ") < 0) {
