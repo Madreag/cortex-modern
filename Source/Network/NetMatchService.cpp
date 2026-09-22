@@ -1354,6 +1354,9 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
+			// session: the admission and silence windows are measured from the end of that work, not across it.
+			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			m_WorldCatchUp.tail.clear();
 			if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false, prepared = false; };
