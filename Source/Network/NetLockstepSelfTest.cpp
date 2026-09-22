@@ -1653,6 +1653,26 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestTheBudgetStartsAtTheHostsOwnStartup(std::string* error) {
+			LoopbackTransport wire, silentWire;
+			NetLockstepCoordinator host;
+			auto config = MakeCoordinatorConfig(1, 2, 0x9A7B, 0, NetTransportLane::ControlReliable);
+			config.roundId = 0x9A7B; config.simTickMs = 1000.0 / 60.0;
+			config.requirePublishedStart = true; config.timeoutMs = 40; config.remoteTransportPeerId = 1;
+			// A seat that is connected but has not published its startup: the budget must not judge it before
+			// this machine has measured its own.
+			if (!wire.StartHost(49485, error) || !silentWire.Connect("loopback", 49485, error) || !host.Start(wire, config, error)) return false;
+			// Many budgets pass while this machine has not measured its own startup: nothing may be agreed yet.
+			for (uint64_t now = 0; now < 600; now += 5) { wire.AdvanceTimeMs(5); host.Tick(now); }
+			if (host.GetAgreedStartRecord()) { *error = "the answer budget ran before the host published its own startup"; return false; }
+			host.NoteLocalStartPark(0);
+			for (uint64_t now = 600; now < 1400 && !host.GetAgreedStartRecord(); now += 5) { wire.AdvanceTimeMs(5); host.Tick(now); }
+			if (!host.GetAgreedStartRecord()) { *error = "the host never formed its boundary after publishing its startup"; return false; }
+			std::cout << "[net-lockstep-selftest] PASS the_budget_starts_at_the_hosts_own_startup first="
+			          << host.GetAgreedStartRecord()->agreedFirstFrame << std::endl;
+			return true;
+		}
+
 		bool TestARestampWithdrawsItsProposal(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -17585,7 +17605,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestFourPeerRoundRunsToLength(&error) ||
 		    !TestDeadLinkLosesOnlyItsOwnSeat(&error) ||
 		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error) ||
-		    !TestSoloRoundRunsWithoutRemotes(&error)) {
+		    !TestSoloRoundRunsWithoutRemotes(&error) ||
+		    !TestTheBudgetStartsAtTheHostsOwnStartup(&error)) {
 			return fail(error);
 		}
 
