@@ -4989,6 +4989,13 @@ namespace RTE {
 		QueueTiming(timing);
 		FlushTimingOutgoing();
 		ApplyTiming(timing);
+		// A hold the park deferred has not taken the seat, and the caller must not treat it as one: it would ask
+		// again on the next frame and spin on a decision that cannot land until the park closes.
+		if (std::any_of(m_DeferredParkTimings.begin(), m_DeferredParkTimings.end(),
+		        [&](const auto& deferred) { return deferred.revision == timing.revision; })) {
+			if (error) *error = "the capture park deferred this hold";
+			return false;
+		}
 		std::vector<uint64_t> pending;
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
@@ -5146,6 +5153,9 @@ namespace RTE {
 		}
 		m_Stats.holdNoticeBudgetMs = noticeMs;
 		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
+		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
+		if (m_CaptureParkAwaitingReports) return false;
 		// The commit horizon runs a delay window ahead of the simulation, so an idle horizon is what a full
 		// pipeline looks like: committed frames nobody has consumed yet are the round's runway. Judge a seat
 		// only once that runway can no longer carry the decision's notice - until then nothing is waiting.
