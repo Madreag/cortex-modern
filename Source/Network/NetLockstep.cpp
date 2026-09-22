@@ -6664,6 +6664,10 @@ namespace RTE {
 			return;
 		}
 		if (m_State != NetLockstepState::WaitingForStart && (m_State != NetLockstepState::Running || HasCommittedAFrame())) {
+			// A seat that rejoined past this boundary hears the host's record again when it republishes its start.
+			// The record names a frame the round is already past, so it is a retransmission to ignore rather than
+			// a boundary that contradicts anything this peer has committed.
+			if (start.agreedEffectiveStartFrame < m_Config.startFrame || start.agreedEffectiveStartFrame < m_Stats.nextFrame) return;
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "agreed start boundary arrived after the round started");
 			return;
 		}
