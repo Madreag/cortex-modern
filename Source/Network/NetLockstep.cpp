@@ -6593,7 +6593,10 @@ namespace RTE {
 
 	void NetLockstepCoordinator::ApplyCapturePark(const NetLockstepTiming& timing) {
 		if (timing.action != NetTimingAction::CapturePark || timing.applyFrame == UINT64_MAX || timing.nextFrame < timing.applyFrame) return;
-		if (timing.revision < m_CaptureParkRevision) return;
+		// A park is named by the frame it opens at, so the final commit for the park this peer is IN is never
+		// dropped for revision ordering: the next park's provisional may have arrived first, and without its
+		// final this one never releases.
+		if (timing.revision < m_CaptureParkRevision && timing.applyFrame != m_SynchronizedCaptureStartFrame) return;
 		// A park is named by the frame it opens at, so the next park's provisional opens a new window while a
 		// late provisional for the park we already closed stays stale.
 		const bool newPark = m_SynchronizedCaptureStartFrame == UINT64_MAX || timing.applyFrame != m_SynchronizedCaptureStartFrame;
