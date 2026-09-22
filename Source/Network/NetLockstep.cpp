@@ -6633,44 +6633,42 @@ namespace RTE {
 		m_ApplyingDeferredParkTiming = true;
 		auto deferred = std::move(m_DeferredParkTimings);
 		m_DeferredParkTimings.clear();
-		// One decision is deferred once per phase; every phase of it takes the SAME new revision or the commit
-		// would name a proposal no peer was ever sent.
-		std::map<uint64_t, uint64_t> restamped;
+		const bool host = m_Config.localPeerId == GetHostPeerId();
+		const bool parked = m_CaptureParkFinalized && m_SynchronizedCaptureStartFrame != UINT64_MAX;
+		std::set<uint64_t> reproposed;
 		for (auto timing: deferred) {
-			if (m_CaptureParkFinalized && m_SynchronizedCaptureStartFrame != UINT64_MAX &&
-			    timing.applyFrame <= m_SynchronizedCaptureEndFrame) {
-				const uint64_t oldApply = timing.applyFrame;
-				timing.applyFrame = m_SynchronizedCaptureEndFrame + 1;
-				if (timing.cutoffFrame == oldApply) timing.cutoffFrame = timing.applyFrame;
-				if (timing.action == NetTimingAction::Reclaim || timing.action == NetTimingAction::WorldAdmission)
-					timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, timing.applyFrame + timing.delayFrames);
-				if (m_Config.localPeerId == GetHostPeerId()) {
-					// A peer may already hold the proposal at its old frame, and a decision is identified by its
-					// revision: re-stamping in place would make the commit contradict what that peer stored. The
-					// re-stamp is a NEW proposal, and the old one is withdrawn everywhere by the rule below - a
-					// proposal the round has passed can never be applied, so every peer drops it identically.
-					const uint64_t superseded = timing.revision;
-					const auto already = restamped.find(superseded);
-					if (already != restamped.end()) {
-						timing.revision = already->second;
-						timing.supersededRevision = superseded;
-						QueueTiming(timing);
-					} else {
-						if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
-						timing.revision = m_NextTimingRevision++;
-						timing.supersededRevision = superseded;
-						restamped[superseded] = timing.revision;
-						const auto found = m_TimingDecisions.find(superseded);
-						const bool committed = found != m_TimingDecisions.end() && found->second.committed;
-						const uint8_t acknowledged = found != m_TimingDecisions.end() ? found->second.acknowledgedPeers : 0;
-						m_TimingDecisions.erase(superseded);
-						m_TimingDecisions[timing.revision] = {timing, acknowledged, committed, m_TimingNowMs};
-						QueueTiming(timing);
-					}
-				}
+			if (!parked || timing.applyFrame > m_SynchronizedCaptureEndFrame) {
+				ApplyTiming(timing);
+				continue;
 			}
-			ApplyTiming(timing);
+			// A client never re-authors a boundary: the host withdraws the old revision and sends a fresh
+			// proposal and commit, and the client applies that pair like any other.
+			if (!host) continue;
+			// One decision, one re-proposal, whichever of its phases the park happened to retain.
+			if (!reproposed.insert(timing.revision).second) continue;
+			NetLockstepTiming proposal = timing;
+			const auto retained = m_TimingDecisions.find(timing.revision);
+			if (retained != m_TimingDecisions.end()) proposal = retained->second.proposal;
+			else if (timing.phase == NetTimingPhase::Commit) continue;
+			if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
+			const uint64_t superseded = proposal.revision;
+			const uint64_t oldApply = proposal.applyFrame;
+			proposal.applyFrame = m_SynchronizedCaptureEndFrame + 1;
+			if (proposal.cutoffFrame == oldApply) proposal.cutoffFrame = proposal.applyFrame;
+			if (proposal.action == NetTimingAction::Reclaim || proposal.action == NetTimingAction::WorldAdmission)
+				proposal.neutralThroughFrame = std::max(proposal.neutralThroughFrame, proposal.applyFrame + proposal.delayFrames);
+			proposal.revision = m_NextTimingRevision++;
+			proposal.supersededRevision = superseded;
+			m_TimingDecisions.erase(superseded);
+			// A phase that carries its own authority lands at once; a proposal waits for the acknowledgement it
+			// asks for and only then commits, so no peer ever sees a commit whose proposal it never had.
+			const bool authored = proposal.phase == NetTimingPhase::HoldAtFrame || proposal.phase == NetTimingPhase::ReclaimAtFrame;
+			m_TimingDecisions[proposal.revision] = {proposal,
+			    authored ? proposal.requiredPeers : static_cast<uint8_t>(1U << (GetHostPeerId() - 1)), authored, m_TimingNowMs};
+			QueueTiming(proposal);
+			if (authored) ApplyTiming(proposal);
 		}
+		FlushTimingOutgoing();
 		m_ApplyingDeferredParkTiming = false;
 	}
 
