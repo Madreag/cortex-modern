@@ -130,10 +130,11 @@ namespace RTE {
 	}
 
 	SimChecksum::Hash SimChecksum::SimGatedHash(const Result& result) {
-		// Combine name || hash in sorted name order, skipping the off-wire controller subsystem.
+		// Combine name || hash in sorted name order, skipping the off-wire controller subsystems: the input a
+		// seat applies and which seat drives an actor on THIS machine are both outside the gated set.
 		std::map<std::string, const Hash*> sorted;
 		for (const auto& [name, hash]: result.per_subsystem) {
-			if (name != "controller") {
+			if (name != "controller" && name != "controller_route") {
 				sorted.emplace(name, &hash);
 			}
 		}
