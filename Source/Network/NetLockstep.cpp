@@ -4261,7 +4261,6 @@ namespace RTE {
 		m_CaptureParkDeadlineMs = 0;
 		m_CaptureParkPublishedEndFrame = UINT64_MAX;
 		m_HighestParkEndFrame = 0;
-		m_ParkSuppressedRevisions.clear();
 		m_PendingCaptureReportMs = 0;
 		m_CaptureParkReportsMs.clear();
 		m_DeferredParkTimings.clear();
@@ -4827,13 +4826,8 @@ namespace RTE {
 		// The host does not expose a timing boundary while a capture park is still waiting for its
 		// final end.  Sending the old apply frame first would let a capture-less peer apply it before
 		// it learns the shared park.
-		if (m_Config.localPeerId == GetHostPeerId() && timing.action != NetTimingAction::CapturePark &&
-		    timing.phase != NetTimingPhase::Status) {
-			// A boundary the park withheld must stay withheld in every phase: sending its commit once the park
-			// closed would reach a peer that never saw the proposal.
-			if (m_CaptureParkAwaitingReports) { m_ParkSuppressedRevisions.insert(timing.revision); return; }
-			if (m_ParkSuppressedRevisions.contains(timing.revision)) return;
-		}
+		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports &&
+		    timing.action != NetTimingAction::CapturePark && timing.phase != NetTimingPhase::Status) return;
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (onlyPeer != 0 && peer != onlyPeer) continue;
 			auto& queue = m_TimingOutgoing[peer];
@@ -6632,7 +6626,6 @@ namespace RTE {
 					timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, timing.applyFrame + timing.delayFrames);
 				if (m_Config.localPeerId == GetHostPeerId()) {
 					if (auto found = m_TimingDecisions.find(timing.revision); found != m_TimingDecisions.end()) found->second.proposal = timing;
-					m_ParkSuppressedRevisions.erase(timing.revision);
 					QueueTiming(timing);
 				}
 			}
