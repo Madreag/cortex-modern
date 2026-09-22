@@ -6910,6 +6910,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
 	const bool luaStateAssignment = g_MovableMan.RunLuaStateAssignmentSelfTest();
 	const bool luaStateRestoreBoundary = g_MovableMan.RunLuaStateRestoreBoundarySelfTest();
+	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
 	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
 	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
 	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
@@ -6948,7 +6949,7 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
