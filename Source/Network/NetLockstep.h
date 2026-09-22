@@ -1027,6 +1027,7 @@ namespace RTE {
 
 		static const char* StateName(NetLockstepState state);
 
+		friend bool TestDelayPaddingPassesAParkedFrame(std::string* error);
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
