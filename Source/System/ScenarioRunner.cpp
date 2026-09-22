@@ -2674,7 +2674,8 @@ namespace RTE {
 			return true;
 		}
 		const auto pending = [] {
-			return (s_LockstepCoordinator && s_LockstepCoordinator->HasPendingRelayWork()) || (s_PendingSessionTail && s_PendingSessionTail());
+			return (s_LockstepCoordinator && (s_LockstepCoordinator->HasPendingRelayWork() || s_LockstepCoordinator->HasPeerBehindOurHorizon())) ||
+			    (s_PendingSessionTail && s_PendingSessionTail());
 		};
 		const auto pump = [] {
 			if (s_LockstepCoordinator) s_LockstepCoordinator->Tick(NetLockstepNowMs());
