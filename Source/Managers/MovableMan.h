@@ -150,6 +150,10 @@ namespace RTE {
 		/// image named - the one its saved script graph, and every live peer, has it on.
 		bool RunLuaStateRestoreBoundarySelfTest();
 
+		/// An object keeps its scripts through a new identity, a restore leaves no two objects sharing
+		/// one, the walk's key tells a shared identity apart, and a freed entry never stops the pass.
+		bool RunLuaStateIdentitySelfTest();
+
 		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
 		/// installing an empty one. Leaves the live record as it found it.
 		bool RunLegacyBrainRecordSelfTest(const Actor* seatBrain);

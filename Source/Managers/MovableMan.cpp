@@ -325,14 +325,17 @@ struct SyncedUpdateEntry {
 	MovableObject* object = nullptr;
 	long uniqueID = 0;
 	MOID moid = g_NoMOID;
+	long registrationSerial = 0;
 };
 
 // The snapshot order: unique ID, then MOID for the pair that shares one (a faithful clone copies the
-// source's ID, and a restore adopts a persisted one). Both come from the sim, so neither depends on how
-// many Lua states the peer runs; the state-vector position the heap would otherwise fall back on does.
+// source's ID), then the place each took in the registration order, which settles the pair the MOID
+// index never saw. All three come from the sim, so none depends on how many Lua states the peer runs;
+// the state-vector position the heap would otherwise fall back on does.
 static bool SyncedUpdateEntryEarlier(const SyncedUpdateEntry& lhs, const SyncedUpdateEntry& rhs) {
 	if (lhs.uniqueID != rhs.uniqueID) return lhs.uniqueID < rhs.uniqueID;
-	return lhs.moid < rhs.moid;
+	if (lhs.moid != rhs.moid) return lhs.moid < rhs.moid;
+	return lhs.registrationSerial < rhs.registrationSerial;
 }
 
 // A Lua state's registered-MO set copied into canonical order with each object's identity read once.
@@ -341,7 +344,7 @@ static std::vector<SyncedUpdateEntry> SnapshotRegisteredMOs(const LuaStateWrappe
 	std::vector<SyncedUpdateEntry> snapshot;
 	snapshot.reserve(registered.size());
 	for (MovableObject* mo: registered) {
-		snapshot.push_back({mo, mo->GetUniqueID(), mo->GetID()});
+		snapshot.push_back({mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()});
 	}
 	std::sort(snapshot.begin(), snapshot.end(), SyncedUpdateEntryEarlier);
 	return snapshot;
@@ -5237,6 +5240,286 @@ bool MovableMan::RunLuaStateRestoreBoundarySelfTest() {
 	          << (restoreGreen ? "" : " (the restore moved the object away from the state its saved script graph is in)")
 	          << std::endl;
 	return passed;
+}
+
+bool MovableMan::RunLuaStateIdentitySelfTest() {
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL create_keeps_a_live_scripted_object_running no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL create_keeps_a_live_scripted_object_running live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+	states.swap(replacement);
+	for (LuaStateWrapper& state: states) {
+		state.Initialize();
+		InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+	}
+	ThreadedSyncedUpdateSelfTestContext context;
+	s_ThreadedSyncedUpdateSelfTestContext = &context;
+
+	const auto add = [this, &fixturePath](long counterBefore) {
+		MovableObject::PinUniqueIDCounter(counterBefore);
+		auto object = std::make_unique<MOPixel>();
+		if (object->Create() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		m_ValidParticles.insert(object.get());
+		m_AddedParticles.push_back(object.get());
+		if (object->LoadScript(fixturePath, true) != 0 || object->AdoptScriptObject() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		return object;
+	};
+	const auto drop = [this](std::unique_ptr<MOPixel>& object) {
+		if (!object) {
+			return;
+		}
+		m_ValidParticles.erase(object.get());
+		std::erase(m_AddedParticles, object.get());
+		object->DestroyScriptState();
+		object.reset();
+	};
+	const auto promote = [&states] {
+		for (LuaStateWrapper& state: states) state.Update();
+	};
+	const auto ran = [&context](long uniqueID) {
+		return static_cast<int>(std::count(context.order.begin(), context.order.end(), uniqueID));
+	};
+	// A field of the mod's own table, written and read where a script would see it.
+	const auto writeCharge = [](LuaStateWrapper* state, long uniqueID, int value) {
+		if (state) state->RunScriptString("_ScriptedObjects[\"" + std::to_string(uniqueID) + "\"].charge = " + std::to_string(value));
+	};
+	const auto readCharge = [](LuaStateWrapper* state, long uniqueID) {
+		double value = -1.0;
+		if (!state) return value;
+		const std::string key = "_ScriptedObjects[\"" + std::to_string(uniqueID) + "\"]";
+		state->RunScriptString("_IdentityRowCharge = " + key + " and " + key + ".charge or -1");
+		std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+		lua_State* luaState = state->GetLuaState();
+		lua_getglobal(luaState, "_IdentityRowCharge");
+		value = lua_tonumber(luaState, -1);
+		lua_pop(luaState, 1);
+		state->RunScriptString("_IdentityRowCharge = nil");
+		return value;
+	};
+
+	bool ready = true;
+
+	// A Create on a live scripted object draws it a new identity. Its hooks find self under that
+	// identity, so the script object has to come along or the object silently stops running.
+	long createBefore = 0;
+	long createAfter = 0;
+	int createRanBefore = 0;
+	int createRanAfter = 0;
+	int createRanUnderTheOldID = 0;
+	double createCharge = -1.0;
+	{
+		auto object = add(savedCounter + 256);
+		ready = object != nullptr;
+		if (ready) {
+			promote();
+			createBefore = object->GetUniqueID();
+			writeCharge(object->GetLuaState(), createBefore, 7);
+			context.order.clear();
+			object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			createRanBefore = ran(createBefore);
+			ready = object->Create() >= 0;
+			createAfter = object->GetUniqueID();
+			promote();
+			context.order.clear();
+			object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			createRanAfter = ran(createAfter);
+			createRanUnderTheOldID = ran(createBefore);
+			createCharge = readCharge(object->GetLuaState(), createAfter);
+		}
+		drop(object);
+	}
+
+	// A restore adopts the identity its image carries. A live object already holding it drew that ID
+	// from the counter, so the holder is the one that moves - and two live objects never share an ID.
+	long holderBefore = 0;
+	long holderAfter = 0;
+	long adoptedID = 0;
+	int liveHoldersOfTheAdoptedID = 0;
+	int adoptedIDNamesTheRestored = 0;
+	double holderCharge = -1.0;
+	{
+		auto holder = add(savedCounter + 512);
+		auto restored = add(savedCounter + 600);
+		ready = ready && holder != nullptr && restored != nullptr;
+		if (ready) {
+			promote();
+			holderBefore = holder->GetUniqueID();
+			writeCharge(holder->GetLuaState(), holderBefore, 9);
+			restored->StageRestoredIdentity(holderBefore, -1);
+			restored->AdoptPersistedUniqueID();
+			adoptedID = restored->GetUniqueID();
+			holderAfter = holder->GetUniqueID();
+			liveHoldersOfTheAdoptedID = 1 + (holderAfter == adoptedID ? 1 : 0);
+			adoptedIDNamesTheRestored = FindObjectByUniqueID(adoptedID) == restored.get() ? 1 : 0;
+			holderCharge = readCharge(holder->GetLuaState(), holderAfter);
+		}
+		drop(restored);
+		drop(holder);
+	}
+
+	// Two live registered objects can still share one unique ID and no MOID - a faithful clone copies
+	// its source's ID and registers with nobody - so the walk's key has to tell them apart itself.
+	long tieSharedID = 0;
+	long tieSerials[2] = {0, 0};
+	int tieKeyIsTotal = 0;
+	int tieEarlierRegistrationIsFirst = 0;
+	{
+		// One state holds both: the assignment is the unique ID modulo the count, so IDs a count apart
+		// land together.
+		const long firstID = savedCounter + 1024;
+		auto first = add(firstID - 1);
+		auto twin = add(firstID + c_LuaStateCount - 1);
+		ready = ready && first != nullptr && twin != nullptr;
+		if (ready) {
+			promote();
+			tieSharedID = first->GetUniqueID();
+			{
+				MovableObject::FaithfulCloneScope faithful(false);
+				twin->StageRestoredIdentity(tieSharedID, -1);
+				twin->AdoptPersistedUniqueID();
+			}
+			tieSerials[0] = first->GetScriptRegistrationSerial();
+			tieSerials[1] = twin->GetScriptRegistrationSerial();
+			const SyncedUpdateEntry earlierEntry{first.get(), tieSharedID, first->GetID(), tieSerials[0]};
+			const SyncedUpdateEntry laterEntry{twin.get(), twin->GetUniqueID(), twin->GetID(), tieSerials[1]};
+			tieKeyIsTotal = SyncedUpdateEntryEarlier(earlierEntry, laterEntry) && !SyncedUpdateEntryEarlier(laterEntry, earlierEntry) ? 1 : 0;
+			LuaStateWrapper* sharedState = first->GetLuaState();
+			if (sharedState == twin->GetLuaState()) {
+				const std::vector<SyncedUpdateEntry> snapshot = SnapshotRegisteredMOs(*sharedState);
+				for (const SyncedUpdateEntry& entry: snapshot) {
+					if (entry.object == first.get() || entry.object == twin.get()) {
+						tieEarlierRegistrationIsFirst = entry.object == first.get() ? 1 : 0;
+						break;
+					}
+				}
+			}
+		}
+		drop(twin);
+		drop(first);
+	}
+
+	// ENGINE 335: the pass reads the request flag through the entry's pointer. A script in the same
+	// pass frees another object synchronously (LuaAdapters.cpp DeleteEntity), so the entry a later pop
+	// reaches - and the entry an earlier pop already read - must both be safe.
+	long laterVictimID = 0;
+	long earlierVictimID = 0;
+	int laterVictimSkipped = 0;
+	int earlierVictimRan = 0;
+	int passesCompleted = 0;
+	int poisonOverAFreedEntry[2] = {0, 0};
+	{
+		auto runner = add(savedCounter + 2048);
+		auto laterVictim = add(savedCounter + 2176);
+		ready = ready && runner != nullptr && laterVictim != nullptr;
+		if (ready) {
+			promote();
+			laterVictimID = laterVictim->GetUniqueID();
+			// The runner's ID is the lower one, so the merge reaches the victim after the script freed it.
+			void* poison = nullptr;
+			void* victimAddress = laterVictim.get();
+			context.order.clear();
+			runner->RequestSyncedUpdate();
+			context.retire = [this, &laterVictim, &poison] {
+				m_ValidParticles.erase(laterVictim.get());
+				std::erase(m_AddedParticles, laterVictim.get());
+				laterVictim.reset();
+				// A block of the same size over the freed one, in a value no flag survives, so a stale
+				// read of the request flag faults instead of looking alive.
+				poison = ::operator new(sizeof(MOPixel));
+				std::memset(poison, 0xDD, sizeof(MOPixel));
+			};
+			RunThreadedSyncedUpdatePass(true);
+			context.retire = nullptr;
+			laterVictimSkipped = static_cast<int>(GetSyncedPassSkippedDeadEntries());
+			poisonOverAFreedEntry[0] = poison == victimAddress ? 1 : 0;
+			++passesCompleted;
+			if (poison) ::operator delete(poison);
+
+			// And the other way: the entry the merge popped and read before a later script freed it.
+			auto earlierVictim = add(savedCounter + 1920);
+			ready = earlierVictim != nullptr;
+			if (ready) {
+				promote();
+				earlierVictimID = earlierVictim->GetUniqueID();
+				poison = nullptr;
+				victimAddress = earlierVictim.get();
+				context.order.clear();
+				runner->RequestSyncedUpdate();
+				context.retire = [this, &earlierVictim, &poison] {
+					m_ValidParticles.erase(earlierVictim.get());
+					std::erase(m_AddedParticles, earlierVictim.get());
+					earlierVictim.reset();
+					poison = ::operator new(sizeof(MOPixel));
+					std::memset(poison, 0xDD, sizeof(MOPixel));
+				};
+				RunThreadedSyncedUpdatePass(true);
+				context.retire = nullptr;
+				earlierVictimRan = ran(earlierVictimID);
+				poisonOverAFreedEntry[1] = poison == victimAddress ? 1 : 0;
+				++passesCompleted;
+				if (poison) ::operator delete(poison);
+			}
+			drop(earlierVictim);
+		}
+		drop(laterVictim);
+		drop(runner);
+	}
+
+	s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+	states.swap(replacement);
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+
+	const bool createGreen = ready && createBefore > 0 && createAfter > 0 && createAfter != createBefore &&
+	                         createRanBefore == 1 && createRanAfter == 1 && createRanUnderTheOldID == 0 && createCharge == 7.0;
+	const bool adoptGreen = ready && adoptedID == holderBefore && holderAfter != adoptedID && liveHoldersOfTheAdoptedID == 1 &&
+	                        adoptedIDNamesTheRestored == 1 && holderCharge == 9.0;
+	const bool tieGreen = ready && tieSharedID > 0 && tieSerials[0] > 0 && tieSerials[1] > tieSerials[0] &&
+	                      tieKeyIsTotal == 1 && tieEarlierRegistrationIsFirst == 1;
+	const bool freedGreen = ready && passesCompleted == 2 && laterVictimSkipped == 1 && earlierVictimRan == 0;
+
+	std::cout << "[script-graph-selftest] " << (createGreen ? "PASS" : "FAIL")
+	          << " create_keeps_a_live_scripted_object_running states=" << c_LuaStateCount
+	          << " id_before=" << createBefore << " id_after=" << createAfter
+	          << " ran_before=" << createRanBefore << " ran_after=" << createRanAfter
+	          << " ran_under_the_old_id=" << createRanUnderTheOldID << " charge=" << createCharge
+	          << (createGreen ? "" : " (Create drew a new identity and the object's scripts stopped running)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (adoptGreen ? "PASS" : "FAIL")
+	          << " restore_gives_an_adopted_unique_id_to_one_object_only states=" << c_LuaStateCount
+	          << " adopted=" << adoptedID << " holder_before=" << holderBefore << " holder_after=" << holderAfter
+	          << " live_holders=" << liveHoldersOfTheAdoptedID << " adopted_id_names_the_restored=" << adoptedIDNamesTheRestored
+	          << " holder_charge=" << holderCharge
+	          << (adoptGreen ? "" : " (the restore left two live objects sharing one unique ID)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (tieGreen ? "PASS" : "FAIL")
+	          << " synced_pass_orders_a_shared_identity_by_registration states=" << c_LuaStateCount
+	          << " shared_id=" << tieSharedID << " serials=" << tieSerials[0] << "," << tieSerials[1]
+	          << " key_is_total=" << tieKeyIsTotal << " earlier_registration_first=" << tieEarlierRegistrationIsFirst
+	          << (tieGreen ? "" : " (two objects sharing a unique ID and a MOID are ordered by the set, not by the key)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (freedGreen ? "PASS" : "FAIL")
+	          << " synced_pass_survives_a_script_freeing_either_side states=" << c_LuaStateCount
+	          << " passes=" << passesCompleted << " later_victim=" << laterVictimID << " later_skipped=" << laterVictimSkipped
+	          << " earlier_victim=" << earlierVictimID << " earlier_ran=" << earlierVictimRan
+	          << " poison_over_the_freed_block=" << poisonOverAFreedEntry[0] << "," << poisonOverAFreedEntry[1]
+	          << (freedGreen ? "" : " (the pass did not finish after a script freed an entry it holds)") << std::endl;
+
+	return createGreen && adoptGreen && tieGreen && freedGreen;
 }
 
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
