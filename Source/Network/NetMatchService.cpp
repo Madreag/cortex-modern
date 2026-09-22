@@ -1357,7 +1357,7 @@ static std::string ResyncSaveName() {
 			}
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
-			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs);
+			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
 			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			m_WorldCatchUp.tail.clear();
 			if (committed) {
@@ -3666,7 +3666,7 @@ static std::string ResyncSaveName() {
 			// The tail replayed on this thread; the session read nothing while it ran, so neither the silence
 			// windows nor the admission deadlines count it.
 			m_AdmissionClock.NotePark(static_cast<uint64_t>(std::max(0.0,
-			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())));
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())), SteadyNowMs());
 			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			std::cout << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
