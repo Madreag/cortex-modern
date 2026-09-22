@@ -255,6 +255,8 @@ struct ThreadedSyncedUpdateSelfTestContext {
 	// as the peer runs states. The count of tables is what F2 is about, so it is counted, never hashed.
 	long globalWrites = 0;
 	std::set<const void*> globalWriteStates;
+	// Whether the engine still knew the object a script asked about, at the moment that script ran.
+	int aliveHere = -1;
 };
 
 ThreadedSyncedUpdateSelfTestContext* s_ThreadedSyncedUpdateSelfTestContext = nullptr;
@@ -303,6 +305,26 @@ int RunThreadedSyncedUpdateSelfTestSpawn(lua_State* state) {
 	return 0;
 }
 
+// Deletes the object running this script through the engine's own script-facing deletion, from inside
+// that object's hook - what a mod's DeleteEntity(self) reaches.
+int RunThreadedSyncedUpdateSelfTestDeleteSelf(lua_State* state) {
+	const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+	if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uniqueID)) {
+		DeleteEntityFromScript(object);
+	}
+	return 0;
+}
+
+// Answers whether the engine still knows the object running this script: a hook that runs on a
+// destroyed object reads freed memory, which is what the self-delete row is about.
+int ReadThreadedSyncedUpdateSelfTestAlive(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext) {
+		const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+		s_ThreadedSyncedUpdateSelfTestContext->aliveHere = g_MovableMan.FindObjectByUniqueID(uniqueID) ? 1 : 0;
+	}
+	return 0;
+}
+
 void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
 	lua_State* luaState = state.GetLuaState();
@@ -316,6 +338,10 @@ void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateWitness");
 	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestSpawn);
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateSpawn");
+	lua_pushcfunction(luaState, ReadThreadedSyncedUpdateSelfTestAlive);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateAliveHere");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestDeleteSelf);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateDeleteSelf");
 }
 
 // A registered MO beside the identity the synced pass orders on, read once when the pass snapshots the
@@ -5482,6 +5508,52 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		drop(runner);
 	}
 
+	// A mod's hook deletes its own object through DeleteEntity, which frees where the script stands
+	// (LuaAdapters.cpp). The loop still holds that object's script list and runs its next script, so
+	// the object has to outlive the loop and go the moment the hook returns.
+	long selfDeleteID = 0;
+	int selfDeleteRan = 0;
+	int selfDeleteSecondScriptRan = 0;
+	int selfDeleteAliveInTheLoop = -1;
+	int selfDeleteStillRegistered = 1;
+	int selfDeleteStillKnown = 1;
+	{
+		const std::string deletePath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookSelfTest.lua");
+		const std::string witnessPath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookWitnessSelfTest.lua");
+		MovableObject::PinUniqueIDCounter(savedCounter + 2560);
+		auto object = std::make_unique<MOPixel>();
+		bool armed = object->Create() >= 0;
+		if (armed) {
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			armed = object->LoadScript(deletePath, true) == 0 && object->LoadScript(witnessPath, true) == 0 &&
+			        object->AdoptScriptObject() >= 0;
+		}
+		if (armed) {
+			promote();
+			selfDeleteID = object->GetUniqueID();
+			LuaStateWrapper* state = object->GetLuaState();
+			// The script owns the object from here: DeleteEntity is what frees it.
+			MovableObject* raw = object.release();
+			context.order.clear();
+			context.aliveHere = -1;
+			raw->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			selfDeleteRan = ran(selfDeleteID);
+			selfDeleteSecondScriptRan = ran(-selfDeleteID);
+			selfDeleteAliveInTheLoop = context.aliveHere;
+			// Both answers read the address only, never the object.
+			selfDeleteStillRegistered = state && state->IsRegisteredMO(raw) ? 1 : 0;
+			selfDeleteStillKnown = FindObjectByUniqueID(selfDeleteID) ? 1 : 0;
+			m_ValidParticles.erase(raw);
+			std::erase(m_AddedParticles, raw);
+			if (selfDeleteStillKnown) delete raw;
+		} else {
+			ready = false;
+			drop(object);
+		}
+	}
+
 	s_ThreadedSyncedUpdateSelfTestContext = nullptr;
 	states.swap(replacement);
 	states.swap(savedStates);
@@ -5494,6 +5566,8 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	const bool tieGreen = ready && tieSharedID > 0 && tieSerials[0] > 0 && tieSerials[1] > tieSerials[0] &&
 	                      tieKeyIsTotal == 1 && tieEarlierRegistrationIsFirst == 1;
 	const bool freedGreen = ready && passesCompleted == 2 && laterVictimSkipped == 1 && earlierVictimRan == 0;
+	const bool selfDeleteGreen = ready && selfDeleteID > 0 && selfDeleteRan == 1 && selfDeleteSecondScriptRan == 1 &&
+	                             selfDeleteAliveInTheLoop == 1 && selfDeleteStillRegistered == 0 && selfDeleteStillKnown == 0;
 
 	std::cout << "[script-graph-selftest] " << (createGreen ? "PASS" : "FAIL")
 	          << " create_keeps_a_live_scripted_object_running states=" << c_LuaStateCount
@@ -5518,8 +5592,14 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	          << " earlier_victim=" << earlierVictimID << " earlier_ran=" << earlierVictimRan
 	          << " poison_over_the_freed_block=" << poisonOverAFreedEntry[0] << "," << poisonOverAFreedEntry[1]
 	          << (freedGreen ? "" : " (the pass did not finish after a script freed an entry it holds)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (selfDeleteGreen ? "PASS" : "FAIL")
+	          << " hook_loop_survives_a_script_deleting_its_own_object states=" << c_LuaStateCount
+	          << " uid=" << selfDeleteID << " deleting_script_ran=" << selfDeleteRan
+	          << " second_script_ran=" << selfDeleteSecondScriptRan << " alive_in_the_loop=" << selfDeleteAliveInTheLoop
+	          << " still_registered_after=" << selfDeleteStillRegistered << " still_known_after=" << selfDeleteStillKnown
+	          << (selfDeleteGreen ? "" : " (the loop ran a script of an object the delete had already destroyed)") << std::endl;
 
-	return createGreen && adoptGreen && tieGreen && freedGreen;
+	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen;
 }
 
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
