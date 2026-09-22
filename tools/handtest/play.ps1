@@ -137,8 +137,8 @@ function Get-InstanceArgs([hashtable]$inst) {
         $argv.Add('-headed')
     }
     $argv.Add('-net-match-report'); $argv.Add('match-report.json')
+    $argv.Add('-net-reconnect-ticket'); $argv.Add('reconnect.ticket')
     if ($inst.Spec.Role -eq 'client') {
-        $argv.Add('-net-reconnect-ticket'); $argv.Add('reconnect.ticket')
         if ($FakeLagMs -gt 0) { $argv.Add('-net-fake-lag'); $argv.Add([string]$FakeLagMs) }
     } else {
         $argv.Add('-net-host-bans'); $argv.Add('host-bans.txt')
@@ -171,6 +171,9 @@ function Write-SelftestScript([hashtable]$inst, [int]$players) {
     if ($inst.Spec.Role -eq 'host') {
         $body = @"
 wait 60
+dump_reconnect
+goto_main
+wait 10
 activate ButtonMainToMultiplayer
 wait 15
 settext TextMultiplayerName Host
@@ -195,6 +198,9 @@ exit
     } else {
         $body = @"
 wait 60
+dump_reconnect
+goto_main
+wait 10
 activate ButtonMainToMultiplayer
 wait 15
 settext TextMultiplayerName $($inst.Spec.Name)
@@ -282,6 +288,12 @@ if ($Headless) {
         return @{ Inst = $inst; Proc = $proc; OutDir = $outDir }
     }
     foreach ($inst in $instances) {
+        # A prior run's session files (reconnect ticket, bans, last match report) change
+        # where the menu lands on entry; the self-check always starts from a clean lobby.
+        foreach ($stale in 'reconnect.ticket', 'Userdata\reconnect.ticket', 'host-bans.txt',
+                          'Userdata\host-bans.txt', 'match-report.json') {
+            Remove-Item (Join-Path $inst.Dir $stale) -Force -ErrorAction SilentlyContinue
+        }
         Write-SelftestScript $inst $players
         if ($inst.Spec.Role -eq 'host') { $runners += & $startOne $inst }
     }
