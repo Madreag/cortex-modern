@@ -315,6 +315,14 @@ int RunThreadedSyncedUpdateSelfTestDeleteSelf(lua_State* state) {
 	return 0;
 }
 
+// Frees the object running this script the way engine code does - a plain delete, not the script-facing
+// one - so the row can prove a hook loop survives a deletion that never waited for it.
+int RunThreadedSyncedUpdateSelfTestEngineDeleteSelf(lua_State* state) {
+	const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+	delete g_MovableMan.FindObjectByUniqueID(uniqueID);
+	return 0;
+}
+
 // Answers whether the engine still knows the object running this script: a hook that runs on a
 // destroyed object reads freed memory, which is what the self-delete row is about.
 int ReadThreadedSyncedUpdateSelfTestAlive(lua_State* state) {
@@ -342,6 +350,8 @@ void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateAliveHere");
 	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestDeleteSelf);
 	lua_setglobal(luaState, "_ThreadedSyncedUpdateDeleteSelf");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestEngineDeleteSelf);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateEngineDeleteSelf");
 }
 
 // A registered MO beside the identity the synced pass orders on, read once when the pass snapshots the
@@ -5400,8 +5410,8 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		drop(holder);
 	}
 
-	// Two live registered objects can still share one unique ID and no MOID - a faithful clone copies
-	// its source's ID and registers with nobody - so the walk's key has to tell them apart itself.
+	// Two live registered objects can still share one unique ID and no MOID - a private copy takes the
+	// identity it shadows and registers with nobody - so the walk's key has to tell them apart itself.
 	long tieSharedID = 0;
 	long tieSerials[2] = {0, 0};
 	int tieKeyIsTotal = 0;
@@ -5417,7 +5427,9 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 			promote();
 			tieSharedID = first->GetUniqueID();
 			{
+				// A private copy is not in the canonical map, so the staged one leaves it first.
 				MovableObject::FaithfulCloneScope faithful(false);
+				UnregisterObject(twin.get());
 				twin->StageRestoredIdentity(tieSharedID, -1);
 				twin->AdoptPersistedUniqueID();
 			}
@@ -5508,6 +5520,56 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		drop(runner);
 	}
 
+	// An image that carries two scripted copies of ONE identity - what a private overlay restores -
+	// read on two peers whose residents came up in opposite order. The pair stays live on one identity
+	// by design, and the walk orders it on the registration serial, which is a per-process fact: the
+	// row records both arms' answers, so the cross-peer half of that is visible in its own numbers.
+	long tieRestoreIDs[2][2] = {{0, 0}, {0, 0}};
+	long tieRestoreSerials[2][2] = {{0, 0}, {0, 0}};
+	int tieRestoreFirstIsEarlier[2] = {-1, -1};
+	int tieRestoreDuplicate[2] = {1, 1};
+	for (size_t arm = 0; arm < 2 && ready; ++arm) {
+		const long firstOwnID = savedCounter + 3072;
+		const long secondOwnID = firstOwnID + c_LuaStateCount;
+		const long imageID = savedCounter + 3008;
+		// The only difference between the arms is which resident registered first.
+		std::unique_ptr<MOPixel> first;
+		std::unique_ptr<MOPixel> second;
+		if (arm == 0) {
+			first = add(firstOwnID - 1);
+			second = add(secondOwnID - 1);
+		} else {
+			second = add(secondOwnID - 1);
+			first = add(firstOwnID - 1);
+		}
+		ready = first != nullptr && second != nullptr;
+		if (ready) {
+			promote();
+			tieRestoreSerials[arm][0] = first->GetScriptRegistrationSerial();
+			tieRestoreSerials[arm][1] = second->GetScriptRegistrationSerial();
+			// The image is read in its own order on every peer, from the same pinned counter.
+			MovableObject::PinUniqueIDCounter(savedCounter + 3500);
+			{
+				// Both are private copies of one identity: neither is in the canonical map.
+				MovableObject::FaithfulCloneScope faithful(false);
+				UnregisterObject(first.get());
+				UnregisterObject(second.get());
+				first->StageRestoredIdentity(imageID, -1);
+				first->AdoptPersistedUniqueID();
+				second->StageRestoredIdentity(imageID, -1);
+				second->AdoptPersistedUniqueID();
+			}
+			tieRestoreIDs[arm][0] = first->GetUniqueID();
+			tieRestoreIDs[arm][1] = second->GetUniqueID();
+			tieRestoreDuplicate[arm] = tieRestoreIDs[arm][0] == tieRestoreIDs[arm][1] ? 1 : 0;
+			const SyncedUpdateEntry firstEntry{first.get(), first->GetUniqueID(), first->GetID(), tieRestoreSerials[arm][0]};
+			const SyncedUpdateEntry secondEntry{second.get(), second->GetUniqueID(), second->GetID(), tieRestoreSerials[arm][1]};
+			tieRestoreFirstIsEarlier[arm] = SyncedUpdateEntryEarlier(firstEntry, secondEntry) ? 1 : 0;
+		}
+		drop(second);
+		drop(first);
+	}
+
 	// A mod's hook deletes its own object through DeleteEntity, which frees where the script stands
 	// (LuaAdapters.cpp). The loop still holds that object's script list and runs its next script, so
 	// the object has to outlive the loop and go the moment the hook returns.
@@ -5554,6 +5616,47 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		}
 	}
 
+	// The same hook, freed by an engine path that never waited for it: the loop must end there and
+	// nothing may read the object afterwards - the scope included.
+	long engineDeleteID = 0;
+	int engineDeleteRan = 0;
+	int engineDeleteSecondScriptRan = 0;
+	int engineDeleteStillKnown = 1;
+	uint64_t engineDeleteLoopsEnded = 0;
+	{
+		const std::string deletePath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/EngineDeleteHookSelfTest.lua");
+		const std::string witnessPath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookWitnessSelfTest.lua");
+		MovableObject::PinUniqueIDCounter(savedCounter + 2816);
+		auto object = std::make_unique<MOPixel>();
+		bool armed = object->Create() >= 0;
+		if (armed) {
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			armed = object->LoadScript(deletePath, true) == 0 && object->LoadScript(witnessPath, true) == 0 &&
+			        object->AdoptScriptObject() >= 0;
+		}
+		if (armed) {
+			promote();
+			engineDeleteID = object->GetUniqueID();
+			const uint64_t loopsEndedBefore = MovableObject::HookLoopsEndedOnADestroyedObject();
+			MovableObject* raw = object.release();
+			context.order.clear();
+			context.aliveHere = -1;
+			raw->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			engineDeleteRan = ran(engineDeleteID);
+			engineDeleteSecondScriptRan = ran(-engineDeleteID);
+			engineDeleteStillKnown = FindObjectByUniqueID(engineDeleteID) ? 1 : 0;
+			engineDeleteLoopsEnded = MovableObject::HookLoopsEndedOnADestroyedObject() - loopsEndedBefore;
+			m_ValidParticles.erase(raw);
+			std::erase(m_AddedParticles, raw);
+			if (engineDeleteStillKnown) delete raw;
+		} else {
+			ready = false;
+			drop(object);
+		}
+	}
+
 	s_ThreadedSyncedUpdateSelfTestContext = nullptr;
 	states.swap(replacement);
 	states.swap(savedStates);
@@ -5568,6 +5671,15 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	const bool freedGreen = ready && passesCompleted == 2 && laterVictimSkipped == 1 && earlierVictimRan == 0;
 	const bool selfDeleteGreen = ready && selfDeleteID > 0 && selfDeleteRan == 1 && selfDeleteSecondScriptRan == 1 &&
 	                             selfDeleteAliveInTheLoop == 1 && selfDeleteStillRegistered == 0 && selfDeleteStillKnown == 0;
+	// What the engine guarantees here: the copies keep the identity they shadow, and each peer walks
+	// them in its own registration order. Whether the two peers AGREE is the serial's open half - the
+	// row prints both answers rather than asserting one.
+	const bool tieRestoreGreen = ready && tieRestoreDuplicate[0] == 1 && tieRestoreDuplicate[1] == 1 &&
+	                             tieRestoreIDs[0][0] == tieRestoreIDs[1][0] && tieRestoreIDs[0][1] == tieRestoreIDs[1][1] &&
+	                             tieRestoreFirstIsEarlier[0] == (tieRestoreSerials[0][0] < tieRestoreSerials[0][1] ? 1 : 0) &&
+	                             tieRestoreFirstIsEarlier[1] == (tieRestoreSerials[1][0] < tieRestoreSerials[1][1] ? 1 : 0);
+	const bool engineDeleteGreen = ready && engineDeleteID > 0 && engineDeleteRan == 1 && engineDeleteSecondScriptRan == 0 &&
+	                               engineDeleteStillKnown == 0 && engineDeleteLoopsEnded == 1;
 
 	std::cout << "[script-graph-selftest] " << (createGreen ? "PASS" : "FAIL")
 	          << " create_keeps_a_live_scripted_object_running states=" << c_LuaStateCount
@@ -5598,8 +5710,24 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	          << " second_script_ran=" << selfDeleteSecondScriptRan << " alive_in_the_loop=" << selfDeleteAliveInTheLoop
 	          << " still_registered_after=" << selfDeleteStillRegistered << " still_known_after=" << selfDeleteStillKnown
 	          << (selfDeleteGreen ? "" : " (the loop ran a script of an object the delete had already destroyed)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (tieRestoreGreen ? "PASS" : "FAIL")
+	          << " a_restored_shadow_pair_walks_in_registration_order states=" << c_LuaStateCount
+	          << " ids_first_registered=" << tieRestoreIDs[0][0] << "," << tieRestoreIDs[0][1]
+	          << " ids_second_registered=" << tieRestoreIDs[1][0] << "," << tieRestoreIDs[1][1]
+	          << " serials=" << tieRestoreSerials[0][0] << "," << tieRestoreSerials[0][1] << ";"
+	          << tieRestoreSerials[1][0] << "," << tieRestoreSerials[1][1]
+	          << " pair_on_one_identity=" << tieRestoreDuplicate[0] << "," << tieRestoreDuplicate[1]
+	          << " first_walks_earlier=" << tieRestoreFirstIsEarlier[0] << "," << tieRestoreFirstIsEarlier[1]
+	          << " peers_agree=" << (tieRestoreFirstIsEarlier[0] == tieRestoreFirstIsEarlier[1] ? 1 : 0)
+	          << (tieRestoreGreen ? "" : " (a shadowed identity's pair did not walk in the peer's own registration order)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (engineDeleteGreen ? "PASS" : "FAIL")
+	          << " hook_loop_survives_an_engine_delete_of_its_object states=" << c_LuaStateCount
+	          << " uid=" << engineDeleteID << " deleting_script_ran=" << engineDeleteRan
+	          << " second_script_ran=" << engineDeleteSecondScriptRan << " still_known_after=" << engineDeleteStillKnown
+	          << " loops_ended_on_a_destroyed_object=" << engineDeleteLoopsEnded
+	          << (engineDeleteGreen ? "" : " (the loop ran on after an engine path freed its object, and its scope wrote through it)") << std::endl;
 
-	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen;
+	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen && tieRestoreGreen && engineDeleteGreen;
 }
 
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
