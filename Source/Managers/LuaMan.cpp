@@ -8760,6 +8760,10 @@ LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 }
 
 size_t LuaMan::ScriptStateIndexForObject(long uniqueID) const {
+	// Lua debugging runs with no threaded states at all; every object script is the master's then.
+	if (m_ScriptStates.empty()) {
+		return 0;
+	}
 	return static_cast<size_t>(static_cast<unsigned long long>(uniqueID) % m_ScriptStates.size());
 }
 
