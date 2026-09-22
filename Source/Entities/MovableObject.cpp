@@ -501,25 +501,30 @@ void MovableObject::AdoptPersistedUniqueID() {
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	m_PersistedMOIgnoreTimerAnchor.Apply(m_MOIgnoreTimer);
-	// The state follows the unique ID this object ends up with, so it is settled after the adoption. The
-	// saved index is read and ignored: it recorded where the writing machine's cursor happened to stand.
-	const auto moveScriptsToTheStateTheUniqueIDNames = [this] {
-		const bool saveNamedAState = m_PersistedLuaStateIndex >= 0;
-		m_PersistedLuaStateIndex = -1;
-		// A running script object lives in its state's VM and is rekeyed there, never moved: the ID names
-		// the state the next load takes, which is every object a restore rebuilds.
-		if (m_ForceIntoMasterLuaState || ObjectScriptsInitialized() || (!saveNamedAState && !m_ThreadedLuaState)) {
+	// The state is settled after the adoption, because both answers depend on the ID this object ends up
+	// with. The image's own index wins when it has one: the saved script graph is restored into that state
+	// (MovableMan::RestoreScriptGraphs), so the object and its own _ScriptedObjects table land together,
+	// and that index is where every live peer has the object - the fresh-start assignment put it there.
+	const auto moveScriptsToTheStateTheImageNames = [this] {
+		const int savedIndex = std::exchange(m_PersistedLuaStateIndex, -1);
+		// A running script object lives in its state's VM and is rekeyed there, never moved.
+		if (m_ForceIntoMasterLuaState || ObjectScriptsInitialized()) {
 			return;
 		}
-		MoveScriptsToState(g_LuaMan.GetScriptStateForObject(m_UniqueID));
+		if (savedIndex >= 0) {
+			MoveScriptsToState(g_LuaMan.GetStateByIndex(savedIndex));
+		} else if (m_ThreadedLuaState) {
+			// No index in the image: the ID names the state, which is what a fresh object gets.
+			MoveScriptsToState(g_LuaMan.GetScriptStateForObject(m_UniqueID));
+		}
 	};
 	if (m_PersistedUniqueID <= 0) {
-		moveScriptsToTheStateTheUniqueIDNames();
+		moveScriptsToTheStateTheImageNames();
 		return;
 	}
 	if (IsFaithfulClone() && !FaithfulCloneRegisters()) {
 		m_UniqueID = std::exchange(m_PersistedUniqueID, 0);
-		moveScriptsToTheStateTheUniqueIDNames();
+		moveScriptsToTheStateTheImageNames();
 		return;
 	}
 	g_MovableMan.UnregisterObject(this);
@@ -533,7 +538,7 @@ void MovableObject::AdoptPersistedUniqueID() {
 		PinUniqueIDCounter(m_UniqueID);
 	}
 	g_MovableMan.RegisterObject(this);
-	moveScriptsToTheStateTheUniqueIDNames();
+	moveScriptsToTheStateTheImageNames();
 }
 
 void MovableObject::ResolveFaithfulLinks() {
