@@ -1810,11 +1810,18 @@ namespace RTE {
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
 		if (producing->TimingDecisionPendingAt(tick)) {
 			LockstepWaitTimer waitTimer;
+			// A production wait longer than a round trip is a defect, not pacing: name what holds it once.
+			const auto waitBegan = std::chrono::steady_clock::now();
+			bool named = false;
 			while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
 				producing->Tick(NetLockstepNowMs());
 				producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
 				if (s_SessionPump) s_SessionPump();
 				if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
+				if (!named && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitBegan).count() > 2000) {
+					named = true;
+					std::cout << "[net-frame-wait] producing held: " << producing->DescribePendingTimingDecisions(tick) << std::endl;
+				}
 				if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			producing->FinishFrameWait(NetLockstepNowMs());
