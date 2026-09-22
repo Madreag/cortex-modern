@@ -6633,6 +6633,9 @@ namespace RTE {
 		m_ApplyingDeferredParkTiming = true;
 		auto deferred = std::move(m_DeferredParkTimings);
 		m_DeferredParkTimings.clear();
+		// One decision is deferred once per phase; every phase of it takes the SAME new revision or the commit
+		// would name a proposal no peer was ever sent.
+		std::map<uint64_t, uint64_t> restamped;
 		for (auto timing: deferred) {
 			if (m_CaptureParkFinalized && m_SynchronizedCaptureStartFrame != UINT64_MAX &&
 			    timing.applyFrame <= m_SynchronizedCaptureEndFrame) {
@@ -6647,19 +6650,22 @@ namespace RTE {
 					// re-stamp is a NEW proposal, and the old one is withdrawn everywhere by the rule below - a
 					// proposal the round has passed can never be applied, so every peer drops it identically.
 					const uint64_t superseded = timing.revision;
-					if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
-					timing.revision = m_NextTimingRevision++;
-					timing.supersededRevision = superseded;
-					const auto found = m_TimingDecisions.find(superseded);
-					const bool committed = found != m_TimingDecisions.end() && found->second.committed;
-					const uint8_t acknowledged = found != m_TimingDecisions.end() ? found->second.acknowledgedPeers : 0;
-					m_TimingDecisions.erase(superseded);
-					m_TimingDecisions[timing.revision] = {timing, acknowledged, committed, m_TimingNowMs};
-					QueueTiming(timing);
-					if (committed && timing.phase == NetTimingPhase::Propose) {
-						NetLockstepTiming commit = timing;
-						commit.phase = NetTimingPhase::Commit;
-						QueueTiming(commit);
+					const auto already = restamped.find(superseded);
+					if (already != restamped.end()) {
+						timing.revision = already->second;
+						timing.supersededRevision = superseded;
+						QueueTiming(timing);
+					} else {
+						if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
+						timing.revision = m_NextTimingRevision++;
+						timing.supersededRevision = superseded;
+						restamped[superseded] = timing.revision;
+						const auto found = m_TimingDecisions.find(superseded);
+						const bool committed = found != m_TimingDecisions.end() && found->second.committed;
+						const uint8_t acknowledged = found != m_TimingDecisions.end() ? found->second.acknowledgedPeers : 0;
+						m_TimingDecisions.erase(superseded);
+						m_TimingDecisions[timing.revision] = {timing, acknowledged, committed, m_TimingNowMs};
+						QueueTiming(timing);
 					}
 				}
 			}
