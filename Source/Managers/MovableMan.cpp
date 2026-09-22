@@ -5528,6 +5528,22 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	long tieRestoreSerials[2][2] = {{0, 0}, {0, 0}};
 	int tieRestoreFirstIsEarlier[2] = {-1, -1};
 	int tieRestoreDuplicate[2] = {1, 1};
+	// What the image recorded for the pair: the writer's own registration order.
+	const long imageSerials[2] = {savedCounter + 7000, savedCounter + 7001};
+	const auto addFromImage = [this, &fixturePath](long counterBefore, long serial) {
+		MovableObject::PinUniqueIDCounter(counterBefore);
+		auto object = std::make_unique<MOPixel>();
+		if (object->Create() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		m_ValidParticles.insert(object.get());
+		m_AddedParticles.push_back(object.get());
+		object->StageRestoredScriptRegistration(serial);
+		if (object->LoadScript(fixturePath, true) != 0 || object->AdoptScriptObject() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		return object;
+	};
 	for (size_t arm = 0; arm < 2 && ready; ++arm) {
 		const long firstOwnID = savedCounter + 3072;
 		const long secondOwnID = firstOwnID + c_LuaStateCount;
@@ -5536,11 +5552,11 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		std::unique_ptr<MOPixel> first;
 		std::unique_ptr<MOPixel> second;
 		if (arm == 0) {
-			first = add(firstOwnID - 1);
-			second = add(secondOwnID - 1);
+			first = addFromImage(firstOwnID - 1, imageSerials[0]);
+			second = addFromImage(secondOwnID - 1, imageSerials[1]);
 		} else {
-			second = add(secondOwnID - 1);
-			first = add(firstOwnID - 1);
+			second = addFromImage(secondOwnID - 1, imageSerials[1]);
+			first = addFromImage(firstOwnID - 1, imageSerials[0]);
 		}
 		ready = first != nullptr && second != nullptr;
 		if (ready) {
@@ -5616,6 +5632,53 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 		}
 	}
 
+	// The serial has to survive the image the way the unique-ID counter does: a restored object keeps
+	// the writer's place in the order, and this machine's registrations continue above it.
+	long roundTripSerials[2] = {0, 0};
+	long roundTripNextSerial = 0;
+	int roundTripBlobCarriesSerial = 0;
+	int roundTripImageApplied = 0;
+	int roundTripScriptsReady = 0;
+	{
+		const long counterBeforeRoundTrip = MovableObject::GetScriptRegistrationSerialCounter();
+		auto source = add(savedCounter + 3968);
+		ready = ready && source != nullptr;
+		std::string image;
+		if (ready) {
+			promote();
+			roundTripSerials[0] = source->GetScriptRegistrationSerial();
+			image = source->SaveRuntimeImage();
+			roundTripBlobCarriesSerial = image.find(std::to_string(roundTripSerials[0])) != std::string::npos ? 1 : 0;
+		}
+		drop(source);
+		if (ready) {
+			// A machine that has drawn nothing of its own reads the image.
+			// A machine that has drawn nothing of its own takes what the image recorded, in the order a
+			// restore has it: the serial is in place before the scripts initialize.
+			MovableObject::PinScriptRegistrationSerial(0);
+			MovableObject::PinUniqueIDCounter(savedCounter + 4032);
+			auto restored = std::make_unique<MOPixel>();
+			ready = restored->Create() >= 0;
+			if (ready) {
+				m_ValidParticles.insert(restored.get());
+				m_AddedParticles.push_back(restored.get());
+				restored->StageRestoredScriptRegistration(roundTripSerials[0]);
+				roundTripImageApplied = 1;
+				roundTripScriptsReady = restored->LoadScript(fixturePath, true) == 0 && restored->AdoptScriptObject() >= 0 ? 1 : 0;
+				ready = roundTripScriptsReady == 1;
+			}
+			if (ready) {
+				promote();
+				roundTripSerials[1] = restored->GetScriptRegistrationSerial();
+				auto next = add(savedCounter + 4096);
+				if (next) roundTripNextSerial = next->GetScriptRegistrationSerial();
+				drop(next);
+			}
+			drop(restored);
+			MovableObject::PinScriptRegistrationSerial(counterBeforeRoundTrip);
+		}
+	}
+
 	// The same hook, freed by an engine path that never waited for it: the loop must end there and
 	// nothing may read the object afterwards - the scope included.
 	long engineDeleteID = 0;
@@ -5671,13 +5734,13 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	const bool freedGreen = ready && passesCompleted == 2 && laterVictimSkipped == 1 && earlierVictimRan == 0;
 	const bool selfDeleteGreen = ready && selfDeleteID > 0 && selfDeleteRan == 1 && selfDeleteSecondScriptRan == 1 &&
 	                             selfDeleteAliveInTheLoop == 1 && selfDeleteStillRegistered == 0 && selfDeleteStillKnown == 0;
-	// What the engine guarantees here: the copies keep the identity they shadow, and each peer walks
-	// them in its own registration order. Whether the two peers AGREE is the serial's open half - the
-	// row prints both answers rather than asserting one.
+	// The image's serials travel with it, so both peers hold the same pair and walk it the same way.
 	const bool tieRestoreGreen = ready && tieRestoreDuplicate[0] == 1 && tieRestoreDuplicate[1] == 1 &&
 	                             tieRestoreIDs[0][0] == tieRestoreIDs[1][0] && tieRestoreIDs[0][1] == tieRestoreIDs[1][1] &&
-	                             tieRestoreFirstIsEarlier[0] == (tieRestoreSerials[0][0] < tieRestoreSerials[0][1] ? 1 : 0) &&
-	                             tieRestoreFirstIsEarlier[1] == (tieRestoreSerials[1][0] < tieRestoreSerials[1][1] ? 1 : 0);
+	                             tieRestoreSerials[0][0] == tieRestoreSerials[1][0] && tieRestoreSerials[0][1] == tieRestoreSerials[1][1] &&
+	                             tieRestoreFirstIsEarlier[0] == tieRestoreFirstIsEarlier[1] && tieRestoreFirstIsEarlier[0] >= 0;
+	const bool roundTripGreen = ready && roundTripSerials[0] > 0 && roundTripBlobCarriesSerial == 1 &&
+	                            roundTripSerials[1] == roundTripSerials[0] && roundTripNextSerial > roundTripSerials[0];
 	const bool engineDeleteGreen = ready && engineDeleteID > 0 && engineDeleteRan == 1 && engineDeleteSecondScriptRan == 0 &&
 	                               engineDeleteStillKnown == 0 && engineDeleteLoopsEnded == 1;
 
@@ -5720,6 +5783,12 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	          << " first_walks_earlier=" << tieRestoreFirstIsEarlier[0] << "," << tieRestoreFirstIsEarlier[1]
 	          << " peers_agree=" << (tieRestoreFirstIsEarlier[0] == tieRestoreFirstIsEarlier[1] ? 1 : 0)
 	          << (tieRestoreGreen ? "" : " (a shadowed identity's pair did not walk in the peer's own registration order)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (roundTripGreen ? "PASS" : "FAIL")
+	          << " a_registration_serial_survives_the_image states=" << c_LuaStateCount
+	          << " saved=" << roundTripSerials[0] << " restored=" << roundTripSerials[1]
+	          << " image_carries_it=" << roundTripBlobCarriesSerial << " image_applied=" << roundTripImageApplied
+	          << " scripts_ready=" << roundTripScriptsReady << " next_after_the_restore=" << roundTripNextSerial
+	          << (roundTripGreen ? "" : " (the image lost the registration serial, so a restored peer drew its own)") << std::endl;
 	std::cout << "[script-graph-selftest] " << (engineDeleteGreen ? "PASS" : "FAIL")
 	          << " hook_loop_survives_an_engine_delete_of_its_object states=" << c_LuaStateCount
 	          << " uid=" << engineDeleteID << " deleting_script_ran=" << engineDeleteRan
@@ -5727,7 +5796,7 @@ bool MovableMan::RunLuaStateIdentitySelfTest() {
 	          << " loops_ended_on_a_destroyed_object=" << engineDeleteLoopsEnded
 	          << (engineDeleteGreen ? "" : " (the loop ran on after an engine path freed its object, and its scope wrote through it)") << std::endl;
 
-	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen && tieRestoreGreen && engineDeleteGreen;
+	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen && tieRestoreGreen && roundTripGreen && engineDeleteGreen;
 }
 
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
