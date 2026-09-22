@@ -1207,7 +1207,8 @@ namespace RTE {
 			    (timing.phase != NetTimingPhase::Status && timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (timing.peerId - 1))) == 0) ||
 			    (timing.action == NetTimingAction::Delay && timing.heldPeers != 0) ||
 			    (timing.action == NetTimingAction::CapturePark && timing.heldPeers != 0) ||
-			    (timing.phase == NetTimingPhase::Status ? timing.revision != 0 || timing.requiredPeers != 0 : timing.revision == 0 || timing.requiredPeers == 0)) {
+			    (timing.phase == NetTimingPhase::Status ? timing.revision != 0 || timing.requiredPeers != 0 : timing.revision == 0 || timing.requiredPeers == 0) ||
+			    (timing.supersededRevision != 0 && (timing.phase == NetTimingPhase::Status || timing.supersededRevision >= timing.revision))) {
 				SetError(error, NetLockstepErrorCode::InvalidValue, 0, "invalid timing decision");
 				return false;
 			}
@@ -1251,6 +1252,7 @@ namespace RTE {
 			AppendU64LE(out, timing.neutralThroughFrame);
 			AppendU8(out, timing.worldTransition.has_value());
 			if (timing.worldTransition && !EncodeWorldTransition(*timing.worldTransition, out, error)) return false;
+			AppendU64LE(out, timing.supersededRevision);
 			return true;
 		}
 
@@ -1281,6 +1283,8 @@ namespace RTE {
 				if (!reader.ReadU8(present) || present > 1) return false;
 				if (present) { timing.worldTransition.emplace(); if (!DecodeWorldTransition(reader, *timing.worldTransition, error)) return false; }
 			}
+			if (version >= NetLockstepCodec::c_TimingWithdrawVersion &&
+			    !ReadOrTruncated(reader.ReadU64LE(timing.supersededRevision), reader, error, "timing withdrawal")) return false;
 			if (!ValidateTiming(timing, error)) return false;
 			out = timing;
 			return true;
@@ -5315,6 +5319,9 @@ namespace RTE {
 		if (!IsRunning() || timing.sessionId != m_Config.sessionId || timing.roundId != m_RoundId || timing.authorityGeneration != m_Config.migrationGeneration ||
 		    timing.peerId > m_Config.peerCount || !SenderOwnsTransport(timing.senderPeerId, fromTransport)) return;
 		const bool authority = timing.senderPeerId == GetHostPeerId() && LockstepPeerOfTransport(fromTransport) == GetHostPeerId();
+		// A decision the host re-stamped names the proposal it replaces: the peer drops that one here, so it can
+		// never hold two pending proposals for the same timing or match a commit against the withdrawn frame.
+		if (authority && timing.supersededRevision != 0) m_TimingDecisions.erase(timing.supersededRevision);
 		if (timing.action == NetTimingAction::CapturePark) {
 			if (timing.phase == NetTimingPhase::Status) {
 				if (m_Config.localPeerId != GetHostPeerId() || timing.peerId != timing.senderPeerId) return;
@@ -6632,6 +6639,7 @@ namespace RTE {
 					const uint64_t superseded = timing.revision;
 					if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
 					timing.revision = m_NextTimingRevision++;
+					timing.supersededRevision = superseded;
 					const auto found = m_TimingDecisions.find(superseded);
 					const bool committed = found != m_TimingDecisions.end() && found->second.committed;
 					const uint8_t acknowledged = found != m_TimingDecisions.end() ? found->second.acknowledgedPeers : 0;
