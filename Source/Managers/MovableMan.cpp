@@ -4969,6 +4969,10 @@ bool MovableMan::RunLuaStateAssignmentSelfTest() {
 	constexpr int c_ObjectCount = 256;
 	// What a machine spends before a match: a single-player scene's objects taking their script states.
 	constexpr int c_PreMatchObjects = 7;
+	// And what it spends DURING it: one object of its own between two of the match's. A cursor shifted
+	// before the match only rotates the states; a cursor shifted inside it regroups the objects, which
+	// is the difference a per-state global carries into the world.
+	constexpr int c_InterleavedAt = 100;
 	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
 	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
@@ -5019,20 +5023,23 @@ bool MovableMan::RunLuaStateAssignmentSelfTest() {
 		ThreadedSyncedUpdateSelfTestContext context;
 		s_ThreadedSyncedUpdateSelfTestContext = &context;
 
-		// The second arm played first: its objects took states before the match's own objects did.
-		std::vector<std::unique_ptr<MOPixel>> history;
-		if (arm == 1) {
-			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 4096);
-			for (int index = 0; index < c_PreMatchObjects; ++index) {
-				auto object = std::make_unique<MOPixel>();
-				if (object->Create() < 0 || object->LoadScript(fixturePath, true) < 0) {
-					ready = false;
-					break;
-				}
-				history.push_back(std::move(object));
+		// One object of this machine's own: made, scripted and dropped, leaving only what it spent.
+		const auto spendOneAssignment = [this, &fixturePath, &ready](long idBase) {
+			MovableObject::PinUniqueIDCounter(idBase);
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0 || object->LoadScript(fixturePath, true) < 0) {
+				ready = false;
+				return;
 			}
-			for (auto& object: history) object->DestroyScriptState();
-			history.clear();
+			object->DestroyScriptState();
+			object->Destroy();
+		};
+
+		// The second arm played first: its objects took states before the match's own objects did.
+		if (arm == 1) {
+			for (int index = 0; index < c_PreMatchObjects && ready; ++index) {
+				spendOneAssignment(savedCounter + c_ObjectCount + 4096 + index);
+			}
 		}
 
 		// The match's objects, with the same unique IDs in both arms and no forced placement: what state
@@ -5056,6 +5063,11 @@ bool MovableMan::RunLuaStateAssignmentSelfTest() {
 				std::cout << "[script-graph-selftest] lua_state_assignment_fixture_refused index=" << index
 				          << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
 				ready = false;
+			}
+			if (arm == 1 && index == c_InterleavedAt) {
+				const long next = MovableObject::GetUniqueIDCounter();
+				spendOneAssignment(savedCounter + c_ObjectCount + 8192);
+				MovableObject::PinUniqueIDCounter(next);
 			}
 		}
 		for (LuaStateWrapper& state: states) state.Update();
