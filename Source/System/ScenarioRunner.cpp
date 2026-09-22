@@ -999,6 +999,10 @@ namespace RTE {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning();
 	}
 
+	bool ScenarioRunner::IsLockstepCapturePark(uint64_t frame) {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsSynchronizedCapturePark(frame);
+	}
+
 	bool ScenarioRunner::FinishLockstepSimulationTick(uint64_t completedTick) {
 		std::erase_if(s_RecoveredInputs, [&](const auto& input) { return input.targetFrame <= completedTick; });
 		std::erase_if(s_RecoveredCommands, [&](const auto& command) { return command.frame <= completedTick; });
