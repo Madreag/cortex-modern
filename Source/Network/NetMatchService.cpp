@@ -1149,6 +1149,13 @@ static std::string ResyncSaveName() {
 		std::unique_ptr<NetLockstepCoordinator> coordinator(coordinatorRaw);
 		std::unique_ptr<NetMatchRunner> runner(runnerRaw);
 		std::string error;
+		{
+			// The worker owns this handshake from here: publish it before the work that parks it, or the park and
+			// the heartbeats reach the old object while this one counts silence.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_WorkerSession = session.get();
+			SetRejoinPhaseLocked(NetSession::RejoinPhase::ImagePending);
+		}
 		const bool started = runner->StartNextMatch(*link.Wire(), *session, *coordinator, &error, stateBytes, std::move(link.lobbyEvents));
 		const uint64_t transferMs = NetLobbyLastStateTransferMs();
 		std::string pendingLoad;
@@ -1282,7 +1289,10 @@ static std::string ResyncSaveName() {
 			while (!stop.stop_requested()) {
 				{
 					std::lock_guard<std::mutex> lock(m_Mutex);
-					if (m_Session) m_Session->TickKeepalive(AdmissionNowMs());
+					// Both pointers are the same handshake: heartbeating only one lets the other time out.
+					const uint64_t keepaliveNowMs = AdmissionNowMs();
+					if (m_Session) m_Session->TickKeepalive(keepaliveNowMs);
+					if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->TickKeepalive(keepaliveNowMs);
 					// Counted under the lock: a load that held it would show a window with no ticks.
 					m_SnapshotLoadKeepaliveTicks.fetch_add(1);
 					m_SnapshotLoadKeepaliveWindowTicks.fetch_add(1);
@@ -1346,6 +1356,7 @@ static std::string ResyncSaveName() {
 				ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
 			}
 			const uint64_t stagingBeganMs = SteadyNowMs();
+			SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
 			if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
 				if (error) *error = "world join snapshot load failed: " + pendingLoad;
 				return false;
@@ -3666,6 +3677,8 @@ static std::string ResyncSaveName() {
 			m_AdmissionClock.NotePark(static_cast<uint64_t>(std::max(0.0,
 			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())), SteadyNowMs());
 			NotePumpParkedLocked();
+			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
+			if (NetSession* live = LiveSessionLocked()) live->TickKeepalive(AdmissionNowMs());
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			std::cout << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
 			          << " capture_ms=" << milliseconds(activationBegan, activationCaptured) << " local_ms=" << milliseconds(activationCaptured, activationLocal)
