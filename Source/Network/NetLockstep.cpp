@@ -5437,12 +5437,6 @@ namespace RTE {
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
-		// A proposal the round has already passed can never be applied, so it is withdrawn on every peer by the
-		// same rule.  Without it a superseded proposal would sit in the table until the round ended and could
-		// still be matched against a later commit.
-		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
-			return !entry.second.committed && entry.second.proposal.applyFrame < m_Stats.nextFrame;
-		});
 		if (m_LastTimingSampleMs == UINT64_MAX || nowMs - m_LastTimingSampleMs >= NetInputDelayEstimator::c_SampleMs) {
 			m_LastTimingSampleMs = nowMs;
 			for (const auto& [peer, transport]: m_RemoteTransports) {
