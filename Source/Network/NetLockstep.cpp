@@ -4260,6 +4260,8 @@ namespace RTE {
 		m_CaptureParkRevision = 0;
 		m_CaptureParkDeadlineMs = 0;
 		m_CaptureParkPublishedEndFrame = UINT64_MAX;
+		m_HighestParkEndFrame = 0;
+		m_ParkSuppressedRevisions.clear();
 		m_PendingCaptureReportMs = 0;
 		m_CaptureParkReportsMs.clear();
 		m_DeferredParkTimings.clear();
@@ -4825,8 +4827,13 @@ namespace RTE {
 		// The host does not expose a timing boundary while a capture park is still waiting for its
 		// final end.  Sending the old apply frame first would let a capture-less peer apply it before
 		// it learns the shared park.
-		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports &&
-		    timing.action != NetTimingAction::CapturePark && timing.phase != NetTimingPhase::Status) return;
+		if (m_Config.localPeerId == GetHostPeerId() && timing.action != NetTimingAction::CapturePark &&
+		    timing.phase != NetTimingPhase::Status) {
+			// A boundary the park withheld must stay withheld in every phase: sending its commit once the park
+			// closed would reach a peer that never saw the proposal.
+			if (m_CaptureParkAwaitingReports) { m_ParkSuppressedRevisions.insert(timing.revision); return; }
+			if (m_ParkSuppressedRevisions.contains(timing.revision)) return;
+		}
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (onlyPeer != 0 && peer != onlyPeer) continue;
 			auto& queue = m_TimingOutgoing[peer];
@@ -5571,9 +5578,10 @@ namespace RTE {
 			if (error) *error = "the lockstep crash fixture did not terminate its held peer";
 			return false;
 		}
-		// The park already committed a canonical empty frame here on every peer, so this tick's sample was
-		// dropped by the park, not lost to an error.
-		if (targetFrame < m_Stats.nextFrame && IsSynchronizedCapturePark(targetFrame)) return true;
+		// A park already committed a canonical empty frame at or below this watermark on every peer, so this
+		// tick's sample was dropped by the park, not lost to an error - and the next park has already moved the
+		// live window on by the time the simulation reaches the frames the last one covered.
+		if (targetFrame < m_Stats.nextFrame && targetFrame <= m_HighestParkEndFrame) return true;
 		if (targetFrame < m_Stats.nextFrame || targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ||
 		    m_LocalFrames.find(targetFrame) != m_LocalFrames.end() || m_LocalInputHistory.contains(targetFrame) ||
 		    std::any_of(m_RecoveryOutgoing.begin(), m_RecoveryOutgoing.end(), [&](const auto& pending) { return pending.frame.senderPeerId == m_Config.localPeerId && pending.frame.targetFrame == targetFrame; })) {
@@ -6581,6 +6589,7 @@ namespace RTE {
 			std::cout << "[net-lockstep] capture park released frame=" << m_SynchronizedCaptureStartFrame
 			          << " end=" << m_SynchronizedCaptureEndFrame << " capture_ms=" << timing.pingMs << std::endl;
 		}
+		m_HighestParkEndFrame = std::max(m_HighestParkEndFrame, m_SynchronizedCaptureEndFrame);
 		m_CaptureParkRevision = std::max(m_CaptureParkRevision, timing.revision);
 	}
 
@@ -6623,6 +6632,7 @@ namespace RTE {
 					timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, timing.applyFrame + timing.delayFrames);
 				if (m_Config.localPeerId == GetHostPeerId()) {
 					if (auto found = m_TimingDecisions.find(timing.revision); found != m_TimingDecisions.end()) found->second.proposal = timing;
+					m_ParkSuppressedRevisions.erase(timing.revision);
 					QueueTiming(timing);
 				}
 			}
