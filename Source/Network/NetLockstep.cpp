@@ -4813,6 +4813,10 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::TimingDecisionPendingAt(uint64_t frame) const {
+		// A decision the capture park is holding cannot commit until the park closes, and the park only closes as
+		// the round keeps producing: waiting on it here is a wait on this peer's own next frame.  The barrier
+		// applies again to the fresh proposal the flush sends at the park's end.
+		if (m_CaptureParkAwaitingReports) return false;
 		for (const auto& [revision, decision]: m_TimingDecisions)
 			if (!decision.committed && decision.proposal.applyFrame <= frame) return true;
 		return false;
