@@ -55,8 +55,26 @@ An object's script fields live under its `UniqueID`, and both move together. A `
 on an object that is already running draws it a new `UniqueID` and takes its script
 object along, so its hooks keep running and its fields are still there; a restore hands
 its saved `UniqueID` to the object the image describes, and a live object that happens to
-hold that ID is given a fresh one (with its own fields) instead, so no two live objects
-ever share an identity.
+hold that ID is given a fresh one (with its own fields) instead, so no two registered
+objects ever share an identity.
+
+Three consequences worth knowing, all of them the same rule seen from different sides:
+
+- an object renumbered at a restore because its persisted ID was held keeps the state it
+  registered on — the `UniqueID` modulo the state count rule places an object when it
+  registers, and a running script is rekeyed where it lives, never moved between states.
+  The set of objects it shares a global table with is its current state's, not the one its
+  new ID names. This only happens to a save written before that rule existed;
+- a private or preview copy of an object (the local overlays) deliberately carries the
+  identity it shadows, so two copies of one `UniqueID` can be alive at once. They are kept
+  apart by the order they registered in, which is this machine's own fact;
+- an object deleted from inside its own hook stays registered until that hook returns: a
+  `MovableMan` lookup in the same hook still finds it, and the object's remaining scripts
+  for that hook still run. It is gone the moment the hook returns.
+
+`DeleteEntity` deletes only what Lua owns (it always has, here and upstream). An object the
+engine owns — anything added to `MovableMan` — is not deleted by it; set `ToDelete` on that
+object instead and the engine removes it at the end of the update.
 
 What a mod author needs to know: a global written in `SyncedUpdate` is visible to the
 objects whose unique IDs land on the writer's state, identically on every peer. If your
