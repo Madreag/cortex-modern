@@ -4265,6 +4265,7 @@ namespace RTE {
 		m_CaptureParkDeadlineMs = 0;
 		m_CaptureParkPublishedEndFrame = UINT64_MAX;
 		m_HighestParkEndFrame = 0;
+		m_UnsentTimingRevisions.clear();
 		m_PendingCaptureReportMs = 0;
 		m_CaptureParkReportsMs.clear();
 		m_DeferredParkTimings.clear();
@@ -4830,8 +4831,13 @@ namespace RTE {
 		// The host does not expose a timing boundary while a capture park is still waiting for its
 		// final end.  Sending the old apply frame first would let a capture-less peer apply it before
 		// it learns the shared park.
-		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports &&
-		    timing.action != NetTimingAction::CapturePark && timing.phase != NetTimingPhase::Status) return;
+		if (m_Config.localPeerId == GetHostPeerId() && timing.action != NetTimingAction::CapturePark &&
+		    timing.phase != NetTimingPhase::Status) {
+			// The park holds this boundary back; remember that no peer has it, so its commit is not sent to peers
+			// that were never told what it commits.
+			if (m_CaptureParkAwaitingReports) { m_UnsentTimingRevisions.insert(timing.revision); return; }
+			if (timing.phase != NetTimingPhase::Commit) m_UnsentTimingRevisions.erase(timing.revision);
+		}
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (onlyPeer != 0 && peer != onlyPeer) continue;
 			auto& queue = m_TimingOutgoing[peer];
@@ -5305,6 +5311,9 @@ namespace RTE {
 	void NetLockstepCoordinator::CommitTiming(uint64_t revision) {
 		auto found = m_TimingDecisions.find(revision);
 		if (found == m_TimingDecisions.end() || found->second.committed || m_Config.localPeerId != GetHostPeerId()) return;
+		// A boundary whose proposal the park withheld has not reached anyone: committing it now would name a
+		// proposal no peer holds.  The flush re-proposes it with a new revision and commits that one.
+		if (m_UnsentTimingRevisions.contains(revision)) return;
 		auto& decision = found->second;
 		if ((decision.acknowledgedPeers & decision.proposal.requiredPeers) != decision.proposal.requiredPeers) return;
 		NetLockstepTiming commit = decision.proposal;

@@ -1307,6 +1307,7 @@ namespace RTE {
 		uint64_t m_CaptureParkDeadlineMs = 0;
 		uint64_t m_CaptureParkPublishedEndFrame = UINT64_MAX;
 		uint64_t m_HighestParkEndFrame = 0;
+		std::set<uint64_t> m_UnsentTimingRevisions;
 		uint32_t m_PendingCaptureReportMs = 0;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
