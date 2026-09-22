@@ -17426,6 +17426,85 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 	} // namespace
 
+	/// A late start whose reclaim the round cannot take yet is retried until it is admitted; deferring it
+	/// once leaves the seat under the AI for the rest of the match.
+	bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error) {
+		LoopbackTransport hostWire, peerWire;
+		if (!hostWire.StartHost(49476, error) || !peerWire.Connect("loopback", 49476, error)) return false;
+		NetPeerId peerTransport = c_InvalidNetPeerId;
+		for (int step = 0; step < 20 && peerTransport == c_InvalidNetPeerId; ++step) {
+			for (const NetTransportEvent& event: hostWire.PollEvents())
+				if (event.type == NetTransportEventType::PeerConnected) peerTransport = event.peerId;
+			hostWire.AdvanceTimeMs(10);
+			peerWire.AdvanceTimeMs(10);
+		}
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A41, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 100; config.roundId = 41; config.joinsRunningRound = true; config.authorityPeerId = 1;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.activePeerIds = {1}; config.relayToOtherPeers = true;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 2;
+		config.remoteTransportPeerIds = {{2, peerTransport}};
+		config.initialSeatHolds[2] = {2, 0, 1, 1, 40};
+		if (!host.Start(hostWire, config, error)) return false;
+		for (uint64_t now = 0; now <= 200 && !host.IsRunning(); now += 10) {
+			host.Tick(now);
+			hostWire.AdvanceTimeMs(10);
+			peerWire.AdvanceTimeMs(10);
+		}
+		if (peerTransport == c_InvalidNetPeerId || !host.IsRunning() || !host.IsSeatUnderAI(2, 100)) {
+			*error = "the late-start fixture did not run a host with a held seat: transport=" + std::to_string(peerTransport) +
+			         " running=" + std::to_string(host.IsRunning()) + " ai=" + std::to_string(host.IsSeatUnderAI(2, 100));
+			return false;
+		}
+		NetLockstepStart start;
+		start.sessionId = config.sessionId; start.localPeerId = 2; start.peerCount = 2; start.roundId = config.roundId;
+		start.controllerFrameVersion = ControllerFrame::c_Version;
+		start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+		start.scenario = config.scenario; start.ownershipPolicy = config.ownershipPolicy;
+		start.startFrame = config.startFrame; start.inputDelayFrames = config.inputDelayFrames;
+		start.startupPublished = true; start.activityRestartMs = 80;
+		std::vector<uint8_t> bytes;
+		if (!NetLockstepCodec::Encode({start}, bytes, nullptr)) { *error = "the late start did not encode"; return false; }
+		// The refusal the live round hits is a race (a reclaim it cannot take at this instant); here it is
+		// forced, so the retry is what the row measures.
+		// The round runs without the held seat; its peer is still a member of this round and the admission
+		// plane re-binds its connection before the late start arrives.
+		if (!host.IsKnownRemotePeer(2)) host.m_RemotePeerIds.push_back(2);
+		// The admission plane re-binds a returning seat's connection before its start arrives.
+		host.m_RemoteTransports[2] = peerTransport;
+		const uint64_t revisions = host.m_NextTimingRevision;
+		host.m_NextTimingRevision = UINT64_MAX;
+		NetTransportEvent arrival;
+		arrival.type = NetTransportEventType::PacketReceived;
+		arrival.peerId = peerTransport;
+		arrival.lane = NetTransportLane::ControlReliable;
+		arrival.bytes = bytes;
+		host.InjectEvent(arrival, 500);
+		if (host.m_LateStartReclaims.count(2) != 1 || host.HasAgreedSeatReclaim(2)) {
+			*error = "the refused late start was not remembered for a retry: pending=" + std::to_string(host.m_LateStartReclaims.size()) +
+			         " agreed=" + std::to_string(host.HasAgreedSeatReclaim(2)) + " starts_seen=" + std::to_string(host.m_RemoteStartsReceived.size()) +
+			         " start_packets=" + std::to_string(host.GetStats().startPacketsReceived) +
+			         " stale=" + std::to_string(host.GetStats().staleRoundPackets) +
+			         " admission_faults=" + std::to_string(host.GetStats().ignoredAdmissionFaults) +
+			         " held=" + std::to_string(host.HasHeldAISeat(2)) + " host_peer=" + std::to_string(host.GetHostPeerId()) +
+			         " running=" + std::to_string(host.IsRunning()) + " reclaim_tx=" + std::to_string(host.m_ReclaimTransactions.count(2)) +
+			         " revisions_capped=" + std::to_string(host.m_NextTimingRevision == UINT64_MAX) + " stop=" + host.GetStats().timeoutReason;
+			return false;
+		}
+		host.m_NextTimingRevision = revisions;
+		for (uint64_t now = 510; now <= 900 && !host.HasAgreedSeatReclaim(2); now += 10) {
+			host.Tick(now);
+			hostWire.AdvanceTimeMs(10);
+			peerWire.AdvanceTimeMs(10);
+		}
+		if (!host.HasAgreedSeatReclaim(2) || !host.m_LateStartReclaims.empty()) {
+			*error = "a deferred late-start reclaim was never retried: pending=" + std::to_string(host.m_LateStartReclaims.size());
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_late_starts_reclaim_is_retried_until_admitted" << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -17598,6 +17677,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestCatchUpFencesTheHoldGap(&error) ||
 		    !TestWorldTailKeepsItsLiveCoordinatorSeparate(&error) ||
 		    !TestLateStartPreservesHoldBoundary(&error) ||
+		    !TestALateStartsReclaimIsRetriedUntilAdmitted(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
