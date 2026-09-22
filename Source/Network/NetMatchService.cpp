@@ -3586,6 +3586,12 @@ static std::string ResyncSaveName() {
 			}
 		}
 		if (m_Session && (m_Session->IsFailed() || m_Session->GetState() == NetSessionState::Closed || m_Session->GetState() == NetSessionState::Rejected)) {
+			// A host that reached its own last tick says goodbye; a seat that is still catching up must read that
+			// as the round ending, not as a link to rejoin, or it spends its rejoin on a match that is over.
+			if (!g_ActivityMan.ActivityRunning() || (g_ActivityMan.GetActivity() && g_ActivityMan.GetActivity()->IsOver())) {
+				ScenarioRunner::SetControllerReplayError("MatchOver:the match ended while this seat was rejoining");
+				return;
+			}
 			ScenarioRunner::SetControllerReplayError(m_WorldCatchUp.privateMatch
 			    ? "PeerHeld:Held - AI in control - reconnecting the private catch-up link"
 			    : "PeerLeft:The host connection was lost while joining the world");
