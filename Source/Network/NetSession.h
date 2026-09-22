@@ -128,6 +128,16 @@ namespace RTE {
 		/// activity restart, a private catch-up replay). Nobody was listening, so that is not silence:
 		/// every silence window starts again at the next evaluation.
 		void NotePumpParked() { m_PumpParked = true; }
+
+		/// Where a rejoining seat is in its own handshake.  Every phase but Active is work this peer is doing
+		/// with nobody to answer, so the ordinary session timeout does not judge it.
+		enum class RejoinPhase : uint8_t { Active = 0, Connecting = 1, ImagePending = 2, Loading = 3, TailReplay = 4 };
+		void SetRejoinPhase(RejoinPhase phase) {
+			m_RejoinPhase = phase;
+			m_AdmissionSuspended = phase != RejoinPhase::Active;
+		}
+		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
+		bool IsAdmissionSuspended() const { return m_AdmissionSuspended; }
 		/// Holds the silence windows open for as long as this peer is the one not listening (a private
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.
 		void SetSilenceSuspended(bool suspended) { m_SilenceSuspended = suspended; }
@@ -352,6 +362,8 @@ namespace RTE {
 		bool m_ResumedWithoutTraffic = false;
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
+		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
+		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;

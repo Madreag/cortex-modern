@@ -1274,6 +1274,12 @@ namespace RTE {
 			if (m_Session) m_Session->NotePumpParked();
 			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->NotePumpParked();
 		}
+		/// The rejoin phase belongs to the peer, not to one session object: the worker and the live session are
+		/// the same handshake seen from two threads.
+		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
+			if (m_Session) m_Session->SetRejoinPhase(phase);
+			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
+		}
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;

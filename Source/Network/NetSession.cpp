@@ -1352,7 +1352,7 @@ namespace RTE {
 		m_LastTimeoutCheckMs = m_NowMs;
 		// A park the engine declared is not silence from anyone: the round held this peer's own pump. The
 		// windows start again here, and the next full budget without a word still ends the peer.
-		if (m_PumpParked || m_SilenceSuspended) {
+		if (m_PumpParked || m_SilenceSuspended || m_AdmissionSuspended) {
 			m_PumpParked = false;
 			m_LastReceiveMs = m_NowMs;
 			m_ResumedWithoutTraffic = false;
@@ -1416,7 +1416,8 @@ namespace RTE {
 					m_Transport->Disconnect(m_RemoteTransportPeerId, mismatch.summary);
 				}
 			}
-		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
+		} else if (!m_AdmissionSuspended &&
+		           (m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs >
 		           ((NetA7Journal::ControlledSilentClient() && m_State == NetSessionState::HelloSent) ? NetA7Journal::SilentReceiveBudgetMs() : m_Config.timeoutMs)) {
 			++m_Stats.timeouts;
