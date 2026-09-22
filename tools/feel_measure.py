@@ -626,10 +626,11 @@ def main(argv=None):
             write_json(root / result['name'] / 'feel-report.json', result)
         write_json(root / 'matrix-report.json', results)
         complete = all(result['launches_complete'] for result in results)
+        proof_pass = all(result['off_wire_pass'] for result in results)
         write_json(root / 'completion.json', dict(finished=stamp(), launches_complete=complete,
             case_launches={result['name']: result['launches_complete'] for result in results},
-            gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
-        return 0 if complete else 1
+            off_wire_pass=proof_pass, gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
+        return 0 if complete and proof_pass else 1
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
