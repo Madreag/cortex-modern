@@ -998,6 +998,16 @@ namespace RTE {
 		bool HasPendingRelayWork() const { return m_RelayHost && (!m_RelayBacklog.empty() || !m_RecoveryOutgoing.empty()); }
 		/// Whether a live remote has not reported reaching the frame this peer has committed to. A peer merely
 		/// behind owes nothing to the relay queues, so the goodbye drain would leave while it still needs us.
+		/// How far every live remote has told us it has come.  The goodbye drain watches this for progress
+		/// instead of spending a fixed budget on a peer that is never going to answer.
+		uint64_t RemoteProgressSum() const {
+			uint64_t sum = 0;
+			for (const auto& [peer, stats]: m_Stats.peers) {
+				if (peer == m_Config.localPeerId) continue;
+				sum += stats.reportedNextFrame + stats.acceptedThroughFrame + stats.highestTargetFrame;
+			}
+			return sum;
+		}
 		bool HasPeerBehindOurHorizon() const {
 			if (!IsRunning()) return false;
 			for (uint8_t peer: m_RemotePeerIds) {
