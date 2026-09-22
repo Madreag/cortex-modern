@@ -158,21 +158,25 @@ namespace RTE {
 		void DeleteWhenHookReturns() { m_DeleteWhenHookReturns = true; }
 
 		/// Holds an object alive for the length of one hook loop: a script may delete it from inside its
-		/// own hook, and the loop still has scripts of that object to run.
+		/// own hook, and the loop still has scripts of that object to run. A delete that does not come
+		/// through the script-facing one frees the object where it stands, and the destructor tells its
+		/// live scopes so, so neither the loop nor this scope ever reads the object again.
 		struct HookCallScope {
-			explicit HookCallScope(MovableObject* object) : m_Object(object) { ++m_Object->m_HookCallDepth; }
-			~HookCallScope() {
-				if (--m_Object->m_HookCallDepth == 0 && m_Object->m_DeleteWhenHookReturns) {
-					m_Object->m_DeleteWhenHookReturns = false;
-					delete m_Object;
-				}
-			}
+			explicit HookCallScope(MovableObject* object);
+			~HookCallScope();
 			HookCallScope(const HookCallScope&) = delete;
 			HookCallScope& operator=(const HookCallScope&) = delete;
 
+			/// Whether the object was destroyed while this loop was running: the loop stops there.
+			bool ObjectIsGone() const { return m_Object == nullptr; }
+
 		private:
+			friend class MovableObject;
 			MovableObject* m_Object;
 		};
+
+		/// Counts the hook loops that ended on an object destroyed under them, for the row that proves it.
+		static uint64_t HookLoopsEndedOnADestroyedObject() { return s_HookLoopsEndedOnADestroyedObject; }
 
 		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
 		void MoveScriptsToState(LuaStateWrapper& state);
@@ -1403,6 +1407,7 @@ namespace RTE {
 		// Global counter with unique ID's
 		static std::atomic<long> m_UniqueIDCounter;
 		static std::atomic<long> s_ScriptRegistrationSerial; //!< Counts registrations, so a shared identity still has an order.
+		static std::atomic<uint64_t> s_HookLoopsEndedOnADestroyedObject; //!< Loops whose object was destroyed under them.
 		// The type of MO this is, either Actor, Item, or Particle
 		int m_MOType;
 		float m_Mass; // In metric kilograms (kg).

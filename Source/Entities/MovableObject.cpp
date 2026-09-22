@@ -46,6 +46,7 @@ AbstractClassInfo(MovableObject, SceneObject);
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
 // Registrations are ordered by the sim, so the serial says which of two objects sharing an identity came first.
 std::atomic<long> MovableObject::s_ScriptRegistrationSerial = 0;
+std::atomic<uint64_t> MovableObject::s_HookLoopsEndedOnADestroyedObject = 0;
 int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
@@ -151,7 +152,37 @@ MovableObject::MovableObject() {
 	Clear();
 }
 
+namespace {
+	// The hook loops running on this thread. A loop's object can be freed under it by any delete path,
+	// so the object's destructor tells the loops that hold it; nothing here outlives a stack frame.
+	thread_local std::vector<MovableObject::HookCallScope*> g_LiveHookScopes;
+} // namespace
+
+MovableObject::HookCallScope::HookCallScope(MovableObject* object) :
+    m_Object(object) {
+	++m_Object->m_HookCallDepth;
+	g_LiveHookScopes.push_back(this);
+}
+
+MovableObject::HookCallScope::~HookCallScope() {
+	std::erase(g_LiveHookScopes, this);
+	if (!m_Object) {
+		return;
+	}
+	if (--m_Object->m_HookCallDepth == 0 && m_Object->m_DeleteWhenHookReturns) {
+		m_Object->m_DeleteWhenHookReturns = false;
+		delete m_Object;
+	}
+}
+
 MovableObject::~MovableObject() {
+	// Whatever freed this object, a hook loop of it running on this thread must not read it again.
+	for (HookCallScope* scope: g_LiveHookScopes) {
+		if (scope->m_Object == this) {
+			scope->m_Object = nullptr;
+			s_HookLoopsEndedOnADestroyedObject.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
 	Destroy(true);
 	g_MovableMan.ForgetDestroyedObject(this);
 }
@@ -1308,6 +1339,10 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		const std::string selfKey = LuaMan::PreviewScriptKey(this);
 
 		for (const LuaFunction& luaFunction: itr->second) {
+			// This list belongs to the object; a delete that did not wait for this loop ends it here.
+			if (hookScope.ObjectIsGone()) {
+				break;
+			}
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
 				LuaStateWrapper& usedState = GetAndLockStateForScript(luabindObjectWrapper->GetFilePath(), &luaFunction);
@@ -1337,6 +1372,10 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
 
 	for (const LuaFunction& luaFunction: m_FunctionsAndScripts.at(functionName)) {
+		// The same end as the hook loop above: this list goes with the object.
+		if (hookScope.ObjectIsGone()) {
+			break;
+		}
 		const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 		if (scriptPath == luabindObjectWrapper->GetFilePath() && usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", LuaMan::PreviewScriptKey(this), functionEntityArguments, functionLiteralArguments) < 0) {
 			g_ConsoleMan.PrintString("ERROR: An error occured while trying to run the " + functionName + " function for script at path " + scriptPath);
