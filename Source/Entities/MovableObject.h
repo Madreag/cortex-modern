@@ -134,6 +134,12 @@ namespace RTE {
 		/// The Lua state index the save recorded for this object, -1 when none.
 		int GetPersistedLuaStateIndex() const { return m_PersistedLuaStateIndex; }
 
+		/// Stages what an image carries for this object, so a row can run the restore boundary itself.
+		void StageRestoredIdentity(long uniqueID, int luaStateIndex) {
+			m_PersistedUniqueID = uniqueID;
+			m_PersistedLuaStateIndex = luaStateIndex;
+		}
+
 		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
 		void MoveScriptsToState(LuaStateWrapper& state);
 

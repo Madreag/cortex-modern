@@ -5123,6 +5123,122 @@ bool MovableMan::RunLuaStateAssignmentSelfTest() {
 	return passed;
 }
 
+bool MovableMan::RunLuaStateRestoreBoundarySelfTest() {
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL restore_keeps_the_object_with_its_saved_script_graph no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL restore_keeps_the_object_with_its_saved_script_graph live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+	states.swap(replacement);
+	for (LuaStateWrapper& state: states) state.Initialize();
+
+	int serialSpawnState = -1;
+	int serialSpawnOwnState = -1;
+	int parallelSpawnState = -1;
+	int parallelSpawnSpawnerState = -1;
+	uint64_t spawnerPlacements = 0;
+	int restoredState = -1;
+	int savedIndex = -1;
+	int idIndex = -1;
+	double restoredField = -1.0;
+	bool ready = true;
+
+	{
+		// A spawn from a SERIAL pass - the channel the contract blesses - takes its OWN state, though the
+		// pass is running inside another one. A spawn from a parallel per-state task cannot: every other
+		// state belongs to another thread for the length of that task, so it takes its spawner's.
+		const size_t spawnerIndex = 3;
+		MovableObject::PinUniqueIDCounter(savedCounter + 64);
+		auto serialObject = std::make_unique<MOPixel>();
+		g_LuaMan.SetThreadLuaStateOverride(&states[spawnerIndex]);
+		ready = serialObject->Create() >= 0 && serialObject->LoadScript(fixturePath, true) == 0;
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		if (ready) {
+			serialSpawnState = g_LuaMan.GetStateIndex(serialObject->GetLuaState());
+			serialSpawnOwnState = static_cast<int>(g_LuaMan.ScriptStateIndexForObject(serialObject->GetUniqueID())) + 1;
+		}
+		serialObject->DestroyScriptState();
+		serialObject->Destroy();
+
+		const uint64_t spawnerPlacementsBefore = LuaMan::ScriptStatesTakenFromASpawner();
+		auto parallelObject = std::make_unique<MOPixel>();
+		g_LuaMan.SetThreadLuaStateOverride(&states[spawnerIndex], true);
+		ready = ready && parallelObject->Create() >= 0 && parallelObject->LoadScript(fixturePath, true) == 0;
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		if (ready) {
+			parallelSpawnState = g_LuaMan.GetStateIndex(parallelObject->GetLuaState());
+			parallelSpawnSpawnerState = static_cast<int>(spawnerIndex) + 1;
+			spawnerPlacements = LuaMan::ScriptStatesTakenFromASpawner() - spawnerPlacementsBefore;
+		}
+		parallelObject->DestroyScriptState();
+		parallelObject->Destroy();
+	}
+
+	{
+		// The restore boundary. The image says which state held this object and its own _ScriptedObjects
+		// table, and the graph is restored into that state by index: the object has to land there too, or
+		// the mod's fields are orphaned and the peer groups its per-state globals differently from the
+		// live ones. The image here names a state the object's ID does not, which is what an object
+		// spawned inside a hook looks like in any save.
+		MovableObject::PinUniqueIDCounter(savedCounter + 128);
+		auto restored = std::make_unique<MOPixel>();
+		if (restored->Create() < 0 || restored->LoadScript(fixturePath, true) != 0) {
+			ready = false;
+		} else {
+			const long uniqueID = restored->GetUniqueID();
+			idIndex = static_cast<int>(g_LuaMan.ScriptStateIndexForObject(uniqueID)) + 1;
+			savedIndex = idIndex == static_cast<int>(states.size()) ? 1 : idIndex + 1;
+			// What RestoreScriptGraphs puts back into the state the image named, keyed on the object.
+			g_LuaMan.GetStateByIndex(savedIndex).RunScriptString(
+			    "_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"] = { charge = 7 }");
+			restored->StageRestoredIdentity(uniqueID, savedIndex);
+			restored->AdoptPersistedUniqueID();
+			restoredState = g_LuaMan.GetStateIndex(restored->GetLuaState());
+			if (LuaStateWrapper* state = restored->GetLuaState()) {
+				state->RunScriptString("_RestoreBoundaryCharge = _ScriptedObjects and _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"] and _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"].charge or -1");
+				std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+				lua_State* luaState = state->GetLuaState();
+				lua_getglobal(luaState, "_RestoreBoundaryCharge");
+				restoredField = lua_tonumber(luaState, -1);
+				lua_pop(luaState, 1);
+				state->RunScriptString("_RestoreBoundaryCharge = nil");
+			}
+		}
+		restored->DestroyScriptState();
+		restored->Destroy();
+	}
+
+	states.swap(replacement);
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+
+	const bool serialGreen = ready && serialSpawnState > 0 && serialSpawnState == serialSpawnOwnState;
+	const bool parallelKnown = ready && parallelSpawnState > 0 && parallelSpawnState == parallelSpawnSpawnerState && spawnerPlacements == 1;
+	const bool restoreGreen = ready && restoredState > 0 && restoredState == savedIndex && restoredField == 7.0;
+	const bool passed = serialGreen && parallelKnown && restoreGreen;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " restore_keeps_the_object_with_its_saved_script_graph states=" << c_LuaStateCount
+	          << " serial_spawn_state=" << serialSpawnState << " serial_spawn_own_state=" << serialSpawnOwnState
+	          << " parallel_spawn_state=" << parallelSpawnState << " parallel_spawner_state=" << parallelSpawnSpawnerState
+	          << " spawner_placements=" << spawnerPlacements
+	          << " saved_state=" << savedIndex << " id_state=" << idIndex << " landed=" << restoredState
+	          << " field=" << restoredField
+	          << (serialGreen ? "" : " (a spawn inside a serial pass took its spawner's state)")
+	          << (restoreGreen ? "" : " (the restore moved the object away from the state its saved script graph is in)")
+	          << std::endl;
+	return passed;
+}
+
 bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
 	constexpr int c_ObjectCount = 1024;
 	constexpr int c_MeasureRounds = 32;
