@@ -233,6 +233,8 @@ void MovableObject::Clear() {
 	m_ForceIntoMasterLuaState = g_SettingsMan.EnableLuaDebugging();
 	m_ScriptObjectName.clear();
 	m_ScriptRegistrationSerial = 0;
+	m_HookCallDepth = 0;
+	m_DeleteWhenHookReturns = false;
 	m_ScreenEffectFile.Reset();
 	m_pScreenEffect = 0;
 	m_EffectRotAngle = 0;
@@ -1281,6 +1283,10 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		return -1;
 	}
 
+	// A script may delete this object from inside its own hook, and the loop still holds this object's
+	// script list: the object lives to the end of the loop and goes the moment it returns.
+	HookCallScope hookScope(this);
+
 	if (!ObjectScriptsInitialized()) {
 		status = InitializeObjectScripts(!LuaMan::IsPreviewClone(this));
 	}
@@ -1323,6 +1329,9 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 	if (m_AllLoadedScripts.empty() || !ObjectScriptsInitialized()) {
 		return -1;
 	}
+
+	// The same hold as the hook loop above: this loop reads this object between two script calls.
+	HookCallScope hookScope(this);
 
 	LuaStateWrapper& usedState = GetAndLockStateForScript(scriptPath);
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);

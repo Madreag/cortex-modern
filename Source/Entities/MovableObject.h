@@ -151,6 +151,29 @@ namespace RTE {
 		/// Takes the next unique ID for this object, bringing its registration and script object along.
 		void TakeNextUniqueID();
 
+		/// Whether a hook loop of this object is running, so a script's delete of it waits for the loop.
+		bool InsideHookLoop() const { return m_HookCallDepth > 0; }
+
+		/// Marks this object for deletion the moment its running hook loop returns.
+		void DeleteWhenHookReturns() { m_DeleteWhenHookReturns = true; }
+
+		/// Holds an object alive for the length of one hook loop: a script may delete it from inside its
+		/// own hook, and the loop still has scripts of that object to run.
+		struct HookCallScope {
+			explicit HookCallScope(MovableObject* object) : m_Object(object) { ++m_Object->m_HookCallDepth; }
+			~HookCallScope() {
+				if (--m_Object->m_HookCallDepth == 0 && m_Object->m_DeleteWhenHookReturns) {
+					m_Object->m_DeleteWhenHookReturns = false;
+					delete m_Object;
+				}
+			}
+			HookCallScope(const HookCallScope&) = delete;
+			HookCallScope& operator=(const HookCallScope&) = delete;
+
+		private:
+			MovableObject* m_Object;
+		};
+
 		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
 		void MoveScriptsToState(LuaStateWrapper& state);
 
@@ -1479,6 +1502,8 @@ namespace RTE {
 
 		std::string m_ScriptObjectName; //!< The name of this object for script usage.
 		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
+		int m_HookCallDepth; //!< How many hook loops of this object are running.
+		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
 		std::vector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
 		std::unordered_map<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
 		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.

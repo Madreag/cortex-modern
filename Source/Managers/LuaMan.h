@@ -25,8 +25,13 @@ namespace RTE {
 	class MovableObject;
 	class Scene;
 	class CheckpointText;
+	class Entity;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
+
+	/// The script-facing deletion (the Lua DeleteEntity adapter) for engine code that cannot include
+	/// the adapter header: it pulls in luabind, which only builds without conformance mode.
+	void DeleteEntityFromScript(Entity* entityToDelete);
 
 	/// Threaded Lua states, the same number on every machine. Lua globals are per state and an object's
 	/// state is its unique ID modulo this, so the count is a simulation input: it is a build constant,
