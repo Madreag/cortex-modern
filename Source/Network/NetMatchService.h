@@ -1268,6 +1268,12 @@ namespace RTE {
 		/// park declared on this thread must still reach the session that is evaluating silence.
 		NetSession* m_WorkerSession = nullptr;
 		NetSession* LiveSessionLocked() const { return m_Session ? m_Session.get() : m_WorkerSession; }
+		/// A park is the whole peer's, not one session's: a rejoin evaluates silence on the worker session while
+		/// the old one is still held, so both hear it or the one that is counting times the rejoin out.
+		void NotePumpParkedLocked() {
+			if (m_Session) m_Session->NotePumpParked();
+			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->NotePumpParked();
+		}
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;
