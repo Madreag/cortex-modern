@@ -1347,6 +1347,7 @@ static std::string ResyncSaveName() {
 				if (!m_CatchUpCoordinator->StartReplay(*m_CatchUpTransport, config, error)) return false;
 				ScenarioRunner::SetLockstepCoordinator(m_CatchUpCoordinator.get());
 			}
+			const uint64_t stagingBeganMs = SteadyNowMs();
 			if (!g_ActivityMan.LoadGameToRestart(pendingLoad)) {
 				if (error) *error = "world join snapshot load failed: " + pendingLoad;
 				return false;
@@ -1356,6 +1357,7 @@ static std::string ResyncSaveName() {
 			}
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
+			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs);
 			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			m_WorldCatchUp.tail.clear();
 			if (committed) {
@@ -3661,7 +3663,10 @@ static std::string ResyncSaveName() {
 			const auto activationWired = std::chrono::steady_clock::now();
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 			m_CatchUpCoordinator.reset(); m_CatchUpTransport.reset(); m_ActivateCatchUpLocalSeat = {};
-			// The tail replayed on this thread; the session read nothing while it ran.
+			// The tail replayed on this thread; the session read nothing while it ran, so neither the silence
+			// windows nor the admission deadlines count it.
+			m_AdmissionClock.NotePark(static_cast<uint64_t>(std::max(0.0,
+			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())));
 			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			std::cout << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
