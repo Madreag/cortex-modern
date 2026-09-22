@@ -51,6 +51,13 @@ The rule an object's state follows, in full:
   recorded for it, which is where its own saved fields are — the same state the peers that
   stayed in the match have it on.
 
+An object's script fields live under its `UniqueID`, and both move together. A `Create`
+on an object that is already running draws it a new `UniqueID` and takes its script
+object along, so its hooks keep running and its fields are still there; a restore hands
+its saved `UniqueID` to the object the image describes, and a live object that happens to
+hold that ID is given a fresh one (with its own fields) instead, so no two live objects
+ever share an identity.
+
 What a mod author needs to know: a global written in `SyncedUpdate` is visible to the
 objects whose unique IDs land on the writer's state, identically on every peer. If your
 script means "all of my objects", key a table by `UniqueID` and write it from every
