@@ -4725,8 +4725,10 @@ namespace RTE {
 				controller.SetFlipIntent(false);
 				controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
 			}
-			while (m_LastQueuedTargetFrame + 1 < target) {
-				if (!QueueInputAtTarget(m_LastQueuedTargetFrame + 1, previous.frames, {}, error, {})) return false;
+			// The cursor is this loop's own: a frame the capture park already committed is accepted without
+			// moving the queued watermark, and re-reading it there would pad the same frame for ever.
+			for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < target; ++pad) {
+				if (!QueueInputAtTarget(pad, previous.frames, {}, error, {})) return false;
 				++m_Stats.delayPaddingFrames;
 			}
 		}

@@ -17458,6 +17458,38 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 
 	/// A late start whose reclaim the round cannot take yet is retried until it is admitted; deferring it
 	/// once leaves the seat under the AI for the rest of the match.
+	/// Delay padding walks its own cursor: a frame the capture park already committed is accepted without
+	/// moving the queued watermark, and a loop that re-read it padded one frame for ever.
+	bool TestDelayPaddingPassesAParkedFrame(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A43, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 43; config.authorityPeerId = 1;
+		config.simTickMs = 1000.0 / 60.0; config.activePeerIds = {1}; config.relayToOtherPeers = true;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 2;
+		if (!host.Start(wire, config, error)) return false;
+		for (uint64_t now = 0; now <= 200 && !host.IsRunning(); now += 10) {
+			host.Tick(now);
+			wire.AdvanceTimeMs(10);
+		}
+		if (!host.IsRunning()) { *error = "the delay padding fixture never ran its round"; return false; }
+		const std::vector<ControllerFrame> frames{MakeFrame(987, 29)};
+		if (!host.QueueLocalInput(29, frames, {}, error)) return false;
+		if (host.SentInputThrough() != 30) { *error = "the padding fixture did not queue its first target"; return false; }
+		// A capture park committed canonical empty frames through 44 while our last target was 30.
+		host.m_Stats.nextFrame = 40;
+		host.m_HighestParkEndFrame = 44;
+		host.m_DelayChanges[1][39] = 6;
+		const std::vector<ControllerFrame> later{MakeFrame(987, 39)};
+		if (!host.QueueLocalInput(39, later, {}, error)) return false;
+		if (host.SentInputThrough() != 45) {
+			*error = "delay padding stopped short of its target: sent_through=" + std::to_string(host.SentInputThrough());
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS delay_padding_passes_a_parked_frame sent_through=" << host.SentInputThrough() << std::endl;
+		return true;
+	}
+
 	bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error) {
 		LoopbackTransport hostWire, peerWire;
 		if (!hostWire.StartHost(49476, error) || !peerWire.Connect("loopback", 49476, error)) return false;
@@ -17708,6 +17740,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestWorldTailKeepsItsLiveCoordinatorSeparate(&error) ||
 		    !TestLateStartPreservesHoldBoundary(&error) ||
 		    !TestALateStartsReclaimIsRetriedUntilAdmitted(&error) ||
+		    !TestDelayPaddingPassesAParkedFrame(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
