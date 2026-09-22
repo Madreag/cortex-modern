@@ -5723,7 +5723,7 @@ void MovableMan::Update() {
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 
 			                                                     for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				                                                     if (ValidMO(mo->GetRootParent())) {
@@ -6339,7 +6339,7 @@ void MovableMan::UpdateControllers() {
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 			                                                     for (Actor* actor: m_Actors) {
 				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;

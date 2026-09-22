@@ -8722,12 +8722,22 @@ shared.parent = _AutosaveCaptureProbe
 }
 
 thread_local LuaStateWrapper* s_luaStateOverride = nullptr;
+// Set only by the per-state tasks that run in parallel: inside one of those, every other state belongs
+// to another thread and the override is the only state this thread may take.
+thread_local bool s_luaStateParallelTask = false;
+std::atomic<uint64_t> s_ScriptStatesTakenFromASpawner{0};
+
 LuaStateWrapper* LuaMan::GetThreadLuaStateOverride() const {
 	return s_luaStateOverride;
 }
 
-void LuaMan::SetThreadLuaStateOverride(LuaStateWrapper* luaState) {
+void LuaMan::SetThreadLuaStateOverride(LuaStateWrapper* luaState, bool parallelStateTask) {
 	s_luaStateOverride = luaState;
+	s_luaStateParallelTask = luaState != nullptr && parallelStateTask;
+}
+
+uint64_t LuaMan::ScriptStatesTakenFromASpawner() {
+	return s_ScriptStatesTakenFromASpawner.load(std::memory_order_relaxed);
 }
 
 thread_local LuaStateWrapper* s_currentLuaState = nullptr;
@@ -8747,10 +8757,14 @@ LuaStateWrapper& LuaMan::GetScriptStateForObject(long uniqueID) {
 }
 
 LuaStateWrapper* LuaMan::GetAndLockScriptStateForObject(long uniqueID) {
-	if (s_luaStateOverride) {
-		// We're creating this object in a multithreaded environment, ensure that it's assigned to the same script state as us
+	// Inside a per-state task every other state belongs to another thread, so the object is assigned to
+	// the state this task holds - it is its spawner's, not its own. Only a ThreadedUpdate hook reaches
+	// here that way, and the contract sends shared-state changes to SyncedUpdate, which is serial.
+	if (s_luaStateOverride && s_luaStateParallelTask) {
 		bool success = s_luaStateOverride->GetMutex().try_lock();
-		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!") return s_luaStateOverride;
+		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!")
+		s_ScriptStatesTakenFromASpawner.fetch_add(1, std::memory_order_relaxed);
+		return s_luaStateOverride;
 	}
 
 	// With no threaded states every object script shares the master state.
@@ -8760,8 +8774,9 @@ LuaStateWrapper* LuaMan::GetAndLockScriptStateForObject(long uniqueID) {
 		return &m_MasterScriptState;
 	}
 
-	// The object picks its own state. A round-robin cursor carried whatever the machine did before the
-	// match into the match: Lua globals are per state, so two peers whose cursors stood at different
+	// The object picks its own state, wherever it was made - a serial pass may hold another state's lock
+	// and still hand this object its own. A round-robin cursor carried whatever the machine did before
+	// the match into the match: Lua globals are per state, so two peers whose cursors stood at different
 	// places grouped different objects in a shared table and parted. This depends on nothing local.
 	const size_t ourState = ScriptStateIndexForObject(uniqueID);
 
