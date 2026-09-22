@@ -4836,11 +4836,9 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer) {
-		// The host does not expose a timing boundary while a capture park is still waiting for its
-		// final end.  Sending the old apply frame first would let a capture-less peer apply it before
-		// it learns the shared park.
-		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports &&
-		    timing.action != NetTimingAction::CapturePark && timing.phase != NetTimingPhase::Status) return;
+		// A park handshake holds only the traffic the park itself authored.  A decision another peer needs in
+		// order to produce or consume a frame is never held behind it: the window the decision lands in is what
+		// defers its application, and the re-stamp at the final end withdraws what it replaces.
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (onlyPeer != 0 && peer != onlyPeer) continue;
 			auto& queue = m_TimingOutgoing[peer];
@@ -4893,10 +4891,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ApplyTiming(const NetLockstepTiming& timing) {
+		// Only a decision that lands INSIDE the park window waits for the window's final end; one outside it is
+		// applied at once, on every peer, exactly as it is sent.
 		if (!m_ApplyingDeferredParkTiming && timing.action != NetTimingAction::CapturePark &&
-		    (m_CaptureParkAwaitingReports ||
-		     (m_SynchronizedCaptureStartFrame != UINT64_MAX && timing.applyFrame >= m_SynchronizedCaptureStartFrame &&
-		      timing.applyFrame <= m_SynchronizedCaptureEndFrame))) {
+		    m_SynchronizedCaptureStartFrame != UINT64_MAX && timing.applyFrame >= m_SynchronizedCaptureStartFrame &&
+		    timing.applyFrame <= m_SynchronizedCaptureEndFrame) {
 			if (std::none_of(m_DeferredParkTimings.begin(), m_DeferredParkTimings.end(), [&](const auto& pending) { return pending.revision == timing.revision; }))
 				m_DeferredParkTimings.push_back(timing);
 			return;
