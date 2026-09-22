@@ -520,6 +520,8 @@ def parse_args(argv=None):
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
     parser.add_argument('--stock-baseline', type=Path, help='same-machine stock measurements, keyed by 60hz and uncapped')
+    parser.add_argument('--cases', nargs='+', choices=[name for name, *_ in AUTOSAVE_CASES],
+                        help='run only the selected autosave arms, without baselines or the full matrix')
     return parser, parser.parse_args(argv)
 
 
@@ -533,6 +535,32 @@ def main(argv=None):
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
     scratch_bytes(root, MATRIX_BYTE_LIMIT)
+    if args.cases:
+        selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases]
+        if not args.analyze_only:
+            root.mkdir(parents=True, exist_ok=True)
+            if (root / 'matrix-plan.json').exists():
+                parser.error('matrix-plan.json already exists; use a fresh output directory')
+            exe = file_record(REPO / 'Cortex Command.exe')
+            write_json(root / 'matrix-plan.json', dict(started=stamp(), exe=exe, branch=branch,
+                commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
+                source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
+                ports=[args.port + 8 + index for index, _ in selected], ticks=2 * TICKS,
+                arms=[case[0] for _, case in selected]))
+            script = root / 'input.txt'
+            input_pattern(script)
+            for index, (name, lag, seconds) in selected:
+                launch_case(root, name, lag, 60, True, args.port + 8 + index, script, exe['sha256'],
+                            args.timeout, window_ticks=2 * TICKS, autosave_seconds=seconds)
+        results = [reduce_timing_case(root / case[0]) for _, case in selected]
+        for result in results:
+            write_json(root / result['name'] / 'feel-report.json', result)
+        write_json(root / 'matrix-report.json', results)
+        complete = all(result['launches_complete'] for result in results)
+        write_json(root / 'completion.json', dict(finished=stamp(), launches_complete=complete,
+            case_launches={result['name']: result['launches_complete'] for result in results},
+            gates_unverified=True, scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT)))
+        return 0 if complete else 1
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
