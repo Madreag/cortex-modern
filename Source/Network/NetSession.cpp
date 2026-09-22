@@ -231,6 +231,14 @@ namespace RTE {
 		RefreshHostState();
 	}
 
+	uint32_t NetSession::GetHandshakingPeerCount() const {
+		uint32_t count = 0;
+		for (const PeerState& peer : m_Peers) {
+			if (peer.state == NetSessionState::Handshake) ++count;
+		}
+		return count;
+	}
+
 	void NetSession::EnableParticipantProof(NetParticipantIdentityStore* localStore) {
 		m_ParticipantProofRequired = true;
 		m_ParticipantStore = localStore;
