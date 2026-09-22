@@ -979,7 +979,7 @@ static std::string ResyncSaveName() {
 			m_ResyncHealOpen = true;
 			// The round owned the transport for the whole match, so nothing stamped a receive while it
 			// played. The silence windows start again here instead of measuring the match behind us.
-			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
+			NotePumpParkedLocked();
 			m_HostRepairPending = false;
 		}
 		const uint64_t a7Resync = NetA7Journal::BeginResync();
@@ -1128,9 +1128,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::NoteResyncRelaunched() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		// Staging the checkpoint and restarting the activity parked this peer's pump for seconds.
-		if (NetSession* live = LiveSessionLocked()) {
-			live->NotePumpParked();
-		}
+		NotePumpParkedLocked();
 		if (!m_ResyncHealOpen) {
 			return;
 		}
@@ -1358,7 +1356,7 @@ static std::string ResyncSaveName() {
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
 			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
-			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
+			NotePumpParkedLocked();
 			m_WorldCatchUp.tail.clear();
 			if (committed) {
 				struct LocalState { Activity::NetLocalPlayerState activity; std::string input, gui, frame; bool valid = false, prepared = false; };
@@ -3667,7 +3665,7 @@ static std::string ResyncSaveName() {
 			// windows nor the admission deadlines count it.
 			m_AdmissionClock.NotePark(static_cast<uint64_t>(std::max(0.0,
 			    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - activationBegan).count())), SteadyNowMs());
-			if (NetSession* live = LiveSessionLocked()) live->NotePumpParked();
+			NotePumpParkedLocked();
 			const auto milliseconds = [](auto from, auto to) { return std::chrono::duration<double, std::milli>(to - from).count(); };
 			std::cout << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
 			          << " capture_ms=" << milliseconds(activationBegan, activationCaptured) << " local_ms=" << milliseconds(activationCaptured, activationLocal)
