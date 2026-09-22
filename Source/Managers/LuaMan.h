@@ -540,8 +540,12 @@ namespace RTE {
 		/// @param uniqueID The unique ID of the object the state is for.
 		LuaStateWrapper& GetScriptStateForObject(long uniqueID);
 
-		/// The index into the threaded states an object's unique ID names. Only valid with states present.
+		/// The index into the threaded states an object's unique ID names, 0 when there are none.
 		size_t ScriptStateIndexForObject(long uniqueID) const;
+
+		/// Objects that took their spawner's state instead of their own, because they were made inside a
+		/// parallel per-state task. Zero for every object made on the sim thread.
+		static uint64_t ScriptStatesTakenFromASpawner();
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
@@ -564,10 +568,12 @@ namespace RTE {
 		/// @return The current lua state to force objects to be assigned to.
 		LuaStateWrapper* GetThreadLuaStateOverride() const;
 
-		/// Forces all new MOs created in this thread to be assigned to a particular lua state.
-		/// This is to ensure that objects created in threaded Lua environments can be safely used.
-		/// @param luaState The lua state to force objects to be assigned to.
-		void SetThreadLuaStateOverride(LuaStateWrapper* luaState);
+		/// Names the lua state this thread is running scripts in. A serial pass still gives a new object
+		/// its own state; only a parallel per-state task hands its own state to what it creates, because
+		/// every other state belongs to another thread for the length of that task.
+		/// @param luaState The lua state this thread runs in, or null to clear it.
+		/// @param parallelStateTask Whether this thread is one of the per-state tasks running in parallel.
+		void SetThreadLuaStateOverride(LuaStateWrapper* luaState, bool parallelStateTask = false);
 
 		/// Gets the current thread lua state that is running.
 		/// @return The current lua state that is running.
