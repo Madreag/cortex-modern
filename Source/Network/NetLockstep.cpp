@@ -4822,6 +4822,21 @@ namespace RTE {
 		return false;
 	}
 
+	std::string NetLockstepCoordinator::DescribePendingTimingDecisions(uint64_t frame) const {
+		std::ostringstream out;
+		out << "frame=" << frame << " next=" << m_Stats.nextFrame << " park_awaiting=" << m_CaptureParkAwaitingReports
+		    << " park=" << (m_SynchronizedCaptureStartFrame == UINT64_MAX ? 0 : m_SynchronizedCaptureStartFrame)
+		    << ".." << m_SynchronizedCaptureEndFrame << " final=" << m_CaptureParkFinalized << " deferred=" << m_DeferredParkTimings.size();
+		for (const auto& [revision, decision]: m_TimingDecisions) {
+			if (decision.committed || decision.proposal.applyFrame > frame) continue;
+			out << " [rev=" << revision << " peer=" << static_cast<int>(decision.proposal.peerId)
+			    << " action=" << static_cast<int>(decision.proposal.action) << " apply=" << decision.proposal.applyFrame
+			    << " required=" << static_cast<int>(decision.proposal.requiredPeers) << " acked=" << static_cast<int>(decision.acknowledgedPeers)
+			    << " proposed_ms=" << decision.proposedAtMs << "]";
+		}
+		return out.str();
+	}
+
 	uint64_t NetLockstepCoordinator::FutureTimingFrame() const {
 		uint64_t horizon = std::max(m_Stats.nextFrame, m_LastQueuedTargetFrame == UINT64_MAX ? 0 : m_LastQueuedTargetFrame + 1);
 		uint16_t delay = InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame);

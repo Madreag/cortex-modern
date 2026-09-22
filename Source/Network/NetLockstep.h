@@ -843,6 +843,8 @@ namespace RTE {
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
 		bool TimingDecisionPendingAt(uint64_t frame) const;
+		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.
+		std::string DescribePendingTimingDecisions(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
