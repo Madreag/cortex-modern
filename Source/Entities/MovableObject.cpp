@@ -44,6 +44,8 @@ using namespace RTE;
 AbstractClassInfo(MovableObject, SceneObject);
 
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
+// Registrations are ordered by the sim, so the serial says which of two objects sharing an identity came first.
+std::atomic<long> MovableObject::s_ScriptRegistrationSerial = 0;
 int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
@@ -230,6 +232,7 @@ void MovableObject::Clear() {
 	m_ThreadedLuaState = nullptr;
 	m_ForceIntoMasterLuaState = g_SettingsMan.EnableLuaDebugging();
 	m_ScriptObjectName.clear();
+	m_ScriptRegistrationSerial = 0;
 	m_ScreenEffectFile.Reset();
 	m_pScreenEffect = 0;
 	m_EffectRotAngle = 0;
@@ -277,6 +280,39 @@ void MovableObject::Clear() {
 	m_PersistedMOIgnoreTimerAnchor = {};
 }
 
+void MovableObject::TakeNextUniqueID() {
+	g_MovableMan.UnregisterObject(this);
+	const long nextUniqueID = MovableObject::GetNextUniqueID();
+	// A hook finds self under the object's unique ID, so a live script object follows the new identity.
+	if (!MoveRunningScriptObjectToID(nextUniqueID)) {
+		g_ConsoleMan.PrintString("ERROR: " + GetModuleAndPresetName() + " lost its script object when its identity changed");
+		std::cout << "[script] " << GetPresetName() << " kept script identity " << m_UniqueID << " while taking " << nextUniqueID << std::endl;
+	}
+	m_UniqueID = nextUniqueID;
+
+	m_MOIDHit = g_NoMOID;
+	m_TerrainMatHit = g_MaterialAir;
+	m_ParticleUniqueIDHit = 0;
+
+	g_MovableMan.RegisterObject(this);
+}
+
+bool MovableObject::MoveRunningScriptObjectToID(long newUniqueID) {
+	if (!m_ThreadedLuaState || !ObjectScriptsInitialized() || newUniqueID <= 0 || newUniqueID == m_UniqueID) {
+		return true;
+	}
+	// A preview clone keeps its own key: the preview drops it, and nothing outside the window reads it.
+	if (LuaMan::IsPreviewClone(this) || m_ScriptObjectName.find("#preview") != std::string::npos) {
+		return true;
+	}
+	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
+	if (!m_ThreadedLuaState->RekeyScriptObjects({{this, newUniqueID}})) {
+		return false;
+	}
+	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(newUniqueID) + "\"]";
+	return true;
+}
+
 LuaStateWrapper& MovableObject::GetAndLockStateForScript(const std::string& scriptPath, const LuaFunction* function) {
 	if (m_ForceIntoMasterLuaState) {
 		m_ThreadedLuaState = &g_LuaMan.GetMasterScriptState();
@@ -302,14 +338,7 @@ int MovableObject::Create() {
 	if (m_EffectStopTime <= 0)
 		m_EffectStopTime = m_Lifetime;
 
-	g_MovableMan.UnregisterObject(this);
-	m_UniqueID = MovableObject::GetNextUniqueID();
-
-	m_MOIDHit = g_NoMOID;
-	m_TerrainMatHit = g_MaterialAir;
-	m_ParticleUniqueIDHit = 0;
-
-	g_MovableMan.RegisterObject(this);
+	TakeNextUniqueID();
 
 	return 0;
 }
@@ -333,14 +362,7 @@ int MovableObject::Create(const float mass,
 	m_HitsMOs = hitMOs;
 	m_GetsHitByMOs = getHitByMOs;
 
-	g_MovableMan.UnregisterObject(this);
-	m_UniqueID = MovableObject::GetNextUniqueID();
-
-	m_MOIDHit = g_NoMOID;
-	m_TerrainMatHit = g_MaterialAir;
-	m_ParticleUniqueIDHit = 0;
-
-	g_MovableMan.RegisterObject(this);
+	TakeNextUniqueID();
 
 	return 0;
 }
@@ -528,9 +550,17 @@ void MovableObject::AdoptPersistedUniqueID() {
 		return;
 	}
 	g_MovableMan.UnregisterObject(this);
-	if (const MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
-		g_ConsoleMan.PrintString("ERROR: restore adopted duplicate UniqueID " + std::to_string(m_PersistedUniqueID) + " (" + GetPresetName() + ")");
-		std::cout << "[restore] duplicate UniqueID " << m_PersistedUniqueID << " adopted by " << GetPresetName() << std::endl;
+	// The image's ID crossed the wire; a live holder of it drew its own from the counter, so the holder
+	// is the one that moves. Every peer restoring this image meets the same holders in the same order.
+	if (MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
+		const long replacement = GetNextUniqueID();
+		g_MovableMan.UnregisterObject(holder);
+		if (!holder->MoveRunningScriptObjectToID(replacement)) {
+			g_ConsoleMan.PrintString("ERROR: restore could not move the script object of " + holder->GetModuleAndPresetName() + " off UniqueID " + std::to_string(m_PersistedUniqueID));
+		}
+		holder->m_UniqueID = replacement;
+		g_MovableMan.RegisterObject(holder);
+		std::cout << "[restore] UniqueID " << m_PersistedUniqueID << " adopted by " << GetPresetName() << "; its live holder " << holder->GetPresetName() << " took " << replacement << std::endl;
 	}
 	m_UniqueID = m_PersistedUniqueID;
 	m_PersistedUniqueID = 0;
@@ -1139,6 +1169,8 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		return 0;
 	}
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
+	// The place this object takes in the registration order, drawn where the sim registers it.
+	m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);
 	if (m_ThreadedLuaState->RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; " + m_ScriptObjectName + " = To" + GetClassName() + "(LuaMan.TempEntity); ") < 0) {
