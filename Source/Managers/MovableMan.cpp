@@ -5617,11 +5617,8 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		// A capture park commits one canonical empty frame on every peer, so its actors must also be in the
-		// canonical wire state there: a controller left on its own machine's mode keeps firing on one peer.
 		NeutralizeUnframedLockstepActors(m_Actors, applied,
-		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame() ||
-		        ScenarioRunner::IsLockstepCapturePark(readyFrame.frame));
+		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame());
 		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
