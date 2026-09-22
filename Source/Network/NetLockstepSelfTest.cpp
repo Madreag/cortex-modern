@@ -3297,6 +3297,34 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		bool TestTheDrainWaitsOnARejoinsOwnProgress(std::string* error) {
+			LoopbackTransport wire;
+			NetLockstepCoordinator replay;
+			NetLockstepConfig config;
+			config.localPeerId = 1; config.peerCount = 2;
+			if (!replay.StartReplay(wire, config, error)) return false;
+			// A rejoin commits no frame while it stages and replays, so only the session's own progress
+			// witnesses it. The budget here is the IDLE bound: it may not end a rejoin that is moving.
+			unsigned int pumps = 0;
+			uint64_t rejoinProgress = 0;
+			constexpr unsigned int c_MovingPumps = 400;
+			ScenarioRunner::SetLockstepCoordinator(&replay);
+			ScenarioRunner::SetSessionPump([&] { if (++pumps <= c_MovingPumps) ++rejoinProgress; }, [] { return true; },
+			                               [&] { return rejoinProgress; });
+			const auto began = std::chrono::steady_clock::now();
+			const bool drained = ScenarioRunner::DrainLockstepRelay(20, 0);
+			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+			ScenarioRunner::SetSessionPump(nullptr);
+			ScenarioRunner::SetLockstepCoordinator(nullptr);
+			if (drained || pumps <= c_MovingPumps) {
+				*error = "the goodbye drain left while a rejoin was still advancing: pumps=" + std::to_string(pumps) +
+				         " spent_ms=" + std::to_string(spentMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_drain_waits_on_a_rejoins_own_progress pumps=" << pumps << std::endl;
+			return true;
+		}
+
 		bool TestCommittedCatchUpKeepsSharedState(std::string* error) {
 			EnsureSwitchTestManagers();
 			const auto timer = g_TimerMan.SaveCheckpoint();
@@ -17572,6 +17600,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestLateStartPreservesHoldBoundary(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
+		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
 		    !TestPrivateReclaimKeepsRoundRunning(&error) || !TestPrivateReclaimKeepsRoundRunning(&error, true) ||
 		    !TestRejoinWindowClearsTheRestart(&error) ||
 		    !TestReturningSeatSurvivesItsFirstTrip(&error) ||

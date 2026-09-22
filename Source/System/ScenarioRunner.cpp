@@ -64,6 +64,7 @@ namespace RTE {
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
 		std::function<bool()> s_PendingSessionTail;
+		std::function<uint64_t()> s_SessionProgress;
 		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		uint64_t s_NextLocalCommandSequence = 1;
@@ -791,9 +792,10 @@ namespace RTE {
 		return s_ControllerReplayError;
 	}
 
-	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail) {
+	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail, std::function<uint64_t()> sessionProgress) {
 		s_SessionPump = std::move(pump);
 		s_PendingSessionTail = std::move(pendingTail);
+		s_SessionProgress = std::move(sessionProgress);
 	}
 
 	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
@@ -2686,11 +2688,16 @@ namespace RTE {
 		// open, and a peer that has stopped answering closes it after one budget.  The total is capped so an
 		// unattended run always ends.
 		constexpr uint32_t c_TotalDrainCapMs = 90000;
-		uint64_t progress = s_LockstepCoordinator->RemoteProgressSum();
+		// A rejoin commits no frame while it authenticates, stages an image and replays a tail, so the round's
+		// own progress cannot witness it: the session's does.
+		const auto witness = [] {
+			return s_LockstepCoordinator->RemoteProgressSum() + (s_SessionProgress ? s_SessionProgress() : 0);
+		};
+		uint64_t progress = witness();
 		uint32_t idleFrom = elapsed();
 		while (pending() && elapsed() - idleFrom < budgetMs && elapsed() < c_TotalDrainCapMs) {
 			pump();
-			const uint64_t now = s_LockstepCoordinator->RemoteProgressSum();
+			const uint64_t now = witness();
 			if (now != progress) { progress = now; idleFrom = elapsed(); }
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}

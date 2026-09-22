@@ -406,6 +406,20 @@ static bool s_rbProbeRestoreMismatch = false;
 
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
+// A held seat that could not get back in before the host said goodbye finished the match it was in.
+static bool s_netMatchCompletedByHostGoodbye = false;
+static uint64_t s_netMatchHeldFromTick = 0;
+static uint64_t s_netMatchGoodbyeFinalFrame = 0;
+
+/// Whether the host's goodbye, not a broken link, ended this seat's rejoin.
+static bool NetMatchHostGoodbyeEndedTheRejoin(const std::string& resyncError) {
+	uint64_t finalFrame = 0;
+	if (!g_NetMatchService.HostGoodbyeSeen(finalFrame) && resyncError.rfind("match over", 0) != 0) {
+		return false;
+	}
+	s_netMatchGoodbyeFinalFrame = finalFrame;
+	return true;
+}
 static NetMatchHealWindow s_netMatchHeals;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
@@ -4728,6 +4742,30 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			g_ActivityMan.EndActivity();
 			ScenarioRunner::ClearControllerReplayError();
 			System::SetQuit(true);
+		} else if (error.find("MatchOver:") != std::string::npos) {
+			// The round this seat was rejoining is finished: it completes on what it holds. Without this the
+			// rejoin's own link failure reads as a broken match instead of a played one.
+			uint64_t goodbyeFinal = 0;
+			(void)g_NetMatchService.HostGoodbyeSeen(goodbyeFinal);
+			s_netMatchCompletedByHostGoodbye = true;
+			s_netMatchGoodbyeFinalFrame = goodbyeFinal;
+			{
+				std::ostringstream line;
+				line << "[net-match] completed_by_host_goodbye=1 held_from=" << s_netMatchHeldFromTick
+				     << " final=" << s_netMatchGoodbyeFinalFrame;
+				System::PrintDiagnosticLine(line.str());
+			}
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
+			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+			g_NetMatchService.FinishMatch(result);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
+			}
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
 			// way a finished one does, which keeps the seats and the admission counters in the report.
@@ -4786,6 +4824,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			}
 			if (heldRejoin) {
+				s_netMatchHeldFromTick = matchTick;
 				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
 				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
 			} else {
@@ -4857,7 +4896,16 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
 				}
-			} else if (resyncError == "match over") {
+			} else if (NetMatchHostGoodbyeEndedTheRejoin(resyncError)) {
+				// The host's goodbye ends this seat's match at the frame the round ended on: the rejoin had
+				// nothing left to return to, so the seat completes with what it holds instead of failing.
+				s_netMatchCompletedByHostGoodbye = heldRejoin;
+				if (heldRejoin) {
+					std::ostringstream line;
+					line << "[net-match] completed_by_host_goodbye=1 held_from=" << s_netMatchHeldFromTick
+					     << " final=" << s_netMatchGoodbyeFinalFrame;
+					System::PrintDiagnosticLine(line.str());
+				}
 				g_NetMatchService.FinishMatch("match over");
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
@@ -7071,6 +7119,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
+	out << "\"completed_by_host_goodbye\":" << (s_netMatchCompletedByHostGoodbye ? 1 : 0) << ",";
+	out << "\"held_from\":" << s_netMatchHeldFromTick << ",";
+	out << "\"goodbye_final_frame\":" << s_netMatchGoodbyeFinalFrame << ",";
 	out << "\"resyncs\":" << s_netMatchHeals.Total() << ",";
 	out << "\"resyncs_in_window\":" << s_netMatchHeals.InWindow() << ",";
 	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";

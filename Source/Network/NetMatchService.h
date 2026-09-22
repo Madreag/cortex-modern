@@ -608,6 +608,12 @@ namespace RTE {
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		bool BeginHeldRejoin(std::string* error = nullptr);
+		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
+		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
+		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
+		uint64_t RejoinProgressSum() const;
+		/// Whether the host's goodbye has been heard, and the frame the round ended on (0 when it named none).
+		bool HostGoodbyeSeen(uint64_t& finalFrame) const;
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -781,6 +787,8 @@ namespace RTE {
 		static bool ResyncSnapshotAllowed(const Activity* activity);
 		static NetRejoinAnswer ClassifyRejoin(const Activity* activity);
 		void AnswerMatchOverRejoin(const std::string& result);
+		/// The goodbye a rejoining seat reads: the round is over, and the frame it ended on.
+		static std::string MatchOverGoodbyeText(uint64_t finalFrame);
 
 		static const char* StateName(NetMatchServiceState state);
 
@@ -1008,6 +1016,9 @@ namespace RTE {
 		void PumpCompletedSessionLocked();
 		/// Refuses Ready peers absent from the ended round; caller holds the lock.
 		void RefuseEndedPeersLocked(const std::string& reason);
+		void SayGoodbyeToRejoinersLocked();
+		/// Reads a host's goodbye out of a session's refusal; true once one has been heard.
+		bool NoteHostGoodbyeLocked(const NetSession* session);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
 		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
@@ -1321,6 +1332,12 @@ namespace RTE {
 		std::atomic<bool> m_EverStarted{false};
 		std::string m_CapturedRunnerReport;
 		std::string m_RejoinOutcome;
+		/// The frame the round ended on, set when this host says goodbye or this peer hears one; 0 while the
+		/// round is live. The flag is separate because a goodbye may name no frame.
+		uint64_t m_CompletedRoundFinalFrame = 0;
+		bool m_HostGoodbyeSeen = false;
+		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
+		bool m_GoodbyeOwedToRejoiners = false;
 		struct LastResyncMetrics {
 			uint64_t archiveBytes = 0;
 			uint64_t envelopeBytes = 0;
