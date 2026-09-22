@@ -1653,6 +1653,100 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestAParkClosesOnItsBudget(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A79, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A79, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A79;
+			hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 40;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49486, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			uint64_t queued = 0;
+			auto feed = [&](uint64_t through) {
+				for (; queued <= through; ++queued)
+					if (!host.QueueLocalInput(queued, {}, {}, error) || !client.QueueLocalInput(queued, {}, {}, error)) return false;
+				return true;
+			};
+			if (!feed(20)) return false;
+			uint64_t now = 0;
+			for (; now < 300 && (host.GetStats().nextFrame < 4 || client.GetStats().nextFrame < 4); now += 2) {
+				hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+				while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
+			}
+			if (host.GetStats().nextFrame < 4) { *error = "the budget row never committed its pre-park frames"; return false; }
+			// The seat that owes a capture report never sends one: only the budget can close this park.
+			const uint64_t completed = host.GetStats().nextFrame - 1;
+			host.BeginSynchronizedCapture(completed);
+			host.CompleteSynchronizedCapture(completed, 120.0);
+			uint64_t end = 0;
+			for (uint64_t frame = completed; frame <= completed + 300; ++frame) if (host.IsSynchronizedCapturePark(frame)) end = frame;
+			if (end == 0) { *error = "the capture park never opened on the host"; return false; }
+			for (uint64_t step = 0; step < 6000 && host.GetStats().nextFrame <= end; step += 2, now += 2) {
+				if (!feed(host.GetStats().nextFrame + 8)) return false;
+				hostWire.AdvanceTimeMs(2); host.Tick(now);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+			}
+			if (host.GetStats().nextFrame <= end) {
+				*error = "the capture park never closed on its budget: next=" + std::to_string(host.GetStats().nextFrame) +
+				         " end=" + std::to_string(end) + " budget_ms=" + std::to_string(hostConfig.timeoutMs);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_park_closes_on_its_budget end=" << end
+			          << " next=" << host.GetStats().nextFrame << std::endl;
+			return true;
+		}
+
+		bool TestADeferredDecisionWaitsForTheFinalEnd(std::string* error) {
+			LoopbackTransport hostWire, wire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A7A, 0, NetTransportLane::ControlReliable);
+			auto config = MakeCoordinatorConfig(2, 1, 0x9A7A, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = config.roundId = 0x9A7A;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.simTickMs = config.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = config.timeoutMs = 20000;
+			if (!StartCoordinatorPair(49487, hostWire, wire, host, client, hostConfig, config, error)) return false;
+			if (!DriveCoordinators(hostWire, wire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			// Only the client runs from here: the host never publishes this park's final end.
+			for (uint64_t now = 0; now < 40 && !client.IsRunning(); now += 2) { wire.AdvanceTimeMs(2); client.Tick(now); }
+			if (!client.IsRunning()) { *error = "the deferred-decision row never started its round"; return false; }
+			const uint16_t before = client.InputDelayAt(2, client.GetStats().nextFrame);
+			// A provisional window opens the park; its final end has not been published yet.
+			NetLockstepTiming provisional;
+			provisional.senderPeerId = 1; provisional.peerId = 1;
+			provisional.action = NetTimingAction::CapturePark; provisional.phase = NetTimingPhase::Commit;
+			provisional.sessionId = config.sessionId; provisional.roundId = config.roundId;
+			provisional.revision = 1; provisional.applyFrame = client.GetStats().nextFrame + 4;
+			provisional.nextFrame = provisional.cutoffFrame = provisional.applyFrame + 20;
+			provisional.requiredPeers = 0x03; provisional.pingMs = 0;
+			// A delay decision lands inside that window and must not be applied from this machine's own end.
+			NetLockstepTiming delay;
+			delay.senderPeerId = 1; delay.peerId = 2;
+			delay.action = NetTimingAction::Delay; delay.phase = NetTimingPhase::Commit;
+			delay.sessionId = config.sessionId; delay.roundId = config.roundId;
+			delay.revision = 2; delay.applyFrame = provisional.applyFrame + 2; delay.cutoffFrame = 0;
+			delay.nextFrame = 0; delay.delayFrames = static_cast<uint16_t>(before + 5); delay.requiredPeers = 0x03;
+			for (const NetLockstepTiming& timing: {provisional, delay}) {
+				std::vector<uint8_t> bytes;
+				NetLockstepError encodeError;
+				if (!NetLockstepCodec::Encode({timing}, bytes, &encodeError)) { *error = "the park row did not encode: " + encodeError.message; return false; }
+				client.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, bytes, {}}, 10);
+			}
+			for (uint64_t now = 12; now < 800; now += 2) { wire.AdvanceTimeMs(2); client.Tick(now); }
+			if (client.InputDelayAt(2, delay.applyFrame) != before) {
+				*error = "a decision the park deferred was applied before the final end: delay=" +
+				         std::to_string(client.InputDelayAt(2, delay.applyFrame)) + " before=" + std::to_string(before);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_deferred_decision_waits_for_the_final_end delay=" << before << std::endl;
+			return true;
+		}
+
 		bool TestTheBudgetStartsAtTheHostsOwnStartup(std::string* error) {
 			LoopbackTransport wire, silentWire;
 			NetLockstepCoordinator host;
@@ -17606,7 +17700,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestDeadLinkLosesOnlyItsOwnSeat(&error) ||
 		    !TestDeadLinkHealedInTimeKeepsEverySeat(&error) ||
 		    !TestSoloRoundRunsWithoutRemotes(&error) ||
-		    !TestTheBudgetStartsAtTheHostsOwnStartup(&error)) {
+		    !TestTheBudgetStartsAtTheHostsOwnStartup(&error) ||
+		    !TestAParkClosesOnItsBudget(&error) ||
+		    !TestADeferredDecisionWaitsForTheFinalEnd(&error)) {
 			return fail(error);
 		}
 
