@@ -5437,6 +5437,12 @@ namespace RTE {
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
+		// A proposal the round has already passed can never be applied, so it is withdrawn on every peer by the
+		// same rule.  Without it a superseded proposal would sit in the table until the round ended and could
+		// still be matched against a later commit.
+		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
+			return !entry.second.committed && entry.second.proposal.applyFrame < m_Stats.nextFrame;
+		});
 		if (m_LastTimingSampleMs == UINT64_MAX || nowMs - m_LastTimingSampleMs >= NetInputDelayEstimator::c_SampleMs) {
 			m_LastTimingSampleMs = nowMs;
 			for (const auto& [peer, transport]: m_RemoteTransports) {
@@ -6625,8 +6631,24 @@ namespace RTE {
 				if (timing.action == NetTimingAction::Reclaim || timing.action == NetTimingAction::WorldAdmission)
 					timing.neutralThroughFrame = std::max(timing.neutralThroughFrame, timing.applyFrame + timing.delayFrames);
 				if (m_Config.localPeerId == GetHostPeerId()) {
-					if (auto found = m_TimingDecisions.find(timing.revision); found != m_TimingDecisions.end()) found->second.proposal = timing;
+					// A peer may already hold the proposal at its old frame, and a decision is identified by its
+					// revision: re-stamping in place would make the commit contradict what that peer stored. The
+					// re-stamp is a NEW proposal, and the old one is withdrawn everywhere by the rule below - a
+					// proposal the round has passed can never be applied, so every peer drops it identically.
+					const uint64_t superseded = timing.revision;
+					if (m_NextTimingRevision == UINT64_MAX) { m_DeferredParkTimings.push_back(timing); continue; }
+					timing.revision = m_NextTimingRevision++;
+					const auto found = m_TimingDecisions.find(superseded);
+					const bool committed = found != m_TimingDecisions.end() && found->second.committed;
+					const uint8_t acknowledged = found != m_TimingDecisions.end() ? found->second.acknowledgedPeers : 0;
+					m_TimingDecisions.erase(superseded);
+					m_TimingDecisions[timing.revision] = {timing, acknowledged, committed, m_TimingNowMs};
 					QueueTiming(timing);
+					if (committed && timing.phase == NetTimingPhase::Propose) {
+						NetLockstepTiming commit = timing;
+						commit.phase = NetTimingPhase::Commit;
+						QueueTiming(commit);
+					}
 				}
 			}
 			ApplyTiming(timing);
