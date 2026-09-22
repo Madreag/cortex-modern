@@ -146,6 +146,10 @@ namespace RTE {
 		/// ran objects before the match assigns the same objects to the same states as one that did not.
 		bool RunLuaStateAssignmentSelfTest();
 
+		/// A spawn inside a serial pass takes its own state, and a restored object lands on the state the
+		/// image named - the one its saved script graph, and every live peer, has it on.
+		bool RunLuaStateRestoreBoundarySelfTest();
+
 		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
 		/// installing an empty one. Leaves the live record as it found it.
 		bool RunLegacyBrainRecordSelfTest(const Actor* seatBrain);
