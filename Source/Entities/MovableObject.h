@@ -140,6 +140,17 @@ namespace RTE {
 			m_PersistedLuaStateIndex = luaStateIndex;
 		}
 
+		/// The place this object took in its Lua state's registration order, drawn on the sim thread when
+		/// its scripts initialized. Two objects that share a unique ID and a MOID are ordered on it.
+		long GetScriptRegistrationSerial() const { return m_ScriptRegistrationSerial; }
+
+		/// Moves this object's live script object to another unique ID's key, so its hooks keep finding
+		/// self when the identity changes under them. Returns false when the key could not be moved.
+		bool MoveRunningScriptObjectToID(long newUniqueID);
+
+		/// Takes the next unique ID for this object, bringing its registration and script object along.
+		void TakeNextUniqueID();
+
 		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
 		void MoveScriptsToState(LuaStateWrapper& state);
 
@@ -1368,6 +1379,7 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 		// Global counter with unique ID's
 		static std::atomic<long> m_UniqueIDCounter;
+		static std::atomic<long> s_ScriptRegistrationSerial; //!< Counts registrations, so a shared identity still has an order.
 		// The type of MO this is, either Actor, Item, or Particle
 		int m_MOType;
 		float m_Mass; // In metric kilograms (kg).
@@ -1466,6 +1478,7 @@ namespace RTE {
 		};
 
 		std::string m_ScriptObjectName; //!< The name of this object for script usage.
+		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
 		std::vector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
 		std::unordered_map<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
 		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.
