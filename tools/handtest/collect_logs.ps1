@@ -61,12 +61,12 @@ foreach ($inst in $instances) {
     }
     $effective = Join-Path $inst.FullName 'Userdata\Settings.ini'
     if (Test-Path $effective) { Copy-Item $effective (Join-Path $dest 'Settings.ini.effective') -Force; $copied++ }
-    foreach ($dir in 'Autosaves', 'ScreenShots', 'Mods') {
+    foreach ($dir in 'Autosaves', 'ScreenShots', 'Mods', 'Userdata\Replays') {
         $src = Join-Path $inst.FullName $dir
         if (Test-Path $src) {
             $files = Get-ChildItem $src -File -Recurse
             if ($files) {
-                Copy-Item $src (Join-Path $dest $dir) -Recurse -Force
+                Copy-Item $src (Join-Path $dest (Split-Path $dir -Leaf)) -Recurse -Force
                 $copied += $files.Count
             }
         }
