@@ -537,6 +537,7 @@ CheckpointText RTE::AssembleCheckpointSave(const CheckpointImage& image) {
 		writer.NewPropertyWithValue("SimUpdateCount", image.simUpdateCount);
 		writer.NewPropertyWithValue("SimTimeTicks", image.simTimeTicks);
 		writer.NewPropertyWithValue("UniqueIDCounter", image.uniqueIDCounter);
+		writer.NewPropertyWithValue("ScriptRegistrationSerial", image.scriptRegistrationSerial);
 		for (const auto& [savedTick, uid]: image.quarantine) {
 			writer.NewProperty("LockstepJoinQuarantine");
 			writer << savedTick << "|" << uid;

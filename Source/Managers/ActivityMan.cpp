@@ -636,6 +636,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->simUpdateCount = g_TimerMan.GetSimUpdateCount();
 	image->simTimeTicks = g_TimerMan.GetSimTimeTicks();
 	image->uniqueIDCounter = MovableObject::GetUniqueIDCounter();
+	image->scriptRegistrationSerial = MovableObject::GetScriptRegistrationSerialCounter();
 	image->quarantine = g_MovableMan.GetLockstepJoinQuarantine();
 	image->placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 	image->placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
@@ -809,6 +810,7 @@ bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 		synchronous.simUpdateCount = g_TimerMan.GetSimUpdateCount();
 		synchronous.simTimeTicks = g_TimerMan.GetSimTimeTicks();
 		synchronous.uniqueIDCounter = MovableObject::GetUniqueIDCounter();
+		synchronous.scriptRegistrationSerial = MovableObject::GetScriptRegistrationSerialCounter();
 		synchronous.quarantine = g_MovableMan.GetLockstepJoinQuarantine();
 		synchronous.placeObjects = g_SceneMan.GetPlaceObjectsOnLoad();
 		synchronous.placeUnits = g_SceneMan.GetPlaceUnitsOnLoad();
@@ -985,6 +987,7 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 		bool placeObjects = true, placeUnits = true, hasActivity = false, hasScene = false;
 		long long simUpdateCount = -1, simTimeTicks = 0;
 		long uniqueIDCounter = -1;
+		long scriptRegistrationSerial = -1;
 		std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 		std::map<size_t, std::string> graphs;
 		std::string runtimeGlobals, worldStructure, sceneRuntime;
@@ -1020,6 +1023,10 @@ bool ActivityMan::ReadSavedGameArchive(const std::string& archivePath, const std
 				reader >> uniqueIDCounter;
 				// Temporary reader/graph clones must never borrow an incoming object's saved ID.
 				MovableObject::PinUniqueIDCounter(std::max(MovableObject::GetUniqueIDCounter(), uniqueIDCounter));
+			} else if (propName == "ScriptRegistrationSerial") {
+				reader >> scriptRegistrationSerial;
+				// Registrations after the restore continue above every serial the image carried.
+				MovableObject::PinScriptRegistrationSerial(std::max(MovableObject::GetScriptRegistrationSerialCounter(), scriptRegistrationSerial));
 			} else if (propName == "LuaStateCursor") {
 				// Retired with the round-robin assignment; read so a save written before it still loads.
 				int retiredCursor = 0;

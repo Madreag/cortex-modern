@@ -141,8 +141,22 @@ namespace RTE {
 		}
 
 		/// The place this object took in its Lua state's registration order, drawn on the sim thread when
-		/// its scripts initialized. Two objects that share a unique ID and a MOID are ordered on it.
+		/// its scripts initialized, or carried over from the image that described it. Two objects that
+		/// share a unique ID and a MOID are ordered on it, on every peer alike.
 		long GetScriptRegistrationSerial() const { return m_ScriptRegistrationSerial; }
+
+		/// Stages the registration serial an image recorded, so the restored object keeps the writer's
+		/// place in the order instead of drawing this machine's next one.
+		void StageRestoredScriptRegistration(long serial) { m_ScriptRegistrationSerial = serial; }
+
+		/// This object's runtime image, and the image applied to it - what a snapshot clone and a save
+		/// carry between them (SpecialBehaviour_MovableObjectRuntime).
+		std::string SaveRuntimeImage() const { return SaveMovableObjectRuntime(); }
+		bool LoadRuntimeImage(std::string_view text) { return LoadMovableObjectRuntime(text); }
+
+		/// The registration counter, saved and restored with an image the way the unique-ID counter is.
+		static long GetScriptRegistrationSerialCounter() { return s_ScriptRegistrationSerial; }
+		static void PinScriptRegistrationSerial(long serial) { s_ScriptRegistrationSerial = serial; }
 
 		/// Moves this object's live script object to another unique ID's key, so its hooks keep finding
 		/// self when the identity changes under them. Returns false when the key could not be moved.

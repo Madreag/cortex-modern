@@ -55,6 +55,7 @@ namespace RTE {
 		int64_t simUpdateCount = 0;
 		int64_t simTimeTicks = 0;
 		long uniqueIDCounter = 0;
+		long scriptRegistrationSerial = 0;
 		std::vector<std::pair<uint64_t, long int>> quarantine;
 		bool placeObjects = false;
 		bool placeUnits = false;
