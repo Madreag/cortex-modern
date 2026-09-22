@@ -177,7 +177,8 @@ def main():
     comparisons = compare_live_hashes(root / 'host-live.jsonl', root / 'client-live.jsonl', 1)
     passed = (all(all(value for key, value in checks[peer].items() if key != 'lines') for peer in checks)
               and not has_http_429(directory) and bool(comparisons)
-              and all(row['compared_ticks'] > 0 and row['mismatched_ticks'] == 0 for row in comparisons))
+              and all(row['compared_ticks'] > 0 and row['mismatched_ticks'] == 0
+                      and row['mismatched_applied_input_ticks'] == 0 for row in comparisons))
     result = dict(passed=passed, checks=checks, comparisons=comparisons,
                   directory_no_429=not has_http_429(directory), directory_port=args.port, game_port=args.game_port,
                   relay=dict(endpoint=f'{turn_host}:{turn_port}', warm_attempts=warm_attempts, reachable=reachable))
