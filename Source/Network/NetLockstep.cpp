@@ -5205,7 +5205,9 @@ namespace RTE {
 					// absorbs the skew once by waiting. The bound catches a stream that STOPPED.
 					continue;
 				}
-				held = ProposePeerHold(peer, nowMs) || held;
+				std::string holdError;
+				if (ProposePeerHold(peer, nowMs, &holdError)) held = true;
+				else std::cout << "[net-lockstep] hold refused peer=" << static_cast<int>(peer) << ": " << holdError << std::endl;
 			}
 			return held;
 		}
@@ -5569,6 +5571,9 @@ namespace RTE {
 			if (error) *error = "the lockstep crash fixture did not terminate its held peer";
 			return false;
 		}
+		// The park already committed a canonical empty frame here on every peer, so this tick's sample was
+		// dropped by the park, not lost to an error.
+		if (targetFrame < m_Stats.nextFrame && IsSynchronizedCapturePark(targetFrame)) return true;
 		if (targetFrame < m_Stats.nextFrame || targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ||
 		    m_LocalFrames.find(targetFrame) != m_LocalFrames.end() || m_LocalInputHistory.contains(targetFrame) ||
 		    std::any_of(m_RecoveryOutgoing.begin(), m_RecoveryOutgoing.end(), [&](const auto& pending) { return pending.frame.senderPeerId == m_Config.localPeerId && pending.frame.targetFrame == targetFrame; })) {
@@ -6425,7 +6430,15 @@ namespace RTE {
 		for (uint8_t peer: m_RemotePeerIds)
 			if (!IsPeerGoneAtFrame(peer, start)) start = std::max(start, m_Stats.peers[peer].reportedNextFrame);
 		m_SynchronizedCaptureStartFrame = start;
-		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil(m_SynchronizedCaptureBudgetMs / m_Config.simTickMs)));
+		// The window is published once and covers both the capture and the trip its reports need: a window that
+		// had to be extended later would stop every survivor at an end the round has already moved.
+		double reportTripMs = 0.0;
+		for (uint8_t peer: m_RemotePeerIds) {
+			if (IsPeerGoneAtFrame(peer, start)) continue;
+			const auto& stats = m_Stats.peers[peer];
+			reportTripMs = std::max(reportTripMs, static_cast<double>(stats.pingMs) + stats.jitterMs);
+		}
+		const uint64_t ticks = static_cast<uint64_t>(std::max(1.0, std::ceil((m_SynchronizedCaptureBudgetMs + reportTripMs) / m_Config.simTickMs)));
 		m_SynchronizedCaptureEndFrame = m_SynchronizedCaptureStartFrame + ticks;
 		const uint64_t parkNowMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
 		// A round configured without an answer budget still bounds the park: waiting forever for one report is
@@ -6849,12 +6862,6 @@ namespace RTE {
 		if (m_Config.localPeerId == GetHostPeerId() && m_CaptureParkAwaitingReports && m_SynchronizedCaptureStartFrame != UINT64_MAX) {
 			// A park still waiting for a report must never let the round reach the published end: past it the
 			// survivors stop committing.  The window is extended ahead of the horizon until the park closes.
-			const uint64_t margin = 2ULL * std::max<uint16_t>(1, InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame));
-			const uint64_t cap = m_SynchronizedCaptureStartFrame + CaptureParkCapTicks();
-			if (m_Stats.nextFrame + margin >= m_SynchronizedCaptureEndFrame && m_SynchronizedCaptureEndFrame < cap) {
-				m_SynchronizedCaptureEndFrame = std::min(cap, m_Stats.nextFrame + 2 * margin);
-				PublishCapturePark(m_SynchronizedCaptureStartFrame);
-			}
 			if (m_CaptureParkDeadlineMs != 0 && nowMs >= m_CaptureParkDeadlineMs) PublishCapturePark(m_SynchronizedCaptureStartFrame);
 		}
 		TickTiming(nowMs);

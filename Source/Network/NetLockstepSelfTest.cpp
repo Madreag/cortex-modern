@@ -1616,7 +1616,8 @@ namespace RTE {
 			}
 			if (host.GetStats().nextFrame != 1 || client.GetStats().nextFrame != 1) { *error = "the two peers did not commit the pre-park frame"; return false; }
 			host.BeginSynchronizedCapture(0); client.BeginSynchronizedCapture(0);
-			host.CompleteSynchronizedCapture(0, 700.0); client.CompleteSynchronizedCapture(0, 700.0);
+			// The two machines cost different amounts to capture: the window both commit is still the host's one.
+			host.CompleteSynchronizedCapture(0, 700.0); client.CompleteSynchronizedCapture(0, 250.0);
 			std::vector<uint64_t> hostFrames, clientFrames;
 			for (uint64_t now = 200; now < 1200 && (host.GetStats().nextFrame <= 44 || client.GetStats().nextFrame <= 44); ++now) {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
@@ -1631,6 +1632,112 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS capture_park_commits_empty_frames through=" << (host.GetStats().nextFrame - 1) << std::endl;
+			return true;
+		}
+
+		bool TestCaptureParkWindowIsTheHostsAlone(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A75, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A75, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A75;
+			hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 20;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49479, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			// This machine has paid for a long capture before; the host's has not.
+			client.CompleteSynchronizedCapture(UINT64_MAX - 1, 700.0);
+			host.BeginSynchronizedCapture(0); client.BeginSynchronizedCapture(0);
+			host.CompleteSynchronizedCapture(0, 250.0); client.CompleteSynchronizedCapture(0, 250.0);
+			for (uint64_t now = 0; now < 400; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
+			for (uint64_t frame = 1; frame <= 80; ++frame) {
+				if (host.IsSynchronizedCapturePark(frame) == client.IsSynchronizedCapturePark(frame)) continue;
+				*error = "the two peers park different frames: frame=" + std::to_string(frame) + " host=" +
+				         std::to_string(host.IsSynchronizedCapturePark(frame)) + " client=" + std::to_string(client.IsSynchronizedCapturePark(frame));
+				return false;
+			}
+			if (!host.IsSynchronizedCapturePark(1)) { *error = "the capture park never opened on the host"; return false; }
+			uint64_t last = 0;
+			for (uint64_t frame = 1; frame <= 80; ++frame) if (host.IsSynchronizedCapturePark(frame)) last = frame;
+			std::cout << "[net-lockstep-selftest] PASS capture_park_window_is_the_hosts_alone through=" << last << std::endl;
+			return true;
+		}
+
+		bool TestAgreedStartKeepsARejoinedHorizon(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A73, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A73, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A73;
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49477, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.NoteLocalStartPark(0); client.NoteLocalStartPark(0);
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			if (!host.GetAgreedStartRecord()) { *error = "the host never formed an agreed start boundary for the rejoin row"; return false; }
+			// The private rejoin restarts this seat at the frame it was admitted at.
+			auto rejoinConfig = client.GetConfig();
+			rejoinConfig.startFrame = 400;
+			if (!client.Start(clientWire, rejoinConfig, error)) return false;
+			const uint64_t rejoined = client.GetStats().nextFrame;
+			if (rejoined < 400) { *error = "the rejoin did not seat the horizon at its activation frame: next=" + std::to_string(rejoined); return false; }
+			// The host re-sends its boundary to a seat that starts again; deliver it the same way the wire does.
+			std::vector<uint8_t> recordBytes;
+			if (!NetLockstepCodec::Encode({*host.GetAgreedStartRecord()}, recordBytes, nullptr)) { *error = "the agreed start record did not encode"; return false; }
+			client.InjectEvent({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, recordBytes, {}}, 1);
+			for (uint64_t now = 0; now < 2000; now += 5) { hostWire.AdvanceTimeMs(5); clientWire.AdvanceTimeMs(5); host.Tick(now); client.Tick(now); }
+			if (client.GetStats().nextFrame < rejoined) {
+				*error = "the agreed start rewound the rejoined horizon: next=" + std::to_string(client.GetStats().nextFrame) +
+				         " rejoined_at=" + std::to_string(rejoined);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS agreed_start_keeps_a_rejoined_horizon rejoined_at=" << rejoined
+			          << " next=" << client.GetStats().nextFrame << std::endl;
+			return true;
+		}
+
+		bool TestOverdueBoundWaitsForTheCommittedRunway(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A74, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A74, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A74;
+			// The silence detector must not take the seat first: this row is about the bound, not the timeout.
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(49478, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			// The host keeps producing past the horizon, as a live sim does; only the sender stops at 40.
+			for (uint64_t frame = 0; frame < 200; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+			for (uint64_t frame = 0; frame < 40; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+			uint64_t now = 0;
+			for (; now < 600 && host.GetStats().nextFrame < 40; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
+			if (host.GetStats().nextFrame < 40) {
+				*error = "the host did not build a committed runway: next=" + std::to_string(host.GetStats().nextFrame);
+				return false;
+			}
+			const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
+			// The sender stops: the horizon goes dry while the round still holds every committed frame.
+			for (uint64_t step = 0; step < 600; step += 2, now += 2) { hostWire.AdvanceTimeMs(2); host.Tick(now); }
+			if (holdsOfPeerTwo() != 0) {
+				*error = "the bound judged a sender while the round still had its committed runway in hand: ready=" +
+				         std::to_string(host.ReadyFrameCount());
+				return false;
+			}
+			NetLockstepReadyFrame ready;
+			while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+			for (uint64_t step = 0; step < 600 && holdsOfPeerTwo() == 0; step += 2, now += 2) {
+				hostWire.AdvanceTimeMs(2); host.Tick(now); host.NoteFrameWait(host.GetStats().nextFrame, now);
+			}
+			if (holdsOfPeerTwo() == 0) {
+				*error = "the bound never judged a stopped sender once the runway was gone: ready=" + std::to_string(host.ReadyFrameCount()) +
+				         " next=" + std::to_string(host.GetStats().nextFrame) + " missing=" + host.GetStats().lastMissingPeers;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS overdue_bound_waits_for_the_runway holds=" << holdsOfPeerTwo() << std::endl;
 			return true;
 		}
 
@@ -17254,6 +17361,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			!TestSenderWaitsForHostAcceptance(&error) ||
 			!TestSynchronizedCapturePark(&error) ||
 			!TestCaptureParkCommitsCanonicalEmptyFrames(&error) ||
+		    !TestCaptureParkWindowIsTheHostsAlone(&error) ||
+		    !TestAgreedStartKeepsARejoinedHorizon(&error) ||
+		    !TestOverdueBoundWaitsForTheCommittedRunway(&error) ||
 		    !TestBoundedHoldKeepsCommitting(&error) ||
 		    !TestHoldDeadlinePrecedesConsumerWait(&error) ||
 		    !TestBoundedWaitGivesASenderItsRampIn(&error) ||
