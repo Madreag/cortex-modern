@@ -132,6 +132,18 @@ namespace {
 		j["status"] = actor->GetStatus();
 		j["dead"] = actor->IsDead();
 		j["ai_mode"] = actor->GetAIMode();
+		// The live controller is what the checksum's controller subsystem reads; without it a dump cannot say
+		// which field two peers disagree on.
+		const Controller& controller = *const_cast<Actor*>(actor)->GetController();
+		uint64_t controlStates = 0;
+		for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state)
+			if (controller.IsState(static_cast<ControlState>(state))) controlStates |= uint64_t{1} << state;
+		j["ctrl_states"] = controlStates;
+		j["ctrl_move"] = {controller.GetAnalogMove().m_X, controller.GetAnalogMove().m_Y};
+		j["ctrl_aim"] = {controller.GetAnalogAim().m_X, controller.GetAnalogAim().m_Y};
+		j["ctrl_cursor"] = {controller.GetAnalogCursor().m_X, controller.GetAnalogCursor().m_Y};
+		j["ctrl_input_mode"] = static_cast<int>(controller.GetInputMode());
+		j["ctrl_player"] = controller.GetPlayer();
 		j["movement_state"] = actor->GetMovementState();
 		j["wound_count"] = actor->GetWoundCount(true, true, true);
 		j["gib_wound_limit"] = actor->GetGibWoundLimit(true, true, true);
