@@ -291,6 +291,7 @@ namespace {
 	                            const AutosaveManifest* manifest = nullptr) {
 		const bool automatic = !matchId.empty();
 		if (automatic) std::filesystem::create_directories(savePath.parent_path());
+		AutosaveStore::SweepOrphanedTemporaries(savePath.parent_path());
 		struct PendingArchive {
 			std::filesystem::path path;
 			zipFile file = nullptr;

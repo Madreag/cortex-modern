@@ -11,11 +11,36 @@
 #include <iterator>
 #include <mutex>
 #include <sstream>
+#include <string_view>
 #include <system_error>
 #include <tuple>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
+#include <cerrno>
+#include <signal.h>
+#endif
+
 namespace RTE {
 	namespace {
+		// A process id nothing holds names a writer that is gone; one the system refuses to open still exists.
+		bool ProcessAlive(unsigned long pid) {
+#ifdef _WIN32
+			HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+			if (!process) return GetLastError() != ERROR_INVALID_PARAMETER;
+			DWORD code = 0;
+			const bool running = GetExitCodeProcess(process, &code) && code == STILL_ACTIVE;
+			CloseHandle(process);
+			return running;
+#else
+			return kill(static_cast<pid_t>(pid), 0) == 0 || errno == EPERM;
+#endif
+		}
+
 		const char* c_RequiredEntries[] = {"Index.ini", "Save Mat.png", "Save FG.png", "Save BG.png"};
 		bool FromHex(const std::string& hex, std::vector<uint8_t>& out);
 
@@ -65,6 +90,29 @@ namespace RTE {
 
 	std::filesystem::path AutosaveStore::Directory() {
 		return std::filesystem::path(System::GetWorkingDirectory()) / "Autosaves";
+	}
+
+	size_t AutosaveStore::SweepOrphanedTemporaries(const std::filesystem::path& directory) {
+		constexpr std::string_view marker = ".ccsave.tmp.";
+		const unsigned long self = System::GetProcessID();
+		size_t removed = 0;
+		std::error_code error;
+		try {
+			for (const auto& entry: std::filesystem::directory_iterator(directory, error)) {
+				const std::string name = entry.path().filename().string();
+				const size_t at = name.rfind(marker);
+				if (at == std::string::npos || !entry.is_regular_file(error) || entry.is_symlink(error)) continue;
+				const std::string digits = name.substr(at + marker.size());
+				unsigned long pid = 0;
+				const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), pid);
+				if (digits.empty() || parsed.ec != std::errc() || parsed.ptr != digits.data() + digits.size() || pid == self || ProcessAlive(pid)) continue;
+				std::error_code removeError;
+				if (std::filesystem::remove(entry.path(), removeError)) ++removed;
+			}
+		} catch (const std::filesystem::filesystem_error&) {
+			// A directory that cannot be listed keeps what it holds; the archive is written either way.
+		}
+		return removed;
 	}
 
 	std::string AutosaveStore::ArchiveName(const std::string& matchId, uint64_t tick) {
