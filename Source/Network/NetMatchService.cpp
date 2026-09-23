@@ -2628,6 +2628,13 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	bool NetMatchService::PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs) {
+		// Zero means no completed capture has been measured yet; only the round's initial base may run
+		// in that state. A capture stalls every peer, so no seat, held or returned, asks for another base after a slow one.
+		const bool captureWithinBudget = lastCaptureMs > 0.0 && lastCaptureMs <= 50.0;
+		return captureWithinBudget && (seatHeld || staleFrom > baseTick);
+	}
+
 	void NetMatchService::PreparePrivateRejoinCheckpoint() {
 		if (!m_IsHost || m_State != NetMatchServiceState::Running || !m_Coordinator || !m_Coordinator->IsRunning() ||
 		    !m_Coordinator->UsesBoundedWait() || m_Coordinator->IsPersistentWorldRound() || m_Coordinator->IsMigrating() || !g_ActivityMan.ActivityRunning()) return;
@@ -2639,11 +2646,8 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		// Zero means no completed capture has been measured yet; only the round's initial base may run
-		// in that state. A held seat never asks for another base after a slow capture.
-		const bool captureWithinBudget = m_PrivateImageLastCaptureMs > 0.0 && m_PrivateImageLastCaptureMs <= 50.0;
-		const bool stale = ((!seatHeld && m_PrivateImageStaleFrom > m_WorldJoin.Image().tick) ||
-		                   (seatHeld && captureWithinBudget)) && !m_WorldJoin.HasImageTransferInFlight() &&
+		const bool stale = PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs) &&
+		                   !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
 		                   !m_PrivateImageTask.valid() && cadenceOpen;
 		const bool initial = m_PrivateImageRound != round;
