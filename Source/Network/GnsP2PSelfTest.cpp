@@ -1339,9 +1339,18 @@ namespace RTE {
 						    "ms), the joiner " + std::to_string(atJoiner.count) + " (longest gap " + Ms(atJoiner.longestGapMs) + "ms)");
 						if (failure.empty()) {
 							PrintConnection(joiner);
-							joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
-							if (!WaitUntil(5000, pump, [&] { return host.closed; })) {
-								failure = "the host did not see the joiner close within 5s";
+							// A reliable message each way, so the close lingers until the relay has carried it.
+							const std::vector<uint8_t> fromJoiner = Payload('J');
+							const std::vector<uint8_t> fromHost = Payload('H');
+							if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+								failure = "Send after the hold: " + error;
+							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+								failure = "the 64-byte reliable messages did not cross both ways intact after the hold";
+							} else {
+								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
+								if (!WaitUntil(5000, pump, [&] { return host.closed; })) {
+									failure = "the host did not see the joiner close within 5s";
+								}
 							}
 						}
 					}
