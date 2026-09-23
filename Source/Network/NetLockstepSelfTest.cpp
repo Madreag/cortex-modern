@@ -71,6 +71,7 @@ namespace RTE {
 
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
+	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -17696,6 +17697,39 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// The runway that defers a judgment is the shortest any survivor has: a survivor ahead of this host runs dry
+	/// first, and it waits on the silent seat for as long as the host's own ready frames last.
+	bool TestASurvivorsRunwayIsTheRounds(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A0F, 14, NetTransportLane::ControlReliable);
+		config.peerCount = 3; config.startFrame = 1; config.roundId = 33;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 14}, {2, 1}, {3, 14}};
+		config.remoteTransportPeerIds = {{2, 1}, {3, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0F);
+		if (!wire.StartHost(48896, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2, 3};
+		host.m_PeersPlayedThisRound = {2, 3};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_PeerEffectiveStart[3] = 15;
+		host.m_Stats.peers[2].pingMs = 0;
+		host.m_Stats.peers[3].pingMs = 200;
+		host.m_Stats.nextFrame = 615;
+		// This host still holds fourteen committed frames to simulate; the survivor on a 1-frame delay is already at 615.
+		for (uint64_t frame = 601; frame < 615; ++frame) { NetLockstepReadyFrame ready; ready.frame = frame; host.m_ReadyFrames.push_back(ready); }
+		host.m_Stats.peers[2].highestTargetFrame = 616;
+		if (!host.DeclareOverdueInputs(615, 1060, 1000, {3})) {
+			*error = "a survivor that had run dry waited on this host's own runway: host_runway_frames=14 holds=" +
+			         std::to_string(host.GetStats().peers.at(3).holds);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_survivors_runway_is_the_rounds held_after_ms=60" << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -17859,6 +17893,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestFirstStartWaitsForPublishedStartup(&error) ||
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
+		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
