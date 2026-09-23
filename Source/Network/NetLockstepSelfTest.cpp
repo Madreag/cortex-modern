@@ -3190,6 +3190,49 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat joining a running round hears the host's first boundary when its own start reaches the host. The record
+		// is the round's start fact and far behind the seat's own first frame; applied, it adopted the round's tag, and
+		// the host's own start - a straggler to a seat that has not learnt its round yet - stopped the joiner on
+		// "lockstep start mismatch".
+		bool TestAJoinerIgnoresTheRoundsFirstBoundary(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A83, 2, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A83, 2, NetTransportLane::ControlReliable);
+			a.roundId = 0x9A83; a.relayToOtherPeers = true; a.authorityPeerId = b.authorityPeerId = 1;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			b.startFrame = 40; b.joinsRunningRound = true;
+			if (!StartCoordinatorPair(48910, hostWire, clientWire, host, client, a, b, error)) return false;
+			const auto inject = [&](const NetLockstepStart& start, uint64_t now) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode({start}, event.bytes)) return false;
+				client.InjectEvent(event, now);
+				return true;
+			};
+			NetLockstepStart record;
+			record.agreedStartRecord = true; record.localPeerId = 1; record.sessionId = b.sessionId; record.roundId = a.roundId;
+			record.peerCount = 2; record.agreedFirstFrame = 8; record.agreedEffectiveStartFrame = 11; record.publishedPeerMask = 0x1;
+			record.peerEffectiveStartFrames[0] = record.peerEffectiveStartFrames[1] = 11;
+			record.peerInputDelays[0] = record.peerInputDelays[1] = 2;
+			record.controllerFrameVersion = ControllerFrame::c_Version;
+			record.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			record.scenario = a.scenario; record.ownershipPolicy = a.ownershipPolicy;
+			NetLockstepStart hostStart = record;
+			hostStart.agreedStartRecord = false; hostStart.agreedFirstFrame = hostStart.agreedEffectiveStartFrame = 0; hostStart.publishedPeerMask = 0;
+			hostStart.startFrame = a.startFrame; hostStart.inputDelayFrames = 2;
+			if (!inject(record, 1) || !inject(hostStart, 2)) { *error = "the joiner row's starts would not encode"; return false; }
+			for (uint64_t now = 3; now < 60; ++now) { clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			if (client.IsFailed() || client.IsStopped()) {
+				*error = std::string("a joining seat stopped on the round's first boundary and the host's own start: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_ignores_the_rounds_first_boundary state=" << NetLockstepCoordinator::StateName(client.GetState()) << std::endl;
+			return true;
+		}
+
 		// A seat whose stream keeps advancing is waited on while its newest tick stays within the bound of the frame the
 		// round needs from it, and held like any other once it strays past: nobody paces the others beyond the bound.
 		bool TestAFeedingPeerIsWaitedOnWithinTheBound(std::string* error) {
@@ -18986,6 +19029,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
 		row(&TestAFeedingPeerIsWaitedOnWithinTheBound, "a_feeding_peer_is_waited_on_within_the_bound");
+		row(&TestAJoinerIgnoresTheRoundsFirstBoundary, "a_joiner_ignores_the_rounds_first_boundary");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
