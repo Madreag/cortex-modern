@@ -9585,7 +9585,8 @@ namespace RTE {
 				SetNetAuthCryptoForTest(nullptr);
 				return false;
 			}
-			const NetH4ModerationSeat* joiner = findRow(lobby.service.GetModerationSeats(), 2);
+			const std::vector<NetH4ModerationSeat> rows = lobby.service.GetModerationSeats();
+			const NetH4ModerationSeat* joiner = findRow(rows, 2);
 			if (joiner == nullptr) {
 				*error = "the open lobby published no row for peer 2";
 				SetNetAuthCryptoForTest(nullptr);
