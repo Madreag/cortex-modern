@@ -373,8 +373,8 @@ namespace RTE {
 #pragma endregion
 
 #pragma region MultiThreading
-		/// Gets the mutex to lock this lua state.
-		std::recursive_mutex& GetMutex() { return m_Mutex; };
+		/// Gets the mutex to lock this lua state. A frozen capture's page copy lands before anyone may take it.
+		std::recursive_mutex& GetMutex() { WaitFrozenCopy(); return m_Mutex; };
 #pragma endregion
 
 #pragma region
