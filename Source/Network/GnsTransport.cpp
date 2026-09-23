@@ -400,6 +400,7 @@ namespace RTE {
 			m_NextPeerId = 1;
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
+			m_LiveTurnLogin.clear();
 			m_PendingEvents.clear();
 		}
 
@@ -669,6 +670,7 @@ namespace RTE {
 			m_IsHost = true;
 			m_IsStarted = true;
 			m_NextPeerId = 1;
+			m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 			return true;
 		}
 
@@ -707,6 +709,7 @@ namespace RTE {
 					m_PeersByConnection[m_ServerConnection] = 1;
 					m_ConnectionsByPeer[1] = m_ServerConnection;
 					s_ConnectionOwners[m_ServerConnection] = this;
+					m_LiveTurnLogin = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 					return true;
 				}
 			}
@@ -831,12 +834,29 @@ namespace RTE {
 
 		void UpdateListenerIceServers(const GnsP2PConfig& config) {
 			GnsTransport::ApplyIceServers(config);
+			UpdateLiveTurnLogins(config);
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) return;
 			auto* utils = SteamNetworkingUtils();
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_Int32, &config.iceEnable);
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnServerList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnUserList.c_str());
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
+		}
+
+		// A renewed relay login reaches every live P2P connection, for its next TURN allocation.
+		void UpdateLiveTurnLogins(const GnsP2PConfig& config) {
+			const std::string login = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
+			if (m_P2PMode < 0 || !m_Interface || config.turnServerList.empty() || login == m_LiveTurnLogin) return;
+			m_LiveTurnLogin = login;
+			auto* utils = SteamNetworkingUtils();
+			int renewed = 0;
+			for (const auto& [connection, peerId] : m_PeersByConnection) {
+				(void)peerId;
+				renewed += utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_ServerList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnServerList.c_str()) &&
+				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_UserList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnUserList.c_str()) &&
+				           utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_Connection, connection, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
+			}
+			if (renewed > 0) std::cout << "[net-relay] relay login renewed on " << renewed << " live connection(s)" << std::endl;
 		}
 
 		static std::vector<SteamNetworkingConfigValue_t> P2PConnectionConfigs(const GnsP2PConfig& config) {
@@ -916,6 +936,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
+		std::string m_LiveTurnLogin; //!< The TURN server, user and password lists the live connections run with.
 
 		static Impl* s_CallbackInstance;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
