@@ -625,7 +625,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto& managerSavers = RuntimeManagerSavers();
 	std::vector<CheckpointText> managerParts(managerSavers.size());
 	std::vector<std::pair<std::string, int64_t>> managerTimings(managerSavers.size());
-	std::shared_ptr<AudioCheckpointCapture> audio;
+	std::shared_ptr<AudioCheckpointCapture> audio, audioSamples;
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();
 	struct Aside {
@@ -675,6 +675,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->sceneRuntime = CheckpointWriter::CaptureNative([scene] { return scene->SaveRuntimeCheckpoint(); });
 		image->sceneRuntimeUs = since(sceneRuntimeStart);
 	});
+	captureAside([&audioSamples] { audioSamples = g_AudioMan.CaptureCheckpointSamples(); });
 	// Each terrain layer copies its own dirty rows; the image keeps the layers' order.
 	const auto layersStart = std::chrono::steady_clock::now();
 	for (LayerCapture& captured: layers) {
@@ -696,7 +697,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto readAudio = [&] {
 		if (audio) return;
 		const auto audioStart = std::chrono::steady_clock::now();
-		audio = g_AudioMan.CaptureCheckpointState();
+		audio = g_AudioMan.CaptureCheckpointState(false);
 		audioReadUs = since(audioStart);
 	};
 	const auto graphStart = std::chrono::steady_clock::now();
@@ -727,7 +728,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
 	readAudio();
-	captureAside([&audio] { g_AudioMan.WriteCapturedSamples(*audio); });
 	aside.Join();
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
@@ -750,7 +750,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
 	const auto globalsStart = std::chrono::steady_clock::now();
-	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get()); });
+	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get()); });
 	image->globalParts.insert(image->globalParts.end(), managerTimings.begin(), managerTimings.end());
 	image->globalParts.emplace_back("audio_read", audioReadUs);
 	image->globalsUs = since(globalsStart);
@@ -2079,7 +2079,7 @@ const std::vector<std::pair<const char*, std::string (*)()>>& ActivityMan::Runti
 
 std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
                                               std::vector<std::pair<std::string, int64_t>>* timings, const std::vector<CheckpointText>* managerParts,
-                                              AudioCheckpointCapture* audio) const {
+                                              AudioCheckpointCapture* audio, const AudioCheckpointCapture* audioSamples) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
@@ -2115,8 +2115,8 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	}
 	record("audio", [&] {
 		// Audio read earlier in the capture is written the same way once its sound owners are known.
-		const auto save = [audio](const std::function<bool(uint64_t, const SoundContainer*)>& contained) {
-			return audio ? g_AudioMan.SaveCaptured(*audio, contained) : g_AudioMan.SaveCheckpoint(contained);
+		const auto save = [audio, audioSamples](const std::function<bool(uint64_t, const SoundContainer*)>& contained) {
+			return audio ? g_AudioMan.SaveCaptured(*audio, contained, audioSamples) : g_AudioMan.SaveCheckpoint(contained);
 		};
 		if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
 			writer(CheckpointWriter::Native([&save] { return save({}); }));

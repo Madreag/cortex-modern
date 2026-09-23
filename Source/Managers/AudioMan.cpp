@@ -2138,18 +2138,29 @@ struct RTE::AudioCheckpointCapture {
 	std::optional<std::vector<CheckpointText>> samples; //!< The samples' texts, when written ahead of the rest.
 };
 
-void AudioMan::WriteCapturedSamples(AudioCheckpointCapture& captured) const {
+void AudioMan::ReadCheckpointSamples(AudioCheckpointCapture& captured) const {
+	std::map<std::string, FMOD::Sound*> samples(ContentFile::s_LoadedSamples.begin(), ContentFile::s_LoadedSamples.end());
+	for (const auto& [path, sound]: samples) {
+		if (!sound) continue;
+		captured.state.samples.push_back(AudioCheckpoint::Sample::Capture(path, sound));
+	}
+}
+
+std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointSamples() const {
+	auto result = std::make_shared<AudioCheckpointCapture>();
+	if (m_AudioEnabled) ReadCheckpointSamples(*result);
 	std::vector<CheckpointText> texts;
-	texts.reserve(captured.state.samples.size());
-	for (const AudioCheckpoint::Sample& sample: captured.state.samples) texts.push_back(CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
-	captured.samples = std::move(texts);
+	texts.reserve(result->state.samples.size());
+	for (const AudioCheckpoint::Sample& sample: result->state.samples) texts.push_back(CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	result->samples = std::move(texts);
+	return result;
 }
 
 std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
 	return SaveCaptured(*CaptureCheckpointState(), contained);
 }
 
-std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
+std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained, const AudioCheckpointCapture* samples) const {
 	AudioRuntime& state = captured.state;
 	std::set<std::string> disownedPresets;
 	for (size_t index = 0; index < state.voices.size(); ++index) {
@@ -2167,10 +2178,11 @@ std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::
 	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
 	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
-	return state.Save(captured.samples ? &*captured.samples : nullptr);
+	const AudioCheckpointCapture& written = samples ? *samples : captured;
+	return state.Save(written.samples ? &*written.samples : nullptr);
 }
 
-std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState() const {
+std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState(bool samples) const {
 	auto result = std::make_shared<AudioCheckpointCapture>();
 	AudioRuntime& state = result->state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
@@ -2198,11 +2210,7 @@ std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState() const
 		}
 		const std::array<FMOD::ChannelGroup*, 4> groups = {m_MasterChannelGroup, m_SFXChannelGroup, m_UIChannelGroup, m_MusicChannelGroup};
 		for (size_t index = 0; index < groups.size(); ++index) state.groups[index] = AudioCheckpoint::Control::Capture(groups[index], false);
-		std::map<std::string, FMOD::Sound*> samples(ContentFile::s_LoadedSamples.begin(), ContentFile::s_LoadedSamples.end());
-		for (const auto& [path, sound]: samples) {
-			if (!sound) continue;
-			state.samples.push_back(AudioCheckpoint::Sample::Capture(path, sound));
-		}
+		if (samples) ReadCheckpointSamples(*result);
 		for (const auto& [identity, voice]: m_PlayingVoices) {
 			if (voice.predicted || !VoiceSimLive(voice)) continue;
 			int bus = voice.hasLifetime ? voice.lifetime.bus : 0;
