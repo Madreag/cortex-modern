@@ -23,6 +23,7 @@ namespace RTE {
 
 	class Scene;
 	class GAScripted;
+	struct AudioCheckpointCapture;
 
 	/// The singleton manager of the Activities and rules of Cortex Command.
 	class ActivityMan : public Singleton<ActivityMan> {
@@ -379,7 +380,11 @@ namespace RTE {
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
 		                              const AutosaveIdentity* identity = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
-		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr) const;
+		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr,
+		    AudioCheckpointCapture* audio = nullptr, const AudioCheckpointCapture* audioSamples = nullptr) const;
+		/// The managers' runtime globals, from the moving objects through the music, in the archive's order; each part is
+		/// captured on its own.
+		static const std::vector<std::pair<const char*, std::string (*)()>>& RuntimeManagerSavers();
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
 		/// Prints each refused script value to the console and tells the player once.

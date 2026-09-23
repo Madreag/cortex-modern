@@ -68,6 +68,16 @@ namespace RTE {
 	};
 	OrphanSnapshotProbe ProbeSnapshotAfterItsHeap();
 
+	/// Registry refs taken by luaL_ref and by luabind on one luabind state, for the checkpoint self-test.
+	struct RegistryRefProbe {
+		int heldRef = 0; //!< The luaL_ref slot held while luabind takes and gives back its refs.
+		int shared = 0; //!< luabind refs handed the held slot, or held slots luaL_ref handed out again.
+		bool heldIntact = false; //!< The held slot still names its own table after luabind's refs are released.
+		bool luabindIntact = false; //!< Every luabind slot still names its own table after a luaL_ref.
+		std::string error;
+	};
+	RegistryRefProbe ProbeRegistryRefs();
+
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
@@ -81,7 +91,12 @@ namespace RTE {
 	class LuaScriptGraphNativeCaptureScope {
 	public:
 		LuaScriptGraphNativeCaptureScope();
+		/// Lends another thread the lookups of the world capture it helps with.
+		explicit LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureData* shared);
 		~LuaScriptGraphNativeCaptureScope();
+		static const LuaScriptGraphNativeCaptureData* Current();
+		/// Walks the world's trees for a capture's native answers here, unless one of its states already did.
+		static void BuildWorld(const LuaScriptGraphNativeCaptureData* shared);
 		LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureScope&) = delete;
 		LuaScriptGraphNativeCaptureScope& operator=(const LuaScriptGraphNativeCaptureScope&) = delete;
 	private:
@@ -256,6 +271,9 @@ namespace RTE {
 		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
 		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
 		void WaitFrozenCopy();
+		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
+		/// whileWaiting runs on the calling thread once the master state is captured, while the pool captures the rest.
+		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
@@ -396,8 +414,8 @@ namespace RTE {
 #pragma endregion
 
 #pragma region MultiThreading
-		/// Gets the mutex to lock this lua state.
-		std::recursive_mutex& GetMutex() { return m_Mutex; };
+		/// Gets the mutex to lock this lua state. A frozen capture's page copy lands before anyone may take it.
+		std::recursive_mutex& GetMutex() { WaitFrozenCopy(); return m_Mutex; };
 #pragma endregion
 
 #pragma region

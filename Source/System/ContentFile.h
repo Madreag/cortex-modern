@@ -3,8 +3,11 @@
 #include "Serializable.h"
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace FMOD {
@@ -203,6 +206,24 @@ namespace RTE {
 		/// @param preMask Whether to replace mask color with 0 alpha (necessary for loading indexed to 32-bit image)
 		static SDL_Palette* DefaultPaletteToSDL(bool preMask = false);
 
+		/// While one lives, LoadedBitmapPath answers from an index of the loaded bitmaps, brought up to date as it
+		/// opens. The loaded bitmaps may not change while one lives; a capture opens one at its fence.
+		class LoadedBitmapIndexScope {
+		public:
+			LoadedBitmapIndexScope();
+			~LoadedBitmapIndexScope();
+			LoadedBitmapIndexScope(const LoadedBitmapIndexScope&) = delete;
+			LoadedBitmapIndexScope& operator=(const LoadedBitmapIndexScope&) = delete;
+		};
+
+		/// The least path the loaded-bitmap cache of one depth holds a bitmap under, or with depth -1 that of the lowest
+		/// depth holding it, which is written back. Null when none does.
+		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
+
+		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
+		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
+		static std::string LoadedBitmapChangeMissedByIndex();
+
 		/// Encodes an 8-bit bitmap without changing its palette indices.
 		/// @return Whether the complete PNG was written to the output buffer.
 		static bool EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output);
@@ -227,7 +248,35 @@ namespace RTE {
 		static const std::string c_ClassName; //!< A string with the friendly-formatted type name of this object.
 
 		static std::unordered_map<size_t, std::string> s_PathHashes; //!< Static map containing the hash values of paths of all loaded data files.
-		static std::array<std::unordered_map<std::string, BITMAP*>, BitDepths::BitDepthCount> s_LoadedBitmaps; //!< Static map containing all the already loaded BITMAPs and their paths for each bit depth.
+		/// One depth's loaded bitmaps. Every change made through them moves a version all depths share, so an index
+		/// built from them knows when it went stale; reading through a const reference moves nothing.
+		class LoadedBitmaps : public std::unordered_map<std::string, BITMAP*> {
+		public:
+			using Base = std::unordered_map<std::string, BITMAP*>;
+			using Base::Base;
+			static uint64_t Version() { return s_Version.load(std::memory_order_acquire); }
+			mapped_type& operator[](const key_type& key) { Changed(); return Base::operator[](key); }
+			mapped_type& at(const key_type& key) { Changed(); return Base::at(key); }
+			const mapped_type& at(const key_type& key) const { return Base::at(key); }
+			iterator find(const key_type& key) { Changed(); return Base::find(key); }
+			const_iterator find(const key_type& key) const { return Base::find(key); }
+			iterator begin() noexcept { Changed(); return Base::begin(); }
+			iterator end() noexcept { Changed(); return Base::end(); }
+			const_iterator begin() const noexcept { return Base::begin(); }
+			const_iterator end() const noexcept { return Base::end(); }
+			size_type erase(const key_type& key) { Changed(); return Base::erase(key); }
+			iterator erase(const_iterator position) { Changed(); return Base::erase(position); }
+			void clear() noexcept { Changed(); Base::clear(); }
+			template <class... Args> std::pair<iterator, bool> try_emplace(const key_type& key, Args&&... args) { Changed(); return Base::try_emplace(key, std::forward<Args>(args)...); }
+			template <class... Args> std::pair<iterator, bool> emplace(Args&&... args) { Changed(); return Base::emplace(std::forward<Args>(args)...); }
+			template <class Value> std::pair<iterator, bool> insert(Value&& value) { Changed(); return Base::insert(std::forward<Value>(value)); }
+			template <class Source> void merge(Source& source) { Changed(); Base::merge(source); }
+			void swap(Base& other) noexcept { Changed(); Base::swap(other); }
+		private:
+			static inline std::atomic<uint64_t> s_Version{0};
+			static void Changed() noexcept { s_Version.fetch_add(1, std::memory_order_acq_rel); }
+		};
+		static std::array<LoadedBitmaps, BitDepths::BitDepthCount> s_LoadedBitmaps; //!< Static map containing all the already loaded BITMAPs and their paths for each bit depth.
 		static std::unordered_map<std::string, SDL_Surface*> s_MemoryPNGs; //!< Static map containing in-memory PNG files for save/load
 		static std::unordered_map<std::string, FMOD::Sound*> s_LoadedSamples; //!< Static map containing all the already loaded FSOUND_SAMPLEs and their paths.
 

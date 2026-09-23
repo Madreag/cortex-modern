@@ -2,6 +2,7 @@
 #include "SceneMan.h"
 #include "PostProcessMan.h"
 #include "PresetMan.h"
+#include "ThreadMan.h"
 #include "FrameMan.h"
 #include "ActivityMan.h"
 #include "CameraMan.h"
@@ -25,6 +26,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <future>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -3145,10 +3147,32 @@ const Material* SceneMan::ResolveMaterialReference(std::string_view text, bool a
 std::string SceneMan::SaveMaterialCatalog() const {
     if (CheckpointWriter::IsCapturing()) {
         std::array<CheckpointText, c_PaletteEntriesNumber> palette;
-        std::vector<CheckpointText> copies, presets;
-        for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) palette[index] = CheckpointWriter::Native([&] { return m_apMatPalette[index]->SaveCheckpoint(); });
-        for (const Material* material: m_MaterialCopiesVector) copies.push_back(CheckpointWriter::Native([&] { return material->SaveCheckpoint(); }));
-        for (const Material* material: CheckpointMaterialPresets()) presets.push_back(CheckpointWriter::Native([&] { return material->SaveCheckpoint(); }));
+        const auto presetMaterials = CheckpointMaterialPresets();
+        std::vector<CheckpointText> copies(m_MaterialCopiesVector.size()), presets(presetMaterials.size());
+        // Each material is written on its own, so a capture writes them side by side and keeps their places.
+        std::vector<std::pair<CheckpointText*, const Material*>> materials;
+        for (size_t index = 0; index < m_apMatPalette.size(); ++index) if (m_apMatPalette[index]) materials.emplace_back(&palette[index], m_apMatPalette[index]);
+        for (size_t index = 0; index < copies.size(); ++index) materials.emplace_back(&copies[index], m_MaterialCopiesVector[index]);
+        for (size_t index = 0; index < presets.size(); ++index) materials.emplace_back(&presets[index], presetMaterials[index]);
+        const size_t chunks = std::clamp<size_t>(materials.size() / 64, 1, 8);
+        const auto write = [&materials, chunks](size_t chunk) {
+            for (size_t index = chunk * materials.size() / chunks; index < (chunk + 1) * materials.size() / chunks; ++index) {
+                const Material* material = materials[index].second;
+                *materials[index].first = CheckpointWriter::CaptureNative([material] { return material->SaveCheckpoint(); });
+            }
+        };
+        std::vector<std::future<void>> tasks;
+        for (size_t chunk = 1; chunk < chunks; ++chunk) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&write, chunk] { write(chunk); }));
+        std::exception_ptr failure;
+        try {
+            write(0);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        // Every task writes into this frame's locals, so all of them end before anything leaves it.
+        for (std::future<void>& task: tasks) task.wait();
+        if (failure) std::rethrow_exception(failure);
+        for (std::future<void>& task: tasks) task.get();
         CheckpointWriter writer("MaterialCatalog1");
         writer(m_MaterialCount, m_MatNameMap, palette, copies, presets);
         return writer.Text();
