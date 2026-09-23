@@ -6334,10 +6334,11 @@ static std::string ResyncSaveName() {
 		return g_SettingsMan.GetNetworkStunServers().empty() ? "Port forwarding required" : "NAT: STUN";
 	}
 
+	// The host row's line for an offer that expired before a renewal landed; the next offer clears it.
+	static constexpr const char* c_RelayLapsedText = "Relay login expired and has not renewed yet; new joins connect direct until it does.";
+
 	std::string NetMatchService::GetRelayError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		// The offer re-mints at half its life, so a live connection never races the expiry it carries.
-		if (m_RelayError.empty() && m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000)) return "The relay login renews itself at half its life; no rejoin is needed.";
 		return m_RelayError;
 	}
 
@@ -6357,7 +6358,11 @@ static std::string ResyncSaveName() {
 				m_RelayReady = true;
 				m_RelayPublishPending = true;
 			}
-			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) { SetRelayOfferLocked({}); m_RelayPublishPending = true; }
+			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) {
+				SetRelayOfferLocked({});
+				m_RelayPublishPending = true;
+				if (m_RelayError.empty()) m_RelayError = c_RelayLapsedText;
+			}
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			const bool fresh = m_FreshRelayRequested.load();
 			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
@@ -6375,6 +6380,7 @@ static std::string ResyncSaveName() {
 				fixed.expiresAt = wall + NetDirectoryClient::c_MaxRelayTtlSeconds;
 				SetRelayOfferLocked(fixed);
 				m_RelayPublishPending = true;
+				if (m_RelayError == c_RelayLapsedText) m_RelayError.clear();
 			}
 		}
 		if (request) m_Directory.RequestIceServers(matchId, NetDirectoryClient::c_MaxRelayTtlSeconds, fixed.Empty() ? nullptr : &fixed);
