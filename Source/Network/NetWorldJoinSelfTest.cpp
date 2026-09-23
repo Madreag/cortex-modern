@@ -2243,9 +2243,9 @@ namespace RTE {
 			{"seats_free", 1},
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
-			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 35},
-			{"controller_frame_version", 7},
+			{"network_protocol_version", NetProtocol::c_Version},
+			{"lockstep_codec_version", NetLockstepCodec::c_Version},
+			{"controller_frame_version", ControllerFrame::c_Version},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
 			{"module_manifest_hash", std::string(64, 'c')},
@@ -2355,7 +2355,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 37");
+			return Fail("WorldTransition frame did not stamp lockstep version " + std::to_string(NetLockstepCodec::c_WorldVersion));
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2396,8 +2396,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 37) {
-			return Fail("ordinary lockstep frame did not stamp version 37");
+		if (ordinaryVersion != NetLockstepCodec::c_Version) {
+			return Fail("ordinary lockstep frame did not stamp version " + std::to_string(NetLockstepCodec::c_Version));
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2406,7 +2406,8 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 36 and match config 6");
+			return Fail("ordinary identity did not stamp lockstep " + std::to_string(NetLockstepCodec::c_Version) +
+			            " and match config " + std::to_string(NetMatchConfigUtil::c_Version));
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||

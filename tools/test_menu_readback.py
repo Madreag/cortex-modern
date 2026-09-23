@@ -1073,6 +1073,9 @@ def scripts(case, port, root, size="960x540"):
                 "dump_lobby\nassert_label LabelLobbyPlayer1 Client 2\n"
                 "assert_label_absent LabelLobbyPlayer0 Joiner\nassert_label_absent LabelLobbyPlayer1 Joiner\n"
                 "assert_label LabelLobbyPlayer2 CPU\n"
+                # The client's rejoin waits on this dump, taken on the options panel so the lobby keeps one capture.
+                "activate ButtonLobbyOptions\nwait 5\nassert_substate HostOptions\ndump_host_options\n"
+                "activate ButtonHostOptBack\nwait 5\nassert_substate Lobby\n"
                 # The kicked client's own rejoin is admitted and seats it under its name again.
                 "wait_label LabelLobbyPlayer1 Joiner\n"
                 "dump_lobby\n"
@@ -1145,6 +1148,8 @@ def scripts(case, port, root, size="960x540"):
                   "assert_status The host removed you from this session\n"
                   "assert_substate Landing\n"
                   "dump_lobby\n"
+                  # The host's post-kick asserts read the open seat before this identity knocks again.
+                  f"wait_file {(root / 'host/runtime/ScreenShots/dump_host_options_11.json').as_posix()} 60\n"
                   # A kick is not a ban: the same identity joins again and lands back in the lobby.
                   "activate ButtonMultiplayerJoinGame\nwait 5\n"
                   "settext TextJoinAddress 127.0.0.1\n"
