@@ -1032,6 +1032,7 @@ namespace RTE {
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1341,6 +1342,7 @@ namespace RTE {
 		uint64_t m_CaptureReportSentMs = 0;
 		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		bool m_ApplyingDeferredParkTiming = false;
 		bool m_CaptureParkAwaitingReports = false;

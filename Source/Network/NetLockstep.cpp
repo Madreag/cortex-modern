@@ -4272,6 +4272,7 @@ namespace RTE {
 		m_CaptureReportSentMs = 0;
 		m_CaptureReportResent = false;
 		m_CaptureParkReportsMs.clear();
+		m_CommittedAtMs.clear();
 		m_DeferredParkTimings.clear();
 		m_ApplyingDeferredParkTiming = false;
 		m_CaptureParkAwaitingReports = false;
@@ -5204,6 +5205,13 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A seat produces this frame's input when it simulates the frame one delay earlier, which it could not
+				// do before we committed that frame and it crossed the seat's link: until then it waits on us.
+				const uint64_t producedFrom = frame - std::min<uint64_t>(frame, std::max<uint16_t>(1, InputDelayAt(peer, frame)));
+				if (const auto given = m_CommittedAtMs.find(producedFrom); given != m_CommittedAtMs.end()) {
+					const uint64_t answerableMs = given->second + peerStats.pingMs + peerStats.jitterMs;
+					if (answerableMs > firstMissingMs && (nowMs < answerableMs || nowMs - answerableMs < declarationDeadline)) continue;
+				}
 				// A sender's first frames of the round are its pipeline filling: the round starts skewed by
 				// the start message's own trip and each peer's activity restart, and the sender's delay
 				// window is the budget that fill was agreed to take. The window is the few frames from its
@@ -9278,6 +9286,10 @@ namespace RTE {
 			}
 			m_ReadyFrames.push_back(std::move(ready));
 			m_HostAcceptedLocalFrames.erase(m_Stats.nextFrame);
+			if (UsesBoundedWait() && m_Config.localPeerId == GetHostPeerId()) {
+				m_CommittedAtMs[m_Stats.nextFrame] = nowMs;
+				while (m_CommittedAtMs.size() > 512) m_CommittedAtMs.erase(m_CommittedAtMs.begin());
+			}
 			++m_Stats.framesAccepted;
 			++m_Stats.nextFrame;
 			m_WaitingFrame = m_Stats.nextFrame;
