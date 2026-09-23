@@ -5194,7 +5194,14 @@ namespace RTE {
 		// The commit horizon runs a delay window ahead of the simulation, so an idle horizon is what a full
 		// pipeline looks like: committed frames nobody has consumed yet are the round's runway. Judge a seat
 		// only once that runway can no longer carry the decision's notice - until then nothing is waiting.
-		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(m_ReadyFrames.size() * m_Config.simTickMs));
+		// The runway is the shortest any survivor has: one ahead of this host runs dry first, and it is the one waiting.
+		uint64_t runwayFrames = m_ReadyFrames.size();
+		for (uint8_t survivor: m_RemotePeerIds) {
+			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame) || IsSeatUnderAI(survivor, frame)) continue;
+			const uint64_t produced = m_Stats.peers[survivor].highestTargetFrame, delay = InputDelayAt(survivor, frame);
+			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay ? frame - (produced - delay) : 0);
+		}
+		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs));
 		if (runwayMs > noticeMs) return false;
 		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
 		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
