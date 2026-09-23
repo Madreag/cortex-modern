@@ -151,6 +151,8 @@ namespace RTE {
 		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
 		/// Refuses one Ready client without ending the host's session.
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
+		/// Refuses every connection still in its handshake with the message, without ending the host's session.
+		void DisconnectJoiningPeers(NetRejectReason reason, const std::string& message);
 		/// Host: how many connections are still in their handshake. A rejoin that has reached us but not yet
 		/// been admitted lives here, and the goodbye drain must see it arrive.
 		uint32_t GetHandshakingPeerCount() const;

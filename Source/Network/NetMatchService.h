@@ -585,6 +585,9 @@ namespace RTE {
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs);
 		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
 		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
+		/// Refuses, with the round's goodbye, every ready peer of the session the ended round does not use, and with
+		/// joiningToo every connection still in its handshake: a returning seat's, when a held seat can still be coming back.
+		static void RefuseEndedPeers(NetSession& session, const NetLockstepCoordinator& coordinator, const std::string& reason, bool joiningToo);
 
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
