@@ -616,7 +616,7 @@ namespace RTE::CheckpointLua {
 				movable = ClassDerivesFrom(object->crep(), "MovableObject");
 				owned = (object->flags() & luabind::detail::object_rep::owner) != 0;
 				detached = !object->ptr() && (!movable || owned);
-				if (movable && object->ptr()) {
+				if (movable && object->ptr() && ScriptGraphNativeAlive(State(), object)) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
 					entry.movable = reinterpret_cast<uintptr_t>(mo);
 					CaptureObject(mo);

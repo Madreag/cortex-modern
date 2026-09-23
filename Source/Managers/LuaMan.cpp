@@ -3915,6 +3915,11 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		std::unordered_map<const void*, VectorField> vectors;
 		std::unordered_map<const void*, long> controllers;
 	};
+	/// Whether an object existed when the capture began.
+	bool Known(const MovableObject* object) const {
+		std::call_once(m_KnownBuilt, [this] { m_Known.insert(knownObjects.begin(), knownObjects.end()); });
+		return m_Known.contains(object);
+	}
 	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
 	const Fields& Owners() const {
 		std::call_once(m_OwnersBuilt, [this] {
@@ -3944,6 +3949,8 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 private:
 	mutable std::once_flag m_OwnersBuilt;
 	mutable Fields m_Owners;
+	mutable std::once_flag m_KnownBuilt;
+	mutable std::unordered_set<const MovableObject*> m_Known;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -4293,6 +4300,30 @@ static int ScriptGraphIteratorRestore(lua_State* L) {
 	return 1;
 }
 
+// Whether the native object behind a wrapper still exists: Lua keeps what it owns, an engine object lives while the
+// engine knows it, and a member (a gib, a limb path, a sound set) lives while something it hangs off does.
+static bool ScriptGraphNativeAlive(lua_State* L, const luabind::detail::object_rep* rep, int depth = 0) {
+	if (!rep || !rep->ptr()) return false;
+	if (rep->flags() & luabind::detail::object_rep::owner) return true;
+	if (rep->crep() && ClassDerivesFrom(rep->crep(), "MovableObject")) {
+		const auto* object = static_cast<const MovableObject*>(rep->ptr());
+		return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
+	}
+	if (depth >= 8 || !rep->get_dependencies().is_valid()) return true;
+	bool member = false, alive = false;
+	rep->get_dependencies().get(L);
+	lua_pushnil(L);
+	while (lua_next(L, -2) != 0) {
+		if (const auto* owner = luabind::detail::is_class_object(L, -1)) {
+			member = true;
+			alive = alive || ScriptGraphNativeAlive(L, owner, depth + 1);
+		}
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
+	return !member || alive;
+}
+
 static int ScriptGraphGibOwner(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->get_dependencies().is_valid()) return 0;
@@ -4300,7 +4331,7 @@ static int ScriptGraphGibOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && ClassDerivesFrom(owner->crep(), "MOSRotating")) {
+		if (owner && ClassDerivesFrom(owner->crep(), "MOSRotating") && ScriptGraphNativeAlive(L, owner)) {
 			const auto& gibs = *static_cast<MOSRotating*>(owner->ptr())->GetGibList();
 			const auto found = std::find(gibs.begin(), gibs.end(), rep->ptr());
 			if (found != gibs.end()) {
@@ -4515,7 +4546,7 @@ static int ScriptGraphSoundSetOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && owner->crep()) {
+		if (owner && owner->crep() && ScriptGraphNativeAlive(L, owner)) {
 			if (std::strcmp(owner->crep()->name(), "SoundContainer") == 0 && &static_cast<SoundContainer*>(owner->ptr())->GetTopLevelSoundSet() == rep->ptr()) {
 				lua_pushinteger(L, -1);
 				return 2;
@@ -4566,7 +4597,7 @@ static int ScriptGraphLimbOwner(lua_State* L) {
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
 			auto* owner = luabind::detail::is_class_object(L, -1);
-			if (owner && ClassDerivesFrom(owner->crep(), "MovableObject")) {
+			if (owner && ClassDerivesFrom(owner->crep(), "MovableObject") && ScriptGraphNativeAlive(L, owner)) {
 				if (const int index = FindActorLimb(static_cast<MovableObject*>(owner->ptr()), path); index >= 0) {
 					lua_pushinteger(L, index);
 					return 2;
@@ -4616,7 +4647,7 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "LimbPath") == 0) {
+		if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "LimbPath") == 0 && ScriptGraphNativeAlive(L, owner)) {
 			auto* path = static_cast<LimbPath*>(owner->ptr());
 			int index = -1;
 			if (&path->GetStartOffset() != rep->ptr()) {
@@ -7747,6 +7778,39 @@ end
 		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
 		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
 		checkpointValues = gated && checkpointValues;
+	}
+
+	{
+		// A capture answers every userdata in the heap, the unreachable ones too, so a member whose owner was
+		// destroyed may not be read through that owner. The owner's storage is written over once it is gone, as
+		// freed memory is; the capture has to finish and a gib still held has to refuse by name.
+		alignas(MOSRotating) std::byte storage[sizeof(MOSRotating)];
+		auto* owner = new (storage) MOSRotating();
+		owner->GetGibList()->push_back(new Gib());
+		Entity* previous = GetTempEntity();
+		SetTempEntity(owner);
+		const int held = RunScriptString("for gib in ToMOSRotating(LuaMan.TempEntity).Gibs do CheckpointHeldGibProbe = gib end");
+		SetTempEntity(previous);
+		owner->~MOSRotating();
+		std::memset(storage, 0xCD, sizeof(storage));
+		CheckpointText image;
+		std::vector<std::string> ownerProblems;
+		const bool captured = CaptureScriptGraph(image, ownerProblems, true);
+		std::string refusal;
+		if (captured) {
+			try {
+				image.Text();
+			} catch (const ScriptGraphRefusal& error) {
+				for (const std::string& problem: error.problems) refusal += problem + "; ";
+			} catch (const std::exception& error) {
+				refusal = error.what();
+			}
+		}
+		RunScriptString("CheckpointHeldGibProbe = nil");
+		const bool named = held == 0 && captured && refusal.find("a Gib whose owner is missing") != std::string::npos;
+		std::cout << "[script-graph-selftest] " << (named ? "PASS" : "FAIL") << " a_member_whose_owner_is_gone_is_never_read_through_it held="
+		          << (held == 0) << " captured=" << captured << " refusal=" << refusal << std::endl;
+		checkpointValues = named && checkpointValues;
 	}
 
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
