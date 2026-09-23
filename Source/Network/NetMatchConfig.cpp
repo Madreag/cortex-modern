@@ -241,6 +241,14 @@ namespace RTE {
 			return sorted;
 		}
 
+		// The builder seats every human by peer id and then every CPU slot by team.
+		bool InBuilderOrder(const std::vector<NetMatchPlayerSlot>& players) {
+			return std::is_sorted(players.begin(), players.end(), [](const NetMatchPlayerSlot& lhs, const NetMatchPlayerSlot& rhs) {
+				if (lhs.cpu != rhs.cpu) return rhs.cpu;
+				return lhs.cpu ? lhs.team < rhs.team : lhs.peerId < rhs.peerId;
+			});
+		}
+
 		std::string BoolText(bool value) {
 			return value ? "1" : "0";
 		}
@@ -671,6 +679,14 @@ namespace RTE {
 			fields.emplace_back(prefix + "team", std::to_string(player.team));
 			fields.emplace_back(prefix + "cpu", BoolText(player.cpu));
 			fields.emplace_back(prefix + "display_name", player.displayName);
+		}
+		// The wire order seats the players: a live roster outside the builder's order hashes that order too.
+		if (config.version >= c_RelayLayoutVersion && !InBuilderOrder(config.players)) {
+			std::string order;
+			for (const NetMatchPlayerSlot& player : config.players) {
+				order += (order.empty() ? "" : ",") + (player.cpu ? "cpu" + std::to_string(player.team) : std::to_string(player.peerId));
+			}
+			fields.emplace_back("player_order", order);
 		}
 		// Only the true case rides the hash, so every pre-existing config keeps its value.
 		if (config.dedicated) {

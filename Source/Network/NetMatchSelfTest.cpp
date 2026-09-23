@@ -416,6 +416,60 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyRefusesDivergentRosterOrder(std::string* error) {
+			// The roster's order seats the players, so one roster in two wire orders is two configs.
+			const NetMatchConfig agreed = MakeConfig();
+			NetMatchConfig divergent = agreed;
+			std::swap(divergent.players[0], divergent.players[1]);
+			const NetHash32 agreedHash = NetMatchConfigUtil::HashConfig(agreed);
+			if (agreedHash == NetMatchConfigUtil::HashConfig(divergent)) {
+				*error = "divergent roster order: the wire orders " + agreed.players[0].displayName + "," + agreed.players[1].displayName + " and " +
+				         divergent.players[0].displayName + "," + divergent.players[1].displayName + " hash alike (" + NetIdentity::HashHex(agreedHash) + ")";
+				return false;
+			}
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43147, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.matchConfig = agreed;
+			if (!clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			// A host that hands this peer the other order and then starts on the hash of the order it kept.
+			const auto hostSend = [&](const NetLobbyPayload& payload, uint64_t& now) {
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({payload}, bytes) || !hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+				for (const uint64_t until = now + 100; now < until; now += 10) {
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					clientLobby.Tick(now);
+				}
+				return true;
+			};
+			uint64_t now = 0;
+			if (!hostSend(NetLobbyMatchConfig{divergent}, now)) return false;
+			if (clientLobby.GetMatchConfig() != divergent || clientLobby.GetMatchConfigHash() != NetMatchConfigUtil::HashConfig(divergent)) {
+				*error = "divergent roster order: the peer did not take the order it was sent (state " + std::string(NetLobbySession::StateName(clientLobby.GetState())) + ")";
+				return false;
+			}
+			NetLobbyStart start;
+			start.sessionId = agreed.sessionId;
+			start.startFrame = 77;
+			start.inputDelayFrames = agreed.inputDelayFrames;
+			start.matchConfigHash = agreedHash;
+			if (!hostSend(start, now)) return false;
+			if (!clientLobby.IsRejected() || clientLobby.GetFailureReason() != "lobby start does not match accepted config") {
+				*error = "divergent roster order: a peer seated in one order started on the hash of another (state " + std::string(NetLobbySession::StateName(clientLobby.GetState())) +
+				         ", reason \"" + clientLobby.GetFailureReason() + "\")";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS divergent_roster_order: the wire order binds the config hash and a start on another order is refused" << std::endl;
+			return true;
+		}
+
 		bool TestMatchConfigHashAndValidation(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) {
@@ -423,8 +477,8 @@ namespace RTE {
 			}
 			NetMatchConfig reordered = config;
 			std::swap(reordered.players[0], reordered.players[1]);
-			if (NetMatchConfigUtil::HashConfig(config) != NetMatchConfigUtil::HashConfig(reordered)) {
-				*error = "match config hash depends on player vector order";
+			if (NetMatchConfigUtil::HashConfig(config) == NetMatchConfigUtil::HashConfig(reordered)) {
+				*error = "match config hash ignores the player order the wire seats";
 				return false;
 			}
 			reordered.players[0].team = 3;
@@ -847,8 +901,8 @@ namespace RTE {
 			const NetHash32 seatedHash = NetMatchConfigUtil::HashConfig(seated);
 			NetMatchConfig reordered = seated;
 			std::swap(reordered.players[2], reordered.players[3]);
-			if (NetMatchConfigUtil::HashConfig(reordered) != seatedHash) {
-				*error = "the CPU roster hash depends on the player vector order";
+			if (NetMatchConfigUtil::HashConfig(reordered) == seatedHash) {
+				*error = "the CPU roster hash ignores the order the wire carries its slots in";
 				return false;
 			}
 			NetMatchConfig aiOnly;
@@ -12390,6 +12444,7 @@ namespace RTE {
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
+		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);
