@@ -64,7 +64,7 @@ int RTEError::s_ShowMessageBoxCallCount = 0;
 int RTEError::s_AssertMessageBoxCallCount = 0;
 static bool s_ForceAssertDialogPathForTest = false;
 std::string RTEError::s_LastIgnoredAssertDescription = "";
-std::source_location RTEError::s_LastIgnoredAssertLocation = {};
+SourceLocation RTEError::s_LastIgnoredAssertLocation = {};
 
 /// What a worker thread leaves for the app main thread to surface at its next frame: the text the
 /// dialog would have shown, plus what a dispatched Abort needs to abort the way AssertFunc would.
@@ -73,7 +73,7 @@ struct PendingWorkerMessage {
 	WorkerMessageKind kind = WorkerMessageKind::Assert;
 	std::string message;
 	std::string description;
-	std::source_location location = {};
+	SourceLocation location = {};
 };
 static std::mutex s_PendingWorkerMessageMutex;
 static PendingWorkerMessage s_PendingWorkerMessageRecord;
@@ -81,7 +81,7 @@ static std::atomic<bool> s_PendingWorkerMessage{false};
 static std::atomic<int> s_PendingWorkerMessageDropped{0};
 
 // The first pending record is kept until the main thread takes it; later ones are only counted.
-static void RecordPendingWorkerMessage(WorkerMessageKind kind, const std::string& message, const std::string& description, const std::source_location& location) {
+static void RecordPendingWorkerMessage(WorkerMessageKind kind, const std::string& message, const std::string& description, const SourceLocation& location) {
 	std::lock_guard<std::mutex> lock(s_PendingWorkerMessageMutex);
 	if (s_PendingWorkerMessage.load(std::memory_order_relaxed)) {
 		++s_PendingWorkerMessageDropped;
@@ -497,7 +497,7 @@ void RTEError::UnhandledExceptionFunc(const std::string& description, const std:
 	AbortAction;
 }
 
-void RTEError::AbortFunc(const std::string& description, const std::source_location& srcLocation) {
+void RTEError::AbortFunc(const std::string& description, const SourceLocation& srcLocation) {
 	s_CurrentlyAborting = true;
 
 	if (!System::IsInExternalModuleValidationMode()) {
@@ -570,7 +570,7 @@ void RTEError::AbortFunc(const std::string& description, const std::source_locat
 	AbortAction;
 }
 
-void RTEError::AssertFunc(const std::string& description, const std::source_location& srcLocation) {
+void RTEError::AssertFunc(const std::string& description, const SourceLocation& srcLocation) {
 	if (System::IsInExternalModuleValidationMode()) {
 		AbortFunc(description, srcLocation);
 	}
@@ -844,7 +844,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 #endif
 	s_AssertFired = false;
 	s_ForceAssertDialogPathForTest = true;
-	AssertFunc("dialog-path probe", std::source_location::current());
+	AssertFunc("dialog-path probe", RTECurrentSourceLocation);
 	s_ForceAssertDialogPathForTest = false;
 	const bool dialogLeftUnfired = !s_AssertFired;
 	std::cout << "[rteerror-selftest] " << (dialogLeftUnfired ? "PASS" : "FAIL")
@@ -853,7 +853,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 	s_AssertFired = false;
 	SDL_setenv_unsafe("CCCP_HEADLESS", "1", 1);
 	std::thread worker([] {
-		AssertFunc("worker-thread probe", std::source_location::current());
+		AssertFunc("worker-thread probe", RTECurrentSourceLocation);
 	});
 	worker.join();
 	const bool workerFired = s_AssertFired;
@@ -862,7 +862,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 
 	s_AssertFired = false;
 	s_IgnoreAllAsserts = true;
-	AssertFunc("ignore-all probe", std::source_location::current());
+	AssertFunc("ignore-all probe", RTECurrentSourceLocation);
 	s_IgnoreAllAsserts = false;
 	const bool ignoreAllFired = s_AssertFired;
 	std::cout << "[rteerror-selftest] " << (ignoreAllFired ? "PASS" : "FAIL")
@@ -876,7 +876,7 @@ bool RTEError::RunAssertPolicySelfTest() {
 	DispatchPendingWorkerMessages();
 	ResetAssertMessageBoxCallCount();
 	std::thread dispatchWorker([] {
-		AssertFunc("worker dispatch probe", std::source_location::current());
+		AssertFunc("worker dispatch probe", RTECurrentSourceLocation);
 	});
 	dispatchWorker.join();
 	const int pendingBefore = PendingWorkerMessageCount();
