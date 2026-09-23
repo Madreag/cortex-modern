@@ -6972,6 +6972,9 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ApplyAgreedStart(const NetLockstepStart& start, uint64_t nowMs) {
+		// A seat joining the running round starts at its own admission, past the round's first boundary. Taking that
+		// record - its round tag above all - would turn the host's own start into a mismatch instead of a straggler.
+		if (m_Config.joinsRunningRound && start.agreedEffectiveStartFrame < m_Config.startFrame) return;
 		if (m_AgreedStartApplied) {
 			if (m_AgreedStartRecord && *m_AgreedStartRecord != start) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "conflicting agreed start boundary");
