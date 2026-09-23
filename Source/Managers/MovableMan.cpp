@@ -1775,6 +1775,7 @@ void MovableMan::RegisterObject(MovableObject* mo) {
 
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	m_KnownObjects[mo->GetUniqueID()] = mo;
+	++m_KnownObjectsVersion;
 }
 
 void MovableMan::UnregisterObject(MovableObject* mo) {
@@ -1787,6 +1788,7 @@ void MovableMan::UnregisterObject(MovableObject* mo) {
 	auto entry = m_KnownObjects.find(mo->GetUniqueID());
 	if (entry != m_KnownObjects.end() && entry->second == mo) {
 		m_KnownObjects.erase(entry);
+		++m_KnownObjectsVersion;
 	}
 }
 
@@ -2195,6 +2197,7 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 			if (heldObjects.contains(entry->second)) entry = m_KnownObjects.erase(entry);
 			else ++entry;
 		}
+		++m_KnownObjectsVersion;
 	}
 	out.validActors.swap(m_ValidActors);
 	out.validItems.swap(m_ValidItems);
@@ -2284,6 +2287,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	{
 		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 		m_KnownObjects = std::move(in.knownObjects);
+		++m_KnownObjectsVersion;
 	}
 	for (size_t index = 0; index < in.scriptRegistrations.size(); ++index) {
 		auto& lists = in.scriptRegistrations[index];
@@ -2447,7 +2451,48 @@ bool MovableMan::SerializeScriptGraphs(std::vector<std::string>& graphs, std::ve
 	return complete;
 }
 
+MovableMan::KnownObjectsScope::KnownObjectsScope() {
+	MovableMan& manager = g_MovableMan;
+	{
+		std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);
+		m_ByIdentity.reserve(manager.m_KnownObjects.size());
+		for (const auto& [uid, object]: manager.m_KnownObjects) m_ByIdentity.push_back(object);
+		m_Version = manager.m_KnownObjectsVersion.load();
+	}
+	m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
+	std::sort(m_ByAddress.begin(), m_ByAddress.end());
+	m_Previous = manager.m_KnownObjectsScope.exchange(this);
+}
+
+MovableMan::KnownObjectsScope::~KnownObjectsScope() {
+	g_MovableMan.m_KnownObjectsScope.store(m_Previous);
+}
+
+std::string MovableMan::KnownObjectsScopeMissedChange() {
+	std::list<SceneObject*> actors;
+	GetAllActors(false, actors);
+	auto* live = actors.empty() ? nullptr : dynamic_cast<MovableObject*>(actors.front());
+	if (!live) return "no live actor";
+	std::string missed;
+	const auto agrees = [this, live](const char* name, std::string& into) {
+		bool scanned = false;
+		{
+			std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+			for (const auto& [uid, object]: m_KnownObjects) scanned = scanned || object == live;
+		}
+		if (IsKnownObject(live) != scanned && into.empty()) into = name;
+	};
+	KnownObjectsScope scope;
+	agrees("none", missed);
+	UnregisterObject(live);
+	agrees("unregister", missed);
+	RegisterObject(live);
+	agrees("register", missed);
+	return missed;
+}
+
 std::vector<MovableObject*> MovableMan::SnapshotKnownObjects() {
+	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) return scope->m_ByIdentity;
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	std::vector<MovableObject*> objects;
 	objects.reserve(m_KnownObjects.size());
@@ -2537,6 +2582,9 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 }
 
 bool MovableMan::IsKnownObject(const MovableObject* object) {
+	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
+		return std::binary_search(scope->m_ByAddress.begin(), scope->m_ByAddress.end(), object);
+	}
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	for (const auto& [uid, known]: m_KnownObjects) {
 		if (known == object) {
@@ -6337,6 +6385,7 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 		std::lock_guard<std::mutex> guard(g_MovableMan.m_ObjectRegisteredMutex);
 		std::erase(g_MovableMan.m_HeldRegistries, &m_Original);
 		g_MovableMan.m_KnownObjects.swap(m_Original);
+		++g_MovableMan.m_KnownObjectsVersion;
 	}
 	g_MovableMan.LoadWorldStructure(m_Structure);
 	MovableObject::PinUniqueIDCounter(m_Counter);

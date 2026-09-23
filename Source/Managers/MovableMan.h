@@ -300,6 +300,26 @@ namespace RTE {
 		/// Whether the pointer is an object this manager knows by unique id, so it can be read safely.
 		bool IsKnownObject(const MovableObject* object);
 
+		/// While one lives, IsKnownObject and SnapshotKnownObjects answer from copies of the known objects taken as it
+		/// opens, without the registry lock, until the known objects change. A capture opens one at its fence.
+		class KnownObjectsScope {
+			friend class MovableMan;
+		public:
+			KnownObjectsScope();
+			~KnownObjectsScope();
+			KnownObjectsScope(const KnownObjectsScope&) = delete;
+			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
+		private:
+			std::vector<MovableObject*> m_ByIdentity; //!< In unique id order, as the registry holds them.
+			std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
+			uint64_t m_Version = 0; //!< The known objects' version the copies were taken at.
+			KnownObjectsScope* m_Previous = nullptr;
+		};
+
+		/// Changes the known objects by each way in while a known-objects scope lives, and checks IsKnownObject answers
+		/// as the registry does after each. @return The first way it did not, or empty.
+		std::string KnownObjectsScopeMissedChange();
+
 		struct AddQueueMark {
 			size_t actors = 0;
 			size_t items = 0;
@@ -1162,6 +1182,8 @@ namespace RTE {
 
 		// Global map which stores all objects so they could be foud by their unique ID
 		std::map<long int, MovableObject*> m_KnownObjects;
+		std::atomic<uint64_t> m_KnownObjectsVersion{0}; //!< Moves with every change to m_KnownObjects, under its lock.
+		std::atomic<KnownObjectsScope*> m_KnownObjectsScope{nullptr}; //!< The innermost live known-objects scope.
 		std::vector<std::map<long int, MovableObject*>*> m_HeldRegistries; //!< Registry copies a scope will put back.
 		std::string m_ScriptGraphFailure; //!< Why the last set-aside could not carry the script graphs, empty when it could.
 
