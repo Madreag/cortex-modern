@@ -210,6 +210,7 @@ namespace RTE {
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
+		bool rejoin = false; // A seat coming back on its ticket: its fresh session walks the rejoin phases.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
 		// World host only: open a new round from the scene instead of resuming the world's newest
@@ -1005,6 +1006,7 @@ namespace RTE {
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
+		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
@@ -1336,10 +1338,9 @@ namespace RTE {
 		}
 		/// The rejoin phase belongs to the peer, not to one session object: the worker and the live session are
 		/// the same handshake seen from two threads.
-		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
-			if (m_Session) m_Session->SetRejoinPhase(phase);
-			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
-		}
+		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase);
+		/// The rejoin's tail replay begins once the snapshot is loaded and the catch-up installed; it ends at the activation.
+		void NoteTailReplayBeganLocked() { SetRejoinPhaseLocked(NetSession::RejoinPhase::TailReplay); }
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;

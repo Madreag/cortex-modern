@@ -129,14 +129,31 @@ namespace RTE {
 		/// every silence window starts again at the next evaluation.
 		void NotePumpParked() { m_PumpParked = true; }
 
-		/// Where a rejoining seat is in its own handshake.  Every phase but Active is work this peer is doing
-		/// with nobody to answer, so the ordinary session timeout does not judge it.
+		/// Where a rejoining seat is in its own handshake. Connecting talks to the host live and keeps every timeout. The
+		/// host staging this seat's image, this peer loading it and this peer replaying the committed tail are work with
+		/// nobody to answer, so the session-silence timeout does not judge them; a transport close still ends the link,
+		/// the host's goodbye completes the seat in any of them, and the service bounds the image and the load itself.
 		enum class RejoinPhase : uint8_t { Active = 0, Connecting = 1, ImagePending = 2, Loading = 3, TailReplay = 4 };
+		static constexpr bool SuspendsSilence(RejoinPhase phase) {
+			return phase == RejoinPhase::ImagePending || phase == RejoinPhase::Loading || phase == RejoinPhase::TailReplay;
+		}
+		static const char* RejoinPhaseName(RejoinPhase phase) {
+			switch (phase) {
+				case RejoinPhase::Active: return "Active";
+				case RejoinPhase::Connecting: return "Connecting";
+				case RejoinPhase::ImagePending: return "ImagePending";
+				case RejoinPhase::Loading: return "Loading";
+				case RejoinPhase::TailReplay: return "TailReplay";
+			}
+			return "Unknown";
+		}
 		void SetRejoinPhase(RejoinPhase phase) {
 			m_RejoinPhase = phase;
-			m_AdmissionSuspended = phase != RejoinPhase::Active;
+			m_AdmissionSuspended = SuspendsSilence(phase);
 		}
 		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
+		/// A rejoin's handshake finished: the seat now waits on the image the host stages for it.
+		void EnterImagePending();
 		bool IsAdmissionSuspended() const { return m_AdmissionSuspended; }
 		/// Holds the silence windows open for as long as this peer is the one not listening (a private
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.

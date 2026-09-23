@@ -914,6 +914,15 @@ static std::string ResyncSaveName() {
 		return sum;
 	}
 
+	void NetMatchService::SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
+		const NetSession* live = m_Session ? m_Session.get() : m_WorkerSession;
+		if (live && live->GetRejoinPhase() != phase) {
+			System::PrintDiagnosticLine(std::string("[net-match] rejoin phase ") + NetSession::RejoinPhaseName(live->GetRejoinPhase()) + " -> " + NetSession::RejoinPhaseName(phase));
+		}
+		if (m_Session) m_Session->SetRejoinPhase(phase);
+		if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
+	}
+
 	bool NetMatchService::EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd) {
 		// A seat readmitted for a frame the round never reached ended it under the AI: it never played again either.
 		return !coordinatorUsesPeer || seatUnderAIAtEnd;
@@ -1506,6 +1515,7 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			NoteTailReplayBeganLocked();
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
 			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
@@ -1560,6 +1570,10 @@ static std::string ResyncSaveName() {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
+		// A resync worker's seat loads the snapshot with nobody to answer, and plays live the moment it lands.
+		const NetSession* rejoining = m_Session ? m_Session.get() : m_WorkerSession;
+		const bool resyncRejoin = rejoining && rejoining->GetRejoinPhase() != NetSession::RejoinPhase::Active;
+		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
 		StartSnapshotLoadKeepalive();
 		if (autosave) {
 			if (!g_ActivityMan.LoadAutosaveToRestart(autosave->matchId, autosave->tick)) {
@@ -1624,6 +1638,7 @@ static std::string ResyncSaveName() {
 			return ScenarioRunner::RestoreNetResyncState(*state);
 		})) { StopSnapshotLoadKeepalive(); if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
+		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 		return true;
 	}
 
@@ -4113,6 +4128,8 @@ static std::string ResyncSaveName() {
 				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
 			}
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+			// The world's tail is replayed; this seat plays live from here and its silence counts again.
+			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 			{
 				std::ostringstream line;
 				line << "[net-world] catch-up complete peer=" << static_cast<int>(m_Coordinator->GetConfig().localPeerId)
@@ -6944,6 +6961,11 @@ static std::string ResyncSaveName() {
 			}
 #endif
 		}
+		if (request.rejoin) {
+			// A returning seat's fresh session talks to the host live until its handshake is done.
+			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
+			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+		}
 		if (started || iceSetupFailed) {
 			if (request.host) ReadRelayOffer(runnerConfig.matchConfig.relay);
 			started = StartLobbyConnection(mux, *transport, *session, *coordinator, *runner, runnerConfig, iceTarget, started, noDirectRoute, &error);
@@ -7485,6 +7507,7 @@ static std::string ResyncSaveName() {
 		request.sessionId = record.directorySessionId;
 		request.playerName = playerName.empty() ? "Client" : playerName;
 		request.resyncOnDesync = true;
+		request.rejoin = true;
 		// The ticket's own flag survives a relaunch, which the live flags do not.
 		request.persistentWorld = record.persistentWorld || liveWorldTarget;
 		if (request.persistentWorld) {

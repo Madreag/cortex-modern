@@ -221,6 +221,11 @@ namespace RTE {
 		m_ResumedWithoutTraffic = false;
 	}
 
+	void NetSession::EnterImagePending() {
+		System::PrintDiagnosticLine("[net-match] rejoin phase Connecting -> ImagePending");
+		SetRejoinPhase(RejoinPhase::ImagePending);
+	}
+
 	void NetSession::DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message) {
 		if (m_Role != NetSessionRole::Host) return;
 		PeerState* peer = FindPeer(peerId);
@@ -1199,6 +1204,8 @@ namespace RTE {
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;
 			m_NextHeartbeatMs = m_NowMs;
+			// A rejoin's handshake is done: what it waits on now is the image the host stages for it.
+			if (m_RejoinPhase == RejoinPhase::Connecting) EnterImagePending();
 			return;
 		}
 		if (!m_ReconnectClient->IsAdmissionPending()) {
@@ -1327,6 +1334,7 @@ namespace RTE {
 			m_State = NetSessionState::Ready;
 			m_StateStartedMs = m_NowMs;
 			m_NextHeartbeatMs = m_NowMs;
+			if (m_RejoinPhase == RejoinPhase::Connecting) EnterImagePending();
 			return;
 		}
 		if (std::holds_alternative<NetHeartbeat>(message.payload)) {
