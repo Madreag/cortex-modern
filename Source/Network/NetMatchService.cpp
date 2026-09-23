@@ -5403,6 +5403,10 @@ static std::string ResyncSaveName() {
 		}
 		m_PendingHostOptions = draft;
 		m_PendingHostOptions->configRevision = adopted.configRevision + 1;
+		// Every minute through every hour, or off; a run's own cadence override keeps its seconds.
+		if (m_PendingHostOptions->autosaveIntervalSeconds != 0 && !s_AutosaveSecondsOverridden) {
+			m_PendingHostOptions->autosaveIntervalSeconds = std::clamp(m_PendingHostOptions->autosaveIntervalSeconds, c_MinAutosaveIntervalSeconds, c_MaxAutosaveIntervalSeconds);
+		}
 		// The runner owns the lobby; this posts the accepted revision to its thread, where an open
 		// round republishes it to every peer at once and a closed one starts its rematch on it. The
 		// draft stays staged here too: it is what the options panel re-seeds from either way.
