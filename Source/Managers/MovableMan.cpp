@@ -2408,7 +2408,8 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
 		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
 		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts
-		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs << std::endl;
+		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs
+		          << " copy_mapped=" << stats.copyMapped << " copy_idle=" << stats.copyIdle << std::endl;
 		if (complete) {
 			if (fromAnImage) *fromAnImage = true;
 			return true;

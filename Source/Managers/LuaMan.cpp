@@ -5955,6 +5955,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			stats->enumUs += image->native->EnumUs();
 			stats->worldUs += image->native->WorldUs();
 			stats->answerUs += image->native->AnswerUs();
+			stats->copyMapped = CheckpointLua::HeapOwner::MappedCopyBytes();
+			stats->copyIdle = CheckpointLua::HeapOwner::IdleCopyBytes();
 		}
 		(void)frozenUs;
 		// A refusal is the archive's verdict and travels back whole; any other failure retires this state's frozen path.

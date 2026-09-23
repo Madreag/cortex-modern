@@ -152,6 +152,10 @@ namespace RTE::CheckpointLua {
 
 		AllocationStats Stats() const { return {m_Bytes, m_Blocks}; }
 
+		/// Every copy buffer any heap has mapped, idle ones included, and the idle part of it.
+		static size_t MappedCopyBytes() { return CopyBytes(false).load(std::memory_order_relaxed); }
+		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
+
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
 		// The caller must hold the VM's execution lock from the freeze until WaitCopy returns: the written
@@ -240,6 +244,10 @@ namespace RTE::CheckpointLua {
 		std::mutex m_SlabMutex;
 		std::vector<std::unique_ptr<Slab>> m_IdleSlabs;
 		std::shared_future<void> m_PendingCopy;
+		static std::atomic<size_t>& CopyBytes(bool idle) {
+			static std::atomic<size_t> mapped{0}, idleBytes{0};
+			return idle ? idleBytes : mapped;
+		}
 		std::shared_ptr<Slab> TakeSlab(size_t pages) {
 			std::unique_ptr<Slab> slab;
 			{
@@ -248,6 +256,7 @@ namespace RTE::CheckpointLua {
 				if (fit != m_IdleSlabs.end()) {
 					slab = std::move(*fit);
 					m_IdleSlabs.erase(fit);
+					CopyBytes(true).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 				}
 			}
 			if (!slab) {
@@ -256,6 +265,7 @@ namespace RTE::CheckpointLua {
 				slab->capacity = pages + pages / 4;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
 				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
+				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			}
 			return std::shared_ptr<Slab>(std::move(slab));
 		}
@@ -263,9 +273,11 @@ namespace RTE::CheckpointLua {
 			std::lock_guard lock(m_SlabMutex);
 			if (m_IdleSlabs.size() < c_IdleSlabs) {
 				m_IdleSlabs.push_back(std::unique_ptr<Slab>(slab));
+				CopyBytes(true).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 				return;
 			}
 			Unmap(slab->pages, slab->capacity * Snapshot::c_PageBytes);
+			CopyBytes(false).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			slab->pages = nullptr;
 			delete slab;
 		}
@@ -457,6 +469,7 @@ namespace RTE::CheckpointLua {
 			return;
 		}
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
+		HeapOwner::CopyBytes(false).fetch_sub(capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.

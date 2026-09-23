@@ -45,6 +45,8 @@ namespace RTE {
 		int64_t enumUs = 0;
 		int64_t worldUs = 0;
 		int64_t answerUs = 0;
+		size_t copyMapped = 0; // Every Lua heap copy mapped after the capture, idle buffers included, and the idle part.
+		size_t copyIdle = 0;
 	};
 
 	class LuabindObjectWrapper;
