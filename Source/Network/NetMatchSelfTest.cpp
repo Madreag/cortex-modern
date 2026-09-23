@@ -12933,6 +12933,8 @@ namespace RTE {
 		if (requestedTtl() != lifetime) failures.push_back("host minted its relay for " + std::to_string(requestedTtl()) + " s, not the service's longest " + std::to_string(lifetime) + " s");
 		service.m_Directory.Update(2); service.UpdateRelayOffer(2);
 		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "host did not publish its minted relay"; return false; }
+		// A healthy offer adds no line under the host's relay hint; the hint itself says the login renews.
+		if (!service.GetRelayError().empty()) failures.push_back("the healthy relay state printed \"" + service.GetRelayError() + "\"");
 		service.UpdateRelayOffer(15001);
 		if (service.m_Directory.IceRequestPending()) failures.push_back("host renewed a relay offer it had just minted");
 		// The same offer with half its lifetime spent.
@@ -12956,6 +12958,22 @@ namespace RTE {
 		service.m_FreshRelayRequested = true;
 		service.UpdateRelayOffer(45004);
 		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") failures.push_back("a fresh round reused the previous relay request");
+		// An offer that lapses while its renewal is still out says so, and the next offer clears the line.
+		relay.expiresAt = now - 1;
+		service.SetRelayOfferLocked(relay);
+		service.UpdateRelayOffer(45005);
+		if (service.GetRelayError().find("Relay login expired") == std::string::npos) failures.push_back("an offer that expired unrenewed printed \"" + service.GetRelayError() + "\"");
+		NetRelayConfig fresh = relay;
+		fresh.expiresAt = now + lifetime;
+		fresh.iceServers.front().credential = "fresh-password";
+		script->replies.push_back({200, fresh.ToJson(), ""});
+		service.m_Directory.Update(45006); service.UpdateRelayOffer(45006);
+		if (!service.ReadRelayOffer(offered) || offered != fresh || !service.GetRelayError().empty()) failures.push_back("the offer that landed after a lapse left \"" + service.GetRelayError() + "\"");
+		// A failed re-mint names the directory's reason instead.
+		service.m_FreshRelayRequested = true;
+		service.UpdateRelayOffer(60010);
+		service.m_Directory.Update(60011); service.UpdateRelayOffer(60011);
+		if (service.GetRelayError() != "Relay credentials unavailable or expired") failures.push_back("a failed re-mint printed \"" + service.GetRelayError() + "\"");
 		if (!failures.empty()) {
 			*error = "relay renewal: " + failures.front();
 			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
