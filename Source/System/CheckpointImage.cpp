@@ -907,6 +907,12 @@ end
 	} else {
 		fail("a_stamped_write_is_not_reused_from_the_shadow", "front object is not an Actor");
 	}
+	// A capture answers which objects exist from a copy; a change to them while it lives must reach the answers.
+	{
+		const std::string missed = g_MovableMan.KnownObjectsScopeMissedChange();
+		if (missed.empty()) pass("a_known_objects_change_reaches_a_capture_scope", "ways=3");
+		else fail("a_known_objects_change_reaches_a_capture_scope", "missed_way=" + missed);
+	}
 	return passed;
 }
 

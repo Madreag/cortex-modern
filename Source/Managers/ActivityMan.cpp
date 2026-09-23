@@ -591,6 +591,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto freezeStart = std::chrono::steady_clock::now();
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
+	// Every part of the capture asks which objects exist; the fence answers from one copy instead of the registry's lock.
+	MovableMan::KnownObjectsScope knownObjects;
 	CaptureAllocationState allocation;
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
