@@ -4309,9 +4309,12 @@ namespace RTE {
 		m_CaptureReportResent = false;
 		m_CaptureParkReportsMs.clear();
 		m_CommittedAtMs.clear();
+		m_ParkFrameSimulated = UINT64_MAX;
+		m_ParkFrameSimulatedMs = 0;
 		m_GoodbyeDrain = false;
 		m_FinalFrame = UINT64_MAX;
 		m_DeferredParkTimings.clear();
+		m_ParkCarriedCommands.clear();
 		m_ApplyingDeferredParkTiming = false;
 		m_CaptureParkAwaitingReports = false;
 		m_CaptureParkFinalized = false;
@@ -4363,6 +4366,7 @@ namespace RTE {
 		m_LastHoldHeartbeatMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
+		m_StartupLinksLost.clear();
 		m_LocalStartupPublished = false;
 		m_AgreedStartApplied = false;
 		m_AgreedStartRecord.reset();
@@ -5278,6 +5282,13 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A park commits its frames with no input from anyone, so a seat owes nothing until the frames after it fall
+				// due: its first post-park inputs are due a delay after the park's last frame ran here, never at the release.
+				if (const uint16_t owed = InputDelayAt(peer, frame); m_ParkFrameSimulated != UINT64_MAX && m_ParkFrameSimulated == m_SynchronizedCaptureEndFrame &&
+				    frame > m_ParkFrameSimulated && frame <= m_ParkFrameSimulated + std::max<uint16_t>(1, owed)) {
+					const uint64_t dueMs = m_ParkFrameSimulatedMs + static_cast<uint64_t>(std::llround(owed * m_Config.simTickMs));
+					if (dueMs > firstMissingMs && (nowMs < dueMs || nowMs - dueMs < declarationDeadline)) continue;
+				}
 				// A seat produces this frame's input when it simulates the frame one delay earlier, which it could not
 				// do before we committed that frame and it crossed the seat's link: until then it waits on us.
 				const uint64_t producedFrom = frame - std::min<uint64_t>(frame, std::max<uint16_t>(1, InputDelayAt(peer, frame)));
@@ -5334,10 +5345,11 @@ namespace RTE {
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
 					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << restartMs
 					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
-				} else if (peerStats.lastProgressMs >= firstMissingMs &&
-				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
-					// A sender still feeding the round every tick is not stalled, it is behind: the round
-					// absorbs the skew once by waiting. The bound catches a stream that STOPPED.
+				} else if (peerStats.lastProgressMs >= firstMissingMs && nowMs - peerStats.lastProgressMs < declarationDeadline &&
+				           peerStats.highestTargetFrame + m_Config.slowPlayerBoundTicks >= frame && peerStats.highestTargetFrame <= frame + m_Config.slowPlayerBoundTicks) {
+					// A sender still feeding the round every tick is not stalled, it is behind: the round absorbs the
+					// skew by waiting, but only while its stream is within the bound of this frame, so it never paces
+					// the others past the bound. The bound catches a stream that STOPPED or strayed.
 					continue;
 				}
 				std::string holdError;
@@ -5766,7 +5778,14 @@ namespace RTE {
 		// A park already committed a canonical empty frame at or below this watermark on every peer, so this
 		// tick's sample was dropped by the park, not lost to an error - and the next park has already moved the
 		// live window on by the time the simulation reaches the frames the last one covered.
-		if (targetFrame < m_Stats.nextFrame && targetFrame <= m_HighestParkEndFrame) return true;
+		if (targetFrame < m_Stats.nextFrame && targetFrame <= m_HighestParkEndFrame) {
+			// The input goes with the park, but a command is an event: it rides this peer's next input instead.
+			if (!commands.empty()) {
+				auto& carried = m_ParkCarriedCommands[targetFrame];
+				carried.insert(carried.end(), commands.begin(), commands.end());
+			}
+			return true;
+		}
 		if (targetFrame < m_Stats.nextFrame || targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ||
 		    m_LocalFrames.find(targetFrame) != m_LocalFrames.end() || m_LocalInputHistory.contains(targetFrame) ||
 		    std::any_of(m_RecoveryOutgoing.begin(), m_RecoveryOutgoing.end(), [&](const auto& pending) { return pending.frame.senderPeerId == m_Config.localPeerId && pending.frame.targetFrame == targetFrame; })) {
@@ -5783,7 +5802,37 @@ namespace RTE {
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.targetFrame = targetFrame;
 		packet.frames = frames;
-		packet.commands = commands;
+		// A park commits its frames empty on every peer, so commands aimed at one wait for the first frame past it.
+		const bool parkedTarget = IsSynchronizedCapturePark(targetFrame);
+		std::map<uint64_t, std::vector<NetGameCommand>> carried = m_ParkCarriedCommands;
+		if (parkedTarget) {
+			if (!commands.empty()) carried[targetFrame].insert(carried[targetFrame].end(), commands.begin(), commands.end());
+		} else {
+			// Oldest first and within the packet's limits: only the newest binding survives, and one this tick carries itself supersedes it.
+			const auto isBinding = [](const NetGameCommand& command) { return std::holds_alternative<NetGamePlayerBindings>(command.payload); };
+			const bool freshBinding = std::any_of(commands.begin(), commands.end(), isBinding);
+			const size_t own = static_cast<size_t>(std::count_if(commands.begin(), commands.end(), [&](const NetGameCommand& command) { return !isBinding(command); }));
+			size_t room = NetLockstepCodec::c_MaxCommandsPerPacket - std::min<size_t>(NetLockstepCodec::c_MaxCommandsPerPacket, own);
+			std::optional<NetGameCommand> binding;
+			for (auto it = carried.begin(); it != carried.end();) {
+				auto& pending = it->second;
+				size_t taken = 0;
+				for (; taken < pending.size(); ++taken) {
+					if (isBinding(pending[taken])) {
+						if (!freshBinding) binding = pending[taken];
+						continue;
+					}
+					if (room == 0) break;
+					packet.commands.push_back(pending[taken]);
+					--room;
+				}
+				pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(taken));
+				if (!pending.empty()) break;
+				it = carried.erase(it);
+			}
+			if (binding) packet.commands.push_back(*binding);
+			packet.commands.insert(packet.commands.end(), commands.begin(), commands.end());
+		}
 		for (NetGameCommand& command : packet.commands) {
 			command.senderPeerId = m_Config.localPeerId;
 		}
@@ -5884,6 +5933,7 @@ namespace RTE {
 			}
 			m_Stats.valueObservationsDropped += dropped;
 		}
+		m_ParkCarriedCommands = std::move(carried);
 		if (recovery) return true;
 		RememberLocalInput(packet);
 		m_LocalFrames[targetFrame] = frames;
@@ -6291,8 +6341,15 @@ namespace RTE {
 			return false;
 		}
 		std::vector<bool> installed(batches.size(), false);
+		const auto agreedStart = m_PeerEffectiveStart.find(m_Config.localPeerId);
 		for (size_t index = 0; index < batches.size(); ++index) {
 			const auto& frame = batches[index];
+			// The agreed first frame can sit past the restored start: every peer commits nothing below it, so that
+			// input is dropped here exactly as production drops it.
+			if (agreedStart != m_PeerEffectiveStart.end() && frame.targetFrame < agreedStart->second) {
+				installed[index] = true;
+				continue;
+			}
 			if (frame.targetFrame < m_Stats.nextFrame || frame.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) {
 				if (error) *error = "resync input batch targets existing or applied input";
 				return false;
@@ -6915,6 +6972,9 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ApplyAgreedStart(const NetLockstepStart& start, uint64_t nowMs) {
+		// A seat joining the running round starts at its own admission, past the round's first boundary. Taking that
+		// record - its round tag above all - would turn the host's own start into a mismatch instead of a straggler.
+		if (m_Config.joinsRunningRound && start.agreedEffectiveStartFrame < m_Config.startFrame) return;
 		if (m_AgreedStartApplied) {
 			if (m_AgreedStartRecord && *m_AgreedStartRecord != start) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "conflicting agreed start boundary");
@@ -6993,6 +7053,7 @@ namespace RTE {
 			m_StartupHeldSeatStamps.insert(peer);
 			++m_Stats.peers[peer].holds;
 			if (peer == m_Config.localPeerId) m_LocalSeatHeld = true;
+			std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << start.agreedFirstFrame << " AI in control" << std::endl;
 		}
 		RefreshLeftSeatHolds();
 		std::cout << "[net-match] agreed first frame=" << start.agreedFirstFrame
@@ -7051,7 +7112,7 @@ namespace RTE {
 			record.peerStartupParks[peer - 1] = peer == m_Config.localPeerId ? m_LocalStartParkMs : m_Stats.peers[peer].startParkMs;
 			record.peerInputDelays[peer - 1] = delay;
 			firstCommitFrame = std::min(firstCommitFrame, record.peerEffectiveStartFrames[peer - 1]);
-			if (expired && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
+			if ((expired || m_StartupLinksLost.contains(peer)) && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
 			    std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peer) != m_RemotePeerIds.end() &&
 			    !IsPeerGoneAtFrame(peer, record.agreedFirstFrame) &&
 			    (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0)
@@ -7088,7 +7149,8 @@ namespace RTE {
 			// announced leave is already the host-authored boundary for that seat; it must not hold the
 			// surviving seats behind the startup publication budget.
 			if (IsPeerGoneAtFrame(peer, m_Config.startFrame)) continue;
-			allPublished = allPublished && m_PeerStartupPublished.contains(peer);
+			// A seat whose link died before it published never will; the start holds it instead of waiting out the budget.
+			allPublished = allPublished && (m_PeerStartupPublished.contains(peer) || (m_Config.substituteSlowPeers && m_StartupLinksLost.contains(peer)));
 		}
 		if (allPublished || StartupWaitExpired(nowMs)) FormAgreedFirstFrame(nowMs);
 	}
@@ -7240,6 +7302,10 @@ namespace RTE {
 		FlushTimingOutgoing();
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
+			m_ParkFrameSimulated = completedTick;
+			m_ParkFrameSimulatedMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
+		}
 		if (!m_DeferStops) return false;
 		if (!IsRunning()) return false;
 		if (m_MigrationResult.snapshotProviderPeerId == m_Config.localPeerId && completedTick == m_MigrationResult.boundary + 1) {
@@ -8335,6 +8401,16 @@ namespace RTE {
 					ApplyPeerLeave(lockstepPeer, FirstFrameWithout(lockstepPeer), "connection lost", nowMs, false);
 					break;
 				}
+				// Before the agreed start the bounded wait holds a seat whose link died, as its answer budget would.
+				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::WaitingForStart && UsesBoundedWait() && m_RequirePublishedStart &&
+				    m_Config.localPeerId == GetHostPeerId() && !m_AgreedStartApplied) {
+					m_StartupLinksLost.insert(lockstepPeer);
+					m_RemoteTransports.erase(lockstepPeer);
+					m_RemoteFrameWindow.erase(lockstepPeer);
+					std::cout << "[net-lockstep] " << DescribePeer(lockstepPeer) << " lost its link before the agreed start; the start holds its seat" << std::endl;
+					TickStartupWait(nowMs);
+					break;
+				}
 				// A transport peer outside the round — a leaver's stale socket finally timing out, a
 				// rejected joiner's half-open connection — cannot invalidate the match.
 				if (lockstepPeer == 0) {
@@ -8518,6 +8594,13 @@ namespace RTE {
 		// Another round's start (a late one from before a resync) is not this round's handshake; before this
 		// peer knows its round, a start for a different frame is that straggler too.
 		if (!followTheAuthority && start.roundId != 0 && ((m_RoundId != 0 && start.roundId != m_RoundId) || (m_RoundId == 0 && start.startFrame != m_Config.startFrame && !worldRosterMessage))) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
+		// A seat joining the running round starts at its own admission; the start the host began the round with names
+		// a frame before it, and once this seat has its round that start is a straggler, never a mismatch.
+		if (m_Config.joinsRunningRound && start.localPeerId == GetHostPeerId() && start.startFrame < m_Config.startFrame &&
+		    m_RoundId != 0 && start.roundId == m_RoundId) {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
@@ -8730,7 +8813,7 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
 			return;
 		}
-		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
+		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		// Forward every frame this peer's slot table has taken in, before any rule of ours drops it: what
 		// the peers behind the relay decode has to be the same sequence, or their tables fall behind and a
 		// later slot reference means nothing to them. They apply the same rules to it that we do.
@@ -9402,6 +9485,11 @@ namespace RTE {
 				// canonical empty frame on every peer instead.
 				if (localIt != m_LocalFrames.end()) m_LocalFrames.erase(localIt);
 				if (remoteIt != m_RemoteFrames.end()) m_RemoteFrames.erase(remoteIt);
+				// Every peer drops the commands too; this peer's own ride its next input, where every peer commits them.
+				if (const auto queued = m_LocalCommands.find(m_Stats.nextFrame); queued != m_LocalCommands.end() && !m_Playback) {
+					auto& carried = m_ParkCarriedCommands[m_Stats.nextFrame];
+					carried.insert(carried.end(), queued->second.begin(), queued->second.end());
+				}
 				m_LocalCommands.erase(m_Stats.nextFrame);
 				m_RemoteCommands.erase(m_Stats.nextFrame);
 				m_LocalObservations.erase(m_Stats.nextFrame);

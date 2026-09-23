@@ -165,8 +165,10 @@ local armNote = ''
 local function publishHotTrace(note)
   armNote = (armNote ~= '' and (armNote..'|') or '')..note
   _PreviewBarrierHotTrace = armNote
+  -- The window puts globals and upvalues back, so the note it wrote survives only in the stash it never arms.
+  if _ScriptFieldsStash then _ScriptFieldsStash['preview:hotnote'] = armNote end
 end
-p.hotNote = function() return armNote end
+p.hotNote = function() return (_ScriptFieldsStash and _ScriptFieldsStash['preview:hotnote']) or armNote end
 local function armHotTrace(label)
   if not jitEnabled then
     if label == 'setup' then armNote = '' end
@@ -279,10 +281,9 @@ p.released = function()
   assert(inside and inside - after >= 48, 'beforeimage bytes not released: '..tostring(inside)..' -> '..tostring(after))
 end
 p.upvalueSlotReport = function()
-  -- Documented limit: the barrier captures tables, so an upvalue slot keeps what the preview wrote.
+  -- The window puts a closed upvalue slot back as it found it.
   _PreviewBarrierUpvalueSlot = slot
-  assert(slot == 2, 'upvalue slot write was undone: '..tostring(slot))
-  slot = 1
+  assert(slot == 1, 'the window left its upvalue write: '..tostring(slot))
 end
 p.check = function()
   assert(p.data == p.alias and p.cycle == p)
@@ -371,10 +372,10 @@ end
 				// Rollback and the upvalue slot only exist after mutate finishes the window stores.
 				if (windowOk[static_cast<size_t>(index)]) {
 					check("preview_barrier_exact_rollback", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.check(); assert(_ScriptFieldsStash['preview:-7654321'] == nil)", false));
-					check("preview_barrier_upvalue_slot_limit", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
+					check("preview_barrier_upvalue_slot_restored", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.upvalueSlotReport()", false));
 				}
 				check("preview_barrier_gc_released", index, round, states[index]->RunScriptString("_PreviewBarrierProbe.released()", false));
-				// Preview rollback drops the global; the note upvalue is the live one.
+				// Preview rollback drops the global and the note upvalue; the stash keeps the window's note.
 				states[index]->RunScriptString("if _PreviewBarrierProbe and _PreviewBarrierProbe.hotNote then _PreviewBarrierHotTrace = _PreviewBarrierProbe.hotNote() end", false);
 				lua_State* observed = states[index]->GetLuaState();
 				const int slotTop = lua_gettop(observed);
@@ -389,7 +390,7 @@ end
 				const char* hotTrace = lua_isstring(observed, -1) ? lua_tostring(observed, -1) : "none";
 				lua_getglobal(observed, "_PreviewBarrierFirstTrace");
 				const int firstTrace = lua_isnumber(observed, -1) ? static_cast<int>(lua_tointeger(observed, -1)) : -1;
-				// Both are documented limits, so the observed values are printed and a contract change shows up here.
+				// The observed values are printed, so a contract change shows up here.
 				std::cout << "[preview-barrier] state=" << index << " round=" << round
 				          << " upvalue_slot_after_end=" << (lua_isnumber(observed, slotTop + 1) ? static_cast<int>(lua_tointeger(observed, slotTop + 1)) : -1)
 				          << " registry_table_after_end=" << registryValue
@@ -399,7 +400,7 @@ end
 			}
 		}
 		for (LuaStateWrapper* state: states) {
-			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; _PreviewBarrierFirstTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
+			state->RunScriptString("_ScriptFieldsStash = _ScriptFieldsStash or {}; debug.sethook(); if _PreviewBarrierProbe and _PreviewBarrierProbe.cleanup then _PreviewBarrierProbe.cleanup() end; _PreviewBarrierProbe = nil; _PreviewBarrierUpvalueSlot = nil; _PreviewBarrierHotTrace = nil; _PreviewBarrierFirstTrace = nil; rawset(_G, '_ScriptFieldsStash\\0probe', nil); _ScriptFieldsStash['preview:-7654321'] = nil; _ScriptFieldsStash['preview:gc'] = nil; _ScriptFieldsStash['preview:hotnote'] = nil; collectgarbage('restart'); collectgarbage('collect')", false);
 			lua_State* done = state->GetLuaState();
 			lua_pushnil(done);
 			lua_setfield(done, LUA_REGISTRYINDEX, "_PreviewBarrierRegistry");

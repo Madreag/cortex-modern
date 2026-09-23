@@ -210,6 +210,7 @@ namespace RTE {
 		// run's AutosaveSeconds setting/override, so a request that names nothing changes nothing.
 		std::optional<uint32_t> autosaveSeconds;
 		bool resyncOnDesync = false; // A runtime desync reloads everyone from the host's snapshot instead of aborting the match.
+		bool rejoin = false; // A seat coming back on its ticket: its fresh session walks the rejoin phases.
 		bool dedicated = false; // Host only: keep lockstep peer hostPeerId but seat no human slot there.
 		bool persistentWorld = false; // Host only: an indefinitely running world, never a last-brain or rematch.
 		// World host only: open a new round from the scene instead of resuming the world's newest
@@ -463,6 +464,8 @@ namespace RTE {
 		std::set<uint8_t> CheckpointWriters(uint64_t tick) const;
 		/// Forgets the schedule a previous round named.
 		void ResetCheckpointSchedule();
+		/// Forgets the capture the host waits on across a heal, keeping the match's chain and the captures already named.
+		void ForgetOpenCaptureOnHeal();
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
 		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
@@ -857,6 +860,8 @@ namespace RTE {
 		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
+		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
+		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
 		/// Client: names the world's own UUID in the stored ticket, so the return watch browses for the
 		/// row the world re-registers under on its next boot.
@@ -1004,6 +1009,7 @@ namespace RTE {
 		static NetLockstepSeatState QuerySeatState(void* context, uint8_t lockstepPeerId, NetPeerId transportPeerId);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestAParkReachesTheSessionAWorkerOwns(std::string* error);
+		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
@@ -1047,6 +1053,9 @@ namespace RTE {
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
+		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
+		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
+		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
@@ -1332,10 +1341,9 @@ namespace RTE {
 		}
 		/// The rejoin phase belongs to the peer, not to one session object: the worker and the live session are
 		/// the same handshake seen from two threads.
-		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
-			if (m_Session) m_Session->SetRejoinPhase(phase);
-			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
-		}
+		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase);
+		/// The rejoin's tail replay begins once the snapshot is loaded and the catch-up installed; it ends at the activation.
+		void NoteTailReplayBeganLocked() { SetRejoinPhaseLocked(NetSession::RejoinPhase::TailReplay); }
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;
@@ -1431,6 +1439,9 @@ namespace RTE {
 		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
 		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: measured capture cost used to gate another refresh.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
+		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
+		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
+		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
 		std::string m_PrivateJoinError;
 		std::shared_ptr<const std::vector<uint8_t>> m_WorldJoinImageArchive; //!< The writer's own buffer, shared.

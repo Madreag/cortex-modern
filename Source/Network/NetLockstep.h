@@ -1310,6 +1310,7 @@ namespace RTE {
 		uint64_t m_StartWaitSinceMs = 0;
 		bool m_LocalStartupPublished = false;
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
+		std::set<uint8_t> m_StartupLinksLost; //!< Host: seats whose link died before the agreed start; the start holds them.
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
@@ -1381,7 +1382,10 @@ namespace RTE {
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
+		uint64_t m_ParkFrameSimulated = UINT64_MAX; //!< The last park frame this peer simulated.
+		uint64_t m_ParkFrameSimulatedMs = 0; //!< When it did: a seat's first post-park input is due a delay after the park's last frame.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
+		std::map<uint64_t, std::vector<NetGameCommand>> m_ParkCarriedCommands; //!< This peer's commands a park emptied, by the frame they targeted; they ride its next input.
 		bool m_ApplyingDeferredParkTiming = false;
 		bool m_CaptureParkAwaitingReports = false;
 		bool m_CaptureParkFinalized = false;

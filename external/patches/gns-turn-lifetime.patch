@@ -19,6 +19,9 @@ The native ICE client keeps a relayed connection alive for its whole life:
   failed is tried again, and a live allocation tries the new login on a
   Refresh at once. A server that holds the allocation to the username that
   created it (RFC 5766 section 4, 441) keeps it on that login.
+- A connection closed locally over a relayed (TURN) route also sends its close
+  through rendezvous: the relay does not always carry the close packets, and the
+  peer takes a rendezvous close the same way.
 - steamnetworkingtypes.h defines STEAMNETWORKINGSOCKETS_TURN_LIFETIME.
 
 diff --git a/include/steam/steamnetworkingtypes.h b/include/steam/steamnetworkingtypes.h
@@ -801,6 +804,28 @@ index 26e9572..1a5cbb5 100644
      	virtual void TransportFreeResources() override;
  
          // Implements CConnectionTransportUDPBase
+diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.cpp
+index a109cdd..93e6ad2 100644
+--- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.cpp
++++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.cpp
+@@ -931,6 +931,17 @@ void CSteamNetworkConnectionP2P::ConnectionStateChanged( ESteamNetworkingConnect
+ 			m_bNeedToSendConnectOKSignal = false;
+ 			m_bWaitForInitialRoutingReady = false;
+ 			EnsureICEFailureReasonSet( usecNow );
++			#ifdef STEAMNETWORKINGSOCKETS_ENABLE_ICE
++				// A relayed route does not always deliver the close packets, so a local close
++				// over one also goes through rendezvous, which the peer takes the same way.
++				if ( GetState() == k_ESteamNetworkingConnectionState_FinWait
++					&& ( eOldState == k_ESteamNetworkingConnectionState_Connected || eOldState == k_ESteamNetworkingConnectionState_Linger )
++					&& m_pTransportICE && m_pTransport == m_pTransportICE
++					&& m_pTransportICE->m_eCurrentRouteKind == k_ESteamNetTransport_TURN )
++				{
++					SendConnectionClosedSignal( usecNow );
++				}
++			#endif
+ 			break;
+ 
+ 		case k_ESteamNetworkingConnectionState_Linger:
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.h b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.h
 index 6b9a320..3d3a157 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_p2p.h

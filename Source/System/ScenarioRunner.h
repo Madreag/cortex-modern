@@ -154,8 +154,12 @@ namespace RTE {
 		/// Pumps the coordinator until the relay host owes no peer a forward, or the budget runs out,
 		/// then keeps relaying for lingerMs. The star's hub is the only route between its clients, so
 		/// quitting with a forward still held takes the round off every client that was waiting on it.
-		/// Returns whether it drained.
-		static bool DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs);
+		/// Returns whether it drained. A drain that reaches totalCapMs with a rejoin still pending says the round's goodbye
+		/// to every pending returner before it leaves.
+		static bool DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs, uint32_t totalCapMs = c_TotalDrainCapMs);
+		static constexpr uint32_t c_TotalDrainCapMs = 90000;
+		/// How long the drain keeps pumping after its cap goodbye, so the goodbye leaves before the host does.
+		static constexpr uint32_t c_CapGoodbyeFlushMs = 1000;
 		static bool FinishLockstepSimulationTick(uint64_t completedTick);
 
 		/// Enable the "waiting for peer" overlay drawn while the lockstep wait is stalled. Interactive
@@ -311,7 +315,8 @@ namespace RTE {
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.
-		static void SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail = {}, std::function<uint64_t()> sessionProgress = {});
+		static void SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail = {}, std::function<uint64_t()> sessionProgress = {},
+		                           std::function<void()> goodbyeToPendingReturners = {});
 		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.

@@ -875,6 +875,43 @@ namespace RTE {
 			return true;
 		}
 
+		/// A rejoin phase with nobody to answer is bounded on its own clock: a phase change starts the clock again, and a
+		/// phase that outlives the ceiling ends the rejoin.
+		bool TestARejoinPhaseEndsAtItsCeiling(std::string* error) {
+			const uint16_t port = 42253;
+			LoopbackTransport hostTransport, clientTransport;
+			NetSession host, client;
+			NetSessionConfig hostConfig = MakeConfig(port, 1054, "Host");
+			NetSessionConfig clientConfig = MakeConfig(port, 1055, "Client");
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 100;
+			clientConfig.rejoinPhaseCeilingMs = 300;
+			if (!host.StartHost(hostTransport, hostConfig, error) || !client.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+			if (!DrivePair(hostTransport, clientTransport, host, client, [&] { return host.IsReady() && client.IsReady(); }, error)) return false;
+			// The host stops answering: only the phase keeps this seat's silence from ending it, and only the ceiling bounds the phase.
+			uint64_t now = 2000;
+			const auto run = [&](uint64_t forMs) {
+				for (const uint64_t until = now + forMs; now < until && !client.HasReject(); now += 10) {
+					client.Tick(now);
+					clientTransport.AdvanceTimeMs(10);
+				}
+			};
+			client.SetRejoinPhase(NetSession::RejoinPhase::ImagePending);
+			run(250);
+			client.SetRejoinPhase(NetSession::RejoinPhase::Loading);
+			run(250);
+			if (client.HasReject()) {
+				*error = "a rejoin phase ended before its own ceiling: the clock did not start again at the phase change";
+				return false;
+			}
+			run(200);
+			if (!client.HasReject() || client.GetRejectReason() != NetRejectReason::Timeout) {
+				*error = "a rejoin phase that outlived its ceiling kept the rejoin waiting: phase=Loading reject=" + std::to_string(client.HasReject());
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS a_rejoin_phase_ends_at_its_ceiling" << std::endl;
+			return true;
+		}
+
 		bool TestLobbyMembership(std::string* error) {
 			constexpr uint16_t port = 42208;
 			LoopbackTransport hostTransport;
@@ -1973,6 +2010,7 @@ namespace RTE {
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
 		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
+		if (!TestARejoinPhaseEndsAtItsCeiling(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
 		if (!TestAdmissionRefusalIsLogged(&error)) return fail(error);
