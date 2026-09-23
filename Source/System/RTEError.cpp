@@ -49,7 +49,15 @@ static bool IsOnAppMainThread() {
 	return current == s_AppMainThreadId.load();
 }
 #else
-static bool IsOnAppMainThread() { return SDL_IsMainThread(); }
+// SDL answers true on every thread until it has recorded its own main thread, so the app's is kept here.
+static std::atomic<std::thread::id> s_AppMainThreadId{};
+
+static bool IsOnAppMainThread() {
+	const std::thread::id current = std::this_thread::get_id();
+	std::thread::id expected{};
+	s_AppMainThreadId.compare_exchange_strong(expected, current);
+	return current == s_AppMainThreadId.load();
+}
 #endif
 
 #include "backward/backward.hpp"
@@ -300,6 +308,8 @@ static LONG WINAPI RTEWindowsExceptionHandler([[maybe_unused]] EXCEPTION_POINTER
 void RTEError::SetExceptionHandlers() {
 #ifdef _WIN32
 	s_AppMainThreadId.store(GetCurrentThreadId());
+#else
+	s_AppMainThreadId.store(std::this_thread::get_id());
 #endif
 	// Basic handling for C++ exceptions. Doesn't give us much meaningful information.
 	[[maybe_unused]] static const std::terminate_handler terminateHandler = []() {
@@ -841,6 +851,8 @@ bool RTEError::RunAssertPolicySelfTest() {
 	}
 #ifdef _WIN32
 	s_AppMainThreadId.store(GetCurrentThreadId());
+#else
+	s_AppMainThreadId.store(std::this_thread::get_id());
 #endif
 	s_AssertFired = false;
 	s_ForceAssertDialogPathForTest = true;
