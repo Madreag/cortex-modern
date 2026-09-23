@@ -11886,3 +11886,55 @@ void LuaMan::EndPreviewScripts() {
 		}
 	}
 }
+
+CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
+	CopyBufferProbe probe;
+	probe.bound = CheckpointLua::HeapOwner::c_LiveSlabs + 1;
+	try {
+		const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
+		lua_State* state = owner->State();
+		// Only the chunks below write the heap, so each freeze copies what they touched.
+		lua_gc(state, LUA_GCSTOP, 0);
+		const auto run = [state](const std::string& code) {
+			if (luaL_loadstring(state, code.c_str()) != 0 || lua_pcall(state, 0, 0, 0) != 0) {
+				const char* message = lua_tostring(state, -1);
+				throw std::runtime_error(message ? message : "a probe chunk failed");
+			}
+		};
+		// Eight arrays on pages of their own, each written in one round only, and one written in every round.
+		constexpr int rounds = 8;
+		run("groups = {} for g = 1, " + std::to_string(rounds) + " do local t = {} for i = 1, 16384 do t[i] = i end groups[g] = t end "
+		    "hot = {} for i = 1, 16384 do hot[i] = 0 end");
+		CheckpointLua::Snapshot held = owner->Freeze({});
+		probe.freezes = 1;
+		for (int round = 1; round <= rounds; ++round) {
+			run("for i = 1, 16384 do hot[i] = hot[i] + 1 end local t = groups[" + std::to_string(round) + "] for i = 1, 16384 do t[i] = -i end");
+			// Each freeze replaces the snapshot before it, as a world keeps one capture in flight.
+			held = owner->Freeze({});
+			++probe.freezes;
+			probe.mostLive = std::max(probe.mostLive, owner->LiveSlabs());
+		}
+		// Nothing wrote the arrays after the last freeze, so its snapshot reads them back byte for byte.
+		const auto matches = [&held, state]() {
+			const GCtab* table = static_cast<const GCtab*>(lua_topointer(state, -1));
+			const TValue* array = tvref(table->array);
+			const size_t bytes = table->asize * sizeof(TValue);
+			const auto frozen = held.ReadBytes(array, bytes);
+			return frozen.size() == bytes && std::memcmp(frozen.data(), array, bytes) == 0;
+		};
+		probe.pagesMatch = true;
+		lua_getglobal(state, "groups");
+		for (int group = 1; group <= rounds; ++group) {
+			lua_rawgeti(state, -1, group);
+			probe.pagesMatch = matches() && probe.pagesMatch;
+			lua_pop(state, 1);
+		}
+		lua_pop(state, 1);
+		lua_getglobal(state, "hot");
+		probe.pagesMatch = matches() && probe.pagesMatch;
+		lua_pop(state, 1);
+	} catch (const std::exception& error) {
+		probe.error = error.what();
+	}
+	return probe;
+}

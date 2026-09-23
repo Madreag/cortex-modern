@@ -1053,6 +1053,22 @@ bool RTE::RunCheckpointImageSelfTest() {
 				pass(row, "the flag was raised and the walk that followed cleared it");
 			}
 		}
+
+		// Pages that go quiet at different freezes each hold the copy buffer they were copied into. A heap
+		// keeps a bounded set of those buffers mapped, and its last snapshot still reads as the heap it froze.
+		{
+			const CopyBufferProbe probe = ProbeCheckpointCopyBuffers();
+			const char* row = "settled_pages_keep_a_bounded_set_of_copy_buffers";
+			const std::string detail = "most_live=" + std::to_string(probe.mostLive) + " bound=" + std::to_string(probe.bound) +
+			                           " freezes=" + std::to_string(probe.freezes) + " pages_match=" + std::to_string(probe.pagesMatch);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.mostLive > probe.bound || !probe.pagesMatch) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
 	}

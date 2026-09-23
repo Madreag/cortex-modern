@@ -138,6 +138,16 @@ namespace RTE::CheckpointLua {
 
 		~HeapOwner() {
 			WaitCopy();
+			// The page table's buffers come back through GiveSlab while the pool still stands; then the pool is unmapped.
+			m_Pages.clear();
+			{
+				std::lock_guard lock(m_SlabMutex);
+				for (const auto& slab: m_IdleSlabs) {
+					CopyBytes(true).fetch_sub(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
+					slab->owner = nullptr;
+				}
+				m_IdleSlabs.clear();
+			}
 			// The wrapper keeps lua_close from destroying the bootstrap's shared arena.
 			if (m_State) lua_close(std::exchange(m_State, nullptr));
 			m_Bootstrap.reset();
@@ -155,6 +165,10 @@ namespace RTE::CheckpointLua {
 		/// Every copy buffer any heap has mapped, idle ones included, and the idle part of it.
 		static size_t MappedCopyBytes() { return CopyBytes(false).load(std::memory_order_relaxed); }
 		static size_t IdleCopyBytes() { return CopyBytes(true).load(std::memory_order_relaxed); }
+		/// The copy buffers of this heap that a page table or a snapshot still holds.
+		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
+		/// The buffer of the last freeze and the one of settled pages; a third means settled pages pin a stale one.
+		static constexpr size_t c_LiveSlabs = 2;
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
@@ -172,28 +186,43 @@ namespace RTE::CheckpointLua {
 			m_Pages.resize(pageCount);
 			m_Written.resize(pageCount);
 			const size_t written = WrittenPages();
+			// A page nothing writes again keeps the whole buffer it was copied into mapped. Once more buffers
+			// are held than a freeze needs, every such page moves into one buffer of its own size.
+			std::vector<void*> settled;
+			if (m_LiveSlabs.load(std::memory_order_relaxed) > c_LiveSlabs) {
+				std::vector<bool> fresh(pageCount, false);
+				for (size_t index = 0; index < written; ++index) fresh[(reinterpret_cast<uintptr_t>(m_Written[index]) - m_Base) / Snapshot::c_PageBytes] = true;
+				for (size_t at = 0; at < pageCount; ++at) {
+					if (m_Pages[at] && !fresh[at]) settled.push_back(reinterpret_cast<void*>(m_Base + at * Snapshot::c_PageBytes));
+				}
+			}
 			auto data = std::make_shared<Snapshot::Data>();
 			data->state = m_State;
 			data->serial = G(m_State)->objserial;
 			data->base = m_Base;
 			data->committed = m_Committed;
-			data->copied = written;
+			data->copied = written + settled.size();
 			data->pages = m_Pages;
-			if (written) {
-				std::shared_ptr<Slab> slab = TakeSlab(written);
+			if (written || !settled.empty()) {
+				std::shared_ptr<Slab> slab = written ? TakeSlab(written, true) : nullptr;
+				std::shared_ptr<Slab> settledSlab = settled.empty() ? nullptr : TakeSlab(settled.size(), false);
 				std::vector<void*> addresses(m_Written.begin(), m_Written.begin() + written);
 				// Both page tables take the copies as they land, so a submitted copy is waited for once, at
 				// the end of the world capture, and an unsubmitted one is already done when Freeze returns.
-				auto copy = [this, data, slab, addresses = std::move(addresses)] {
+				auto copy = [this, data, slab, settledSlab, addresses = std::move(addresses), settled = std::move(settled)] {
 					const auto copyStarted = std::chrono::steady_clock::now();
-					for (size_t index = 0; index < addresses.size(); ++index) {
-						Snapshot::Page& page = slab->pages[index];
-						std::memcpy(page.bytes, addresses[index], Snapshot::c_PageBytes);
-						const size_t at = (reinterpret_cast<uintptr_t>(addresses[index]) - m_Base) / Snapshot::c_PageBytes;
-						auto shared = std::shared_ptr<const Snapshot::Page>(slab, &page);
-						data->pages[at] = shared;
-						m_Pages[at] = std::move(shared);
-					}
+					const auto copyInto = [this, &data](const std::shared_ptr<Slab>& into, const std::vector<void*>& from) {
+						for (size_t index = 0; index < from.size(); ++index) {
+							Snapshot::Page& page = into->pages[index];
+							std::memcpy(page.bytes, from[index], Snapshot::c_PageBytes);
+							const size_t at = (reinterpret_cast<uintptr_t>(from[index]) - m_Base) / Snapshot::c_PageBytes;
+							auto shared = std::shared_ptr<const Snapshot::Page>(into, &page);
+							data->pages[at] = shared;
+							m_Pages[at] = std::move(shared);
+						}
+					};
+					if (slab) copyInto(slab, addresses);
+					if (settledSlab) copyInto(settledSlab, settled);
 					data->copyUs.store(MicrosecondsSince(copyStarted), std::memory_order_relaxed);
 				};
 				std::future<void> pending = submit ? submit(std::move(copy)) : std::future<void>();
@@ -238,19 +267,21 @@ namespace RTE::CheckpointLua {
 			Snapshot::Page* pages = nullptr;
 			size_t capacity = 0;
 			HeapOwner* owner = nullptr;
+			bool pooled = true; // A buffer of settled pages is sized to them, so it is unmapped instead of reused.
 			~Slab();
 		};
 		static constexpr size_t c_IdleSlabs = 3;
 		std::mutex m_SlabMutex;
 		std::vector<std::unique_ptr<Slab>> m_IdleSlabs;
+		std::atomic<size_t> m_LiveSlabs{0};
 		std::shared_future<void> m_PendingCopy;
 		static std::atomic<size_t>& CopyBytes(bool idle) {
 			static std::atomic<size_t> mapped{0}, idleBytes{0};
 			return idle ? idleBytes : mapped;
 		}
-		std::shared_ptr<Slab> TakeSlab(size_t pages) {
+		std::shared_ptr<Slab> TakeSlab(size_t pages, bool pooled) {
 			std::unique_ptr<Slab> slab;
-			{
+			if (pooled) {
 				std::lock_guard lock(m_SlabMutex);
 				const auto fit = std::find_if(m_IdleSlabs.begin(), m_IdleSlabs.end(), [pages](const auto& candidate) { return candidate->capacity >= pages; });
 				if (fit != m_IdleSlabs.end()) {
@@ -262,16 +293,19 @@ namespace RTE::CheckpointLua {
 			if (!slab) {
 				slab = std::make_unique<Slab>();
 				slab->owner = this;
-				slab->capacity = pages + pages / 4;
+				slab->pooled = pooled;
+				slab->capacity = pooled ? pages + pages / 4 : pages;
 				slab->pages = static_cast<Snapshot::Page*>(MapPages(slab->capacity * Snapshot::c_PageBytes));
 				if (!slab->pages) throw std::runtime_error("could not map a Lua heap copy");
 				CopyBytes(false).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 			}
+			m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
 			return std::shared_ptr<Slab>(std::move(slab));
 		}
 		void GiveSlab(Slab* slab) {
+			m_LiveSlabs.fetch_sub(1, std::memory_order_relaxed);
 			std::lock_guard lock(m_SlabMutex);
-			if (m_IdleSlabs.size() < c_IdleSlabs) {
+			if (slab->pooled && m_IdleSlabs.size() < c_IdleSlabs) {
 				m_IdleSlabs.push_back(std::unique_ptr<Slab>(slab));
 				CopyBytes(true).fetch_add(slab->capacity * Snapshot::c_PageBytes, std::memory_order_relaxed);
 				return;
@@ -465,6 +499,7 @@ namespace RTE::CheckpointLua {
 			kept->pages = std::exchange(pages, nullptr);
 			kept->capacity = capacity;
 			kept->owner = owner;
+			kept->pooled = pooled;
 			owner->GiveSlab(kept);
 			return;
 		}

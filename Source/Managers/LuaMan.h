@@ -49,6 +49,16 @@ namespace RTE {
 		size_t copyIdle = 0;
 	};
 
+	/// What a tracked heap whose pages go quiet at different freezes kept mapped, for the checkpoint self-test.
+	struct CopyBufferProbe {
+		size_t freezes = 0;
+		size_t mostLive = 0; //!< The most copy buffers the heap held after any freeze, once the snapshot before it was released.
+		size_t bound = 0;
+		bool pagesMatch = false; //!< Every array the last snapshot froze reads back as the live heap.
+		std::string error;
+	};
+	CopyBufferProbe ProbeCheckpointCopyBuffers();
+
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
