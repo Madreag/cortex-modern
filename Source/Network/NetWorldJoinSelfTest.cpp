@@ -6192,6 +6192,45 @@ namespace RTE {
 		return true;
 	}
 
+	// A returning seat waits on one private capture's writer for a bound: a writer silent past it is abandoned and one fresh
+	// capture taken, and when that one stays silent too the rejoin is refused and the seat stays with the AI that holds it.
+	bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A34);
+		std::string setupError;
+		if (!host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(42, 2, 2, 3, "returning", 1, &setupError)) {
+			*error = "the stuck-image row could not open a rejoin: " + setupError;
+			return false;
+		}
+		constexpr uint64_t wait = NetMatchService::c_PrivateImageWaitMs;
+		std::promise<NetMatchService::PrivateJoinImage> first, second;
+		host.m_PrivateImageTask = first.get_future();
+		host.m_PrivateImageTakenMs = 1000;
+		host.BoundPrivateImageWait(1000 + wait);
+		if (!host.m_PrivateImageTask.valid() || host.m_PrivateImageRecapture) {
+			*error = "a capture writer was abandoned before its bound";
+			return false;
+		}
+		host.BoundPrivateImageWait(1000 + wait + 1);
+		if (host.m_PrivateImageTask.valid() || !host.m_PrivateImageRecapture || host.m_WorldJoin.FindSession(42) == nullptr) {
+			*error = std::string("a writer silent past its bound was not retaken once: abandoned=") + (host.m_PrivateImageTask.valid() ? "0" : "1") +
+			         " recapture=" + (host.m_PrivateImageRecapture ? "1" : "0") + " waiting=" + (host.m_WorldJoin.FindSession(42) ? "1" : "0");
+			return false;
+		}
+		// The fresh capture starts, and its writer goes silent too.
+		host.m_PrivateImageRecapture = false;
+		host.m_PrivateImageTask = second.get_future();
+		host.m_PrivateImageTakenMs = 60000;
+		host.BoundPrivateImageWait(60000 + wait + 1);
+		if (host.m_WorldJoin.FindSession(42) != nullptr) {
+			*error = "a returning seat kept waiting on a second silent capture writer";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_stuck_private_image_is_retaken_once_then_refused" << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6945,6 +6984,7 @@ namespace RTE {
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
+			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

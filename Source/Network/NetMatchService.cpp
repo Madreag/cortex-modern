@@ -2783,10 +2783,10 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs) &&
+		const bool stale = (m_PrivateImageRecapture || PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs)) &&
 		                   !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
-		                   !m_PrivateImageTask.valid() && cadenceOpen;
+		                   !m_PrivateImageTask.valid() && (m_PrivateImageRecapture || cadenceOpen);
 		const bool initial = m_PrivateImageRound != round;
 		// A successor captures a private base only when a held seat needs one.
 		if (initial && m_Coordinator->GetConfig().migrationGeneration != 0 && !seatHeld) return;
@@ -2801,6 +2801,7 @@ static std::string ResyncSaveName() {
 		} finishCapture{*this, ownsKeepalive};
 		m_PrivateImageRound = round;
 		m_PrivateImageTakenMs = nowMs;
+		m_PrivateImageRecapture = false;
 		if (initial) { m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); }
 		m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
@@ -3450,9 +3451,40 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::BoundPrivateImageWait(uint64_t nowMs) {
+		std::vector<NetPeerId> waiting;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) waiting.push_back(session.connection);
+		if (waiting.empty()) {
+			m_PrivateImageRecaptured = false;
+			return;
+		}
+		const bool stuck = m_PrivateImageTask.valid() && m_PrivateImageTakenMs != 0 && nowMs > m_PrivateImageTakenMs + c_PrivateImageWaitMs &&
+		                   m_PrivateImageTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+		const bool retakeFailed = m_PrivateImageRecaptured && !m_PrivateImageRecapture && !m_PrivateImageTask.valid() && !m_PrivateJoinError.empty();
+		if (!stuck && !retakeFailed) return;
+		// A std::async future waits for its task when destroyed, so a stuck writer is waited out off the sim thread.
+		if (stuck) std::thread([task = std::move(m_PrivateImageTask)]() mutable { task.wait(); }).detach();
+		if (!m_PrivateImageRecaptured) {
+			m_PrivateImageRecapture = m_PrivateImageRecaptured = true;
+			m_PrivateJoinError.clear();
+			std::ostringstream line;
+			line << "[net-match] private checkpoint writer silent past " << c_PrivateImageWaitMs << "ms: taking a fresh one for " << waiting.size() << " returning seat(s)";
+			System::PrintDiagnosticLine(line.str());
+			return;
+		}
+		// The fresh capture never answered either: the returning seats stay with the AI that holds them.
+		for (const NetPeerId connection: waiting) m_WorldJoin.CancelJoin(connection, "the host could not stage the rejoin image");
+		m_PrivateImageRecaptured = false;
+		std::ostringstream line;
+		line << "[net-match] private rejoin refused: no checkpoint within two captures; " << waiting.size() << " seat(s) stay with the AI";
+		System::PrintDiagnosticLine(line.str());
+	}
+
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		BoundPrivateImageWait(SteadyNowMs());
 		const auto ready = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> live;
 		uint64_t sentThrough = m_Coordinator->SentInputThrough();
