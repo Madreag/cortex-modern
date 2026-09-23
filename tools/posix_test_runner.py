@@ -343,6 +343,7 @@ def prepare_runtime(
     out: Path | str,
     data: Path | str | None = None,
     binary: Path | str | None = None,
+    fixtures: Sequence[str] | None = None,
 ) -> Path:
     repo_path = Path(repo).resolve()
     out_path = Path(out).resolve()
@@ -359,6 +360,13 @@ def prepare_runtime(
         dest = runtime / "tools/fixtures"
         dest.mkdir(parents=True, exist_ok=True)
         (dest / fixture.name).write_bytes(fixture.read_bytes())
+    # The binary is not beside tools/ here, so a row's named fixtures resolve from the runtime.
+    staged = [str(name) for name in (fixtures or [])]
+    if staged:
+        dest = runtime / "tools/fixtures"
+        dest.mkdir(parents=True, exist_ok=True)
+        for name in staged:
+            (dest / Path(name).name).write_bytes((repo_path / "tools/fixtures" / name).read_bytes())
     exe = resolve_binary(repo_path, binary)
     manifest = {
         "executable": str(exe),
@@ -366,6 +374,7 @@ def prepare_runtime(
         "data": str(data_path),
         "settings_sha256": hashlib.sha256(settings.encode()).hexdigest(),
         "settings_overrides": SETTINGS_OVERRIDES,
+        "fixtures": staged,
     }
     (out_path / "runtime.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return runtime
@@ -393,11 +402,12 @@ def make_run(
     expected: Sequence[Path | str] | None = None,
     binary: Path | str | None = None,
     data: Path | str | None = None,
+    fixtures: Sequence[str] | None = None,
 ) -> IsolatedRun:
     repo_path = Path(repo).resolve()
     out_path = Path(out).resolve()
     out_path.mkdir(parents=True, exist_ok=False)
-    runtime = prepare_runtime(repo_path, out_path, data=data, binary=binary)
+    runtime = prepare_runtime(repo_path, out_path, data=data, binary=binary, fixtures=fixtures)
     exe = resolve_binary(repo_path, binary)
     argv = [str(exe), *with_headless(args)]
     private_env = posix_launch_env(repo_path, runtime, exe, env)
