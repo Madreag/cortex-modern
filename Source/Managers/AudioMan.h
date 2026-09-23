@@ -124,13 +124,15 @@ namespace RTE {
 		class CheckpointRegistryScope {
 			friend class AudioMan;
 		public:
-			CheckpointRegistryScope();
+			/// A scope that does not skip notes lets this thread's captures note the sounds they carry while it lives.
+			explicit CheckpointRegistryScope(bool skipCarriedNotes = true);
 			~CheckpointRegistryScope();
 			CheckpointRegistryScope(const CheckpointRegistryScope&) = delete;
 			CheckpointRegistryScope& operator=(const CheckpointRegistryScope&) = delete;
 		private:
 			std::optional<CheckpointSoundRegistry> m_Original;
 			uint64_t m_Cursor;
+			bool m_SkipCarriedNotes = true;
 		};
 		/// Changes the sound registry by each way in while a registry scope lives, and checks the registry after it is
 		/// the saved one less the containers gone. @return The first way that left something else, or empty.

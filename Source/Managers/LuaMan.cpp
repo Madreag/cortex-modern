@@ -3908,13 +3908,17 @@ struct VectorField {
 }
 
 struct RTE::LuaScriptGraphNativeCaptureData {
-	const std::vector<MovableObject*> knownObjects = g_MovableMan.SnapshotKnownObjects();
+	/// The objects that existed when the capture began, copied by the first question asked of them.
+	const std::vector<MovableObject*>& KnownObjects() const {
+		std::call_once(m_KnownObjectsCopied, [this] { m_KnownObjects = g_MovableMan.SnapshotKnownObjects(); });
+		return m_KnownObjects;
+	}
 	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
 	mutable std::mutex frozenWorldMutex;
 	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
 		std::call_once(m_KnownBuilt, [this] {
-			m_Known.assign(knownObjects.begin(), knownObjects.end());
+			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
 			std::sort(m_Known.begin(), m_Known.end());
 		});
 		return std::binary_search(m_Known.begin(), m_Known.end(), object);
@@ -3962,8 +3966,8 @@ private:
 		std::call_once(m_OwnersBuilt, [this] {
 			auto& vectors = m_Owners.vectors.sorted;
 			auto& controllers = m_Owners.controllers.sorted;
-			vectors.reserve(knownObjects.size() * 6);
-			for (MovableObject* mo: knownObjects) {
+			vectors.reserve(KnownObjects().size() * 6);
+			for (MovableObject* mo: KnownObjects()) {
 				const long uid = mo->GetUniqueID();
 				if (Actor* actor = dynamic_cast<Actor*>(mo)) controllers.emplace_back(actor->GetController(), uid);
 				vectors.emplace_back(&mo->GetPos(), VectorField{uid, "Pos"});
@@ -3995,6 +3999,8 @@ private:
 		});
 		return m_Owners;
 	}
+	mutable std::once_flag m_KnownObjectsCopied;
+	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
 	mutable Fields m_Owners;
 	mutable std::once_flag m_KnownBuilt;
@@ -4538,7 +4544,7 @@ static int ScriptGraphGibReferences(lua_State* L) {
 		}
 		if (const auto* craft = dynamic_cast<const ACraft*>(object)) for (const MovableObject* item: craft->GetCollectedInventory()) collect(item);
 	};
-	for (const MovableObject* object: s_GraphNativeCapture->knownObjects) {
+	for (const MovableObject* object: s_GraphNativeCapture->KnownObjects()) {
 		if (g_MovableMan.ValidMO(object)) collect(object);
 	}
 	lua_pushnil(L);
@@ -6127,7 +6133,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
 	if (!shared) return;
 	std::lock_guard worldLock(shared->frozenWorldMutex);
-	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->knownObjects);
+	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
 }
 
 bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting) {
@@ -6566,7 +6572,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	PushScriptGraphScratchTable(m_State);
 	// One world capture snapshots the known objects once for every state.
 	const std::vector<MovableObject*> known = s_GraphNativeCapture ? std::vector<MovableObject*>() : g_MovableMan.SnapshotKnownObjects();
-	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->knownObjects : known) {
+	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->KnownObjects() : known) {
 		if (mo->GetLuaState() != this || mo->IsOriginalPreset() || mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) {
 			continue;
 		}

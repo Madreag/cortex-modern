@@ -1294,16 +1294,16 @@ void AudioMan::ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistr
 
 thread_local int s_SkipCarriedSoundNotes = 0;
 
-AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()) {
+AudioMan::CheckpointRegistryScope::CheckpointRegistryScope(bool skipCarriedNotes) : m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()), m_SkipCarriedNotes(skipCarriedNotes) {
 	{
 		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
 		g_AudioMan.m_RegistryScopes.push_back(this);
 	}
-	++s_SkipCarriedSoundNotes;
+	if (m_SkipCarriedNotes) ++s_SkipCarriedSoundNotes;
 }
 
 AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
-	--s_SkipCarriedSoundNotes;
+	if (m_SkipCarriedNotes) --s_SkipCarriedSoundNotes;
 	std::optional<CheckpointSoundRegistry> original;
 	{
 		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);

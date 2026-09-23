@@ -180,18 +180,21 @@ namespace {
 	}
 
 	struct CaptureAllocationState {
+		/// A capture whose carried-sound scope does not remember its notes leaves the last carried set alone, so it need
+		/// not be kept here.
+		explicit CaptureAllocationState(bool keepCarried = true) {
+			if (keepCarried) carried = g_AudioMan.LastCarriedSoundIdentities();
+		}
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
 		int cursor = g_LuaMan.GetScriptStateCursor();
-		CheckpointSoundRegistry sounds = g_AudioMan.CaptureCheckpointSoundRegistry();
-		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		// The registry and its cursor come back as they were, saved only if the capture changes them.
+		AudioMan::CheckpointRegistryScope sounds{false};
+		std::optional<std::unordered_set<uint64_t>> carried;
 		void RestoreCounters() const { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
 		~CaptureAllocationState() {
 			RestoreCounters();
-			g_AudioMan.RestoreCheckpointSoundRegistry(std::move(sounds));
-			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+			if (carried) g_AudioMan.RememberCarriedSoundIdentities(std::move(*carried));
 		}
 	};
 
@@ -594,8 +597,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// Every part of the capture asks which objects exist; the fence answers from one copy instead of the registry's lock.
 	MovableMan::KnownObjectsScope knownObjects;
 	LuaScriptGraphNativeCaptureScope nativeLookups;
-	CaptureAllocationState allocation;
-	AudioMan::SoundCheckpointSaveScope carriedSounds;
+	// The capture's carried sounds judge its audio; the last carried set outside it stays as it was.
+	CaptureAllocationState allocation(false);
+	AudioMan::SoundCheckpointSaveScope carriedSounds(false);
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	auto& cow = CheckpointCow::Get();
