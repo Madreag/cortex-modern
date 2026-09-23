@@ -631,6 +631,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		static constexpr uint16_t c_Version = 32;
 		static constexpr uint16_t c_WorldVersion = 33;
+		static constexpr uint16_t c_CheckpointVersion = 34; //!< The newest wire: frames that carry the checkpoint schedule.
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;

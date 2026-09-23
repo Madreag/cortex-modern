@@ -406,7 +406,7 @@ namespace RTE {
 			world.deterministicConfig = worldInputs.deterministicConfig;
 			joiner.deterministicConfig = defaultInputs.deterministicConfig;
 			const auto& supported = world.deterministicConfig;
-			if (supported.supportedLockstepCodecVersion != 32 || supported.supportedWorldLockstepCodecVersion != 33 ||
+			if (supported.supportedLockstepCodecVersion != 34 || supported.supportedWorldLockstepCodecVersion != 33 ||
 			    supported.supportedMatchConfigVersion != 6 || supported.supportedWorldMatchConfigVersion != 7) {
 				*error = "the admission identity lost a supported layout";
 				return false;

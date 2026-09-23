@@ -65,6 +65,7 @@ namespace RTE {
 		std::function<void()> s_SessionPump;
 		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
+		std::vector<std::pair<uint8_t, NetGameCheckpoint>> s_AppliedCheckpoints;
 		uint64_t s_NextLocalCommandSequence = 1;
 		uint64_t s_CommandSessionId = 0;
 		std::array<uint8_t, 16> s_CommandEpoch{};
@@ -1117,6 +1118,23 @@ namespace RTE {
 		return true;
 	}
 
+	bool ScenarioRunner::SubmitCheckpoint(const NetGameCheckpoint& checkpoint) {
+		if (!s_LockstepCoordinator) return false;
+		NetGameCommand command;
+		command.senderPeerId = GetLockstepLocalPeerId();
+		command.payload = checkpoint;
+		EnqueueLocalGameCommand(command);
+		return true;
+	}
+
+	void ScenarioRunner::NoteAppliedCheckpoint(uint8_t sender, const NetGameCheckpoint& checkpoint) {
+		s_AppliedCheckpoints.emplace_back(sender, checkpoint);
+	}
+
+	std::vector<std::pair<uint8_t, NetGameCheckpoint>> ScenarioRunner::TakeAppliedCheckpoints() {
+		return std::exchange(s_AppliedCheckpoints, {});
+	}
+
 	bool ScenarioRunner::AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error) {
 		// The mirror of the send gate above: an ordinary round decodes these packets now, so without
 		// this it would spawn an actor and rebind a brain on a host-stamped transition.
@@ -1979,7 +1997,7 @@ namespace RTE {
 			return;
 		}
 		const NetGameCommandType enqueuedType = NetGameCommandTypeOf(command.payload);
-		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition) {
+		if (enqueuedType != NetGameCommandType::Reseat && enqueuedType != NetGameCommandType::WorldTransition && enqueuedType != NetGameCommandType::Checkpoint) {
 			const uint8_t sender = command.senderPeerId != 0 ? command.senderPeerId : GetLockstepLocalPeerId();
 			if (const NetGameAIOrder* order = std::get_if<NetGameAIOrder>(&command.payload)) {
 				if (!IsLockstepAIOrderAuthorized(sender, *order)) {
