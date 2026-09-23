@@ -300,7 +300,7 @@ function Get-WindowSlotX([hashtable]$inst) {
 function Write-MacInstructions([string]$buildSha) {
     $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.IPAddress -match '^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[0-1])\.)' -and $_.PrefixOrigin -ne 'WellKnown' } |
-        Select-Object -First 1).IPAddress
+        Sort-Object { $_.IPAddress -match '^(192\.168\.|10\.)' ? 0 : 1 } | Select-Object -First 1).IPAddress
     if (-not $lanIp) { $lanIp = '<this PC''s LAN IP - run ipconfig>' }
     Write-Host ''
     Write-Host '=== Erol-Mac: LAN peer ===' -ForegroundColor Cyan
