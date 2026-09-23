@@ -2925,6 +2925,9 @@ static std::string ResyncSaveName() {
 			if (activation != 0) {
 				if (const NetWorldJoinSession* session = host.FindSession(connection); session) {
 					(void)lobby.SendPayloadTo(WorldJoinLobbyPeer(*session), MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
+					std::cout << "[net-world] activation announced peer=" << static_cast<int>(session->assignedPeerId) << " at=" << activation
+					          << " applied=" << report.value << " horizon=" << nowFrame << " replay_ticks=" << session->wallCatchUpTicks
+					          << " replay_ms=" << session->wallCatchUpMs << std::endl;
 				}
 			}
 			return activation;
