@@ -364,7 +364,7 @@ namespace RTE::CheckpointLua {
 				// The states of one world capture may run side by side; the first to get here walks the world.
 				std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);
 				auto& shared = s_GraphNativeCapture->frozenWorld;
-				if (!shared) shared = BuildWorld(s_GraphNativeCapture->knownObjects);
+				if (!shared) shared = BuildWorld(s_GraphNativeCapture->KnownObjects());
 				m_Image->m_World = std::static_pointer_cast<const NativeImage::World>(shared);
 			}
 			const auto answerStarted = std::chrono::steady_clock::now();

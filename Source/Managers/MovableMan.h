@@ -310,9 +310,12 @@ namespace RTE {
 			KnownObjectsScope(const KnownObjectsScope&) = delete;
 			KnownObjectsScope& operator=(const KnownObjectsScope&) = delete;
 		private:
-			std::vector<MovableObject*> m_ByIdentity; //!< In unique id order, as the registry holds them.
-			std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
-			uint64_t m_Version = 0; //!< The known objects' version the copies were taken at.
+			/// Copies the known objects the first time anything asks; a change since the scope opened stops it being asked.
+			void Copy() const;
+			mutable std::once_flag m_Copied;
+			mutable std::vector<MovableObject*> m_ByIdentity; //!< In unique id order, as the registry holds them.
+			mutable std::vector<const MovableObject*> m_ByAddress; //!< Sorted by address, for IsKnownObject.
+			uint64_t m_Version = 0; //!< The known objects' version when the scope opened.
 			KnownObjectsScope* m_Previous = nullptr;
 		};
 

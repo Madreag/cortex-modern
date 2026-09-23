@@ -2457,13 +2457,22 @@ MovableMan::KnownObjectsScope::KnownObjectsScope() {
 	MovableMan& manager = g_MovableMan;
 	{
 		std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);
-		m_ByIdentity.reserve(manager.m_KnownObjects.size());
-		for (const auto& [uid, object]: manager.m_KnownObjects) m_ByIdentity.push_back(object);
 		m_Version = manager.m_KnownObjectsVersion.load();
 	}
-	m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
-	std::sort(m_ByAddress.begin(), m_ByAddress.end());
 	m_Previous = manager.m_KnownObjectsScope.exchange(this);
+}
+
+void MovableMan::KnownObjectsScope::Copy() const {
+	std::call_once(m_Copied, [this] {
+		MovableMan& manager = g_MovableMan;
+		{
+			std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);
+			m_ByIdentity.reserve(manager.m_KnownObjects.size());
+			for (const auto& [uid, object]: manager.m_KnownObjects) m_ByIdentity.push_back(object);
+		}
+		m_ByAddress.assign(m_ByIdentity.begin(), m_ByIdentity.end());
+		std::sort(m_ByAddress.begin(), m_ByAddress.end());
+	});
 }
 
 MovableMan::KnownObjectsScope::~KnownObjectsScope() {
@@ -2494,7 +2503,10 @@ std::string MovableMan::KnownObjectsScopeMissedChange() {
 }
 
 std::vector<MovableObject*> MovableMan::SnapshotKnownObjects() {
-	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) return scope->m_ByIdentity;
+	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
+		scope->Copy();
+		return scope->m_ByIdentity;
+	}
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
 	std::vector<MovableObject*> objects;
 	objects.reserve(m_KnownObjects.size());
@@ -2585,6 +2597,7 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 
 bool MovableMan::IsKnownObject(const MovableObject* object) {
 	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
+		scope->Copy();
 		return std::binary_search(scope->m_ByAddress.begin(), scope->m_ByAddress.end(), object);
 	}
 	std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
