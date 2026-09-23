@@ -1558,12 +1558,14 @@ local function visitFunction(value, ctx)
 				cellId = SCRATCH_BAND + ctx.scratch
 			elseif cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
-			-- A store into this cell reports nothing, so the chunk that carries it is rewritten every capture.
-			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
 			local open = ctx.openUpvalues[cellKey]
 			if open then
+				-- An open cell lives on a coroutine's stack, which nothing watches.
+				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
 			else
+				-- A store into a cell reports nothing, so the chunk keys its reuse on the value the cell holds.
+				ctx.rootCells[#ctx.rootCells + 1] = setmetatable({ fn = value, index = i, value = upvalue, empty = upvalue == nil }, { __mode = "v" })
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]"))
 			end
 		end
@@ -1689,10 +1691,23 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		if cache and not samePaths(paths, cache.paths) then cache = nil end
 	end
 	phase("paths")
-	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
+	-- Whether every cell a chunk read still holds what it held; a collected closure or value holds nothing.
+	local function cellsHold(cells)
+		for _, cell in ipairs(cells) do
+			if cell.fn == nil then return false end
+			local _, current = debug.getupvalue(cell.fn, cell.index)
+			if cell.empty then
+				if current ~= nil then return false end
+			elseif current == nil or not rawequal(current, cell.value) then
+				return false
+			end
+		end
+		return true
+	end
 	local function chunk(uid, part, value, produce, force)
 		local key = uid .. ":" .. part
 		local dirty
@@ -1701,7 +1716,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 			else dirty = not tonumber(uid) or dirt.roots[uid] or dirt.roots[tostring(tonumber(uid))] end
 		end
 		local kept = cache and cache.chunks[key]
-		if kept and (force or dirty or not kept.cacheable or not rawequal(kept.source[1], value)) then kept = nil end
+		if kept and (force or dirty or not kept.cacheable or not rawequal(kept.source[1], value) or not cellsHold(kept.cells)) then kept = nil end
 		if kept then
 			for id, object in pairs(kept.values) do
 				if type(object) == "function" and not rawequal(getfenv(object), kept.envs[id]) then kept = nil; break end
@@ -1726,9 +1741,11 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		_ScriptGraphBeginRoot(uid, part)
 		local firstNode, firstBox = #ctx.order + 1, #ctx.boxRefs
 		local outerRefs = ctx.refs
-		ctx.refs, ctx.rootUnwatched = {}, false
+		local outerCells = ctx.rootCells
+		ctx.refs, ctx.rootUnwatched, ctx.rootCells = {}, false, {}
 		local token = produce()
-		local refs, unwatched = ctx.refs, ctx.rootUnwatched
+		local refs, unwatched, cells = ctx.refs, ctx.rootUnwatched, ctx.rootCells
+		ctx.rootCells = outerCells
 		if #ctx.boxRefs > firstBox then unwatched = unwatched or "deferred Box owner" end
 		ctx.refs = outerRefs
 		local text, order, owned, areas = {}, {}, {}, {}
@@ -1742,7 +1759,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		for address, link in pairs(ctx.areaBoxes) do
 			if defines[ctx.ids[link.owner]] then areas[address] = setmetatable({ owner = link.owner, index = link.index }, { __mode = "v" }) end
 		end
-		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched,
+		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched, cells = cells,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
 		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, envs = setmetatable({}, { __mode = "v" }) }
 		chunks[key] = written
@@ -3538,8 +3555,8 @@ do
 	local afterCall = _ScriptGraphDirtyRoots().roots["41"] ~= nil
 	check("userdata_write_marks_its_root", afterProperty and afterCall,
 	      "property=" .. tostring(afterProperty) .. " call=" .. tostring(afterCall))
-	-- A chunk that reached an upvalue cell or a coroutine carries state no barrier watches, so it is
-	-- written again every capture however quiet the barrier was.
+	-- No barrier watches a store into an upvalue cell, so a chunk that reached one is reused only while
+	-- every cell it read holds what it held; a store rewrites it however quiet the barrier was.
 	local unwatchedRoot = (function()
 		local held = 0
 		return { read = function() return held end, bump = function(to) held = to end }
@@ -3548,9 +3565,12 @@ do
 	local unwatchedFirst = _ScriptGraph.serialize(unwatchedRoots)
 	unwatchedRoot.bump(7)
 	local unwatchedText = _ScriptGraph.serialize(unwatchedRoots)
-	local unwatchedReused, unwatchedCacheable = _ScriptGraph.cacheState("51")
-	check("an_upvalue_cell_keeps_its_root_out_of_the_cache", not unwatchedReused and not unwatchedCacheable and unwatchedText ~= unwatchedFirst,
-	      "reused=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst))
+	local unwatchedReused = _ScriptGraph.cacheState("51")
+	local unwatchedQuiet = _ScriptGraph.serialize(unwatchedRoots)
+	local quietReused = _ScriptGraph.cacheState("51")
+	check("a_store_into_an_upvalue_cell_rewrites_its_root", not unwatchedReused and unwatchedText ~= unwatchedFirst and quietReused and unwatchedQuiet == unwatchedText,
+	      "reused_after_store=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst) ..
+	      " reused_when_quiet=" .. tostring(quietReused) .. " quiet_same=" .. tostring(unwatchedQuiet == unwatchedText))
 	do
 		local previous = rawget(_G, "CheckpointWeakCacheProbe")
 		local weak = setmetatable({}, { __mode = "v" })
@@ -3605,6 +3625,24 @@ do
 		      "engine_kept=" .. tostring(engineKept) .. " engine_cacheable=" .. tostring(engineCacheable) ..
 		      " engine_unwatched=" .. tostring(engineUnwatched) .. " engine_reused_after_write=" .. tostring(patchedState) .. " patch_found=" .. tostring(patchFound))
 		rawset(string, "CheckpointCacheProbe", previousPatch)
+		-- A mod that wraps a library function keeps the original in an upvalue cell. While the cell holds the
+		-- same value the chunk that carries it is reused; a store into the cell rewrites it.
+		local realFloor = math.floor
+		local function wrap(original)
+			return function(value) return original(value) end, function(value) original = value end
+		end
+		local wrapper, setWrapped = wrap(math.floor)
+		math.floor = wrapper
+		_ScriptGraph.serialize(graphRoots)
+		local wrappedFirst = _ScriptGraph.serialize(graphRoots)
+		local wrappedKept, wrappedCacheable, wrappedUnwatched = _ScriptGraph.cacheState("0", "engine")
+		setWrapped(math.ceil)
+		local wrappedMoved = _ScriptGraph.serialize(graphRoots)
+		local wrappedAfter = _ScriptGraph.cacheState("0", "engine")
+		check("closure_wrapped_library_function_keeps_its_chunk", wrappedKept and not wrappedAfter and wrappedMoved ~= wrappedFirst,
+		      "engine_kept=" .. tostring(wrappedKept) .. " engine_cacheable=" .. tostring(wrappedCacheable) .. " engine_unwatched=" .. tostring(wrappedUnwatched) ..
+		      " reused_after_cell_write=" .. tostring(wrappedAfter) .. " text_moved=" .. tostring(wrappedMoved ~= wrappedFirst))
+		math.floor = realFloor
 		local restored, errors = _ScriptGraph.deserialize(second)
 		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse", keptAlias and #errors == 0 and
 		      restored["61"] and rawequal(restored["61"].shared, CheckpointGlobalCacheProbe) and CheckpointGlobalCacheProbe.revision == 1)
