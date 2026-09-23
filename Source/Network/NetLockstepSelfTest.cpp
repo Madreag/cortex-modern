@@ -3190,6 +3190,56 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat whose stream keeps advancing is waited on while its newest tick stays within the bound of the frame the
+		// round needs from it, and held like any other once it strays past: nobody paces the others beyond the bound.
+		bool TestAFeedingPeerIsWaitedOnWithinTheBound(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A82, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A82, 0, NetTransportLane::ControlReliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A82;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(48909, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			for (uint64_t frame = 0; frame < 200; ++frame) if (!host.QueueLocalInput(frame, {}, {}, error)) return false;
+			for (uint64_t frame = 0; frame < 40; ++frame) if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+			uint64_t now = 0;
+			for (; now < 600 && host.GetStats().nextFrame < 40; now += 2) { hostWire.AdvanceTimeMs(2); clientWire.AdvanceTimeMs(2); host.Tick(now); client.Tick(now); }
+			if (host.GetStats().nextFrame != 40) { *error = "the host did not reach the frame the seat skips: next=" + std::to_string(host.GetStats().nextFrame); return false; }
+			const auto holdsOfPeerTwo = [&] { const auto& peers = host.GetStats().peers; const auto found = peers.find(2); return found == peers.end() ? 0U : found->second.holds; };
+			NetLockstepReadyFrame ready;
+			while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+			const auto step = [&](uint64_t until) {
+				for (; now < until; ++now) {
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+					(void)host.NoteFrameWait(40, now);
+				}
+			};
+			// Frame 40 is late, but the seat keeps sending the ticks after it: within the bound the round waits on it.
+			for (uint64_t frame = 41; frame <= 40 + hostConfig.slowPlayerBoundTicks; ++frame) {
+				if (!client.QueueLocalInput(frame, {}, {}, error)) return false;
+				step(now + 30);
+				if (holdsOfPeerTwo() != 0) {
+					*error = "a seat still sending ticks within the bound of the frame the round waits on was held: sent_through=" + std::to_string(frame) +
+					         " now_ms=" + std::to_string(now) + " next=" + std::to_string(host.GetStats().nextFrame);
+					return false;
+				}
+			}
+			// One tick past the bound, and the stream that never answered the frame is judged like any other.
+			const uint64_t stray = 41 + hostConfig.slowPlayerBoundTicks;
+			if (!client.QueueLocalInput(stray, {}, {}, error)) return false;
+			step(now + 30);
+			if (holdsOfPeerTwo() == 0) {
+				*error = "a seat whose stream strayed past the bound of the frame the round waits on was not held: sent_through=" + std::to_string(stray);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_feeding_peer_is_waited_on_within_the_bound held_at_tick=" << stray << std::endl;
+			return true;
+		}
+
 		// A resumed round's agreed first frame sits past its restored start by the slowest restart, so the restored
 		// batch reaches below the first frame the round commits. Refusing it failed every heal and every resume.
 		bool TestAResumedRoundPrimesPastItsAgreedFirstFrame(std::string* error) {
@@ -18935,6 +18985,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
+		row(&TestAFeedingPeerIsWaitedOnWithinTheBound, "a_feeding_peer_is_waited_on_within_the_bound");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;

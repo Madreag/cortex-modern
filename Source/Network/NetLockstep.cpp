@@ -5345,10 +5345,11 @@ namespace RTE {
 					          << "ms ramp=" << ramp << "ms ping=" << peerStats.pingMs << "ms link=" << linkMs << "ms jitter=" << linkJitterMs
 					          << "ms own_park=" << m_Stats.longestOwnParkMs << "ms peer_park=" << restartMs
 					          << "ms heard_through=" << peerStats.highestTargetFrame << std::endl;
-				} else if (peerStats.lastProgressMs >= firstMissingMs &&
-				           nowMs - peerStats.lastProgressMs < declarationDeadline) {
-					// A sender still feeding the round every tick is not stalled, it is behind: the round
-					// absorbs the skew once by waiting. The bound catches a stream that STOPPED.
+				} else if (peerStats.lastProgressMs >= firstMissingMs && nowMs - peerStats.lastProgressMs < declarationDeadline &&
+				           peerStats.highestTargetFrame + m_Config.slowPlayerBoundTicks >= frame && peerStats.highestTargetFrame <= frame + m_Config.slowPlayerBoundTicks) {
+					// A sender still feeding the round every tick is not stalled, it is behind: the round absorbs the
+					// skew by waiting, but only while its stream is within the bound of this frame, so it never paces
+					// the others past the bound. The bound catches a stream that STOPPED or strayed.
 					continue;
 				}
 				std::string holdError;
@@ -8802,7 +8803,7 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep frame sender mismatch: peer " + std::to_string(frame.senderPeerId) + " is not a remote");
 			return;
 		}
-		peerStats.highestTargetFrame = std::max(peerStats.highestTargetFrame, frame.targetFrame);
+		if (frame.targetFrame > peerStats.highestTargetFrame) { peerStats.highestTargetFrame = frame.targetFrame; peerStats.lastProgressMs = nowMs; }
 		// Forward every frame this peer's slot table has taken in, before any rule of ours drops it: what
 		// the peers behind the relay decode has to be the same sequence, or their tables fall behind and a
 		// later slot reference means nothing to them. They apply the same rules to it that we do.
