@@ -190,7 +190,7 @@ namespace RTE {
 		size_t LastAutosaveBytes() const { return m_LastAutosaveBytes; }
 		double LastAutosaveCaptureMs() const { return m_LastAutosaveCaptureMs; }
 		/// What the last capture did to the sim's counters while it ran; every field is zero when the serializers are pure.
-		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int cursorMoves = 0; int soundCursorMoves = 0; };
+		struct CaptureEffects { long uidsAllocated = 0; uint64_t simDraws = 0; uint64_t renderDraws = 0; int soundCursorMoves = 0; };
 		CaptureEffects LastCaptureEffects() const { return m_LastCaptureEffects; }
 		/// One finished autosave archive, as the writer thread left it: the bytes it wrote, their
 		/// digest and the buffer itself. A capture that is still being zipped is not one of these.

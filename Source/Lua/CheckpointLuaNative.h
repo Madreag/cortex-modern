@@ -415,13 +415,12 @@ namespace RTE::CheckpointLua {
 		struct NativeEffects {
 			RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 			long uid = MovableObject::GetUniqueIDCounter();
-			int cursor = g_LuaMan.GetScriptStateCursor();
 			// The sound registry is restored once per world capture, as the live walk has it.
 			uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 			std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
 			~NativeEffects() {
 				g_SimRNG = sim; g_RenderRNG = render;
-				MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor);
+				MovableObject::PinUniqueIDCounter(uid);
 				g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 				g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
 			}
