@@ -880,6 +880,11 @@ namespace RTE {
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
+		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
+		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
+		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
+		/// @param firstFrame The joining round's first frame.
+		static void AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame);
 		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
 		/// What a seat has waited SINCE it was last reclaimed: what the player is shown, while the
 		/// match record in GetStats()/BuildReportJson keeps the round's totals.
