@@ -50,7 +50,7 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from feel.retained_resume import read_live_hashes, split_passes
+from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
 from run_sim_test import make_run
 from feel_measure import stage_baseline
 
@@ -241,13 +241,19 @@ def compare_live_window(root: Path, first_tick: int, last_tick: int) -> dict:
         by_tick[who] = indexed
     shared = sorted((by_tick["host"].keys() & by_tick["client"].keys()) & set(range(first_tick, max(by_tick["host"]) + 1)))
     mismatches, compared = [], 0
+    shared_part = lambda row: {name: value for name, value in row["subsystems"].items() if name not in PER_PEER_SUBSYSTEMS}
     for tick in shared:
-        readings = by_tick["host"][tick] + by_tick["client"][tick]
-        reference = readings[0]
-        for row in readings[1:]:
-            compared += 1
-            if row["sim_gated"] != reference["sim_gated"] or row["subsystems"] != reference["subsystems"]:
-                mismatches.append(tick)
+        # Every replay of one peer agrees in full; the two peers agree on all but the routing each does for itself.
+        for who in ("host", "client"):
+            readings = by_tick[who][tick]
+            for row in readings[1:]:
+                compared += 1
+                if row["sim_gated"] != readings[0]["sim_gated"] or row["subsystems"] != readings[0]["subsystems"]:
+                    mismatches.append(tick)
+        host, client = by_tick["host"][tick][0], by_tick["client"][tick][0]
+        compared += 1
+        if host["sim_gated"] != client["sim_gated"] or shared_part(host) != shared_part(client):
+            mismatches.append(tick)
     assert not mismatches, f"live passes disagree at {len(mismatches)} ticks: {mismatches[:8]}"
     assert max(by_tick["host"]) == max(by_tick["client"]), f"peer tails differ: {max(by_tick['host'])} vs {max(by_tick['client'])}"
     return {"passed": True, "required_ticks": len(required), "compared_readings": compared,
@@ -759,6 +765,29 @@ class WorldRestartOracleTests(unittest.TestCase):
                 compare_live_window(root, 1, 3)
             write("client", [rows[0], rows[2]])
             with self.assertRaisesRegex(AssertionError, "missing 1 required ticks"):
+                compare_live_window(root, 1, 3)
+
+    def test_live_window_leaves_each_peer_only_its_own_routing(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [{"tick": tick, "sim_gated": str(tick), "subsystems": {"actors": str(tick), "controller_route": "host"}} for tick in range(1, 4)]
+            routed = [dict(row, subsystems=dict(row["subsystems"], controller_route="client")) for row in rows]
+            def write(who, values):
+                (root / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in values))
+            write("host", rows); write("client", routed + routed)
+            self.assertTrue(compare_live_window(root, 1, 3)["passed"])
+            # One peer's own replays keep the routing in the compare.
+            strayed = [dict(row) for row in routed]
+            strayed[1] = dict(strayed[1], subsystems=dict(strayed[1]["subsystems"], controller_route="other"))
+            write("client", routed + strayed)
+            with self.assertRaisesRegex(AssertionError, "live passes disagree"):
+                compare_live_window(root, 1, 3)
+            # Across the peers nothing wider than the routing is left out.
+            wider = [dict(row) for row in routed]
+            wider[1] = dict(wider[1], subsystems=dict(wider[1]["subsystems"], actors="bad"))
+            write("client", wider)
+            with self.assertRaisesRegex(AssertionError, "live passes disagree"):
                 compare_live_window(root, 1, 3)
 
     HOST_START = "[net-lockstep] start round=2610485712550324653 frame=1 local_peer=1 peers=2 input_delay=3\n"
