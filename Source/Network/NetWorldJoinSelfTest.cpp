@@ -2043,6 +2043,49 @@ namespace RTE {
 			return 0;
 		}
 
+		/// A joiner waits at the frame before its activation until the round agrees it; an activation the round passed
+		/// without agreeing (a park moved the input horizon past it) is announced again instead of leaving the seat there.
+		int TestAJoinerWaitingOnAnUnagreedActivationIsReannounced() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("waiting join did not open: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 10;
+			image.bytes = 4;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferComplete(7, 4, &error)) {
+				return Fail(error);
+			}
+			uint64_t firstE = 0;
+			if (!host.NoteCatchUpProgress(7, 10, 1, 1, 20, &firstE, &error) || firstE == 0) {
+				return Fail("waiting join did not announce E: " + error);
+			}
+			// The joiner replays to the frame before E and waits there for the round to agree E.
+			if (!host.NoteCatchUpProgress(7, firstE - 1, firstE - 11, 200, firstE - 4, nullptr, &error)) {
+				return Fail("waiting joiner's progress was refused: " + error);
+			}
+			if (host.SlowActivation(firstE) != nullptr) {
+				return Fail("a joiner waiting at E-1 was moved before the round passed E");
+			}
+			if (host.SlowActivation(firstE + 1) == nullptr) {
+				return Fail("the round passed an E it never agreed and the joiner waiting at E-1 was left there: e=" + std::to_string(firstE));
+			}
+			uint64_t later = 0;
+			if (!host.ReannounceActivation(7, firstE + 1, &later, &error) || later <= firstE + 1) {
+				return Fail("the waiting joiner did not get a later E: " + error);
+			}
+			std::cout << "[net-world-join-selftest] PASS a_joiner_waiting_on_an_unagreed_activation_is_reannounced e=" << firstE
+			          << " later=" << later << std::endl;
+			return 0;
+		}
+
 		int TestSlowJoinerReannounceThenFree() {
 			std::string error;
 			NetWorldJoinHost host;
@@ -6875,6 +6918,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
+			return result;
+		}
+		if (const int result = TestAJoinerWaitingOnAnUnagreedActivationIsReannounced(); result != 0) {
 			return result;
 		}
 		if (const int result = TestJoinPlaneAndLeave(); result != 0) {
