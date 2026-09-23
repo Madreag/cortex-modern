@@ -433,8 +433,16 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// What one tick boundary does about the checkpoint schedule.
+		enum class AutosaveCapture { None, Scheduled, Join, Deferred };
+		/// A capture the writer has not finished holds a frozen copy of every Lua heap, so a match keeps one in flight at most.
+		static constexpr size_t c_MaxUnwrittenAutosaves = 1;
+		/// Advances the schedule to the sim time `now` and says whether this boundary captures, given the captures the writer has not finished.
+		AutosaveCapture PlanAutosaveCapture(int64_t now, size_t unwrittenCaptures);
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
+		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
+		void ResolveAwaitedAutosave(uint64_t tick, bool archived);
 		/// Takes every verdict the writer thread has finished since the last tick boundary.
 		void TakeAutosaveVerdicts();
 		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
@@ -995,6 +1003,7 @@ namespace RTE {
 		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
+		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
