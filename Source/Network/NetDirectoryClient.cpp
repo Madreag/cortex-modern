@@ -654,10 +654,18 @@ namespace RTE {
 
 	bool NetDirectoryClient::TargetsPersistentWorld(const std::vector<GameRow>& rows, int selectedIndex, const std::string& address, uint16_t port,
 	                                                const std::string& lastWorldAddress, uint16_t lastWorldPort, std::string* outActivity) {
-		const auto isWorldRow = [](const GameRow& row) { return row.persistentWorld || row.activity == "Persistent World"; };
+		if (address.empty()) {
+			return false;
+		}
+		// A session address names its directory row, whatever the port box holds.
+		const bool session = address.starts_with("session:");
+		const auto targets = [&](const GameRow& row) {
+			const bool world = row.persistentWorld || row.activity == "Persistent World";
+			return world && (session ? !row.sessionId.empty() && address == "session:" + row.sessionId : row.address == address && row.port == port);
+		};
 		if (selectedIndex >= 0 && static_cast<size_t>(selectedIndex) < rows.size()) {
 			const GameRow& row = rows[static_cast<size_t>(selectedIndex)];
-			if (row.address == address && row.port == port && isWorldRow(row)) {
+			if (targets(row)) {
 				if (outActivity && !row.activity.empty()) {
 					*outActivity = row.activity;
 				}
@@ -665,14 +673,18 @@ namespace RTE {
 			}
 		}
 		for (const GameRow& row: rows) {
-			if (row.address == address && row.port == port && isWorldRow(row)) {
+			if (targets(row)) {
 				if (outActivity && !row.activity.empty()) {
 					*outActivity = row.activity;
 				}
 				return true;
 			}
 		}
-		return lastWorldPort != 0 && address == lastWorldAddress && port == lastWorldPort;
+		return session ? address == lastWorldAddress : lastWorldPort != 0 && address == lastWorldAddress && port == lastWorldPort;
+	}
+
+	std::string NetDirectoryClient::WorldJoinTarget(const std::string& address, const std::string& sessionId) {
+		return sessionId.empty() ? address : "session:" + sessionId;
 	}
 
 	std::vector<NetDirectoryClient::GameRow> NetDirectoryClient::MergeGameLists(const std::vector<NetLanHostInfo>& lan,

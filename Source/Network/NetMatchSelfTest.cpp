@@ -489,6 +489,60 @@ namespace RTE {
 			return true;
 		}
 
+		bool TestLobbyRefusesDivergentRosterOrder(std::string* error) {
+			// The roster's order seats the players, so one roster in two wire orders is two configs.
+			const NetMatchConfig agreed = MakeConfig();
+			NetMatchConfig divergent = agreed;
+			std::swap(divergent.players[0], divergent.players[1]);
+			const NetHash32 agreedHash = NetMatchConfigUtil::HashConfig(agreed);
+			if (agreedHash == NetMatchConfigUtil::HashConfig(divergent)) {
+				*error = "divergent roster order: the wire orders " + agreed.players[0].displayName + "," + agreed.players[1].displayName + " and " +
+				         divergent.players[0].displayName + "," + divergent.players[1].displayName + " hash alike (" + NetIdentity::HashHex(agreedHash) + ")";
+				return false;
+			}
+			LoopbackTransport hostTransport, clientTransport;
+			NetPeerId hostRemotePeer = c_InvalidNetPeerId, clientRemotePeer = c_InvalidNetPeerId;
+			if (!StartLoopbackTransports(43147, hostTransport, clientTransport, hostRemotePeer, clientRemotePeer, error)) return false;
+			NetLobbySession clientLobby;
+			NetLobbySessionConfig clientConfig;
+			clientConfig.host = false;
+			clientConfig.localPeerId = 2;
+			clientConfig.remotePeerId = 1;
+			clientConfig.remoteTransportPeerId = clientRemotePeer;
+			clientConfig.matchConfig = agreed;
+			if (!clientLobby.Start(clientTransport, clientConfig, error)) return false;
+			// A host that hands this peer the other order and then starts on the hash of the order it kept.
+			const auto hostSend = [&](const NetLobbyPayload& payload, uint64_t& now) {
+				std::vector<uint8_t> bytes;
+				if (!NetLobbyProtocol::Encode({payload}, bytes) || !hostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, bytes, error)) return false;
+				for (const uint64_t until = now + 100; now < until; now += 10) {
+					hostTransport.AdvanceTimeMs(10);
+					clientTransport.AdvanceTimeMs(10);
+					clientLobby.Tick(now);
+				}
+				return true;
+			};
+			uint64_t now = 0;
+			if (!hostSend(NetLobbyMatchConfig{divergent}, now)) return false;
+			if (clientLobby.GetMatchConfig() != divergent || clientLobby.GetMatchConfigHash() != NetMatchConfigUtil::HashConfig(divergent)) {
+				*error = "divergent roster order: the peer did not take the order it was sent (state " + std::string(NetLobbySession::StateName(clientLobby.GetState())) + ")";
+				return false;
+			}
+			NetLobbyStart start;
+			start.sessionId = agreed.sessionId;
+			start.startFrame = 77;
+			start.inputDelayFrames = agreed.inputDelayFrames;
+			start.matchConfigHash = agreedHash;
+			if (!hostSend(start, now)) return false;
+			if (!clientLobby.IsRejected() || clientLobby.GetFailureReason() != "lobby start does not match accepted config") {
+				*error = "divergent roster order: a peer seated in one order started on the hash of another (state " + std::string(NetLobbySession::StateName(clientLobby.GetState())) +
+				         ", reason \"" + clientLobby.GetFailureReason() + "\")";
+				return false;
+			}
+			std::cout << "[net-match-selftest] PASS divergent_roster_order: the wire order binds the config hash and a start on another order is refused" << std::endl;
+			return true;
+		}
+
 		bool TestMatchConfigHashAndValidation(std::string* error) {
 			NetMatchConfig config = MakeConfig();
 			if (!NetMatchConfigUtil::ValidateLocalAlpha(config, error)) {
@@ -496,8 +550,8 @@ namespace RTE {
 			}
 			NetMatchConfig reordered = config;
 			std::swap(reordered.players[0], reordered.players[1]);
-			if (NetMatchConfigUtil::HashConfig(config) != NetMatchConfigUtil::HashConfig(reordered)) {
-				*error = "match config hash depends on player vector order";
+			if (NetMatchConfigUtil::HashConfig(config) == NetMatchConfigUtil::HashConfig(reordered)) {
+				*error = "match config hash ignores the player order the wire seats";
 				return false;
 			}
 			reordered.players[0].team = 3;
@@ -920,8 +974,8 @@ namespace RTE {
 			const NetHash32 seatedHash = NetMatchConfigUtil::HashConfig(seated);
 			NetMatchConfig reordered = seated;
 			std::swap(reordered.players[2], reordered.players[3]);
-			if (NetMatchConfigUtil::HashConfig(reordered) != seatedHash) {
-				*error = "the CPU roster hash depends on the player vector order";
+			if (NetMatchConfigUtil::HashConfig(reordered) == seatedHash) {
+				*error = "the CPU roster hash ignores the order the wire carries its slots in";
 				return false;
 			}
 			NetMatchConfig aiOnly;
@@ -12804,26 +12858,48 @@ namespace RTE {
 		service.m_RelayReplies = 0;
 		service.m_FreshRelayRequested = true;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + 3600);
+		const uint64_t lifetime = NetDirectoryClient::c_MaxRelayTtlSeconds;
+		std::vector<std::string> failures;
+		const auto requestedTtl = [&] { return nlohmann::json::parse(script->sent.back().body).value("ttl", uint64_t{0}); };
+		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + lifetime);
 		script->replies.push_back({200, relay.ToJson(), ""});
 		service.UpdateRelayOffer(1);
 		NetRelayConfig offered;
 		if (!service.m_Directory.IceRequestPending() || service.ReadRelayOffer(offered)) { *error = "host did not wait for the match's relay request"; return false; }
-		if (nlohmann::json::parse(script->sent.back().body) != nlohmann::json{{"token", "host-token"}, {"match_id", relay.matchId}, {"ttl", 3600}}) { *error = "host requested an unbound relay lifetime"; return false; }
+		const auto body = nlohmann::json::parse(script->sent.back().body);
+		if (body.value("token", "") != "host-token" || body.value("match_id", "") != relay.matchId || body.size() != 3) { *error = "host sent an unexpected relay request: " + script->sent.back().body; return false; }
+		if (requestedTtl() != lifetime) failures.push_back("host minted its relay for " + std::to_string(requestedTtl()) + " s, not the service's longest " + std::to_string(lifetime) + " s");
 		service.m_Directory.Update(2); service.UpdateRelayOffer(2);
 		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "host did not publish its minted relay"; return false; }
-		relay.expiresAt = now + 299;
-		service.SetRelayOfferLocked(relay);
 		service.UpdateRelayOffer(15001);
-		if (!service.m_Directory.IceRequestPending()) { *error = "host did not refresh before relay expiry"; return false; }
-		relay.expiresAt = now + 3600;
+		if (service.m_Directory.IceRequestPending()) failures.push_back("host renewed a relay offer it had just minted");
+		// The same offer with half its lifetime spent.
+		relay.expiresAt = now + lifetime / 2;
+		service.SetRelayOfferLocked(relay);
+		service.m_RelayOfferIssuedAt = now - lifetime / 2;
+		service.UpdateRelayOffer(15002);
+		if (!service.m_Directory.IceRequestPending()) {
+			failures.push_back("host kept a relay offer with " + std::to_string(relay.expiresAt - now) + " of its " + std::to_string(lifetime) + " s left instead of renewing it at half its lifetime");
+			service.SetRelayOfferLocked({});
+			service.UpdateRelayOffer(30002);
+		}
+		if (service.m_Directory.IceRequestPending() && requestedTtl() != lifetime) failures.push_back("host renewed its relay for " + std::to_string(requestedTtl()) + " s");
+		relay.expiresAt = now + lifetime;
 		relay.iceServers.front().credential = "renewed-password";
 		script->replies.push_back({200, relay.ToJson(), ""});
-		service.m_Directory.Update(15002); service.UpdateRelayOffer(15002);
+		service.m_RelayPublishPending = false;
+		service.m_Directory.Update(30003); service.UpdateRelayOffer(30003);
+		if (!service.ReadRelayOffer(offered) || offered != relay || !service.m_RelayPublishPending) failures.push_back("host did not publish the renewed relay through the lobby config");
 		service.m_LastRoundId = 2;
 		service.m_FreshRelayRequested = true;
-		service.UpdateRelayOffer(30001);
-		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") { *error = "a fresh round reused the previous relay request"; return false; }
+		service.UpdateRelayOffer(45004);
+		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") failures.push_back("a fresh round reused the previous relay request");
+		if (!failures.empty()) {
+			*error = "relay renewal: " + failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS relay renewal: minted for " << lifetime << " s, renewed at half its lifetime and republished" << std::endl;
 		return true;
 	}
 
@@ -13146,6 +13222,7 @@ namespace RTE {
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
+		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);
 		if (!TestMatchConfigHashAndValidation(&error)) return fail(error);
 		if (!TestMigrationConfigOrder<NetMatchConfig>(&error))
 			return fail(error);
