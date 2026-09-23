@@ -7240,6 +7240,61 @@ namespace RTE {
 		return true;
 	}
 
+	/// The round's goodbye reaches a returning seat still in its handshake, not only a seated one: one that is mid-handshake
+	/// when the host leaves reads the round ending instead of a lost link, and completes rather than failing.
+	bool TestTheGoodbyeReachesAHandshakingReturner(std::string* error) {
+		const uint16_t port = 42331;
+		LoopbackTransport hostTransport;
+		LoopbackTransport clientTransport;
+		NetSession hostSession;
+		NetSession clientSession;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.sessionId = 0x6007D;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "handshaking-goodbye-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !clientSession.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 2000 && hostSession.GetHandshakingPeerCount() == 0; now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (hostSession.GetHandshakingPeerCount() != 1 || hostSession.GetReadyPeerCount() != 0) {
+			*error = "the fixture never held the returner in its handshake: handshaking=" + std::to_string(hostSession.GetHandshakingPeerCount()) +
+			         " ready=" + std::to_string(hostSession.GetReadyPeerCount());
+			return false;
+		}
+		const NetLockstepCoordinator endedRound;
+		NetMatchService::RefuseEndedPeers(hostSession, endedRound, "match over through frame 2401", true);
+		for (const uint64_t until = now + 1000; now <= until && !clientSession.HasReject(); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (!clientSession.HasReject() || clientSession.GetRejectSummary() != "match over through frame 2401") {
+			*error = std::string("a returner in its handshake when the round ended was left without the goodbye: client=") +
+			         NetSession::StateName(clientSession.GetState()) + " reject=\"" + clientSession.GetRejectSummary() + "\"";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS the_goodbye_reaches_a_handshaking_returner reject=\"" << clientSession.GetRejectSummary() << "\"" << std::endl;
+		return true;
+	}
+
 	bool TestServiceKick(std::string* error) {
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -12763,6 +12818,7 @@ namespace RTE {
 		if (!chatCarryError.empty()) return fail(chatCarryError);
 		if (!TestPendingSessionEventSurvivesTeardown(&error)) return fail(error);
 		if (!TestServiceKick(&error)) return fail(error);
+		if (!TestTheGoodbyeReachesAHandshakingReturner(&error)) return fail(error);
 		if (!TestStartingKickMarshals(&error)) return fail(error);
 		if (!TestUnreadableBanListHoldsAdmission(&error)) return fail(error);
 		if (!TestLobbyModerationRows(&error)) return fail(error);

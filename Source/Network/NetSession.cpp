@@ -233,6 +233,19 @@ namespace RTE {
 		RefreshHostState();
 	}
 
+	void NetSession::DisconnectJoiningPeers(NetRejectReason reason, const std::string& message) {
+		if (m_Role != NetSessionRole::Host) return;
+		for (PeerState& peer: m_Peers) {
+			if (peer.state != NetSessionState::Handshake && peer.state != NetSessionState::Accepted) continue;
+			System::PrintDiagnosticLine(std::string("[net-session] joining peer refused reason=") + NetProtocol::RejectReasonName(reason) +
+			                            " role=host connection=" + std::to_string(peer.transportPeerId) + " state=" + StateName(peer.state) + " detail=" + message);
+			Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(reason), message});
+			peer.state = NetSessionState::Closed;
+			DropPeerTransport(peer.transportPeerId, message);
+		}
+		RefreshHostState();
+	}
+
 	uint32_t NetSession::GetHandshakingPeerCount() const {
 		uint32_t count = 0;
 		for (const PeerState& peer : m_Peers) {

@@ -845,7 +845,7 @@ static std::string ResyncSaveName() {
 		m_GoodbyeOwedToRejoiners = true;
 		// That seat is not a member, so the Stop never reaches it. Told the round is over and where it ended,
 		// it finishes its match instead of timing out on a host that is on its way out.
-		RefuseEndedPeersLocked(MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
+		if (m_Session) RefuseEndedPeers(*m_Session, *m_Coordinator, MatchOverGoodbyeText(m_CompletedRoundFinalFrame), true);
 	}
 
 	bool NetMatchService::NoteHostGoodbyeLocked(const NetSession* session) {
@@ -901,15 +901,21 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::RefuseEndedPeersLocked(const std::string& reason) {
 		if (!m_IsHost || !m_Session || !m_Coordinator) return;
-		const uint64_t resume = m_Coordinator->GetResumeFrame();
+		RefuseEndedPeers(*m_Session, *m_Coordinator, reason, false);
+	}
+
+	void NetMatchService::RefuseEndedPeers(NetSession& session, const NetLockstepCoordinator& coordinator, const std::string& reason, bool joiningToo) {
+		const uint64_t resume = coordinator.GetResumeFrame();
 		const uint64_t lastFrame = resume > 0 ? resume - 1 : 0;
-		for (const NetSessionPeerInfo& peer : m_Session->GetReadyPeers()) {
+		for (const NetSessionPeerInfo& peer : session.GetReadyPeers()) {
 			uint8_t seat = 0;
-			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
-			if (EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) {
-				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded, reason);
+			for (const auto& [peerId, transport]: coordinator.RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
+			if (EndedRoundOwesGoodbye(coordinator.UsesTransportPeer(peer.transportPeerId), seat != 0 && coordinator.IsSeatUnderAI(seat, lastFrame))) {
+				session.DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded, reason);
 			}
 		}
+		// A returning seat still in its handshake is owed the same answer, or it reads the host leaving as a lost link.
+		if (joiningToo) session.DisconnectJoiningPeers(NetRejectReason::SessionEnded, reason);
 	}
 
 	uint64_t NetLobbyLastStateTransferMs();
@@ -4819,6 +4825,7 @@ static std::string ResyncSaveName() {
 		// The round has already said goodbye: a rejoin that lands in the drain window is answered with it,
 		// never left to measure a host that is on its way out.
 		if (m_IsHost && m_GoodbyeOwedToRejoiners && m_Session && m_Coordinator) {
+			m_Session->DisconnectJoiningPeers(NetRejectReason::SessionEnded, MatchOverGoodbyeText(m_CompletedRoundFinalFrame));
 			for (const NetSessionPeerInfo& peer: m_Session->GetReadyPeers()) {
 				if (m_Coordinator->UsesTransportPeer(peer.transportPeerId)) continue;
 				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded,
