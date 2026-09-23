@@ -6046,6 +6046,10 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	if (shared) {
+		std::lock_guard worldLock(shared->frozenWorldMutex);
+		if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->knownObjects);
+	}
 	const auto capture = [&](size_t index) {
 		LuaScriptGraphNativeCaptureScope lookups(shared);
 		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
