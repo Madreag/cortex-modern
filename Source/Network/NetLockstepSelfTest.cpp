@@ -1115,7 +1115,7 @@ namespace RTE {
 			}
 			const std::vector<uint8_t> expectedPrefix = {
 				0x43, 0x43, 0x4C, 0x33,
-				0x24, 0x00,
+				0x25, 0x00,
 				0x10, 0x00,
 				0x03, 0x00,
 				0x00, 0x00,
@@ -5780,8 +5780,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			LoopbackTransport clientTransport;
 			NetLockstepCoordinator host;
 			NetLockstepCoordinator client;
-			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
-			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000086ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000086ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000086ULL, 0, NetTransportLane::ControlReliable);
 			hostConfig.frameRedundancyTicks = 4;
 			clientConfig.frameRedundancyTicks = 1;
 			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
@@ -5815,8 +5815,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			LoopbackTransport clientTransport;
 			NetLockstepCoordinator host;
 			NetLockstepCoordinator client;
-			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
-			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000081ULL, 0, NetTransportLane::InputUnreliable);
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, 0x7000000000000081ULL, 0, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, 0x7000000000000081ULL, 0, NetTransportLane::ControlReliable);
 			hostConfig.frameRedundancyTicks = 1;
 			clientConfig.frameRedundancyTicks = 4;
 			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) {
@@ -5860,6 +5860,192 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				         std::to_string(host.GetStats().windowCopiesApplied) + ", client applied " + std::to_string(client.GetStats().windowCopiesApplied);
 				return false;
 			}
+			return true;
+		}
+
+		/// On the unreliable lane the window is the only repair, so it has to reach back a round trip: twenty ticks of one
+		/// sender ride one packet and a peer that missed all but the first reads every one of them out of it.
+		bool TestAWindowReachesBackARoundTrip(std::string* error) {
+			NetSoundObservationDictionary encodeTable;
+			NetLockstepObservationBlocks blocks;
+			std::vector<NetLockstepFrame> ticks;
+			std::vector<std::vector<uint8_t>> classic;
+			for (uint64_t tick = 1; tick <= 20; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = tick;
+				frame.roundId = 41;
+				frame.frames = {MakeFrame(100, tick)};
+				frame.observations = {MakeObservation(1, 700 + tick, tick, 1, 1, 0.5F + static_cast<float>(tick))};
+				NetLockstepError encodeError;
+				size_t encoded = 0, valueEncoded = 0;
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({frame}, bytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+					*error = "tick " + std::to_string(tick) + " did not encode: " + encodeError.message;
+					return false;
+				}
+				classic.push_back(std::move(bytes));
+				ticks.push_back(std::move(frame));
+			}
+			NetLockstepFrame newest = ticks.back();
+			newest.priorWindow.assign(ticks.begin(), ticks.end() - 1);
+			NetLockstepError encodeError;
+			std::vector<uint8_t> windowBytes;
+			if (!NetLockstepCodec::Encode({newest}, windowBytes, &encodeError, nullptr, nullptr, nullptr, &blocks) ||
+			    windowBytes.size() <= NetLockstepCodec::c_HeaderBytes + 1 || windowBytes[NetLockstepCodec::c_HeaderBytes + 1] != 20) {
+				*error = "a twenty-tick window did not encode: " + encodeError.message;
+				return false;
+			}
+			NetSoundObservationTables lagging;
+			lagging.roundId = 41;
+			if (!NetLockstepCodec::Decode(classic.front().data(), classic.front().size(), ControllerFrame::c_Version, &lagging).ok) {
+				*error = "the first tick did not decode";
+				return false;
+			}
+			const NetLockstepDecodeResult repaired = NetLockstepCodec::Decode(windowBytes.data(), windowBytes.size(), ControllerFrame::c_Version, &lagging);
+			if (!repaired.ok) {
+				*error = "a peer that missed ticks 2..19 refused the twenty-tick window: " + repaired.error.message;
+				return false;
+			}
+			const auto& got = std::get<NetLockstepFrame>(repaired.packet.payload);
+			size_t read = got.observations.size() == 1 ? 1 : 0;
+			for (const NetLockstepFrame& copy : got.priorWindow) {
+				if (!copy.observationsReadPast && copy.observations.size() == 1 && copy.observations.front().objectUID == 700 + copy.targetFrame) ++read;
+			}
+			if (got.priorWindow.size() != 19 || read != 19) {
+				*error = "the twenty-tick window repaired " + std::to_string(read) + " of 19 missed ticks from " + std::to_string(got.priorWindow.size()) + " copies";
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_window_reaches_back_a_round_trip ticks=20 repaired=" << read << std::endl;
+			return true;
+		}
+
+		/// A packet the unreliable lane delivers late carries a tick this peer already read: it is read past, and neither
+		/// taken for a sender that started over nor for a hole in the table.
+		bool TestALateTickIsReadPast(std::string* error) {
+			NetSoundObservationDictionary encodeTable;
+			NetLockstepObservationBlocks blocks;
+			std::vector<std::vector<uint8_t>> packets;
+			for (uint64_t tick = 1; tick <= 3; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1;
+				frame.targetFrame = tick;
+				frame.roundId = 42;
+				frame.frames = {MakeFrame(100, tick)};
+				frame.observations = {MakeObservation(1, 800 + tick, tick, 1, 1, 0.25F)};
+				NetLockstepError encodeError;
+				size_t encoded = 0, valueEncoded = 0;
+				std::vector<uint8_t> bytes;
+				if (!NetLockstepCodec::Encode({frame}, bytes, &encodeError, &encodeTable, &encoded, &valueEncoded, &blocks)) {
+					*error = "tick " + std::to_string(tick) + " did not encode: " + encodeError.message;
+					return false;
+				}
+				packets.push_back(std::move(bytes));
+			}
+			NetSoundObservationTables reader;
+			reader.roundId = 42;
+			for (size_t index : {0U, 1U}) {
+				if (!NetLockstepCodec::Decode(packets[index].data(), packets[index].size(), ControllerFrame::c_Version, &reader).ok) {
+					*error = "tick " + std::to_string(index + 1) + " did not decode in order";
+					return false;
+				}
+			}
+			const NetLockstepDecodeResult late = NetLockstepCodec::Decode(packets[0].data(), packets[0].size(), ControllerFrame::c_Version, &reader);
+			const bool readPast = late.ok && std::get<NetLockstepFrame>(late.packet.payload).observationsReadPast;
+			const uint64_t bindings = reader.Exactly(1).BindingCount();
+			const NetLockstepDecodeResult next = NetLockstepCodec::Decode(packets[2].data(), packets[2].size(), ControllerFrame::c_Version, &reader);
+			if (!readPast || bindings != 2 || !next.ok) {
+				*error = "a late copy of tick 1 was not read past: ok=" + std::to_string(late.ok) + " read_past=" + std::to_string(readPast) +
+				         " bindings=" + std::to_string(bindings) + " (2 before it) and tick 3 then " + (next.ok ? std::string("decoded") : "failed: " + next.error.message);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_late_tick_is_read_past bindings=" << bindings << std::endl;
+			return true;
+		}
+
+		/// A tick the relay host first reads inside a later packet's window was never sent on to the peers behind it: the
+		/// host forwards it on its own, oldest first, so a lossy link from one client never starves another.
+		bool TestTheRelayForwardsATickItFirstReadInAWindow(std::string* error) {
+			LoopbackTransport hostTransport, clientTransport, survivorTransport;
+			if (!hostTransport.StartHost(49540, error) || !clientTransport.Connect("loopback", 49540, error) || !survivorTransport.Connect("loopback", 49540, error)) return false;
+			LoopbackTransportConfig lossy;
+			lossy.unreliableDropEveryN = 3;
+			clientTransport.SetFaultConfig(lossy);
+			const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> remotes) {
+				NetLockstepConfig value;
+				value.sessionId = 0x9A40; value.roundId = 40; value.localPeerId = local; value.peerCount = 3;
+				value.timeoutMs = 20000; value.simTickMs = 1000.0 / 60.0;
+				value.remoteTransportPeerIds = std::move(remotes); value.relayToOtherPeers = local == 1;
+				value.frameLane = NetTransportLane::InputUnreliable; value.frameRedundancyTicks = 4;
+				value.matchConfig = NetMatchConfigUtil::MakeDefault(value.sessionId);
+				value.matchConfig.peerCount = 3; value.matchConfig.players.push_back({3, 2, false, "Survivor"});
+				value.ownershipPolicy = "team-owner";
+				return value;
+			};
+			NetLockstepCoordinator host, client, survivor;
+			if (!host.Start(hostTransport, config(1, {{2, 1}, {3, 2}}), error) || !client.Start(clientTransport, config(2, {{1, 1}}), error) ||
+			    !survivor.Start(survivorTransport, config(3, {{1, 1}}), error)) return false;
+			uint64_t now = 0;
+			const auto step = [&] {
+				hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1); survivorTransport.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now); survivor.Tick(now);
+				++now;
+			};
+			for (int turn = 0; turn < 20; ++turn) step();
+			if (!host.IsRunning() || !client.IsRunning() || !survivor.IsRunning()) {
+				*error = "the three-peer relay fixture did not start";
+				return false;
+			}
+			constexpr uint64_t c_Ticks = 12;
+			for (uint64_t produced = 0; produced < c_Ticks; ++produced) {
+				if (!host.QueueLocalInput(produced, {MakeFrame(100 + static_cast<int64_t>(produced), produced + 1)}, {}, error) ||
+				    !client.QueueLocalInput(produced, {MakeFrame(200 + static_cast<int64_t>(produced), produced + 11)}, {}, error,
+				        {MakeObservation(2, 600 + produced, produced, 1, 1, 1.25F + static_cast<float>(produced))}) ||
+				    !survivor.QueueLocalInput(produced, {MakeFrame(300 + static_cast<int64_t>(produced), produced + 21)}, {}, error)) return false;
+				step();
+			}
+			std::map<uint64_t, std::pair<uint64_t, float>> hostSaw, survivorSaw;
+			const auto collect = [](NetLockstepCoordinator& peer, std::map<uint64_t, std::pair<uint64_t, float>>& saw) {
+				NetLockstepReadyFrame ready;
+				while (peer.PopReadyFrame(ready)) {
+					uint64_t clientMask = 0;
+					for (const ControllerFrame& frame : ready.remoteFrames) if (frame.actorUniqueID == 200 + static_cast<int64_t>(ready.frame)) clientMask = frame.stateMask;
+					float reading = -1.0F;
+					for (const NetSoundObservation& observation : ready.remoteObservations) if (observation.senderPeerId == 2) reading = observation.value;
+					saw[ready.frame] = {clientMask, reading};
+				}
+				NetLockstepReadyFrame drained;
+				while (peer.PopReadyFrame(drained)) {}
+			};
+			NetLockstepReadyFrame spare;
+			while (client.PopReadyFrame(spare)) {}
+			for (int turn = 0; turn < 3000 && (hostSaw.size() < c_Ticks || survivorSaw.size() < c_Ticks); ++turn) {
+				step();
+				collect(host, hostSaw);
+				collect(survivor, survivorSaw);
+				while (client.PopReadyFrame(spare)) {}
+			}
+			if (host.GetStats().windowCopiesApplied == 0) {
+				*error = "the lossy client link never made the host read a tick out of a window";
+				return false;
+			}
+			if (survivorSaw.size() != c_Ticks || hostSaw.size() != c_Ticks) {
+				uint64_t missing = 0;
+				while (survivorSaw.contains(missing)) ++missing;
+				*error = "the survivor behind the relay committed " + std::to_string(survivorSaw.size()) + " of " + std::to_string(c_Ticks) +
+				         " ticks (first missing " + std::to_string(missing) + ") while the host committed " + std::to_string(hostSaw.size()) +
+				         " and read " + std::to_string(host.GetStats().windowCopiesApplied) + " ticks out of windows";
+				return false;
+			}
+			for (uint64_t tick = 0; tick < c_Ticks; ++tick) {
+				if (hostSaw[tick] != survivorSaw[tick] || hostSaw[tick].first != tick + 11 || hostSaw[tick].second != 1.25F + static_cast<float>(tick)) {
+					*error = "tick " + std::to_string(tick) + " committed the client's mask " + std::to_string(hostSaw[tick].first) + "/" +
+					         std::to_string(survivorSaw[tick].first) + " and reading " + std::to_string(hostSaw[tick].second) + "/" +
+					         std::to_string(survivorSaw[tick].second) + " on the host/survivor";
+					return false;
+				}
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_relay_forwards_a_tick_it_first_read_in_a_window repaired=" << host.GetStats().windowCopiesApplied << std::endl;
 			return true;
 		}
 
@@ -6034,7 +6220,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				c.peerCount = 3;
 				c.remoteTransportPeerIds = std::move(transports);
 				c.relayToOtherPeers = relay;
-				c.frameLane = NetTransportLane::InputUnreliable;
+				c.frameLane = NetTransportLane::ControlReliable;
 				c.scenario = "LockstepSelfTest";
 				c.ownershipPolicy = "unique-id-split";
 				c.frameRedundancyTicks = ticks;
@@ -7299,7 +7485,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			seat.holdUntilFrame = 0x5152535455565758ULL;
 			seat.holderName = "A";
 			const std::vector<uint8_t> expected = {
-				0x43, 0x43, 0x4C, 0x33, 0x24, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
+				0x43, 0x43, 0x4C, 0x33, 0x25, 0x00, 0x10, 0x00, 0x06, 0x00, 0x00, 0x00, 0x58, 0x00, 0x00, 0x00,
 				0x01, 0x01, 0x00, 0x00, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01,
 				0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
 				0x18, 0x17, 0x16, 0x15, 0x14, 0x13, 0x12, 0x11,
@@ -18153,6 +18339,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestFrameWindowDegradesWhenItOutgrowsThePacket(&error) ||
 		    !TestFrameWindowStaysClassicWithoutCapability(&error) ||
 		    !TestFrameWindowSurvivesUnreliableLoss(&error) ||
+		    !TestAWindowReachesBackARoundTrip(&error) ||
+		    !TestALateTickIsReadPast(&error) ||
+		    !TestTheRelayForwardsATickItFirstReadInAWindow(&error) ||
 		    !TestFrameWindowStripsRelayWithoutCapability(&error) ||
 		    !TestFrameWindowHoldHeartbeatKeepsTicksOne(&error) ||
 		    !TestActivityGateAgreesAcrossPeers(&error) ||
