@@ -270,7 +270,7 @@ namespace RTE::CheckpointLua {
 			bool pooled = true; // A buffer of settled pages is sized to them, so it is unmapped instead of reused.
 			~Slab();
 		};
-		static constexpr size_t c_IdleSlabs = 3;
+		static constexpr size_t c_IdleSlabs = 1; // With one capture in flight, the next freeze reuses the buffer the last one gave back.
 		std::mutex m_SlabMutex;
 		std::vector<std::unique_ptr<Slab>> m_IdleSlabs;
 		std::atomic<size_t> m_LiveSlabs{0};
