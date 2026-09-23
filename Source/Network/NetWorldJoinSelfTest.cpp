@@ -6082,6 +6082,63 @@ namespace RTE {
 		return true;
 	}
 
+	// A capture park carries a command aimed into it to the first frame past it, so a named capture can land after the
+	// tick it named. Every peer takes it where it lands and reports that tick; the host must wait on that tick, or it waits
+	// on reports that never come and the schedule stops after one capture.
+	bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error) {
+		std::array<NetMatchService, 2> services;
+		services[0].m_IsHost = true;
+		for (NetMatchService& service: services) {
+			service.m_AutosaveMatchId = "00000000deadbeef-0000000000000006";
+			service.m_MatchAutosaveSeconds = 1;
+		}
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		constexpr uint64_t lastTick = 600, streamDelay = 4, parkedCapture = 30;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::array<std::vector<uint64_t>, 2> captures;
+		std::array<std::vector<std::pair<uint64_t, uint64_t>>, 2> writers;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			std::vector<NetMatchService::CheckpointNote> applied;
+			if (const auto due = stream.find(tick); due != stream.end()) applied = due->second;
+			for (size_t index = 0; index < services.size(); ++index) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick;
+				input.now = static_cast<int64_t>(tick) * tickLength;
+				input.applied = applied;
+				input.lead = lead;
+				input.writers = {1, 2};
+				auto& writer = writers[index];
+				while (!writer.empty() && writer.front().second <= tick) {
+					input.finished.push_back(writer.front().first);
+					writer.erase(writer.begin());
+				}
+				input.unwritten = writer.size();
+				const NetMatchService::AutosaveTickOutput output = services[index].StepAutosaveSchedule(input);
+				if (output.capture) {
+					captures[index].push_back(tick);
+					writer.emplace_back(tick, (writer.empty() ? tick : writer.back().second) + 40);
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = static_cast<uint8_t>(index + 1);
+					// Every capture the host names is aimed into a park and lands past the tick it named.
+					stream[tick + (note.kind == NetGameCheckpoint::Capture ? lead + parkedCapture : streamDelay)].push_back(note);
+				}
+			}
+		}
+		const auto list = [](const std::vector<uint64_t>& ticks) {
+			std::string text;
+			for (const uint64_t tick: ticks) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			return text;
+		};
+		if (captures[0] != captures[1] || captures[0].size() < 4) {
+			*error = "a capture that landed past its named tick stopped the schedule: host " + list(captures[0]) + " client " + list(captures[1]);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_capture_named_into_a_park_opens_the_next ticks=" << list(captures[0]) << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6833,6 +6890,7 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
+			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

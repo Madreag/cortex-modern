@@ -2896,7 +2896,10 @@ static std::string ResyncSaveName() {
 		for (const CheckpointNote& note: input.applied) {
 			if (note.kind == NetGameCheckpoint::Capture) {
 				// A capture named for a tick already behind this frame is taken here, on every peer alike.
-				m_ScheduledCaptures.insert(std::max(note.tick, input.tick));
+				const uint64_t takenAt = std::max(note.tick, input.tick);
+				m_ScheduledCaptures.insert(takenAt);
+				// The writers report the tick they took, so that is the capture the host waits on.
+				if (m_IsHost && note.tick == m_OpenCaptureTick) m_OpenCaptureTick = takenAt;
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
 			}
