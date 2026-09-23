@@ -110,7 +110,20 @@ namespace {
 
 std::string Scene::SaveRuntimeCheckpoint() const {
 	std::vector<CheckpointText> pathfinders;
-	for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+	if (CheckpointWriter::IsCapturing()) {
+		// Each team's grid is its own; a capture takes them side by side, in the same order.
+		pathfinders.resize(m_pPathFinders.size());
+		std::vector<std::future<void>> tasks;
+		for (size_t index = 0; index < m_pPathFinders.size(); ++index) {
+			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index] {
+				pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
+			}));
+		}
+		for (std::future<void>& task: tasks) task.wait();
+		for (std::future<void>& task: tasks) task.get();
+	} else {
+		for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
+	}
 	std::vector<std::pair<CheckpointText, CheckpointText>> backgrounds;
 	for (const SLBackground* layer: m_BackLayerList) backgrounds.emplace_back(CheckpointWriter::Native([&] { return layer->Entity::SaveCheckpoint(); }), CheckpointWriter::Native([&] { return layer->SaveCheckpoint(); }));
 	std::array<CheckpointText, Players::MaxPlayerCount> brains;

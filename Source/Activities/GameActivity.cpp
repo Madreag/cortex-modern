@@ -8,6 +8,7 @@
 #include "FrameMan.h"
 #include "UInputMan.h"
 #include "AudioMan.h"
+#include "ThreadMan.h"
 #include "MetaMan.h"
 #include "ConsoleMan.h"
 #include "MenuMan.h"
@@ -3434,15 +3435,42 @@ template <class T> bool CheckpointMenuBuilt(const T* menu) {
 }
 
 std::string GameActivity::SaveValueCheckpoint() const {
+	const auto menu = [this](int player, int part) -> std::function<std::string()> {
+		switch (part) {
+			case 0: return [this, player] { return m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{}; };
+			case 1: return [this, player] { return m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{}; };
+			case 2: return [this, player] { return m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{}; };
+			case 3: return [this, player] { return m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{}; };
+			default: return [this, player] { return m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{}; };
+		}
+	};
+	constexpr int c_MenuParts = 5;
+	// A capture takes each player's menus and banners side by side; the archive holds them in the same order.
+	std::vector<CheckpointText> menus;
+	if (CheckpointWriter::IsCapturing()) {
+		menus.resize(Players::MaxPlayerCount * c_MenuParts);
+		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
+		std::vector<std::future<void>> tasks;
+		for (size_t index = 0; index < menus.size(); ++index) {
+			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index] {
+				AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+				menus[index] = CheckpointWriter::CaptureNative(menu(static_cast<int>(index) / c_MenuParts, static_cast<int>(index) % c_MenuParts));
+			}));
+		}
+		for (std::future<void>& task: tasks) task.wait();
+		for (std::future<void>& task: tasks) task.get();
+	}
 	CheckpointWriter writer("GameActivity3");
 	writer(CheckpointWriter::Native([&] { return Activity::SaveCheckpoint(); }));
 	VisitCheckpoint(writer, *this);
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
-		writer(CheckpointWriter::Native([&] { return m_pBuyGUI[player] ? m_pBuyGUI[player]->SaveCheckpoint() : std::string{}; }),
-			CheckpointWriter::Native([&] { return m_pEditorGUI[player] ? m_pEditorGUI[player]->SaveCheckpoint() : std::string{}; }),
-			CheckpointWriter::Native([&] { return m_InventoryMenuGUI[player] ? m_InventoryMenuGUI[player]->SaveCheckpoint() : std::string{}; }),
-			CheckpointWriter::Native([&] { return m_pBannerRed[player] ? m_pBannerRed[player]->SaveCheckpoint() : std::string{}; }),
-			CheckpointWriter::Native([&] { return m_pBannerYellow[player] ? m_pBannerYellow[player]->SaveCheckpoint() : std::string{}; }));
+		if (!menus.empty()) {
+			const size_t first = static_cast<size_t>(player) * c_MenuParts;
+			writer(menus[first], menus[first + 1], menus[first + 2], menus[first + 3], menus[first + 4]);
+		} else {
+			writer(CheckpointWriter::Native(menu(player, 0)), CheckpointWriter::Native(menu(player, 1)), CheckpointWriter::Native(menu(player, 2)),
+				CheckpointWriter::Native(menu(player, 3)), CheckpointWriter::Native(menu(player, 4)));
+		}
 	}
 	return writer.Text();
 }
