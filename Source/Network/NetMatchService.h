@@ -583,6 +583,8 @@ namespace RTE {
 		void PreparePrivateRejoinCheckpoint();
 		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs);
+		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
+		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
 
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.

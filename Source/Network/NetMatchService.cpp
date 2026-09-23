@@ -894,10 +894,19 @@ static std::string ResyncSaveName() {
 		return sum;
 	}
 
+	bool NetMatchService::EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd) {
+		// A seat readmitted for a frame the round never reached ended it under the AI: it never played again either.
+		return !coordinatorUsesPeer || seatUnderAIAtEnd;
+	}
+
 	void NetMatchService::RefuseEndedPeersLocked(const std::string& reason) {
 		if (!m_IsHost || !m_Session || !m_Coordinator) return;
+		const uint64_t resume = m_Coordinator->GetResumeFrame();
+		const uint64_t lastFrame = resume > 0 ? resume - 1 : 0;
 		for (const NetSessionPeerInfo& peer : m_Session->GetReadyPeers()) {
-			if (!m_Coordinator->UsesTransportPeer(peer.transportPeerId)) {
+			uint8_t seat = 0;
+			for (const auto& [peerId, transport]: m_Coordinator->RemoteTransports()) if (transport == peer.transportPeerId) seat = peerId;
+			if (EndedRoundOwesGoodbye(m_Coordinator->UsesTransportPeer(peer.transportPeerId), seat != 0 && m_Coordinator->IsSeatUnderAI(seat, lastFrame))) {
 				m_Session->DisconnectReadyPeer(peer.transportPeerId, NetRejectReason::SessionEnded, reason);
 			}
 		}
