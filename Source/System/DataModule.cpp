@@ -524,7 +524,8 @@ void DataModule::CheckSupportedGameVersion() const {
 		return;
 	}
 	if (System::IsInExternalModuleValidationMode()) {
-		System::PrintFaultToCLI("[module] " + message + " boxes=" + std::to_string(RTEError::ShowMessageBoxCallCount()));
+		System::PrintDiagnosticLine("[module] " + message + " boxes=" + std::to_string(RTEError::ShowMessageBoxCallCount()));
+		System::PrintFaultToCLI("[module] " + message);
 		RTEAbort(message);
 	}
 	System::PrintDiagnosticLine("[module] WARNING: " + message);

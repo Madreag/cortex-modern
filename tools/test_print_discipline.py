@@ -119,6 +119,25 @@ DISCIPLINED = (
     ("Source/CI/DeterminismCheck.cpp", "determinism-check"),
     ("Source/System/TelemetryBundle.cpp", "telemetry"),
     ("Source/CI/NetModerationGUIProbe.cpp", "net-ui-probe"),
+    ("Source/Managers/ActivityMan.cpp", "autosave"),
+    ("Source/Managers/ActivityMan.cpp", "autosave-effects"),
+    ("Source/Managers/ActivityMan.cpp", "global-callback-selftest"),
+    ("Source/Managers/ActivityMan.cpp", "load-selftest"),
+    ("Source/Managers/ActivityMan.cpp", "runtime-globals"),
+    ("Source/Managers/ActivityMan.cpp", "save-callback-selftest"),
+    ("Source/Managers/ActivityMan.cpp", "save-refusal-diagnosis-selftest"),
+    ("Source/Managers/ActivityMan.cpp", "scriptgraph"),
+    ("Source/Managers/ActivityMan.cpp", "snapbench"),
+    ("Source/Network/NetMatchService.cpp", "autosave"),
+    ("Source/Network/NetMatchService.cpp", "net-host-defaults"),
+    ("Source/Network/NetMatchService.cpp", "net-join-wait"),
+    ("Source/Network/NetMatchService.cpp", "net-lockstep"),
+    ("Source/Network/NetMatchService.cpp", "net-match"),
+    ("Source/Network/NetMatchService.cpp", "net-match-selftest"),
+    ("Source/Network/NetMatchService.cpp", "net-reconnect"),
+    ("Source/Network/NetMatchService.cpp", "net-world"),
+    ("Source/Network/NetLobbySession.cpp", "net-lobby"),
+    ("Source/Network/NetLobbySession.cpp", "net-match"),
 )
 FPRINTF_STDERR = re.compile(r'std::fprintf\(stderr,\s*"RTE ')
 WRITER = re.compile(r"void WriteWholeLine\(std::ostream& stream, const std::string& line\)")
@@ -150,7 +169,7 @@ def check(repo: Path, logs: list) -> dict:
     main_text = main.read_text(encoding="utf-8", errors="replace") if main.is_file() else ""
     rows = {}
     for name, tag in DISCIPLINED:
-        rows[f"{tag}_lines_are_one_write"] = hits(repo / name, streamed(tag))
+        rows.setdefault(f"{tag}_lines_are_one_write", []).extend(hits(repo / name, streamed(tag)))
     rows["rte_error_lines_use_the_print_lock"] = hits(rte_error, FPRINTF_STDERR)
     rows["menu_script_helper_present"] = [] if "void MenuScriptPrint(const std::string& line)" in main_text else \
         [{"file": str(main), "line": 0, "text": "MenuScriptPrint helper missing"}]
