@@ -231,6 +231,10 @@ SCHEMAS["MovableObjectRuntime1"] = [("entity", "o"), ("position", VECTOR), *fiel
     ("string_values", STRING_MAP), ("number_values", NUMBER_MAP), ("screen_effect_file", "o"),
     *fields("has_screen_effect screen_effect_hash effect_start_time effect_stop_time effect_start_strength effect_stop_strength effect_always_shows effect_angle inherit_effect_angle randomize_effect_angle randomize_effect_every_frame post_effect_enabled "
     "remove_orphan_radius remove_orphan_area remove_orphan_rate collision_damage penetration_damage wound_damage_multiplier apply_wound_collision apply_wound_burst_collision ignore_terrain hit_moid hit_material hit_particle_uid last_collision_frame scripted_update_interval since_scripted_update")]
+# v2 carries the object's script registration serial after traveling (MovableObject::SaveMovableObjectRuntime).
+_MO_SERIAL_AT = [name for name, _ in SCHEMAS["MovableObjectRuntime1"]].index("traveling") + 1
+SCHEMAS["MovableObjectRuntime2"] = [*SCHEMAS["MovableObjectRuntime1"][:_MO_SERIAL_AT], ("script_registration_serial", "n"),
+    *SCHEMAS["MovableObjectRuntime1"][_MO_SERIAL_AT:]]
 SCHEMAS["LimbPath1"] = [("entity", "o"), ("start", VECTOR), *fields("start_segment_count disabled_collision_segment segment_progress "
     "travel_speed segment_threshold base_speed_multiplier current_speed_multiplier"), *fields("base_scale current_scale", VECTOR), ("push_force", "n"),
     *fields("joint_position joint_velocity", VECTOR), ("rotation", "o"), *fields("rotation_offset position_offset", VECTOR), ("time_left", "n"),
