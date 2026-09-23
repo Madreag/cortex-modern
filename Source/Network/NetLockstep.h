@@ -1028,6 +1028,7 @@ namespace RTE {
 		static const char* StateName(NetLockstepState state);
 
 		friend bool TestDelayPaddingPassesAParkedFrame(std::string* error);
+		friend bool TestACaptureReportsToItsOwnPark(std::string* error);
 		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
@@ -1235,7 +1236,7 @@ namespace RTE {
 		void PublishCapturePark(uint64_t startFrame);
 		void ApplyCapturePark(const NetLockstepTiming& timing);
 		uint64_t CaptureParkCapTicks() const;
-		void SendCaptureParkReport();
+		void SendCaptureParkReport(uint64_t nowMs = 0);
 		void RetryLateStartReclaims();
 		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
@@ -1334,6 +1335,11 @@ namespace RTE {
 		uint64_t m_CaptureParkPublishedEndFrame = UINT64_MAX;
 		uint64_t m_HighestParkEndFrame = 0;
 		uint32_t m_PendingCaptureReportMs = 0;
+		uint64_t m_PendingCaptureTick = UINT64_MAX; //!< The tick the pending capture report measured.
+		uint64_t m_ReportedCaptureParkStart = UINT64_MAX; //!< The park this peer's last capture report went to.
+		uint32_t m_ReportedCaptureParkMs = 0;
+		uint64_t m_CaptureReportSentMs = 0;
+		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		bool m_ApplyingDeferredParkTiming = false;
