@@ -115,17 +115,24 @@ namespace {
 
 std::string Scene::SaveRuntimeCheckpoint() const {
 	std::vector<CheckpointText> pathfinders;
-	if (CheckpointWriter::IsCapturing()) {
-		// Each team's grid is its own; a capture takes them side by side, in the same order.
-		pathfinders.resize(m_pPathFinders.size());
+	// The grid tasks read this frame's locals, so they end before anything leaves it.
+	struct GridTasks {
 		std::vector<std::future<void>> tasks;
+		~GridTasks() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
+		void Join() {
+			for (std::future<void>& task: tasks) task.wait();
+			for (std::future<void>& task: tasks) task.get();
+			tasks.clear();
+		}
+	} grids;
+	if (CheckpointWriter::IsCapturing()) {
+		// Each team's grid is its own; a capture takes them side by side, in the same order, beside the rest of the runtime.
+		pathfinders.resize(m_pPathFinders.size());
 		for (size_t index = 0; index < m_pPathFinders.size(); ++index) {
-			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index] {
+			grids.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, &pathfinders, index] {
 				pathfinders[index] = CheckpointWriter::CaptureNative([this, index] { return m_pPathFinders[index] ? m_pPathFinders[index]->SaveCheckpoint() : ""; });
 			}));
 		}
-		for (std::future<void>& task: tasks) task.wait();
-		for (std::future<void>& task: tasks) task.get();
 	} else {
 		for (const auto& pathfinder: m_pPathFinders) pathfinders.push_back(CheckpointWriter::Native([&] { return pathfinder ? pathfinder->SaveCheckpoint() : ""; }));
 	}
@@ -147,6 +154,7 @@ std::string Scene::SaveRuntimeCheckpoint() const {
 		if (!terrain.Capture()) throw std::runtime_error("could not capture scene terrain metadata");
 		metadata = CheckpointText(terrain.SaveMetadata());
 	}
+	grids.Join();
 	CheckpointWriter writer("SceneRuntime1");
 	writer(CheckpointWriter::Native([&] { return Entity::SaveCheckpoint(); }), m_Location, m_LocationOffset, m_MetagamePlayable, m_Revealed, m_OwnedByTeam, m_RoundIncome,
 		m_BuildBudget, m_BuildBudgetRatio, m_AutoDesigned, m_TotalInvestment, m_PathfindingUpdated, m_PartialPathUpdateTimer,
