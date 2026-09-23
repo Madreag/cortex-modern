@@ -16,6 +16,7 @@
 #include "ConsoleMan.h"
 #include "SettingsMan.h"
 #include "ThreadMan.h"
+#include "AudioMan.h"
 #include "MetaMan.h"
 #include "ContentFile.h"
 #include "Base64/base64.h"
@@ -1359,14 +1360,18 @@ int Scene::Save(Writer& writer) const {
 		g_MovableMan.GetAllItems(false, liveObjects);
 		g_MovableMan.GetAllParticles(false, liveObjects);
 	}
+	const auto placeable = [doFullGameSave](const SceneObject* placedObject) {
+		// Preset-less MOPixels (terrain debris) serialize in full form on full-game saves; anything else preset-less is unplaceable.
+		return !(placedObject->GetPresetName().empty() || placedObject->GetPresetName() == "None") || (doFullGameSave && dynamic_cast<const MOPixel*>(placedObject));
+	};
+	const std::vector<CheckpointText> liveTexts = writer.IsCapturing() && writer.IsSavedScene(this) ? CaptureSceneObjects(writer, liveObjects, placeable, doFullGameSave) : std::vector<CheckpointText>();
+	size_t liveIndex = 0;
 	for (int set = PlacedObjectSets::PLACEONLOAD; set < PlacedObjectSets::PLACEDSETSCOUNT; ++set) {
-		const auto& objects = writer.IsSavedScene(this) && set == PlacedObjectSets::PLACEONLOAD ? liveObjects : m_PlacedObjects[set];
+		const bool live = writer.IsSavedScene(this) && set == PlacedObjectSets::PLACEONLOAD;
+		const auto& objects = live ? liveObjects : m_PlacedObjects[set];
 		for (const SceneObject* placedObject: objects) {
-			if (placedObject->GetPresetName().empty() || placedObject->GetPresetName() == "None") {
-				// Preset-less MOPixels (terrain debris) serialize in full form on full-game saves; anything else preset-less is unplaceable.
-				if (!(doFullGameSave && dynamic_cast<const MOPixel*>(placedObject))) {
-					continue;
-				}
+			if (!placeable(placedObject)) {
+				continue;
 			}
 
 			if (set == PlacedObjectSets::PLACEONLOAD) {
@@ -1377,8 +1382,11 @@ int Scene::Save(Writer& writer) const {
 				writer.NewProperty("PlaceAIPlanObject");
 			}
 
-			// writer << placedObject;
-			SaveSceneObject(writer, placedObject, false, doFullGameSave);
+			if (live && !liveTexts.empty()) {
+				writer.Append(liveTexts[liveIndex++]);
+			} else {
+				SaveSceneObject(writer, placedObject, false, doFullGameSave);
+			}
 		}
 	}
 
@@ -1450,6 +1458,58 @@ int Scene::Save(Writer& writer) const {
 	writer << m_GlobalAcc;
 
 	return 0;
+}
+
+namespace {
+	thread_local int64_t s_LastObjectCaptureUs = 0;
+}
+
+int64_t Scene::LastObjectCaptureUs() {
+	return s_LastObjectCaptureUs;
+}
+
+std::vector<CheckpointText> Scene::CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData) {
+	const auto started = std::chrono::steady_clock::now();
+	std::vector<const SceneObject*> order;
+	order.reserve(objects.size());
+	for (const SceneObject* object: objects) if (placeable(object)) order.push_back(object);
+	std::vector<CheckpointText> texts(order.size());
+	const Writer::SaveOverrides* overrides = writer.GetSaveOverrides();
+	const int indent = writer.GetIndent();
+	AudioMan::SoundCheckpointSaveScope* sounds = AudioMan::SoundCheckpointSaveScope::Current();
+	// Each object is written by one thread, as its own capture, exactly as the loop would write it.
+	const auto capture = [&](size_t first, size_t last) {
+		AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
+		CheckpointCache values;
+		values.Begin();
+		CheckpointWriter::CacheScope valuesScope(&values);
+		for (size_t index = first; index < last; ++index) {
+			const SceneObject* object = order[index];
+			texts[index] = Writer::Capture([&](Writer& owned) {
+				owned.SetSaveOverrides(overrides);
+				owned.SetCaptureObject(object);
+				SaveSceneObject(owned, object, false, saveFullData);
+			}, indent);
+		}
+	};
+	// Few objects carry most of the work (an actor's whole attachable tree), so each is a task of its own.
+	constexpr size_t c_ObjectsPerTask = 1;
+	std::vector<std::future<void>> tasks;
+	for (size_t first = c_ObjectsPerTask; first < order.size(); first += c_ObjectsPerTask) {
+		tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, first, last = std::min(first + c_ObjectsPerTask, order.size())] { capture(first, last); }));
+	}
+	std::exception_ptr failure;
+	try {
+		capture(0, std::min(c_ObjectsPerTask, order.size()));
+	} catch (...) {
+		failure = std::current_exception();
+	}
+	// Every task reads this frame's locals, so all of them end before anything leaves it.
+	for (std::future<void>& task: tasks) task.wait();
+	if (failure) std::rethrow_exception(failure);
+	for (std::future<void>& task: tasks) task.get();
+	s_LastObjectCaptureUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+	return texts;
 }
 
 void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData) {

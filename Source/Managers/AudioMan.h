@@ -129,8 +129,19 @@ namespace RTE {
 			bool Contains(uint64_t identity) const { return m_Carried.contains(identity); }
 			const std::unordered_set<uint64_t>& Carried() const { return m_Carried; }
 			static SoundCheckpointSaveScope* Current() { return s_Current; }
+			/// Collects this thread's notes into a capture another thread opened, for as long as it lives.
+			class Lend {
+			public:
+				explicit Lend(SoundCheckpointSaveScope* scope) : m_Previous(s_Current) { s_Current = scope; }
+				~Lend() { s_Current = m_Previous; }
+				Lend(const Lend&) = delete;
+				Lend& operator=(const Lend&) = delete;
+			private:
+				SoundCheckpointSaveScope* m_Previous;
+			};
 		private:
 			static thread_local SoundCheckpointSaveScope* s_Current;
+			std::mutex m_NoteMutex;
 			std::unordered_set<uint64_t> m_Carried;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
 		};

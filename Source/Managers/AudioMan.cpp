@@ -1307,7 +1307,9 @@ AudioMan::SoundCheckpointSaveScope::~SoundCheckpointSaveScope() {
 }
 
 void AudioMan::SoundCheckpointSaveScope::Note(uint64_t identity) {
-	if (identity) m_Carried.insert(identity);
+	if (!identity) return;
+	std::lock_guard lock(m_NoteMutex);
+	m_Carried.insert(identity);
 }
 
 void AudioMan::NoteCarriedSoundIdentity(uint64_t identity) {
