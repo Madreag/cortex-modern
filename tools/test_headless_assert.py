@@ -30,8 +30,16 @@ def run_case(repo: Path, out: Path, timeout: float = 120.0) -> dict:
         run.close()
     stdout = (out / "run/stdout.log").read_text(encoding="utf-8", errors="replace") if (out / "run/stdout.log").is_file() else ""
     lines = stdout.splitlines()
+    # The POSIX runner keeps stderr, where the fault and ShutDown lines go, in its own file.
+    stderr_path = out / "run/stderr.log"
+    errors = stderr_path.read_text(encoding="utf-8", errors="replace").splitlines() if stderr_path.is_file() else []
     fault = next((line for line in lines if CONTINUED in line), "")
     after = [line for line in lines[lines.index(fault) + 1:] if "[menu-script] assert_screen" in line] if fault else []
+    if not fault and errors:
+        # Two files keep no order between them; the fire_assert step's verdict prints once the assert has returned.
+        fault = next((line for line in errors if CONTINUED in line), "")
+        fired = next((index for index, line in enumerate(lines) if line.startswith("[menu-script] fire_assert ")), None)
+        after = [line for line in lines[fired + 1:] if "[menu-script] assert_screen" in line] if fault and fired is not None else []
     exit_code = record.get("exit_code")
     result = {
         "selftest": "headless-assert-continues",
@@ -39,7 +47,7 @@ def run_case(repo: Path, out: Path, timeout: float = 120.0) -> dict:
         "timed_out": bool(record.get("timed_out")),
         "fault_line": fault,
         "verdicts_after_assert": after[:2],
-        "shutdown_line": next((line for line in lines if SHUTDOWN in line), ""),
+        "shutdown_line": next((line for line in lines + errors if SHUTDOWN in line), ""),
         "exe_sha256": record.get("exe_sha256"),
         "stdout": str(out / "run/stdout.log"),
     }
