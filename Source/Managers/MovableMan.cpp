@@ -2369,7 +2369,7 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 	return g_ActivityMan.RestoreRuntimeGlobals(in.runtimeGlobals) && restored;
 }
 
-bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage) const {
+bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage, const std::function<void()>& whileWaiting) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
 	LuaScriptGraphNativeCaptureScope nativeCapture;
@@ -2404,7 +2404,7 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		FrozenCaptureStats stats;
 		std::vector<std::string> frozenProblems;
 		// The page copies land off this thread; a state waits for its own at its gate before it runs again.
-		const bool complete = LuaStateWrapper::CaptureFrozenScriptGraphs(graphs, frozenProblems, stats);
+		const bool complete = LuaStateWrapper::CaptureFrozenScriptGraphs(graphs, frozenProblems, stats, whileWaiting);
 		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
 		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
 		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
