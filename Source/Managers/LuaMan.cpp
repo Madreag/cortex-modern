@@ -4017,6 +4017,7 @@ LuaScriptGraphNativeCaptureScope::~LuaScriptGraphNativeCaptureScope() { s_GraphN
 
 const LuaScriptGraphNativeCaptureData* LuaScriptGraphNativeCaptureScope::Current() { return s_GraphNativeCapture; }
 
+
 namespace {
 
 static int ScriptGraphNoteTable(lua_State* L) {
@@ -6123,6 +6124,12 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	}
 }
 
+void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
+	if (!shared) return;
+	std::lock_guard worldLock(shared->frozenWorldMutex);
+	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->knownObjects);
+}
+
 bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting) {
 	std::vector<LuaStateWrapper*> order{&g_LuaMan.GetMasterScriptState()};
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) order.push_back(&state);
@@ -6132,10 +6139,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::vector<char> complete(order.size(), 0);
 	CheckpointLua::NativeEffects effects;
 	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
-	if (shared) {
-		std::lock_guard worldLock(shared->frozenWorldMutex);
-		if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->knownObjects);
-	}
+	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
 	const auto capture = [&](size_t index) {
 		LuaScriptGraphNativeCaptureScope lookups(shared);
 		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
