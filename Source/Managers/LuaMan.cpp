@@ -7516,7 +7516,8 @@ end
 _ScriptGraphGcProbe.CheckpointGcMarker = { pinned = true }
 _ScriptGraphGcWatch = setmetatable({}, { __mode = "v" })
 _ScriptGraphGcWatch[1] = _ScriptGraphGcProbe.CheckpointGcMarker
-assert(({_ScriptGraphNative(_ScriptGraphGcProbe)})[1] == "entity", "the probe is not a live entity reference")
+local probeKind = ({_ScriptGraphNative(_ScriptGraphGcProbe)})[1]
+assert(probeKind == "entity", "the probe is not a live entity reference, kind=" .. tostring(probeKind))
 )lua");
 		CheckpointText probeImage;
 		std::vector<std::string> probeProblems;
