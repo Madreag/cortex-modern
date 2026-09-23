@@ -29,6 +29,7 @@ namespace RTE {
 	class SoundContainer;
 	struct SoundData;
 	struct NetSoundObservation;
+	struct AudioCheckpointCapture;
 
 	/// The singleton manager of sound effect and music playback.
 	class AudioMan : public Singleton<AudioMan> {
@@ -38,6 +39,11 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const;
 		std::string SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
+		/// The audio a checkpoint archives, read at the capture's instant.
+		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointState() const;
+		/// Writes a captured state as SaveCheckpoint would have at its instant, once the sound owners the rest of the
+		/// capture carries are known; the capture's disowned voices are cleared in place.
+		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;

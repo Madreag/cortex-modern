@@ -2124,8 +2124,39 @@ std::string AudioMan::SaveCheckpoint() const {
 	return SaveCheckpoint(std::function<bool(uint64_t, const SoundContainer*)>{});
 }
 
-std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
+struct RTE::AudioCheckpointCapture {
 	AudioRuntime state;
+	std::vector<const SoundContainer*> owners; //!< Each voice's owner, which the filter judges.
+};
+
+std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
+	return SaveCaptured(*CaptureCheckpointState(), contained);
+}
+
+std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
+	AudioRuntime& state = captured.state;
+	std::set<std::string> disownedPresets;
+	for (size_t index = 0; index < state.voices.size(); ++index) {
+		const SoundContainer* owner = captured.owners[index];
+		uint64_t& ownerIdentity = state.voices[index].owner;
+		if (contained && ownerIdentity && !contained(ownerIdentity, owner)) {
+			if (disownedPresets.insert(owner->GetPresetName()).second) {
+				std::ostringstream line;
+				line << "[audio-checkpoint] disowned voice owner " << owner->GetPresetName();
+				System::PrintDiagnosticLine(line.str());
+			}
+			ownerIdentity = 0;
+		}
+	}
+	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
+	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
+	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
+	return state.Save();
+}
+
+std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState() const {
+	auto result = std::make_shared<AudioCheckpointCapture>();
+	AudioRuntime& state = result->state;
 	state.enabled = m_AudioEnabled; state.nextVoice = m_NextVoiceIdentity;
 	state.deferredSoundOpTick = m_DeferredSoundOpTick; state.deferredSoundOpOrdinal = m_DeferredSoundOpOrdinal;
 	state.muteMaster = m_MuteMaster; state.muteMusic = m_MuteMusic; state.muteSounds = m_MuteSounds; state.muteOnFocusLoss = m_MuteAudioOnFocusLoss;
@@ -2156,23 +2187,13 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 			if (!sound) continue;
 			state.samples.push_back(AudioCheckpoint::Sample::Capture(path, sound));
 		}
-		std::set<std::string> disownedPresets;
 		for (const auto& [identity, voice]: m_PlayingVoices) {
 			if (voice.predicted || !VoiceSimLive(voice)) continue;
 			int bus = voice.hasLifetime ? voice.lifetime.bus : 0;
 			FMOD::ChannelGroup* group = nullptr;
 			if (FMOD::Channel* live = voice.Channel(); live && live->getChannelGroup(&group) == FMOD_OK) bus = group == m_UIChannelGroup ? 1 : group == m_MusicChannelGroup ? 2 : 0;
-			uint64_t ownerIdentity = voice.owner ? voice.owner->GetCheckpointIdentity() : 0;
-			if (contained && ownerIdentity && !contained(ownerIdentity, voice.owner)) {
-				if (disownedPresets.insert(voice.owner->GetPresetName()).second) {
-					{
-						std::ostringstream line;
-						line << "[audio-checkpoint] disowned voice owner " << voice.owner->GetPresetName();
-						System::PrintDiagnosticLine(line.str());
-					}
-				}
-				ownerIdentity = 0;
-			}
+			const uint64_t ownerIdentity = voice.owner ? voice.owner->GetCheckpointIdentity() : 0;
+			result->owners.push_back(voice.owner);
 			unsigned simPosition = 0;
 			LogicalSoundVoice::Progress progress{};
 			if (voice.hasLifetime) {
@@ -2195,10 +2216,7 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 		}
 		TraceCheckpointBoundary("save-captured");
 	}
-	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
-	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
-	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
-	return state.Save();
+	return result;
 }
 
 bool AudioMan::LoadCheckpoint(std::string_view text, bool validateOnly, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings, std::string* refusal) {
