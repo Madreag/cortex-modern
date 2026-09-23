@@ -5308,6 +5308,27 @@ static std::string ResyncSaveName() {
 		if (snapshot.sceneModule.empty()) {
 			snapshot.sceneModule = m_SceneModule;
 		}
+		if (snapshot.modeName.empty() && m_MatchConfig.sessionId != 0) {
+			snapshot.modeName = NetMatchConfigUtil::ModeName(m_MatchConfig.mode);
+		}
+		if (snapshot.modeLabel.empty() && m_MatchConfig.sessionId != 0) {
+			snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(m_MatchConfig.mode);
+		}
+		if (snapshot.members.empty() && snapshot.active) {
+			// Until the runner's first publish this renders the committed roster on the host and, on a
+			// client, the local placeholder config the runner publishes from WaitForSessionReady.
+			for (const NetMatchPlayerSlot& slot : m_MatchConfig.players) {
+				NetLobbyMember member;
+				member.peerId = slot.peerId;
+				member.team = slot.team;
+				member.cpu = slot.cpu;
+				member.isLocal = slot.peerId == m_LocalPeerId;
+				member.displayName = member.isLocal && !m_LocalName.empty() ? m_LocalName : slot.displayName;
+				member.connected = member.isLocal || slot.cpu;
+				member.inputDelayFrames = NetMatchConfigUtil::PeerInputDelay(m_MatchConfig, slot.peerId);
+				snapshot.members.push_back(member);
+			}
+		}
 		if (snapshot.members.empty() && snapshot.active) {
 			NetLobbyMember local;
 			local.peerId = m_LocalPeerId;
