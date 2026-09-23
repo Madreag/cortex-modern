@@ -228,7 +228,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_RelayUserTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayUser"));
 	m_RelayPassTextbox = dynamic_cast<GUITextBox*>(m_GUIControlManager->GetControl("TextNetworkRelayPass"));
 	m_RelayPassTextbox->SetPasswordMask(true);
-	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkRelayHint"))->SetText("Leave the address empty for the host's offer. Changes apply next connection.\nThis build uses UDP TURN; TCP/TLS and live credential renewal are unavailable.");
+	dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkRelayHint"))->SetText("Leave the address empty for the host's offer. Changes apply next connection.\nUDP TURN only; no TCP/TLS relays. A host's directory login renews while the session runs.");
 	for (GUITextBox* box : {m_StunServersTextbox, m_RelayAddressTextbox, m_RelayUserTextbox, m_RelayPassTextbox}) box->SetMaxTextLength(1024);
 	for (const char* name : {"LabelNetworkConnectionHint", "LabelNetworkStunHint", "LabelNetworkOwnRelay", "LabelNetworkRelayHint", "LabelNetInternetReason"}) {
 		if (auto* label = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl(name))) label->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
