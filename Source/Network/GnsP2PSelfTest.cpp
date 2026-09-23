@@ -11,6 +11,7 @@
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -46,6 +47,7 @@ namespace RTE {
 		std::mutex s_OutputMutex;
 		std::vector<std::string> s_LocalCandidates; //!< Every candidate GNS queued for a peer, as "address port typ type".
 		std::set<std::string> s_RemoteHostCandidates; //!< "address:port" of every host candidate a peer sent.
+		std::atomic<int> s_RenewedLoginAnswers{0}; //!< GNS lines reporting a TURN server's answer to a renewed login on a live allocation.
 
 		double ElapsedMs() {
 			return std::chrono::duration<double, std::milli>(Clock::now() - s_Start).count();
@@ -118,6 +120,9 @@ namespace RTE {
 				if (!line.empty()) {
 					std::cout << "[net-p2p-selftest] t=" << Ms(ElapsedMs()) << "ms gns(" << static_cast<int>(type) << ") " << line << '\n';
 					NoteCandidates(line);
+					if (line.find("the renewed login") != std::string::npos) {
+						++s_RenewedLoginAnswers;
+					}
 				}
 			}
 			std::cout.flush();
@@ -1252,6 +1257,284 @@ namespace RTE {
 			return Finish(failure);
 		}
 
+		constexpr double c_RelayGapMs = 5000;
+
+		// The TURN login comes from the environment, so it never reaches a log or a command line.
+		bool RelayLogin(std::string* user, std::string* pass) {
+			const char* envUser = std::getenv("CC_TEST_TURN_USER");
+			const char* envPass = std::getenv("CC_TEST_TURN_PASS");
+			if (!envUser || !envPass || !*envUser || !*envPass) {
+				return false;
+			}
+			*user = envUser;
+			*pass = envPass;
+			return true;
+		}
+
+		GnsP2PConfig RelayOnlyConfig(const std::string& server, const std::string& user, const std::string& pass) {
+			GnsP2PConfig config;
+			config.iceEnable = k_nSteamNetworkingConfig_P2P_Transport_ICE_Enable_Relay;
+			config.connectionMode = 2;
+			config.turnServerList = server;
+			config.turnUserList = user;
+			config.turnPassList = pass;
+			return config;
+		}
+
+		std::string CheckRelayed(Side& side) {
+			const GnsPeerConnectionInfo info = side.transport.GetPeerConnectionInfo(side.peer);
+			const bool relayed = (info.flags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0;
+			if (info.state == k_ESteamNetworkingConnectionState_Connected && relayed) {
+				return {};
+			}
+			return std::string(side.name) + " is " + StateName(info.state) + (relayed ? ", relayed" : ", not relayed") + (info.endDebug.empty() ? std::string() : " (\"" + info.endDebug + "\")");
+		}
+
+		std::vector<uint8_t> Numbered(char tag, uint32_t number) {
+			std::vector<uint8_t> bytes = Payload(tag);
+			for (int i = 0; i < 4; ++i) {
+				bytes[1 + i] = static_cast<uint8_t>(number >> (8 * i));
+			}
+			return bytes;
+		}
+
+		/// One direction of the relay-hold exchange, as its receiver saw it.
+		struct Arrivals {
+			uint32_t count = 0;
+			uint32_t last = 0;
+			double lastMs = 0;
+			double longestGapMs = 0;
+		};
+
+		// Takes one side's events without a line per packet.
+		void DrainArrivals(Side& side, char tag, Arrivals& arrivals) {
+			for (NetTransportEvent& event : side.transport.PollEvents()) {
+				if (event.type == NetTransportEventType::PacketReceived) {
+					if (event.bytes.size() == c_MessageSize && event.bytes[0] == static_cast<uint8_t>(tag)) {
+						const double now = ElapsedMs();
+						arrivals.longestGapMs = std::max(arrivals.longestGapMs, now - arrivals.lastMs);
+						arrivals.lastMs = now;
+						arrivals.last = static_cast<uint32_t>(event.bytes[1]) | static_cast<uint32_t>(event.bytes[2]) << 8 | static_cast<uint32_t>(event.bytes[3]) << 16 | static_cast<uint32_t>(event.bytes[4]) << 24;
+						++arrivals.count;
+					}
+				} else if (event.type == NetTransportEventType::PeerConnected) {
+					side.peer = event.peerId;
+					side.connected = true;
+				} else {
+					if (!side.closed) {
+						side.closed = true;
+						side.closeReason = event.reason;
+						side.closedMs = ElapsedMs();
+					}
+					Say(std::string(side.name) + " event " + EventName(event.type) + " reason=\"" + event.reason + "\"");
+				}
+			}
+		}
+
+		/// relay-hold: both sides relay only through one TURN server; a numbered message crosses each way every second for the whole hold.
+		int RunRelayHold(int seconds, const std::string& server) {
+			Say("mode: relay-hold, single process, both sides relay only through " + server + " for " + std::to_string(seconds) + " s; a numbered message crosses each way every second");
+			std::string user;
+			std::string pass;
+			if (!RelayLogin(&user, &pass)) {
+				return Finish("CC_TEST_TURN_USER and CC_TEST_TURN_PASS must hold the TURN login");
+			}
+			EnableGnsOutput();
+			GnsP2PConfig hostConfig = RelayOnlyConfig(server, user, pass);
+			GnsP2PConfig joinerConfig;
+			SingleProcessConfigs(&hostConfig, &joinerConfig);
+
+			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
+			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
+			const auto releases = std::make_shared<std::atomic<int>>(0);
+			std::string failure;
+			{
+				Side host("host");
+				Side joiner("joiner");
+				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
+				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
+				const auto signal = [&] {
+					Deliver(*toHost, host.transport, hostContext, nullptr);
+					Deliver(*toJoiner, joiner.transport, joinerContext, nullptr);
+				};
+				const auto pump = [&] {
+					signal();
+					Drain(host);
+					Drain(joiner);
+				};
+				std::string error;
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) {
+					failure = "StartHostP2P: " + error;
+				} else if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), host.transport.GetLocalIdentity(), c_HostVirtualPort, joinerConfig, &error)) {
+					failure = "ConnectP2P: " + error;
+				} else {
+					joiner.peer = 1;
+					const double connectMs = ElapsedMs();
+					if (!WaitUntil(30000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) || host.closed || joiner.closed) {
+						failure = "the relayed connection did not reach Connected on both sides within 30s (host \"" + host.closeReason + "\", joiner \"" + joiner.closeReason + "\")";
+					} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
+						failure = "not a relayed route: " + failure;
+					} else {
+						Say("both sides Connected over the relay " + Ms(ElapsedMs() - connectMs) + "ms after ConnectP2P; holding for " + std::to_string(seconds) + " s");
+						PrintConnection(joiner);
+						const double holdMs = ElapsedMs();
+						Arrivals atHost;
+						Arrivals atJoiner;
+						atHost.lastMs = atJoiner.lastMs = holdMs;
+						uint32_t sent = 0;
+						double nextSendMs = holdMs;
+						double nextReportMs = holdMs + 30000;
+						while (failure.empty() && ElapsedMs() - holdMs < seconds * 1000.0) {
+							signal();
+							DrainArrivals(host, 'J', atHost);
+							DrainArrivals(joiner, 'H', atJoiner);
+							const double now = ElapsedMs();
+							if (host.closed || joiner.closed) {
+								failure = "the relayed connection closed " + Ms((now - holdMs) / 1000) + " s into the hold (host \"" + host.closeReason + "\", joiner \"" + joiner.closeReason + "\")";
+							} else if (now - atHost.lastMs > c_RelayGapMs || now - atJoiner.lastMs > c_RelayGapMs) {
+								failure = std::string("no message ") + (now - atHost.lastMs > c_RelayGapMs ? "from the joiner" : "from the host") + " for " + Ms(c_RelayGapMs / 1000) + " s at " + Ms((now - holdMs) / 1000) +
+								          " s into the hold; last from the joiner #" + std::to_string(atHost.last) + " at " + Ms((atHost.lastMs - holdMs) / 1000) + " s, last from the host #" + std::to_string(atJoiner.last) + " at " + Ms((atJoiner.lastMs - holdMs) / 1000) + " s";
+							} else if (now >= nextSendMs) {
+								++sent;
+								if (!joiner.transport.Send(joiner.peer, NetTransportLane::InputUnreliable, Numbered('J', sent), &error) || !host.transport.Send(host.peer, NetTransportLane::InputUnreliable, Numbered('H', sent), &error)) {
+									failure = "Send #" + std::to_string(sent) + ": " + error;
+								}
+								nextSendMs += 1000;
+							}
+							if (failure.empty() && now >= nextReportMs) {
+								const std::string route = CheckRelayed(joiner) + CheckRelayed(host);
+								Say("hold " + Ms((now - holdMs) / 1000) + " s: sent " + std::to_string(sent) + " each way; the host received " + std::to_string(atHost.count) + ", the joiner " + std::to_string(atJoiner.count) +
+								    "; route " + (route.empty() ? std::string("relayed on both sides") : route));
+								if (!route.empty()) {
+									failure = "the route left the relay: " + route;
+								}
+								nextReportMs += 30000;
+							}
+							std::this_thread::sleep_for(std::chrono::milliseconds(5));
+						}
+						Say("hold summary: " + Ms((ElapsedMs() - holdMs) / 1000) + " s, sent " + std::to_string(sent) + " each way; the host received " + std::to_string(atHost.count) + " (longest gap " + Ms(atHost.longestGapMs) +
+						    "ms), the joiner " + std::to_string(atJoiner.count) + " (longest gap " + Ms(atJoiner.longestGapMs) + "ms)");
+						if (failure.empty()) {
+							PrintConnection(joiner);
+							const std::vector<uint8_t> fromJoiner = Payload('J');
+							const std::vector<uint8_t> fromHost = Payload('H');
+							if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+								failure = "Send after the hold: " + error;
+							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+								failure = "the 64-byte reliable messages did not cross both ways intact after the hold";
+							} else {
+								// GNS does not always carry a relayed close to the peer, so the row reports it; the hold is the verdict.
+								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
+								const bool seen = WaitUntil(5000, pump, [&] { return host.closed; });
+								Say(std::string("after the hold: 64 reliable bytes crossed each way; the host ") + (seen ? "saw the joiner close" : "did not see the joiner close within 5 s"));
+							}
+						}
+					}
+				}
+				host.transport.Stop();
+				joiner.transport.Stop();
+			}
+			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
+			return Finish(failure);
+		}
+
+		/// relay-renew: the joiner starts with a stale TURN login and gets the valid one on its live connection, as a renewed relay offer
+		/// reaches it; then a rotated login, which its live allocation tries on a Refresh at once.
+		int RunRelayRenew(const std::string& server) {
+			Say("mode: relay-renew, single process, both sides relay only through " + server + "; the joiner starts with a stale TURN login, is handed the valid one on its live connection 1 s in, then a rotated one");
+			std::string user;
+			std::string pass;
+			if (!RelayLogin(&user, &pass)) {
+				return Finish("CC_TEST_TURN_USER and CC_TEST_TURN_PASS must hold the TURN login");
+			}
+			EnableGnsOutput();
+			GnsP2PConfig hostConfig = RelayOnlyConfig(server, user, pass);
+			GnsP2PConfig joinerConfig;
+			SingleProcessConfigs(&hostConfig, &joinerConfig);
+			std::random_device random;
+			joinerConfig.turnUserList = "relay-renew-stale";
+			joinerConfig.turnPassList = std::to_string(random()) + std::to_string(random());
+			GnsP2PConfig renewed = joinerConfig;
+			renewed.turnUserList = user;
+			renewed.turnPassList = pass;
+			Say("joiner TURN user 'relay-renew-stale' (unknown to the server); the renewed login is the host's");
+
+			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
+			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
+			const auto releases = std::make_shared<std::atomic<int>>(0);
+			std::string failure;
+			{
+				Side host("host");
+				Side joiner("joiner");
+				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
+				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
+				const auto pump = [&] {
+					Deliver(*toHost, host.transport, hostContext, nullptr);
+					Deliver(*toJoiner, joiner.transport, joinerContext, nullptr);
+					Drain(host);
+					Drain(joiner);
+				};
+				std::string error;
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) {
+					failure = "StartHostP2P: " + error;
+				} else if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), host.transport.GetLocalIdentity(), c_HostVirtualPort, joinerConfig, &error)) {
+					failure = "ConnectP2P: " + error;
+				} else {
+					joiner.peer = 1;
+					// A relayed connect takes over 5 s and the attempt times out at 10 s, so the renewal comes early.
+					WaitUntil(1000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner)); });
+					if (joiner.connected || joiner.closed) {
+						failure = std::string("the joiner ") + (joiner.closed ? "closed (\"" + joiner.closeReason + "\")" : "connected") + " on its stale login before the renewal";
+					} else {
+						Say("joiner " + StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " 1 s in on the stale login; handing it the renewed login through UpdateListenerIceServers");
+						const double renewMs = ElapsedMs();
+						joiner.transport.UpdateListenerIceServers(renewed);
+						if (!WaitUntil(15000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) || host.closed || joiner.closed) {
+							failure = "the joiner did not connect on the renewed login: it is " + StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " (\"" + joiner.closeReason + "\")";
+						} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
+							failure = "not a relayed route: " + failure;
+						} else {
+							Say("both sides Connected over the relay " + Ms(ElapsedMs() - renewMs) + "ms after the renewed login reached the joiner's live connection");
+							const std::vector<uint8_t> fromJoiner = Payload('J');
+							const std::vector<uint8_t> fromHost = Payload('H');
+							if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+								failure = "Send: " + error;
+							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
+								failure = "the 64-byte messages did not cross both ways intact over the renewed relay";
+							} else {
+								Say("host and joiner exchanged 64 bytes each way intact over the renewed relay");
+								// A live allocation tries the next renewed login on a Refresh at once, and stays up whatever the server answers.
+								GnsP2PConfig rotated = renewed;
+								rotated.turnUserList = "relay-renew-rotated";
+								rotated.turnPassList = std::to_string(random()) + std::to_string(random());
+								const int answersBefore = s_RenewedLoginAnswers.load();
+								Say("handing the joiner's live connection a rotated login (user 'relay-renew-rotated')");
+								joiner.transport.UpdateListenerIceServers(rotated);
+								WaitUntil(8000, pump, [&] { return host.closed || joiner.closed; });
+								if (s_RenewedLoginAnswers.load() == answersBefore) {
+									failure = "the joiner's live allocation never refreshed with the rotated login within 8 s";
+								} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
+									failure = "the relay did not survive the rotated login: " + failure;
+								} else if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+									failure = "Send after the rotated login: " + error;
+								} else if (!WaitUntil(5000, pump, [&] { return host.received.size() > 1 && joiner.received.size() > 1; })) {
+									failure = "the 64-byte messages did not cross both ways after the rotated login";
+								} else {
+									Say("the relay answered the rotated login and the host and joiner still exchange 64 bytes each way");
+									joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
+									WaitUntil(5000, pump, [&] { return host.closed; });
+								}
+							}
+						}
+					}
+				}
+				host.transport.Stop();
+				joiner.transport.Stop();
+			}
+			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
+			return Finish(failure);
+		}
+
 	} // namespace
 
 	int GnsP2PSelfTest::Run(const std::vector<std::string>& args) {
@@ -1287,6 +1570,12 @@ namespace RTE {
 			std::cout << "[net-p2p-selftest] " << (passed ? "PASS payload_hold_order_and_cap" : "FAIL: " + error) << std::endl;
 			return passed ? 0 : 1;
 		}
+		if (args[0] == "relay-hold" && args.size() == 3 && ParseNumber(args[1], &value) && value > 0) {
+			return RunRelayHold(value, args[2]);
+		}
+		if (args[0] == "relay-renew" && args.size() == 2) {
+			return RunRelayRenew(args[1]);
+		}
 		if (args[0] == "dir-host" || args[0] == "dir-join" || args[0] == "dir-reject" || args[0] == "dir-dup") {
 			const DirectoryCase variant = args[0] == "dir-reject" ? DirectoryCase::Reject : args[0] == "dir-dup" ? DirectoryCase::Dup : DirectoryCase::Plain;
 			const bool plain = variant == DirectoryCase::Plain;
@@ -1298,6 +1587,7 @@ namespace RTE {
 			}
 		}
 		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | goodbye"
+		             " | relay-hold <seconds> <turn-server> | relay-renew <turn-server>"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;

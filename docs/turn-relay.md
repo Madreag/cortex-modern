@@ -71,7 +71,7 @@ A listing client can `GET` the same path with `X-Install-Key` to retrieve the cu
 
 Fixed host credentials use the same POST with an additional `iceServers` member. That publishes the supplied private relay login instead of invoking a backend. The directory's expiry limits this publication; it cannot revoke a permanent account on someone else's TURN server. A host choosing Fixed deliberately shares that account with match participants. A player's own private relay is local and is never published to the lobby.
 
-The engine requests a one-hour offer, requests another five minutes before expiry, and requests fresh credentials for rematch and repair. Failed requests retry no faster than every 15 seconds. Old offers remain usable only until their own expiry. Tokens and credentials are omitted from directory request logs and diagnostics; password text boxes and menu dumps are masked.
+The engine requests the directory's longest offer (86400 s), requests another once half its lifetime has passed, and requests fresh credentials for rematch and repair. Failed requests retry no faster than every 15 seconds. Old offers remain usable only until their own expiry. Tokens and credentials are omitted from directory request logs and diagnostics; password text boxes and menu dumps are masked.
 
 ## Self-hosted coturn
 
@@ -150,15 +150,43 @@ STUN settings contain comma-separated `host:port` values: `stun.l.google.com:193
 
 The linked native GNS ICE implementation consumes UDP TURN endpoints. The directory and lobby preserve TCP/TLS URLs, but this engine currently selects only UDP entries and passes GNS parallel comma-separated address, username and password lists. TCP/TLS-only access is not implemented by this change.
 
-Credential refresh currently updates the offer and future listener connections. Native GNS copies credentials into each live ICE session and exposes no supported hot-renewal entry point in the installed SDK. Existing relay allocations can therefore expire even after a fresh offer was published. The menu states this limitation and the active login's expiry; reconnecting obtains the fresh offer. Uninterrupted long-round renewal needs the matching GNS source/build and an allocation restart or renewal seam. Cloudflare explicitly disconnects expired allocations. [Cloudflare allocation expiry](https://developers.cloudflare.com/realtime/turn/faq/).
+A relayed connection lives as long as the match because the engine links GameNetworkingSockets built with `external/patches/gns-turn-lifetime.patch` (below). Stock GNS 1.6.0 sends CreatePermission once, so the relay drops the peer when that permission's 300 s run out, and it counts an error answer to Refresh as success. The patched library sends the permissions again every 240 s, resends a Refresh, CreatePermission or Allocate refused for a stale nonce with the new one, re-allocates when the server holds no allocation (437) or the allocation lapsed, and reports and retries any other refusal before the allocation lapses. A renewed offer reaches the live connections: `UpdateListenerIceServers` sets the new TURN lists on each live P2P connection (the log shows `[net-relay] relay login renewed on N live connection(s)`), every later allocation uses the new login, a relay that failed is tried again with it, and a live allocation tries it on a Refresh at once. A server that holds an allocation to the username that created it (RFC 5766 section 4; coturn answers 441) keeps the allocation on its first login, which coturn goes on accepting; Cloudflare takes a renewed credential on the allocation, which it requires past a credential's 48-hour maximum. [Cloudflare allocation expiry](https://developers.cloudflare.com/realtime/turn/faq/).
 
-These two transport limits remain unfinished. The menu must not imply that selecting Relay only solves a network that blocks UDP, or that publishing a new credential renews a running allocation. IP retry remains the last resort after ICE for Automatic and Direct only; Relay only refuses that downgrade.
+One limit stays: when a server stops accepting an allocation's login and refuses the renewed one too, the re-allocated relay has a new address, and native ICE does not move an established route to a new pair of equal priority, so that connection drops and the match's rejoin path takes over. The Host Options relay hint still tells the player to rejoin before the active login expires; that advice predates the live renewal.
+
+The TCP/TLS limit remains unfinished. The menu must not imply that selecting Relay only solves a network that blocks UDP. IP retry remains the last resort after ICE for Automatic and Direct only; Relay only refuses that downgrade.
+
+## GameNetworkingSockets build
+
+The engine builds against GameNetworkingSockets v1.6.0 (upstream commit `2cb93a06350bb065db53abdb0d87cf297e0bfd34`) with `external/patches/gns-turn-lifetime.patch` applied. The patch defines `STEAMNETWORKINGSOCKETS_TURN_LIFETIME` in `steamnetworkingtypes.h`; `GnsTransport.cpp` refuses to compile against a GNS without it. The patched library installs beside the stock prefix, as `<stock prefix>-turnfix`: `RTEA.vcxproj` and `meson.build` use that sibling whenever it exists, so `GNS_ROOT` / `-Dgns_root` keep naming the stock prefix and the dependency prefix does not change. On this PC:
+
+- `GNS_ROOT = D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release` (the build uses `D:\Projects\stage2_p2\gns_spike\install-win-vcpkg-release-turnfix`)
+- `GNS_DEP_ROOT = D:\Projects\stage2_p2\gns_spike\build-win-vcpkg-release\vcpkg_installed\x64-windows` (unchanged: protobuf 6.33.4, abseil 20260107.1, OpenSSL 3.6.2)
+
+Pointing `GNS_ROOT` at the `-turnfix` prefix directly works as well. Rebuild on Windows (VS 2026 CMake; the dependency prefix is only read):
+
+```sh
+git clone https://github.com/ValveSoftware/GameNetworkingSockets.git gns-src
+git -C gns-src checkout v1.6.0
+git -C gns-src apply <repo>/external/patches/gns-turn-lifetime.patch
+cmake -S gns-src -B D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix -G "Visual Studio 18 2026" -A x64 \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIB=OFF -DBUILD_STATIC_LIB=ON -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF \
+  -DBUILD_TOOLS=OFF -DENABLE_ICE=ON -DUSE_CRYPTO=OpenSSL -DUSE_STEAMWEBRTC=OFF -DLTO=OFF \
+  -DCMAKE_PREFIX_PATH=<GNS_DEP_ROOT> -DProtobuf_PROTOC_EXECUTABLE=<GNS_DEP_ROOT>/tools/protobuf/protoc.exe \
+  -DOPENSSL_ROOT_DIR=<GNS_DEP_ROOT> -DCMAKE_INSTALL_PREFIX=D:/Projects/stage2_p2/gns_spike/install-win-vcpkg-release-turnfix
+cmake --build D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix --config Release
+cmake --install D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix --config Release
+```
+
+On macOS and Linux build the same checkout and patch with the flags the stock prefix used, install into `<stock prefix>-turnfix`, and keep passing the stock prefix as `-Dgns_root`.
+
+`tools/turn_relay_rows.py hold|renew --turn <host:port> --out <dir>` runs the two relay rows (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
 
 Ordinary match config is version 6; persistent-world config is version 7. Versions 2-5 remain readable as recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
 
 ## Phase 3b WAN measurement plan
 
-Do not execute this plan until the completion pass is authorized. First close the TCP/TLS and live-renewal gaps above, then compile the same revisions on both peers.
+Do not execute this plan until the completion pass is authorized. First close the TCP/TLS gap above, then compile the same revisions on both peers.
 
 1. Use this PC as host and the Mac as the second peer. Begin with coturn in WSL and its directory HMAC backend. Record firewall rules, public/advertised addresses and allocation ports. A Mac on the same home LAN is a LAN baseline; use a genuinely separate WAN connection for the WAN rows.
 2. Capture the host Network routing page and player Connection page at 640x360, 960x540 and 1280x720. Exercise every state, custom STUN list, empty list, Fixed credentials, masking, save/reopen, and personal-relay precedence.
