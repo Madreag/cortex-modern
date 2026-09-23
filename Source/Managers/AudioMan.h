@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 #include <vector>
@@ -105,6 +106,7 @@ namespace RTE {
 		/// Exchanges both halves of the registry in one step; a restore that swaps one without the other leaves identities resolving to freed containers.
 		void SwapCheckpointSoundRegistry(CheckpointSoundRegistry& registry, std::unordered_map<const SoundContainer*, uint64_t>& live) {
 			std::lock_guard lock(m_CheckpointRegistryMutex);
+			SaveRegistryForScopes();
 			m_CheckpointSoundContainers.swap(registry);
 			m_LiveCheckpointSoundContainers.swap(live);
 		}
@@ -117,16 +119,22 @@ namespace RTE {
 		std::unordered_set<uint64_t> LastCarriedSoundIdentities() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_LastCarriedSoundIdentities; }
 		void StopRecordingRestoredSoundRegistry();
 		bool RestoredSoundRegistryActive() const { std::lock_guard lock(m_CheckpointRegistryMutex); return m_RestoredSoundRegistryActive; }
+		/// While one lives, the sound registry is saved before the first change made to it, and put back when the scope
+		/// ends less the containers gone by then; a registry nothing changed is left as it is.
 		class CheckpointRegistryScope {
+			friend class AudioMan;
 		public:
 			CheckpointRegistryScope();
 			~CheckpointRegistryScope();
 			CheckpointRegistryScope(const CheckpointRegistryScope&) = delete;
 			CheckpointRegistryScope& operator=(const CheckpointRegistryScope&) = delete;
 		private:
-			CheckpointSoundRegistry m_Original;
+			std::optional<CheckpointSoundRegistry> m_Original;
 			uint64_t m_Cursor;
 		};
+		/// Changes the sound registry by each way in while a registry scope lives, and checks the registry after it is
+		/// the saved one less the containers gone. @return The first way that left something else, or empty.
+		std::string RegistryScopeMissedChange();
 		class SoundCheckpointSaveScope {
 		public:
 			/// A scope that does not remember its notes when it ends only collects them for its owner.
@@ -610,6 +618,9 @@ namespace RTE {
 		int m_NextVoiceIdentity = 0;
 		// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and several states collect at once, so the registry group down to m_NextSoundContainerIdentity is locked.
 		mutable std::recursive_mutex m_CheckpointRegistryMutex;
+		std::vector<CheckpointRegistryScope*> m_RegistryScopes; //!< The live registry scopes, each saved into before the first change.
+		/// Saves the registry into every live scope that has not saved it yet; called under the registry lock before a change.
+		void SaveRegistryForScopes();
 		CheckpointSoundRegistry m_CheckpointSoundContainers;
 		std::unordered_map<const SoundContainer*, uint64_t> m_LiveCheckpointSoundContainers;
 		CheckpointSoundRegistry m_RestoredSoundContainers;
