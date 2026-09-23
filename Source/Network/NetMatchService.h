@@ -990,6 +990,7 @@ namespace RTE {
 		friend bool TestLobbyModerationRows(std::string* error);
 		friend bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error);
 		friend bool TestRematchAfterHostDeparture(std::string* error);
+		friend bool TestResyncFailureAfterHostDeparture(std::string* error);
 		friend bool ServiceRematchRoster(NetMatchService& service, const NetMatchConfig& played, uint8_t localSessionPeerId, NetMatchConfig& roster, std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestGnsStopCancelContracts(std::string* error);

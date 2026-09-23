@@ -10143,6 +10143,90 @@ namespace RTE {
 		return true;
 	}
 
+	// A resync that fails because the host's session is already gone is the departure itself: the
+	// client must say "The host left the match", not the wire's last words.
+	bool TestResyncFailureAfterHostDeparture(std::string* error) {
+		for (int arm = 0; arm < 2; ++arm) {
+			NetMatchService service;
+			service.m_IsHost = false;
+			LoopbackTransport hostWire;
+			auto clientWireOwner = std::make_unique<LoopbackTransport>();
+			LoopbackTransport* clientWire = clientWireOwner.get();
+			NetSession hostSession;
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!StartServiceRematchSession(static_cast<uint16_t>(48922 + arm * 2), hostWire, *clientWire, hostSession, *service.m_Session, error)) return false;
+			// The runner a resync reuses keeps the client config of the match it was born on; Start
+			// refuses a client with no join address only after it has taken that config.
+			LoopbackTransport idle;
+			NetLockstepCoordinator unused;
+			NetMatchRunnerConfig primed;
+			primed.host = false;
+			primed.matchConfig = MakeConfig();
+			primed.useLobbyProtocol = true;
+			std::string ignored;
+			(void)service.m_Runner->Start(idle, *service.m_Session, unused, primed, &ignored);
+			service.m_MigratedTransport = std::move(clientWireOwner);
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_State = NetMatchServiceState::Running;
+				service.m_StatusText = "Ready; waiting for host start";
+				NetLobbyMember host;
+				host.peerId = 1;
+				host.displayName = "Host";
+				host.connected = true;
+				NetLobbyMember self;
+				self.peerId = 2;
+				self.displayName = "Client";
+				self.isLocal = true;
+				self.connected = true;
+				service.m_LobbySnapshot.active = true;
+				service.m_LobbySnapshot.members = {host, self};
+			}
+			// The host's session ends while the client is still between ReadyToLaunch and its first
+			// committed frame.
+			hostSession.Close("host left");
+			hostWire.AdvanceTimeMs(10);
+			clientWire->AdvanceTimeMs(10);
+			for (const NetTransportEvent& event : clientWire->PollEvents()) {
+				service.m_Session->InjectEvent(event, 0);
+			}
+			if (service.m_Session->IsReady()) {
+				*error = "the host's close never reached the client's session";
+				return false;
+			}
+			if (arm == 0) {
+				// The resync is asked of a session that is already gone.
+				std::string resyncError;
+				if (service.ResyncMatch(&resyncError)) {
+					*error = "a resync on a dead session committed";
+					return false;
+				}
+				service.ReportRuntimeError("resync failed: " + resyncError);
+			} else {
+				// The resync worker meets the dead session itself, as the field failure did.
+				NetMatchService::TransportLink link;
+				{
+					std::lock_guard<std::mutex> lock(service.m_Mutex);
+					link = service.TakeTransportLinkLocked();
+				}
+				service.WorkerResyncMain(std::move(link), service.m_Session.release(), service.m_Coordinator.release(), service.m_Runner.release(), {});
+				service.ReportRuntimeError("resync failed: " + service.GetErrorText());
+			}
+			const NetLobbySnapshot snapshot = service.GetLobbySnapshot();
+			if (service.GetState() != NetMatchServiceState::Failed || snapshot.errorText != "The host left the match" ||
+			    snapshot.statusText != "The host left the match" || snapshot.members.size() != 1 || !snapshot.members[0].isLocal) {
+				*error = "arm " + std::to_string(arm) + " state=" + std::to_string(static_cast<int>(service.GetState())) +
+				         " status='" + snapshot.statusText + "' error='" + snapshot.errorText +
+				         "' members=" + std::to_string(snapshot.members.size());
+				return false;
+			}
+		}
+		std::cout << "PASS resync_failure_after_host_departure message=The host left the match" << std::endl;
+		return true;
+	}
+
 	bool TestServiceReturnToLobbyFormsTheNextRoster(std::string* error) {
 		struct Case {
 			const char* name;
@@ -13037,7 +13121,8 @@ namespace RTE {
 
 	int NetMatchSelfTest::RunLobbyLifecycle() {
 		std::string error;
-		const bool passed = TestSnapshotTransferKeepsSessionAlive(&error) && TestRematchAfterHostDeparture(&error);
+		const bool passed = TestSnapshotTransferKeepsSessionAlive(&error) && TestRematchAfterHostDeparture(&error) &&
+		                    TestResyncFailureAfterHostDeparture(&error);
 		std::cout << "[net-match-lobby-lifecycle-selftest] " << (passed ? "PASS" : "FAIL: " + error) << std::endl;
 		return passed ? 0 : 1;
 	}
@@ -13124,6 +13209,7 @@ namespace RTE {
 		if (!stagedRematchError.empty()) return fail(stagedRematchError);
 		if (!TestSnapshotTransferKeepsSessionAlive(&error)) return fail(error);
 		if (!TestRematchAfterHostDeparture(&error)) return fail(error);
+		if (!TestResyncFailureAfterHostDeparture(&error)) return fail(error);
 		if (!TestRematchRosterDerivation(&error)) return fail(error);
 		if (!TestRematchRebuildsTheSurvivingRoster(&error)) return fail(error);
 		if (!TestRematchProposalFits(&error)) return fail(error);
