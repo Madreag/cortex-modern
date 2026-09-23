@@ -16,6 +16,8 @@ BUDGET_MS = 5.0
 SPLIT = re.compile(r"^\[autosave\] tick=(\d+) layers_us=(\d+) activity_us=(\d+) graph_us=(\d+) scene_us=(\d+) structure_us=(\d+) scene_runtime_us=(\d+) globals_us=(\d+)$", re.M)
 WORKER = re.compile(r"^\[autosave\] tick=(\d+) freeze_us=(\d+) worker_us=(\d+) image_bytes=(\d+) .*", re.M)
 DETAIL = re.compile(r"^\[autosave-split\] tick=(\d+) serialize_scene_ms=([0-9.]+) serialize_mos_ms=([0-9.]+) lua_graph_ms=([0-9.]+) compress_write_ms=([0-9.]+) freeze_ms=([0-9.]+) bytes=(\d+)$", re.M)
+# The sim thread's wait at a Lua state's gate for page copies still landing, reported at the next tick's first Lua work.
+GATE = re.compile(r"^\[autosave-gate\] tick=(\d+) waited_us=(\d+)$", re.M)
 
 
 def measure(root: Path, records: dict) -> dict:
@@ -35,6 +37,14 @@ def measure(root: Path, records: dict) -> dict:
             capture.update(splits.get(capture["tick"], {}))
             capture.update(workers.get(capture["tick"], {}))
             capture.update(details.get(capture["tick"], {}))
+            capture["gate_wait_ms"] = 0.0
+        # A gate wait belongs to the last capture before it: its copies are the only ones a gate can wait for.
+        for tick, waited in GATE.findall(log):
+            owner = max((row for row in captures if row["tick"] < int(tick)), key=lambda row: row["tick"], default=None)
+            if owner is not None:
+                owner["gate_wait_ms"] += int(waited) / 1000
+        for capture in captures:
+            capture["share_ms"] = capture["capture_ms"] + capture["gate_wait_ms"]
         record = records.get(who, {})
         reached = 0
         trace = root / f"{who}_trace.json"
@@ -43,7 +53,8 @@ def measure(root: Path, records: dict) -> dict:
             reached = max((int(row["tick"]) for run in data.get("runs", [])
                            for row in run.get("tick_hashes", [])), default=0)
         peers[who] = {"record": record, "captures": captures, "last_trace_tick": reached,
-                      "max_capture_ms": max((row["capture_ms"] for row in captures), default=None)}
+                      "max_capture_ms": max((row["capture_ms"] for row in captures), default=None),
+                      "max_share_ms": max((row["share_ms"] for row in captures), default=None)}
     return peers
 
 
@@ -80,9 +91,9 @@ def main() -> int:
             peers = measure(directory, records)
             passed = all(peer["record"].get("exit_code") == 0 and not peer["record"].get("timed_out")
                          and peer["captures"] and peer["last_trace_tick"] >= 600
-                         and peer["max_capture_ms"] < BUDGET_MS for peer in peers.values())
+                         and peer["max_share_ms"] < BUDGET_MS for peer in peers.values())
             result["arms"][arm] = {"passed": passed, "peers": peers}
-            costs = ", ".join(f"{who}={peer['max_capture_ms']} ms tick={peer['last_trace_tick']}" for who, peer in peers.items())
+            costs = ", ".join(f"{who}={peer['max_capture_ms']} ms share={peer['max_share_ms']} ms tick={peer['last_trace_tick']}" for who, peer in peers.items())
             line = f"{'PASS' if passed else 'FAIL'} {arm}: budget < {BUDGET_MS} ms; {costs}"
         except Exception as error:
             result["arms"][arm] = {"passed": False, "error": repr(error)}
