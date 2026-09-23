@@ -70,6 +70,7 @@ namespace RTE {
 		std::string GetLocalIdentity() const;
 		/// Updates the credentials used by subsequent ICE connections on this listener.
 		static void ApplyIceServers(const GnsP2PConfig& config);
+		/// Also hands a changed relay login to the TURN allocations of the live P2P connections.
 		void UpdateListenerIceServers(const GnsP2PConfig& config);
 		static bool ConnectionPolicyAllowsRoute(int mode, bool relayed) { return mode == 1 ? !relayed : mode != 2 || relayed; }
 
