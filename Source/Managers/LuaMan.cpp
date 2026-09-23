@@ -283,7 +283,7 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 }
 
 std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	lua_getglobal(m_State, "_ScriptedObjects");
 	std::string identity = "-";
 	if (lua_istable(m_State, -1)) {
@@ -5468,7 +5468,7 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 } // namespace
 
 bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& objects) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (!m_State || objects.empty()) return false;
 	// Integer registry slots and weak table entries are not strong script aliases.
 	struct Reach {
@@ -5559,7 +5559,7 @@ bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& ob
 }
 
 bool LuaStateWrapper::RekeyScriptObjects(const std::vector<std::pair<const MovableObject*, long>>& identities, bool validateOnly) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (identities.empty()) return true;
 	if (!m_State) return false;
 	const int top = lua_gettop(m_State);
@@ -5864,7 +5864,7 @@ bool LuaStateWrapper::CaptureScriptGraph(CheckpointText& text, std::vector<std::
 }
 
 bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const auto started = std::chrono::steady_clock::now();
 	const int top = lua_gettop(m_State);
 	// Every write to the live heap happens before the freeze: after it each first write to a page is a fault.
@@ -5934,8 +5934,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
-		// The written pages are copied here into a pooled slab whose pages are already resident.
-		image->heap = m_CheckpointHeap->Freeze({});
+		// The copy runs off this thread; the gate holds every way into this VM until it lands.
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
@@ -5991,7 +5991,7 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 }
 
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const auto nativeStart = std::chrono::steady_clock::now();
 	struct FinishTiming {
 		lua_State* state;
@@ -6089,7 +6089,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 }
 
 std::vector<long> LuaStateWrapper::ListScriptGraphRoots(const std::string& text) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	std::vector<long> roots;
@@ -6116,7 +6116,7 @@ std::vector<long> LuaStateWrapper::ListScriptGraphRoots(const std::string& text)
 }
 
 bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
@@ -6133,7 +6133,7 @@ bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<s
 }
 
 bool LuaStateWrapper::PrepareScriptGraph(const std::string* text, std::vector<std::string>& problems, bool reuseHeld) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
@@ -6153,12 +6153,12 @@ bool LuaStateWrapper::PrepareScriptGraph(const std::string* text, std::vector<st
 }
 
 void LuaStateWrapper::ReleaseScriptOwnedObjects() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	VisitScriptOwnedObjects(m_State, ReleaseScriptOwnedTree);
 }
 
 bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
 	m_NativeCache.reset();
 	ScriptCallbackRootScope callbackRoot{m_State};
@@ -6250,7 +6250,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 }
 
 void LuaStateWrapper::CallScriptGraph(const char* function) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptGraph");
 	if (lua_istable(m_State, -1)) {
@@ -6263,7 +6263,7 @@ void LuaStateWrapper::CallScriptGraph(const char* function) {
 }
 
 bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
@@ -6555,7 +6555,7 @@ void LuaStateWrapper::UnstashScriptObject(long uniqueID) {
 }
 
 double LuaStateWrapper::GetScriptObjectNumberField(long uniqueID, const std::string& field, double fallback) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	PushScriptObjectInstanceTable(m_State, uniqueID);
 	double value = fallback;
 	if (lua_istable(m_State, -1)) {
@@ -7004,7 +7004,7 @@ void LuaMan::Initialize() {
 }
 
 void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (m_State) VisitScriptOwnedObjects(m_State, visit);
 }
 
@@ -7366,7 +7366,7 @@ void RTE::ArmLuaCheckpointValueBarrier() {
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
@@ -7600,6 +7600,45 @@ end
 		std::cout << "[script-graph-selftest] " << (skipsFinalized ? "PASS" : "FAIL") << " capture_walks_userdata_by_the_live_rule finalized_present="
 		          << finalizedPresent << " finalized_visited=" << finalizedVisited << std::endl;
 		checkpointValues = skipsFinalized && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		// A frozen heap is copied off the thread that froze it. Until the copy lands, the state's lock is the
+		// gate: a script run through it waits, so its writes are never in the image. The copy threads are
+		// kept busy first, so the copy is still queued when the script asks for the state.
+		RunScriptString("_ScriptGraphGateProbe = {} for index = 1, 4096 do _ScriptGraphGateProbe[index] = index end");
+		lua_getglobal(m_State, "_ScriptGraphGateProbe");
+		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
+		lua_pop(m_State, 1);
+		const TValue* array = table ? tvref(table->array) : nullptr;
+		const size_t bytes = table ? table->asize * sizeof(TValue) : 0;
+		std::vector<std::byte> before(bytes);
+		if (bytes) std::memcpy(before.data(), array, bytes);
+		constexpr auto c_Hold = std::chrono::milliseconds(150);
+		std::vector<std::future<void>> busy;
+		for (int thread = 0; thread < 8; ++thread) busy.push_back(CheckpointLua::CopyPool::Submit([c_Hold] { std::this_thread::sleep_for(c_Hold); }));
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		}
+		const auto entered = std::chrono::steady_clock::now();
+		RunScriptString("for index = 1, 4096 do _ScriptGraphGateProbe[index] = -index end");
+		const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - entered).count();
+		for (auto& task: busy) task.wait();
+		bool imageHeld = false, liveWritten = false;
+		try {
+			const auto image = frozen.ReadBytes(array, bytes);
+			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
+			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0;
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] gate probe: " << error.what() << std::endl;
+		}
+		RunScriptString("_ScriptGraphGateProbe = nil");
+		const bool gated = imageHeld && liveWritten;
+		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
+		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
+		checkpointValues = gated && checkpointValues;
 	}
 
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
@@ -9676,7 +9715,7 @@ int LuaStateWrapper::RunScriptFunctionString(const std::string& functionName, co
 	}
 
 	// Lock here, even though we also lock in RunScriptString(), to ensure that the temp entity vector isn't stomped by separate threads.
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	scriptString << functionName + "(";
@@ -9720,7 +9759,7 @@ int LuaStateWrapper::RunScriptString(const std::string& scriptString, bool conso
 	}
 	int error = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
@@ -9744,7 +9783,7 @@ int LuaStateWrapper::RunScriptString(const std::string& scriptString, bool conso
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -9825,7 +9864,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, bool& returnParam, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -9916,7 +9955,7 @@ int LuaStateWrapper::RunScriptFile(const std::string& filePath, bool consoleErro
 
 	int error = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = filePath;
 
@@ -9975,7 +10014,7 @@ int LuaStateWrapper::RunScriptFile(const std::string& filePath, bool consoleErro
 }
 
 bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const std::vector<std::string>& functionNamesToLookFor, std::unordered_map<std::string, LuabindObjectWrapper*>& outFunctionNamesAndObjects) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	luabind::object funcHoldingObject = luabind::globals(m_State)[funcObjectName.c_str()];
@@ -10034,7 +10073,7 @@ int LuaStateWrapper::RunScriptFileAndRetrieveFunctions(const std::string& filePa
 		return 0;
 	}
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	if (int error = RunScriptFile(filePath); error < 0) {
@@ -10065,7 +10104,7 @@ bool LuaStateWrapper::ExpressionIsTrue(const std::string& expression, bool conso
 	}
 	bool result = false;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the script string onto the stack so we can execute it, and then actually try to run it. Assign the result to a dedicated temp global variable.
 	if (luaL_dostring(m_State, std::string("ExpressionResult = " + expression + ";").c_str())) {
@@ -10086,7 +10125,7 @@ bool LuaStateWrapper::ExpressionIsTrue(const std::string& expression, bool conso
 }
 
 void LuaStateWrapper::SavePointerAsGlobal(void* objectToSave, const std::string& globalName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the pointer onto the Lua stack.
 	lua_pushlightuserdata(m_State, objectToSave);
@@ -10095,7 +10134,7 @@ void LuaStateWrapper::SavePointerAsGlobal(void* objectToSave, const std::string&
 }
 
 bool LuaStateWrapper::GlobalIsDefined(const std::string& globalName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Get the var you want onto the stack so we can check it.
 	lua_getglobal(m_State, globalName.c_str());
@@ -10108,7 +10147,7 @@ bool LuaStateWrapper::GlobalIsDefined(const std::string& globalName) {
 }
 
 bool LuaStateWrapper::TableEntryIsDefined(const std::string& tableName, const std::string& indexName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the table onto the stack, checking if it even exists.
 	lua_getglobal(m_State, tableName.c_str());
@@ -10453,6 +10492,15 @@ bool LuaMan::FileEOF(int fileIndex) {
 
 void LuaMan::Update() {
 	ZoneScoped;
+
+	// The last capture's page copies land before this tick's first Lua work; what the gates waited is reported.
+	m_MasterScriptState.WaitFrozenCopy();
+	for (LuaStateWrapper& luaState: m_ScriptStates) luaState.WaitFrozenCopy();
+	static int64_t reportedGateWaitUs = 0;
+	if (const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds(); gateWaitUs != reportedGateWaitUs) {
+		System::PrintDiagnosticLine(std::format("[autosave-gate] tick={} waited_us={}\n", g_TimerMan.GetSimUpdateCount(), gateWaitUs - reportedGateWaitUs));
+		reportedGateWaitUs = gateWaitUs;
+	}
 
 	m_MasterScriptState.Update();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -11346,7 +11394,7 @@ namespace {
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const int top = lua_gettop(m_State);
 	const std::string uid = std::to_string(uniqueID);
 	PushScriptObjectInstanceTable(m_State, uniqueID);
@@ -11377,7 +11425,7 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 }
 
 bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	text.clear();
@@ -11399,7 +11447,7 @@ bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std:
 }
 
 bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptGraph");
@@ -11473,7 +11521,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 }
 
 void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (m_PreviewGlobalFenceArmed) {
 		return;
 	}
@@ -11502,7 +11550,7 @@ bool LuaMan::PreviewRegistryRootEnabled() {
 }
 
 int LuaStateWrapper::DropPreviewWindowReferences() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (!m_PreviewGlobalFenceArmed) {
 		return 0;
 	}
@@ -11573,7 +11621,7 @@ int LuaStateWrapper::DropPreviewWindowReferences() {
 }
 
 int LuaStateWrapper::ReleasePreviewGlobalFence() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	int changes = 0;
 	if (m_PreviewGlobalFenceArmed) {
 		// This state alone: its own references go back on luabind's free list before its rollback, not after it.
@@ -11636,7 +11684,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 }
 
 bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	freezeClass.clear();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptFieldsStash");
@@ -11665,7 +11713,7 @@ bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
 	if (!object) {
 		return false;
 	}
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (RunScriptString("_PreviewInvOnStride = _PreviewInvOnStride or function(self) self.previewInvCounter = (self.previewInvCounter or 0) + 1 end") < 0) {
 		return false;
 	}

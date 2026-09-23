@@ -2404,13 +2404,8 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		FrozenCaptureStats stats;
 		LuaMan::s_FrozenCaptureStats = &stats;
 		std::vector<std::string> frozenProblems;
+		// The page copies land off this thread; a state waits for its own at its gate before it runs again.
 		const bool complete = captureAll(true, frozenProblems);
-		// Every state's page copy has landed before any state may run again. The capture path copies
-		// inline, so this is where a copy given a thread of its own would be waited for.
-		const auto waitStarted = std::chrono::steady_clock::now();
-		g_LuaMan.GetMasterScriptState().WaitFrozenCopy();
-		for (LuaStateWrapper& state: states) state.WaitFrozenCopy();
-		stats.copyUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - waitStarted).count();
 		LuaMan::s_FrozenCaptureStats = nullptr;
 		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
 		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
