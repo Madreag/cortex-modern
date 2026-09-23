@@ -8,12 +8,34 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
 
 # Ports: this driver owns 48860-48879; only the world-segment arm binds one (a two-peer world round).
 SEGMENT_PORT = 48860
+
+
+def _wire_version(header: str, owner: str, name: str) -> int:
+    """One class-scoped constexpr from the sources under test, so an expectation cannot pin a stale literal."""
+    path = Path(__file__).resolve().parent.parent / header
+    text = path.read_text(encoding="utf-8")
+    opener = re.search(rf"(?m)^[ \t]*class\s+{owner}\b[^;{{]*\{{", text)
+    if not opener:
+        raise RuntimeError(f"{path}: {owner} not found")
+    start, depth = text.rindex("{", opener.start(), opener.end()), 0
+    for index in range(start, len(text)):
+        depth += (text[index] == "{") - (text[index] == "}")
+        if depth == 0:
+            body = text[start:index]
+            break
+    else:
+        raise RuntimeError(f"{path}: {owner} is never closed")
+    found = list(re.finditer(rf"(?m)^[ \t]*static\s+constexpr\s+\w+\s+{name}\s*=\s*(\d+)\s*;", body))
+    if len(found) != 1:
+        raise RuntimeError(f"{path}: expected exactly one definition of {owner}::{name}, found {len(found)}")
+    return int(found[0].group(1))
 
 # Exact messages the completion pass will print when the wave-tip admission
 # still refuses a live world, or a clean leave still ends one.
@@ -33,7 +55,10 @@ RED_DIRECTORY_RESUME = "directory resume did not keep the world id"
 RED_DIRECTORY_TOKEN = "directory resume did not issue a new token"
 RED_DIRECTORY_SEIZED = "directory resume took a row without its token"
 RED_CODEC = "WorldTransition codec did not round-trip"
-RED_ORDINARY_IDENTITY = "ordinary identity did not stamp lockstep 34 and match config 6"
+RED_ORDINARY_IDENTITY = ("ordinary identity did not stamp lockstep " +
+                         str(_wire_version("Source/Network/NetLockstep.h", "NetLockstepCodec", "c_Version")) +
+                         " and match config " +
+                         str(_wire_version("Source/Network/NetMatchConfig.h", "NetMatchConfigUtil", "c_Version")))
 RED_ADMIT = "a due activation cancelled instead of admitting"
 RED_ORDINARY_JOIN_ACCEPTED = "an ordinary NewJoin was accepted"
 RED_CATCHUP_PAST_TAIL = "catch-up-ran-past-the-tail"
@@ -759,7 +784,7 @@ def _world_row(world_id: str, boot: int, resume_token: str = "") -> dict:
         "game_version": "7.0.0",
         "build_id": "stage2-world",
         "network_protocol_version": 1,
-        "lockstep_codec_version": 35,
+        "lockstep_codec_version": _wire_version("Source/Network/NetLockstep.h", "NetLockstepCodec", "c_Version"),
         "controller_frame_version": 7,
         "match_config_hash": "a" * 64,
         "session_identity_hash": "b" * 64,
