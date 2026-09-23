@@ -2042,10 +2042,18 @@ namespace {
 		// or re-simulated tick has to continue from the same place.
 		uint64_t deferredSoundOpTick = 0;
 		uint64_t deferredSoundOpOrdinal = 0;
-		template <class Archive> void Fields(Archive& archive) {
-			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, samples, voices, minimumDistances, events);
+		template <class Archive> void Fields(Archive& archive) { FieldsWith(archive, samples); }
+		// The samples take their place in the archive as themselves or as their already written texts.
+		template <class Archive, class Samples> void FieldsWith(Archive& archive, Samples& sampleValues) {
+			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, sampleValues, voices, minimumDistances, events);
 		}
-		std::string Save() { CheckpointWriter archive("AudioRuntime3"); Fields(archive); archive(audibility, deferredSoundOpTick, deferredSoundOpOrdinal); return archive.Text(); }
+		std::string Save(const std::vector<CheckpointText>* sampleTexts = nullptr) {
+			CheckpointWriter archive("AudioRuntime3");
+			if (sampleTexts) FieldsWith(archive, *sampleTexts);
+			else Fields(archive);
+			archive(audibility, deferredSoundOpTick, deferredSoundOpOrdinal);
+			return archive.Text();
+		}
 		// Every refusal names itself, so a rejected archive says what was wrong with it.
 		bool Load(std::string_view text, std::string* refusal = nullptr) {
 			const auto refuse = [refusal](std::string reason) { if (refusal) *refusal = std::move(reason); return false; };
@@ -2127,7 +2135,15 @@ std::string AudioMan::SaveCheckpoint() const {
 struct RTE::AudioCheckpointCapture {
 	AudioRuntime state;
 	std::vector<const SoundContainer*> owners; //!< Each voice's owner, which the filter judges.
+	std::optional<std::vector<CheckpointText>> samples; //!< The samples' texts, when written ahead of the rest.
 };
+
+void AudioMan::WriteCapturedSamples(AudioCheckpointCapture& captured) const {
+	std::vector<CheckpointText> texts;
+	texts.reserve(captured.state.samples.size());
+	for (const AudioCheckpoint::Sample& sample: captured.state.samples) texts.push_back(CheckpointWriter::CaptureNative([&sample] { return sample.SaveCheckpoint(); }));
+	captured.samples = std::move(texts);
+}
 
 std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const {
 	return SaveCaptured(*CaptureCheckpointState(), contained);
@@ -2151,7 +2167,7 @@ std::string AudioMan::SaveCaptured(AudioCheckpointCapture& captured, const std::
 	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
 	state.nextSoundContainer = GetCheckpointSoundContainerCursor();
 	for (const AudioCheckpoint::Voice& voice: state.voices) state.nextSoundContainer = std::max(state.nextSoundContainer, voice.owner);
-	return state.Save();
+	return state.Save(captured.samples ? &*captured.samples : nullptr);
 }
 
 std::shared_ptr<AudioCheckpointCapture> AudioMan::CaptureCheckpointState() const {
