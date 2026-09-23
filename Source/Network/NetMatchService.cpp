@@ -5316,9 +5316,8 @@ static std::string ResyncSaveName() {
 			snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(m_MatchConfig.mode);
 		}
 		if (snapshot.members.empty() && snapshot.active) {
-			// The roster Start validated is the same one the runner's first publish will carry:
-			// until it lands the panel renders the pending seats from it, not a lone local row
-			// that reports "everyone to ready up" while the round is still standing up.
+			// Until the runner's first publish this renders the committed roster on the host and, on a
+			// client, the local placeholder config the runner publishes from WaitForSessionReady.
 			for (const NetMatchPlayerSlot& slot : m_MatchConfig.players) {
 				NetLobbyMember member;
 				member.peerId = slot.peerId;
