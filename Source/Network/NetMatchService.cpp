@@ -913,6 +913,15 @@ static std::string ResyncSaveName() {
 		return sum;
 	}
 
+	void NetMatchService::SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
+		const NetSession* live = m_Session ? m_Session.get() : m_WorkerSession;
+		if (live && live->GetRejoinPhase() != phase) {
+			System::PrintDiagnosticLine(std::string("[net-match] rejoin phase ") + NetSession::RejoinPhaseName(live->GetRejoinPhase()) + " -> " + NetSession::RejoinPhaseName(phase));
+		}
+		if (m_Session) m_Session->SetRejoinPhase(phase);
+		if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
+	}
+
 	bool NetMatchService::EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd) {
 		// A seat readmitted for a frame the round never reached ended it under the AI: it never played again either.
 		return !coordinatorUsesPeer || seatUnderAIAtEnd;
@@ -1505,6 +1514,7 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::InstallWorldCatchUp(m_WorldCatchUp.snapshotTick, m_WorldCatchUp.tail, error, m_WorldCatchUp.privateMatch)) {
 				return false;
 			}
+			NoteTailReplayBeganLocked();
 			// Loading the snapshot and installing the catch-up own this thread for seconds while nothing reads the
 			// session: the admission and silence windows are measured from the end of that work, not across it.
 			m_AdmissionClock.NotePark(SteadyNowMs() - stagingBeganMs, SteadyNowMs());
@@ -1559,6 +1569,10 @@ static std::string ResyncSaveName() {
 			if (error) *error = "the resync snapshot has no player bindings for this peer";
 			return false;
 		}
+		// A resync worker's seat loads the snapshot with nobody to answer, and plays live the moment it lands.
+		const NetSession* rejoining = m_Session ? m_Session.get() : m_WorkerSession;
+		const bool resyncRejoin = rejoining && rejoining->GetRejoinPhase() != NetSession::RejoinPhase::Active;
+		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
 		StartSnapshotLoadKeepalive();
 		if (autosave) {
 			if (!g_ActivityMan.LoadAutosaveToRestart(autosave->matchId, autosave->tick)) {
@@ -1623,6 +1637,7 @@ static std::string ResyncSaveName() {
 			return ScenarioRunner::RestoreNetResyncState(*state);
 		})) { StopSnapshotLoadKeepalive(); if (error) *error = "could not stage resync local state restoration"; return false; }
 		ScenarioRunner::ApplyDeterministicConfig();
+		if (resyncRejoin) SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 		return true;
 	}
 
@@ -2552,7 +2567,13 @@ static std::string ResyncSaveName() {
 				    session.acknowledgedThrough + 1 < completed) return true;
 			}
 			return false;
-		}, [this] { return RejoinProgressSum(); });
+		}, [this] { return RejoinProgressSum(); }, [this] {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_Session || !m_Coordinator) return;
+			const uint64_t resume = m_Coordinator->GetResumeFrame();
+			const uint64_t finalFrame = m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0);
+			RefuseEndedPeers(*m_Session, *m_Coordinator, MatchOverGoodbyeText(finalFrame), true);
+		});
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
@@ -2628,6 +2649,8 @@ static std::string ResyncSaveName() {
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 			ResetCheckpointSchedule();
+		} else {
+			ForgetOpenCaptureOnHeal();
 		}
 		// Every round writes its checkpoints under the configuration it is actually played on, so a
 		// resumed match's own checkpoints can be resumed again.
@@ -2759,10 +2782,10 @@ static std::string ResyncSaveName() {
 		m_PrivateImageSeatHeld = seatHeld;
 		const uint64_t nowMs = SteadyNowMs();
 		const bool cadenceOpen = m_PrivateImageTakenMs == 0 || nowMs - m_PrivateImageTakenMs >= c_PrivateImageMinIntervalMs;
-		const bool stale = PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs) &&
+		const bool stale = (m_PrivateImageRecapture || PrivateBaseRefreshDue(seatHeld, m_PrivateImageStaleFrom, m_WorldJoin.Image().tick, m_PrivateImageLastCaptureMs)) &&
 		                   !m_WorldJoin.HasImageTransferInFlight() &&
 		                   !m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) &&
-		                   !m_PrivateImageTask.valid() && cadenceOpen;
+		                   !m_PrivateImageTask.valid() && (m_PrivateImageRecapture || cadenceOpen);
 		const bool initial = m_PrivateImageRound != round;
 		// A successor captures a private base only when a held seat needs one.
 		if (initial && m_Coordinator->GetConfig().migrationGeneration != 0 && !seatHeld) return;
@@ -2777,6 +2800,7 @@ static std::string ResyncSaveName() {
 		} finishCapture{*this, ownsKeepalive};
 		m_PrivateImageRound = round;
 		m_PrivateImageTakenMs = nowMs;
+		m_PrivateImageRecapture = false;
 		if (initial) { m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); }
 		m_PrivateJoinError.clear();
 		const auto& config = m_Coordinator->GetConfig();
@@ -2879,6 +2903,13 @@ static std::string ResyncSaveName() {
 		(void)ScenarioRunner::TakeAppliedCheckpoints();
 	}
 
+	void NetMatchService::ForgetOpenCaptureOnHeal() {
+		// A heal restarts the stream the writers' reports rode, so the host names afresh instead of waiting on reports it dropped.
+		m_OpenCaptureTick = 0;
+		m_CaptureWriters.clear();
+		m_OpenCaptureForJoin = false;
+	}
+
 	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {
 		std::set<uint8_t> writers;
 		if (!m_Coordinator) return writers;
@@ -2895,7 +2926,10 @@ static std::string ResyncSaveName() {
 		for (const CheckpointNote& note: input.applied) {
 			if (note.kind == NetGameCheckpoint::Capture) {
 				// A capture named for a tick already behind this frame is taken here, on every peer alike.
-				m_ScheduledCaptures.insert(std::max(note.tick, input.tick));
+				const uint64_t takenAt = std::max(note.tick, input.tick);
+				m_ScheduledCaptures.insert(takenAt);
+				// The writers report the tick they took, so that is the capture the host waits on.
+				if (m_IsHost && note.tick == m_OpenCaptureTick) m_OpenCaptureTick = takenAt;
 			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
 			}
@@ -3416,9 +3450,40 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::BoundPrivateImageWait(uint64_t nowMs) {
+		std::vector<NetPeerId> waiting;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) waiting.push_back(session.connection);
+		if (waiting.empty()) {
+			m_PrivateImageRecaptured = false;
+			return;
+		}
+		const bool stuck = m_PrivateImageTask.valid() && m_PrivateImageTakenMs != 0 && nowMs > m_PrivateImageTakenMs + c_PrivateImageWaitMs &&
+		                   m_PrivateImageTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready;
+		const bool retakeFailed = m_PrivateImageRecaptured && !m_PrivateImageRecapture && !m_PrivateImageTask.valid() && !m_PrivateJoinError.empty();
+		if (!stuck && !retakeFailed) return;
+		// A std::async future waits for its task when destroyed, so a stuck writer is waited out off the sim thread.
+		if (stuck) std::thread([task = std::move(m_PrivateImageTask)]() mutable { task.wait(); }).detach();
+		if (!m_PrivateImageRecaptured) {
+			m_PrivateImageRecapture = m_PrivateImageRecaptured = true;
+			m_PrivateJoinError.clear();
+			std::ostringstream line;
+			line << "[net-match] private checkpoint writer silent past " << c_PrivateImageWaitMs << "ms: taking a fresh one for " << waiting.size() << " returning seat(s)";
+			System::PrintDiagnosticLine(line.str());
+			return;
+		}
+		// The fresh capture never answered either: the returning seats stay with the AI that holds them.
+		for (const NetPeerId connection: waiting) m_WorldJoin.CancelJoin(connection, "the host could not stage the rejoin image");
+		m_PrivateImageRecaptured = false;
+		std::ostringstream line;
+		line << "[net-match] private rejoin refused: no checkpoint within two captures; " << waiting.size() << " seat(s) stay with the AI";
+		System::PrintDiagnosticLine(line.str());
+	}
+
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		BoundPrivateImageWait(SteadyNowMs());
 		const auto ready = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> live;
 		uint64_t sentThrough = m_Coordinator->SentInputThrough();
@@ -4094,6 +4159,8 @@ static std::string ResyncSaveName() {
 				m_Coordinator->InjectEvent(event, NetLockstepNowMs());
 			}
 			m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
+			// The world's tail is replayed; this seat plays live from here and its silence counts again.
+			SetRejoinPhaseLocked(NetSession::RejoinPhase::Active);
 			{
 				std::ostringstream line;
 				line << "[net-world] catch-up complete peer=" << static_cast<int>(m_Coordinator->GetConfig().localPeerId)
@@ -6951,6 +7018,11 @@ static std::string ResyncSaveName() {
 			}
 #endif
 		}
+		if (request.rejoin) {
+			// A returning seat's fresh session talks to the host live until its handshake is done.
+			System::PrintDiagnosticLine("[net-match] rejoin phase Active -> Connecting");
+			session->SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+		}
 		if (started || iceSetupFailed) {
 			if (request.host) ReadRelayOffer(runnerConfig.matchConfig.relay);
 			started = StartLobbyConnection(mux, *transport, *session, *coordinator, *runner, runnerConfig, iceTarget, started, noDirectRoute, &error);
@@ -7492,6 +7564,7 @@ static std::string ResyncSaveName() {
 		request.sessionId = record.directorySessionId;
 		request.playerName = playerName.empty() ? "Client" : playerName;
 		request.resyncOnDesync = true;
+		request.rejoin = true;
 		// The ticket's own flag survives a relaunch, which the live flags do not.
 		request.persistentWorld = record.persistentWorld || liveWorldTarget;
 		if (request.persistentWorld) {

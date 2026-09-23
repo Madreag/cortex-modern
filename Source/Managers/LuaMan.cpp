@@ -9380,7 +9380,7 @@ _PrimitiveQueueCapture = nil
 	std::cout << "[script-graph-selftest] " << (previewCallerCopyRollsBack ? "PASS" : "FAIL")
 	          << " preview_caller_copy_rolls_back fence=" << (LuaMan::PreviewGlobalFenceEnabled() ? "on" : "off") << std::endl;
 	checkpointValues = previewCallerCopyRollsBack && checkpointValues;
-	// The upvalue slots a window writes are counted, and the registry form of the rollback is armed by hand and pinned.
+	// The upvalue slots a window writes are counted and put back, and the registry form of the rollback is armed by hand and pinned.
 	bool previewSlotMeasureAndRegistryRoot = false;
 	{
 		const int measureBefore = luaJIT_preview_measure(m_State, 1);
@@ -9468,9 +9468,9 @@ _PrimitiveQueueCapture = nil
 		// back puts the free-list head and that slot's link where the window found them.
 		const bool registryArrayRolledBack = freeListBefore > 0 && linkBefore > 0 && slotInside == 300 &&
 		                                     freeListInside != freeListBefore && freeListAfter == freeListBefore && slotAfter == linkBefore;
-		// Two slots changed and one was written back, the registry key the window set is gone, and every reference still names its own value.
+		// Two slots were left changed and both came back, the registry key the window set is gone, and every reference still names its own value.
 		previewSlotMeasureAndRegistryRoot = staged == 0 && rooted == 1 && wrote == 0 && writes == 2 &&
-		                                    slotsAfter == 231 && insideRegistry == 2 && afterRegistry == 1 &&
+		                                    slotsAfter == 111 && insideRegistry == 2 && afterRegistry == 1 &&
 		                                    registryArrayRolledBack && referencesUsable;
 		RunScriptString("_PreviewSlotProbe = nil; _PreviewSlotValue = nil", false);
 		lua_pushnil(m_State);
@@ -9479,6 +9479,54 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (previewSlotMeasureAndRegistryRoot ? "PASS" : "FAIL") << " preview_slot_measure_and_registry_root" << std::endl;
 	checkpointValues = previewSlotMeasureAndRegistryRoot && checkpointValues;
+	// A preview's edge hook runs the canonical state's own closure, so a file-scope local it counts must come back with the window.
+	bool previewLeavesNoUpvalueWrite = false;
+	{
+		const std::string firePath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewUpvalueFire.lua");
+		std::unordered_map<std::string, LuabindObjectWrapper*> hooks;
+		const bool loaded = RunScriptFileAndRetrieveFunctions(firePath, {"OnFire", "ReadShots"}, hooks, false) == 0 && hooks.count("OnFire") > 0 && hooks.count("ReadShots") > 0;
+		const auto readShots = [this, &firePath]() {
+			const int top = lua_gettop(m_State);
+			int shots = -1;
+			lua_getglobal(m_State, firePath.c_str());
+			if (lua_istable(m_State, -1)) {
+				lua_getfield(m_State, -1, "ReadShots");
+				if (lua_pcall(m_State, 0, 1, 0) == 0 && lua_isnumber(m_State, -1)) {
+					shots = static_cast<int>(lua_tointeger(m_State, -1));
+				}
+			}
+			lua_settop(m_State, top);
+			return shots;
+		};
+		const int before = loaded ? readShots() : -1;
+		int fired = -99;
+		int inside = -1;
+		CapturePreviewGlobalFence();
+		{
+			LuaMan::PreviewHookScope hookScope(true);
+			fired = loaded ? RunScriptFunctionObject(hooks.at("OnFire"), "", "") : -99;
+			inside = readShots();
+		}
+		ReleasePreviewGlobalFence();
+		const int after = readShots();
+		previewLeavesNoUpvalueWrite = loaded && fired == 0 && before == 0 && inside == 1 && after == 0;
+		std::cout << "[script-graph-selftest] " << (previewLeavesNoUpvalueWrite ? "PASS" : "FAIL") << " preview_leaves_no_upvalue_write before=" << before
+		          << " fired=" << fired << " inside=" << inside << " after=" << after
+		          << (inside == 1 && after == 1 ? " (a preview edge hook left an upvalue write in the shared state)" : "") << std::endl;
+		for (const auto& [name, function]: hooks) {
+			delete function;
+		}
+		// Leave the cache and the globals as this arm found them.
+		if (auto entry = m_ScriptCache.find(firePath); entry != m_ScriptCache.end()) {
+			for (const auto& [name, function]: entry->second.functionNamesAndObjects) {
+				delete function;
+			}
+			m_ScriptCache.erase(entry);
+		}
+		lua_pushnil(m_State);
+		lua_setglobal(m_State, firePath.c_str());
+	}
+	checkpointValues = previewLeavesNoUpvalueWrite && checkpointValues;
 	// A mod may add a key to a library table, by require("table.clear") or by a plain string.trim = f. The graph
 	// names such a value by its path, which is the very key the restore's wipe takes, so a set-aside must keep it.
 	bool addedLibraryKeyReinstates = false;

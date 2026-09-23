@@ -53,8 +53,11 @@ def load_trace(path):
     return ticks, {k: v for k, v in runs[0].items() if k != "tick_hashes"}
 
 
-def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks=1, prefix=False):
-    result = {"compared_ticks": 0, "first_divergence": None, "divergent_subsystems": [], "reasons": [], "paused_ticks": 0}
+def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks=1, prefix=False, per_peer=frozenset()):
+    """per_peer names the subsystems that are per-machine by construction; only a cross-peer caller passes them
+    (tools/feel/retained_resume.py PER_PEER_SUBSYSTEMS), and the comparison of two runs of one peer keeps them."""
+    result = {"compared_ticks": 0, "first_divergence": None, "divergent_subsystems": [], "reasons": [], "paused_ticks": 0,
+              "per_peer_excluded": sorted(per_peer)}
     if type(first_tick) is not int or first_tick < 1 or type(min_ticks) is not int or min_ticks < 1:
         result["reasons"].append("first_tick and min_ticks must be positive integers")
         return False, result
@@ -97,7 +100,7 @@ def strict_compare(host, client, expected_ticks=None, *, first_tick=1, min_ticks
         hs, hp = ht[tick]
         cs, cp = ct[tick]
         schemas.update((tuple(sorted(hs)), tuple(sorted(cs))))
-        diff = sorted(k for k in hs.keys() | cs.keys() if k != "controller" and (k not in hs or k not in cs or hs[k] != cs[k]))
+        diff = sorted(k for k in hs.keys() | cs.keys() if k != "controller" and k not in per_peer and (k not in hs or k not in cs or hs[k] != cs[k]))
         if diff or hp != cp:
             result["first_divergence"] = tick
             result["divergent_subsystems"] = diff

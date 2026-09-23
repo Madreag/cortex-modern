@@ -16,7 +16,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
-from feel.retained_resume import compare_live_hashes
+from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
 from run_sim_test import make_run
 from run_selftests import SELFTESTS
@@ -279,13 +279,22 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     return out
 
 
-def compare_pair(first, second, expected_ticks=TICKS):
-    result = dict(first=str(first), second=str(second))
-    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks)
+def compare_pair(first, second, expected_ticks=TICKS, cross_peer=False):
+    """Two peers' traces skip only the per-machine routing subsystem (and the total that folds it in); two runs of one
+    peer compare every field."""
+    result = dict(first=str(first), second=str(second), cross_peer=cross_peer)
+    per_peer = PER_PEER_SUBSYSTEMS if cross_peer else frozenset()
+    ok, existing = strict_compare(first, second, expected_ticks=expected_ticks, per_peer=per_peer)
     result.update(sim_gated_pass=ok, existing_comparator=existing)
+
+    def shared(row):
+        if not cross_peer:
+            return row
+        return {**{key: value for key, value in row.items() if key != 'total'},
+                'subsystems': {name: value for name, value in row['subsystems'].items() if name not in per_peer}}
     try:
-        left = json.loads(first.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']
-        right = json.loads(second.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']
+        left = [shared(row) for row in json.loads(first.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
+        right = [shared(row) for row in json.loads(second.read_text(encoding='utf-8-sig'))['runs'][0]['tick_hashes']]
         exact_coverage = [row['tick'] for row in left] == [row['tick'] for row in right] == list(range(1, expected_ticks + 1))
         result['all_tick_hashes_identical'] = exact_coverage and left == right
         result['first_full_row_difference'] = next((a['tick'] for a, b in zip(left, right) if a != b), None)
@@ -400,7 +409,7 @@ def reduce_timing_case(run, reference=None):
     if reference is not None:
         for value in peers.values():
             apply_tps_call(value, reference)
-    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS))
+    proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS), cross_peer=True)
     pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
     live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
             for left, right in pairs}
@@ -471,8 +480,8 @@ def analyze(root, stock=None):
                         reference = stock[cap_name]
                 apply_tps_call(timing, reference)
                 peers[peer + '_off'] = timing
-            proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json'),
-                     'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json'),
+            proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json', cross_peer=True),
+                     'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json', cross_peer=True),
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
             write_json(on / 'hash-proof.json', proof)
             raw_paths = [on / 'manifest.json', on / 'run-result.json', on / 'match.ccreplay', on / 'replay-report.json',

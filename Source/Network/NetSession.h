@@ -59,6 +59,8 @@ namespace RTE {
 		bool readyWithoutPeers = false;
 		uint32_t heartbeatIntervalMs = 100;
 		uint32_t timeoutMs = 1000;
+		/// A rejoin phase with nobody to answer (the image, the load, the tail) ends the rejoin past this, the host's own join deadline.
+		uint32_t rejoinPhaseCeilingMs = 180000;
 		uint16_t minProtocolVersion = NetProtocol::c_Version;
 		uint16_t maxProtocolVersion = NetProtocol::c_Version;
 		bool rejectUserdataModules = true;
@@ -129,14 +131,31 @@ namespace RTE {
 		/// every silence window starts again at the next evaluation.
 		void NotePumpParked() { m_PumpParked = true; }
 
-		/// Where a rejoining seat is in its own handshake.  Every phase but Active is work this peer is doing
-		/// with nobody to answer, so the ordinary session timeout does not judge it.
+		/// Where a rejoining seat is in its own handshake. Connecting talks to the host live and keeps every timeout. The
+		/// host staging this seat's image, this peer loading it and this peer replaying the committed tail are work with
+		/// nobody to answer, so the session-silence timeout does not judge them; a transport close still ends the link,
+		/// and the host's goodbye completes the seat in any of them.
 		enum class RejoinPhase : uint8_t { Active = 0, Connecting = 1, ImagePending = 2, Loading = 3, TailReplay = 4 };
+		static constexpr bool SuspendsSilence(RejoinPhase phase) {
+			return phase == RejoinPhase::ImagePending || phase == RejoinPhase::Loading || phase == RejoinPhase::TailReplay;
+		}
+		static const char* RejoinPhaseName(RejoinPhase phase) {
+			switch (phase) {
+				case RejoinPhase::Active: return "Active";
+				case RejoinPhase::Connecting: return "Connecting";
+				case RejoinPhase::ImagePending: return "ImagePending";
+				case RejoinPhase::Loading: return "Loading";
+				case RejoinPhase::TailReplay: return "TailReplay";
+			}
+			return "Unknown";
+		}
 		void SetRejoinPhase(RejoinPhase phase) {
 			m_RejoinPhase = phase;
-			m_AdmissionSuspended = phase != RejoinPhase::Active;
+			m_AdmissionSuspended = SuspendsSilence(phase);
 		}
 		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
+		/// A rejoin's handshake finished: the seat now waits on the image the host stages for it.
+		void EnterImagePending();
 		bool IsAdmissionSuspended() const { return m_AdmissionSuspended; }
 		/// Holds the silence windows open for as long as this peer is the one not listening (a private
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.
@@ -368,6 +387,8 @@ namespace RTE {
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
 		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
+		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase the ceiling clock is timing, read on the session's own thread.
+		uint64_t m_CeilingPhaseSinceMs = 0;
 		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
 		uint64_t m_NextHeartbeatMs = 0;

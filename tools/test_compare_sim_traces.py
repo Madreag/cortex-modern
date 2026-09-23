@@ -30,6 +30,25 @@ class TraceContracts(unittest.TestCase):
         client["runs"][0]["tick_hashes"][1]["subsystems"]["controller"] = "c" * 64
         self.assertTrue(self.compare(self.trace, client)[0])
 
+    def test_per_peer_routing_is_skipped_only_when_named(self):
+        # The routing subsystem is per machine by construction; a cross-peer caller names it, and nothing else widens.
+        host, client = copy.deepcopy(self.trace), copy.deepcopy(self.trace)
+        for entry in host["runs"][0]["tick_hashes"]:
+            entry["subsystems"]["controller_route"] = "d" * 64
+        for entry in client["runs"][0]["tick_hashes"]:
+            entry["subsystems"]["controller_route"] = "e" * 64
+        passed, result = self.compare(host, client)
+        self.assertFalse(passed)
+        self.assertEqual(result["divergent_subsystems"], ["controller_route"])
+        passed, result = self.compare(host, client, per_peer=frozenset({"controller_route"}))
+        self.assertTrue(passed)
+        self.assertEqual(result["compared_ticks"], 3)
+        self.assertEqual(result["per_peer_excluded"], ["controller_route"])
+        client["runs"][0]["tick_hashes"][2]["subsystems"]["actors"] = "c" * 64
+        passed, result = self.compare(host, client, per_peer=frozenset({"controller_route"}))
+        self.assertFalse(passed)
+        self.assertEqual((result["first_divergence"], result["divergent_subsystems"]), (3, ["actors"]))
+
     def test_real_divergence_is_localized(self):
         client = copy.deepcopy(self.trace)
         client["runs"][0]["tick_hashes"][1]["subsystems"]["actors"] = "c" * 64

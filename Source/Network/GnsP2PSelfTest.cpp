@@ -1423,10 +1423,12 @@ namespace RTE {
 							} else if (!WaitUntil(5000, pump, [&] { return !host.received.empty() && !joiner.received.empty(); }) || host.received.front() != fromJoiner || joiner.received.front() != fromHost) {
 								failure = "the 64-byte reliable messages did not cross both ways intact after the hold";
 							} else {
-								// GNS does not always carry a relayed close to the peer, so the row reports it; the hold is the verdict.
 								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
-								const bool seen = WaitUntil(5000, pump, [&] { return host.closed; });
-								Say(std::string("after the hold: 64 reliable bytes crossed each way; the host ") + (seen ? "saw the joiner close" : "did not see the joiner close within 5 s"));
+								if (!WaitUntil(5000, pump, [&] { return host.closed; })) {
+									failure = "after the hold the host did not see the joiner's close within 5 s over the relay";
+								} else {
+									Say("after the hold: 64 reliable bytes crossed each way; the host saw the joiner close");
+								}
 							}
 						}
 					}

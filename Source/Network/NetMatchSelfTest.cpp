@@ -7411,6 +7411,168 @@ namespace RTE {
 		return true;
 	}
 
+	/// A returning seat walks every rejoin phase, each with its own silence rule: Connecting keeps the timeout, the image,
+	/// the load and the tail replay suspend it, Active restores it. The host's goodbye during the tail replay completes it.
+	bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error) {
+		const uint16_t port = 42333;
+		LoopbackTransport hostTransport;
+		auto clientWire = std::make_unique<LoopbackTransport>();
+		LoopbackTransport& clientTransport = *clientWire;
+		NetSession hostSession;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.sessionId = 0x6007F;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "rejoin-phase-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		NetMatchService service;
+		service.m_IsHost = false;
+		service.m_State = NetMatchServiceState::Running;
+		service.m_Session = std::make_unique<NetSession>();
+		NetSession& clientSession = *service.m_Session;
+		std::string steps;
+		const auto check = [&](NetSession::RejoinPhase phase, bool suspended, const char* when) {
+			const bool ok = clientSession.GetRejoinPhase() == phase && clientSession.IsAdmissionSuspended() == suspended;
+			steps += std::string(steps.empty() ? "" : " ") + when + "=" + NetSession::RejoinPhaseName(clientSession.GetRejoinPhase()) + (clientSession.IsAdmissionSuspended() ? "/suspended" : "/judged");
+			return ok;
+		};
+		bool walked = true;
+		// The fresh session of a returning seat handshakes live.
+		clientSession.SetRejoinPhase(NetSession::RejoinPhase::Connecting);
+		walked &= check(NetSession::RejoinPhase::Connecting, false, "connecting");
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !clientSession.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 2000 && (hostSession.GetReadyPeerCount() == 0 || !clientSession.IsReady()); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()) {
+			*error = "the fixture never seated the returner: client=" + std::string(NetSession::StateName(clientSession.GetState()));
+			return false;
+		}
+		walked &= check(NetSession::RejoinPhase::ImagePending, true, "ready");
+		service.SetRejoinPhaseLocked(NetSession::RejoinPhase::Loading);
+		walked &= check(NetSession::RejoinPhase::Loading, true, "loading");
+		service.NoteTailReplayBeganLocked();
+		walked &= check(NetSession::RejoinPhase::TailReplay, true, "tail");
+		// The goodbye arrives while the tail replays: the drive reads it and the seat completes on the round's end.
+		service.m_MigratedTransport = std::move(clientWire);
+		service.m_Runner = std::make_unique<NetMatchRunner>();
+		service.m_WorldCatchUp.active = true;
+		service.m_WorldCatchUp.privateMatch = true;
+		ScenarioRunner::ClearControllerReplayError();
+		hostSession.DisconnectReadyPeer(hostSession.GetReadyPeers().front().transportPeerId, NetRejectReason::SessionEnded, "match over through frame 2401");
+		for (const uint64_t until = now + 1000; now <= until && !ScenarioRunner::HasControllerReplayError(); now += 5) {
+			hostSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+			service.DriveWorldJoinClient(now);
+		}
+		uint64_t finalFrame = 0;
+		const bool goodbye = service.HostGoodbyeSeen(finalFrame);
+		const std::string replayError = ScenarioRunner::GetControllerReplayError();
+		ScenarioRunner::ClearControllerReplayError();
+		service.m_Session.reset();
+		service.m_MigratedTransport.reset();
+		if (!walked || !goodbye || finalFrame != 2401 || replayError.rfind("MatchOver:", 0) != 0) {
+			*error = "a rejoin did not walk its phases or finish on the goodbye in its tail replay: phases=[" + steps + "] goodbye=" +
+			         std::to_string(goodbye) + " final=" + std::to_string(finalFrame) + " stop=\"" + replayError + "\"";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay phases=[" << steps << "] final=" << finalFrame << std::endl;
+		return true;
+	}
+
+	/// A goodbye drain that reaches its cap while a rejoin is still moving says the round's goodbye to every pending
+	/// returner before the host leaves, so the returner completes instead of reading the exit as a lost link.
+	bool TestTheDrainSaysGoodbyeAtItsCap(std::string* error) {
+		const uint16_t port = 42332;
+		LoopbackTransport hostTransport;
+		LoopbackTransport clientTransport;
+		NetSession hostSession;
+		NetSession clientSession;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.sessionId = 0x6007E;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "drain-cap-goodbye-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !clientSession.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 2000 && (hostSession.GetReadyPeerCount() == 0 || !clientSession.IsReady()); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()) {
+			*error = "the fixture never seated the returner: ready=" + std::to_string(hostSession.GetReadyPeerCount()) + " client=" + NetSession::StateName(clientSession.GetState());
+			return false;
+		}
+		// The round is over; the returner is a ready peer the ended round does not use, and its rejoin keeps moving.
+		LoopbackTransport drainWire;
+		NetLockstepCoordinator drained;
+		NetLockstepConfig drainConfig;
+		drainConfig.localPeerId = 1; drainConfig.peerCount = 2;
+		if (!drained.StartReplay(drainWire, drainConfig, error)) return false;
+		const NetLockstepCoordinator endedRound;
+		uint64_t rejoinProgress = 0;
+		ScenarioRunner::SetLockstepCoordinator(&drained);
+		ScenarioRunner::SetSessionPump([&] {
+			++rejoinProgress;
+			++now;
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(1);
+			clientTransport.AdvanceTimeMs(1);
+		}, [] { return true; }, [&] { return rejoinProgress; }, [&] {
+			NetMatchService::RefuseEndedPeers(hostSession, endedRound, "match over through frame 2401", true);
+		});
+		constexpr uint32_t c_ShortenedCapMs = 400;
+		const auto began = std::chrono::steady_clock::now();
+		const bool left = ScenarioRunner::DrainLockstepRelay(250, 0, c_ShortenedCapMs);
+		const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+		ScenarioRunner::SetSessionPump(nullptr);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		for (const uint64_t until = now + 1000; now <= until && !clientSession.HasReject(); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (left || spentMs < c_ShortenedCapMs || !clientSession.HasReject() || clientSession.GetRejectSummary() != "match over through frame 2401") {
+			*error = std::string("the drain left at its cap without the goodbye: drained=") + (left ? "1" : "0") + " spent_ms=" + std::to_string(spentMs) +
+			         " client=" + NetSession::StateName(clientSession.GetState()) + " reject=\"" + clientSession.GetRejectSummary() + "\"";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS the_drain_says_goodbye_at_its_cap spent_ms=" << spentMs << " reject=\"" << clientSession.GetRejectSummary() << "\"" << std::endl;
+		return true;
+	}
+
 	bool TestServiceKick(std::string* error) {
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -13291,6 +13453,17 @@ namespace RTE {
 		};
 
 		std::string error;
+		// These rows each report their own failure, so one run names every red among them.
+		bool rowsPassed = true;
+		const auto row = [&](bool (*test)(std::string*), const char* name) {
+			std::string rowError;
+			if (test(&rowError)) return;
+			std::cerr << "[net-match-selftest] FAIL " << name << ": " << rowError << std::endl;
+			rowsPassed = false;
+		};
+		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		row(&TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay, "a_rejoin_walks_its_phases_and_the_goodbye_ends_its_tail_replay");
+		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);

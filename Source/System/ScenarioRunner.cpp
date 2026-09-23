@@ -65,6 +65,7 @@ namespace RTE {
 		std::function<void()> s_SessionPump;
 		std::function<bool()> s_PendingSessionTail;
 		std::function<uint64_t()> s_SessionProgress;
+		std::function<void()> s_GoodbyeToPendingReturners;
 		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		std::vector<std::pair<uint8_t, NetGameCheckpoint>> s_AppliedCheckpoints;
@@ -802,10 +803,12 @@ namespace RTE {
 		return s_ControllerReplayError;
 	}
 
-	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail, std::function<uint64_t()> sessionProgress) {
+	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail, std::function<uint64_t()> sessionProgress,
+	                                   std::function<void()> goodbyeToPendingReturners) {
 		s_SessionPump = std::move(pump);
 		s_PendingSessionTail = std::move(pendingTail);
 		s_SessionProgress = std::move(sessionProgress);
+		s_GoodbyeToPendingReturners = std::move(goodbyeToPendingReturners);
 	}
 
 	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
@@ -1861,6 +1864,20 @@ namespace RTE {
 		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (!PrimeRestoredLockstepInputs(error)) return false;
+		// A resumed round's agreed first frame can sit past its restored start. Every peer commits nothing below it, so the
+		// restored samples aimed there go as a fresh one would, and their commands ride this peer's next input instead.
+		if (const uint64_t first = s_LockstepCoordinator->GetStats().effectiveStartFrame; config.resumeFromSnapshot && first > config.startFrame) {
+			const auto isBinding = [](const NetGameCommand& command) { return std::holds_alternative<NetGamePlayerBindings>(command.payload); };
+			std::vector<NetGameCommand> carried;
+			for (auto it = s_RequeuedInputs.begin(); it != s_RequeuedInputs.end() && it->first < first; it = s_RequeuedInputs.erase(it)) {
+				for (const NetGameCommand& command: it->second.commands) if (!isBinding(command)) carried.push_back(command);
+				s_RequeuedCommands.erase(it->first);
+			}
+			for (auto it = s_RequeuedCommands.begin(); it != s_RequeuedCommands.end() && it->first < first; it = s_RequeuedCommands.erase(it))
+				for (const NetGameCommand& command: it->second) if (!isBinding(command)) carried.push_back(command);
+			s_RequeuedPlayerBindings.erase(s_RequeuedPlayerBindings.begin(), s_RequeuedPlayerBindings.lower_bound(first));
+			s_PendingLocalGameCommands.insert(s_PendingLocalGameCommands.begin(), carried.begin(), carried.end());
+		}
 		const auto& acks = s_LockstepCoordinator->GetAuthoritativeCommandAcks();
 		if (const auto ack = acks.find(config.localPeerId); ack != acks.end()) {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
@@ -2704,7 +2721,7 @@ namespace RTE {
 		s_RetiredChecksumCounters = {};
 	}
 
-	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs) {
+	bool ScenarioRunner::DrainLockstepRelay(uint32_t budgetMs, uint32_t lingerMs, uint32_t totalCapMs) {
 		const auto start = std::chrono::steady_clock::now();
 		auto elapsed = [&start] {
 			return static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
@@ -2727,7 +2744,6 @@ namespace RTE {
 		// The budget is an IDLE bound, not a fixed spend: a peer whose rejoin is still advancing keeps the door
 		// open, and a peer that has stopped answering closes it after one budget.  The total is capped so an
 		// unattended run always ends.
-		constexpr uint32_t c_TotalDrainCapMs = 90000;
 		// A rejoin commits no frame while it authenticates, stages an image and replays a tail, so the round's
 		// own progress cannot witness it: the session's does.
 		const auto witness = [] {
@@ -2735,11 +2751,20 @@ namespace RTE {
 		};
 		uint64_t progress = witness();
 		uint32_t idleFrom = elapsed();
-		while (pending() && elapsed() - idleFrom < budgetMs && elapsed() < c_TotalDrainCapMs) {
+		while (pending() && elapsed() - idleFrom < budgetMs && elapsed() < totalCapMs) {
 			pump();
 			const uint64_t now = witness();
 			if (now != progress) { progress = now; idleFrom = elapsed(); }
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		// A returner still moving at the cap reads the host leaving as a lost link unless it hears the goodbye first.
+		if (pending() && elapsed() >= totalCapMs && s_GoodbyeToPendingReturners) {
+			std::cout << "[net-match] drain reached its cap after " << elapsed() << "ms with a rejoin pending; saying the goodbye to every pending returner" << std::endl;
+			s_GoodbyeToPendingReturners();
+			for (const uint32_t until = elapsed() + c_CapGoodbyeFlushMs; elapsed() < until;) {
+				pump();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
 		}
 		const bool drained = !pending();
 		const uint32_t drainMs = elapsed();

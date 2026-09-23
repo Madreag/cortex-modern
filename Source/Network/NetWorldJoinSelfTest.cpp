@@ -6083,6 +6083,155 @@ namespace RTE {
 		return true;
 	}
 
+	// A capture park carries a command aimed into it to the first frame past it, so a named capture can land after the
+	// tick it named. Every peer takes it where it lands and reports that tick; the host must wait on that tick, or it waits
+	// on reports that never come and the schedule stops after one capture.
+	bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error) {
+		std::array<NetMatchService, 2> services;
+		services[0].m_IsHost = true;
+		for (NetMatchService& service: services) {
+			service.m_AutosaveMatchId = "00000000deadbeef-0000000000000006";
+			service.m_MatchAutosaveSeconds = 1;
+		}
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		constexpr uint64_t lastTick = 600, streamDelay = 4, parkedCapture = 30;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::array<std::vector<uint64_t>, 2> captures;
+		std::array<std::vector<std::pair<uint64_t, uint64_t>>, 2> writers;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			std::vector<NetMatchService::CheckpointNote> applied;
+			if (const auto due = stream.find(tick); due != stream.end()) applied = due->second;
+			for (size_t index = 0; index < services.size(); ++index) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick;
+				input.now = static_cast<int64_t>(tick) * tickLength;
+				input.applied = applied;
+				input.lead = lead;
+				input.writers = {1, 2};
+				auto& writer = writers[index];
+				while (!writer.empty() && writer.front().second <= tick) {
+					input.finished.push_back(writer.front().first);
+					writer.erase(writer.begin());
+				}
+				input.unwritten = writer.size();
+				const NetMatchService::AutosaveTickOutput output = services[index].StepAutosaveSchedule(input);
+				if (output.capture) {
+					captures[index].push_back(tick);
+					writer.emplace_back(tick, (writer.empty() ? tick : writer.back().second) + 40);
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = static_cast<uint8_t>(index + 1);
+					// Every capture the host names is aimed into a park and lands past the tick it named.
+					stream[tick + (note.kind == NetGameCheckpoint::Capture ? lead + parkedCapture : streamDelay)].push_back(note);
+				}
+			}
+		}
+		const auto list = [](const std::vector<uint64_t>& ticks) {
+			std::string text;
+			for (const uint64_t tick: ticks) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			return text;
+		};
+		if (captures[0] != captures[1] || captures[0].size() < 4) {
+			*error = "a capture that landed past its named tick stopped the schedule: host " + list(captures[0]) + " client " + list(captures[1]);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_capture_named_into_a_park_opens_the_next ticks=" << list(captures[0]) << std::endl;
+		return true;
+	}
+
+	// A heal restarts the stream a writer's report rode on. The host that waited on a report the heal dropped named no
+	// capture for the rest of the match; it names afresh, and the reports after the heal keep the schedule moving.
+	bool TestAHealNamesTheNextCaptureAfresh(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		host.m_AutosaveMatchId = "00000000deadbeef-0000000000000007";
+		host.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		constexpr uint64_t lastTick = 900, healAt = 200, streamDelay = 4;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> captures;
+		std::vector<std::pair<uint64_t, uint64_t>> writer;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			if (tick == healAt) {
+				// Everything in flight goes with the heal; the relaunch keeps the chain and forgets the open capture.
+				stream.clear();
+				writer.clear();
+				host.ForgetOpenCaptureOnHeal();
+			}
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.lead = lead;
+			input.writers = {1, 2};
+			while (!writer.empty() && writer.front().second <= tick) {
+				input.finished.push_back(writer.front().first);
+				writer.erase(writer.begin());
+			}
+			const NetMatchService::AutosaveTickOutput output = host.StepAutosaveSchedule(input);
+			if (output.capture) {
+				captures.push_back(tick);
+				writer.emplace_back(tick, tick + 30);
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				// The second writer reports each capture the host's own writer does, one stream trip later.
+				note.sender = 1;
+				stream[tick + streamDelay].push_back(note);
+				if (note.kind == NetGameCheckpoint::Written) stream[tick + streamDelay].push_back({2, note.kind, note.tick});
+			}
+		}
+		const size_t afterHeal = static_cast<size_t>(std::count_if(captures.begin(), captures.end(), [](uint64_t tick) { return tick > healAt; }));
+		if (afterHeal < 4) {
+			std::string text;
+			for (const uint64_t tick: captures) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			*error = "the host named no capture after a heal dropped a writer's report: captures " + text + " heal_at=" + std::to_string(healAt);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_heal_names_the_next_capture_afresh after_heal=" << afterHeal << std::endl;
+		return true;
+	}
+
+	// A returning seat waits on one private capture's writer for a bound: a writer silent past it is abandoned and one fresh
+	// capture taken, and when that one stays silent too the rejoin is refused and the seat stays with the AI that holds it.
+	bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A34);
+		std::string setupError;
+		if (!host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(42, 2, 2, 3, "returning", 1, &setupError)) {
+			*error = "the stuck-image row could not open a rejoin: " + setupError;
+			return false;
+		}
+		constexpr uint64_t wait = NetMatchService::c_PrivateImageWaitMs;
+		std::promise<NetMatchService::PrivateJoinImage> first, second;
+		host.m_PrivateImageTask = first.get_future();
+		host.m_PrivateImageTakenMs = 1000;
+		host.BoundPrivateImageWait(1000 + wait);
+		if (!host.m_PrivateImageTask.valid() || host.m_PrivateImageRecapture) {
+			*error = "a capture writer was abandoned before its bound";
+			return false;
+		}
+		host.BoundPrivateImageWait(1000 + wait + 1);
+		if (host.m_PrivateImageTask.valid() || !host.m_PrivateImageRecapture || host.m_WorldJoin.FindSession(42) == nullptr) {
+			*error = std::string("a writer silent past its bound was not retaken once: abandoned=") + (host.m_PrivateImageTask.valid() ? "0" : "1") +
+			         " recapture=" + (host.m_PrivateImageRecapture ? "1" : "0") + " waiting=" + (host.m_WorldJoin.FindSession(42) ? "1" : "0");
+			return false;
+		}
+		// The fresh capture starts, and its writer goes silent too.
+		host.m_PrivateImageRecapture = false;
+		host.m_PrivateImageTask = second.get_future();
+		host.m_PrivateImageTakenMs = 60000;
+		host.BoundPrivateImageWait(60000 + wait + 1);
+		if (host.m_WorldJoin.FindSession(42) != nullptr) {
+			*error = "a returning seat kept waiting on a second silent capture writer";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_stuck_private_image_is_retaken_once_then_refused" << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6834,6 +6983,9 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
+			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
+			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
+			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

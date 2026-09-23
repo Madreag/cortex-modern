@@ -152,6 +152,7 @@ static int preview_upvalue(LJPreview *p, GCupval *uv, cTValue *v, int scan)
   entry->uv = uv;
   entry->saved = *v;
   entry->counted = 0;
+  entry->closed = uv->closed != 0;
   return 1;
 }
 
@@ -199,8 +200,8 @@ static int preview_walk(LJPreview *p, int scan)
 	if (isluafunc(fn)) {
 	  GCupval *uv = &gcref(fn->l.uvptr[i])->uv;
 	  v = uvval(uv);
-	  /* The barrier puts tables back; a slot is measured, so the contract is decided on numbers. */
-	  if (p->measure && !preview_upvalue(p, uv, v, scan)) return 0;
+	  /* Every slot is recorded for the end to put back; a measuring scan counts the ones left changed. */
+	  if (!preview_upvalue(p, uv, v, scan)) return 0;
 	} else {
 	  v = &fn->c.upvalue[i];
 	}
@@ -466,7 +467,7 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
 {
   global_State *g = G(L);
   LJPreview *p = g->preview;
-  size_t changes = 0;
+  size_t changes = 0, i;
   double started;
   if (!p || !p->active) return 0;
   p->active = 0;
@@ -489,6 +490,15 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
     if (p->timed) p->stats.measure_ms += preview_clock()-scanned;
   }
   started = p->timed ? preview_clock() : 0.0;
+  /* A closed slot goes back to what the window found; an open one is its frame's stack slot. */
+  for (i = 0; i < p->nupvalues; i++) {
+    LJPreviewUV *e = &p->upvalues[i];
+    TValue *v = uvval(e->uv);
+    if (e->closed && v->u64 != e->saved.u64) {
+      copyTV(L, v, &e->saved);
+      lj_gc_barrier(L, e->uv, v);
+    }
+  }
   while (p->lastwrite) {
     LJPreviewTable *e = &p->tables[p->lastwrite-1];
     GCtab *t = e->table;

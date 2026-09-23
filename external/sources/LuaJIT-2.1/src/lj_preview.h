@@ -11,11 +11,12 @@ typedef struct LJPreviewTable {
   int captured;
 } LJPreviewTable;
 
-/* An upvalue slot as the window found it; the measurement compares it at the end. */
+/* An upvalue slot as the window found it; the end puts a closed one back and the measurement compares it. */
 typedef struct LJPreviewUV {
   GCupval *uv;
   TValue saved;
   int counted;
+  int closed;
 } LJPreviewUV;
 
 typedef struct LJPreview {
