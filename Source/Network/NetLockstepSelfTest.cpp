@@ -2984,6 +2984,72 @@ namespace RTE {
 			return true;
 		}
 
+		// The redundancy window is the unreliable lane's only repair. The round samples its link on its first tick, so the
+		// first frames of a 200 ms link already ride out a burst longer than the window's floor of eight.
+		bool TestTheFirstFramesRideOutABurstOnALongLink(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3C, 0, NetTransportLane::InputUnreliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3C, 0, NetTransportLane::InputUnreliable);
+			hostConfig.roundId = clientConfig.roundId = 0x9A3C;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			LoopbackTransportConfig link;
+			link.latencyMs = 200;
+			hostWire.SetFaultConfig(link);
+			clientWire.SetFaultConfig(link);
+			if (!StartCoordinatorPair(48906, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			uint64_t now = 0;
+			const auto step = [&](uint64_t ms) {
+				for (uint64_t until = now + ms; now < until; ++now) {
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+					host.Tick(now); client.Tick(now);
+				}
+			};
+			for (int guard = 0; guard < 4000 && (!host.IsRunning() || !client.IsRunning()); ++guard) step(1);
+			if (!host.IsRunning() || !client.IsRunning()) { *error = "the long-link pair never started"; return false; }
+			// Every one of the client's first twelve frames is lost; the thirteenth has to carry them all.
+			LoopbackTransportConfig burst = link;
+			burst.unreliableDropEveryN = 1;
+			clientWire.SetFaultConfig(burst);
+			constexpr uint64_t c_Burst = 12;
+			uint64_t tick = 0;
+			std::string queueError;
+			for (; tick < c_Burst; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, &queueError) || !client.QueueLocalInput(tick, {MakeFrame(200, tick)}, {}, &queueError)) {
+					*error = "the burst's input was refused at tick " + std::to_string(tick) + ": " + queueError; return false;
+				}
+				step(17);
+			}
+			clientWire.SetFaultConfig(link);
+			uint64_t committed = 0;
+			bool everyFrameHadTheClient = true;
+			for (; tick < c_Burst + 40; ++tick) {
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, &queueError) || !client.QueueLocalInput(tick, {MakeFrame(200, tick)}, {}, &queueError)) {
+					*error = "the input after the burst was refused at tick " + std::to_string(tick) + ": " + queueError; return false;
+				}
+				step(17);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) {
+					everyFrameHadTheClient = everyFrameHadTheClient && !ready.remoteFrames.empty();
+					(void)host.FinishSimulationTick(ready.frame);
+					committed = ready.frame + 1;
+				}
+				while (client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
+			}
+			step(1000);
+			NetLockstepReadyFrame ready;
+			while (host.PopReadyFrame(ready)) { everyFrameHadTheClient = everyFrameHadTheClient && !ready.remoteFrames.empty(); (void)host.FinishSimulationTick(ready.frame); committed = ready.frame + 1; }
+			if (committed < c_Burst + 20 || !everyFrameHadTheClient) {
+				*error = "the first frames of a 200 ms link did not ride out a burst of " + std::to_string(c_Burst) + ": host committed " + std::to_string(committed) +
+				         " frames, every one with the client's input=" + std::to_string(everyFrameHadTheClient);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS the_first_frames_ride_out_a_burst_on_a_long_link burst=" << c_Burst << " committed=" << committed << std::endl;
+			return true;
+		}
+
 		// A seat whose link dies before it published its startup never will. Under the bounded wait the start holds it,
 		// as its answer budget would have; failing the round there ended a host whose client stalled in its launch.
 		bool TestALinkLostBeforeTheStartIsHeld(std::string* error) {
@@ -18782,6 +18848,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
 		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_a_park_emptied_commits_after_it");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
+		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
