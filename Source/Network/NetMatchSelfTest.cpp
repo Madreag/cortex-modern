@@ -7912,8 +7912,8 @@ namespace RTE {
 		bool returnOffered = false;
 		std::string returnAnswer = "nothing";
 		for (uint32_t round = 0; round < 16; ++round) {
-			service.m_ReconnectHost.Tick(now);
-			returnAdmission.Tick(now);
+			service.m_ReconnectHost.Tick(0);
+			returnAdmission.Tick(0);
 			bool moved = false;
 			for (NetH4Outbound& outbound : service.m_ReconnectHost.TakeOutbound()) {
 				moved = true;
@@ -7926,14 +7926,13 @@ namespace RTE {
 				} else if (const auto* refused = std::get_if<NetJoinRejected>(&outbound.payload)) {
 					returnAnswer = std::string("refused ") + NetProtocol::RejectReasonName(refused->rejectReason);
 				}
-				returnAdmission.HandleMessage(outbound.payload, now);
+				returnAdmission.HandleMessage(outbound.payload, 0);
 			}
 			service.m_ReconnectHost.TakeCommits();
 			for (NetH4Outbound& outbound : returnAdmission.TakeOutbound()) {
 				moved = true;
-				service.m_ReconnectHost.HandleMessage(returnConnection, outbound.payload, now);
+				service.m_ReconnectHost.HandleMessage(returnConnection, outbound.payload, 0);
 			}
-			now += 260;
 			if (!moved) {
 				break;
 			}
@@ -8603,10 +8602,7 @@ namespace RTE {
 			replacementJoin.identity = seatH4;
 			replacementJoin.displayName = "Replacement";
 			replacementJoin.txId.fill(0x21);
-			// The kicked seat settles for one denial cadence before admission offers it again; this
-			// join lands on the first retransmit after the window opens.
-			const uint64_t rejoinNow = NetReconnectHost::c_RemovalSettleMs + NetReconnectHost::c_RetransmitIntervalMs;
-			seatService.m_ReconnectHost.HandleMessage(replacementConnection, replacementJoin, rejoinNow);
+			seatService.m_ReconnectHost.HandleMessage(replacementConnection, replacementJoin, 0);
 			uint16_t replacementSeat = UINT16_MAX;
 			std::string replacementRefusal = "nothing";
 			for (NetH4Outbound& outbound : seatService.m_ReconnectHost.TakeOutbound()) {
@@ -8637,7 +8633,7 @@ namespace RTE {
 			returningJoin.identity = seatH4;
 			returningJoin.displayName = "Kicked";
 			returningJoin.txId.fill(0x22);
-			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, rejoinNow);
+			seatService.m_ReconnectHost.HandleMessage(returningConnection, returningJoin, 0);
 			bool offeredReturn = false;
 			uint16_t returnSeat = UINT16_MAX;
 			std::string returnAnswer = "nothing";
