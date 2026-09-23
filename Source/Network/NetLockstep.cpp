@@ -8597,6 +8597,13 @@ namespace RTE {
 			++m_Stats.staleRoundPackets;
 			return;
 		}
+		// A seat joining the running round starts at its own admission; the start the host began the round with names
+		// a frame before it, and once this seat has its round that start is a straggler, never a mismatch.
+		if (m_Config.joinsRunningRound && start.localPeerId == GetHostPeerId() && start.startFrame < m_Config.startFrame &&
+		    m_RoundId != 0 && start.roundId == m_RoundId) {
+			++m_Stats.staleRoundPackets;
+			return;
+		}
 		if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && start.startFrame < admission->second.frame) {
 			++m_Stats.staleRoundPackets;
 			return;
