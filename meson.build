@@ -278,6 +278,10 @@ deps += [sdl3_dep, sdl3_image_dep, allegro_dep, luajit_dep, loadpng_dep, raknet_
 gns_mode = get_option('with_gns')
 if gns_mode != 'disabled'
   gns_root = get_option('gns_root')
+  # GameNetworkingSockets built with external/patches/gns-turn-lifetime.patch installs beside the stock prefix.
+  if gns_root != '' and fs.is_file(join_paths(gns_root + '-turnfix', 'include', 'GameNetworkingSockets', 'steam', 'steamnetworkingtypes.h'))
+    gns_root = gns_root + '-turnfix'
+  endif
   gns_dep_root = get_option('gns_dep_root')
   gns_required = gns_mode == 'enabled'
   if gns_root == ''
