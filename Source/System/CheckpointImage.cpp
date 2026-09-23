@@ -1069,6 +1069,22 @@ bool RTE::RunCheckpointImageSelfTest() {
 				pass(row, detail);
 			}
 		}
+
+		// A checkpoint image can outlive the Lua state it froze (the last image at shutdown). Releasing it
+		// afterwards must not reach into the destroyed heap, and its copy buffers must still be unmapped.
+		{
+			const OrphanSnapshotProbe probe = ProbeSnapshotAfterItsHeap();
+			const char* row = "a_snapshot_released_after_its_heap_never_calls_into_it";
+			const std::string detail = "dead_heap_calls=" + std::to_string(probe.deadHeapCalls) + " mapped_after=" + std::to_string(probe.mappedAfter) +
+			                           " pages_read=" + std::to_string(probe.pagesRead);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.deadHeapCalls != 0 || probe.mappedAfter != 0 || !probe.pagesRead) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
 	}

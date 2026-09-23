@@ -59,6 +59,15 @@ namespace RTE {
 	};
 	CopyBufferProbe ProbeCheckpointCopyBuffers();
 
+	/// A snapshot released after the heap it froze, for the checkpoint self-test.
+	struct OrphanSnapshotProbe {
+		size_t deadHeapCalls = 0; //!< Buffers handed back to the destroyed heap.
+		size_t mappedAfter = 0; //!< Copy bytes still mapped once the snapshot is gone, beyond what was mapped before the heap.
+		bool pagesRead = false; //!< The snapshot still read its frozen array after the heap was destroyed.
+		std::string error;
+	};
+	OrphanSnapshotProbe ProbeSnapshotAfterItsHeap();
+
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
