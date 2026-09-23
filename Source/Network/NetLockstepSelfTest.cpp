@@ -70,6 +70,7 @@
 namespace RTE {
 
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+	bool TestAStarvedSeatIsNotLate(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -17660,6 +17661,41 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A seat produces its input for a frame when it simulates the frame one delay earlier, which it cannot do before
+	/// this host has committed that frame and it has crossed the seat's link: until then it waits on us, not late.
+	bool TestAStarvedSeatIsNotLate(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A0E, 14, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 32;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 14}, {2, 14}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A0E);
+		if (!wire.StartHost(48897, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 15;
+		host.m_Stats.peers[2].pingMs = 200;
+		host.m_Stats.nextFrame = 48;
+		// This host's own park held back frame 34, the one the seat produces frame 48 from: it committed it only now.
+		for (uint64_t frame = 20; frame < 48; ++frame) host.m_CommittedAtMs[frame] = frame < 34 ? 700 : 1000;
+		if (host.DeclareOverdueInputs(48, 1100, 1000, {2}) || host.GetStats().peers.at(2).holds != 0) {
+			*error = "a seat waiting on this host's own frame was held as slow: since_missing=100ms link=200ms holds=" +
+			         std::to_string(host.GetStats().peers.at(2).holds);
+			return false;
+		}
+		// Negative control: answered a link ago and still silent past the bound, the seat is declared.
+		if (!host.DeclareOverdueInputs(48, 1260, 1000, {2})) {
+			*error = "the bound no longer declares a seat the round answered a link ago";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_starved_seat_is_not_late held_after_ms=260" << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -17822,6 +17858,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestASlowStartingPeerIsJudgedByItsOwnRestart(&error) ||
 		    !TestFirstStartWaitsForPublishedStartup(&error) ||
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
+		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
