@@ -53,6 +53,7 @@ namespace RTE {
 		std::string portMap;        //!< The host's router-mapping status line; "" when the toggle is off or not hosting.
 		uint32_t portMapSerial = 0; //!< Bumped whenever portMap changes so the panel skips redundant rewrites.
 		bool playedAMatch = false;  //!< A match has already run on this session, so this lobby is a rematch lobby.
+		bool leftMatch = false;     //!< This peer already sent the match its leave; the lobby that remains is not theirs.
 		// A lobby that resumes a match from disk names the checkpoint it stands on, so every peer can
 		// say whether it holds that very archive. Empty on an ordinary lobby.
 		std::string resumeMatchId;
