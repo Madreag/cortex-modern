@@ -1663,6 +1663,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	if (m_HostRecAutosaveIntervalBox) {
 		m_HostRecAutosaveIntervalBox->SetNumericOnly(true);
 		m_HostRecAutosaveIntervalBox->SetMaxNumericValue(NetMatchService::c_MaxAutosaveIntervalSeconds);
+		m_HostRecAutosaveIntervalBox->SetMinNumericValue(NetMatchService::c_MinAutosaveIntervalSeconds);
 		m_HostRecAutosaveIntervalBox->SetMaxTextLength(4);
 	}
 	// The scene list is a preset census like the host picker's activity one; the draft's own scene
@@ -2124,7 +2125,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 			}
 		}
 		m_HostRecLastSaveLabel->SetText(m_HostLastSaveText.empty()
-		                                  ? (m_HostOptionsDraft.autosaveEnabled
+		                                  ? (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds > 0
 		                                         ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds - none saved yet"
 		                                         : "No autosaves while this is off")
 		                                  : m_HostLastSaveText);
@@ -2326,7 +2327,8 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostRecAutosaveCheck) m_HostOptionsDraft.autosaveEnabled = m_HostRecAutosaveCheck->GetCheck() == GUICheckbox::Checked;
 	if (m_HostRecAutosaveIntervalBox) {
 		const long parsed = std::strtol(m_HostRecAutosaveIntervalBox->GetText().c_str(), nullptr, 10);
-		m_HostOptionsDraft.autosaveIntervalSeconds = static_cast<uint32_t>(std::clamp<long>(parsed, 0, NetMatchService::c_MaxAutosaveIntervalSeconds));
+		// Zero stays off; a nonzero interval clamps into the announced minute-to-hour range.
+		m_HostOptionsDraft.autosaveIntervalSeconds = parsed <= 0 ? 0 : static_cast<uint32_t>(std::clamp<long>(parsed, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds));
 	}
 	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 
