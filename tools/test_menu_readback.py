@@ -1329,6 +1329,13 @@ def scripts(case, port, root, size="960x540"):
                  "set_text TextHostRecAutosaveInterval 0\nwait_ms 500\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  "assert_label LabelHostRecAutosaveHint Autosaves every 60 s to 60 min, or off\n"
+                 # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
+                 # No peer has joined, so the accepted draft waits for the lobby round to republish it.
+                 "activate ButtonHostOptApply\nwait_ms 500\n"
+                 "assert_label_absent LabelHostOptStatus requires a nonzero interval\n"
+                 "assert_label LabelHostOptStatus Apply republishes this lobby.\n"
+                 "assert_checked CheckHostRecAutosave 0\n"
+                 "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")

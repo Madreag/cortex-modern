@@ -2324,11 +2324,28 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 
 	// Recovery.
 	if (m_HostRecRepairCheck) m_HostOptionsDraft.automaticRepair = m_HostRecRepairCheck->GetCheck() == GUICheckbox::Checked;
+	const bool autosaveWasEnabled = m_HostOptionsDraft.autosaveEnabled;
 	if (m_HostRecAutosaveCheck) m_HostOptionsDraft.autosaveEnabled = m_HostRecAutosaveCheck->GetCheck() == GUICheckbox::Checked;
 	if (m_HostRecAutosaveIntervalBox) {
-		const long parsed = std::strtol(m_HostRecAutosaveIntervalBox->GetText().c_str(), nullptr, 10);
-		// Zero stays off; a nonzero interval clamps into the announced minute-to-hour range.
-		m_HostOptionsDraft.autosaveIntervalSeconds = parsed <= 0 ? 0 : static_cast<uint32_t>(std::clamp<long>(parsed, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds));
+		const std::string typed = m_HostRecAutosaveIntervalBox->GetText();
+		char* parsedEnd = nullptr;
+		const long parsed = std::strtol(typed.c_str(), &parsedEnd, 10);
+		// An emptied box is mid-edit and keeps the draft's interval; zero is off, and a nonzero
+		// interval clamps into the announced minute-to-hour range.
+		if (parsedEnd != typed.c_str()) {
+			m_HostOptionsDraft.autosaveIntervalSeconds = parsed <= 0 ? 0 : static_cast<uint32_t>(std::clamp<long>(parsed, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds));
+		}
+	}
+	if (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds == 0) {
+		if (autosaveWasEnabled) {
+			// A typed 0 is off, so the checkbox, the caption and the published config agree.
+			m_HostOptionsDraft.autosaveEnabled = false;
+			if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(GUICheckbox::Unchecked);
+		} else {
+			// Switching autosave on starts at the shortest cadence instead of reading the off zero back.
+			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_MinAutosaveIntervalSeconds;
+			if (m_HostRecAutosaveIntervalBox) m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
+		}
 	}
 	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 
