@@ -3689,7 +3689,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			config.localPeerId = 1; config.peerCount = 2;
 			if (!replay.StartReplay(wire, config, error)) return false;
 			// A rejoin commits no frame while it stages and replays, so only the session's own progress
-			// witnesses it. The budget here is the IDLE bound: it may not end a rejoin that is moving.
+			// witnesses it. The budget here is the IDLE bound: it may not end a rejoin that is moving. It stays
+			// above the 15.6 ms timer tick a descheduled pump can take, far below the moving rejoin's 400 pumps.
 			unsigned int pumps = 0;
 			uint64_t rejoinProgress = 0;
 			constexpr unsigned int c_MovingPumps = 400;
@@ -3697,7 +3698,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			ScenarioRunner::SetSessionPump([&] { if (++pumps <= c_MovingPumps) ++rejoinProgress; }, [] { return true; },
 			                               [&] { return rejoinProgress; });
 			const auto began = std::chrono::steady_clock::now();
-			const bool drained = ScenarioRunner::DrainLockstepRelay(20, 0);
+			const bool drained = ScenarioRunner::DrainLockstepRelay(250, 0);
 			const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
 			ScenarioRunner::SetSessionPump(nullptr);
 			ScenarioRunner::SetLockstepCoordinator(nullptr);
@@ -3706,7 +3707,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				         " spent_ms=" + std::to_string(spentMs);
 				return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS the_drain_waits_on_a_rejoins_own_progress pumps=" << pumps << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS the_drain_waits_on_a_rejoins_own_progress pumps=" << pumps << " spent_ms=" << spentMs << std::endl;
 			return true;
 		}
 
