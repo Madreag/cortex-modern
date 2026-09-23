@@ -40,6 +40,19 @@ namespace RTE {
 #pragma region Destruction
 		static void ApplyQueuedDeletions();
 
+		/// Deletes every queued luabind object while the state that is about to close is still open: a
+		/// queued object holds a registry reference into its own state and unrefs it when it is deleted.
+		/// @param luaState The state about to be closed.
+		/// @return How many queued objects belonged to that state, i.e. how many the drain rescued.
+		static uint64_t DrainQueuedDeletionsBeforeStateClose(lua_State* luaState);
+
+		/// How many queued luabind objects were drained by a state close that would otherwise have outlived it.
+		static uint64_t QueuedDeletionsDrainedAtStateClose();
+
+		/// How many queued luabind objects the drain found naming a state that is already closed. Always 0
+		/// while every close drains first; anything else is a use-after-free the drain refused to run.
+		static uint64_t QueuedDeletionsNamingAClosedState();
+
 		/// Destructor method used to clean up a LuabindObjectWrapper object before deletion from system memory.
 		~LuabindObjectWrapper();
 #pragma endregion
@@ -66,8 +79,17 @@ namespace RTE {
 		/// @param stateIndex The state's LuaMan index, which fixes its place in the drain order.
 		static void InstallSimThreadDeletion(lua_State* luaState, int stateIndex);
 
-		/// Deletes what the collecting threads handed over, state by state in index order and in finalizer order within a state.
+		/// Deletes what the collecting threads handed over, in the sim's unique-ID order across every state's queue.
 		static void ApplyQueuedEntityDeletions();
+
+		/// Drains a synthetic queue set of the given width and reports the order the drain ran, for the self-test.
+		/// @param stateCount How many per-state queues the synthetic set is spread over.
+		/// @return The drained keys, in the order their destructors ran.
+		static std::string RunQueuedDeletionOrderSelfTest(int stateCount);
+
+		/// The drain order of handed-over objects that carry no unique ID: their queue, then their place
+		/// in it. Everything ties at ID 0, which the MovableObject row never reaches.
+		static std::string RunQueuedDeletionOrderSelfTestNoUniqueID(int stateCount);
 
 		/// The number of Lua-owned engine objects destructed on the sim thread.
 		static uint64_t SimThreadDeletionCount();

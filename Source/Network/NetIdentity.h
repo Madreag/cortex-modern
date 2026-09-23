@@ -22,8 +22,8 @@ namespace RTE {
 		int recommendedMoidCount = 0;
 		bool particleSettling = false;
 		bool moSubtraction = false;
-		int numLuaStates = 0;
-		int numLuaStatesOverride = -1;
+		int numLuaStates = 0; //!< The build's fixed threaded-Lua-state count; hashed, so another build's count refuses.
+		int numLuaStatesOverride = -1; //!< Diagnostic only: the retired settings override an old file may still carry.
 		std::string selectedModule;
 		bool scenarioTestModuleLoaded = false;
 		uint16_t lockstepCodecVersion = 0; //!< Target layout for diagnostics and discovery; agreed through the lobby.
@@ -114,11 +114,6 @@ namespace RTE {
 
 	class NetIdentity {
 	public:
-		/// Enables the test-only cross-hardware Lua-state experiment. It is set before
-		/// manager initialization and never belongs in a shipped protocol mode.
-		static void SetLuaStateCountExperiment(bool enabled);
-		static bool LuaStateCountExperimentEnabled();
-
 		/// Ordinary target keeps c_Version / lockstep c_Version. A world target stamps
 		/// c_PersistentWorldVersion / c_WorldVersion.
 		static void StampOptionsForTarget(NetIdentityBuildOptions& options, bool world);
@@ -152,6 +147,11 @@ namespace RTE {
 		static bool DumpCurrentManifestJson(const std::string& path, std::string* error = nullptr, NetIdentityManifest* outManifest = nullptr);
 
 		static std::optional<NetIdentityMismatch> Compare(const NetIdentityManifest& expected, const NetIdentityManifest& actual, bool rejectUserdataModules = true);
+
+		/// Why this runtime cannot take part in a network match, or an empty string when it can. A peer
+		/// with no threaded Lua states runs every SyncedUpdate on the master state on its own schedule,
+		/// so it would part from a normal peer on the first tick a mod asks for one.
+		static std::string LocalMatchRefusal(int threadedLuaStateCount);
 
 		/// The loaded modules as the diagnostic digest wire carries them, sorted by file name and cut
 		/// to the entry and byte caps. Diagnostic only - admission still decides on the full hashes.

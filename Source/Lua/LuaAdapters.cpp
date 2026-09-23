@@ -1095,7 +1095,18 @@ float LuaAdaptersUtility::GetPathFindingDefaultDigStrength() {
 	return c_PathFindingDefaultDigStrength;
 }
 
+// The script-facing deletion for engine code that cannot include the luabind adapter header.
+void RTE::DeleteEntityFromScript(Entity* entityToDelete) {
+	LuaAdaptersUtility::DeleteEntity(entityToDelete);
+}
+
 void LuaAdaptersUtility::DeleteEntity(Entity* entityToDelete) {
+	// A script deleting the object whose hook is running would free the script list that loop is
+	// walking, so that one object goes when its hook returns. Everything else is freed here.
+	if (auto* movableObject = dynamic_cast<MovableObject*>(entityToDelete); movableObject && movableObject->InsideHookLoop()) {
+		movableObject->DeleteWhenHookReturns();
+		return;
+	}
 	delete entityToDelete;
 	entityToDelete = nullptr;
 }

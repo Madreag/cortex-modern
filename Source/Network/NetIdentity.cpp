@@ -17,7 +17,6 @@
 #include <algorithm>
 #include <atomic>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -34,8 +33,6 @@
 namespace RTE {
 
 	namespace {
-		std::atomic<bool> s_LuaStateCountExperiment{false};
-
 		using json = nlohmann::json;
 		namespace fs = std::filesystem;
 
@@ -140,9 +137,10 @@ namespace RTE {
 			AppendInt(hasher, "recommended_moid_count", static_cast<uint64_t>(config.recommendedMoidCount));
 			AppendBool(hasher, "particle_settling", config.particleSettling);
 			AppendBool(hasher, "mo_subtraction", config.moSubtraction);
-			if (!s_LuaStateCountExperiment.load(std::memory_order_relaxed)) {
-				AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
-			}
+			// Lua globals are per state and an object's state is its unique ID modulo the count, so the
+			// count is a simulation input. It is a build constant now: this hashes which build is running,
+			// and a build that changed it cannot join one that did not.
+			AppendInt(hasher, "num_lua_states", static_cast<uint64_t>(config.numLuaStates));
 			AppendField(hasher, "selected_module", config.selectedModule);
 			AppendBool(hasher, "scenario_test_module_loaded", config.scenarioTestModuleLoaded);
 			// Admission checks supported layouts; the lobby agrees on the host's selected layout.
@@ -435,17 +433,6 @@ namespace RTE {
 		return HashConfig(config);
 	}
 
-	void NetIdentity::SetLuaStateCountExperiment(bool enabled) {
-		s_LuaStateCountExperiment.store(enabled, std::memory_order_relaxed);
-		if (enabled) {
-			std::cout << "[net-identity] EXPERIMENT ONLY: Lua threaded-state count is omitted from deterministic identity and hello admission; this run is not wave-safe" << std::endl;
-		}
-	}
-
-	bool NetIdentity::LuaStateCountExperimentEnabled() {
-		return s_LuaStateCountExperiment.load(std::memory_order_relaxed);
-	}
-
 	NetHash32 NetIdentity::HashModuleManifest(const std::vector<NetIdentityModuleEntry>& modules) {
 		return ComputeModuleManifestHash(modules);
 	}
@@ -483,12 +470,10 @@ namespace RTE {
 		manifest.deterministicConfig.recommendedMoidCount = g_SettingsMan.RecommendedMOIDCount();
 		manifest.deterministicConfig.particleSettling = g_MovableMan.IsParticleSettlingEnabled();
 		manifest.deterministicConfig.moSubtraction = g_MovableMan.IsMOSubtractionEnabled();
-		manifest.deterministicConfig.numLuaStates = static_cast<int>(g_LuaMan.GetThreadedScriptStates().size());
-		if (LuaStateCountExperimentEnabled()) {
-			std::cout << "[net-identity] EXPERIMENT ONLY: local Lua threaded states=" << manifest.deterministicConfig.numLuaStates
-			          << "; count is diagnostic only for this run" << std::endl;
-		}
-		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetNumberOfLuaStatesOverride();
+		// The build constant, never the live count: a runtime that cannot run it refuses the match outright
+		// (LocalMatchRefusal), so what admission compares is which build the peers are running.
+		manifest.deterministicConfig.numLuaStates = c_LuaStateCount;
+		manifest.deterministicConfig.numLuaStatesOverride = g_SettingsMan.GetRetiredLuaStateCountOverride();
 		manifest.deterministicConfig.selectedModule = g_PresetMan.GetSingleModuleToLoad();
 		manifest.deterministicConfig.scenarioTestModuleLoaded = g_PresetMan.GetModuleID("Tests.rte") >= 0;
 		manifest.deterministicConfig.lockstepCodecVersion = options.lockstepCodecVersion;
@@ -733,6 +718,16 @@ namespace RTE {
 			return MakeHashMismatch("session_rules_hash", NetRejectReason::SessionRulesMismatch, expected.sessionRulesHash, actual.sessionRulesHash, "session rules hash does not match");
 		}
 		return std::nullopt;
+	}
+
+	std::string NetIdentity::LocalMatchRefusal(int threadedLuaStateCount) {
+		// Lua debugging puts every object script on the master state, and the master pass runs
+		// SyncedUpdate on all of them every tick instead of on request, so this runtime cannot stay in
+		// step with a normal peer. It is a single-player debugging mode; say so rather than desync.
+		if (threadedLuaStateCount <= 0) {
+			return "Lua debugging runs the game on the master script state only - turn EnableLuaDebugging off to host or join a match";
+		}
+		return {};
 	}
 
 	std::vector<NetModuleDigestEntry> NetIdentity::BuildModuleDigests(const std::vector<NetIdentityModuleEntry>& modules, size_t maxEntries, bool* outTruncated) {

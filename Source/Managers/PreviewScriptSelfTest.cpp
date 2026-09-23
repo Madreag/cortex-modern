@@ -860,7 +860,6 @@ if not ok then error(err) end
 		const auto rng = g_SimRNG.GetEngineState();
 		const uint64_t draws = g_SimRNG.GetDrawCount();
 		const long uid = MovableObject::GetUniqueIDCounter();
-		const int cursor = g_LuaMan.GetScriptStateCursor();
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		Activity::RollbackState activityState;
 		activity->CaptureRollbackState(activityState);
@@ -1130,19 +1129,20 @@ if not ok then error(err) end
 				AEmitter* retiringPart = woundCopy();
 				AEmitter* survivingPart = woundCopy();
 				survivor->AddWound(survivingPart, Vector(), false);
-				const int cursorBefore = g_LuaMan.GetScriptStateCursor();
 				const bool stateless = retiringPart->GetAllLoadedScripts().empty() && survivingPart->GetAllLoadedScripts().empty() && !retiringPart->GetLuaState() && !survivingPart->GetLuaState();
-				armed("stateless_preview_parts", stateless, "cursor=" + std::to_string(cursorBefore) + " retiring_scripts=" + std::to_string(retiringPart->GetAllLoadedScripts().size()) + " surviving_scripts=" + std::to_string(survivingPart->GetAllLoadedScripts().size()));
+				armed("stateless_preview_parts", stateless, "retiring_scripts=" + std::to_string(retiringPart->GetAllLoadedScripts().size()) + " surviving_scripts=" + std::to_string(survivingPart->GetAllLoadedScripts().size()));
 				const int retiringLoad = stateless ? retiringPart->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua")) : -99;
 				const int survivingLoad = stateless ? survivingPart->LoadScript(g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua")) : -99;
 				armed("late_scripts_loaded", retiringLoad == 0 && survivingLoad == 0, "retiring=" + std::to_string(retiringLoad) + " surviving=" + std::to_string(survivingLoad));
-				const int cursorGained = g_LuaMan.GetScriptStateCursor();
-				armed("late_state_allocation", true, "retiring_state=" + std::to_string(g_LuaMan.GetStateIndex(retiringPart->GetLuaState())) + " surviving_state=" + std::to_string(g_LuaMan.GetStateIndex(survivingPart->GetLuaState())) + " cursor " + std::to_string(cursorBefore) + "->" + std::to_string(cursorGained));
+				// The state each part takes is its own unique ID's, so a window that loads a script moves nothing shared.
+				armed("late_state_allocation", g_LuaMan.GetStateIndex(retiringPart->GetLuaState()) - 1 == static_cast<int>(g_LuaMan.ScriptStateIndexForObject(retiringPart->GetUniqueID())) &&
+				      g_LuaMan.GetStateIndex(survivingPart->GetLuaState()) - 1 == static_cast<int>(g_LuaMan.ScriptStateIndexForObject(survivingPart->GetUniqueID())),
+				      "retiring_state=" + std::to_string(g_LuaMan.GetStateIndex(retiringPart->GetLuaState())) + " surviving_state=" + std::to_string(g_LuaMan.GetStateIndex(survivingPart->GetLuaState())) +
+				      " retiring_uid=" + std::to_string(retiringPart->GetUniqueID()) + " surviving_uid=" + std::to_string(survivingPart->GetUniqueID()));
 				add(retiringPart);
                                 g_MovableMan.HarvestSpeculativeSpawns();
 				ghostRoots.push_back(retiringPart);
 				afterDispose.push_back([=, &check]() {
-					check("lua_state_cursor_after_preview", g_LuaMan.GetScriptStateCursor() == cursor, "observed=" + std::to_string(g_LuaMan.GetScriptStateCursor()) + " saved=" + std::to_string(cursor));
 					check("no_canonical_slot_for_preview_part", !survivingPart->ObjectScriptsInitialized(), "slot='" + survivingPart->m_ScriptObjectName + "' state=" + std::to_string(g_LuaMan.GetStateIndex(survivingPart->GetLuaState())));
 				});
 			} else {
@@ -1173,7 +1173,6 @@ if not ok then error(err) end
 		g_SimRNG.SetEngineState(rng);
 		g_SimRNG.SetDrawCount(draws);
 		MovableObject::PinUniqueIDCounter(uid);
-		g_LuaMan.SetScriptStateCursor(cursor);
 		g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
 		PostProcessMan::SetRegistrationSuppressed(false);
 		AudioMan::SetPlaybackSuppressed(false);

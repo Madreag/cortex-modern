@@ -176,16 +176,25 @@ def place_engine(run, placement):
     return applied
 
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None):
+def peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history):
+    # What a runtime spent before the match: the joining client takes its own, every other peer the host's.
+    return client_pre_match_history if peer == 'client' else host_pre_match_history
+
+
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None, host_lua_states=4, client_lua_states=4, host_pre_match_history=0, client_pre_match_history=0):
     out = root / name
     out.mkdir(exist_ok=False)
     final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
+    # The engine's Lua state count is a build constant; the flags are kept, accepted and ignored.
+    lua_states = {'host': host_lua_states, 'client': client_lua_states}
+    pre_match_history = {'host': host_pre_match_history, 'client': client_pre_match_history}
     manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
-                    exe=file_record(REPO / 'Cortex Command.exe'))
+                    exe=file_record(REPO / 'Cortex Command.exe'), lua_states=lua_states, pre_match_history=pre_match_history,
+                    lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
@@ -197,7 +206,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         for peer in peers:
             run_out = out / peer
             trace = out / f'{peer}_trace.json'
-            flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes', '-num-lua-states', '4',
+            flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes',
                      '-net-live-tick-hashes', str(out / f'{peer}-live.jsonl'),
                      '-out', str(trace), '-input-script', str(script),
                      '-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
@@ -205,6 +214,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                      '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini')]
             if record:
                 flags += ['-feel-measure', str(run_out / 'feel')]
+            if peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history):
+                flags += ['-selftest-prematch-history', str(peer_pre_match_history(peer, host_pre_match_history, client_pre_match_history))]
             if sp:
                 flags += ['-scenario', 'FeelBaseline', '-controller-log-out', str(out / 'controllers.json')]
             else:
@@ -523,7 +534,7 @@ def gates(root, control, timeout):
                '--out', str(out / 'selftests'), '--timeout', str(timeout)]
     with (out / 'selftests-driver.log').open('w', encoding='utf-8') as log:
         suite = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, env=env)
-    graph = make_run(REPO, ['-script-graph-selftest', '-num-lua-states', '4'], out / 'script-graph', timeout=timeout, env=env)
+    graph = make_run(REPO, ['-script-graph-selftest'], out / 'script-graph', timeout=timeout, env=env)
     try:
         graph_record = graph.start().finish()
     finally:
@@ -572,6 +583,10 @@ def parse_args(argv=None):
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
     parser.add_argument('--stock-baseline', type=Path, help='same-machine stock measurements, keyed by 60hz and uncapped')
+    parser.add_argument('--host-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
+    parser.add_argument('--client-lua-states', type=int, default=4, help='retired: the build fixes the Lua state count')
+    parser.add_argument('--host-pre-match-history', type=int, default=0, help='objects the host runtime spends before the match')
+    parser.add_argument('--client-pre-match-history', type=int, default=0, help='objects the joining client spends before the match')
     return parser, parser.parse_args(argv)
 
 
@@ -580,6 +595,8 @@ def main(argv=None):
     root = args.out.resolve()
     if not 48231 <= args.port <= 48240:
         parser.error('the ten match ports must stay within 48231..48240')
+    if args.host_lua_states < 1 or args.client_lua_states < 1:
+        parser.error('--host-lua-states and --client-lua-states must be positive')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
@@ -599,28 +616,32 @@ def main(argv=None):
                     captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
                     arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
                          [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
-                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES])
+                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES],
+                    lua_states={'host': args.host_lua_states, 'client': args.client_lua_states},
+                    pre_match_history={'host': args.host_pre_match_history, 'client': args.client_pre_match_history})
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
+        counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
+                      host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
-            launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True)
-            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True)
+            launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
+            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
         launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe['sha256'], args.timeout, sp=True,
-                    window_ticks=2 * TICKS, sp_humans=3)
+                    window_ticks=2 * TICKS, sp_humans=3, **counts)
         port = args.port
         for lag in (100, 200):
             for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
                 for enabled in (True, False):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
-                    launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
+                    launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout, **counts)
                     port += 1
         for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
             launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
-                        loss_percent=loss, silent_tick=silent)
+                        loss_percent=loss, silent_tick=silent, **counts)
         for index, (name, lag, autosave_seconds) in enumerate(AUTOSAVE_CASES):
             launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
-                        window_ticks=2 * TICKS, autosave_seconds=autosave_seconds)
+                        window_ticks=2 * TICKS, autosave_seconds=autosave_seconds, **counts)
     try:
         stock = json.loads(args.stock_baseline.read_text(encoding='utf-8')) if args.stock_baseline else None
         results = analyze(root, stock)

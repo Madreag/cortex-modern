@@ -11,6 +11,7 @@
 #include "FrameMan.h"
 #include "GUIInput.h"
 #include "GnsTransport.h"
+#include "LuaMan.h"
 #include "NetHttpClient.h"
 #ifdef CCCP_WITH_GNS
 #include "GnsSignaling.h"
@@ -433,6 +434,12 @@ static std::string ResyncSaveName() {
 		}
 		if (request.port == 0) {
 			if (error) *error = "port must be nonzero";
+			return false;
+		}
+		// Both roles, before anything is opened: a runtime without threaded Lua states cannot match one.
+		if (const std::string luaRefusal = NetIdentity::LocalMatchRefusal(static_cast<int>(g_LuaMan.GetThreadedScriptStates().size())); !luaRefusal.empty()) {
+			if (error) *error = luaRefusal;
+			SetState(NetMatchServiceState::Failed, request.host ? "Hosting refused" : "Joining refused", luaRefusal);
 			return false;
 		}
 		if (!request.host && request.address.empty() && request.sessionId.empty()) {

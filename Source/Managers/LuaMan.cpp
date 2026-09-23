@@ -6879,6 +6879,12 @@ void LuaStateWrapper::WaitFrozenCopy() {
 
 void LuaStateWrapper::Destroy() {
 	ReportPreviewBarrierStats();
+	if (!m_State) {
+		return;
+	}
+	// A wrapper destructed anywhere queues its luabind object, and deleting that object unrefs a
+	// registry slot of the state it lives in. Anything still queued for this state has to go now.
+	LuabindObjectWrapper::DrainQueuedDeletionsBeforeStateClose(m_State);
 	m_NativeCache.reset();
 	m_CheckpointHeap.reset();
 	m_State = nullptr;
@@ -6977,12 +6983,10 @@ void LuaMan::Initialize() {
 	LuabindObjectWrapper::SetPreviewDeletionHook(&LuaMan::ForgetPreviewBornWrapper);
 	m_MasterScriptState.Initialize();
 
-	int luaStateCount = std::thread::hardware_concurrency();
-	if (g_SettingsMan.EnableLuaDebugging()) {
-		luaStateCount = 0;
-	} else if (g_SettingsMan.GetNumberOfLuaStatesOverride() != -1) {
-		luaStateCount = g_SettingsMan.GetNumberOfLuaStatesOverride();
-	}
+	// Every machine runs the same number of states, whatever its core count: the assignment is a pure
+	// function of the object, and a different count would group different objects in a per-state global.
+	// Lua debugging is the one exception, and it refuses a network match instead of joining one.
+	const int luaStateCount = g_SettingsMan.EnableLuaDebugging() ? 0 : c_LuaStateCount;
 
 	m_ScriptStates = std::vector<LuaStateWrapper>(luaStateCount);
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -7066,7 +7070,7 @@ static std::string LuaStateTickHash() {
 	return found == result.per_subsystem.end() ? std::string("-") : SimChecksum::HashHex(found->second);
 }
 
-static bool RunThreadedScriptWriteHashSelfTestForCurrentStates(std::string* hashOut) {
+static bool RunThreadedScriptWriteHashSelfTestForCurrentStates() {
 	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
 	if (states.empty()) {
 		std::cout << "[script-graph-selftest] FAIL lua_state_sees_threaded_script_writes no threaded Lua states" << std::endl;
@@ -7117,48 +7121,11 @@ static bool RunThreadedScriptWriteHashSelfTestForCurrentStates(std::string* hash
 	const bool layoutFree = single == spread;
 	std::cout << "[script-graph-selftest] " << (seen ? "PASS" : "FAIL") << " lua_state_sees_threaded_script_writes states=" << states.size() << " before=" << before << " after=" << spread << std::endl;
 	std::cout << "[script-graph-selftest] " << (layoutFree ? "PASS" : "FAIL") << " lua_state_same_writes_hash_the_same_on_one_state_and_spread states=" << states.size() << " one_state=" << single << " spread=" << spread << std::endl;
-	if (hashOut) *hashOut = spread;
 	return seen && layoutFree;
 }
 
 bool LuaMan::RunThreadedScriptWriteHashSelfTest() {
-	return RunThreadedScriptWriteHashSelfTestForCurrentStates(nullptr);
-}
-
-bool LuaMan::RunThreadedScriptWriteHashSelfTestTwoCounts() {
-	const auto hasLiveScriptObjects = [](const LuaStateWrapper& state) {
-		return !state.GetRegisteredMOs().empty() || !state.GetPendingRegisteredMOs().empty();
-	};
-	if (g_MovableMan.GetMOIDCount() != 0 || hasLiveScriptObjects(m_MasterScriptState) || std::any_of(m_ScriptStates.begin(), m_ScriptStates.end(), hasLiveScriptObjects)) {
-		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash live movable/script objects prevent the temporary state-set test" << std::endl;
-		return false;
-	}
-	WaitForAsyncGarbageCollection();
-
-	LuaStatesArray savedStates;
-	savedStates.swap(m_ScriptStates);
-	const int savedCursor = m_LastAssignedLuaState;
-	std::array<std::string, 2> hashes;
-	const std::array<int, 2> counts{4, 32};
-	bool passed = true;
-	for (size_t countIndex = 0; countIndex < counts.size(); ++countIndex) {
-		LuaStatesArray replacement(static_cast<size_t>(counts[countIndex]));
-		m_ScriptStates.swap(replacement);
-		for (LuaStateWrapper& state: m_ScriptStates) state.Initialize();
-		m_LastAssignedLuaState = 0;
-		passed = RunThreadedScriptWriteHashSelfTestForCurrentStates(&hashes[countIndex]) && passed;
-		m_ScriptStates.swap(replacement);
-	}
-	m_ScriptStates.swap(savedStates);
-	m_LastAssignedLuaState = savedCursor;
-
-	const bool equal = passed && hashes[0] == hashes[1];
-	if (equal) {
-		std::cout << "[script-graph-selftest] PASS lua_state_two_count_hash states=4,32 hash=" << hashes[0] << std::endl;
-	} else {
-		std::cout << "[script-graph-selftest] FAIL lua_state_two_count_hash states=4,32 hash4=" << hashes[0] << " hash32=" << hashes[1] << std::endl;
-	}
-	return equal;
+	return RunThreadedScriptWriteHashSelfTestForCurrentStates();
 }
 
 static bool RunTickEndCollectionSelfTest() {
@@ -7320,17 +7287,48 @@ bool LuaMan::RunScriptGraphSelfTest() {
 	ResetPathCallbacks(true);
 	std::cout << "[script-graph-selftest] " << (purgePreserved ? "PASS" : "FAIL") << " native_path_callback_survives_purge" << std::endl;
 	const bool threadedWrites = RunThreadedScriptWriteHashSelfTest();
-	const bool threadedWritesTwoCounts = RunThreadedScriptWriteHashSelfTestTwoCounts();
+	const bool luaStateAssignment = g_MovableMan.RunLuaStateAssignmentSelfTest();
+	const bool luaStateRestoreBoundary = g_MovableMan.RunLuaStateRestoreBoundarySelfTest();
+	const bool luaStateIdentity = g_MovableMan.RunLuaStateIdentitySelfTest();
+	const bool threadedSyncedOrder = g_MovableMan.RunThreadedSyncedUpdateOrderSelfTest();
+	const std::string queuedDeletionOrder4 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(4);
+	const std::string queuedDeletionOrder32 = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTest(32);
+	const bool queuedDeletionOrder = queuedDeletionOrder4 == "1,2,3,4,5,6,7,8" && queuedDeletionOrder4 == queuedDeletionOrder32;
+	std::cout << "[script-graph-selftest] " << (queuedDeletionOrder ? "PASS" : "FAIL")
+	          << " queued_entity_deletion_order states=4,32 order4=" << queuedDeletionOrder4 << " order32=" << queuedDeletionOrder32
+	          << (queuedDeletionOrder ? "" : " (the drain follows the state count, not the unique ID)") << std::endl;
+	// What carries no unique ID at all: twice at one count, so a key that raced would show it here.
+	const std::string queuedTagOrderFirst = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(c_LuaStateCount);
+	const std::string queuedTagOrderAgain = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(c_LuaStateCount);
+	const std::string queuedTagOrderFour = LuabindObjectWrapper::RunQueuedDeletionOrderSelfTestNoUniqueID(4);
+	// At the build's count each tag sits alone in its own queue, so the drain prints them in queue order;
+	// at four queues the same handover fills each queue twice, and the drain prints each queue's two in
+	// the order that queue took them. Both are the (queue, place in queue) rule, spelled out.
+	const bool queuedTagOrder = queuedTagOrderFirst == "1,2,3,4,5,6,7,8" && queuedTagOrderFirst == queuedTagOrderAgain &&
+	                            queuedTagOrderFour == "5,1,6,2,7,3,8,4";
+	std::cout << "[script-graph-selftest] " << (queuedTagOrder ? "PASS" : "FAIL")
+	          << " queued_deletion_order_without_a_unique_id states=" << c_LuaStateCount << ",4 order=" << queuedTagOrderFirst
+	          << " again=" << queuedTagOrderAgain << " order4=" << queuedTagOrderFour << " expected4=5,1,6,2,7,3,8,4"
+	          << (queuedTagOrder ? "" : " (what has no unique ID drains in the order the collectors raced to hand it over)") << std::endl;
+	// The order fixture opens and closes its own states, so by here a state close has had wrappers of
+	// its own to drain. Nothing may be left naming a state that is gone: deleting one reads a freed VM.
+	const uint64_t drainedAtStateClose = LuabindObjectWrapper::QueuedDeletionsDrainedAtStateClose();
+	const uint64_t namingAClosedState = LuabindObjectWrapper::QueuedDeletionsNamingAClosedState();
+	const bool queuedDeletionsSafe = namingAClosedState == 0 && drainedAtStateClose > 0;
+	std::cout << "[script-graph-selftest] " << (queuedDeletionsSafe ? "PASS" : "FAIL")
+	          << " queued_deletions_never_outlive_their_lua_state drained_at_state_close=" << drainedAtStateClose
+	          << " naming_a_closed_state=" << namingAClosedState
+	          << (namingAClosedState > 0 ? " (a queued luabind object held a reference into a closed state)" : (drainedAtStateClose == 0 ? " (no state close drained anything, so the row proved nothing)" : "")) << std::endl;
 	const bool tickEndCollection = RunTickEndCollectionSelfTest();
 	const bool collectionThread = RunGarbageCollectionThreadSelfTest();
 	LuaStatesArray setAside;
 	setAside.swap(m_ScriptStates);
-	LuaStateWrapper* emptyPick = GetAndLockFreeScriptState();
+	LuaStateWrapper* emptyPick = GetAndLockScriptStateForObject(1);
 	const bool emptySetPicksMaster = emptyPick == &m_MasterScriptState;
 	emptyPick->GetMutex().unlock();
 	m_ScriptStates.swap(setAside);
 	std::cout << "[script-graph-selftest] " << (emptySetPicksMaster ? "PASS" : "FAIL") << " empty_threaded_set_yields_master" << std::endl;
-	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && threadedWritesTwoCounts && tickEndCollection && collectionThread && emptySetPicksMaster;
+	return m_MasterScriptState.RunScriptGraphSelfTest() && purgePreserved && threadedWrites && luaStateAssignment && luaStateRestoreBoundary && luaStateIdentity && threadedSyncedOrder && queuedDeletionOrder && queuedTagOrder && queuedDeletionsSafe && tickEndCollection && collectionThread && emptySetPicksMaster;
 }
 
 bool LuaStateWrapper::RunLuaHeldReferenceSelfTest() {
@@ -8380,18 +8378,16 @@ _PrimitiveQueueCapture = nil
 	}
 	std::cout << "[script-graph-selftest] " << (refusesBeforeMoving ? "PASS" : "FAIL") << " reinstate_refuses_before_it_moves_the_world" << std::endl;
 	checkpointValues = refusesBeforeMoving && checkpointValues;
-	// A refusal it cannot see coming still has to finish the restore: the counter and the cursor are the
-	// originals' state, not the candidate's, whatever the graph did.
+	// A refusal it cannot see coming still has to finish the restore: the counter is the originals'
+	// state, not the candidate's, whatever the graph did.
 	bool refusalFinishesRestore = false;
 	{
 		MovableMan::WorldSetAside aside;
 		if (g_MovableMan.SetAsideWorld(aside, false) && !aside.luaGraphs.empty()) {
 			const long counter = aside.uniqueIDCounter;
-			const int cursor = aside.luaStateCursor;
 			MovableObject::PinUniqueIDCounter(counter + 64);
-			g_LuaMan.SetScriptStateCursor(cursor + 1);
 			aside.luaGraphs.front().insert(0, "X");
-			refusalFinishesRestore = !g_MovableMan.ReinstateWorld(aside) && MovableObject::GetUniqueIDCounter() == counter && g_LuaMan.GetScriptStateCursor() == cursor;
+			refusalFinishesRestore = !g_MovableMan.ReinstateWorld(aside) && MovableObject::GetUniqueIDCounter() == counter;
 		}
 	}
 	std::cout << "[script-graph-selftest] " << (refusalFinishesRestore ? "PASS" : "FAIL") << " refused_reinstate_finishes_the_restore" << std::endl;
@@ -8889,7 +8885,6 @@ _PrimitiveQueueCapture = nil
 	bool previewLateScriptLoadLeavesStatesAsFound = false;
 	{
 		const std::string scriptPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua");
-		const int cursorBefore = g_LuaMan.GetScriptStateCursor();
 		const std::string bindingsBefore = g_MovableMan.DescribeScriptBindings();
 		std::vector<std::string> graphsBefore;
 		std::vector<std::string> graphsAfter;
@@ -8917,8 +8912,6 @@ _PrimitiveQueueCapture = nil
 		const uint64_t undoneBefore = LuaMan::PreviewGlobalsUndoneCount();
 		LuaMan::EndPreviewScripts();
 		const uint64_t undone = LuaMan::PreviewGlobalsUndoneCount() - undoneBefore;
-		const int cursorAfter = g_LuaMan.GetScriptStateCursor();
-		const bool cursorKept = cursorAfter == cursorBefore;
 		const bool bindingsKept = g_MovableMan.DescribeScriptBindings() == bindingsBefore;
 		RunScriptString("_PreviewLateHost = nil; _PreviewLateUID = nil");
 		g_LuaMan.CollectGarbageForCheckpoint();
@@ -8973,11 +8966,10 @@ _PrimitiveQueueCapture = nil
 			              std::to_string(first.size()) + "->" + std::to_string(second.size()) + " at " + std::to_string(at) + " '" + first.substr(at, 40) + "' vs '" + second.substr(at, 40) + "'";
 		}
 		std::cout << "[preview-late-script] staged=" << staged << " loaded=" << loaded << " state=" << stateTaken
-		          << " cursor " << cursorBefore << "->" << cursorAfter << " bindings_kept=" << bindingsKept
+		          << " bindings_kept=" << bindingsKept
 		          << " graphs_kept=" << graphsKept << " graph_problems=" << graphProblems.size()
 		          << " uid=" << uid << " host_gone=" << hostGone << " state_fenced=" << stateFenced << " undone=" << undone << graphDelta << std::endl;
-		previewLateScriptLoadLeavesStatesAsFound = staged && loaded == 0 && cursorKept && bindingsKept && graphsKept && hostGone;
-		g_LuaMan.SetScriptStateCursor(cursorBefore);
+		previewLateScriptLoadLeavesStatesAsFound = staged && loaded == 0 && bindingsKept && graphsKept && hostGone;
 	}
 	// A pie slice reloads its own script file inside the window, so the cached function objects must come back with the globals.
 	{
@@ -9318,12 +9310,22 @@ shared.parent = _AutosaveCaptureProbe
 }
 
 thread_local LuaStateWrapper* s_luaStateOverride = nullptr;
+// Set only by the per-state tasks that run in parallel: inside one of those, every other state belongs
+// to another thread and the override is the only state this thread may take.
+thread_local bool s_luaStateParallelTask = false;
+std::atomic<uint64_t> s_ScriptStatesTakenFromASpawner{0};
+
 LuaStateWrapper* LuaMan::GetThreadLuaStateOverride() const {
 	return s_luaStateOverride;
 }
 
-void LuaMan::SetThreadLuaStateOverride(LuaStateWrapper* luaState) {
+void LuaMan::SetThreadLuaStateOverride(LuaStateWrapper* luaState, bool parallelStateTask) {
 	s_luaStateOverride = luaState;
+	s_luaStateParallelTask = luaState != nullptr && parallelStateTask;
+}
+
+uint64_t LuaMan::ScriptStatesTakenFromASpawner() {
+	return s_ScriptStatesTakenFromASpawner.load(std::memory_order_relaxed);
 }
 
 thread_local LuaStateWrapper* s_currentLuaState = nullptr;
@@ -9331,11 +9333,30 @@ LuaStateWrapper* LuaMan::GetThreadCurrentLuaState() const {
 	return s_currentLuaState;
 }
 
-LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
-	if (s_luaStateOverride) {
-		// We're creating this object in a multithreaded environment, ensure that it's assigned to the same script state as us
+size_t LuaMan::ScriptStateIndexForObject(long uniqueID) const {
+	// Lua debugging runs with no threaded states at all; every object script is the master's then.
+	if (m_ScriptStates.empty()) {
+		return 0;
+	}
+	return static_cast<size_t>(static_cast<unsigned long long>(uniqueID) % m_ScriptStates.size());
+}
+
+LuaStateWrapper& LuaMan::GetScriptStateForObject(long uniqueID) {
+	if (m_ScriptStates.empty()) {
+		return m_MasterScriptState;
+	}
+	return m_ScriptStates[ScriptStateIndexForObject(uniqueID)];
+}
+
+LuaStateWrapper* LuaMan::GetAndLockScriptStateForObject(long uniqueID) {
+	// Inside a per-state task every other state belongs to another thread, so the object is assigned to
+	// the state this task holds - it is its spawner's, not its own. Only a ThreadedUpdate hook reaches
+	// here that way, and the contract sends shared-state changes to SyncedUpdate, which is serial.
+	if (s_luaStateOverride && s_luaStateParallelTask) {
 		bool success = s_luaStateOverride->GetMutex().try_lock();
-		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!") return s_luaStateOverride;
+		RTEAssert(success, "Our lua state override for our thread already belongs to another thread!")
+		s_ScriptStatesTakenFromASpawner.fetch_add(1, std::memory_order_relaxed);
+		return s_luaStateOverride;
 	}
 
 	// With no threaded states every object script shares the master state.
@@ -9345,19 +9366,11 @@ LuaStateWrapper* LuaMan::GetAndLockFreeScriptState() {
 		return &m_MasterScriptState;
 	}
 
-	// TODO
-	// It would be nice to assign to least-saturated state, but that's a bit tricky with MO registering...
-	/*auto itr = std::min_element(m_ScriptStates.begin(), m_ScriptStates.end(),
-	    [](const LuaStateWrapper& lhs, const LuaStateWrapper& rhs) { return lhs.GetRegisteredMOs().size() < rhs.GetRegisteredMOs().size(); }
-	);
-
-	bool success = itr->GetMutex().try_lock();
-	RTEAssert(success, "Script mutex was already locked while in a non-multithreaded environment!");
-
-	return &(*itr);*/
-
-	int ourState = m_LastAssignedLuaState;
-	m_LastAssignedLuaState = (m_LastAssignedLuaState + 1) % m_ScriptStates.size();
+	// The object picks its own state, wherever it was made - a serial pass may hold another state's lock
+	// and still hand this object its own. A round-robin cursor carried whatever the machine did before
+	// the match into the match: Lua globals are per state, so two peers whose cursors stood at different
+	// places grouped different objects in a shared table and parted. This depends on nothing local.
+	const size_t ourState = ScriptStateIndexForObject(uniqueID);
 
 	bool success = m_ScriptStates[ourState].GetMutex().try_lock();
 	RTEAssert(success, "Script mutex was already locked while in a non-multithreaded environment!");
@@ -11809,8 +11822,6 @@ void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& r
 		}
 	}
 	if (PreviewGlobalFenceEnabled()) {
-		// The shared cursor is preview-visible state too: a script the window loads takes the next state from it.
-		s_PreviewScriptStateCursor = g_LuaMan.GetScriptStateCursor();
 		s_PreviewFenceWindow = true;
 		// Only the states a preview runs code in: the clones script in their originals' states, and the master runs the global scripts.
 		g_LuaMan.GetMasterScriptState().CapturePreviewGlobalFence();
@@ -11920,7 +11931,6 @@ void LuaMan::EndPreviewScripts() {
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.DropPreviewWindowReferences(); });
 		LuabindObjectWrapper::ApplyQueuedDeletions();
 		ForEachLuaState([](LuaStateWrapper& state) { s_PreviewGlobalsUndone += state.ReleasePreviewGlobalFence(); });
-		g_LuaMan.SetScriptStateCursor(s_PreviewScriptStateCursor);
 		if (s_PreviewGlobalsUndone > 0 && !s_PreviewGlobalsReported) {
 			s_PreviewGlobalsReported = true;
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;

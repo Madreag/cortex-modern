@@ -51,6 +51,7 @@ namespace RTE {
 	class MovableObject;
 	class Scene;
 	class CheckpointText;
+	class Entity;
 	struct PathRequest;
 	struct LuaPathCallbackContext;
 	struct LuaScriptGraphNativeCaptureData;
@@ -72,6 +73,15 @@ namespace RTE {
 		explicit ScriptGraphRefusal(std::vector<std::string> list) : std::runtime_error("script graph capture refused"), problems(std::move(list)) {}
 		std::vector<std::string> problems;
 	};
+
+	/// The script-facing deletion (the Lua DeleteEntity adapter) for engine code that cannot include
+	/// the adapter header: it pulls in luabind, which only builds without conformance mode.
+	void DeleteEntityFromScript(Entity* entityToDelete);
+
+	/// Threaded Lua states, the same number on every machine. Lua globals are per state and an object's
+	/// state is its unique ID modulo this, so the count is a simulation input: it is a build constant,
+	/// never a setting. Changing it is a different build and the deterministic identity says so.
+	static constexpr int c_LuaStateCount = 32;
 
 	/// A single lua state. Multiple of these can exist at once for multithreaded scripting.
 	class LuaStateWrapper {
@@ -150,9 +160,19 @@ namespace RTE {
 		/// Unregisters an MO as using us.
 		/// @param moToUnregister The MO to unregister as using us. Ownership is NOT transferred!
 		void UnregisterMO(MovableObject* moToUnregister) {
-			m_RegisteredMOs.erase(moToUnregister);
+			if (m_RegisteredMOs.erase(moToUnregister) > 0) {
+				s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
+			}
 			m_AddedRegisteredMOs.erase(moToUnregister);
 		}
+
+		/// Whether this MO is in the live registration set. The pending set is not part of a pass.
+		/// @param mo The MO to look for. Only its address is read, so a freed one is safe to ask about.
+		bool IsRegisteredMO(MovableObject* mo) const { return m_RegisteredMOs.find(mo) != m_RegisteredMOs.end(); }
+
+		/// Counts removals from any state's live registration set, a destroyed MO's included. A pass
+		/// that sees it unchanged since it read the sets knows every pointer it holds is still live.
+		static uint64_t RegisteredMOUnregistrationCount() { return s_RegisteredMOUnregistrations.load(std::memory_order_relaxed); }
 
 		/// A destroyed object leaves the lists a set-aside world will swap back; a detached live one stays.
 		void ForgetDestroyedRegisteredMO(MovableObject* moToForget) {
@@ -170,6 +190,8 @@ namespace RTE {
 		void SwapRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			m_RegisteredMOs.swap(registered);
 			m_AddedRegisteredMOs.swap(pending);
+			// A whole set left the live list, so no snapshot taken before this may skip its liveness check.
+			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		/// Hands both lists to a set-aside world and marks them held, so nothing can be destroyed in between.
 		void SwapAndHoldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
@@ -177,6 +199,7 @@ namespace RTE {
 			m_AddedRegisteredMOs.swap(pending);
 			m_HeldRegisteredMOs.push_back(&registered);
 			m_HeldRegisteredMOs.push_back(&pending);
+			s_RegisteredMOUnregistrations.fetch_add(1, std::memory_order_relaxed);
 		}
 		void ForgetHeldRegisteredMOs(std::unordered_set<MovableObject*>& registered, std::unordered_set<MovableObject*>& pending) {
 			std::erase(m_HeldRegisteredMOs, &registered);
@@ -453,6 +476,8 @@ namespace RTE {
 			std::string functionName; //!< The function's name in that file.
 		};
 
+		inline static std::atomic<uint64_t> s_RegisteredMOUnregistrations{0}; //!< Every removal from any state's live registration set, so a pass can tell when nothing it holds can have died.
+
 		std::unordered_set<MovableObject*> m_RegisteredMOs; //!< The objects using our lua state.
 		std::vector<std::unordered_set<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
 		std::unordered_set<MovableObject*> m_AddedRegisteredMOs; //!< The objects using our lua state that were recently added.
@@ -573,11 +598,17 @@ namespace RTE {
 		/// The save index of a state: 0 for the master state, 1 onwards for the threaded ones, -1 for none.
 		int GetStateIndex(const LuaStateWrapper* state) const;
 
-		/// Gets the threaded state cursor used by the next unassigned script.
-		int GetScriptStateCursor() const { return m_LastAssignedLuaState; }
+		/// The threaded state an object's scripts belong on: its unique ID modulo the state count, the
+		/// master state when there are none. Unlocked, for the restore and the self-tests.
+		/// @param uniqueID The unique ID of the object the state is for.
+		LuaStateWrapper& GetScriptStateForObject(long uniqueID);
 
-		/// Restores the threaded state cursor after a checkpoint.
-		void SetScriptStateCursor(int cursor) { m_LastAssignedLuaState = m_ScriptStates.empty() ? 0 : cursor % m_ScriptStates.size(); }
+		/// The index into the threaded states an object's unique ID names, 0 when there are none.
+		size_t ScriptStateIndexForObject(long uniqueID) const;
+
+		/// Objects that took their spawner's state instead of their own, because they were made inside a
+		/// parallel per-state task. Zero for every object made on the sim thread.
+		static uint64_t ScriptStatesTakenFromASpawner();
 
 		/// The state a save index names, wrapping when this machine has fewer threaded states.
 		LuaStateWrapper& GetStateByIndex(int index);
@@ -596,27 +627,27 @@ namespace RTE {
 		/// Runs the threaded-write fixture against the currently initialized state set.
 		bool RunThreadedScriptWriteHashSelfTest();
 
-		/// Runs the same fixture in fresh four-state and 32-state sets, then compares the hashes.
-		/// This is a self-test only; it refuses to replace a set that owns live script objects.
-		bool RunThreadedScriptWriteHashSelfTestTwoCounts();
-
 		/// Gets the current thread lua state override that new objects created will be assigned to.
 		/// @return The current lua state to force objects to be assigned to.
 		LuaStateWrapper* GetThreadLuaStateOverride() const;
 
-		/// Forces all new MOs created in this thread to be assigned to a particular lua state.
-		/// This is to ensure that objects created in threaded Lua environments can be safely used.
-		/// @param luaState The lua state to force objects to be assigned to.
-		void SetThreadLuaStateOverride(LuaStateWrapper* luaState);
+		/// Names the lua state this thread is running scripts in. A serial pass still gives a new object
+		/// its own state; only a parallel per-state task hands its own state to what it creates, because
+		/// every other state belongs to another thread for the length of that task.
+		/// @param luaState The lua state this thread runs in, or null to clear it.
+		/// @param parallelStateTask Whether this thread is one of the per-state tasks running in parallel.
+		void SetThreadLuaStateOverride(LuaStateWrapper* luaState, bool parallelStateTask = false);
 
 		/// Gets the current thread lua state that is running.
 		/// @return The current lua state that is running.
 		LuaStateWrapper* GetThreadCurrentLuaState() const;
 
-		/// Returns a free threaded script states to assign a movableobject to.
-		/// This will be locked to our thread and safe to use - ensure that it'll be unlocked after use!
+		/// Returns the threaded script state an object's scripts belong on, locked to our thread and safe
+		/// to use - ensure that it'll be unlocked after use! The state is the object's unique ID modulo the
+		/// state count, so every peer, every restore and every machine puts that object on the same state.
+		/// @param uniqueID The unique ID of the object the state is for.
 		/// @return A script state.
-		LuaStateWrapper* GetAndLockFreeScriptState();
+		LuaStateWrapper* GetAndLockScriptStateForObject(long uniqueID);
 
 		/// Clears internal Lua package tables from all user-defined modules. Those must be reloaded with ReloadAllScripts().
 		void ClearUserModuleCache();
@@ -800,8 +831,6 @@ namespace RTE {
 		std::shared_ptr<LuaPathCallbackContext> m_PathCallbacks; //!< The current world's asynchronous callbacks.
 		std::shared_ptr<LuaPathCallbackContext> m_PathCallbackCapture; //!< The queue view used during graph capture.
 
-		int m_LastAssignedLuaState = 0;
-
 		BS::multi_future<void> m_GarbageCollectionTask;
 
 		/// Clears all the member variables of this LuaMan, effectively resetting the members of this abstraction level only.
@@ -819,7 +848,6 @@ namespace RTE {
 		static inline uint64_t s_PreviewGlobalsUndone = 0;
 		static inline bool s_PreviewGlobalsReported = false;
 		static inline bool s_PreviewFenceWindow = false;
-		static inline int s_PreviewScriptStateCursor = 0;
 	};
 
 	/// RAII redirect of the C++ sim-RNG free functions and Lua math.random to one

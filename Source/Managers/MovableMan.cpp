@@ -56,16 +56,29 @@
 
 #include <bit>
 
+extern "C" {
+#include "lua.h"
+#include "lauxlib.h"
+}
+
 #include "nlohmann/json.hpp"
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <execution>
 #include <fstream>
+#include <functional>
+#include <iomanip>
 #include <map>
+#include <memory>
+#include <queue>
+#include <set>
 #include <string>
+#include <sstream>
 #include <tuple>
 #include <unordered_set>
 #include <vector>
@@ -240,6 +253,150 @@ struct MOUniqueIDLess {
 		return a->GetUniqueID() < b->GetUniqueID();
 	}
 };
+
+struct ThreadedSyncedUpdateSelfTestContext {
+	std::vector<long> order;
+	// Armed by the deleted-object row; the first SyncedUpdate of the pass retires another state's object.
+	std::function<void()> retire;
+	// Armed for the ordered runs; the first SyncedUpdate of the pass spawns one object into the world.
+	std::function<void()> spawn;
+	// The object every SyncedUpdate writes into: the contract's "modifying other objects" channel.
+	MovableObject* witness = nullptr;
+	std::vector<long> spawnedIDs;
+	// The contract's global-table channel: one write per object, landing in as many per-state tables
+	// as the peer runs states. The count of tables is what F2 is about, so it is counted, never hashed.
+	long globalWrites = 0;
+	std::set<const void*> globalWriteStates;
+	// Whether the engine still knew the object a script asked about, at the moment that script ran.
+	int aliveHere = -1;
+};
+
+ThreadedSyncedUpdateSelfTestContext* s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+
+int AppendThreadedSyncedUpdateSelfTestOrder(lua_State* state) {
+	if (!s_ThreadedSyncedUpdateSelfTestContext) return 0;
+	s_ThreadedSyncedUpdateSelfTestContext->order.push_back(static_cast<long>(luaL_checknumber(state, 1)));
+	return 0;
+}
+
+int ReadThreadedSyncedUpdateSelfTestOrderLength(lua_State* state) {
+	lua_pushinteger(state, s_ThreadedSyncedUpdateSelfTestContext ? static_cast<lua_Integer>(s_ThreadedSyncedUpdateSelfTestContext->order.size()) : 0);
+	return 1;
+}
+
+int RunThreadedSyncedUpdateSelfTestRetire(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext && s_ThreadedSyncedUpdateSelfTestContext->retire) {
+		std::exchange(s_ThreadedSyncedUpdateSelfTestContext->retire, nullptr)();
+	}
+	return 0;
+}
+
+// The contract's "modifying other objects": every SyncedUpdate folds its own identity into one other
+// object's field, so the value carries the order the pass ran in and not merely its membership.
+int RunThreadedSyncedUpdateSelfTestWitness(lua_State* state) {
+	if (!s_ThreadedSyncedUpdateSelfTestContext || !s_ThreadedSyncedUpdateSelfTestContext->witness) return 0;
+	MovableObject* witness = s_ThreadedSyncedUpdateSelfTestContext->witness;
+	const auto previous = static_cast<uint32_t>(witness->GetNumberValue("threaded_synced_witness"));
+	const auto uniqueID = static_cast<uint32_t>(static_cast<long>(luaL_checknumber(state, 1)));
+	witness->SetNumberValue("threaded_synced_witness", static_cast<double>((previous ^ uniqueID) * 16777619u));
+	// The caller has just written its own state's global table; the value it reports is that table's
+	// running count, so a positive one says the write happened and the state says which table took it.
+	if (luaL_checknumber(state, 2) > 0) {
+		++s_ThreadedSyncedUpdateSelfTestContext->globalWrites;
+		s_ThreadedSyncedUpdateSelfTestContext->globalWriteStates.insert(g_LuaMan.GetThreadLuaStateOverride());
+	}
+	return 0;
+}
+
+// The contract's "spawning objects": the first SyncedUpdate of an armed pass puts one object into the
+// world. Its unique ID is part of what the row hashes, so a spawn at a different point in the order shows.
+int RunThreadedSyncedUpdateSelfTestSpawn(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext && s_ThreadedSyncedUpdateSelfTestContext->spawn) {
+		std::exchange(s_ThreadedSyncedUpdateSelfTestContext->spawn, nullptr)();
+	}
+	return 0;
+}
+
+// Deletes the object running this script through the engine's own script-facing deletion, from inside
+// that object's hook - what a mod's DeleteEntity(self) reaches.
+int RunThreadedSyncedUpdateSelfTestDeleteSelf(lua_State* state) {
+	const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+	if (MovableObject* object = g_MovableMan.FindObjectByUniqueID(uniqueID)) {
+		DeleteEntityFromScript(object);
+	}
+	return 0;
+}
+
+// Frees the object running this script the way engine code does - a plain delete, not the script-facing
+// one - so the row can prove a hook loop survives a deletion that never waited for it.
+int RunThreadedSyncedUpdateSelfTestEngineDeleteSelf(lua_State* state) {
+	const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+	delete g_MovableMan.FindObjectByUniqueID(uniqueID);
+	return 0;
+}
+
+// Answers whether the engine still knows the object running this script: a hook that runs on a
+// destroyed object reads freed memory, which is what the self-delete row is about.
+int ReadThreadedSyncedUpdateSelfTestAlive(lua_State* state) {
+	if (s_ThreadedSyncedUpdateSelfTestContext) {
+		const long uniqueID = static_cast<long>(luaL_checknumber(state, 1));
+		s_ThreadedSyncedUpdateSelfTestContext->aliveHere = g_MovableMan.FindObjectByUniqueID(uniqueID) ? 1 : 0;
+	}
+	return 0;
+}
+
+void InstallThreadedSyncedUpdateSelfTestCallbacks(LuaStateWrapper& state) {
+	std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+	lua_State* luaState = state.GetLuaState();
+	lua_pushcfunction(luaState, AppendThreadedSyncedUpdateSelfTestOrder);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateAppend");
+	lua_pushcfunction(luaState, ReadThreadedSyncedUpdateSelfTestOrderLength);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateLength");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestRetire);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateRetire");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestWitness);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateWitness");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestSpawn);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateSpawn");
+	lua_pushcfunction(luaState, ReadThreadedSyncedUpdateSelfTestAlive);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateAliveHere");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestDeleteSelf);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateDeleteSelf");
+	lua_pushcfunction(luaState, RunThreadedSyncedUpdateSelfTestEngineDeleteSelf);
+	lua_setglobal(luaState, "_ThreadedSyncedUpdateEngineDeleteSelf");
+}
+
+// A registered MO beside the identity the synced pass orders on, read once when the pass snapshots the
+// state. A script earlier in the same pass can delete an object still held in the snapshot, so nothing
+// after the snapshot may read the object to order it.
+struct SyncedUpdateEntry {
+	MovableObject* object = nullptr;
+	long uniqueID = 0;
+	MOID moid = g_NoMOID;
+	long registrationSerial = 0;
+};
+
+// The snapshot order: unique ID, then MOID for the pair that shares one (a faithful clone copies the
+// source's ID), then the place each took in the registration order, which settles the pair the MOID
+// index never saw. All three come from the sim, so none depends on how many Lua states the peer runs;
+// the state-vector position the heap would otherwise fall back on does.
+static bool SyncedUpdateEntryEarlier(const SyncedUpdateEntry& lhs, const SyncedUpdateEntry& rhs) {
+	if (lhs.uniqueID != rhs.uniqueID) return lhs.uniqueID < rhs.uniqueID;
+	if (lhs.moid != rhs.moid) return lhs.moid < rhs.moid;
+	return lhs.registrationSerial < rhs.registrationSerial;
+}
+
+// A Lua state's registered-MO set copied into canonical order with each object's identity read once.
+static std::vector<SyncedUpdateEntry> SnapshotRegisteredMOs(const LuaStateWrapper& state) {
+	const auto& registered = state.GetRegisteredMOs();
+	std::vector<SyncedUpdateEntry> snapshot;
+	snapshot.reserve(registered.size());
+	for (MovableObject* mo: registered) {
+		snapshot.push_back({mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()});
+	}
+	std::sort(snapshot.begin(), snapshot.end(), SyncedUpdateEntryEarlier);
+	return snapshot;
+}
 
 // A Lua state's registered-MO set copied into canonical unique-ID order (the set itself is unordered).
 static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& state, bool includePending = false) {
@@ -1898,8 +2055,7 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 		AudioMan::CheckpointRegistryScope sounds;
 		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
 		long uid = MovableObject::GetUniqueIDCounter();
-		int cursor = g_LuaMan.GetScriptStateCursor();
-		~CaptureAllocationState() { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor); }
+		~CaptureAllocationState() { g_SimRNG = sim; g_RenderRNG = render; MovableObject::PinUniqueIDCounter(uid); }
 	} allocationState;
 	out.runtimeGlobals = g_ActivityMan.CaptureRuntimeGlobals();
 	out.frameState = g_FrameMan.SaveCheckpoint();
@@ -1971,7 +2127,6 @@ bool MovableMan::CaptureWorld(WorldSnapshot& out) {
 	// Faithful clones keep their identity, but anything the clone chain drew from the counter is undone.
 	MovableObject::PinUniqueIDCounter(counter);
 	out.uniqueIDCounter = counter;
-	out.luaStateCursor = allocationState.cursor;
 	return true;
 	} catch (const std::exception& error) {
 		out.Clear();
@@ -2090,7 +2245,6 @@ bool MovableMan::RestoreWorldCandidate(const WorldSnapshot& in, const std::vecto
 		return false;
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
-	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	for (Actor* actor: m_Actors) {
 		actor->ResolveFaithfulLinks();
 	}
@@ -2147,7 +2301,6 @@ bool MovableMan::SetAsideWorld(WorldSetAside& out, bool holdActivity) {
 	if (Scene* scene = g_SceneMan.GetScene()) {
 		scene->SwapAreas(out.sceneAreas);
 	}
-	out.luaStateCursor = g_LuaMan.GetScriptStateCursor();
 	out.scriptRegistrations.clear();
 	// A throw before the world is held must not leave a pointer into this frame published.
 	struct Publication {
@@ -2373,7 +2526,6 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 		g_LuaMan.GetStateByIndex(static_cast<int>(index)).CallScriptGraph("releaseObjects");
 	}
 	MovableObject::PinUniqueIDCounter(in.uniqueIDCounter);
-	g_LuaMan.SetScriptStateCursor(in.luaStateCursor);
 	if (in.terrain.width) restored = in.terrain.Restore() && restored;
 	restored = g_MusicMan.RestoreCheckpointOwners(in.musicOwners) && restored;
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(in.soundRegistrations));
@@ -2501,10 +2653,8 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
 	struct AllocationState {
 		long uidCounter = MovableObject::GetUniqueIDCounter();
-		int luaStateCursor = g_LuaMan.GetScriptStateCursor();
 		~AllocationState() {
 			MovableObject::PinUniqueIDCounter(uidCounter);
-			g_LuaMan.SetScriptStateCursor(luaStateCursor);
 		}
 	} allocationState;
 	// A receiving peer may never have captured its VM. Detach every old Lua-owned
@@ -4832,6 +4982,1390 @@ static void ForgetActivitySlots(MovableObject* object) {
 	if (const Actor* actor = dynamic_cast<Actor*>(object)) activity->ForgetDestroyedActor(actor);
 }
 
+void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
+	const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
+	m_SyncedPassSkippedDeadEntries = 0;
+	// DeleteEntity frees an object where the script stands (LuaAdapters.cpp), so a SyncedUpdate can
+	// destroy an object this pass read before it started - its own included. The live registration set
+	// answers for the whole pass: a destructor unregisters, and a new registration waits in the pending
+	// set until the next LuaMan::Update, so nothing joins the set in between. The removal count tells
+	// the ordinary tick, where nothing died, from the one that has to look each object up.
+	const uint64_t unregistrationsAtSnapshot = LuaStateWrapper::RegisteredMOUnregistrationCount();
+	const auto stillRegistered = [unregistrationsAtSnapshot](LuaStateWrapper& state, MovableObject* mo) {
+		return LuaStateWrapper::RegisteredMOUnregistrationCount() == unregistrationsAtSnapshot || state.IsRegisteredMO(mo);
+	};
+	if (!globalMoidOrder) {
+		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+			g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
+				if (!stillRegistered(luaState, mo)) {
+					++m_SyncedPassSkippedDeadEntries;
+					continue;
+				}
+				// The request flag alone, as the threaded loop has always had it: the master pass owns
+				// the ValidMO rule, and a threaded object that asked for a SyncedUpdate still gets one.
+				if (mo->HasRequestedSyncedUpdate()) {
+					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+					if (!stillRegistered(luaState, mo)) {
+						++m_SyncedPassSkippedDeadEntries;
+						continue;
+					}
+					mo->ResetRequestedSyncedUpdateFlag();
+				}
+			}
+		}
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		return;
+	}
+
+	struct Cursor {
+		LuaStateWrapper* state = nullptr;
+		std::vector<SyncedUpdateEntry> objects;
+		size_t next = 0;
+	};
+	struct Pending {
+		SyncedUpdateEntry entry;
+		size_t cursor = 0;
+	};
+	// Orders on the identity stored at snapshot time, never on the object: an earlier script in this
+	// same pass may have deleted it.
+	const auto earlier = [](const Pending& lhs, const Pending& rhs) {
+		return SyncedUpdateEntryEarlier(rhs.entry, lhs.entry);
+	};
+
+	std::vector<Cursor> cursors;
+	cursors.reserve(g_LuaMan.GetThreadedScriptStates().size());
+	std::priority_queue<Pending, std::vector<Pending>, decltype(earlier)> pending(earlier);
+	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
+		Cursor& cursor = cursors.emplace_back();
+		cursor.state = &luaState;
+		cursor.objects = SnapshotRegisteredMOs(luaState);
+		if (!cursor.objects.empty()) pending.push({cursor.objects.front(), cursors.size() - 1});
+	}
+
+	LuaStateWrapper* currentState = nullptr;
+	while (!pending.empty()) {
+		const Pending next = pending.top();
+		pending.pop();
+		Cursor& cursor = cursors[next.cursor];
+		if (currentState != cursor.state) {
+			g_LuaMan.SetThreadLuaStateOverride(cursor.state);
+			currentState = cursor.state;
+		}
+		MovableObject* mo = next.entry.object;
+		// Ordered on the identity read at snapshot time and reached only while the object is still
+		// registered: an earlier script in this same pass may have freed it, on any state.
+		if (!stillRegistered(*cursor.state, mo)) {
+			++m_SyncedPassSkippedDeadEntries;
+		} else if (mo->HasRequestedSyncedUpdate()) {
+			mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+			if (stillRegistered(*cursor.state, mo)) {
+				mo->ResetRequestedSyncedUpdateFlag();
+			} else {
+				++m_SyncedPassSkippedDeadEntries;
+			}
+		}
+		++cursor.next;
+		if (cursor.next < cursor.objects.size()) pending.push({cursor.objects[cursor.next], next.cursor});
+	}
+	g_LuaMan.SetThreadLuaStateOverride(nullptr);
+}
+
+bool MovableMan::RunLuaStateAssignmentSelfTest() {
+	constexpr int c_ObjectCount = 256;
+	// What a machine spends before a match: a single-player scene's objects taking their script states.
+	constexpr int c_PreMatchObjects = 7;
+	// And what it spends DURING it: one object of its own between two of the match's. A cursor shifted
+	// before the match only rotates the states; a cursor shifted inside it regroups the objects, which
+	// is the difference a per-state global carries into the world.
+	constexpr int c_InterleavedAt = 100;
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_assignment_follows_the_unique_id no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL lua_state_assignment_follows_the_unique_id live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	std::array<std::string, 2> sharedCounterHashes{};
+	std::array<std::vector<int>, 2> assignments{};
+	std::array<long, 2> firstObjectID{};
+	bool byTheUniqueID = true;
+	bool ready = true;
+
+	// Every object's own field after the pass: the per-state global its state holds, which is the channel
+	// Data/Modding/threaded-determinism.md blesses and the one a shared assignment decides the value of.
+	const auto hashSharedCounters = [](const std::vector<std::unique_ptr<MOPixel>>& objects) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		const auto mix = [&hash](uint64_t value) {
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		};
+		for (const auto& object: objects) {
+			mix(static_cast<uint64_t>(object->GetUniqueID()));
+			mix(static_cast<uint64_t>(object->GetNumberValue("threaded_synced_shared_counter")));
+		}
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
+
+	for (size_t arm = 0; arm < 2 && ready; ++arm) {
+		LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+		states.swap(replacement);
+		for (LuaStateWrapper& state: states) {
+			state.Initialize();
+			InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+		}
+		ThreadedSyncedUpdateSelfTestContext context;
+		s_ThreadedSyncedUpdateSelfTestContext = &context;
+
+		// One object of this machine's own: made, scripted and dropped, leaving only what it spent.
+		const auto spendOneAssignment = [this, &fixturePath, &ready](long idBase) {
+			MovableObject::PinUniqueIDCounter(idBase);
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0 || object->LoadScript(fixturePath, true) < 0) {
+				ready = false;
+				return;
+			}
+			object->DestroyScriptState();
+			object->Destroy();
+		};
+
+		// The second arm played first: its objects took states before the match's own objects did.
+		if (arm == 1) {
+			for (int index = 0; index < c_PreMatchObjects && ready; ++index) {
+				spendOneAssignment(savedCounter + c_ObjectCount + 4096 + index);
+			}
+		}
+
+		// The match's objects, with the same unique IDs in both arms and no forced placement: what state
+		// each one lands on is the assignment's answer and nothing else.
+		std::vector<std::unique_ptr<MOPixel>> objects;
+		objects.reserve(c_ObjectCount);
+		MovableObject::PinUniqueIDCounter(savedCounter);
+		for (int index = 0; index < c_ObjectCount && ready; ++index) {
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0) {
+				ready = false;
+				break;
+			}
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			objects.push_back(std::move(object));
+			MOPixel* fixtureObject = objects.back().get();
+			const int loadStatus = fixtureObject->LoadScript(fixturePath, true);
+			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
+			if (loadStatus < 0 || adoptStatus < 0) {
+				std::cout << "[script-graph-selftest] lua_state_assignment_fixture_refused index=" << index
+				          << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
+				ready = false;
+			}
+			if (arm == 1 && index == c_InterleavedAt) {
+				const long next = MovableObject::GetUniqueIDCounter();
+				spendOneAssignment(savedCounter + c_ObjectCount + 8192);
+				MovableObject::PinUniqueIDCounter(next);
+			}
+		}
+		for (LuaStateWrapper& state: states) state.Update();
+
+		if (ready && objects.size() == c_ObjectCount) {
+			assignments[arm].reserve(objects.size());
+			for (const auto& object: objects) {
+				const int stateIndex = g_LuaMan.GetStateIndex(object->GetLuaState());
+				assignments[arm].push_back(stateIndex);
+				// The save index is one-based over the threaded states, so the ID's index is one less.
+				byTheUniqueID = byTheUniqueID && stateIndex - 1 == static_cast<int>(g_LuaMan.ScriptStateIndexForObject(object->GetUniqueID()));
+			}
+			firstObjectID[arm] = objects.front()->GetUniqueID();
+			context.order.clear();
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			sharedCounterHashes[arm] = hashSharedCounters(objects);
+		} else {
+			ready = false;
+		}
+
+		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+		for (const auto& object: objects) {
+			m_ValidParticles.erase(object.get());
+			std::erase(m_AddedParticles, object.get());
+			object->DestroyScriptState();
+			object->Destroy();
+		}
+		states.swap(replacement);
+	}
+
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+	const bool sameAssignment = ready && !assignments[0].empty() && assignments[0] == assignments[1];
+	const bool sameSharedCounters = ready && !sharedCounterHashes[0].empty() && sharedCounterHashes[0] == sharedCounterHashes[1];
+	const bool passed = sameAssignment && sameSharedCounters && byTheUniqueID && firstObjectID[0] == firstObjectID[1];
+	size_t firstDifference = assignments[0].size();
+	for (size_t index = 0; index < assignments[0].size() && index < assignments[1].size(); ++index) {
+		if (assignments[0][index] != assignments[1][index]) {
+			firstDifference = index;
+			break;
+		}
+	}
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " lua_state_assignment_follows_the_unique_id states=" << c_LuaStateCount
+	          << " pre_match_objects=0," << c_PreMatchObjects << " objects=" << c_ObjectCount
+	          << " shared_counters=" << sharedCounterHashes[0] << "," << sharedCounterHashes[1]
+	          << " same_assignment=" << (sameAssignment ? 1 : 0) << " by_unique_id=" << (byTheUniqueID ? 1 : 0)
+	          << " first_uid=" << firstObjectID[0] << "," << firstObjectID[1]
+	          << " first_state=" << (assignments[0].empty() ? -1 : assignments[0].front()) << "," << (assignments[1].empty() ? -1 : assignments[1].front())
+	          << (sameAssignment ? "" : " first_difference_at=" + std::to_string(firstDifference))
+	          << (passed ? "" : " (a machine that ran objects before the match put the same objects on other states)") << std::endl;
+	return passed;
+}
+
+bool MovableMan::RunLuaStateRestoreBoundarySelfTest() {
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL restore_keeps_the_object_with_its_saved_script_graph no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL restore_keeps_the_object_with_its_saved_script_graph live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+	states.swap(replacement);
+	for (LuaStateWrapper& state: states) state.Initialize();
+
+	int serialSpawnState = -1;
+	int serialSpawnOwnState = -1;
+	int parallelSpawnState = -1;
+	int parallelSpawnSpawnerState = -1;
+	uint64_t spawnerPlacements = 0;
+	int restoredState = -1;
+	int savedIndex = -1;
+	int idIndex = -1;
+	double restoredField = -1.0;
+	bool ready = true;
+
+	{
+		// A spawn from a SERIAL pass - the channel the contract blesses - takes its OWN state, though the
+		// pass is running inside another one. A spawn from a parallel per-state task cannot: every other
+		// state belongs to another thread for the length of that task, so it takes its spawner's.
+		const size_t spawnerIndex = 3;
+		MovableObject::PinUniqueIDCounter(savedCounter + 64);
+		auto serialObject = std::make_unique<MOPixel>();
+		g_LuaMan.SetThreadLuaStateOverride(&states[spawnerIndex]);
+		ready = serialObject->Create() >= 0 && serialObject->LoadScript(fixturePath, true) == 0;
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		if (ready) {
+			serialSpawnState = g_LuaMan.GetStateIndex(serialObject->GetLuaState());
+			serialSpawnOwnState = static_cast<int>(g_LuaMan.ScriptStateIndexForObject(serialObject->GetUniqueID())) + 1;
+		}
+		serialObject->DestroyScriptState();
+		serialObject->Destroy();
+
+		const uint64_t spawnerPlacementsBefore = LuaMan::ScriptStatesTakenFromASpawner();
+		auto parallelObject = std::make_unique<MOPixel>();
+		g_LuaMan.SetThreadLuaStateOverride(&states[spawnerIndex], true);
+		ready = ready && parallelObject->Create() >= 0 && parallelObject->LoadScript(fixturePath, true) == 0;
+		g_LuaMan.SetThreadLuaStateOverride(nullptr);
+		if (ready) {
+			parallelSpawnState = g_LuaMan.GetStateIndex(parallelObject->GetLuaState());
+			parallelSpawnSpawnerState = static_cast<int>(spawnerIndex) + 1;
+			spawnerPlacements = LuaMan::ScriptStatesTakenFromASpawner() - spawnerPlacementsBefore;
+		}
+		parallelObject->DestroyScriptState();
+		parallelObject->Destroy();
+	}
+
+	{
+		// The restore boundary. The image says which state held this object and its own _ScriptedObjects
+		// table, and the graph is restored into that state by index: the object has to land there too, or
+		// the mod's fields are orphaned and the peer groups its per-state globals differently from the
+		// live ones. The image here names a state the object's ID does not, which is what an object
+		// spawned inside a hook looks like in any save.
+		MovableObject::PinUniqueIDCounter(savedCounter + 128);
+		auto restored = std::make_unique<MOPixel>();
+		if (restored->Create() < 0 || restored->LoadScript(fixturePath, true) != 0) {
+			ready = false;
+		} else {
+			const long uniqueID = restored->GetUniqueID();
+			idIndex = static_cast<int>(g_LuaMan.ScriptStateIndexForObject(uniqueID)) + 1;
+			savedIndex = idIndex == static_cast<int>(states.size()) ? 1 : idIndex + 1;
+			// What RestoreScriptGraphs puts back into the state the image named, keyed on the object.
+			g_LuaMan.GetStateByIndex(savedIndex).RunScriptString(
+			    "_ScriptedObjects = _ScriptedObjects or {}; _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"] = { charge = 7 }");
+			restored->StageRestoredIdentity(uniqueID, savedIndex);
+			restored->AdoptPersistedUniqueID();
+			restoredState = g_LuaMan.GetStateIndex(restored->GetLuaState());
+			if (LuaStateWrapper* state = restored->GetLuaState()) {
+				state->RunScriptString("_RestoreBoundaryCharge = _ScriptedObjects and _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"] and _ScriptedObjects[\"" + std::to_string(uniqueID) + "\"].charge or -1");
+				std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+				lua_State* luaState = state->GetLuaState();
+				lua_getglobal(luaState, "_RestoreBoundaryCharge");
+				restoredField = lua_tonumber(luaState, -1);
+				lua_pop(luaState, 1);
+				state->RunScriptString("_RestoreBoundaryCharge = nil");
+			}
+		}
+		restored->DestroyScriptState();
+		restored->Destroy();
+	}
+
+	states.swap(replacement);
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+
+	const bool serialGreen = ready && serialSpawnState > 0 && serialSpawnState == serialSpawnOwnState;
+	const bool parallelKnown = ready && parallelSpawnState > 0 && parallelSpawnState == parallelSpawnSpawnerState && spawnerPlacements == 1;
+	const bool restoreGreen = ready && restoredState > 0 && restoredState == savedIndex && restoredField == 7.0;
+	const bool passed = serialGreen && parallelKnown && restoreGreen;
+	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL")
+	          << " restore_keeps_the_object_with_its_saved_script_graph states=" << c_LuaStateCount
+	          << " serial_spawn_state=" << serialSpawnState << " serial_spawn_own_state=" << serialSpawnOwnState
+	          << " parallel_spawn_state=" << parallelSpawnState << " parallel_spawner_state=" << parallelSpawnSpawnerState
+	          << " spawner_placements=" << spawnerPlacements
+	          << " saved_state=" << savedIndex << " id_state=" << idIndex << " landed=" << restoredState
+	          << " field=" << restoredField
+	          << (serialGreen ? "" : " (a spawn inside a serial pass took its spawner's state)")
+	          << (restoreGreen ? "" : " (the restore moved the object away from the state its saved script graph is in)")
+	          << std::endl;
+	return passed;
+}
+
+bool MovableMan::RunLuaStateIdentitySelfTest() {
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL create_keeps_a_live_scripted_object_running no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL create_keeps_a_live_scripted_object_running live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+	states.swap(replacement);
+	for (LuaStateWrapper& state: states) {
+		state.Initialize();
+		InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+	}
+	ThreadedSyncedUpdateSelfTestContext context;
+	s_ThreadedSyncedUpdateSelfTestContext = &context;
+
+	const auto add = [this, &fixturePath](long counterBefore) {
+		MovableObject::PinUniqueIDCounter(counterBefore);
+		auto object = std::make_unique<MOPixel>();
+		if (object->Create() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		m_ValidParticles.insert(object.get());
+		m_AddedParticles.push_back(object.get());
+		if (object->LoadScript(fixturePath, true) != 0 || object->AdoptScriptObject() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		return object;
+	};
+	const auto drop = [this](std::unique_ptr<MOPixel>& object) {
+		if (!object) {
+			return;
+		}
+		m_ValidParticles.erase(object.get());
+		std::erase(m_AddedParticles, object.get());
+		object->DestroyScriptState();
+		object.reset();
+	};
+	const auto promote = [&states] {
+		for (LuaStateWrapper& state: states) state.Update();
+	};
+	const auto ran = [&context](long uniqueID) {
+		return static_cast<int>(std::count(context.order.begin(), context.order.end(), uniqueID));
+	};
+	// A field of the mod's own table, written and read where a script would see it.
+	const auto writeCharge = [](LuaStateWrapper* state, long uniqueID, int value) {
+		if (state) state->RunScriptString("_ScriptedObjects[\"" + std::to_string(uniqueID) + "\"].charge = " + std::to_string(value));
+	};
+	const auto readCharge = [](LuaStateWrapper* state, long uniqueID) {
+		double value = -1.0;
+		if (!state) return value;
+		const std::string key = "_ScriptedObjects[\"" + std::to_string(uniqueID) + "\"]";
+		state->RunScriptString("_IdentityRowCharge = " + key + " and " + key + ".charge or -1");
+		std::lock_guard<std::recursive_mutex> lock(state->GetMutex());
+		lua_State* luaState = state->GetLuaState();
+		lua_getglobal(luaState, "_IdentityRowCharge");
+		value = lua_tonumber(luaState, -1);
+		lua_pop(luaState, 1);
+		state->RunScriptString("_IdentityRowCharge = nil");
+		return value;
+	};
+
+	bool ready = true;
+
+	// A Create on a live scripted object draws it a new identity. Its hooks find self under that
+	// identity, so the script object has to come along or the object silently stops running.
+	long createBefore = 0;
+	long createAfter = 0;
+	int createRanBefore = 0;
+	int createRanAfter = 0;
+	int createRanUnderTheOldID = 0;
+	double createCharge = -1.0;
+	{
+		auto object = add(savedCounter + 256);
+		ready = object != nullptr;
+		if (ready) {
+			promote();
+			createBefore = object->GetUniqueID();
+			writeCharge(object->GetLuaState(), createBefore, 7);
+			context.order.clear();
+			object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			createRanBefore = ran(createBefore);
+			ready = object->Create() >= 0;
+			createAfter = object->GetUniqueID();
+			promote();
+			context.order.clear();
+			object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			createRanAfter = ran(createAfter);
+			createRanUnderTheOldID = ran(createBefore);
+			createCharge = readCharge(object->GetLuaState(), createAfter);
+		}
+		drop(object);
+	}
+
+	// A restore adopts the identity its image carries. A live object already holding it drew that ID
+	// from the counter, so the holder is the one that moves - and two live objects never share an ID.
+	long holderBefore = 0;
+	long holderAfter = 0;
+	long adoptedID = 0;
+	int liveHoldersOfTheAdoptedID = 0;
+	int adoptedIDNamesTheRestored = 0;
+	double holderCharge = -1.0;
+	{
+		auto holder = add(savedCounter + 512);
+		auto restored = add(savedCounter + 600);
+		ready = ready && holder != nullptr && restored != nullptr;
+		if (ready) {
+			promote();
+			holderBefore = holder->GetUniqueID();
+			writeCharge(holder->GetLuaState(), holderBefore, 9);
+			restored->StageRestoredIdentity(holderBefore, -1);
+			restored->AdoptPersistedUniqueID();
+			adoptedID = restored->GetUniqueID();
+			holderAfter = holder->GetUniqueID();
+			liveHoldersOfTheAdoptedID = 1 + (holderAfter == adoptedID ? 1 : 0);
+			adoptedIDNamesTheRestored = FindObjectByUniqueID(adoptedID) == restored.get() ? 1 : 0;
+			holderCharge = readCharge(holder->GetLuaState(), holderAfter);
+		}
+		drop(restored);
+		drop(holder);
+	}
+
+	// Two live registered objects can still share one unique ID and no MOID - a private copy takes the
+	// identity it shadows and registers with nobody - so the walk's key has to tell them apart itself.
+	long tieSharedID = 0;
+	long tieSerials[2] = {0, 0};
+	int tieKeyIsTotal = 0;
+	int tieEarlierRegistrationIsFirst = 0;
+	{
+		// One state holds both: the assignment is the unique ID modulo the count, so IDs a count apart
+		// land together.
+		const long firstID = savedCounter + 1024;
+		auto first = add(firstID - 1);
+		auto twin = add(firstID + c_LuaStateCount - 1);
+		ready = ready && first != nullptr && twin != nullptr;
+		if (ready) {
+			promote();
+			tieSharedID = first->GetUniqueID();
+			{
+				// A private copy is not in the canonical map, so the staged one leaves it first.
+				MovableObject::FaithfulCloneScope faithful(false);
+				UnregisterObject(twin.get());
+				twin->StageRestoredIdentity(tieSharedID, -1);
+				twin->AdoptPersistedUniqueID();
+			}
+			tieSerials[0] = first->GetScriptRegistrationSerial();
+			tieSerials[1] = twin->GetScriptRegistrationSerial();
+			const SyncedUpdateEntry earlierEntry{first.get(), tieSharedID, first->GetID(), tieSerials[0]};
+			const SyncedUpdateEntry laterEntry{twin.get(), twin->GetUniqueID(), twin->GetID(), tieSerials[1]};
+			tieKeyIsTotal = SyncedUpdateEntryEarlier(earlierEntry, laterEntry) && !SyncedUpdateEntryEarlier(laterEntry, earlierEntry) ? 1 : 0;
+			LuaStateWrapper* sharedState = first->GetLuaState();
+			if (sharedState == twin->GetLuaState()) {
+				const std::vector<SyncedUpdateEntry> snapshot = SnapshotRegisteredMOs(*sharedState);
+				for (const SyncedUpdateEntry& entry: snapshot) {
+					if (entry.object == first.get() || entry.object == twin.get()) {
+						tieEarlierRegistrationIsFirst = entry.object == first.get() ? 1 : 0;
+						break;
+					}
+				}
+			}
+		}
+		drop(twin);
+		drop(first);
+	}
+
+	// ENGINE 335: the pass reads the request flag through the entry's pointer. A script in the same
+	// pass frees another object synchronously (LuaAdapters.cpp DeleteEntity), so the entry a later pop
+	// reaches - and the entry an earlier pop already read - must both be safe.
+	long laterVictimID = 0;
+	long earlierVictimID = 0;
+	int laterVictimSkipped = 0;
+	int earlierVictimRan = 0;
+	int passesCompleted = 0;
+	int poisonOverAFreedEntry[2] = {0, 0};
+	{
+		auto runner = add(savedCounter + 2048);
+		auto laterVictim = add(savedCounter + 2176);
+		ready = ready && runner != nullptr && laterVictim != nullptr;
+		if (ready) {
+			promote();
+			laterVictimID = laterVictim->GetUniqueID();
+			// The runner's ID is the lower one, so the merge reaches the victim after the script freed it.
+			void* poison = nullptr;
+			void* victimAddress = laterVictim.get();
+			context.order.clear();
+			runner->RequestSyncedUpdate();
+			context.retire = [this, &laterVictim, &poison] {
+				m_ValidParticles.erase(laterVictim.get());
+				std::erase(m_AddedParticles, laterVictim.get());
+				laterVictim.reset();
+				// A block of the same size over the freed one, in a value no flag survives, so a stale
+				// read of the request flag faults instead of looking alive.
+				poison = ::operator new(sizeof(MOPixel));
+				std::memset(poison, 0xDD, sizeof(MOPixel));
+			};
+			RunThreadedSyncedUpdatePass(true);
+			context.retire = nullptr;
+			laterVictimSkipped = static_cast<int>(GetSyncedPassSkippedDeadEntries());
+			poisonOverAFreedEntry[0] = poison == victimAddress ? 1 : 0;
+			++passesCompleted;
+			if (poison) ::operator delete(poison);
+
+			// And the other way: the entry the merge popped and read before a later script freed it.
+			auto earlierVictim = add(savedCounter + 1920);
+			ready = earlierVictim != nullptr;
+			if (ready) {
+				promote();
+				earlierVictimID = earlierVictim->GetUniqueID();
+				poison = nullptr;
+				victimAddress = earlierVictim.get();
+				context.order.clear();
+				runner->RequestSyncedUpdate();
+				context.retire = [this, &earlierVictim, &poison] {
+					m_ValidParticles.erase(earlierVictim.get());
+					std::erase(m_AddedParticles, earlierVictim.get());
+					earlierVictim.reset();
+					poison = ::operator new(sizeof(MOPixel));
+					std::memset(poison, 0xDD, sizeof(MOPixel));
+				};
+				RunThreadedSyncedUpdatePass(true);
+				context.retire = nullptr;
+				earlierVictimRan = ran(earlierVictimID);
+				poisonOverAFreedEntry[1] = poison == victimAddress ? 1 : 0;
+				++passesCompleted;
+				if (poison) ::operator delete(poison);
+			}
+			drop(earlierVictim);
+		}
+		drop(laterVictim);
+		drop(runner);
+	}
+
+	// An image that carries two scripted copies of ONE identity - what a private overlay restores -
+	// read on two peers whose residents came up in opposite order. The pair stays live on one identity
+	// by design, and the walk orders it on the registration serial, which is a per-process fact: the
+	// row records both arms' answers, so the cross-peer half of that is visible in its own numbers.
+	long tieRestoreIDs[2][2] = {{0, 0}, {0, 0}};
+	long tieRestoreSerials[2][2] = {{0, 0}, {0, 0}};
+	int tieRestoreFirstIsEarlier[2] = {-1, -1};
+	int tieRestoreDuplicate[2] = {1, 1};
+	// What the image recorded for the pair: the writer's own registration order.
+	const long imageSerials[2] = {savedCounter + 7000, savedCounter + 7001};
+	const auto addFromImage = [this, &fixturePath](long counterBefore, long serial) {
+		MovableObject::PinUniqueIDCounter(counterBefore);
+		auto object = std::make_unique<MOPixel>();
+		if (object->Create() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		m_ValidParticles.insert(object.get());
+		m_AddedParticles.push_back(object.get());
+		object->StageRestoredScriptRegistration(serial);
+		if (object->LoadScript(fixturePath, true) != 0 || object->AdoptScriptObject() < 0) {
+			return std::unique_ptr<MOPixel>();
+		}
+		return object;
+	};
+	for (size_t arm = 0; arm < 2 && ready; ++arm) {
+		const long firstOwnID = savedCounter + 3072;
+		const long secondOwnID = firstOwnID + c_LuaStateCount;
+		const long imageID = savedCounter + 3008;
+		// The only difference between the arms is which resident registered first.
+		std::unique_ptr<MOPixel> first;
+		std::unique_ptr<MOPixel> second;
+		if (arm == 0) {
+			first = addFromImage(firstOwnID - 1, imageSerials[0]);
+			second = addFromImage(secondOwnID - 1, imageSerials[1]);
+		} else {
+			second = addFromImage(secondOwnID - 1, imageSerials[1]);
+			first = addFromImage(firstOwnID - 1, imageSerials[0]);
+		}
+		ready = first != nullptr && second != nullptr;
+		if (ready) {
+			promote();
+			tieRestoreSerials[arm][0] = first->GetScriptRegistrationSerial();
+			tieRestoreSerials[arm][1] = second->GetScriptRegistrationSerial();
+			// The image is read in its own order on every peer, from the same pinned counter.
+			MovableObject::PinUniqueIDCounter(savedCounter + 3500);
+			{
+				// Both are private copies of one identity: neither is in the canonical map.
+				MovableObject::FaithfulCloneScope faithful(false);
+				UnregisterObject(first.get());
+				UnregisterObject(second.get());
+				first->StageRestoredIdentity(imageID, -1);
+				first->AdoptPersistedUniqueID();
+				second->StageRestoredIdentity(imageID, -1);
+				second->AdoptPersistedUniqueID();
+			}
+			tieRestoreIDs[arm][0] = first->GetUniqueID();
+			tieRestoreIDs[arm][1] = second->GetUniqueID();
+			tieRestoreDuplicate[arm] = tieRestoreIDs[arm][0] == tieRestoreIDs[arm][1] ? 1 : 0;
+			const SyncedUpdateEntry firstEntry{first.get(), first->GetUniqueID(), first->GetID(), tieRestoreSerials[arm][0]};
+			const SyncedUpdateEntry secondEntry{second.get(), second->GetUniqueID(), second->GetID(), tieRestoreSerials[arm][1]};
+			tieRestoreFirstIsEarlier[arm] = SyncedUpdateEntryEarlier(firstEntry, secondEntry) ? 1 : 0;
+		}
+		drop(second);
+		drop(first);
+	}
+
+	// A mod's hook deletes its own object through DeleteEntity, which frees where the script stands
+	// (LuaAdapters.cpp). The loop still holds that object's script list and runs its next script, so
+	// the object has to outlive the loop and go the moment the hook returns.
+	long selfDeleteID = 0;
+	int selfDeleteRan = 0;
+	int selfDeleteSecondScriptRan = 0;
+	int selfDeleteAliveInTheLoop = -1;
+	int selfDeleteStillRegistered = 1;
+	int selfDeleteStillKnown = 1;
+	{
+		const std::string deletePath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookSelfTest.lua");
+		const std::string witnessPath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookWitnessSelfTest.lua");
+		MovableObject::PinUniqueIDCounter(savedCounter + 2560);
+		auto object = std::make_unique<MOPixel>();
+		bool armed = object->Create() >= 0;
+		if (armed) {
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			armed = object->LoadScript(deletePath, true) == 0 && object->LoadScript(witnessPath, true) == 0 &&
+			        object->AdoptScriptObject() >= 0;
+		}
+		if (armed) {
+			promote();
+			selfDeleteID = object->GetUniqueID();
+			LuaStateWrapper* state = object->GetLuaState();
+			// The script owns the object from here: DeleteEntity is what frees it.
+			MovableObject* raw = object.release();
+			context.order.clear();
+			context.aliveHere = -1;
+			raw->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			selfDeleteRan = ran(selfDeleteID);
+			selfDeleteSecondScriptRan = ran(-selfDeleteID);
+			selfDeleteAliveInTheLoop = context.aliveHere;
+			// Both answers read the address only, never the object.
+			selfDeleteStillRegistered = state && state->IsRegisteredMO(raw) ? 1 : 0;
+			selfDeleteStillKnown = FindObjectByUniqueID(selfDeleteID) ? 1 : 0;
+			m_ValidParticles.erase(raw);
+			std::erase(m_AddedParticles, raw);
+			if (selfDeleteStillKnown) delete raw;
+		} else {
+			ready = false;
+			drop(object);
+		}
+	}
+
+	// The serial has to survive the image the way the unique-ID counter does: a restored object keeps
+	// the writer's place in the order, and this machine's registrations continue above it.
+	long roundTripSerials[2] = {0, 0};
+	long roundTripNextSerial = 0;
+	int roundTripBlobCarriesSerial = 0;
+	int roundTripImageApplied = 0;
+	int roundTripScriptsReady = 0;
+	{
+		const long counterBeforeRoundTrip = MovableObject::GetScriptRegistrationSerialCounter();
+		auto source = add(savedCounter + 3968);
+		ready = ready && source != nullptr;
+		std::string image;
+		if (ready) {
+			promote();
+			roundTripSerials[0] = source->GetScriptRegistrationSerial();
+			image = source->SaveRuntimeImage();
+			roundTripBlobCarriesSerial = image.find(std::to_string(roundTripSerials[0])) != std::string::npos ? 1 : 0;
+		}
+		drop(source);
+		if (ready) {
+			// A machine that has drawn nothing of its own reads the image.
+			// A machine that has drawn nothing of its own takes what the image recorded, in the order a
+			// restore has it: the serial is in place before the scripts initialize.
+			MovableObject::PinScriptRegistrationSerial(0);
+			MovableObject::PinUniqueIDCounter(savedCounter + 4032);
+			auto restored = std::make_unique<MOPixel>();
+			ready = restored->Create() >= 0;
+			if (ready) {
+				m_ValidParticles.insert(restored.get());
+				m_AddedParticles.push_back(restored.get());
+				restored->StageRestoredScriptRegistration(roundTripSerials[0]);
+				roundTripImageApplied = 1;
+				roundTripScriptsReady = restored->LoadScript(fixturePath, true) == 0 && restored->AdoptScriptObject() >= 0 ? 1 : 0;
+				ready = roundTripScriptsReady == 1;
+			}
+			if (ready) {
+				promote();
+				roundTripSerials[1] = restored->GetScriptRegistrationSerial();
+				auto next = add(savedCounter + 4096);
+				if (next) roundTripNextSerial = next->GetScriptRegistrationSerial();
+				drop(next);
+			}
+			drop(restored);
+			MovableObject::PinScriptRegistrationSerial(counterBeforeRoundTrip);
+		}
+	}
+
+	// The same hook, freed by an engine path that never waited for it: the loop must end there and
+	// nothing may read the object afterwards - the scope included.
+	long engineDeleteID = 0;
+	int engineDeleteRan = 0;
+	int engineDeleteSecondScriptRan = 0;
+	int engineDeleteStillKnown = 1;
+	uint64_t engineDeleteLoopsEnded = 0;
+	{
+		const std::string deletePath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/EngineDeleteHookSelfTest.lua");
+		const std::string witnessPath = g_PresetMan.GetFullModulePath("Tests.rte/Activities/SelfDeleteHookWitnessSelfTest.lua");
+		MovableObject::PinUniqueIDCounter(savedCounter + 2816);
+		auto object = std::make_unique<MOPixel>();
+		bool armed = object->Create() >= 0;
+		if (armed) {
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			armed = object->LoadScript(deletePath, true) == 0 && object->LoadScript(witnessPath, true) == 0 &&
+			        object->AdoptScriptObject() >= 0;
+		}
+		if (armed) {
+			promote();
+			engineDeleteID = object->GetUniqueID();
+			const uint64_t loopsEndedBefore = MovableObject::HookLoopsEndedOnADestroyedObject();
+			MovableObject* raw = object.release();
+			context.order.clear();
+			context.aliveHere = -1;
+			raw->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			engineDeleteRan = ran(engineDeleteID);
+			engineDeleteSecondScriptRan = ran(-engineDeleteID);
+			engineDeleteStillKnown = FindObjectByUniqueID(engineDeleteID) ? 1 : 0;
+			engineDeleteLoopsEnded = MovableObject::HookLoopsEndedOnADestroyedObject() - loopsEndedBefore;
+			m_ValidParticles.erase(raw);
+			std::erase(m_AddedParticles, raw);
+			if (engineDeleteStillKnown) delete raw;
+		} else {
+			ready = false;
+			drop(object);
+		}
+	}
+
+	s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+	states.swap(replacement);
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+
+	const bool createGreen = ready && createBefore > 0 && createAfter > 0 && createAfter != createBefore &&
+	                         createRanBefore == 1 && createRanAfter == 1 && createRanUnderTheOldID == 0 && createCharge == 7.0;
+	const bool adoptGreen = ready && adoptedID == holderBefore && holderAfter != adoptedID && liveHoldersOfTheAdoptedID == 1 &&
+	                        adoptedIDNamesTheRestored == 1 && holderCharge == 9.0;
+	const bool tieGreen = ready && tieSharedID > 0 && tieSerials[0] > 0 && tieSerials[1] > tieSerials[0] &&
+	                      tieKeyIsTotal == 1 && tieEarlierRegistrationIsFirst == 1;
+	const bool freedGreen = ready && passesCompleted == 2 && laterVictimSkipped == 1 && earlierVictimRan == 0;
+	const bool selfDeleteGreen = ready && selfDeleteID > 0 && selfDeleteRan == 1 && selfDeleteSecondScriptRan == 1 &&
+	                             selfDeleteAliveInTheLoop == 1 && selfDeleteStillRegistered == 0 && selfDeleteStillKnown == 0;
+	// The image's serials travel with it, so both peers hold the same pair and walk it the same way.
+	const bool tieRestoreGreen = ready && tieRestoreDuplicate[0] == 1 && tieRestoreDuplicate[1] == 1 &&
+	                             tieRestoreIDs[0][0] == tieRestoreIDs[1][0] && tieRestoreIDs[0][1] == tieRestoreIDs[1][1] &&
+	                             tieRestoreSerials[0][0] == tieRestoreSerials[1][0] && tieRestoreSerials[0][1] == tieRestoreSerials[1][1] &&
+	                             tieRestoreFirstIsEarlier[0] == tieRestoreFirstIsEarlier[1] && tieRestoreFirstIsEarlier[0] >= 0;
+	const bool roundTripGreen = ready && roundTripSerials[0] > 0 && roundTripBlobCarriesSerial == 1 &&
+	                            roundTripSerials[1] == roundTripSerials[0] && roundTripNextSerial > roundTripSerials[0];
+	const bool engineDeleteGreen = ready && engineDeleteID > 0 && engineDeleteRan == 1 && engineDeleteSecondScriptRan == 0 &&
+	                               engineDeleteStillKnown == 0 && engineDeleteLoopsEnded == 1;
+
+	std::cout << "[script-graph-selftest] " << (createGreen ? "PASS" : "FAIL")
+	          << " create_keeps_a_live_scripted_object_running states=" << c_LuaStateCount
+	          << " id_before=" << createBefore << " id_after=" << createAfter
+	          << " ran_before=" << createRanBefore << " ran_after=" << createRanAfter
+	          << " ran_under_the_old_id=" << createRanUnderTheOldID << " charge=" << createCharge
+	          << (createGreen ? "" : " (Create drew a new identity and the object's scripts stopped running)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (adoptGreen ? "PASS" : "FAIL")
+	          << " restore_gives_an_adopted_unique_id_to_one_object_only states=" << c_LuaStateCount
+	          << " adopted=" << adoptedID << " holder_before=" << holderBefore << " holder_after=" << holderAfter
+	          << " live_holders=" << liveHoldersOfTheAdoptedID << " adopted_id_names_the_restored=" << adoptedIDNamesTheRestored
+	          << " holder_charge=" << holderCharge
+	          << (adoptGreen ? "" : " (the restore left two live objects sharing one unique ID)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (tieGreen ? "PASS" : "FAIL")
+	          << " synced_pass_orders_a_shared_identity_by_registration states=" << c_LuaStateCount
+	          << " shared_id=" << tieSharedID << " serials=" << tieSerials[0] << "," << tieSerials[1]
+	          << " key_is_total=" << tieKeyIsTotal << " earlier_registration_first=" << tieEarlierRegistrationIsFirst
+	          << (tieGreen ? "" : " (two objects sharing a unique ID and a MOID are ordered by the set, not by the key)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (freedGreen ? "PASS" : "FAIL")
+	          << " synced_pass_survives_a_script_freeing_either_side states=" << c_LuaStateCount
+	          << " passes=" << passesCompleted << " later_victim=" << laterVictimID << " later_skipped=" << laterVictimSkipped
+	          << " earlier_victim=" << earlierVictimID << " earlier_ran=" << earlierVictimRan
+	          << " poison_over_the_freed_block=" << poisonOverAFreedEntry[0] << "," << poisonOverAFreedEntry[1]
+	          << (freedGreen ? "" : " (the pass did not finish after a script freed an entry it holds)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (selfDeleteGreen ? "PASS" : "FAIL")
+	          << " hook_loop_survives_a_script_deleting_its_own_object states=" << c_LuaStateCount
+	          << " uid=" << selfDeleteID << " deleting_script_ran=" << selfDeleteRan
+	          << " second_script_ran=" << selfDeleteSecondScriptRan << " alive_in_the_loop=" << selfDeleteAliveInTheLoop
+	          << " still_registered_after=" << selfDeleteStillRegistered << " still_known_after=" << selfDeleteStillKnown
+	          << (selfDeleteGreen ? "" : " (the loop ran a script of an object the delete had already destroyed)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (tieRestoreGreen ? "PASS" : "FAIL")
+	          << " a_restored_shadow_pair_walks_in_registration_order states=" << c_LuaStateCount
+	          << " ids_first_registered=" << tieRestoreIDs[0][0] << "," << tieRestoreIDs[0][1]
+	          << " ids_second_registered=" << tieRestoreIDs[1][0] << "," << tieRestoreIDs[1][1]
+	          << " serials=" << tieRestoreSerials[0][0] << "," << tieRestoreSerials[0][1] << ";"
+	          << tieRestoreSerials[1][0] << "," << tieRestoreSerials[1][1]
+	          << " pair_on_one_identity=" << tieRestoreDuplicate[0] << "," << tieRestoreDuplicate[1]
+	          << " first_walks_earlier=" << tieRestoreFirstIsEarlier[0] << "," << tieRestoreFirstIsEarlier[1]
+	          << " peers_agree=" << (tieRestoreFirstIsEarlier[0] == tieRestoreFirstIsEarlier[1] ? 1 : 0)
+	          << (tieRestoreGreen ? "" : " (a shadowed identity's pair did not walk in the peer's own registration order)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (roundTripGreen ? "PASS" : "FAIL")
+	          << " a_registration_serial_survives_the_image states=" << c_LuaStateCount
+	          << " saved=" << roundTripSerials[0] << " restored=" << roundTripSerials[1]
+	          << " image_carries_it=" << roundTripBlobCarriesSerial << " image_applied=" << roundTripImageApplied
+	          << " scripts_ready=" << roundTripScriptsReady << " next_after_the_restore=" << roundTripNextSerial
+	          << (roundTripGreen ? "" : " (the image lost the registration serial, so a restored peer drew its own)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (engineDeleteGreen ? "PASS" : "FAIL")
+	          << " hook_loop_survives_an_engine_delete_of_its_object states=" << c_LuaStateCount
+	          << " uid=" << engineDeleteID << " deleting_script_ran=" << engineDeleteRan
+	          << " second_script_ran=" << engineDeleteSecondScriptRan << " still_known_after=" << engineDeleteStillKnown
+	          << " loops_ended_on_a_destroyed_object=" << engineDeleteLoopsEnded
+	          << (engineDeleteGreen ? "" : " (the loop ran on after an engine path freed its object, and its scope wrote through it)") << std::endl;
+
+	return createGreen && adoptGreen && tieGreen && freedGreen && selfDeleteGreen && tieRestoreGreen && roundTripGreen && engineDeleteGreen;
+}
+
+bool MovableMan::RunThreadedSyncedUpdateOrderSelfTest() {
+	constexpr int c_ObjectCount = 1024;
+	constexpr int c_MeasureRounds = 32;
+	constexpr std::string_view c_Fixture = "Tests.rte/Activities/ThreadedSyncedOrderSelfTest.lua";
+	const std::string fixturePath = g_PresetMan.GetFullModulePath(std::string(c_Fixture));
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	if (states.empty()) {
+		std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order no threaded Lua states" << std::endl;
+		return false;
+	}
+	if (GetMOIDCount() != 0 || !m_ValidActors.empty() || !m_ValidItems.empty() || !m_ValidParticles.empty()) {
+		std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order live movable objects prevent the temporary state-set test" << std::endl;
+		return false;
+	}
+
+	const long savedCounter = MovableObject::GetUniqueIDCounter();
+	LuaStatesArray savedStates;
+	savedStates.swap(states);
+	std::array<std::string, 2> perStateHashes;
+	std::array<std::string, 2> globalHashes;
+	long long perStateUs = 0;
+	long long globalUs = 0;
+	std::array<std::string, 2> duplicateHashes;
+	std::array<std::string, 2> freedAcrossStatesHashes{};
+	std::array<std::string, 2> freedAcrossStatesExpected{};
+	std::array<long, 2> freedAcrossStatesSkipped{};
+	std::array<long, 2> freedAcrossStatesRan{};
+	std::array<long, 2> freedAcrossStatesPoisonHit{};
+	std::array<long, 2> freedAcrossStatesVictimID{};
+	bool freedAcrossStatesVictimRan = false;
+	bool freedAcrossStatesReady = true;
+	std::array<std::array<long, 2>, 2> duplicatePositions{};
+	std::array<std::array<long, 2>, 2> duplicateIDs{};
+	std::array<std::array<long, 2>, 2> duplicateMOIDs{};
+	std::array<long, 2> duplicateOrderLength{};
+	long retiredExpectedAt = 0;
+	long retiredActualAt = 0;
+	size_t retiredExpectedLength = 0;
+	size_t retiredActualLength = 0;
+	std::string retiredExpectedHash;
+	std::string retiredActualHash;
+	size_t retiredFirstDivergence = 0;
+	bool unlistedRootRan = false;
+	std::array<long, 2> globalWriteTotals{};
+	std::array<long, 2> globalWriteStatesWritten{};
+	std::array<long, 2> spawnedInPass{};
+	long long loadPerStateUs = 0;
+	long long loadGlobalUs = 0;
+	long long loadGlobalAfterADeletionUs = 0;
+	int loadObjectsRegistered = 0;
+	bool passed = true;
+
+	const auto hashOrder = [](const std::vector<long>& order) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		for (long uniqueID: order) {
+			const auto value = static_cast<uint64_t>(uniqueID);
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		}
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
+
+	const auto hashFixture = [](const ThreadedSyncedUpdateSelfTestContext& context, const std::vector<std::unique_ptr<MOPixel>>& objects) {
+		uint64_t hash = 0xcbf29ce484222325ULL;
+		const auto mix = [&hash](uint64_t value) {
+			for (size_t byte = 0; byte < sizeof(value); ++byte) {
+				hash ^= static_cast<uint8_t>(value >> (byte * 8));
+				hash *= 0x100000001b3ULL;
+			}
+		};
+		for (long uniqueID: context.order) mix(static_cast<uint64_t>(uniqueID));
+		for (const auto& object: objects) {
+			mix(static_cast<uint64_t>(object->GetUniqueID()));
+			mix(static_cast<uint64_t>(object->GetNumberValue("threaded_synced_order_length")));
+		}
+		// The two permitted writes whose value carries the order: what the pass wrote into another
+		// object, and what it spawned. The third, a global table, is per state and is counted instead.
+		if (context.witness) mix(static_cast<uint64_t>(context.witness->GetNumberValue("threaded_synced_witness")));
+		for (long uniqueID: context.spawnedIDs) mix(static_cast<uint64_t>(uniqueID));
+		std::ostringstream text;
+		text << std::hex << std::setw(16) << std::setfill('0') << hash;
+		return text.str();
+	};
+
+	// The count is a build constant, so the two arms differ in PLACEMENT instead: the second puts every
+	// object c_PlacementShift states along, which is where a round-robin peer with a different pre-match
+	// history would have put it. The global walk orders by unique ID, so both arms must run identically.
+	constexpr size_t c_PlacementShift = 7;
+	for (size_t countIndex = 0; countIndex < 2; ++countIndex) {
+		const size_t shift = countIndex == 0 ? 0 : c_PlacementShift;
+		LuaStatesArray replacement(static_cast<size_t>(c_LuaStateCount));
+		states.swap(replacement);
+		for (LuaStateWrapper& state: states) {
+			state.Initialize();
+			InstallThreadedSyncedUpdateSelfTestCallbacks(state);
+		}
+
+		ThreadedSyncedUpdateSelfTestContext context;
+		std::vector<std::unique_ptr<MOPixel>> objects;
+		std::vector<std::unique_ptr<MOPixel>> twins;
+		objects.reserve(c_ObjectCount);
+		MovableObject::PinUniqueIDCounter(savedCounter);
+		s_ThreadedSyncedUpdateSelfTestContext = &context;
+		bool fixtureReady = true;
+		for (int index = 0; index < c_ObjectCount; ++index) {
+			auto object = std::make_unique<MOPixel>();
+			if (object->Create() < 0) {
+				fixtureReady = false;
+				break;
+			}
+			m_ValidParticles.insert(object.get());
+			m_AddedParticles.push_back(object.get());
+			objects.push_back(std::move(object));
+			MOPixel* fixtureObject = objects.back().get();
+			fixtureObject->MoveScriptsToState(states[(static_cast<size_t>(index) + shift) % states.size()]);
+			const int loadStatus = fixtureObject->LoadScript(fixturePath, true);
+			const int adoptStatus = loadStatus < 0 ? -1 : fixtureObject->AdoptScriptObject();
+			if (loadStatus < 0 || adoptStatus < 0) {
+				std::cout << "[script-graph-selftest] threaded_synced_update_fixture_refused index=" << index << " load=" << loadStatus << " adopt=" << adoptStatus << std::endl;
+				fixtureReady = false;
+				break;
+			}
+		}
+		for (LuaStateWrapper& state: states) state.Update();
+
+		// The object every SyncedUpdate writes into, and the objects the pass spawns. Neither is
+		// registered with a state, so they are written and made, never run.
+		std::vector<std::unique_ptr<MOPixel>> spawned;
+		std::unique_ptr<MOPixel> witness;
+		{
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 64);
+			auto created = std::make_unique<MOPixel>();
+			if (created->Create() >= 0) {
+				witness = std::move(created);
+				context.witness = witness.get();
+			}
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+		}
+
+		const auto run = [&](bool globalOrder, bool armWrites = false) {
+			context.order.clear();
+			const long counterBeforeRun = MovableObject::GetUniqueIDCounter();
+			if (armWrites) {
+				// Above every other fixture object, so a spawn never takes an identity the rows expect.
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 128);
+				if (context.witness) context.witness->SetNumberValue("threaded_synced_witness", 0);
+				context.spawnedIDs.clear();
+				context.globalWrites = 0;
+				context.globalWriteStates.clear();
+				context.spawn = [this, &spawned, &context] {
+					auto object = std::make_unique<MOPixel>();
+					if (object->Create() < 0) return;
+					m_ValidParticles.insert(object.get());
+					m_AddedParticles.push_back(object.get());
+					context.spawnedIDs.push_back(object->GetUniqueID());
+					spawned.push_back(std::move(object));
+				};
+			}
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(globalOrder);
+			if (armWrites) {
+				context.spawn = nullptr;
+				MovableObject::PinUniqueIDCounter(counterBeforeRun);
+			}
+			return hashFixture(context, objects);
+		};
+
+		// What the per-state globals hold after a pass: the total has to be one write per object, and
+		// how it is spread over the states is the count's business, never the world's.
+		if (fixtureReady && objects.size() == c_ObjectCount) {
+			perStateHashes[countIndex] = run(false, true);
+			globalHashes[countIndex] = run(true, true);
+			globalWriteTotals[countIndex] = context.globalWrites;
+			globalWriteStatesWritten[countIndex] = static_cast<long>(context.globalWriteStates.size());
+			spawnedInPass[countIndex] = static_cast<long>(context.spawnedIDs.size());
+
+			// Two live objects can share a unique ID: a faithful clone copies the source's, and a
+			// restored object adopts a persisted one. A pair of those, on two states, must run in the
+			// same order however many states there are. Their MOIDs come from the sim's own index.
+			const long sharedUniqueID = savedCounter + c_ObjectCount + 1;
+			std::vector<MovableObject*> moidIndex;
+			for (size_t twin = 0; twin < 2 && fixtureReady; ++twin) {
+				auto object = std::make_unique<MOPixel>();
+				MovableObject::PinUniqueIDCounter(sharedUniqueID - 1);
+				if (object->Create() < 0) {
+					fixtureReady = false;
+					break;
+				}
+				m_ValidParticles.insert(object.get());
+				m_AddedParticles.push_back(object.get());
+				twins.push_back(std::move(object));
+				MOPixel* twinObject = twins.back().get();
+				twinObject->UpdateMOID(moidIndex);
+				twinObject->MoveScriptsToState(states[(twin * 3 + 1 + shift) % states.size()]);
+				const int loadStatus = twinObject->LoadScript(fixturePath, true);
+				if (loadStatus < 0 || twinObject->AdoptScriptObject() < 0) fixtureReady = false;
+			}
+			MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+			for (LuaStateWrapper& state: states) state.Update();
+			context.order.clear();
+			for (const auto& object: objects) object->RequestSyncedUpdate();
+			for (const auto& twin: twins) twin->RequestSyncedUpdate();
+			RunThreadedSyncedUpdatePass(true);
+			duplicatePositions[countIndex] = {static_cast<long>(twins[0]->GetNumberValue("threaded_synced_order_length")),
+			                                  static_cast<long>(twins[1]->GetNumberValue("threaded_synced_order_length"))};
+			duplicateIDs[countIndex] = {twins[0]->GetUniqueID(), twins[1]->GetUniqueID()};
+			duplicateMOIDs[countIndex] = {static_cast<long>(twins[0]->GetID()), static_cast<long>(twins[1]->GetID())};
+			duplicateHashes[countIndex] = hashOrder({duplicatePositions[countIndex][0], duplicatePositions[countIndex][1]});
+			duplicateOrderLength[countIndex] = static_cast<long>(context.order.size());
+
+			// The Harvester shape: the first object of the pass frees another state's object, which the
+			// snapshot already holds and the merge reaches later. DeleteEntity frees where the script
+			// stands (LuaAdapters.cpp), so the pass must never touch that entry again.
+			{
+				void* victimPoison = nullptr;
+				const void* victimAddress = nullptr;
+				long victimID = 0;
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 8);
+				auto victim = std::make_unique<MOPixel>();
+				if (victim->Create() < 0) {
+					freedAcrossStatesReady = false;
+				} else {
+					m_ValidParticles.insert(victim.get());
+					m_AddedParticles.push_back(victim.get());
+					MOPixel* victimObject = victim.get();
+					// One state on from the first object of the walk, at either placement, and the highest
+					// unique ID there is, so the walk reaches it last.
+					victimObject->MoveScriptsToState(states[(1 + shift) % states.size()]);
+					const int loadStatus = victimObject->LoadScript(fixturePath, true);
+					if (loadStatus < 0 || victimObject->AdoptScriptObject() < 0) freedAcrossStatesReady = false;
+					victimAddress = victimObject;
+					victimID = victimObject->GetUniqueID();
+					for (LuaStateWrapper& state: states) state.Update();
+					std::vector<long> expectedOrder;
+					expectedOrder.reserve(objects.size() + twins.size());
+					for (const auto& object: objects) expectedOrder.push_back(object->GetUniqueID());
+					for (const auto& twin: twins) expectedOrder.push_back(twin->GetUniqueID());
+					std::sort(expectedOrder.begin(), expectedOrder.end());
+					context.order.clear();
+					for (const auto& object: objects) object->RequestSyncedUpdate();
+					for (const auto& twin: twins) twin->RequestSyncedUpdate();
+					victimObject->RequestSyncedUpdate();
+					context.retire = [this, &victim, &victimPoison] {
+						m_ValidParticles.erase(victim.get());
+						std::erase(m_AddedParticles, victim.get());
+						victim.reset();
+						// A block of the same size over the freed one, filled with a value no vtable
+						// pointer or flag survives, so a stale read faults instead of looking alive.
+						victimPoison = ::operator new(sizeof(MOPixel));
+						std::memset(victimPoison, 0xDD, sizeof(MOPixel));
+					};
+					RunThreadedSyncedUpdatePass(true);
+					context.retire = nullptr;
+					freedAcrossStatesSkipped[countIndex] = static_cast<long>(GetSyncedPassSkippedDeadEntries());
+					freedAcrossStatesRan[countIndex] = static_cast<long>(context.order.size());
+					freedAcrossStatesHashes[countIndex] = hashOrder(context.order);
+					freedAcrossStatesExpected[countIndex] = hashOrder(expectedOrder);
+					freedAcrossStatesVictimID[countIndex] = victimID;
+					freedAcrossStatesPoisonHit[countIndex] = victimPoison == victimAddress ? 1 : 0;
+					freedAcrossStatesVictimRan = freedAcrossStatesVictimRan || std::find(context.order.begin(), context.order.end(), victimID) != context.order.end();
+				}
+				if (victimPoison) ::operator delete(victimPoison);
+				if (victim) {
+					m_ValidParticles.erase(victim.get());
+					std::erase(m_AddedParticles, victim.get());
+					victim->DestroyScriptState();
+				}
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+			}
+
+			if (shift == c_PlacementShift) {
+				run(false);
+				run(true);
+				std::vector<long long> perStateSamples;
+				std::vector<long long> globalSamples;
+				perStateSamples.reserve(c_MeasureRounds);
+				globalSamples.reserve(c_MeasureRounds);
+				for (int round = 0; round < c_MeasureRounds; ++round) {
+					const auto perStateStarted = std::chrono::steady_clock::now();
+					run(false);
+					perStateSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - perStateStarted).count());
+					const auto globalStarted = std::chrono::steady_clock::now();
+					run(true);
+					globalSamples.push_back(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - globalStarted).count());
+				}
+				std::sort(perStateSamples.begin(), perStateSamples.end());
+				std::sort(globalSamples.begin(), globalSamples.end());
+				perStateUs = perStateSamples[perStateSamples.size() / 2];
+				globalUs = globalSamples[globalSamples.size() / 2];
+
+				// The same walk at the size of a battle. What the global order added is per registered
+				// MO - one snapshot entry, one heap push and one pop each - so the accepted cost scales
+				// with the count and the budget with it. These carry no scripts, which is what most of a
+				// battle's registered objects are to this pass: a request flag read and nothing more.
+				constexpr int c_LoadObjectCount = 5000;
+				std::vector<std::unique_ptr<MOPixel>> loadObjects;
+				loadObjects.reserve(c_LoadObjectCount);
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount + 1024);
+				for (int index = 0; index < c_LoadObjectCount; ++index) {
+					auto object = std::make_unique<MOPixel>();
+					if (object->Create() < 0) break;
+					states[(static_cast<size_t>(index) + shift) % states.size()].RegisterMO(object.get());
+					loadObjects.push_back(std::move(object));
+				}
+				MovableObject::PinUniqueIDCounter(savedCounter + c_ObjectCount);
+				loadObjectsRegistered = static_cast<int>(loadObjects.size());
+				for (LuaStateWrapper& state: states) state.Update();
+				{
+					std::vector<long long> loadPerStateSamples;
+					std::vector<long long> loadGlobalSamples;
+					std::vector<long long> loadAfterDeletionSamples;
+					const auto measure = [this](bool globalOrder) {
+						const auto started = std::chrono::steady_clock::now();
+						RunThreadedSyncedUpdatePass(globalOrder);
+						return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
+					};
+					measure(false);
+					measure(true);
+					for (int round = 0; round < c_MeasureRounds; ++round) {
+						loadPerStateSamples.push_back(measure(false));
+						loadGlobalSamples.push_back(measure(true));
+					}
+					// And again with the liveness lookup engaged: one unregistration means the pass can no
+					// longer take a pointer on trust, so every entry is looked up in its state's set.
+					if (!loadObjects.empty()) {
+						states[(loadObjects.size() - 1 + shift) % states.size()].UnregisterMO(loadObjects.back().get());
+					}
+					for (int round = 0; round < c_MeasureRounds; ++round) {
+						loadAfterDeletionSamples.push_back(measure(true));
+					}
+					std::sort(loadPerStateSamples.begin(), loadPerStateSamples.end());
+					std::sort(loadGlobalSamples.begin(), loadGlobalSamples.end());
+					std::sort(loadAfterDeletionSamples.begin(), loadAfterDeletionSamples.end());
+					loadPerStateUs = loadPerStateSamples[loadPerStateSamples.size() / 2];
+					loadGlobalUs = loadGlobalSamples[loadGlobalSamples.size() / 2];
+					loadGlobalAfterADeletionUs = loadAfterDeletionSamples[loadAfterDeletionSamples.size() / 2];
+				}
+				for (size_t index = 0; index < loadObjects.size(); ++index) {
+					states[(index + shift) % states.size()].UnregisterMO(loadObjects[index].get());
+				}
+				loadObjects.clear();
+
+				// The first object of the pass deletes another state's later object, which the pass has
+				// already snapshotted. The merge must order that entry by the identity it read at
+				// snapshot time; reading the object again picks up whatever took its place.
+				constexpr size_t c_RetiredIndex = 500;
+				MOPixel* retired = objects[c_RetiredIndex].get();
+				std::vector<long> expectedOrder;
+				expectedOrder.reserve(objects.size() + twins.size() - 1);
+				for (const auto& object: objects) {
+					if (object.get() != retired) expectedOrder.push_back(object->GetUniqueID());
+				}
+				for (const auto& twin: twins) expectedOrder.push_back(twin->GetUniqueID());
+				std::sort(expectedOrder.begin(), expectedOrder.end());
+				context.order.clear();
+				for (const auto& object: objects) object->RequestSyncedUpdate();
+				for (const auto& twin: twins) twin->RequestSyncedUpdate();
+				context.retire = [this, retired, shift, &states] {
+					// What the engine leaves behind when a mid-pass deletion takes an object, short of
+					// freeing the fixture's memory: off the valid sets, out of its Lua state, and its
+					// slot handed to a new object, which is what a re-used allocation reads back as.
+					m_ValidParticles.erase(retired);
+					std::erase(m_AddedParticles, retired);
+					states[(c_RetiredIndex + shift) % states.size()].UnregisterMO(retired);
+					retired->Create();
+					retired->ResetRequestedSyncedUpdateFlag();
+				};
+				RunThreadedSyncedUpdatePass(true);
+				context.retire = nullptr;
+				retiredExpectedHash = hashOrder(expectedOrder);
+				retiredActualHash = hashOrder(context.order);
+				retiredExpectedLength = expectedOrder.size();
+				retiredActualLength = context.order.size();
+				const auto divergence = std::mismatch(expectedOrder.begin(), expectedOrder.end(), context.order.begin(), context.order.end());
+				retiredFirstDivergence = static_cast<size_t>(divergence.first - expectedOrder.begin());
+				retiredExpectedAt = retiredFirstDivergence < expectedOrder.size() ? expectedOrder[retiredFirstDivergence] : 0;
+				retiredActualAt = retiredFirstDivergence < context.order.size() ? context.order[retiredFirstDivergence] : 0;
+
+				// The threaded pass ran on the request flag alone before the global walk, so a
+				// registered object whose root is outside the valid sets kept getting its SyncedUpdate.
+				constexpr size_t c_UnlistedRootIndex = 7;
+				MOPixel* unlisted = objects[c_UnlistedRootIndex].get();
+				m_ValidParticles.erase(unlisted);
+				context.order.clear();
+				for (const auto& object: objects) object->RequestSyncedUpdate();
+				RunThreadedSyncedUpdatePass(true);
+				unlistedRootRan = std::find(context.order.begin(), context.order.end(), unlisted->GetUniqueID()) != context.order.end();
+				m_ValidParticles.insert(unlisted);
+			}
+		} else {
+			passed = false;
+			std::cout << "[script-graph-selftest] FAIL threaded_synced_update_global_moid_order fixture_objects=" << objects.size() << " expected=" << c_ObjectCount << std::endl;
+		}
+
+		s_ThreadedSyncedUpdateSelfTestContext = nullptr;
+		context.witness = nullptr;
+		witness.reset();
+		for (auto* group: {&objects, &twins, &spawned}) {
+			for (const auto& object: *group) {
+				m_ValidParticles.erase(object.get());
+				std::erase(m_AddedParticles, object.get());
+				object->DestroyScriptState();
+				object->Destroy();
+			}
+		}
+		states.swap(replacement);
+	}
+
+	states.swap(savedStates);
+	MovableObject::PinUniqueIDCounter(savedCounter);
+	const bool perStateRed = perStateHashes[0] != perStateHashes[1];
+	const bool globalGreen = globalHashes[0] == globalHashes[1];
+	const double deltaPercent = perStateUs == 0 ? 0.0 : (100.0 * static_cast<double>(globalUs - perStateUs) / static_cast<double>(perStateUs));
+	// The accepted cost of the global walk over the per-state walk, as time rather than as a share of
+	// whatever the per-state walk happened to take: 0.15 ms of a 16.7 ms tick, at 1,024 registered MOs
+	// across 32 states, median of 32 interleaved passes.
+	constexpr long long c_AddedBudgetUs = 150;
+	const long long addedUs = globalUs - perStateUs;
+	const bool timingGreen = perStateUs > 0 && addedUs <= c_AddedBudgetUs;
+	const bool retiredGreen = !retiredExpectedHash.empty() && retiredExpectedHash == retiredActualHash;
+	const bool duplicateGreen = !duplicateHashes[0].empty() && duplicateHashes[0] == duplicateHashes[1];
+	const bool freedAcrossStatesGreen = freedAcrossStatesReady && !freedAcrossStatesHashes[0].empty() &&
+	                                    freedAcrossStatesHashes[0] == freedAcrossStatesExpected[0] &&
+	                                    freedAcrossStatesHashes[1] == freedAcrossStatesExpected[1] &&
+	                                    freedAcrossStatesHashes[0] == freedAcrossStatesHashes[1] &&
+	                                    freedAcrossStatesSkipped[0] == 1 && freedAcrossStatesSkipped[1] == 1 &&
+	                                    !freedAcrossStatesVictimRan;
+	// One global write per object and one spawn per armed pass, at either placement, and the writes land
+	// in every state the build runs. Which OBJECTS share a table is what the assignment decides, and that
+	// is the row the assignment fixture owns.
+	const bool permittedWritesGreen = globalWriteTotals[0] == c_ObjectCount && globalWriteTotals[1] == c_ObjectCount &&
+	                                  globalWriteStatesWritten[0] == c_LuaStateCount && globalWriteStatesWritten[1] == c_LuaStateCount &&
+	                                  spawnedInPass[0] == 1 && spawnedInPass[1] == 1;
+	// 150 us was accepted at 1,024 registered MOs; the walk's added cost is per MO, so the budget is too.
+	constexpr long long c_LoadBudgetUs = c_AddedBudgetUs * 5000 / c_ObjectCount;
+	const long long loadAddedUs = loadGlobalUs - loadPerStateUs;
+	const long long loadAddedWithLookupUs = loadGlobalAfterADeletionUs - loadPerStateUs;
+	const bool loadTimingGreen = loadObjectsRegistered == 5000 && loadPerStateUs > 0 &&
+	                             loadAddedUs <= c_LoadBudgetUs && loadAddedWithLookupUs <= c_LoadBudgetUs;
+	passed = passed && perStateRed && globalGreen && timingGreen && retiredGreen && duplicateGreen && unlistedRootRan && freedAcrossStatesGreen && permittedWritesGreen && loadTimingGreen;
+	std::cout << "[script-graph-selftest] " << (perStateRed ? "PASS" : "FAIL")
+	          << " threaded_synced_update_per_state_order_red states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << perStateHashes[0] << " hash_shifted=" << perStateHashes[1]
+	          << (perStateRed ? "" : " (the per-state control ran the same order at both placements, so it detects nothing)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (globalGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_global_moid_order states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << globalHashes[0] << " hash_shifted=" << globalHashes[1] << std::endl;
+	std::cout << "[script-graph-selftest] " << (duplicateGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_duplicate_unique_id_order states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " hash_placed=" << duplicateHashes[0] << " hash_shifted=" << duplicateHashes[1]
+	          << " pos_placed=" << duplicatePositions[0][0] << "," << duplicatePositions[0][1]
+	          << " pos_shifted=" << duplicatePositions[1][0] << "," << duplicatePositions[1][1]
+	          << " ids_placed=" << duplicateIDs[0][0] << "," << duplicateIDs[0][1]
+	          << " ids_shifted=" << duplicateIDs[1][0] << "," << duplicateIDs[1][1]
+	          << " moids_placed=" << duplicateMOIDs[0][0] << "," << duplicateMOIDs[0][1]
+	          << " moids_shifted=" << duplicateMOIDs[1][0] << "," << duplicateMOIDs[1][1]
+	          << " ran_placed=" << duplicateOrderLength[0] << " ran_shifted=" << duplicateOrderLength[1]
+	          << (duplicateGreen ? "" : " (the duplicate pair's order follows where the objects were placed)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (unlistedRootRan ? "PASS" : "FAIL")
+	          << " threaded_synced_update_unlisted_root_still_runs states=" << c_LuaStateCount
+	          << (unlistedRootRan ? "" : " (a registered object whose root is outside the valid sets lost its SyncedUpdate)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (retiredGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_deleted_object_not_reread states=" << c_LuaStateCount << " expected_order=" << retiredExpectedHash
+	          << " pass_order=" << retiredActualHash << " expected_length=" << retiredExpectedLength
+	          << " pass_length=" << retiredActualLength << " first_divergence=" << retiredFirstDivergence
+	          << " expected_at=" << retiredExpectedAt << " pass_at=" << retiredActualAt << std::endl;
+	std::cout << "[script-graph-selftest] " << (freedAcrossStatesGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_freed_across_states_is_skipped states=" << c_LuaStateCount
+	          << " placement=0," << c_PlacementShift << " order_placed=" << freedAcrossStatesHashes[0]
+	          << " order_shifted=" << freedAcrossStatesHashes[1] << " expected_placed=" << freedAcrossStatesExpected[0]
+	          << " expected_shifted=" << freedAcrossStatesExpected[1] << " skipped_placed=" << freedAcrossStatesSkipped[0]
+	          << " skipped_shifted=" << freedAcrossStatesSkipped[1] << " ran_placed=" << freedAcrossStatesRan[0]
+	          << " ran_shifted=" << freedAcrossStatesRan[1] << " victim_placed=" << freedAcrossStatesVictimID[0]
+	          << " victim_shifted=" << freedAcrossStatesVictimID[1] << " victim_ran=" << (freedAcrossStatesVictimRan ? 1 : 0)
+	          << " poison_over_the_freed_block=" << freedAcrossStatesPoisonHit[0] << "," << freedAcrossStatesPoisonHit[1]
+	          << (freedAcrossStatesGreen ? "" : " (the pass reached an object a script in the same pass had freed)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (timingGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_pass_timing registered=" << c_ObjectCount << " states=" << c_LuaStateCount << " before_us=" << perStateUs
+	          << " after_us=" << globalUs << " added_us=" << addedUs << " budget_us=" << c_AddedBudgetUs
+	          << " delta_pct=" << std::fixed << std::setprecision(2) << deltaPercent << std::endl;
+	std::cout << "[script-graph-selftest] " << (loadTimingGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_pass_timing_under_load registered=" << loadObjectsRegistered
+	          << " states=" << c_LuaStateCount << " before_us=" << loadPerStateUs << " after_us=" << loadGlobalUs
+	          << " added_us=" << loadAddedUs << " after_a_deletion_us=" << loadGlobalAfterADeletionUs
+	          << " added_with_lookup_us=" << loadAddedWithLookupUs << " budget_us=" << c_LoadBudgetUs
+	          << (loadTimingGreen ? "" : " (the walk costs more per registered MO than 1,024 said it would)") << std::endl;
+	std::cout << "[script-graph-selftest] " << (permittedWritesGreen ? "PASS" : "FAIL")
+	          << " threaded_synced_update_permitted_writes states=" << c_LuaStateCount << " placement=0," << c_PlacementShift
+	          << " global_writes=" << globalWriteTotals[0]
+	          << "," << globalWriteTotals[1] << " expected=" << c_ObjectCount
+	          << " states_written=" << globalWriteStatesWritten[0] << "," << globalWriteStatesWritten[1]
+	          << " spawned=" << spawnedInPass[0] << "," << spawnedInPass[1]
+	          << (permittedWritesGreen ? "" : " (a spawn, an other-object write or a global write did not happen once per object)") << std::endl;
+	return passed;
+}
+
 void MovableMan::Update() {
 	ZoneScoped;
 
@@ -4932,7 +6466,7 @@ void MovableMan::Update() {
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 
 			                                                     for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
 				                                                     if (ValidMO(mo->GetRootParent())) {
@@ -4949,30 +6483,16 @@ void MovableMan::Update() {
 	{
 		ZoneScopedN("Multithreaded Scripts SyncedUpdate");
 
-		// The serial, MOID-ordered channel for script-driven shared-state mutation;
+		// The serial, global-MOID channel for script-driven shared-state mutation;
 		// scripts opt in via RequestSyncedUpdate. See Data/Modding/threaded-determinism.md.
-		const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
-
 		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
 		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
 			if (ValidMO(mo->GetRootParent())) {
-				mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
+				mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
 			}
 		}
 		g_LuaMan.SetThreadLuaStateOverride(nullptr);
-
-		for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-			g_LuaMan.SetThreadLuaStateOverride(&luaState);
-
-			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
-				if (mo->HasRequestedSyncedUpdate()) {
-					mo->RunScriptedFunctionInAppropriateScripts(syncedUpdate, false, false, {}, {}, {});
-					mo->ResetRequestedSyncedUpdateFlag();
-				}
-			}
-
-			g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		}
+		RunThreadedSyncedUpdatePass(true);
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
 
@@ -5562,7 +7082,7 @@ void MovableMan::UpdateControllers() {
 		                                                     [&](int start, int end) {
 			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState);
+			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
 			                                                     for (Actor* actor: m_Actors) {
 				                                                     if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetLuaState() == &luaState && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					                                                     g_CurrentAIActor = actor;
@@ -6338,7 +7858,7 @@ void MovableMan::RedrawRestoredMOIDs() {
 
 MovableMan::ConstructionRegistryScope::ConstructionRegistryScope() :
 	m_OriginalSounds(g_AudioMan.CaptureCheckpointSoundRegistry()), m_SoundCursor(g_AudioMan.GetCheckpointSoundContainerCursor()),
-	m_Counter(MovableObject::GetUniqueIDCounter()), m_Cursor(g_LuaMan.GetScriptStateCursor()) {
+	m_Counter(MovableObject::GetUniqueIDCounter()) {
 	g_MovableMan.CompleteQueuedMOIDDrawings();
 	g_MovableMan.WaitForActorsSeeTask();
 	{
@@ -6360,7 +7880,6 @@ MovableMan::ConstructionRegistryScope::~ConstructionRegistryScope() {
 	}
 	g_MovableMan.LoadWorldStructure(m_Structure);
 	MovableObject::PinUniqueIDCounter(m_Counter);
-	g_LuaMan.SetScriptStateCursor(m_Cursor);
 	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_OriginalSounds));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_SoundCursor);
 }

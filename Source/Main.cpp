@@ -253,10 +253,14 @@ static std::vector<NetLiveStall> s_netLiveStalls;
 static std::optional<uint64_t> s_netLiveStallActivation;
 static bool s_netPerturbWhenLive = false;
 
-// CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
-static constexpr int c_NetSessionDefaultLuaStates = 4;
-static int s_cliNumLuaStatesOverride = -1;
-static bool s_netIdentityLuaStatesExperiment = false;
+// The retired -num-lua-states flag: parsed so old command lines still run, and reported once.
+static bool s_retiredLuaStateCountFlag = false;
+
+// -selftest-prematch-history <objects>: spend that many objects' unique IDs and script-state
+// assignments before anything else, the way a session that played a scene before hosting has. The
+// two-peer rows that prove the assignment needs no agreement start one runtime with a history and
+// the other without.
+static int s_preMatchHistoryObjects = 0;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
@@ -657,10 +661,10 @@ void InitializeManagers() {
 	g_ThreadMan.Initialize();
 	g_SettingsMan.Initialize();
 
-	// Apply the CLI -num-lua-states override after SettingsMan loads (so it wins over the file)
-	// and before LuaMan creates its threaded states.
-	if (s_cliNumLuaStatesOverride >= 0) {
-		g_SettingsMan.SetNumberOfLuaStatesOverride(s_cliNumLuaStatesOverride);
+	// Say once that neither the flag nor the settings line picks the count any more.
+	if (s_retiredLuaStateCountFlag || g_SettingsMan.GetRetiredLuaStateCountOverride() != -1) {
+		std::cout << "[lua] the threaded Lua state count is fixed at " << c_LuaStateCount
+		          << "; -num-lua-states and NumberOfLuaStatesOverride are retired" << std::endl;
 	}
 	g_WindowMan.Initialize();
 	g_GLResourceMan.Initialize();
@@ -966,6 +970,11 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				    duration.ptr == spec.data() + spec.size() && stall.tick > 0 && stall.milliseconds > 0 && stall.milliseconds <= 20000)
 					s_netLiveStalls.push_back(stall);
 			}
+			++i;
+			continue;
+		}
+		if (currentArg == "-selftest-prematch-history" && i + 1 < argCount) {
+			s_preMatchHistoryObjects = static_cast<int>(std::strtol(argValue[i + 1], nullptr, 10));
 			++i;
 			continue;
 		}
@@ -2959,13 +2968,33 @@ static void CheckRestoredScriptGraphs() {
 // Everything a preview may touch besides the MO dump: clocks, RNG, identity counter, queues, activity
 // scalars, terrain layers and the Lua bindings. The camera and the previews themselves are the only
 // presentation-side changes a preview is allowed to make.
+// What a session leaves behind before a match: unique IDs drawn and script states handed out. The
+// objects are made and destroyed here, so nothing of them reaches the match but the counters.
+static void SpendPreMatchHistory(int objects) {
+	if (objects <= 0) {
+		return;
+	}
+	const std::string scriptPath = g_PresetMan.GetFullModulePath("Tests.rte/PreviewCompat.lua");
+	int loaded = 0;
+	for (int index = 0; index < objects; ++index) {
+		auto* object = new MOPixel;
+		if (object->Create() >= 0 && object->LoadScript(scriptPath, true) == 0 && object->AdoptScriptObject() == 0) {
+			++loaded;
+		}
+		object->DestroyScriptState();
+		object->Destroy();
+		delete object;
+	}
+	std::cout << "[selftest] pre-match history: objects=" << objects << " scripted=" << loaded
+	          << " uid_counter=" << MovableObject::GetUniqueIDCounter() << std::endl;
+}
+
 static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {
 	std::ostringstream out;
 	out << "sim_count=" << g_TimerMan.GetSimUpdateCount() << " sim_ticks=" << g_TimerMan.GetSimTimeTicks() << " accumulator=" << g_TimerMan.GetSimAccumulator() << "\n";
 	out << "rng_draws=" << g_SimRNG.GetDrawCount() << " rng_state=" << g_SimRNG.GetEngineState() << "\n";
 	out << "sound_cursor=" << g_AudioMan.GetCheckpointSoundContainerCursor() << "\n";
 	out << "uid_counter=" << MovableObject::GetUniqueIDCounter() << "\n";
-	out << "lua_state_cursor=" << g_LuaMan.GetScriptStateCursor() << "\n";
 	const MovableMan::AddQueueMark mark = g_MovableMan.MarkAddQueues();
 	out << "queues actors=" << mark.actors << " items=" << mark.items << " particles=" << mark.particles << " alarms=" << mark.alarms << "\n";
 	if (const Activity* activity = g_ActivityMan.GetActivity()) {
@@ -8470,35 +8499,12 @@ int main(int argc, char** argv) {
 		return DeterminismCheck::Run(argc, argv);
 	}
 
-	// Pick up the thread-count override before any init runs. Net-session smoke uses
-	// a fixed default so its traces compare across machines; normal identity admission remains strict.
-	bool explicitLuaStateOverride = false;
-	bool netSessionRequested = false;
-	bool matchServiceRequested = false;
+	// The Lua state count is a build constant, so the flag only reports that it no longer chooses one.
 	for (int i = 1; i < argc; ++i) {
-		if (argv[i] == nullptr) {
-			continue;
-		}
-		const std::string arg = argv[i];
-		if (arg == "-num-lua-states" && i + 1 < argc) {
-			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
-			explicitLuaStateOverride = true;
+		if (argv[i] != nullptr && std::string(argv[i]) == "-num-lua-states" && i + 1 < argc) {
+			s_retiredLuaStateCountFlag = true;
 			++i;
-		} else if (arg == "-net-identity-lua-states-experiment") {
-			s_netIdentityLuaStatesExperiment = true;
-		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
-			netSessionRequested = true;
-			if (arg == "-net-dedicated") matchServiceRequested = true;
-		} else if (arg == "-net-match-service-e2e" || arg == "-net-persistent-world") {
-			matchServiceRequested = true;
 		}
-	}
-	// Normal sessions keep the Lua-state count in the identity. The experiment flag is a
-	// deliberately loud, test-only exception used only while proving count invariance.
-	NetIdentity::SetLuaStateCountExperiment(s_netIdentityLuaStatesExperiment);
-	// Service launches keep the saved VM layout, including a match restarted from this runtime.
-	if (netSessionRequested && !matchServiceRequested && !explicitLuaStateOverride) {
-		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
 	}
 
 	// Decided before LuaMan starts, so its startup line names the collector this run uses.
@@ -8667,6 +8673,7 @@ int main(int argc, char** argv) {
 	}
 
 	g_PresetMan.LoadAllDataModules();
+	SpendPreMatchHistory(s_preMatchHistoryObjects);
 	// The modules are loaded and will not change under this process: read them once here, off the game
 	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
 	NetIdentity::PrimeManifest();
