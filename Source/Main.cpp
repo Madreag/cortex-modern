@@ -2985,8 +2985,10 @@ static void SpendPreMatchHistory(int objects) {
 		object->Destroy();
 		delete object;
 	}
-	std::cout << "[selftest] pre-match history: objects=" << objects << " scripted=" << loaded
-	          << " uid_counter=" << MovableObject::GetUniqueIDCounter() << std::endl;
+	std::ostringstream line;
+	line << "[selftest] pre-match history: objects=" << objects << " scripted=" << loaded
+	     << " uid_counter=" << MovableObject::GetUniqueIDCounter();
+	System::PrintDiagnosticLine(line.str());
 }
 
 static std::string DescribeCanonicalExtras(std::vector<std::string>& problems) {

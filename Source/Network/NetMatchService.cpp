@@ -3078,9 +3078,11 @@ static std::string ResyncSaveName() {
 			if (activation != 0) {
 				if (const NetWorldJoinSession* session = host.FindSession(connection); session) {
 					(void)lobby.SendPayloadTo(WorldJoinLobbyPeer(*session), MakeWorldJoinReport(c_NetWorldReportActivate, activation), nullptr);
-					std::cout << "[net-world] activation announced peer=" << static_cast<int>(session->assignedPeerId) << " at=" << activation
-					          << " applied=" << report.value << " horizon=" << nowFrame << " replay_ticks=" << session->wallCatchUpTicks
-					          << " replay_ms=" << session->wallCatchUpMs << std::endl;
+					std::ostringstream line;
+					line << "[net-world] activation announced peer=" << static_cast<int>(session->assignedPeerId) << " at=" << activation
+					     << " applied=" << report.value << " horizon=" << nowFrame << " replay_ticks=" << session->wallCatchUpTicks
+					     << " replay_ms=" << session->wallCatchUpMs;
+					System::PrintDiagnosticLine(line.str());
 				}
 			}
 			return activation;
@@ -4013,8 +4015,8 @@ static std::string ResyncSaveName() {
 			m_Coordinator->DeferStopsToTickBoundary();
 			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
 			const auto& config = m_Coordinator->GetConfig();
-			std::cout << std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
-			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames) << std::flush;
+			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
+			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames));
 		}
 		ReleaseWorldCatchUpOnceRunning(m_Coordinator && m_Coordinator->IsRunning(), m_WorldCatchUp);
 	}
