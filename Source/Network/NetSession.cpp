@@ -1384,6 +1384,21 @@ namespace RTE {
 		// A rejoin phase is this peer's own handshake, so its silence window starts again every evaluation -
 		// and nothing else on the session is suspended: a stalled transfer and a silent peer keep their own
 		// watchdogs and their own clocks.
+		// Each phase with nobody to answer gets the host's own join deadline on its own clock and no more: past it the
+		// rejoin ends here, and the seat stays with the AI the host already gave it.
+		if (const RejoinPhase phase = m_RejoinPhase.load(); phase != m_CeilingPhase) {
+			m_CeilingPhase = phase;
+			m_CeilingPhaseSinceMs = m_NowMs;
+		} else if (SuspendsSilence(phase) && m_Config.rejoinPhaseCeilingMs != 0 && m_NowMs >= m_CeilingPhaseSinceMs &&
+		           m_NowMs - m_CeilingPhaseSinceMs > m_Config.rejoinPhaseCeilingMs) {
+			++m_Stats.timeouts;
+			SetFailed(NetRejectReason::Timeout, "rejoin_phase_ms", std::to_string(m_Config.rejoinPhaseCeilingMs), std::to_string(m_NowMs - m_CeilingPhaseSinceMs),
+			          std::string("rejoin phase ") + RejoinPhaseName(phase) + " outlived its ceiling");
+			if (m_RemoteTransportPeerId != c_InvalidNetPeerId) {
+				m_Transport->Disconnect(m_RemoteTransportPeerId, "rejoin phase outlived its ceiling");
+			}
+			return;
+		}
 		if (m_AdmissionSuspended) {
 			m_LastReceiveMs = m_NowMs;
 			m_ResumedWithoutTraffic = false;

@@ -59,6 +59,8 @@ namespace RTE {
 		bool readyWithoutPeers = false;
 		uint32_t heartbeatIntervalMs = 100;
 		uint32_t timeoutMs = 1000;
+		/// A rejoin phase with nobody to answer (the image, the load, the tail) ends the rejoin past this, the host's own join deadline.
+		uint32_t rejoinPhaseCeilingMs = 180000;
 		uint16_t minProtocolVersion = NetProtocol::c_Version;
 		uint16_t maxProtocolVersion = NetProtocol::c_Version;
 		bool rejectUserdataModules = true;
@@ -385,6 +387,8 @@ namespace RTE {
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
 		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
+		RejoinPhase m_CeilingPhase = RejoinPhase::Active; //!< The phase the ceiling clock is timing, read on the session's own thread.
+		uint64_t m_CeilingPhaseSinceMs = 0;
 		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
 		uint64_t m_NextHeartbeatMs = 0;
