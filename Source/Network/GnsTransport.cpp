@@ -1027,13 +1027,49 @@ namespace RTE {
 
 			void SendRejectionSignal(const SteamNetworkingIdentity& identityPeer, const void* message, int size) override {
 				if (m_Inner) {
-					m_Inner->SendRejectionSignal(identityPeer, message, size);
+					const std::vector<uint8_t> named = NameRejectionSender(message, size, m_Owner ? m_Owner->GetLocalIdentity() : std::string());
+					m_Inner->SendRejectionSignal(identityPeer, named.data(), static_cast<int>(named.size()));
 				}
 			}
 
 			Impl* m_Owner;
 			ISteamNetworkingSignalingRecvContext* m_Inner;
 		};
+
+		/// GNS 1.6.0 marshals a rejection that names no sender, and a receiver drops any signal that names none, so the
+		/// refused joiner waits out its connect timeout. The rendezvous message's from_identity (field 8) is added when absent.
+		static std::vector<uint8_t> NameRejectionSender(const void* message, int size, const std::string& identity) {
+			const uint8_t* bytes = static_cast<const uint8_t*>(message);
+			std::vector<uint8_t> named(bytes, bytes + std::max(size, 0));
+			const auto readVarint = [&named](size_t& at, uint64_t& value) {
+				value = 0;
+				for (int shift = 0; shift < 64 && at < named.size(); shift += 7) {
+					const uint8_t byte = named[at++];
+					value |= static_cast<uint64_t>(byte & 0x7F) << shift;
+					if ((byte & 0x80) == 0) return true;
+				}
+				return false;
+			};
+			if (identity.empty() || identity.size() > 127) return named;
+			for (size_t at = 0; at < named.size();) {
+				uint64_t key = 0;
+				uint64_t length = 0;
+				if (!readVarint(at, key)) return named;
+				if ((key >> 3) == 8) return named;
+				switch (key & 7) {
+					case 0: if (!readVarint(at, length)) return named; break;
+					case 1: at += 8; break;
+					case 2: if (!readVarint(at, length) || length > named.size() - at) return named; at += static_cast<size_t>(length); break;
+					case 5: at += 4; break;
+					default: return named;
+				}
+				if (at > named.size()) return named;
+			}
+			named.push_back(static_cast<uint8_t>((8 << 3) | 2));
+			named.push_back(static_cast<uint8_t>(identity.size()));
+			named.insert(named.end(), identity.begin(), identity.end());
+			return named;
+		}
 
 		bool m_HasGnsRef = false;
 		bool m_IsHost = false;
