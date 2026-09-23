@@ -1085,6 +1085,22 @@ bool RTE::RunCheckpointImageSelfTest() {
 				pass(row, detail);
 			}
 		}
+
+		// luaL_ref and luabind both take registry slots on a luabind state. A slot one of them holds is never
+		// handed to the other, whichever took its ref first.
+		{
+			const RegistryRefProbe probe = ProbeRegistryRefs();
+			const char* row = "a_registry_ref_is_never_handed_to_a_second_owner";
+			const std::string detail = "held_ref=" + std::to_string(probe.heldRef) + " shared=" + std::to_string(probe.shared) +
+			                           " held_intact=" + std::to_string(probe.heldIntact) + " luabind_intact=" + std::to_string(probe.luabindIntact);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.shared != 0 || !probe.heldIntact || !probe.luabindIntact) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
 	}

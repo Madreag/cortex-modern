@@ -68,6 +68,16 @@ namespace RTE {
 	};
 	OrphanSnapshotProbe ProbeSnapshotAfterItsHeap();
 
+	/// Registry refs taken by luaL_ref and by luabind on one luabind state, for the checkpoint self-test.
+	struct RegistryRefProbe {
+		int heldRef = 0; //!< The luaL_ref slot held while luabind takes and gives back its refs.
+		int shared = 0; //!< luabind refs handed the held slot, or held slots luaL_ref handed out again.
+		bool heldIntact = false; //!< The held slot still names its own table after luabind's refs are released.
+		bool luabindIntact = false; //!< Every luabind slot still names its own table after a luaL_ref.
+		std::string error;
+	};
+	RegistryRefProbe ProbeRegistryRefs();
+
 	class LuabindObjectWrapper;
 	class MovableObject;
 	class Scene;
