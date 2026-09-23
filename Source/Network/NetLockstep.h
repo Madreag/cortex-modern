@@ -399,6 +399,7 @@ namespace RTE {
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
+		uint64_t seatStateThroughFrame = 0; // A joining round's holds, departures and returns already cover every frame up to this one.
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -1279,6 +1280,8 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		/// Whether a decision is committed, applied everywhere it must be and behind the frame the round resumes from.
+		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
