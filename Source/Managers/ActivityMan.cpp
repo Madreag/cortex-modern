@@ -618,6 +618,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// capture's carried sounds.
 	std::vector<CheckpointText> managerParts;
 	std::vector<std::pair<std::string, int64_t>> managerTimings;
+	auto sceneCache = std::make_shared<CheckpointCache>();
+	sceneCache->Begin();
 	struct Aside {
 		std::vector<std::future<void>> tasks;
 		~Aside() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
@@ -628,15 +630,22 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		}
 	} aside;
 	AudioMan::SoundCheckpointSaveScope* const sounds = &carriedSounds;
-	const auto captureAside = [&aside, sounds](std::function<void()> work) {
-		aside.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([sounds, work = std::move(work)] {
+	const auto captureAside = [&aside, sounds](std::function<void()> work, CheckpointCache* cache = nullptr) {
+		aside.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([sounds, cache, work = std::move(work)] {
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 			CheckpointCache values;
 			values.Begin();
-			CheckpointWriter::CacheScope valuesScope(&values);
+			CheckpointWriter::CacheScope valuesScope(cache ? cache : &values);
 			work();
 		}));
 	};
+	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
+	captureAside([&] {
+		const auto sceneStart = std::chrono::steady_clock::now();
+		image->scene = scene->CaptureSavedScene(fileName);
+		image->movableUs = Scene::LastObjectCaptureUs();
+		image->sceneUs = since(sceneStart);
+	}, sceneCache.get());
 	captureAside([&] {
 		const auto activityStart = std::chrono::steady_clock::now();
 		image->activity = Writer::Capture([&](Writer& writer) {
@@ -685,16 +694,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// feeds no index and reuses no root, so it reports neither rather than the last live walk's sample.
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
-	const auto sceneStart = std::chrono::steady_clock::now();
-	auto sceneCache = std::make_shared<CheckpointCache>();
-	sceneCache->Begin();
-	{
-		// Elapsed timer fields change even when their object's write stamp holds.
-		CheckpointWriter::CacheScope sceneValues(sceneCache.get());
-		image->scene = scene->CaptureSavedScene(fileName);
-		image->movableUs = Scene::LastObjectCaptureUs();
-	}
-	image->sceneUs = since(sceneStart);
 	aside.Join();
 	// The counters are read against their values at the freeze, before anything puts them back.
 	CaptureEffects effects;
