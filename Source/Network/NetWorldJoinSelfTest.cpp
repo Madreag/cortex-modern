@@ -3062,6 +3062,21 @@ namespace RTE {
 		return 0;
 	}
 
+	/// Capturing a private base stalls every peer's simulation for the capture, so a seat's return buys no refresh whose
+	/// measured capture cannot fit the bound: the next rejoin replays a longer tail in private instead.
+	int TestAReturnedSeatTakesNoBaseThatStallsTheRound() {
+		if (NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 173.5)) {
+			return Fail("a returned seat refreshed the private base with a 173.5 ms capture, a stall of every peer past the 50 ms bound");
+		}
+		if (!NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(false, 1, 1, 12.0) ||
+		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5) ||
+		    NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 0.0)) {
+			return Fail("a private base refresh that fits the bound was refused, or one that does not was taken for a held seat");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returned_seat_takes_no_base_that_stalls_the_round capture_ms=173.5" << std::endl;
+		return 0;
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -6492,6 +6507,7 @@ namespace RTE {
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
+		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;

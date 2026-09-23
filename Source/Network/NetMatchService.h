@@ -581,6 +581,8 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		void PreparePrivateRejoinCheckpoint();
+		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
+		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs);
 
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
