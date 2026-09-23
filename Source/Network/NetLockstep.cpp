@@ -5130,7 +5130,7 @@ namespace RTE {
 		std::map<uint8_t, const NetLockstepTiming*> newest;
 		for (const NetLockstepTiming& reclaim: reclaims) {
 			if (reclaim.phase != NetTimingPhase::ReclaimAtFrame || reclaim.peerId == 0 || reclaim.peerId > config.peerCount || reclaim.peerId > 4 ||
-			    reclaim.peerId == config.localPeerId || reclaim.applyFrame > firstFrame) continue;
+			    reclaim.peerId == config.localPeerId || reclaim.applyFrame > firstFrame || reclaim.applyFrame <= config.seatStateThroughFrame) continue;
 			const NetLockstepTiming*& latest = newest[reclaim.peerId];
 			if (!latest || latest->revision < reclaim.revision) latest = &reclaim;
 		}
@@ -5436,6 +5436,8 @@ namespace RTE {
 			if (timing.senderPeerId != GetHostPeerId() || LockstepPeerOfTransport(fromTransport) != GetHostPeerId() || timing.sessionId != m_Config.sessionId ||
 			    (m_RoundId != 0 && timing.roundId != m_RoundId) || timing.authorityGeneration != m_Config.migrationGeneration || timing.peerId == 0 ||
 			    timing.peerId > 4 || timing.peerId > m_Config.peerCount) return;
+			// The seat state this round started from already applied every transition up to this frame.
+			if (timing.applyFrame <= m_Config.seatStateThroughFrame) return;
 			if (timing.phase == NetTimingPhase::ReclaimAtFrame) {
 				const auto prior = m_ReclaimTransactions.find(timing.peerId);
 				if ((prior != m_ReclaimTransactions.end() && prior->second.eventSequence >= timing.revision) ||
@@ -5589,6 +5591,13 @@ namespace RTE {
 		(void)nowMs;
 	}
 
+	bool NetLockstepCoordinator::DecisionSettled(const TimingDecision& decision) const {
+		const bool applied = decision.proposal.phase != NetTimingPhase::HoldAtFrame ||
+		    (m_Config.localPeerId == GetHostPeerId() ? (decision.acknowledgedPeers & decision.proposal.requiredPeers) == decision.proposal.requiredPeers :
+		     (decision.acknowledgedPeers & (1U << (m_Config.localPeerId - 1))) != 0);
+		return decision.committed && applied && decision.proposal.applyFrame < GetResumeFrame();
+	}
+
 	void NetLockstepCoordinator::TickTiming(uint64_t nowMs) {
 		if (!IsRunning() || m_Playback) return;
 		const bool host = m_Config.localPeerId == GetHostPeerId();
@@ -5659,12 +5668,13 @@ namespace RTE {
 		for (const auto& [revision, decision]: m_TimingDecisions) if (!decision.committed) pending.push_back(revision);
 		for (uint64_t revision: pending) CommitTiming(revision);
 		FlushTimingOutgoing();
+		// A held seat that comes back sets its round up from a tail that can stop short of the holds and returns decided since:
+		// they stay here while a seat is held, for the answer to its start.
+		const bool heldSeatMayReturn = host && !m_AiHeldSeats.empty();
 		std::erase_if(m_TimingDecisions, [&](const auto& entry) {
 			const auto& decision = entry.second;
-			const bool applied = decision.proposal.phase != NetTimingPhase::HoldAtFrame ||
-			    (m_Config.localPeerId == GetHostPeerId() ? (decision.acknowledgedPeers & decision.proposal.requiredPeers) == decision.proposal.requiredPeers :
-			     (decision.acknowledgedPeers & (1U << (m_Config.localPeerId - 1))) != 0);
-			return decision.committed && applied && decision.proposal.applyFrame < GetResumeFrame();
+			if (heldSeatMayReturn && (decision.proposal.phase == NetTimingPhase::HoldAtFrame || decision.proposal.phase == NetTimingPhase::ReclaimAtFrame)) return false;
+			return DecisionSettled(decision);
 		});
 		const uint64_t oldest = m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ? m_Stats.nextFrame - NetLockstepCodec::c_MaxFutureFrameSkew : 0;
 		for (auto& [peer, changes]: m_DelayChanges)
@@ -8528,6 +8538,8 @@ namespace RTE {
 				const NetLockstepTiming& transition = decision.proposal;
 				if ((transition.phase != NetTimingPhase::HoldAtFrame && transition.phase != NetTimingPhase::ReclaimAtFrame) ||
 				    transition.applyFrame > start.startFrame || (transition.heldPeers & returning) != 0) continue;
+				// The settled ones are kept for a held seat's return; a new member's snapshot already carries them.
+				if (!m_AiHeldSeats.contains(start.localPeerId) && DecisionSettled(decision)) continue;
 				SendPacket({transition}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
 			}
 			auto members = m_RemotePeerIds;

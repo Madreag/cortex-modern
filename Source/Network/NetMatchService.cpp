@@ -3702,6 +3702,7 @@ static std::string ResyncSaveName() {
 				live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 				live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
 				live.initialPeerLeaves = m_CatchUpCoordinator->GetPeerLeaveFrames();
+				live.seatStateThroughFrame = m_WorldCatchUp.appliedThrough;
 				std::vector<NetLockstepTiming> returns;
 				for (const auto& event: m_CatchUpWirePackets) {
 					if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) continue;
