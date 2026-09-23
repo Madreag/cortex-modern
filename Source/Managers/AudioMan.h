@@ -39,13 +39,13 @@ namespace RTE {
 	public:
 		std::string SaveCheckpoint() const;
 		std::string SaveCheckpoint(const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
-		/// The audio a checkpoint archives, read at the capture's instant.
-		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointState() const;
+		/// The audio a checkpoint archives, read at the capture's instant; without its samples when they are read apart.
+		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointState(bool samples = true) const;
+		/// The loaded samples a checkpoint archives, read and written on any thread; they need no mixer lock.
+		std::shared_ptr<AudioCheckpointCapture> CaptureCheckpointSamples() const;
 		/// Writes a captured state as SaveCheckpoint would have at its instant, once the sound owners the rest of the
-		/// capture carries are known; the capture's disowned voices are cleared in place.
-		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
-		/// Writes a captured state's samples ahead of the rest, on any thread; nothing about them waits for the owners.
-		void WriteCapturedSamples(AudioCheckpointCapture& captured) const;
+		/// capture carries are known; the capture's disowned voices are cleared in place. Samples read apart are given.
+		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained, const AudioCheckpointCapture* samples = nullptr) const;
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;
@@ -520,6 +520,8 @@ namespace RTE {
 		std::mutex m_SoundChannelMinimumAudibleDistancesMutex; //!, As above but for m_SoundChannelMinimumAudibleDistances
 
 	private:
+		/// Every loaded sample, in path order.
+		void ReadCheckpointSamples(AudioCheckpointCapture& captured) const;
 
 		// Voice identities belong to the engine. Backend channel numbers never enter a checkpoint.
 		struct PlayingVoice {
