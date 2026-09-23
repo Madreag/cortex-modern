@@ -6139,6 +6139,59 @@ namespace RTE {
 		return true;
 	}
 
+	// A heal restarts the stream a writer's report rode on. The host that waited on a report the heal dropped named no
+	// capture for the rest of the match; it names afresh, and the reports after the heal keep the schedule moving.
+	bool TestAHealNamesTheNextCaptureAfresh(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		host.m_AutosaveMatchId = "00000000deadbeef-0000000000000007";
+		host.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		constexpr uint64_t lastTick = 900, healAt = 200, streamDelay = 4;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> captures;
+		std::vector<std::pair<uint64_t, uint64_t>> writer;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			if (tick == healAt) {
+				// Everything in flight goes with the heal; the relaunch keeps the chain and forgets the open capture.
+				stream.clear();
+				writer.clear();
+				host.ForgetOpenCaptureOnHeal();
+			}
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.lead = lead;
+			input.writers = {1, 2};
+			while (!writer.empty() && writer.front().second <= tick) {
+				input.finished.push_back(writer.front().first);
+				writer.erase(writer.begin());
+			}
+			const NetMatchService::AutosaveTickOutput output = host.StepAutosaveSchedule(input);
+			if (output.capture) {
+				captures.push_back(tick);
+				writer.emplace_back(tick, tick + 30);
+			}
+			for (NetMatchService::CheckpointNote note: output.send) {
+				// The second writer reports each capture the host's own writer does, one stream trip later.
+				note.sender = 1;
+				stream[tick + streamDelay].push_back(note);
+				if (note.kind == NetGameCheckpoint::Written) stream[tick + streamDelay].push_back({2, note.kind, note.tick});
+			}
+		}
+		const size_t afterHeal = static_cast<size_t>(std::count_if(captures.begin(), captures.end(), [](uint64_t tick) { return tick > healAt; }));
+		if (afterHeal < 4) {
+			std::string text;
+			for (const uint64_t tick: captures) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			*error = "the host named no capture after a heal dropped a writer's report: captures " + text + " heal_at=" + std::to_string(healAt);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_heal_names_the_next_capture_afresh after_heal=" << afterHeal << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6891,6 +6944,7 @@ namespace RTE {
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
+			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
 			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);

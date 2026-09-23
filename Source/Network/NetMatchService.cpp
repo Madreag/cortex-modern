@@ -2629,6 +2629,8 @@ static std::string ResyncSaveName() {
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 			ResetCheckpointSchedule();
+		} else {
+			ForgetOpenCaptureOnHeal();
 		}
 		// Every round writes its checkpoints under the configuration it is actually played on, so a
 		// resumed match's own checkpoints can be resumed again.
@@ -2878,6 +2880,13 @@ static std::string ResyncSaveName() {
 		m_CaptureWriters.clear();
 		m_OpenCaptureForJoin = false;
 		(void)ScenarioRunner::TakeAppliedCheckpoints();
+	}
+
+	void NetMatchService::ForgetOpenCaptureOnHeal() {
+		// A heal restarts the stream the writers' reports rode, so the host names afresh instead of waiting on reports it dropped.
+		m_OpenCaptureTick = 0;
+		m_CaptureWriters.clear();
+		m_OpenCaptureForJoin = false;
 	}
 
 	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {

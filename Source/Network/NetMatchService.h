@@ -462,6 +462,8 @@ namespace RTE {
 		std::set<uint8_t> CheckpointWriters(uint64_t tick) const;
 		/// Forgets the schedule a previous round named.
 		void ResetCheckpointSchedule();
+		/// Forgets the capture the host waits on across a heal, keeping the match's chain and the captures already named.
+		void ForgetOpenCaptureOnHeal();
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
 		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
