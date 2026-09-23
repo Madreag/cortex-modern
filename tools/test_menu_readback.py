@@ -1,23 +1,26 @@
 """Read real menu controls and drive scoped input through private engine runs."""
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import re
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 from PIL import Image
 
 from run_sim_test import make_run
+from test_lobby_lifecycle import wait_for_log
 from test_telemetry_bundle import set_visual_resolution
 
 
 CASES = ("landing", "settings", "pages", "combo-fit", "lobby", "pause", "live", "input", "input-parity", "disabled",
          "scope-off", "network", "net-chat", "net-recovery", "net-files", "net-internet", "misc-page",
-         "lobby-name", "net-options", "net-activity", "net-host-left", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
+         "lobby-name", "net-options", "net-activity", "net-host-left", "net-host-left-early", "net-resume", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "local-end-match", "prehost-visibility", "oracles")
 LANDING = "wait 40\nactivate ButtonMainToMultiplayer\nwait 12\nassert_substate Landing\n"
 OPTIONS = "wait 40\nactivate ButtonMainToOptions\nwait 8\nassert_screen SettingsScreen\n"
 PAGES = ("Video", "Audio", "Input", "Gameplay", "Misc", "Network")
@@ -134,7 +137,7 @@ PAUSE_PAGE_FIRST_VALUE = {
     "Misc": "CheckboxShowToolTips",
 }
 SIZE_GATES = (
-    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network", "net-host-left")
+    *((case, size) for case in ("lobby", "host-defaults", "host-stun", "host-stun-empty", "host-relay", "net-connection", "world-open-seat", "repair", "pause", "network", "net-host-left", "net-host-left-early")
       for size in ("640x360", "960x540", "1280x720")),
     ("net-chat", "960x540"),
     ("net-chat", "1280x720"),
@@ -287,6 +290,9 @@ def seeds(case):
         return {"host": INTERNET_SEED}
     if case == "live":
         return {"host": {"NetworkRecordReplays": "1"}, "client": {"NetworkRecordReplays": "1"}}
+    if case == "net-host-left-early":
+        # The input barrier below is measured from a fixed delay, so the negotiated floor is pinned.
+        return {"host": {"NetworkInputDelayFrames": "1"}, "client": {"NetworkInputDelayFrames": "1"}}
     return {}
 
 
@@ -328,6 +334,23 @@ def status_wrap_notes(observation):
 def probe_root(root, who):
     """One directory per peer's probe: the engine writes its result beside the script it was handed."""
     return root / f"{who}_probe"
+
+
+_NTDLL = ctypes.WinDLL("ntdll")
+
+
+def suspend_run(run):
+    """Freeze every thread of a live run's process; a suspended peer is absent to the wire but its
+    failure path carries no fixture error of its own the way an in-engine hold would."""
+    if run.process is None:
+        raise RuntimeError("suspend asked for a process that has not started")
+    if _NTDLL.NtSuspendProcess(ctypes.c_void_p(run.process)) != 0:
+        raise RuntimeError("NtSuspendProcess failed")
+
+
+def resume_run(run):
+    if _NTDLL.NtResumeProcess(ctypes.c_void_p(run.process)) != 0:
+        raise RuntimeError("NtResumeProcess failed")
 
 
 def row_checks(control, parent):
@@ -882,39 +905,71 @@ def scripts(case, port, root, size="960x540"):
                  "dump_host_options\n"
                  f"set_share_address {WIDE_SHARE_HOST}\nwait 5\n"
                  "dump_host_options\nexit\n")
-    elif case == "net-host-left":
+    elif case in ("net-host-left", "net-host-left-early"):
         done = probe_root(root, "host") / "done.json"
+        client_frame = probe_root(root, "client") / "client_frame.json"
         host = (LANDING + "activate ButtonMultiplayerHostGame\nwait 5\n"
                 "combo_select ComboHostActivity P4 Alpha Duel - Base.rte\nwait 5\n"
                 f"settext TextHostPort {port}\nsettext TextHostPlayers 2\n"
                 "activate ButtonMultiplayerCreate\nwait_connected 2 60\nwait_remote_ready 60\n"
-                "activate ButtonMultiplayerStart\n"
-                f"wait_file {done} 90\nwait_ms 500\ndump_lobby\ndump_host_options\nexit\n")
+                "activate ButtonMultiplayerStart\n")
         client = (LANDING + "activate ButtonMultiplayerJoinGame\nwait 5\n"
                   f"settext TextJoinAddress 127.0.0.1\nsettext TextJoinPort {port}\n"
                   "activate ButtonMultiplayerConnect\nwait_connected 2 60\nwait 5\n"
-                  "activate ButtonMultiplayerReady\n"
-                  f"wait_file {done} 90\nwait_ms 1000\n"
-                  "assert_status The host left the match\n"
-                  "assert_substate Landing\nassert_visible LabelMultiplayerLandingStatus 1\n"
-                  "assert_label LabelMultiplayerLandingStatus The host left the match\n"
-                  "assert_text_fits LabelMultiplayerLandingStatus\ndump_lobby\ndump_host_options\nexit\n")
-        return {"host": host, "client": client}, {"host": {"schema": 1, "timeout_ms": 90000, "steps": [
-            {"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 150},
-            {"op": "wait", "elapsed_ms": 500},
-            {"op": "assert", "equals": {"paused": False, "service": "Running"}},
-            {"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
-            {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonLeaveMatch"),
-            {"op": "wait", "screen": "PauseLeaveConfirm"}, menu_step("activate ButtonLeaveConfirm"),
-            {"op": "wait", "scope": "menu", "elapsed_ms": 500},
-            {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]},
+                  "activate ButtonMultiplayerReady\n")
+        if case == "net-host-left":
+            host += f"wait_file {done} 90\nwait_ms 500\ndump_lobby\ndump_host_options\nexit\n"
+            client += f"wait_file {done} 90\n"
+            client += (# The failure's error text lands before the menu reconciles the subscreen to
+                       # Landing; assert_status reads the lobby label while it is still there.
+                       "wait_error The host left the match\n"
+                       "wait_label LabelMultiplayerLandingStatus The host left the match\n"
+                       "assert_status The host left the match\n"
+                       "assert_substate Landing\nassert_visible LabelMultiplayerLandingStatus 1\n"
+                       "assert_label LabelMultiplayerLandingStatus The host left the match\n"
+                       "assert_text_fits LabelMultiplayerLandingStatus\ndump_lobby\ndump_host_options\nexit\n")
+        else:
+            # The driver suspends the client mid-launch and terminates the host while its seat is
+            # held; the parked host never reaches a menu step past the start.
+            host += "wait 99999\n"
+            client += (# A launch that dies with its host has no sealed seat to reclaim, so no
+                       # reconnect or rematch lobby is offered and the player lands back on the
+                       # main screen: the departure verdict is the service's own error, state and
+                       # roster, which dump_lobby prints.
+                       "wait_error The host left the match\nwait_state Failed 30\n"
+                       "dump_lobby\ndump_reconnect\ndump_host_options\nexit\n")
+        leave = [{"op": "key_down", "key": "Escape"}, {"op": "key_up", "key": "Escape"},
+                 {"op": "wait", "screen": "Pause"}, menu_step("activate ButtonLeaveMatch"),
+                 {"op": "wait", "screen": "PauseLeaveConfirm"}, menu_step("activate ButtonLeaveConfirm"),
+                 {"op": "wait", "scope": "menu", "elapsed_ms": 500},
+                 {"op": "signal", "name": "done", "scope": "menu"}, {"op": "finish"}]
+        if case == "net-host-left":
+            # The host leaves only after the client's own round has committed frames, so the case
+            # measures a mid-match departure on any machine load instead of racing the client's start.
+            host_steps = [{"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 150},
+                          {"op": "wait_file", "path": str(client_frame)},
+                          {"op": "wait", "elapsed_ms": 500},
+                          {"op": "assert", "equals": {"paused": False, "service": "Running"}}] + leave
             # The survivor lands on the multiplayer landing once the dead rematch lobby reports Failed;
             # its panel rect sits beside the net_ui rects in that observation.
+            client_probe = {"schema": 1, "timeout_ms": 90000, "steps": [
+                {"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 30},
+                {"op": "signal", "name": "client_frame"},
+                {"op": "wait", "scope": "menu", "service": "Failed"},
+                {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
+                {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
+                {"op": "finish"}]}
+            return {"host": host, "client": client}, {
+                "host": {"schema": 1, "timeout_ms": 90000, "steps": host_steps},
+                "client": client_probe}
+        # The client signals when its service commits to the launch; the run itself owns the
+        # host's departure (see the hold/terminate pair in run_case), so no host probe rides along.
+        return {"host": host, "client": client}, {
             "client": {"schema": 1, "timeout_ms": 90000, "steps": [
-            {"op": "wait", "scope": "menu", "service": "Failed"},
-            {"op": "assert_control", "scope": "menu", "control": "MultiplayerLandingPanel", "equals": {}},
-            {"op": "assert_control", "scope": "menu", "control": "MultiplayerScreen", "equals": {}},
-            {"op": "finish"}]}}
+                {"op": "wait", "service": "Running"},
+                {"op": "signal", "name": "client_rtl"},
+                {"op": "wait", "service": "Failed"},
+                {"op": "signal", "name": "client_done"}, {"op": "finish"}]}}
     elif case == "net-activity":
         # Fresh host setup uses Skirmish Defense; the keyboard anchor is the row above the picked one.
         # A vanished pick needs a module unload the menu harness cannot drive; the native
@@ -1330,6 +1385,9 @@ def scripts(case, port, root, size="960x540"):
             text += "focus_next\nassert_focus TextMultiplayerName\n"
         text += f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
         steps = (([{"op": "wait", "sim_at_least": 150},
+                  # The host's own sim count says nothing about the client's start: the first checks
+                  # wait until the client's round has committed frames of its own.
+                  {"op": "wait_file", "path": str(probe_root(root, "client") / "client_frame.json")},
                   # ENGINE 195: a band pushed while the panel is closed paints at the bottom of the
                   # game screen; opening the panel moves it, and `single` fails if the old band's
                   # pixels stay behind on the GUI layer. The watch arms before the move so a ghost
@@ -1421,6 +1479,13 @@ def scripts(case, port, root, size="960x540"):
     texts = {"host": text}
     if case == "live":
         texts["client"] = f"wait_file {probe_root(root, 'host') / 'done.json'} 90\nexit\n"
+        probes = {"host": probe,
+                  # The client signals once its own round is running and committing frames, so the
+                  # host's first checks measure a live match on any machine load.
+                  "client": {"schema": 1, "timeout_ms": 150000, "steps": [
+                      {"op": "wait", "service": "Running", "screen": "Gameplay", "sim_at_least": 30},
+                      {"op": "signal", "name": "client_frame"}, {"op": "finish"}]}}
+        return texts, probes
     return texts, {"host": probe} if probe else {}
 
 
@@ -1619,9 +1684,9 @@ def run_case(options, case, root, failing=None):
         texts, probes = {"host": prelude + setup + assertion + "\nexit\n"}, {}
     inputs = root / "input.txt"
     inputs.write_text(INPUT_SCRIPT, encoding="utf-8")
-    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left")
+    paired = case in ("pause", "repair", "live", "net-options", "net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     # A menu-driven pair joins through the real UI, so it carries no service-e2e flags.
-    menu_driven = case in ("net-activity", "local-end-match", "net-host-left")
+    menu_driven = case in ("net-activity", "local-end-match", "net-host-left", "net-host-left-early")
     seeded = {} if failing else seeds(case)
     runs, records, argv, images = {}, {}, {}, []
     result = {"pass": False, "case": case, "scripts": {}, "records": records, "probes": {}, "seeds": seeded}
@@ -1631,7 +1696,7 @@ def run_case(options, case, root, failing=None):
             script.write_text(texts[who], encoding="utf-8")
             result["scripts"][str(script)] = sha(script)
             args = ["-menu-script", str(script)]
-            if case == "net-host-left":
+            if case in ("net-host-left", "net-host-left-early"):
                 args += ["-input-script", str(inputs)]
             if case in ("local-end-match", "net-host-left"):
                 # The post-match lobby's status surfaces report into this run's events.jsonl.
@@ -1682,6 +1747,28 @@ def run_case(options, case, root, failing=None):
             if menu_driven and index == 0:
                 # The joining peer's menu must find the host's lobby already listening.
                 threading.Event().wait(2.0)
+        if case == "net-host-left-early":
+            # The client signals Running at its launch transition; suspending it there freezes the
+            # start mid-flight so the departure can be staged while nothing has committed. The host
+            # rules the absent seat held ("AI in control") before it dies, so the resumed client
+            # wakes into a held rejoin against a dead session - the resync path, not a migration.
+            while runs["client"].process is None or runs["host"].process is None:
+                time.sleep(0.05)
+            rtl = probe_root(root, "client") / "client_rtl.json"
+            deadline = time.monotonic() + 90
+            while not rtl.exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("the client never committed to its launch")
+                if runs["client"].poll() is not None:
+                    raise RuntimeError("the client ended before reaching its launch window")
+                time.sleep(0.05)
+            suspend_run(runs["client"])
+            try:
+                wait_for_log(runs["host"], "AI in control", 45)
+                runs["host"].terminate()
+            finally:
+                resume_run(runs["client"])
+            result["host_departure"] = "terminated while the held client was suspended mid-launch"
         for thread in threads:
             thread.join()
         logs = {who: "\n".join((run.out / leaf).read_text(encoding="utf-8", errors="replace")
@@ -1707,7 +1794,9 @@ def run_case(options, case, root, failing=None):
                     if host_setup:
                         picker = next(c for c in host_setup[0]["controls"] if c["name"] == "ComboHostActivity")
                         assert_combo_matches_loaded_activities(picker, host_setup[0])
-                assert record.get("exit_code") == 0, record
+                # The early variant's host is the departure itself: terminated mid-launch, 137.
+                expected_exit = 137 if (case, who) == ("net-host-left-early", "host") else 0
+                assert record.get("exit_code") == expected_exit, record
                 assert "[menu-script] FAILED:" not in logs[who], logs[who][-3000:]
         if not failing:
             if case == "net-activity":
@@ -1746,7 +1835,9 @@ def run_case(options, case, root, failing=None):
             observation = json.loads((probe_root(root, who) / "net-ui-result.json").read_text(encoding="utf-8"))
             result["probes"][who] = observation
             assert observation["pass"] and observation["complete"], (who, observation)
-            if case == "live":
+            if case == "live" and who == "host":
+                # The roster-fit and status-wrap surfaces are read off the host's probe; the
+                # client's probe is only the committed-frame rendezvous the checks wait on.
                 fits = roster_fit_observations(observation)
                 assert len(fits) == 1, fits
                 row = fits[0]
@@ -2226,11 +2317,34 @@ def run_case(options, case, root, failing=None):
             assert service["status"] == "e2e complete", service["status"]
             result["host_departure"] = {"boundary": boundary, "round_id": round_id,
                 "new_host_peer_id": service["local_peer_id"], "completed_tick": lockstep["completed_simulation_tick"]}
-        if case == "net-host-left":
-            status = [control["text"] for capture in images if capture["peer"] == "client"
-                      for control in capture["controls"] if control["name"] == "LabelMultiplayerLandingStatus"]
-            assert status and all("The host left the match" in value and "rematch roster:" not in value for value in status), status
-            result["host_departure_status"] = status
+        if case in ("net-host-left", "net-host-left-early"):
+            if case == "net-host-left-early":
+                # A dead launch leaves no seat to reclaim, so the departure verdict is the
+                # service's own error and status text in the client's lobby dump - with the
+                # roster down to the local member.
+                verdicts = re.findall(r'dump_lobby state=Failed members=1 .*?error="([^"]*)" status="([^"]*)"',
+                                      logs["client"])
+                assert verdicts and all(error == "The host left the match" == status
+                                        for error, status in verdicts), verdicts
+                result["host_departure_status"] = verdicts
+            else:
+                status = [control["text"] for capture in images if capture["peer"] == "client"
+                          for control in capture["controls"] if control["name"] == "LabelMultiplayerLandingStatus"]
+                assert status and all("The host left the match" in value and "rematch roster:" not in value for value in status), status
+                result["host_departure_status"] = status
+            if case == "net-host-left-early":
+                # The seat the host held while the client was suspended is what routes the wake-up
+                # through the held rejoin and the resync failure, not the migration a Running peer
+                # would take on a mid-match departure.
+                assert "AI in control" in logs["host"], logs["host"][-2000:]
+                assert records["host"].get("injected_termination"), records["host"]
+                assert "is now hosting" not in logs["client"], logs["client"][-4000:]
+                early = [line for line in logs["client"].splitlines()
+                         if "[net-match]" in line and "resync failed" in line]
+                assert early, logs["client"][-4000:]
+                result["client_startup_failure"] = early[-1]
+                client_done = json.loads((probe_root(root, "client") / "client_done.json").read_text(encoding="utf-8"))
+                result["client_sim_at_failure"] = client_done.get("sim_frame")
         if case == "net-activity":
             # The combo's picked row is what the lobby carries, and both peers read the same
             # preset, module and scene off the wire - the client's label is the proof a bare name never was.
