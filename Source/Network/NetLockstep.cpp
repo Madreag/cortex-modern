@@ -5202,8 +5202,9 @@ namespace RTE {
 		uint64_t runwayFrames = m_ReadyFrames.size();
 		for (uint8_t survivor: m_RemotePeerIds) {
 			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame) || IsSeatUnderAI(survivor, frame)) continue;
+			// The input for a frame is produced while simulating the frame a delay earlier, so the next frame it simulates follows that.
 			const uint64_t produced = m_Stats.peers[survivor].highestTargetFrame, delay = InputDelayAt(survivor, frame);
-			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay ? frame - (produced - delay) : 0);
+			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
 		}
 		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs));
 		if (runwayMs > noticeMs) return false;
