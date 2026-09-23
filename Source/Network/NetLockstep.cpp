@@ -4312,6 +4312,7 @@ namespace RTE {
 		m_GoodbyeDrain = false;
 		m_FinalFrame = UINT64_MAX;
 		m_DeferredParkTimings.clear();
+		m_ParkCarriedCommands.clear();
 		m_ApplyingDeferredParkTiming = false;
 		m_CaptureParkAwaitingReports = false;
 		m_CaptureParkFinalized = false;
@@ -5766,7 +5767,14 @@ namespace RTE {
 		// A park already committed a canonical empty frame at or below this watermark on every peer, so this
 		// tick's sample was dropped by the park, not lost to an error - and the next park has already moved the
 		// live window on by the time the simulation reaches the frames the last one covered.
-		if (targetFrame < m_Stats.nextFrame && targetFrame <= m_HighestParkEndFrame) return true;
+		if (targetFrame < m_Stats.nextFrame && targetFrame <= m_HighestParkEndFrame) {
+			// The input goes with the park, but a command is an event: it rides this peer's next input instead.
+			if (!commands.empty()) {
+				auto& carried = m_ParkCarriedCommands[targetFrame];
+				carried.insert(carried.end(), commands.begin(), commands.end());
+			}
+			return true;
+		}
 		if (targetFrame < m_Stats.nextFrame || targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew ||
 		    m_LocalFrames.find(targetFrame) != m_LocalFrames.end() || m_LocalInputHistory.contains(targetFrame) ||
 		    std::any_of(m_RecoveryOutgoing.begin(), m_RecoveryOutgoing.end(), [&](const auto& pending) { return pending.frame.senderPeerId == m_Config.localPeerId && pending.frame.targetFrame == targetFrame; })) {
@@ -5783,7 +5791,37 @@ namespace RTE {
 		packet.senderPeerId = m_Config.localPeerId;
 		packet.targetFrame = targetFrame;
 		packet.frames = frames;
-		packet.commands = commands;
+		// A park commits its frames empty on every peer, so commands aimed at one wait for the first frame past it.
+		const bool parkedTarget = IsSynchronizedCapturePark(targetFrame);
+		std::map<uint64_t, std::vector<NetGameCommand>> carried = m_ParkCarriedCommands;
+		if (parkedTarget) {
+			if (!commands.empty()) carried[targetFrame].insert(carried[targetFrame].end(), commands.begin(), commands.end());
+		} else {
+			// Oldest first and within the packet's limits: only the newest binding survives, and one this tick carries itself supersedes it.
+			const auto isBinding = [](const NetGameCommand& command) { return std::holds_alternative<NetGamePlayerBindings>(command.payload); };
+			const bool freshBinding = std::any_of(commands.begin(), commands.end(), isBinding);
+			const size_t own = static_cast<size_t>(std::count_if(commands.begin(), commands.end(), [&](const NetGameCommand& command) { return !isBinding(command); }));
+			size_t room = NetLockstepCodec::c_MaxCommandsPerPacket - std::min<size_t>(NetLockstepCodec::c_MaxCommandsPerPacket, own);
+			std::optional<NetGameCommand> binding;
+			for (auto it = carried.begin(); it != carried.end();) {
+				auto& pending = it->second;
+				size_t taken = 0;
+				for (; taken < pending.size(); ++taken) {
+					if (isBinding(pending[taken])) {
+						if (!freshBinding) binding = pending[taken];
+						continue;
+					}
+					if (room == 0) break;
+					packet.commands.push_back(pending[taken]);
+					--room;
+				}
+				pending.erase(pending.begin(), pending.begin() + static_cast<std::ptrdiff_t>(taken));
+				if (!pending.empty()) break;
+				it = carried.erase(it);
+			}
+			if (binding) packet.commands.push_back(*binding);
+			packet.commands.insert(packet.commands.end(), commands.begin(), commands.end());
+		}
 		for (NetGameCommand& command : packet.commands) {
 			command.senderPeerId = m_Config.localPeerId;
 		}
@@ -5884,6 +5922,7 @@ namespace RTE {
 			}
 			m_Stats.valueObservationsDropped += dropped;
 		}
+		m_ParkCarriedCommands = std::move(carried);
 		if (recovery) return true;
 		RememberLocalInput(packet);
 		m_LocalFrames[targetFrame] = frames;
@@ -9409,6 +9448,11 @@ namespace RTE {
 				// canonical empty frame on every peer instead.
 				if (localIt != m_LocalFrames.end()) m_LocalFrames.erase(localIt);
 				if (remoteIt != m_RemoteFrames.end()) m_RemoteFrames.erase(remoteIt);
+				// Every peer drops the commands too; this peer's own ride its next input, where every peer commits them.
+				if (const auto queued = m_LocalCommands.find(m_Stats.nextFrame); queued != m_LocalCommands.end() && !m_Playback) {
+					auto& carried = m_ParkCarriedCommands[m_Stats.nextFrame];
+					carried.insert(carried.end(), queued->second.begin(), queued->second.end());
+				}
 				m_LocalCommands.erase(m_Stats.nextFrame);
 				m_RemoteCommands.erase(m_Stats.nextFrame);
 				m_LocalObservations.erase(m_Stats.nextFrame);
