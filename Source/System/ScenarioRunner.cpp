@@ -1861,6 +1861,20 @@ namespace RTE {
 		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
 		if (producing->DeferLocalInput(tick, frames)) return true;
 		if (!PrimeRestoredLockstepInputs(error)) return false;
+		// A resumed round's agreed first frame can sit past its restored start. Every peer commits nothing below it, so the
+		// restored samples aimed there go as a fresh one would, and their commands ride this peer's next input instead.
+		if (const uint64_t first = s_LockstepCoordinator->GetStats().effectiveStartFrame; config.resumeFromSnapshot && first > config.startFrame) {
+			const auto isBinding = [](const NetGameCommand& command) { return std::holds_alternative<NetGamePlayerBindings>(command.payload); };
+			std::vector<NetGameCommand> carried;
+			for (auto it = s_RequeuedInputs.begin(); it != s_RequeuedInputs.end() && it->first < first; it = s_RequeuedInputs.erase(it)) {
+				for (const NetGameCommand& command: it->second.commands) if (!isBinding(command)) carried.push_back(command);
+				s_RequeuedCommands.erase(it->first);
+			}
+			for (auto it = s_RequeuedCommands.begin(); it != s_RequeuedCommands.end() && it->first < first; it = s_RequeuedCommands.erase(it))
+				for (const NetGameCommand& command: it->second) if (!isBinding(command)) carried.push_back(command);
+			s_RequeuedPlayerBindings.erase(s_RequeuedPlayerBindings.begin(), s_RequeuedPlayerBindings.lower_bound(first));
+			s_PendingLocalGameCommands.insert(s_PendingLocalGameCommands.begin(), carried.begin(), carried.end());
+		}
 		const auto& acks = s_LockstepCoordinator->GetAuthoritativeCommandAcks();
 		if (const auto ack = acks.find(config.localPeerId); ack != acks.end()) {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
