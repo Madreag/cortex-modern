@@ -1,8 +1,9 @@
-"""The TURN relay row: a relayed connection outlives its permissions.
+"""The TURN relay rows: a relayed connection outlives its permissions, and takes a renewed login live.
 
     python tools/turn_relay_rows.py hold --seconds 360 --turn 192.168.50.122:3479 --out <dir>
+    python tools/turn_relay_rows.py renew --turn 192.168.50.122:3479 --out <dir>
 
-Runs -net-p2p-selftest relay-hold through the runner with CCCP_HEADLESS=1. The TURN login is
+Runs -net-p2p-selftest relay-hold / relay-renew through the runner with CCCP_HEADLESS=1. The TURN login is
 read from a coturn config's "user=<name>:<password>" line (or CC_TEST_TURN_USER / CC_TEST_TURN_PASS) and handed
 to the engine through its environment only: it never reaches a command line, a log or the run record.
 With --coturn-log, the TURN server's own log lines for the run window are fetched over ssh as evidence.
@@ -26,6 +27,8 @@ from run_sim_test import make_run  # noqa: E402
 GNS_LINES = {
     "permissions_installed": re.compile(r"ICE: TURN permissions of relay \S+ installed"),
     "allocation_refreshed": re.compile(r"ICE: TURN relay \S+ refreshed for"),
+    "login_updated": re.compile(r"ICE: TURN login updated"),
+    "relay_login_renewed": re.compile(r"\[net-relay\] relay login renewed on \d+ live connection"),
     "turn_warnings": re.compile(r"ICE: TURN .*(refused|timed out|holds no allocation)"),
 }
 COTURN_LINES = {
@@ -77,7 +80,7 @@ def fetch_coturn(spec: str, started: datetime, ended: datetime, relays: set[str]
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("row", choices=("hold",))
+    parser.add_argument("row", choices=("hold", "renew"))
     parser.add_argument("--turn", required=True, help="TURN server host:port")
     parser.add_argument("--seconds", type=int, default=360, help="hold: how long the relayed connection must keep passing data")
     parser.add_argument("--login-conf", type=Path, default=Path("D:/mx/coturn-20260920/turnserver-fixed.conf"))
@@ -90,8 +93,8 @@ def main() -> int:
     # The engine inherits the login; passing it through make_run's env would copy it into launch.json.
     os.environ["CC_TEST_TURN_USER"], os.environ["CC_TEST_TURN_PASS"] = user, password
 
-    words = ["relay-hold", str(args.seconds), args.turn]
-    timeout = args.seconds + 180
+    words = ["relay-hold", str(args.seconds), args.turn] if args.row == "hold" else ["relay-renew", args.turn]
+    timeout = args.seconds + 180 if args.row == "hold" else 180
     started = datetime.now()
     run = make_run(REPO, ["-net-p2p-selftest", *words], out / "engine", timeout, env={"CCCP_HEADLESS": "1"})
     try:
@@ -107,7 +110,7 @@ def main() -> int:
     result = {
         "row": args.row,
         "turn": args.turn,
-        "seconds": args.seconds,
+        "seconds": args.seconds if args.row == "hold" else None,
         "started": started.isoformat(timespec="seconds"),
         "ended": ended.isoformat(timespec="seconds"),
         "exit_code": record.get("exit_code"),
