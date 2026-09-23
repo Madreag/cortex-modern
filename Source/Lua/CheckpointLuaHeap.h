@@ -254,11 +254,22 @@ namespace RTE::CheckpointLua {
 				}
 			};
 			if (submit) {
+				// The snapshot waits on a promise of its own: a task's future can keep the task, and with it this
+				// snapshot, alive for as long as the snapshot holds that future.
+				auto done = std::make_shared<std::promise<void>>();
 				std::lock_guard lock(m_CopyMutex);
-				data->ready = submit(std::move(copy)).share();
+				data->ready = done->get_future().share();
 				m_PendingCopy = data->ready;
 				++m_CopyGeneration;
 				m_CopyPending.store(true, std::memory_order_release);
+				submit([copy = std::move(copy), done] {
+					try {
+						copy();
+						done->set_value();
+					} catch (...) {
+						done->set_exception(std::current_exception());
+					}
+				});
 			} else {
 				copy();
 			}
