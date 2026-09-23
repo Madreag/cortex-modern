@@ -3053,6 +3053,63 @@ namespace RTE {
 			return true;
 		}
 
+		// The same two returns the other way round: the first seat's return was decided after the second had set up its round
+		// and its start was answered, for a frame still before that round's first. The round dropped the decision as behind
+		// it, kept the seat under the AI, and stopped on the seat's own start as an unknown peer's.
+		bool TestAJoinerTakesAReturnDecidedAfterItsStart(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49543, error) || !clientWire.Connect("loopback", 49543, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A54; config.roundId = 54; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 40; config.joinsRunningRound = true; config.inputDelayFrames = 2;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Returned"});
+			config.initialSeatHolds[3] = NetGameSeatHold{3, 0, 1, 1, 20};
+			config.initialPeerLeaves[3] = 20;
+			config.peerIncarnations[3] = 1;
+			config.activePeerIds = {1, 2};
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			const auto wire = [](const NetLockstepPacket& packet) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				(void)NetLockstepCodec::Encode(packet, event.bytes);
+				return event;
+			};
+			const auto startOf = [&config](uint8_t peer, uint64_t frame) {
+				NetLockstepStart start;
+				start.sessionId = config.sessionId; start.roundId = 54; start.localPeerId = peer; start.peerCount = 3;
+				start.startFrame = frame; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = config.scenario; start.ownershipPolicy = config.ownershipPolicy;
+				return start;
+			};
+			NetLockstepTiming reclaim;
+			reclaim.senderPeerId = 1; reclaim.peerId = 3; reclaim.action = NetTimingAction::Reclaim; reclaim.phase = NetTimingPhase::ReclaimAtFrame;
+			reclaim.sessionId = config.sessionId; reclaim.roundId = 54; reclaim.revision = 11; reclaim.applyFrame = 30; reclaim.delayFrames = 2;
+			reclaim.neutralThroughFrame = 32; reclaim.seatIncarnations[2] = 2; reclaim.requiredPeers = 0x1; reclaim.heldPeers = 0x4;
+			reclaim.cutoffFrame = reclaim.applyFrame;
+			uint64_t now = 0;
+			// Our start is answered by the host alone; the return and then the seat's own start follow.
+			for (const NetTransportEvent& event: {wire({startOf(1, 40)}), wire({reclaim}), wire({startOf(3, 30)})}) {
+				if (event.bytes.empty()) { *error = "a packet of the second return would not encode"; return false; }
+				client.InjectEvent(event, now);
+				for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			if (!client.IsRunning() || client.IsPeerGoneAtFrame(3, 40) || client.IsSeatUnderAI(3, 40) || !client.HasReceivedAllRemoteStarts()) {
+				*error = std::string("a return decided after this seat's start, for a frame before its first, was lost: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason +
+				         " gone_at_first=" + std::to_string(client.IsPeerGoneAtFrame(3, 40)) + " under_ai=" + std::to_string(client.IsSeatUnderAI(3, 40));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_takes_a_return_decided_after_its_start stale_packets=" << client.GetStats().staleRoundPackets << std::endl;
+			return true;
+		}
+
 		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
@@ -18388,6 +18445,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestOwnStartReturnedDoesNotFailTheRound(&error) ||
 		    !TestAJoinerTakesADelayDecidedForItsTail(&error) ||
 		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
+		    !TestAJoinerTakesAReturnDecidedAfterItsStart(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||

@@ -5414,7 +5414,31 @@ namespace RTE {
 		}
 	}
 
+	void NetLockstepCoordinator::TakeReturnBeforeFirstFrame(const NetLockstepTiming& reclaim) {
+		const uint8_t peer = reclaim.peerId;
+		if (!IsKnownRemotePeer(peer)) { m_RemotePeerIds.push_back(peer); std::sort(m_RemotePeerIds.begin(), m_RemotePeerIds.end()); }
+		m_ReclaimTransactions[peer] = {peer, reclaim.authorityGeneration, reclaim.revision, reclaim.seatIncarnations[peer - 1], reclaim.applyFrame,
+		    reclaim.delayFrames, reclaim.neutralThroughFrame, reclaim.worldTransition};
+		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
+		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
+		m_PeerAdmissions[peer] = {m_Config.startFrame, PeerInputDelay(peer)};
+		// The host answered our start before this return, and the seat's own start names a frame behind ours: the decision stands in for both.
+		m_RemoteStartsReceived.insert(peer);
+	}
+
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
+		// A return that lands before a joining round's first frame is taken at once, even before the round runs: the seat's own
+		// start may already be on its way, and nothing later in the round revisits a frame behind it.
+		if (m_Config.joinsRunningRound && timing.phase == NetTimingPhase::ReclaimAtFrame && timing.applyFrame < m_Config.startFrame) {
+			if (timing.senderPeerId != GetHostPeerId() || LockstepPeerOfTransport(fromTransport) != GetHostPeerId() || timing.sessionId != m_Config.sessionId ||
+			    (m_RoundId != 0 && timing.roundId != m_RoundId) || timing.authorityGeneration != m_Config.migrationGeneration || timing.peerId == 0 ||
+			    timing.peerId > 4 || timing.peerId > m_Config.peerCount || timing.peerId == m_Config.localPeerId) return;
+			const auto prior = m_ReclaimTransactions.find(timing.peerId);
+			if ((prior != m_ReclaimTransactions.end() && prior->second.eventSequence >= timing.revision) ||
+			    timing.seatIncarnations[timing.peerId - 1] <= m_Config.peerIncarnations[timing.peerId]) return;
+			TakeReturnBeforeFirstFrame(timing);
+			return;
+		}
 		if (m_State == NetLockstepState::WaitingForStart && timing.senderPeerId == GetHostPeerId() &&
 		    timing.sessionId == m_Config.sessionId && (m_RoundId == 0 || timing.roundId == m_RoundId) && SenderOwnsTransport(timing.senderPeerId, fromTransport)) {
 			if (m_PreStartTiming.size() >= 256) { Fail(NetLockstepStopReason::ProtocolError, m_Config.startFrame, "pre-start timing backlog overflow"); return; }

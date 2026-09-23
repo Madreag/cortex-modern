@@ -1257,6 +1257,8 @@ namespace RTE {
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport);
+		/// Takes a seat the host brought back before this joining round's first frame as a member from that frame.
+		void TakeReturnBeforeFirstFrame(const NetLockstepTiming& reclaim);
 		void TickTiming(uint64_t nowMs);
 		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
 		void FlushTimingOutgoing();
