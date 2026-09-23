@@ -2402,11 +2402,9 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 	const auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count(); };
 	if (frozen) {
 		FrozenCaptureStats stats;
-		LuaMan::s_FrozenCaptureStats = &stats;
 		std::vector<std::string> frozenProblems;
 		// The page copies land off this thread; a state waits for its own at its gate before it runs again.
-		const bool complete = captureAll(true, frozenProblems);
-		LuaMan::s_FrozenCaptureStats = nullptr;
+		const bool complete = LuaStateWrapper::CaptureFrozenScriptGraphs(graphs, frozenProblems, stats);
 		std::cout << "[script-graph-capture] path=frozen states=" << stats.states << " us=" << elapsed() << " native_us=" << stats.nativeUs
 		          << " freeze_us=" << stats.heapUs << " copy_us=" << stats.copyUs << " pages=" << stats.pages << " bytes=" << stats.bytes
 		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned

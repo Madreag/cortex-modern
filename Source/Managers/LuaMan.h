@@ -90,7 +90,10 @@ namespace RTE {
 	class LuaScriptGraphNativeCaptureScope {
 	public:
 		LuaScriptGraphNativeCaptureScope();
+		/// Lends another thread the lookups of the world capture it helps with.
+		explicit LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureData* shared);
 		~LuaScriptGraphNativeCaptureScope();
+		static const LuaScriptGraphNativeCaptureData* Current();
 		LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureScope&) = delete;
 		LuaScriptGraphNativeCaptureScope& operator=(const LuaScriptGraphNativeCaptureScope&) = delete;
 	private:
@@ -243,6 +246,8 @@ namespace RTE {
 		bool FrozenCaptureAvailable() const { return !m_FrozenCaptureUnavailable->load(std::memory_order_relaxed); }
 		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
 		void WaitFrozenCopy();
+		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
+		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats);
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);
