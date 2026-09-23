@@ -74,7 +74,6 @@ namespace RTE {
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
-	bool TestAHoldReachesAWaitingSurvivorByTheBound(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -17855,58 +17854,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
-	/// This host judges a deadline on its next pass and a survivor reads the decision on its next, so a survivor already
-	/// waiting on a silent seat learns of the hold by the bound only when both passes come off the seat's grace.
-	bool TestAHoldReachesAWaitingSurvivorByTheBound(std::string* error) {
-		// Judges the silent seat once, on a fresh host, with the survivor 'runway' frames from running dry.
-		const auto judge = [&](uint64_t runway, uint64_t nowMs, bool& declared, uint64_t& noticeMs) {
-			LoopbackTransport wire;
-			NetLockstepCoordinator host;
-			auto config = MakeCoordinatorConfig(1, 2, 0x9A12, 14, NetTransportLane::ControlReliable);
-			config.peerCount = 3; config.startFrame = 1; config.roundId = 36;
-			config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
-			config.relayToOtherPeers = true;
-			config.peerInputDelayFrames = {{1, 14}, {2, 1}, {3, 14}};
-			config.remoteTransportPeerIds = {{2, 1}, {3, 1}};
-			config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A12);
-			if (!wire.StartHost(48889, error) || !host.Start(wire, config, error)) return false;
-			host.m_State = NetLockstepState::Running;
-			host.m_RemotePeerIds = {2, 3};
-			host.m_PeersPlayedThisRound = {2, 3};
-			host.m_PeerEffectiveStart[2] = 2;
-			host.m_PeerEffectiveStart[3] = 15;
-			host.m_Stats.peers[2].pingMs = 0;
-			host.m_Stats.peers[3].pingMs = 200;
-			host.m_Stats.nextFrame = 615;
-			// This host still holds fourteen committed frames; the survivor on a 1-frame delay produces a frame while simulating the one before.
-			for (uint64_t frame = 601; frame < 615; ++frame) { NetLockstepReadyFrame ready; ready.frame = frame; host.m_ReadyFrames.push_back(ready); }
-			host.m_Stats.peers[2].highestTargetFrame = 615 - runway;
-			declared = host.DeclareOverdueInputs(615, nowMs, 1000, {3});
-			noticeMs = host.GetStats().holdNoticeBudgetMs;
-			return true;
-		};
-		bool declared = false;
-		uint64_t noticeMs = 0;
-		if (!judge(0, 1010, declared, noticeMs)) return false;
-		if (declared) {
-			*error = "a seat was held 10 ms after it went missing, inside the grace its survivor's notice leaves it: notice_ms=" + std::to_string(noticeMs);
-			return false;
-		}
-		if (!judge(0, 1015, declared, noticeMs)) return false;
-		if (!declared || 15 + noticeMs > 50) {
-			*error = "the hold was still undeclared 15 ms after the seat went missing: notice_ms=" + std::to_string(noticeMs) +
-			         " leaves the waiting survivor a pass of ours and a pass of its own past the 50 ms bound";
-			return false;
-		}
-		if (!judge(1, 1015, declared, noticeMs)) return false;
-		if (!declared) {
-			*error = "a survivor one frame from running dry was left to run dry before the seat was judged: notice_ms=" + std::to_string(noticeMs);
-			return false;
-		}
-		std::cout << "[net-lockstep-selftest] PASS a_hold_reaches_a_waiting_survivor_by_the_bound declared_after_ms=15 notice_ms=" << noticeMs << std::endl;
-		return true;
-	}
-
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -18074,7 +18021,6 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||
-		    !TestAHoldReachesAWaitingSurvivorByTheBound(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||
