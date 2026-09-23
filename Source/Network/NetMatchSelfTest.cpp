@@ -7349,6 +7349,83 @@ namespace RTE {
 		return true;
 	}
 
+	/// A goodbye drain that reaches its cap while a rejoin is still moving says the round's goodbye to every pending
+	/// returner before the host leaves, so the returner completes instead of reading the exit as a lost link.
+	bool TestTheDrainSaysGoodbyeAtItsCap(std::string* error) {
+		const uint16_t port = 42332;
+		LoopbackTransport hostTransport;
+		LoopbackTransport clientTransport;
+		NetSession hostSession;
+		NetSession clientSession;
+		NetSessionConfig hostConfig;
+		hostConfig.port = port;
+		hostConfig.sessionId = 0x6007E;
+		hostConfig.displayName = "Host";
+		hostConfig.maxPeers = 2;
+		hostConfig.heartbeatIntervalMs = 25;
+		hostConfig.timeoutMs = 30000;
+		NetIdentityManifest& identity = hostConfig.localIdentity;
+		identity.gameVersion = "7.0.0-test";
+		identity.networkProtocolVersion = NetProtocol::c_Version;
+		identity.controllerFrameVersion = ControllerFrame::c_Version;
+		identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+		identity.buildId = "drain-cap-goodbye-selftest";
+		identity.platform = "test";
+		NetSessionConfig clientConfig = hostConfig;
+		clientConfig.displayName = "Returner";
+		++clientConfig.localNonce;
+		if (!hostSession.StartHost(hostTransport, hostConfig, error) || !clientSession.StartClient(clientTransport, "loopback", clientConfig, error)) return false;
+		uint64_t now = 0;
+		for (; now <= 2000 && (hostSession.GetReadyPeerCount() == 0 || !clientSession.IsReady()); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (hostSession.GetReadyPeerCount() != 1 || !clientSession.IsReady()) {
+			*error = "the fixture never seated the returner: ready=" + std::to_string(hostSession.GetReadyPeerCount()) + " client=" + NetSession::StateName(clientSession.GetState());
+			return false;
+		}
+		// The round is over; the returner is a ready peer the ended round does not use, and its rejoin keeps moving.
+		LoopbackTransport drainWire;
+		NetLockstepCoordinator drained;
+		NetLockstepConfig drainConfig;
+		drainConfig.localPeerId = 1; drainConfig.peerCount = 2;
+		if (!drained.StartReplay(drainWire, drainConfig, error)) return false;
+		const NetLockstepCoordinator endedRound;
+		uint64_t rejoinProgress = 0;
+		ScenarioRunner::SetLockstepCoordinator(&drained);
+		ScenarioRunner::SetSessionPump([&] {
+			++rejoinProgress;
+			++now;
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(1);
+			clientTransport.AdvanceTimeMs(1);
+		}, [] { return true; }, [&] { return rejoinProgress; }, [&] {
+			NetMatchService::RefuseEndedPeers(hostSession, endedRound, "match over through frame 2401", true);
+		});
+		constexpr uint32_t c_ShortenedCapMs = 400;
+		const auto began = std::chrono::steady_clock::now();
+		const bool left = ScenarioRunner::DrainLockstepRelay(250, 0, c_ShortenedCapMs);
+		const auto spentMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - began).count();
+		ScenarioRunner::SetSessionPump(nullptr);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		for (const uint64_t until = now + 1000; now <= until && !clientSession.HasReject(); now += 5) {
+			hostSession.Tick(now);
+			clientSession.Tick(now);
+			hostTransport.AdvanceTimeMs(5);
+			clientTransport.AdvanceTimeMs(5);
+		}
+		if (left || spentMs < c_ShortenedCapMs || !clientSession.HasReject() || clientSession.GetRejectSummary() != "match over through frame 2401") {
+			*error = std::string("the drain left at its cap without the goodbye: drained=") + (left ? "1" : "0") + " spent_ms=" + std::to_string(spentMs) +
+			         " client=" + NetSession::StateName(clientSession.GetState()) + " reject=\"" + clientSession.GetRejectSummary() + "\"";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS the_drain_says_goodbye_at_its_cap spent_ms=" << spentMs << " reject=\"" << clientSession.GetRejectSummary() << "\"" << std::endl;
+		return true;
+	}
+
 	bool TestServiceKick(std::string* error) {
 		class ScriptedAuthCrypto : public NetAuthCrypto {
 		public:
@@ -13210,6 +13287,16 @@ namespace RTE {
 		};
 
 		std::string error;
+		// These rows each report their own failure, so one run names every red among them.
+		bool rowsPassed = true;
+		const auto row = [&](bool (*test)(std::string*), const char* name) {
+			std::string rowError;
+			if (test(&rowError)) return;
+			std::cerr << "[net-match-selftest] FAIL " << name << ": " << rowError << std::endl;
+			rowsPassed = false;
+		};
+		row(&TestTheDrainSaysGoodbyeAtItsCap, "the_drain_says_goodbye_at_its_cap");
+		if (!rowsPassed) return fail("a reporting row failed");
 		std::string menuError, routeError;
 		const bool menuInputs = TestLocalMenuKeepsInputs(&menuError);
 		const bool routeEvidence = TestConnectedRouteEvidence(&routeError);

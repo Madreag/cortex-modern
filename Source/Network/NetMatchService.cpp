@@ -2553,7 +2553,13 @@ static std::string ResyncSaveName() {
 				    session.acknowledgedThrough + 1 < completed) return true;
 			}
 			return false;
-		}, [this] { return RejoinProgressSum(); });
+		}, [this] { return RejoinProgressSum(); }, [this] {
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_IsHost || !m_Session || !m_Coordinator) return;
+			const uint64_t resume = m_Coordinator->GetResumeFrame();
+			const uint64_t finalFrame = m_CompletedRoundFinalFrame != 0 ? m_CompletedRoundFinalFrame : (resume > 0 ? resume - 1 : 0);
+			RefuseEndedPeers(*m_Session, *m_Coordinator, MatchOverGoodbyeText(finalFrame), true);
+		});
 		ScenarioRunner::SetLockstepSeatPresence(&m_SeatPresence);
 		// The coordinator owns the transport queue during the match; reconnect handshakes hand over
 		// here and drain through PumpSessionEvents on the same (game) thread.
