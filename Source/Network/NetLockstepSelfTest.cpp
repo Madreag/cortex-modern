@@ -3233,6 +3233,50 @@ namespace RTE {
 			return true;
 		}
 
+		// The host answers a joining seat with the start for the seat's own first frame and, on a repeat, with the start it
+		// began the round with. The second names a frame long before the joiner's; the joiner already had its round, and
+		// stopped on "lockstep start mismatch" with the host's seat taken by the AI.
+		bool TestAJoinerTakesTheHostsRoundStartAsAStraggler(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A85, 2, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A85, 2, NetTransportLane::ControlReliable);
+			a.roundId = 0x9A85; a.relayToOtherPeers = true; a.authorityPeerId = b.authorityPeerId = 1;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = 1000.0 / 60.0;
+			b.startFrame = 40; b.joinsRunningRound = true;
+			if (!StartCoordinatorPair(48912, hostWire, clientWire, host, client, a, b, error)) return false;
+			const auto inject = [&](uint64_t startFrame, uint64_t now) {
+				NetLockstepStart start;
+				start.localPeerId = 1; start.sessionId = b.sessionId; start.roundId = a.roundId; start.peerCount = 2;
+				start.startFrame = startFrame; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = a.scenario; start.ownershipPolicy = a.ownershipPolicy;
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode({start}, event.bytes)) return false;
+				client.InjectEvent(event, now);
+				return true;
+			};
+			// The start for the joiner's own first frame, then the one the host began the round with.
+			if (!inject(b.startFrame, 1)) { *error = "the joiner row's start would not encode"; return false; }
+			for (uint64_t now = 2; now < 20; ++now) { clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			if (!client.IsRunning()) {
+				*error = std::string("the joiner did not take the host's start for its own first frame: state=") + NetLockstepCoordinator::StateName(client.GetState());
+				return false;
+			}
+			if (!inject(a.startFrame, 20)) { *error = "the joiner row's start would not encode"; return false; }
+			for (uint64_t now = 21; now < 60; ++now) { clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			if (!client.IsRunning()) {
+				*error = std::string("a joining seat stopped on the start the host began the round with: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason;
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_takes_the_hosts_round_start_as_a_straggler" << std::endl;
+			return true;
+		}
+
 		// A seat whose stream keeps advancing is waited on while its newest tick stays within the bound of the frame the
 		// round needs from it, and held like any other once it strays past: nobody paces the others beyond the bound.
 		bool TestAFeedingPeerIsWaitedOnWithinTheBound(std::string* error) {
@@ -19030,6 +19074,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
 		row(&TestAFeedingPeerIsWaitedOnWithinTheBound, "a_feeding_peer_is_waited_on_within_the_bound");
 		row(&TestAJoinerIgnoresTheRoundsFirstBoundary, "a_joiner_ignores_the_rounds_first_boundary");
+		row(&TestAJoinerTakesTheHostsRoundStartAsAStraggler, "a_joiner_takes_the_hosts_round_start_as_a_straggler");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
