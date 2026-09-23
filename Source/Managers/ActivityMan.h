@@ -379,7 +379,9 @@ namespace RTE {
 		                              std::shared_future<bool>& task, size_t& bytes, SaveCompression compression = SaveCompression::Fast,
 		                              const AutosaveIdentity* identity = nullptr);
 		std::string CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
-		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr) const;
+		    std::vector<std::pair<std::string, int64_t>>* timings = nullptr, const std::vector<CheckpointText>* managerParts = nullptr) const;
+		/// The managers' runtime globals, from the moving objects through the music, each captured on its own in the archive's order.
+		static std::vector<CheckpointText> CaptureRuntimeManagerParts(std::vector<std::pair<std::string, int64_t>>* timings);
 		/// Serializes script graphs the way a save does and reports each refusal.
 		bool CaptureScriptGraphsOrReportRefusal(SaveKind kind, std::vector<std::string>& graphs);
 		/// Prints each refused script value to the console and tells the player once.
