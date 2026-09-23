@@ -593,6 +593,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	g_MovableMan.WaitForActorsSeeTask();
 	CaptureAllocationState allocation;
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
+	ContentFile::LoadedBitmapIndexScope bitmapIndex;
 	const uint64_t liveSoundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 	auto& cow = CheckpointCow::Get();
 	cow.BeginImage();
