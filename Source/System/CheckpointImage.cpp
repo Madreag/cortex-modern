@@ -46,16 +46,16 @@ using namespace RTE;
 namespace {
 	std::atomic<uint64_t> s_LuaWrites{0};
 	std::atomic<int> s_BarrierPaused{0};
-	std::atomic<std::thread::id> s_BarrierPauseOwner{};
+	thread_local int s_BarrierPauseDepth = 0;
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
 	thread_local int s_BarrierIgnored = 0;
 
 	void OnLuaTableWrite(void* table) {
 		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
-			// The capture's own scratch writes are its business; the callback stays installed so
+			// A capturing thread's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
-			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+			if (s_BarrierPauseDepth > 0) {
 				return;
 			}
 			// The freeze is meant to hold every Lua thread. One that wrote anyway would be lost
@@ -73,7 +73,7 @@ namespace {
 	void OnLuaValueWrite(void* value) {
 		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
-			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+			if (s_BarrierPauseDepth > 0) {
 				return;
 			}
 			s_PausedForeignWrites.fetch_add(1, std::memory_order_relaxed);
@@ -516,15 +516,14 @@ void RTE::CheckpointValueWritten(const void* value) {
 
 // A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
 RTE::LuaCheckpointBarrierPause::LuaCheckpointBarrierPause() {
-	// The pausing thread's own writes are the capture's scratch; any other thread's are a defect.
-	s_BarrierPauseOwner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+	// Each pausing thread's own writes are the capture's scratch; any other thread's are a defect.
+	++s_BarrierPauseDepth;
 	s_BarrierPaused.fetch_add(1, std::memory_order_relaxed);
 }
 
 RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
-	if (s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed) == 1) {
-		s_BarrierPauseOwner.store(std::thread::id(), std::memory_order_relaxed);
-	}
+	s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed);
+	--s_BarrierPauseDepth;
 }
 
 RTE::LuaCheckpointBarrierIgnore::LuaCheckpointBarrierIgnore() { ++s_BarrierIgnored; }

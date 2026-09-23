@@ -15,6 +15,22 @@ namespace RTE::CheckpointLua {
 
 	class CaptureScope;
 
+	// The counters a native capture must leave as it found them, put back when it ends.
+	struct NativeEffects {
+		RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
+		long uid = MovableObject::GetUniqueIDCounter();
+		int cursor = g_LuaMan.GetScriptStateCursor();
+		// The sound registry is restored once per world capture, as the live walk has it.
+		uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
+		std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
+		~NativeEffects() {
+			g_SimRNG = sim; g_RenderRNG = render;
+			MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor);
+			g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
+			g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
+		}
+	};
+
 	class NativeImage {
 	public:
 		struct Value {
@@ -292,7 +308,10 @@ namespace RTE::CheckpointLua {
 	// The caller holds the VM lock and keeps carried sound observations enabled.
 	class CaptureScope {
 	public:
-		CaptureScope(lua_State* state, NativeCache& cache) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()), m_Cache(cache) {}
+		CaptureScope(lua_State* state, NativeCache& cache) : m_References(state), m_Capture(true), m_Thread(std::this_thread::get_id()), m_Cache(cache) {
+			// A world capture puts the counters back once, after every state; a state captured alone does it here.
+			if (!s_GraphNativeCapture) m_Effects.emplace();
+		}
 		CaptureScope(const CaptureScope&) = delete;
 		CaptureScope& operator=(const CaptureScope&) = delete;
 
@@ -341,6 +360,8 @@ namespace RTE::CheckpointLua {
 			lua_pop(State(), 1);
 			const auto worldStarted = std::chrono::steady_clock::now();
 			m_Image->m_EnumUs = std::chrono::duration_cast<std::chrono::microseconds>(worldStarted - enumStarted).count();
+			// The states of one world capture may run side by side; the first to get here walks the world.
+			std::lock_guard worldLock(s_GraphNativeCapture->frozenWorldMutex);
 			auto& shared = s_GraphNativeCapture->frozenWorld;
 			if (!shared) {
 				auto world = std::make_shared<NativeImage::World>();
@@ -412,20 +433,7 @@ namespace RTE::CheckpointLua {
 			}
 		} m_References;
 
-		struct NativeEffects {
-			RandomGenerator sim = g_SimRNG, render = g_RenderRNG;
-			long uid = MovableObject::GetUniqueIDCounter();
-			int cursor = g_LuaMan.GetScriptStateCursor();
-			// The sound registry is restored once per world capture, as the live walk has it.
-			uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
-			std::unordered_set<uint64_t> carried = g_AudioMan.LastCarriedSoundIdentities();
-			~NativeEffects() {
-				g_SimRNG = sim; g_RenderRNG = render;
-				MovableObject::PinUniqueIDCounter(uid); g_LuaMan.SetScriptStateCursor(cursor);
-				g_AudioMan.SetCheckpointSoundContainerCursor(soundCursor);
-				g_AudioMan.RememberCarriedSoundIdentities(std::move(carried));
-			}
-		} m_Effects;
+		std::optional<NativeEffects> m_Effects;
 
 		ScriptGraphCaptureScope m_Capture;
 		std::optional<LuaScriptGraphNativeCaptureScope> m_NativeScope;

@@ -3909,30 +3909,41 @@ struct VectorField {
 
 struct RTE::LuaScriptGraphNativeCaptureData {
 	const std::vector<MovableObject*> knownObjects = g_MovableMan.SnapshotKnownObjects();
-	std::unordered_map<const void*, VectorField> vectorFields;
-	std::unordered_map<const void*, long> controllerOwners;
 	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
-	LuaScriptGraphNativeCaptureData() {
-		vectorFields.reserve(knownObjects.size() * 6);
-		controllerOwners.reserve(knownObjects.size());
-		for (MovableObject* mo: knownObjects) {
-			const long uid = mo->GetUniqueID();
-			if (Actor* actor = dynamic_cast<Actor*>(mo)) controllerOwners[actor->GetController()] = uid;
-			vectorFields[&mo->GetPos()] = {uid, "Pos"};
-			vectorFields[&mo->GetVel()] = {uid, "Vel"};
-			vectorFields[&mo->GetPrevPos()] = {uid, "PrevPos"};
-			vectorFields[&mo->GetPrevVel()] = {uid, "PrevVel"};
-			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
-				vectorFields[&rotating->GetRecoilForce()] = {uid, "RecoilForce"};
-				vectorFields[&rotating->GetRecoilOffset()] = {uid, "RecoilOffset"};
+	mutable std::mutex frozenWorldMutex;
+	struct Fields {
+		std::unordered_map<const void*, VectorField> vectors;
+		std::unordered_map<const void*, long> controllers;
+	};
+	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
+	const Fields& Owners() const {
+		std::call_once(m_OwnersBuilt, [this] {
+			m_Owners.vectors.reserve(knownObjects.size() * 6);
+			m_Owners.controllers.reserve(knownObjects.size());
+			for (MovableObject* mo: knownObjects) {
+				const long uid = mo->GetUniqueID();
+				if (Actor* actor = dynamic_cast<Actor*>(mo)) m_Owners.controllers[actor->GetController()] = uid;
+				m_Owners.vectors[&mo->GetPos()] = {uid, "Pos"};
+				m_Owners.vectors[&mo->GetVel()] = {uid, "Vel"};
+				m_Owners.vectors[&mo->GetPrevPos()] = {uid, "PrevPos"};
+				m_Owners.vectors[&mo->GetPrevVel()] = {uid, "PrevVel"};
+				if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+					m_Owners.vectors[&rotating->GetRecoilForce()] = {uid, "RecoilForce"};
+					m_Owners.vectors[&rotating->GetRecoilOffset()] = {uid, "RecoilOffset"};
+				}
+				if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
+					m_Owners.vectors[&attachable->GetParentOffset()] = {uid, "ParentOffset"};
+					m_Owners.vectors[&attachable->GetJointOffset()] = {uid, "JointOffset"};
+					m_Owners.vectors[&attachable->GetJointPos()] = {uid, "JointPos"};
+				}
 			}
-			if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
-				vectorFields[&attachable->GetParentOffset()] = {uid, "ParentOffset"};
-				vectorFields[&attachable->GetJointOffset()] = {uid, "JointOffset"};
-				vectorFields[&attachable->GetJointPos()] = {uid, "JointPos"};
-			}
-		}
+		});
+		return m_Owners;
 	}
+
+private:
+	mutable std::once_flag m_OwnersBuilt;
+	mutable Fields m_Owners;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -3941,7 +3952,13 @@ LuaScriptGraphNativeCaptureScope::LuaScriptGraphNativeCaptureScope()
 	s_GraphNativeCapture = m_Data.get();
 }
 
+LuaScriptGraphNativeCaptureScope::LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureData* shared) : m_Previous(s_GraphNativeCapture) {
+	s_GraphNativeCapture = shared;
+}
+
 LuaScriptGraphNativeCaptureScope::~LuaScriptGraphNativeCaptureScope() { s_GraphNativeCapture = m_Previous; }
+
+const LuaScriptGraphNativeCaptureData* LuaScriptGraphNativeCaptureScope::Current() { return s_GraphNativeCapture; }
 
 namespace {
 
@@ -5213,7 +5230,8 @@ static int ScriptGraphNative(lua_State* L) {
 		}
 	}
 	if (className == "Controller" && s_GraphNativeCapture) {
-		if (const auto actor = s_GraphNativeCapture->controllerOwners.find(rep->ptr()); actor != s_GraphNativeCapture->controllerOwners.end()) {
+		const auto& controllers = s_GraphNativeCapture->Owners().controllers;
+		if (const auto actor = controllers.find(rep->ptr()); actor != controllers.end()) {
 			lua_pushstring(L, "controller-ref");
 			lua_pushnumber(L, static_cast<lua_Number>(actor->second));
 			return 2;
@@ -5225,7 +5243,8 @@ static int ScriptGraphNative(lua_State* L) {
 			return 1;
 		}
 		if (s_GraphNativeCapture) {
-			if (const auto field = s_GraphNativeCapture->vectorFields.find(rep->ptr()); field != s_GraphNativeCapture->vectorFields.end()) {
+			const auto& vectors = s_GraphNativeCapture->Owners().vectors;
+			if (const auto field = vectors.find(rep->ptr()); field != vectors.end()) {
 				lua_pushstring(L, "vector-ref");
 				lua_pushnumber(L, static_cast<lua_Number>(field->second.uid));
 				lua_pushstring(L, field->second.property);
@@ -6016,6 +6035,53 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		problems.emplace_back(std::string("frozen graph capture failed: ") + error.what());
 		return false;
 	}
+}
+
+bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats) {
+	std::vector<LuaStateWrapper*> order{&g_LuaMan.GetMasterScriptState()};
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) order.push_back(&state);
+	std::vector<CheckpointText> texts(order.size());
+	std::vector<std::vector<std::string>> refusals(order.size());
+	std::vector<FrozenCaptureStats> parts(order.size());
+	std::vector<char> complete(order.size(), 0);
+	CheckpointLua::NativeEffects effects;
+	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	const auto capture = [&](size_t index) {
+		LuaScriptGraphNativeCaptureScope lookups(shared);
+		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
+		LuaMan::s_FrozenCaptureStats = &parts[index];
+		complete[index] = order[index]->CaptureScriptGraph(texts[index], refusals[index], true);
+		LuaMan::s_FrozenCaptureStats = previous;
+	};
+	// Each state is its own VM behind its own lock, so the states are captured side by side.
+	std::vector<std::future<void>> tasks;
+	tasks.reserve(order.size());
+	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] { capture(index); }));
+	std::exception_ptr failure;
+	try {
+		capture(0);
+	} catch (...) {
+		failure = std::current_exception();
+	}
+	// Every task reads this frame's locals, so all of them end before anything leaves it.
+	for (std::future<void>& task: tasks) task.wait();
+	if (failure) std::rethrow_exception(failure);
+	for (std::future<void>& task: tasks) task.get();
+	bool all = true;
+	for (size_t index = 0; index < order.size(); ++index) {
+		const FrozenCaptureStats& part = parts[index];
+		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
+		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
+		stats.iterators += part.iterators; stats.owned += part.owned; stats.callbacksUs += part.callbacksUs; stats.faults += part.faults;
+		stats.faultUs += part.faultUs; stats.receiversUs += part.receiversUs; stats.activityUs += part.activityUs; stats.asyncUs += part.asyncUs;
+		stats.cacheUs += part.cacheUs; stats.objectsUs += part.objectsUs; stats.cachedScripts += part.cachedScripts; stats.rootsUs += part.rootsUs;
+		stats.enumUs += part.enumUs; stats.worldUs += part.worldUs; stats.answerUs += part.answerUs;
+		stats.copyMapped = std::max(stats.copyMapped, part.copyMapped); stats.copyIdle = std::max(stats.copyIdle, part.copyIdle);
+		problems.insert(problems.end(), refusals[index].begin(), refusals[index].end());
+		all = all && complete[index];
+	}
+	graphs = std::move(texts);
+	return all;
 }
 
 CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
