@@ -81,6 +81,7 @@ extern "C" {
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -11933,6 +11934,43 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 		lua_getglobal(state, "hot");
 		probe.pagesMatch = matches() && probe.pagesMatch;
 		lua_pop(state, 1);
+	} catch (const std::exception& error) {
+		probe.error = error.what();
+	}
+	return probe;
+}
+
+OrphanSnapshotProbe RTE::ProbeSnapshotAfterItsHeap() {
+	OrphanSnapshotProbe probe;
+	try {
+		const size_t mappedBefore = CheckpointLua::HeapOwner::MappedCopyBytes();
+		const size_t deadBefore = CheckpointLua::HeapOwner::CallsIntoDestroyedHeaps();
+		std::optional<CheckpointLua::Snapshot> held;
+		std::vector<std::byte> frozen;
+		const void* array = nullptr;
+		{
+			const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
+			lua_State* state = owner->State();
+			lua_gc(state, LUA_GCSTOP, 0);
+			if (luaL_loadstring(state, "kept = {} for i = 1, 16384 do kept[i] = i end") != 0 || lua_pcall(state, 0, 0, 0) != 0) {
+				const char* message = lua_tostring(state, -1);
+				throw std::runtime_error(message ? message : "the probe chunk failed");
+			}
+			held = owner->Freeze({});
+			lua_getglobal(state, "kept");
+			const GCtab* table = static_cast<const GCtab*>(lua_topointer(state, -1));
+			array = tvref(table->array);
+			const auto bytes = held->ReadBytes(array, table->asize * sizeof(TValue));
+			frozen.assign(bytes.begin(), bytes.end());
+			lua_pop(state, 1);
+		}
+		// The heap is gone and the snapshot is not, as the checkpoint image outlives a state at shutdown.
+		const auto after = held->ReadBytes(array, frozen.size());
+		probe.pagesRead = !frozen.empty() && after.size() == frozen.size() && std::memcmp(after.data(), frozen.data(), frozen.size()) == 0;
+		held.reset();
+		probe.deadHeapCalls = CheckpointLua::HeapOwner::CallsIntoDestroyedHeaps() - deadBefore;
+		const size_t mappedAfter = CheckpointLua::HeapOwner::MappedCopyBytes();
+		probe.mappedAfter = mappedAfter > mappedBefore ? mappedAfter - mappedBefore : 0;
 	} catch (const std::exception& error) {
 		probe.error = error.what();
 	}

@@ -23,6 +23,7 @@ extern "C" {
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -133,12 +134,20 @@ namespace RTE::CheckpointLua {
 		static std::unique_ptr<HeapOwner> Create() {
 			auto owner = std::unique_ptr<HeapOwner>(new HeapOwner());
 			owner->Initialize();
+			{
+				std::lock_guard lock(RegistryMutex());
+				LiveHeaps().insert(owner.get());
+			}
 			return owner;
 		}
 
 		~HeapOwner() {
 			WaitCopy();
-			// The page table's buffers come back through GiveSlab while the pool still stands; then the pool is unmapped.
+			// From here a buffer released anywhere, by a snapshot that outlives this heap too, unmaps itself.
+			{
+				std::lock_guard lock(RegistryMutex());
+				LiveHeaps().erase(this);
+			}
 			m_Pages.clear();
 			{
 				std::lock_guard lock(m_SlabMutex);
@@ -169,6 +178,8 @@ namespace RTE::CheckpointLua {
 		size_t LiveSlabs() const { return m_LiveSlabs.load(std::memory_order_relaxed); }
 		/// The buffer of the last freeze and the one of settled pages; a third means settled pages pin a stale one.
 		static constexpr size_t c_LiveSlabs = 2;
+		/// Buffers handed back to a heap that no longer exists; any is a use after free.
+		static size_t CallsIntoDestroyedHeaps() { return DeadHeapCalls().load(std::memory_order_relaxed); }
 
 		using Submit = std::function<std::future<void>(std::function<void()>)>;
 
@@ -279,6 +290,20 @@ namespace RTE::CheckpointLua {
 			static std::atomic<size_t> mapped{0}, idleBytes{0};
 			return idle ? idleBytes : mapped;
 		}
+		// Every heap that still exists; a buffer goes back only to one of these. Never destroyed, so a
+		// snapshot released during static teardown still finds it.
+		static std::mutex& RegistryMutex() {
+			static std::mutex* mutex = new std::mutex();
+			return *mutex;
+		}
+		static std::unordered_set<const HeapOwner*>& LiveHeaps() {
+			static auto* heaps = new std::unordered_set<const HeapOwner*>();
+			return *heaps;
+		}
+		static std::atomic<size_t>& DeadHeapCalls() {
+			static std::atomic<size_t> calls{0};
+			return calls;
+		}
 		std::shared_ptr<Slab> TakeSlab(size_t pages, bool pooled) {
 			std::unique_ptr<Slab> slab;
 			if (pooled) {
@@ -302,7 +327,25 @@ namespace RTE::CheckpointLua {
 			m_LiveSlabs.fetch_add(1, std::memory_order_relaxed);
 			return std::shared_ptr<Slab>(std::move(slab));
 		}
+		// A buffer goes back to its heap only while that heap exists; one released after it is unmapped instead.
+		static void ReturnSlab(HeapOwner* owner, Slab* slab) {
+			{
+				std::lock_guard lock(RegistryMutex());
+				if (LiveHeaps().contains(owner)) {
+					owner->GiveSlab(slab);
+					return;
+				}
+			}
+			slab->owner = nullptr;
+			delete slab;
+		}
+		// The caller holds RegistryMutex.
 		void GiveSlab(Slab* slab) {
+			if (!LiveHeaps().contains(this)) {
+				// Only the address is read: the heap behind it is gone, so the buffer is left mapped rather than touch it.
+				DeadHeapCalls().fetch_add(1, std::memory_order_relaxed);
+				return;
+			}
 			m_LiveSlabs.fetch_sub(1, std::memory_order_relaxed);
 			std::lock_guard lock(m_SlabMutex);
 			if (slab->pooled && m_IdleSlabs.size() < c_IdleSlabs) {
@@ -500,7 +543,7 @@ namespace RTE::CheckpointLua {
 			kept->capacity = capacity;
 			kept->owner = owner;
 			kept->pooled = pooled;
-			owner->GiveSlab(kept);
+			HeapOwner::ReturnSlab(owner, kept);
 			return;
 		}
 		HeapOwner::Unmap(pages, capacity * Snapshot::c_PageBytes);
