@@ -854,6 +854,8 @@ namespace RTE {
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
 		/// Marks the host's goodbye drain: the round has run its last tick and judges no seat from here.
 		void SetGoodbyeDrain(bool draining) { m_GoodbyeDrain = draining; }
+		/// The last frame this peer will simulate: every peer stops producing past it.
+		void SetFinalFrame(uint64_t frame) { m_FinalFrame = frame; }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		/// Moves every running deadline past a gap in our own ticks, so our park is not charged to a peer.
 		void ShiftDeadlinesPastOurOwnPark(uint64_t nowMs);
@@ -1037,6 +1039,7 @@ namespace RTE {
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
+		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1346,6 +1349,7 @@ namespace RTE {
 		uint64_t m_CaptureReportSentMs = 0;
 		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;

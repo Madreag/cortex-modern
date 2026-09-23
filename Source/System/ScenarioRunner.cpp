@@ -1355,6 +1355,10 @@ namespace RTE {
 		return s_LockstepAppliedFrame;
 	}
 
+	void ScenarioRunner::SetLockstepFinalFrame(uint64_t frame) {
+		if (s_LockstepCoordinator) s_LockstepCoordinator->SetFinalFrame(frame);
+	}
+
 	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
 		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
 		if (s_LockstepCoordinator) {

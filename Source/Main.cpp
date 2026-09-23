@@ -6461,6 +6461,9 @@ void RunGameLoop() {
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
 					const uint64_t completedTicks = ScenarioRunner::IsPersistentWorld() ? simTick : s_netMatchE2ETicks.Total();
+					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
+					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
+						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));
 					if (!unlimitedWorld && completedTicks > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
