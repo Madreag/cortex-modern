@@ -1101,6 +1101,13 @@ bool RTE::RunCheckpointImageSelfTest() {
 				pass(row, detail);
 			}
 		}
+		// A registry scope that saves the registry only when something changes it must leave what an eager copy would.
+		{
+			if (!AudioMan::IsConstructed()) AudioMan::Construct();
+			const std::string missed = g_AudioMan.RegistryScopeMissedChange();
+			if (missed.empty()) pass("a_registry_scope_puts_back_what_any_change_moved", "ways=5");
+			else fail("a_registry_scope_puts_back_what_any_change_moved", "missed_way=" + missed);
+		}
 		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
 		{
 			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();

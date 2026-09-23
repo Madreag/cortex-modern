@@ -1217,9 +1217,16 @@ uint64_t AudioMan::AllocateCheckpointSoundContainerID() {
 	return ++m_NextSoundContainerIdentity;
 }
 
+void AudioMan::SaveRegistryForScopes() {
+	for (CheckpointRegistryScope* scope: m_RegistryScopes) {
+		if (!scope->m_Original) scope->m_Original = m_CheckpointSoundContainers;
+	}
+}
+
 void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
 	if (!identity) return;
 	std::lock_guard lock(m_CheckpointRegistryMutex);
+	SaveRegistryForScopes();
 	m_LiveCheckpointSoundContainers[container] = identity;
 	m_NextSoundContainerIdentity = std::max(m_NextSoundContainerIdentity, identity);
 	auto& owners = m_CheckpointSoundContainers[identity];
@@ -1232,6 +1239,7 @@ void AudioMan::RegisterCheckpointSoundContainer(SoundContainer* container, uint6
 
 void AudioMan::UnregisterCheckpointSoundContainer(SoundContainer* container, uint64_t identity) {
 	std::lock_guard lock(m_CheckpointRegistryMutex);
+	SaveRegistryForScopes();
 	m_LiveCheckpointSoundContainers.erase(container);
 	auto found = m_CheckpointSoundContainers.find(identity);
 	if (found != m_CheckpointSoundContainers.end()) {
@@ -1265,6 +1273,7 @@ CheckpointSoundRegistry AudioMan::AddedCheckpointSoundRegistrations(const Checkp
 
 void AudioMan::RestoreCheckpointSoundRegistry(CheckpointSoundRegistry original) {
 	std::lock_guard lock(m_CheckpointRegistryMutex);
+	SaveRegistryForScopes();
 	for (auto entry = original.begin(); entry != original.end();) {
 		std::erase_if(entry->second, [this, identity = entry->first](const SoundContainer* owner) {
 			const auto live = m_LiveCheckpointSoundContainers.find(owner);
@@ -1285,14 +1294,61 @@ void AudioMan::ActivateCheckpointSoundRegistrations(const CheckpointSoundRegistr
 
 thread_local int s_SkipCarriedSoundNotes = 0;
 
-AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Original(g_AudioMan.CaptureCheckpointSoundRegistry()), m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()) {
+AudioMan::CheckpointRegistryScope::CheckpointRegistryScope() : m_Cursor(g_AudioMan.GetCheckpointSoundContainerCursor()) {
+	{
+		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
+		g_AudioMan.m_RegistryScopes.push_back(this);
+	}
 	++s_SkipCarriedSoundNotes;
 }
 
 AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
 	--s_SkipCarriedSoundNotes;
-	g_AudioMan.RestoreCheckpointSoundRegistry(std::move(m_Original));
+	std::optional<CheckpointSoundRegistry> original;
+	{
+		std::lock_guard lock(g_AudioMan.m_CheckpointRegistryMutex);
+		std::erase(g_AudioMan.m_RegistryScopes, this);
+		original = std::move(m_Original);
+	}
+	// Every change keeps each registered container live under its identity, so a registry no change reached is already
+	// what restoring its copy would make it.
+	if (original) g_AudioMan.RestoreCheckpointSoundRegistry(std::move(*original));
 	g_AudioMan.SetCheckpointSoundContainerCursor(m_Cursor);
+}
+
+std::string AudioMan::RegistryScopeMissedChange() {
+	// Only the scratch containers' addresses are registered; nothing reads through them.
+	static const std::array<char, 4> scratch{};
+	const auto container = [](size_t index) { return reinterpret_cast<SoundContainer*>(const_cast<char*>(&scratch[index])); };
+	const uint64_t cursor = GetCheckpointSoundContainerCursor();
+	const uint64_t identity = cursor + 1000;
+	const CheckpointSoundRegistry before = CaptureCheckpointSoundRegistry();
+	std::string missed;
+	const auto way = [&](const char* name, const std::function<void()>& change) {
+		{
+			CheckpointRegistryScope scope;
+			change();
+		}
+		if (CaptureCheckpointSoundRegistry() != before && missed.empty()) missed = name;
+	};
+	way("none", [] {});
+	way("register", [&] { RegisterCheckpointSoundContainer(container(0), identity); });
+	UnregisterCheckpointSoundContainer(container(0), identity);
+	way("restore", [&] { RestoreCheckpointSoundRegistry({}); });
+	CheckpointSoundRegistry registry;
+	std::unordered_map<const SoundContainer*, uint64_t> live;
+	CaptureCheckpointSoundRegistry(registry, live);
+	way("swap", [&] {
+		CheckpointSoundRegistry changed = registry;
+		std::unordered_map<const SoundContainer*, uint64_t> changedLive = live;
+		changed[identity + 2].push_back(container(2));
+		changedLive[container(2)] = identity + 2;
+		SwapCheckpointSoundRegistry(changed, changedLive);
+	});
+	SwapCheckpointSoundRegistry(registry, live);
+	way("unregister", [&] { UnregisterCheckpointSoundContainer(container(3), identity + 3); });
+	SetCheckpointSoundContainerCursor(cursor);
+	return missed;
 }
 
 thread_local AudioMan::SoundCheckpointSaveScope* AudioMan::SoundCheckpointSaveScope::s_Current = nullptr;
