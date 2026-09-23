@@ -174,6 +174,8 @@ namespace RTE {
 		bool matchConfigSent = false;     //!< The seat's config went out once; a retry does not resend it.
 		uint64_t catchUpTicks = 0;        //!< Ticks it reported replaying, for the catch-up rate.
 		uint64_t catchUpMs = 0;
+		uint64_t wallCatchUpTicks = 0;   //!< Ticks replayed between timed reports, for the wall-clock catch-up rate.
+		uint64_t wallCatchUpMs = 0;
 		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.

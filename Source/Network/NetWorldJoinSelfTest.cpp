@@ -3030,6 +3030,38 @@ namespace RTE {
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
+	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
+	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
+	int TestPrivateActivationWaitsForTheCatchUp() {
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A21);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state"; image.authorityPeerId = 1; image.tick = 40;
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		if (!host.NoteRejoinCapacity(42, 240, 3000000, 0)) return Fail("the compute headroom sample was refused");
+		// The first report carries the whole replay so far; then 42 ticks every 500 ms: 84 a second against the round's 60.
+		uint64_t activation = 0, applied = 900, round = 1000;
+		if (!host.NoteCatchUpProgress(42, applied, applied - 40, 1, round, &activation, &error)) return Fail(error);
+		while (activation == 0 && applied < 2000) {
+			applied += 42; round += 30;
+			if (!host.NoteCatchUpProgress(42, applied, 42, 500, round, &activation, &error)) return Fail(error);
+		}
+		// At 84 against 60 the seat closes 24 frames a second: it meets the round 60/24 frames on per frame behind.
+		const uint64_t caughtUp = round + (round - applied) * 60 / 24;
+		if (activation < caughtUp + c_NetWorldActivationLeadFrames) {
+			return Fail("a returning seat was activated before it could catch up: activation=" + std::to_string(activation) +
+			            " round=" + std::to_string(round) + " applied=" + std::to_string(applied) + " caught_up_at=" + std::to_string(caughtUp));
+		}
+		std::cout << "[net-world-join-selftest] PASS private_activation_waits_for_the_catch_up activation=" << activation
+		          << " caught_up_at=" << caughtUp << std::endl;
+		return 0;
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -6459,6 +6491,7 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
+		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
