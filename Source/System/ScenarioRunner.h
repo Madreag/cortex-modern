@@ -279,6 +279,8 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		/// The last frame this peer will simulate in the round, once its end is known.
+		static void SetLockstepFinalFrame(uint64_t frame);
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
 		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);

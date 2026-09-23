@@ -73,6 +73,7 @@ namespace RTE {
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
 	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
+	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -17764,6 +17765,36 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// Every peer stops producing at the round's last tick, so the frames past it are fed by nobody: a seat whose input
+	/// for them is missing is a seat that finished, and holding it holds a round that is over.
+	bool TestNoSeatIsJudgedPastTheLastTick(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A11, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 35;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A11);
+		if (!wire.StartHost(48894, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_Stats.nextFrame = 2403;
+		ScenarioRunner::SetLockstepCoordinator(&host);
+		ScenarioRunner::SetLockstepFinalFrame(2401);
+		const bool declared = host.DeclareOverdueInputs(2403, 5000, 1000, {2});
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (declared || host.m_Stats.peers[2].holds != 0) {
+			*error = "a seat was held for a frame past the round's last tick: frame=2403 last=2401 holds=" + std::to_string(host.m_Stats.peers[2].holds);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS no_seat_is_judged_past_the_last_tick last=2401" << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -17929,6 +17960,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
 		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
+		    !TestNoSeatIsJudgedPastTheLastTick(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||

@@ -4274,6 +4274,7 @@ namespace RTE {
 		m_CaptureParkReportsMs.clear();
 		m_CommittedAtMs.clear();
 		m_GoodbyeDrain = false;
+		m_FinalFrame = UINT64_MAX;
 		m_DeferredParkTimings.clear();
 		m_ApplyingDeferredParkTiming = false;
 		m_CaptureParkAwaitingReports = false;
@@ -5177,7 +5178,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
 		if (!UsesBoundedWait() || m_Playback || m_Config.localPeerId != GetHostPeerId() || missing.empty()) return false;
 		// Past this host's last tick nothing simulates the frame, so no survivor waits on the seat's input.
-		if (m_GoodbyeDrain) return false;
+		if (m_GoodbyeDrain || frame > m_FinalFrame) return false;
 		// Autosave is an agreed event: all peers are in the same capture park, so its silence is
 		// not evidence that one seat stopped producing input.
 		if (IsSynchronizedCapturePark(frame)) return false;
