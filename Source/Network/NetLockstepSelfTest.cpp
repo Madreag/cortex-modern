@@ -1657,6 +1657,79 @@ namespace RTE {
 			return true;
 		}
 
+		// A park commits its frames empty on every peer, but a command is an event, not a sample: one aimed at a park
+		// frame - queued inside the window, or produced for a frame the park already committed while its peer captured -
+		// commits once past the park, at the same frame on every peer. Dropped, a writer's report never reached the host.
+		bool TestACommandAParkEmptiedCommitsAfterIt(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A7B, 0, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A7B, 0, NetTransportLane::ControlReliable);
+			hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 20;
+			hostConfig.roundId = clientConfig.roundId = 0x9A7B;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			if (!StartCoordinatorPair(48904, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+			const auto written = [](uint64_t tick) { return NetGameCommand{2, NetGameCheckpoint{NetGameCheckpoint::Written, tick}}; };
+			std::vector<std::pair<uint64_t, uint64_t>> hostNotes, clientNotes;
+			const auto notes = [](const NetLockstepReadyFrame& ready, std::vector<std::pair<uint64_t, uint64_t>>& into) {
+				for (const auto* list: {&ready.localCommands, &ready.remoteCommands})
+					for (const NetGameCommand& command: *list)
+						if (const auto* note = std::get_if<NetGameCheckpoint>(&command.payload); note && note->kind == NetGameCheckpoint::Written) into.emplace_back(note->tick, ready.frame);
+			};
+			uint64_t queued = 0;
+			uint64_t insideAt = 0;
+			// Every tick of the client's also carries its player binding, the way a live seat's stream does.
+			auto feed = [&](uint64_t through) {
+				for (; queued <= through; ++queued) {
+					std::vector<NetGameCommand> commands{{2, NetGamePlayerBindings{}, 0}};
+					if (insideAt == 0 && client.IsSynchronizedCapturePark(queued)) { insideAt = queued; commands.push_back(written(71)); }
+					if (!host.QueueLocalInput(queued, {}, {}, error) || !client.QueueLocalInput(queued, {}, commands, error)) return false;
+				}
+				return true;
+			};
+			const auto pump = [&](uint64_t now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) { notes(ready, hostNotes); (void)host.FinishSimulationTick(ready.frame); }
+				while (client.PopReadyFrame(ready)) { notes(ready, clientNotes); (void)client.FinishSimulationTick(ready.frame); }
+			};
+			if (!feed(9)) return false;
+			uint64_t now = 0;
+			for (; now < 200 && (host.GetStats().nextFrame <= 3 || client.GetStats().nextFrame <= 3); ++now) pump(now);
+			const uint64_t completed = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame) - 1;
+			host.BeginSynchronizedCapture(completed); client.BeginSynchronizedCapture(completed);
+			host.CompleteSynchronizedCapture(completed, 700.0); client.CompleteSynchronizedCapture(completed, 250.0);
+			uint64_t behindAt = 0;
+			for (; now < 4000 && (behindAt == 0 || host.GetStats().nextFrame <= behindAt + 30 || client.GetStats().nextFrame <= behindAt + 30); ++now) {
+				if (!feed(std::max(host.GetStats().nextFrame, client.GetStats().nextFrame) + 8)) return false;
+				// Once the park is behind both peers, a sample produced late for one of its frames carries a command.
+				if (behindAt == 0 && insideAt != 0 && !client.IsSynchronizedCapturePark(client.GetStats().nextFrame) && client.GetStats().nextFrame > insideAt + 1 &&
+				    host.GetStats().nextFrame > insideAt + 1) {
+					behindAt = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame);
+					if (!client.QueueLocalInput(insideAt + 1, {}, {written(72)}, error)) return false;
+				}
+				pump(now);
+			}
+			const auto frameOf = [](const std::vector<std::pair<uint64_t, uint64_t>>& seen, uint64_t tick) {
+				std::vector<uint64_t> frames;
+				for (const auto& [note, frame]: seen) if (note == tick) frames.push_back(frame);
+				return frames;
+			};
+			const auto host71 = frameOf(hostNotes, 71), client71 = frameOf(clientNotes, 71), host72 = frameOf(hostNotes, 72), client72 = frameOf(clientNotes, 72);
+			const auto describe = [](const std::vector<uint64_t>& frames) { std::string text; for (uint64_t frame: frames) text += (text.empty() ? "" : ",") + std::to_string(frame); return "[" + text + "]"; };
+			if (insideAt == 0 || behindAt == 0 || host71.size() != 1 || host71 != client71 || host72.size() != 1 || host72 != client72 ||
+			    host.IsSynchronizedCapturePark(host71.front()) || host.IsSynchronizedCapturePark(host72.front())) {
+				*error = "a command a park emptied did not commit once past it on both peers: inside_at=" + std::to_string(insideAt) + " behind_at=" + std::to_string(behindAt) +
+				         " note71 host=" + describe(host71) + " client=" + describe(client71) + " note72 host=" + describe(host72) + " client=" + describe(client72) +
+				         " host_next=" + std::to_string(host.GetStats().nextFrame) + " client_next=" + std::to_string(client.GetStats().nextFrame);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_command_a_park_emptied_commits_after_it inside_at=" << insideAt << " note71_frame=" << host71.front()
+			          << " behind_at=" << behindAt << " note72_frame=" << host72.front() << std::endl;
+			return true;
+		}
+
 		bool TestAParkClosesOnItsBudget(std::string* error) {
 			LoopbackTransport hostWire, clientWire;
 			NetLockstepCoordinator host, client;
@@ -18652,6 +18725,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			rowsPassed = false;
 		};
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
+		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_a_park_emptied_commits_after_it");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;

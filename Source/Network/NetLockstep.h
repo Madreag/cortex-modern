@@ -1382,6 +1382,7 @@ namespace RTE {
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
+		std::map<uint64_t, std::vector<NetGameCommand>> m_ParkCarriedCommands; //!< This peer's commands a park emptied, by the frame they targeted; they ride its next input.
 		bool m_ApplyingDeferredParkTiming = false;
 		bool m_CaptureParkAwaitingReports = false;
 		bool m_CaptureParkFinalized = false;
