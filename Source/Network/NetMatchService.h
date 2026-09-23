@@ -436,10 +436,38 @@ namespace RTE {
 		}
 		/// Runs only after a complete lockstep tick, outside paused ticks and preview frames.
 		void AutosaveAtTickBoundary(uint64_t tick);
+		/// One entry of the checkpoint schedule on the committed stream.
+		struct CheckpointNote { uint8_t sender = 0; uint8_t kind = 0; uint64_t tick = 0; };
+		/// What one completed tick hands the checkpoint schedule.
+		struct AutosaveTickInput {
+			uint64_t tick = 0;
+			int64_t now = 0; //!< The tick's sim time.
+			size_t unwritten = 0; //!< Captures this peer's writer has not finished.
+			std::vector<CheckpointNote> applied; //!< The schedule entries the tick's committed frame carried.
+			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
+			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
+			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
+		};
+		struct AutosaveTickOutput {
+			bool capture = false; //!< This peer captures at this tick.
+			std::vector<CheckpointNote> send; //!< Entries this peer puts on its committed stream.
+		};
+		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
+		/// Every peer captures at each tick the host names; the host names the next one only once every
+		/// writer has reported the last one finished, so no peer holds more than one unwritten capture.
+		AutosaveTickOutput StepAutosaveSchedule(const AutosaveTickInput& input);
+		/// Whether this host's capture at the tick is the one a joining member waits for.
+		bool IsJoinCaptureTick(uint64_t tick) const { return m_IsHost && m_OpenCaptureForJoin && tick == m_OpenCaptureTick; }
+		/// Host: the peers that capture on the schedule at the tick, itself included.
+		std::set<uint8_t> CheckpointWriters(uint64_t tick) const;
+		/// Forgets the schedule a previous round named.
+		void ResetCheckpointSchedule();
 		/// Applies a finished capture's verdict to the world bookkeeping it stood for.
 		void ApplyAutosaveVerdict(uint64_t tick, bool joinCapture, bool archived);
-		/// Takes every verdict the writer thread has finished since the last tick boundary.
-		void TakeAutosaveVerdicts();
+		/// Settles the awaited capture a writer verdict names; a verdict nobody awaits changes nothing.
+		void ResolveAwaitedAutosave(uint64_t tick, bool archived);
+		/// Takes every verdict the writer thread has finished since the last tick boundary; returns the captures they finished.
+		std::vector<uint64_t> TakeAutosaveVerdicts();
 		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
@@ -1016,6 +1044,8 @@ namespace RTE {
 		friend bool TestWorldCleanStopWritesFinalCheckpoint(std::string* error);
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
+		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
+		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
@@ -1372,6 +1402,10 @@ namespace RTE {
 		// A capture the simulation queued and whose verdict the writer thread has not given yet.
 		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
 		std::vector<AwaitedAutosave> m_AwaitedAutosaves;
+		std::set<uint64_t> m_ScheduledCaptures; //!< Ticks the host named that this peer has not reached.
+		uint64_t m_OpenCaptureTick = 0; //!< Host: the capture it named last, until every writer reported it.
+		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
+		bool m_OpenCaptureForJoin = false;
 		uint64_t m_WorldCaptureRequestedTick = 0; //!< The tick a bootstrap already asked a capture at.
 		bool m_WorldCapturePending = false;
 		bool m_WorldSpectatorDeclinesPromotion = false; //!< This watcher's own choice, as it last sent it.

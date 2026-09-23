@@ -843,6 +843,13 @@ void ActivityMan::WaitForAutosaveTasks() const {
 	for (const auto& task: m_AutosaveTasks) task.wait();
 }
 
+size_t ActivityMan::UnwrittenAutosaves() {
+	std::erase_if(m_AutosaveTasks, [](const auto& task) {
+		return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready;
+	});
+	return m_AutosaveTasks.size();
+}
+
 bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 	try {
 		AudioCheckpoint::MixerLock mixer(g_AudioMan.IsAudioEnabled() ? g_AudioMan.GetAudioSystem() : nullptr);

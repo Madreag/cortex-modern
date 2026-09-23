@@ -676,6 +676,7 @@ namespace RTE {
 		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
 		static constexpr uint16_t c_TimingWithdrawVersion = 36;
 		static constexpr uint16_t c_InputAcceptanceVersion = 34;
+		static constexpr uint16_t c_CheckpointVersion = 34; //!< The newest wire: frames that carry the checkpoint schedule.
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
