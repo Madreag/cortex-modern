@@ -54,9 +54,11 @@ namespace RTE {
 		uint64_t firstTick = UINT64_MAX;
 		uint64_t lastTick = UINT64_MAX;
 		uint64_t priorTicks = 0;
+		uint64_t matchFirstFrame = UINT64_MAX;
 		uint64_t segmentFirstFrame = 0; // The frame this segment resumed at; 0 when only the observed ticks are known.
 
 		void NoteSimTick(uint64_t nowTick) {
+			if (matchFirstFrame == UINT64_MAX) matchFirstFrame = nowTick;
 			if (firstTick == UINT64_MAX) {
 				firstTick = nowTick;
 			}
@@ -69,16 +71,17 @@ namespace RTE {
 			const uint64_t origin = segmentFirstFrame > 0 ? segmentFirstFrame : firstTick;
 			return lastTick >= origin ? lastTick - origin + 1 : 0;
 		}
-		// The healed round replays from resumeFrame, so the frames before it are the round's and are
-		// counted once: the clock stays the round's frame number whatever the relaunch cost each peer.
+		// A private return retains the original run budget, including disk-resumed rounds.
 		void OnResyncRelaunch(uint64_t resumeFrame = 0) {
-			priorTicks = resumeFrame > 0 ? resumeFrame - 1 : priorTicks + SegmentTicks();
+			if (matchFirstFrame == UINT64_MAX && resumeFrame > 0) matchFirstFrame = resumeFrame;
+			priorTicks = resumeFrame > 0 ? (resumeFrame > matchFirstFrame ? resumeFrame - matchFirstFrame : 0) : priorTicks + SegmentTicks();
 			segmentFirstFrame = resumeFrame;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
 		}
 		void OnNewMatch() {
 			priorTicks = 0;
+			matchFirstFrame = UINT64_MAX;
 			segmentFirstFrame = 0;
 			firstTick = UINT64_MAX;
 			lastTick = UINT64_MAX;
@@ -582,6 +585,13 @@ namespace RTE {
 
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		void PreparePrivateRejoinCheckpoint();
+		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
+		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs);
+		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
+		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
+		/// Refuses, with the round's goodbye, every ready peer of the session the ended round does not use, and with
+		/// joiningToo every connection still in its handshake: a returning seat's, when a held seat can still be coming back.
+		static void RefuseEndedPeers(NetSession& session, const NetLockstepCoordinator& coordinator, const std::string& reason, bool joiningToo);
 
 		/// Runs the mid-match session upkeep: drains the reconnect-handshake events the coordinator
 		/// handed over, and (host) turns a newly Ready session peer into a resync-for-rejoin.
@@ -609,6 +619,12 @@ namespace RTE {
 		/// Re-enters the match this process was dropped from, using the stored recovery record.
 		bool BeginTicketRejoin(std::string* error = nullptr);
 		bool BeginHeldRejoin(std::string* error = nullptr);
+		/// How far every rejoin this host is serving has come: its admission, its phase, the image staged for
+		/// it, the transfer it has acknowledged and the tail it has consumed. The goodbye drain watches this
+		/// beside the round's own progress, because a rejoin commits no frame until it is back in the round.
+		uint64_t RejoinProgressSum() const;
+		/// Whether the host's goodbye has been heard, and the frame the round ended on (0 when it named none).
+		bool HostGoodbyeSeen(uint64_t& finalFrame) const;
 		/// The request a stored ticket rejoins with. The world flag is the ticket's own, so a relaunch
 		/// against a world host still hellos on the world plane.
 		static NetMatchServiceRequest BuildTicketRejoinRequest(const NetH4TicketRecord& record, const std::string& playerName, bool liveWorldTarget);
@@ -782,6 +798,8 @@ namespace RTE {
 		static bool ResyncSnapshotAllowed(const Activity* activity);
 		static NetRejoinAnswer ClassifyRejoin(const Activity* activity);
 		void AnswerMatchOverRejoin(const std::string& result);
+		/// The goodbye a rejoining seat reads: the round is over, and the frame it ended on.
+		static std::string MatchOverGoodbyeText(uint64_t finalFrame);
 
 		static const char* StateName(NetMatchServiceState state);
 
@@ -807,7 +825,7 @@ namespace RTE {
 				                                                                 : ip.get(); }
 		};
 
-		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest);
+		void WorkerMain(NetMatchServiceRequest request, NetIdentityManifest manifest, NetIdentityBuildOptions identityOptions);
 		void DriveWorldJoins(uint64_t nowMs);
 		void DrivePrivateMatchRejoins(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
@@ -982,7 +1000,9 @@ namespace RTE {
 		friend bool TestRelayOfferRefresh(std::string* error);
 		friend bool TestIceConnectionFallback(std::string* error);
 		friend bool TestHandoverSnapshotStatus(std::string* error);
+		friend bool TestDiscoveryOccupancy(std::string* error);
 		friend bool TestServiceIceRematchPlaysTwoRounds(std::string* error);
+		friend bool TestEndMatchWithHeldSeatKeepsItsLease(std::string* error);
 		friend bool TestCompletedLobbyIsNotARecovery(std::string* error);
 		friend bool TestCompletedLobbyExpires(std::string* error);
 		friend bool TestCapturedWorldIdentityKeepsTheWorldStamp(std::string* error);
@@ -1009,6 +1029,9 @@ namespace RTE {
 		void PumpCompletedSessionLocked();
 		/// Refuses Ready peers absent from the ended round; caller holds the lock.
 		void RefuseEndedPeersLocked(const std::string& reason);
+		void SayGoodbyeToRejoinersLocked();
+		/// Reads a host's goodbye out of a session's refusal; true once one has been heard.
+		bool NoteHostGoodbyeLocked(const NetSession* session);
 		/// The relaunch's queue reset, with a permanent diagnostic for anything a teardown left behind.
 		void DiscardUndeliveredSessionEventsLocked();
 		/// Folds the coordinator's counters into the service so a gate can read them across a resync.
@@ -1091,6 +1114,7 @@ namespace RTE {
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveTicks{0};
 		std::atomic<uint64_t> m_SnapshotLoadKeepaliveWindowTicks{0};
 		bool m_WorkerDone = false;
+		bool m_IdentityPending = false;
 		bool m_IsHost = false;
 		uint8_t m_LocalPeerId = 0;
 		int m_LocalTeam = -1;
@@ -1268,6 +1292,18 @@ namespace RTE {
 		/// park declared on this thread must still reach the session that is evaluating silence.
 		NetSession* m_WorkerSession = nullptr;
 		NetSession* LiveSessionLocked() const { return m_Session ? m_Session.get() : m_WorkerSession; }
+		/// A park is the whole peer's, not one session's: a rejoin evaluates silence on the worker session while
+		/// the old one is still held, so both hear it or the one that is counting times the rejoin out.
+		void NotePumpParkedLocked() {
+			if (m_Session) m_Session->NotePumpParked();
+			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->NotePumpParked();
+		}
+		/// The rejoin phase belongs to the peer, not to one session object: the worker and the live session are
+		/// the same handshake seen from two threads.
+		void SetRejoinPhaseLocked(NetSession::RejoinPhase phase) {
+			if (m_Session) m_Session->SetRejoinPhase(phase);
+			if (m_WorkerSession && m_WorkerSession != m_Session.get()) m_WorkerSession->SetRejoinPhase(phase);
+		}
 		std::unique_ptr<NetLockstepCoordinator> m_Coordinator;
 		std::unique_ptr<NetMatchRunner> m_Runner;
 		std::vector<NetTransportEvent> m_PendingLobbyEvents;
@@ -1300,6 +1336,7 @@ namespace RTE {
 		bool m_DirectoryRetracted = false;          //!< The match ended while the state was still Running.
 		bool m_DirectoryHidden = false;             //!< A natural ICE end keeps the bound row unlisted.
 		bool m_DirectoryRelistPending = false;      //!< The next lobby awaits the hide acknowledgement.
+		bool m_KeepEndedDirectoryLease = false;    //!< A held seat may still need the match-over answer.
 		uint16_t m_BeaconGamePort = 0;
 		uint8_t m_BeaconMaxPlayers = 2;
 		std::atomic<bool> m_ReadyRequested{false};
@@ -1308,6 +1345,12 @@ namespace RTE {
 		std::atomic<bool> m_EverStarted{false};
 		std::string m_CapturedRunnerReport;
 		std::string m_RejoinOutcome;
+		/// The frame the round ended on, set when this host says goodbye or this peer hears one; 0 while the
+		/// round is live. The flag is separate because a goodbye may name no frame.
+		uint64_t m_CompletedRoundFinalFrame = 0;
+		bool m_HostGoodbyeSeen = false;
+		/// Host: a seat was held when the round ended, so a rejoin still arriving is owed the goodbye.
+		bool m_GoodbyeOwedToRejoiners = false;
 		struct LastResyncMetrics {
 			uint64_t archiveBytes = 0;
 			uint64_t envelopeBytes = 0;
@@ -1350,6 +1393,7 @@ namespace RTE {
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
 		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
+		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: measured capture cost used to gate another refresh.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
 		bool m_PrivateImageSeatHeld = false;
 		std::string m_PrivateJoinError;

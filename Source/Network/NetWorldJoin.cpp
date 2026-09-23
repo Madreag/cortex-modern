@@ -1642,7 +1642,7 @@ namespace RTE {
 		m_Image = image;
 		m_Metrics.NoteCapture(image.captureMs, image.bytes);
 		for (NetWorldJoinSession& session: m_Sessions) {
-			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && session.snapshotTick == 0) {
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {
 				session.snapshotTick = image.tick;
 				session.deliveredThrough = image.tick;
 				session.acknowledgedThrough = image.tick;
@@ -1753,6 +1753,11 @@ namespace RTE {
 		session->acknowledgedThrough = appliedThrough;
 		session->catchUpTicks += ticksReplayed;
 		session->catchUpMs += elapsedMs;
+		// The first report carries the whole replay so far against no clock; only timed reports measure the rate.
+		if (elapsedMs > 1) {
+			session->wallCatchUpTicks += ticksReplayed;
+			session->wallCatchUpMs += elapsedMs;
+		}
 		m_Metrics.NoteCatchUp(ticksReplayed, elapsedMs);
 		if (IsPrivateMatch() && (!session->linkFits || !session->headroom.Ready())) return true;
 		if (session->activationTick != 0) {
@@ -1763,7 +1768,16 @@ namespace RTE {
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame) {
 			return true;
 		}
-		session->activationTick = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
+		uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
+		// A returning seat closes on the round only by the difference of the two rates: activated before it has caught
+		// up, it reaches its first frame after the round does and every peer waits on it.
+		const double roundRate = 1000.0 / m_SimTickMs;
+		const double replayRate = session->wallCatchUpMs > 0 ? session->wallCatchUpTicks * 1000.0 / session->wallCatchUpMs : 0.0;
+		if (IsPrivateMatch() && replayRate > roundRate && nowFrame > appliedThrough) {
+			const double frames = std::ceil((nowFrame - appliedThrough) * roundRate / (replayRate - roundRate));
+			activation = std::max(activation, nowFrame + static_cast<uint64_t>(frames) + c_NetWorldActivationLeadFrames);
+		}
+		session->activationTick = activation;
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
@@ -1860,6 +1874,18 @@ namespace RTE {
 
 	void NetWorldJoinHost::MarkActivationCommitted(NetPeerId connection) {
 		if (auto* session = Find(connection)) session->activationCommitted = true;
+	}
+
+	bool NetWorldJoinHost::HasBootstrapInFlight() const {
+		return std::any_of(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
+			return session.phase != NetWorldJoinPhase::Active && session.phase != NetWorldJoinPhase::Spectating && session.phase != NetWorldJoinPhase::Failed;
+		});
+	}
+
+	bool NetWorldJoinHost::HasImageTransferInFlight() const {
+		return std::any_of(m_Sessions.begin(), m_Sessions.end(), [](const NetWorldJoinSession& session) {
+			return session.phase == NetWorldJoinPhase::SnapshotTransfer;
+		});
 	}
 
 	bool NetWorldJoinHost::CompleteActivation(NetPeerId connection, uint64_t atFrame, std::string* error) {

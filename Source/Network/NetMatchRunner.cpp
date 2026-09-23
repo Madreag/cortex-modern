@@ -90,6 +90,7 @@ namespace RTE {
 			const double tickMs = g_TimerMan.GetDeltaTimeMS();
 			const uint16_t floorDelay = m_MatchConfig.inputDelayFrames;
 			std::vector<uint16_t> delays(m_MatchConfig.peerCount, std::max<uint16_t>(floorDelay, 1));
+			uint16_t slowestRemoteDelay = delays.front();
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
@@ -97,8 +98,16 @@ namespace RTE {
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(
 				    estimate.RequiredFrames(tickMs, floorDelay), NetMatchConfigUtil::c_MaxInputDelayFrames));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
+				slowestRemoteDelay = std::max(slowestRemoteDelay, neededDelay);
 				std::cout << "[net-match] auto input delay: peer " << static_cast<int>(peerId) << " rtt " << rttMs
 				          << "ms -> " << delays[peerId - 1] << " frames (manual floor " << floorDelay << ")" << std::endl;
+			}
+			// The host's sender window covers the slowest link so its frames do not feed a peer's wait back into its stream.
+			const size_t hostIndex = m_MatchConfig.hostPeerId > 0 && m_MatchConfig.hostPeerId <= m_MatchConfig.peerCount ? m_MatchConfig.hostPeerId - 1 : 0;
+			if (delays[hostIndex] < slowestRemoteDelay) {
+				delays[hostIndex] = slowestRemoteDelay;
+				std::cout << "[net-match] auto input delay: host sender window " << delays[hostIndex]
+				          << " frames (slowest remote link)" << std::endl;
 			}
 			m_MatchConfig.peerInputDelayFrames = std::move(delays);
 		}
@@ -372,6 +381,8 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::StartNextMatch(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, std::string* error, std::vector<uint8_t> stateToStream, std::vector<NetTransportEvent> pendingLobbyEvents) {
+		m_PrivateJoinConfig.reset();
+		m_WorldJoinStarting = false;
 		m_HostLostDuringSetup = false;
 		m_HostOptionsRefused = false;
 		m_SetupError.clear();
@@ -696,6 +707,7 @@ namespace RTE {
 		};
 		lockstepConfig.substituteSlowPeers = m_MatchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion && m_MatchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
 		lockstepConfig.slowPlayerBoundTicks = m_MatchConfig.slowPlayerBoundTicks;
+		lockstepConfig.requirePublishedStart = m_UseLobbyProtocol && !m_WorldJoinStarting;
 		// The host's redundancy window rides the agreed config, so every peer repeats the same ticks.
 		lockstepConfig.frameRedundancyTicks = m_MatchConfig.frameRedundancyTicks;
 		if (!m_MatchConfig.peerInputDelayFrames.empty()) {
@@ -711,7 +723,9 @@ namespace RTE {
 		// A world joiner's round opens inside one that has been running: the members it joins owe it
 		// every frame from its own start, so none of them ramps in behind the input delay.
 		lockstepConfig.joinsRunningRound = m_WorldJoinStarting;
-		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
+		// Input frames ride the unreliable lane: a lost packet is repaired by the next one's window, not by a
+		// retransmission every later frame waits behind.
+		lockstepConfig.frameLane = NetTransportLane::InputUnreliable;
 		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
 		// other agreed field; a joining peer's own request only carries its local default.
 		lockstepConfig.scenario = m_UseLobbyProtocol ? m_MatchConfig.activityPreset : config.scenario;
@@ -738,7 +752,7 @@ namespace RTE {
 				                         static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
 			} while (lockstepConfig.roundId == 0);
 		}
-		if (m_PrivateJoinConfig) {
+		if (m_WorldJoinStarting && m_PrivateJoinConfig) {
 			lockstepConfig.resumeFromSnapshot = false;
 			lockstepConfig.roundId = m_PrivateJoinConfig->roundId;
 			lockstepConfig.migrationGeneration = m_PrivateJoinConfig->migrationGeneration;
@@ -747,6 +761,7 @@ namespace RTE {
 			lockstepConfig.initialDelayChanges = m_PrivateJoinConfig->initialDelayChanges;
 			lockstepConfig.initialSeatHolds = m_PrivateJoinConfig->initialSeatHolds;
 			lockstepConfig.initialSeatReclaims = m_PrivateJoinConfig->initialSeatReclaims;
+			lockstepConfig.seatStateThroughFrame = m_PrivateJoinConfig->seatStateThroughFrame;
 			lockstepConfig.peerIncarnations = m_PrivateJoinConfig->peerIncarnations;
 			lockstepConfig.activePeerIds.clear();
 			for (uint8_t peer = 1; peer <= lockstepConfig.peerCount; ++peer)
@@ -776,6 +791,11 @@ namespace RTE {
 				SetFailed(coordinator.GetStats().timeoutReason);
 				if (error) *error = m_SetupError;
 				return false;
+			}
+			// The initial start packets are the lobby handshake. A service match remains
+			// parked until the game thread measures and republishes activity startup.
+			if (coordinator.IsRunning() || (coordinator.HasReceivedAllRemoteStarts() && coordinator.GetConfig().requirePublishedStart)) {
+				return true;
 			}
 			if (nowMs - startMs > maxWaitMs) {
 				m_HostLostDuringSetup = !m_Config.host;
@@ -811,7 +831,7 @@ namespace RTE {
 		// Start waits on a live remote ready, not the idle default (a reject never seats one).
 		snapshot.remoteReady = m_Lobby.GetState() != NetLobbyState::Idle && m_Lobby.IsRemoteReady();
 		if (m_Config.host && session.HasReject() && session.GetReadyPeerCount() < m_Config.sessionConfig.maxPeers) {
-			snapshot.errorText = "A player could not join: " + session.BuildRejectText();
+			snapshot.errorText = "A player could not join: " + session.BuildPlayerRefusalText();
 		}
 
 		const uint8_t localId = LocalLockstepPeerId(session);
@@ -854,9 +874,7 @@ namespace RTE {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
-		// The joiner's sim thread calls this at E-1: the handshake advances a tick per pump from here,
-		// because a wait loop would hold the sim update it runs inside. The deadline counts those
-		// updates; this runs inside the tick, where a wall clock is a per-machine decision.
+		// The joiner handshakes while replaying toward its agreed activation frame.
 		m_WorldJoinStarting = true;
 		m_WorldJoinStartTicks = 0;
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {

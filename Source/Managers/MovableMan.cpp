@@ -132,6 +132,18 @@ namespace {
 		j["status"] = actor->GetStatus();
 		j["dead"] = actor->IsDead();
 		j["ai_mode"] = actor->GetAIMode();
+		// The live controller is what the checksum's controller subsystem reads; without it a dump cannot say
+		// which field two peers disagree on.
+		const Controller& controller = *const_cast<Actor*>(actor)->GetController();
+		uint64_t controlStates = 0;
+		for (int state = 0; state < ControlState::CONTROLSTATECOUNT; ++state)
+			if (controller.IsState(static_cast<ControlState>(state))) controlStates |= uint64_t{1} << state;
+		j["ctrl_states"] = controlStates;
+		j["ctrl_move"] = {controller.GetAnalogMove().m_X, controller.GetAnalogMove().m_Y};
+		j["ctrl_aim"] = {controller.GetAnalogAim().m_X, controller.GetAnalogAim().m_Y};
+		j["ctrl_cursor"] = {controller.GetAnalogCursor().m_X, controller.GetAnalogCursor().m_Y};
+		j["ctrl_input_mode"] = static_cast<int>(controller.GetInputMode());
+		j["ctrl_player"] = controller.GetPlayer();
 		j["movement_state"] = actor->GetMovementState();
 		j["wound_count"] = actor->GetWoundCount(true, true, true);
 		j["gib_wound_limit"] = actor->GetGibWoundLimit(true, true, true);
@@ -388,10 +400,11 @@ static bool ApplyControllerFramesToLockstepActors(const std::deque<Actor*>& acto
 
 // An actor no frame was committed for this tick (its first D ticks in the world, the ticks after a
 // pause or an ownership change) runs on neutral input on every peer, not on its owner's fresh sample.
-static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, const std::unordered_set<int64_t>& applied) {
+static void NeutralizeUnframedLockstepActors(const std::deque<Actor*>& actors, const std::unordered_set<int64_t>& applied, bool canonicalStartup = false) {
 	for (Actor* actor: actors) {
 		if (applied.find(static_cast<int64_t>(actor->GetUniqueID())) == applied.end()) {
 			actor->GetController()->ApplyWireNeutral();
+			if (canonicalStartup) actor->GetController()->ApplyWireMode(Controller::CIM_NETWORK, Players::NoPlayer);
 		}
 	}
 }
@@ -975,6 +988,7 @@ void RTE::ApplyLockstepSeatReclaims(const NetLockstepReadyFrame& ready, const st
 			actor->TouchCheckpoint(); ++reclaimed;
 		}
 		if (auto* activity = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity())) activity->ApplyNetworkSeatAI(peer, false, ready.frame);
+		if (peer == ScenarioRunner::GetLockstepLocalPeerId()) ScenarioRunner::NoteLocalSeatReclaimed();
 		std::cout << "[net-match] seat-reclaimed peer=" << static_cast<int>(peer) << " frame=" << ready.frame << " live_actors=" << reclaimed << std::endl;
 	}
 }
@@ -992,7 +1006,8 @@ void RTE::ApplyLockstepLeaveHandoffs(const NetLockstepReadyFrame& readyFrame, co
 	for (uint8_t peer: readyFrame.aiHeldPeerIds) ScenarioRunner::ApplyLockstepSeatAI(peer, readyFrame.frame);
 	for (Actor* actor: actors) {
 		const int64_t uid = static_cast<int64_t>(actor->GetUniqueID());
-		const uint8_t claimant = ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled());
+		const uint8_t claimant = readyFrame.aiHeldPeerIds.empty() ? ScenarioRunner::GetLockstepDropTimeActorOwner(uid, actor->GetTeam(), !actor->IsPlayerControlled())
+		    : ScenarioRunner::GetLockstepHeldSeat(uid, actor->GetTeam(), !actor->IsPlayerControlled(), readyFrame.frame);
 		const bool aiTakeover = std::find(readyFrame.aiHeldPeerIds.begin(), readyFrame.aiHeldPeerIds.end(), claimant) != readyFrame.aiHeldPeerIds.end();
 		const bool playerControlled = actor->IsPlayerControlled();
 		const bool disabled = actor->GetController()->IsQuickDisabled();
@@ -1148,8 +1163,14 @@ namespace {
 			const Vector cursor = controller->GetAnalogCursor();
 			const float analog[6] = {move.m_X, move.m_Y, aim.m_X, aim.m_Y, cursor.m_X, cursor.m_Y};
 			g_SimChecksum.Update("controller", analog, sizeof(analog));
+			// The seat's input mode and player are routing, not input: the seat that owns an actor is CIM_PLAYER
+			// with its player number on its OWN machine and CIM_NETWORK/NoPlayer on every other one, so they are
+			// per-peer by construction and belong beside the applied input, never inside it.
 			const int32_t inputMode = static_cast<int32_t>(controller->GetInputMode());
-			g_SimChecksum.Update("controller", &inputMode, sizeof(inputMode));
+			g_SimChecksum.Update("controller_route", &controllerID, sizeof(controllerID));
+			g_SimChecksum.Update("controller_route", &inputMode, sizeof(inputMode));
+			const int32_t controllerPlayer = controller->GetPlayer();
+			g_SimChecksum.Update("controller_route", &controllerPlayer, sizeof(controllerPlayer));
 			const int32_t aiMode = static_cast<int32_t>(a->GetAIMode());
 			g_SimChecksum.Update("controller", &aiMode, sizeof(aiMode));
 		});
@@ -5605,6 +5626,7 @@ void MovableMan::UpdateControllers() {
 		std::string error;
 		NetLockstepReadyFrame readyFrame;
 		if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(simTick, readyFrame, &error)) {
+			if (!error.empty()) ScenarioRunner::SetControllerReplayError("private replay tick " + std::to_string(simTick) + ": " + error);
 			return;
 		}
 		std::unordered_set<int64_t> applied;
@@ -5661,7 +5683,8 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		NeutralizeUnframedLockstepActors(m_Actors, applied);
+		NeutralizeUnframedLockstepActors(m_Actors, applied,
+		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame());
 		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);

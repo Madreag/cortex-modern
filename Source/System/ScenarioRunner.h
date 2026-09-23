@@ -190,6 +190,7 @@ namespace RTE {
 		/// with leaves not applied. The drop ledger records this; a leave must not rename it first.
 		static uint8_t GetLockstepDropTimeActorOwner(int64_t actorUniqueID, int actorTeam, bool cpuControlled);
 		/// The seat a reclaim at this frame covers an actor for; outside a reclaim gap the drop-time owner.
+		static uint8_t GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 		static uint8_t GetLockstepReclaimSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame);
 		/// The synced match's host peer; 0 without a coordinator.
 		static uint8_t GetLockstepHostPeerId();
@@ -280,6 +281,8 @@ namespace RTE {
 		/// The last frame the sim applied. The reclaim hold is counted in these, so anything that
 		/// shows or decides on the hold reads the tick and never a clock.
 		static uint64_t GetLockstepAppliedFrame();
+		/// The last frame this peer will simulate in the round, once its end is known.
+		static void SetLockstepFinalFrame(uint64_t frame);
 		static bool IsLockstepSeatUnderAI(uint8_t peerId, uint64_t frame);
 		static bool IsLockstepSeatReclaimGap(uint8_t peerId, uint64_t frame);
 		static void FilterReclaimControllerInputs(NetLockstepReadyFrame& ready);
@@ -303,7 +306,7 @@ namespace RTE {
 		/// The session upkeep the match service owns. A peer that stops sending frames parks the sim
 		/// thread in the lockstep wait, so without this the admission plane cannot answer anything -
 		/// including the leave the waited-for peer is waiting to have acknowledged.
-		static void SetSessionPump(std::function<void()> pump);
+		static void SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail = {}, std::function<uint64_t()> sessionProgress = {});
 		static void SetLockstepSeatPresence(const NetSeatPresence* presence);
 
 		/// One shown match-event banner: the lockstep tick it was recorded at, its class and text.
@@ -318,6 +321,10 @@ namespace RTE {
 		static void PushNetUiToast(const std::string& kind, const std::string& text, uint8_t senderPeerId = 0);
 		/// Drops the on-screen queue (a resync relaunch clears it); the report log is kept.
 		static void ClearNetUiToasts();
+		/// A reclaimed local seat ends the rejoin banners and the wait clocks that ran while it was away.
+		static void NoteLocalSeatReclaimed();
+		/// Reclaims of the local seat so far; a surface restarts its own reading when this moves.
+		static uint32_t GetLockstepSeatReclaimEpoch();
 		/// Draws at most three unexpired toast rows at bottom centre, outside simulation state.
 		static void DrawNetUiToasts();
 		/// Every banner queued this run, in order — the report's ui.toasts source.
@@ -407,6 +414,7 @@ namespace RTE {
 		static bool IsLockstepReplayPlayback();
 		static const NetMatchConfig& GetLockstepReplayConfig();
 		static uint64_t GetLockstepReplayStartFrame();
+		static const std::optional<NetLockstepStart>& GetLockstepReplayAgreedStart();
 		/// Whether the recording being played is a world segment, and the checkpoint it stands on.
 		static bool IsLockstepReplayWorldSegment();
 		static const NetWorldSegmentHeader& GetLockstepReplayWorldSegment();
@@ -445,11 +453,14 @@ namespace RTE {
 		static void ApplyLockstepPauseCommand(bool pause, uint8_t senderPeerId = 0);
 		static void AdvanceLockstepPausedTick();
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
+		/// Pumps a delayed tick before simulation mutation, leaving rendering free while input is owed.
+		static bool PollLockstepSimulationTick(uint64_t tick);
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// The local frames already queued for a future lockstep tick (the input-delay pipeline).
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
+		static uint64_t GetLockstepEffectiveStartFrame();
 		static bool UsesBoundedLockstepWait();
 		static bool IsLockstepPeerGone(uint8_t peerId, uint64_t frame);
 		static void DiscardHeldLocalInputs();

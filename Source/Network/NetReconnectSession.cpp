@@ -2039,6 +2039,8 @@ namespace RTE {
 		}
 		for (const NetH4Denial& denial : m_Admission.ReleaseDueDenials(nowMs)) {
 			++m_Stats.denialsReleased;
+			std::cout << "[net-reconnect] admission refused reason=" << NetH4DenialReasonName(denial.reason) << " connection=" << denial.connection
+			          << (m_MatchEnded ? " match_ended=1" : "") << std::endl;
 			Send(denial.connection, denial.precise ? denial.payload : NetPayload{NetJoinRejected{NetRejectReason::HostNotAccepting, c_DenialText, "", "", ""}});
 		}
 		// A dropped holder stops being worth waiting for at the same P2 horizon a provisional seat has;

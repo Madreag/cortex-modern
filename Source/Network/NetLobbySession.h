@@ -148,8 +148,7 @@ namespace RTE {
 		size_t QueuedStateTransfers() const { return m_QueuedStateTransfers.size(); }
 		/// Binds a session-Ready joiner so the host can send it config and StateChunks.
 		bool BindLateRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
-		/// Binds a world bootstrap's own lobby id. Its chunks go out by transport, without the lobby-up
-		/// gate: a reserved world id is never named in a lobby payload, so the client cannot mark it up.
+		/// Binds a world bootstrap id; its connection must be lobby-ready before receiving chunks.
 		bool BindWorldTransferRemote(uint8_t peerId, NetPeerId transport, std::string* error = nullptr);
 		/// Whether that peer is a world bootstrap this host bound itself.
 		bool IsWorldTransferPeer(uint8_t peerId) const { return m_WorldTransferPeers.find(peerId) != m_WorldTransferPeers.end(); }

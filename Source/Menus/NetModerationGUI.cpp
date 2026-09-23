@@ -483,6 +483,17 @@ NetModerationGUI::PanelPlacement NetModerationGUI::PlaceSeatsPanelOnScreen(int s
 	return PlaceSeatsPanel(highestTop, screenHeight - c_PanelGap, wanted, minHeight, bands);
 }
 
+bool NetModerationGUI::MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch) {
+	return controllerSyncActive || matchResyncing || hostLost || ((lockstepAttached || matchEnded) && activityInMatch);
+}
+
+bool NetModerationGUI::ActivityInMatch() {
+	// Not ActivityRunning(): that reads false the moment the pause menu opens, and the host's End Match
+	// pauses the activity on its way out.
+	const Activity* activity = g_ActivityMan.GetActivity();
+	return activity && !activity->IsOver();
+}
+
 void NetModerationGUI::LayoutPanel() {
 	const int screenHeight = g_WindowMan.GetResY();
 	GUIFont* font = g_FrameMan.GetSmallFont(true);
@@ -773,6 +784,12 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const bool paused = !resyncing && !placing && !holdPause && !missingFrames && ScenarioRunner::IsLockstepPaused();
 	const int countdown = paused ? ScenarioRunner::GetLockstepResumeCountdown() : 0;
 	const bool waiting = resyncing || placing || holdPause || missingFrames;
+	// A wait that began before this seat was reclaimed is not the wait the player is in now: the round
+	// was stopped for the rejoin, so the clock would read the whole absence back to them.
+	if (const uint32_t reclaims = ScenarioRunner::GetLockstepSeatReclaimEpoch(); reclaims != m_StatusWaitReclaimEpoch) {
+		m_StatusWaitReclaimEpoch = reclaims;
+		m_StatusWaitStartedUs = 0;
+	}
 	if (!waiting) m_StatusWaitStartedUs = 0;
 	else if (m_StatusWaitStartedUs == 0) m_StatusWaitStartedUs = paceNowUs;
 	const long long currentWaitMs = waiting ? (paceNowUs - m_StatusWaitStartedUs) / 1000 : 0;
@@ -979,7 +996,11 @@ void NetModerationGUI::RecordStatusObservation(const NetLobbySnapshot& snapshot,
 }
 
 void NetModerationGUI::UpdateMatchChat(const NetLobbySnapshot& snapshot) {
-	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing();
+	// Chat follows the status: the end of the round is when players say gg and agree a rematch, so it
+	// lives as long as the surfaces around it do.
+	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
+	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(),
+	    snapshot.serviceState == "Completed" && ActivityInMatch(), ActivityInMatch());
 	if (!inMatch) {
 		m_MatchChatLines.clear();
 		if (m_ChatEntryOpen) {
@@ -1428,10 +1449,15 @@ void NetModerationGUI::Draw() {
 		m_NetStatusBox->SetVisible(false);
 		m_NetStatus->SetVisible(false);
 	}
-	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" && !m_Open) return;
+	// A completed round's peer is still in its match until the activity is over, and it still needs its
+	// surfaces to read the result and leave.
+	const bool matchEnded = snapshot.serviceState == "Completed" && ActivityInMatch();
+	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" &&
+	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
-	const bool inMatch = ScenarioRunner::IsLockstepControllerSyncActive() || g_NetMatchService.IsMatchResyncing() || snapshot.statusText.starts_with("Host lost");
+	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
+	    snapshot.statusText.starts_with("Host lost"), ScenarioRunner::HasLockstepCoordinator(), matchEnded, ActivityInMatch());
 	if (inMatch) {
 		CreateOverlay();
 	} else {

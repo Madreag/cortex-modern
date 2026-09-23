@@ -248,10 +248,15 @@ static bool s_frameStallArmed = false;
 static bool s_frameStallFired = false;
 static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
+struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
+static std::vector<NetLiveStall> s_netLiveStalls;
+static std::optional<uint64_t> s_netLiveStallActivation;
+static bool s_netPerturbWhenLive = false;
 
 // CLI -num-lua-states override for the determinism thread-count matrix. -1 = no override.
 static constexpr int c_NetSessionDefaultLuaStates = 4;
 static int s_cliNumLuaStatesOverride = -1;
+static bool s_netIdentityLuaStatesExperiment = false;
 
 // Post-module-load diagnostic. Empty means disabled.
 static std::string s_netIdentityDumpPath;
@@ -414,6 +419,20 @@ static int64_t SteadyMilliseconds() {
 }
 static int s_netMatchServiceE2EExitCode = 0;
 static int s_netMatchServiceE2ERematches = 0;
+// A held seat that could not get back in before the host said goodbye finished the match it was in.
+static bool s_netMatchCompletedByHostGoodbye = false;
+static uint64_t s_netMatchHeldFromTick = 0;
+static uint64_t s_netMatchGoodbyeFinalFrame = 0;
+
+/// Whether the host's goodbye, not a broken link, ended this seat's rejoin.
+static bool NetMatchHostGoodbyeEndedTheRejoin(const std::string& resyncError) {
+	uint64_t finalFrame = 0;
+	if (!g_NetMatchService.HostGoodbyeSeen(finalFrame) && resyncError.rfind("match over", 0) != 0) {
+		return false;
+	}
+	s_netMatchGoodbyeFinalFrame = finalFrame;
+	return true;
+}
 static NetMatchHealWindow s_netMatchHeals;
 static bool s_netMatchResyncOnDesync = false;
 static bool s_netMatchAutoDelay = false;
@@ -711,6 +730,9 @@ void DestroyManagers() {
 }
 
 int ShutDown(int exitCode) {
+	// A quit during the identity walk must not sit through the rest of the disk pass; what it finished
+	// is kept. This runs before the statics are torn down, where the future would wait unasked.
+	NetIdentity::StopManifestPriming();
 	// The writer holds frames the run has already presented, so it drains while SDL is still up.
 	FrameRecorder::Instance().Finish();
 	if (!MenuAutomation::FinishReadbacks()) {
@@ -930,6 +952,21 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				System::PrintDiagnosticLine(line.str());
 			}
 			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-test-perturb-when-live") { s_netPerturbWhenLive = true; ++i; continue; }
+		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
+			const std::string spec = argValue[++i];
+			const size_t separator = spec.find(':');
+			NetLiveStall stall{};
+			if (separator != std::string::npos) {
+				const auto tick = std::from_chars(spec.data(), spec.data() + separator, stall.tick);
+				const auto duration = std::from_chars(spec.data() + separator + 1, spec.data() + spec.size(), stall.milliseconds);
+				if (tick.ec == std::errc{} && tick.ptr == spec.data() + separator && duration.ec == std::errc{} &&
+				    duration.ptr == spec.data() + spec.size() && stall.tick > 0 && stall.milliseconds > 0 && stall.milliseconds <= 20000)
+					s_netLiveStalls.push_back(stall);
+			}
+			++i;
 			continue;
 		}
 		if (currentArg == "-selftest-frame-stall" && i + 1 < argCount) {
@@ -1507,6 +1544,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 
 		if (!lastArg && currentArg == "-net-fake-lag") {
 			GnsTransport::SetSimulatedLagMs(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
+			continue;
+		}
+		if (!lastArg && currentArg == "-net-rendezvous-log") {
+			GnsTransport::SetRendezvousLogLevel(static_cast<int>(std::strtol(argValue[++i], nullptr, 10)));
 			continue;
 		}
 		if (!lastArg && currentArg == "-feel-render-settings") {
@@ -4699,7 +4740,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			System::SetQuit(true);
 		}
 	} else {
-		const uint64_t e2eTickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+		const uint64_t e2eTickBudget = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
+		const uint64_t e2eTickCap = !ScenarioRunner::IsPersistentWorld() && s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
+		    ? e2eTickBudget + s_netMatchE2ETicks.matchFirstFrame - 1 : e2eTickBudget;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
 			NetMatchE2ERoundReachedPlannedEnd(error, s_netMatchE2ETicks.Total(), matchTick, e2eTickCap);
@@ -4727,6 +4770,30 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				g_ActivityMan.EndActivity();
 				ScenarioRunner::ClearControllerReplayError();
 				System::SetQuit(true);
+			}
+		} else if (error.find("MatchOver:") != std::string::npos) {
+			// The round this seat was rejoining is finished: it completes on what it holds. Without this the
+			// rejoin's own link failure reads as a broken match instead of a played one.
+			uint64_t goodbyeFinal = 0;
+			(void)g_NetMatchService.HostGoodbyeSeen(goodbyeFinal);
+			s_netMatchCompletedByHostGoodbye = true;
+			s_netMatchGoodbyeFinalFrame = goodbyeFinal;
+			{
+				std::ostringstream line;
+				line << "[net-match] completed_by_host_goodbye=1 held_from=" << s_netMatchHeldFromTick
+				     << " final=" << s_netMatchGoodbyeFinalFrame;
+				System::PrintDiagnosticLine(line.str());
+			}
+			const std::string result = NetMatchEndReason(g_ActivityMan.GetActivity());
+			g_ConsoleMan.PrintString("NETWORK: Match complete: " + result);
+			g_NetMatchService.FinishMatch(result);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				System::SetQuit(true);
+			} else {
+				returnToMenuAfterNetworkEnd = true;
 			}
 		} else if (error.find("PeerLeft:") != std::string::npos && g_NetMatchService.GetState() == NetMatchServiceState::Running) {
 			// The last peer announced its leave, so the match is over rather than broken: it ends the
@@ -4771,6 +4838,8 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		           (s_netMatchHeals.Allowed(g_TimerMan.GetSimTimeTicks(), g_TimerMan.GetTicksPerSecond()) || g_NetMatchService.IsHostMigrationRepairPending()) &&
 		           g_NetMatchService.GetState() == NetMatchServiceState::Running)) {
 			const bool heldRejoin = error.find("PeerHeld:") != std::string::npos;
+			System::PrintDiagnosticLine("[net-match] recovery requested tick=" + std::to_string(matchTick) +
+			    " catch_up=" + std::to_string(ScenarioRunner::WorldCatchUpActive()) + " reason=" + error);
 			static unsigned int traceRecoveryCount = 0;
 			const std::string traceGapKey = observeTraceRecovery ? "menu_trace_gap_" + std::to_string(++traceRecoveryCount) : std::string();
 			if (observeTraceRecovery) {
@@ -4784,6 +4853,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				}
 			}
 			if (heldRejoin) {
+				s_netMatchHeldFromTick = matchTick;
 				g_ConsoleMan.PrintString("NETWORK: Held - AI in control - rejoining");
 				ScenarioRunner::PushNetUiToast("seat_held", "Held - AI in control - rejoining");
 			} else {
@@ -4855,7 +4925,16 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
 				}
-			} else if (resyncError == "match over") {
+			} else if (NetMatchHostGoodbyeEndedTheRejoin(resyncError)) {
+				// The host's goodbye ends this seat's match at the frame the round ended on: the rejoin had
+				// nothing left to return to, so the seat completes with what it holds instead of failing.
+				s_netMatchCompletedByHostGoodbye = heldRejoin;
+				if (heldRejoin) {
+					std::ostringstream line;
+					line << "[net-match] completed_by_host_goodbye=1 held_from=" << s_netMatchHeldFromTick
+					     << " final=" << s_netMatchGoodbyeFinalFrame;
+					System::PrintDiagnosticLine(line.str());
+				}
 				g_NetMatchService.FinishMatch("match over");
 				g_ActivityMan.EndActivity();
 				g_ActivityMan.SetInActivity(false);
@@ -5089,6 +5168,17 @@ void RunGameLoop() {
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(s_frameStallMs));
 		}
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive()) {
+			for (auto& stall: s_netLiveStalls) if (!stall.fired && static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) >= stall.tick) {
+				const uint64_t activation = ScenarioRunner::WorldCatchUpActivationTick();
+				if (s_netLiveStallActivation && activation <= *s_netLiveStallActivation) break;
+				stall.fired = true;
+				s_netLiveStallActivation = activation;
+				System::PrintDiagnosticLine("[net-test] live stall frame=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " ms=" + std::to_string(stall.milliseconds));
+				std::this_thread::sleep_for(std::chrono::milliseconds(stall.milliseconds));
+				break;
+			}
+		}
 
 		g_TimerMan.Update();
 
@@ -5136,6 +5226,10 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
+				break;
+			}
+			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {
+				if (ScenarioRunner::HasControllerReplayError()) HandleControllerReplayFailure(returnToMenuAfterNetworkEnd);
 				break;
 			}
 			ZoneScopedN("Simulation Update");
@@ -5198,7 +5292,7 @@ void RunGameLoop() {
 			const bool desyncSampleTick = s_netDesyncCheck && ScenarioRunner::IsLockstepControllerSyncActive() &&
 			                              (simTick % c_DesyncCheckIntervalTicks == 0);
 			const bool a7HashTick = NetA7Journal::Enabled() && ScenarioRunner::IsLockstepControllerSyncActive();
-			const bool liveHashTick = !s_netLiveTickHashPath.empty() && ScenarioRunner::IsLockstepControllerSyncActive();
+			const bool liveHashTick = !s_netLiveTickHashPath.empty() && (ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsActive() || ScenarioRunner::WorldCatchUpActive());
 			const bool hashThisTick = s_recordTickHashes || desyncSampleTick || a7HashTick || liveHashTick;
 			if (hashThisTick) {
 				g_SimChecksum.BeginTick(simTick);
@@ -5208,8 +5302,17 @@ void RunGameLoop() {
 			// gate OR the runtime desync detector sees a guaranteed divergence. One-shot: a resynced
 			// match reuses tick numbers, and the healed round must NOT be re-poisoned.
 			static bool s_perturbFired = false;
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && simTick == ScenarioRunner::GetArgs().selftestPerturbTick && !s_perturbFired) {
+			bool perturbDue = simTick == ScenarioRunner::GetArgs().selftestPerturbTick;
+			if (s_netPerturbWhenLive) {
+				perturbDue = simTick >= ScenarioRunner::GetArgs().selftestPerturbTick && simTick % c_DesyncCheckIntervalTicks == 0 && ScenarioRunner::IsLockstepControllerSyncActive() && !ScenarioRunner::WorldCatchUpActive();
+				const auto* match = ScenarioRunner::GetLockstepMatchConfig();
+				if (!match) perturbDue = false;
+				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
+					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
+			}
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
+				if (s_netPerturbWhenLive) System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
 				std::random_device perturbDevice;
 				const unsigned perturbAdvance = (perturbDevice() % 64u) + 1u;
 				for (unsigned k = 0; k < perturbAdvance; ++k) {
@@ -5680,6 +5783,7 @@ void RunGameLoop() {
 					nlohmann::json subsystems = nlohmann::json::object();
 					for (const auto& [name, hash]: tickResult.per_subsystem) subsystems[name] = SimChecksum::HashHex(hash);
 					trace << nlohmann::json{{"round", ScenarioRunner::GetLockstepRoundId()}, {"tick", simTick},
+					    {"wall_ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count()},
 					    {"peer", ScenarioRunner::GetLockstepLocalPeerId()}, {"paused", lockstepPausedTick},
 					    {"total", SimChecksum::HashHex(tickResult.total)}, {"sim_gated", SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))},
 					    {"subsystems", std::move(subsystems)}}.dump() << '\n';
@@ -6180,6 +6284,7 @@ void RunGameLoop() {
 			const uint64_t restoreCheckTick = std::max(s_netAutosaveRestoreTick, s_netAutosaveRestoreAtTick);
 			if (restoreCheckTick > 0 && simTick >= restoreCheckTick &&
 			    (s_netAutosaveRestoreTick > 0 || !s_netAutosaveRestoreWhich.empty())) {
+				(void)ScenarioRunner::DrainLockstepRelay(c_CappedStopDrainMs, 0);
 				s_netAutosaveRestorePassed = RunAutosaveRestoreCheck(s_netAutosaveRestoreTick, s_netAutosaveRestoreWhich);
 				System::SetQuit(true);
 				g_ActivityMan.EndActivity();
@@ -6418,7 +6523,11 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					if (!unlimitedWorld && s_netMatchE2ETicks.Total() > tickCap) {
+					const uint64_t completedTicks = ScenarioRunner::IsPersistentWorld() ? simTick : s_netMatchE2ETicks.Total();
+					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
+					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
+						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));
+					if (!unlimitedWorld && completedTicks > tickCap) {
 						// A capped stop is per-peer wall clock: a peer settled behind a lagged link still
 						// owes itself our in-flight tail, so hand over the forwards we hold and hold the
 						// socket open before quitting drops it.
@@ -7086,6 +7195,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"winner_team\":" << (reportGameActivity ? reportGameActivity->GetWinnerTeam() : Activity::NoTeam) << ",";
 	out << "\"entered_editor\":" << (s_netMatchServiceE2EEnteredEditor ? "true" : "false") << ",";
 	out << "\"rematches\":" << s_netMatchServiceE2ERematches << ",";
+	out << "\"completed_by_host_goodbye\":" << (s_netMatchCompletedByHostGoodbye ? 1 : 0) << ",";
+	out << "\"held_from\":" << s_netMatchHeldFromTick << ",";
+	out << "\"goodbye_final_frame\":" << s_netMatchGoodbyeFinalFrame << ",";
 	out << "\"resyncs\":" << s_netMatchHeals.Total() << ",";
 	out << "\"resyncs_in_window\":" << s_netMatchHeals.InWindow() << ",";
 	out << "\"stale_activity_slots\":" << g_ActivityMan.StaleActivitySlotCount() << ",";
@@ -7262,6 +7374,13 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 		if (error) *error = setupError;
 		CloseNetReplayPlayback();
 		return false;
+	}
+	if (const auto& agreed = ScenarioRunner::GetLockstepReplayAgreedStart(); agreed) {
+		if (!s_replayCoordinator.ApplyReplayAgreedStart(*agreed, &setupError)) {
+			if (error) *error = setupError;
+			CloseNetReplayPlayback();
+			return false;
+		}
 	}
 	ScenarioRunner::SetLockstepCoordinator(&s_replayCoordinator);
 
@@ -8263,6 +8382,9 @@ int main(int argc, char** argv) {
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-selftest") {
 			return NetLockstepSelfTest::Run();
 		}
+		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-first-start-selftest") {
+			return NetLockstepSelfTest::RunFirstStart();
+		}
 		if (argv[i] != nullptr && std::string(argv[i]) == "-net-lockstep-ordering-selftest") {
 			return NetLockstepSelfTest::RunOrdering();
 		}
@@ -8349,7 +8471,7 @@ int main(int argc, char** argv) {
 	}
 
 	// Pick up the thread-count override before any init runs. Net-session smoke uses
-	// a fixed default so its traces compare across machines; the identity no longer hashes the count.
+	// a fixed default so its traces compare across machines; normal identity admission remains strict.
 	bool explicitLuaStateOverride = false;
 	bool netSessionRequested = false;
 	bool matchServiceRequested = false;
@@ -8362,6 +8484,8 @@ int main(int argc, char** argv) {
 			s_cliNumLuaStatesOverride = static_cast<int>(std::strtol(argv[i + 1], nullptr, 10));
 			explicitLuaStateOverride = true;
 			++i;
+		} else if (arg == "-net-identity-lua-states-experiment") {
+			s_netIdentityLuaStatesExperiment = true;
 		} else if (arg == "-net-host" || arg == "-net-dedicated" || arg == "-net-join" || arg == "-net-join-session") {
 			netSessionRequested = true;
 			if (arg == "-net-dedicated") matchServiceRequested = true;
@@ -8369,6 +8493,9 @@ int main(int argc, char** argv) {
 			matchServiceRequested = true;
 		}
 	}
+	// Normal sessions keep the Lua-state count in the identity. The experiment flag is a
+	// deliberately loud, test-only exception used only while proving count invariance.
+	NetIdentity::SetLuaStateCountExperiment(s_netIdentityLuaStatesExperiment);
 	// Service launches keep the saved VM layout, including a match restarted from this runtime.
 	if (netSessionRequested && !matchServiceRequested && !explicitLuaStateOverride) {
 		s_cliNumLuaStatesOverride = c_NetSessionDefaultLuaStates;
@@ -8540,6 +8667,9 @@ int main(int argc, char** argv) {
 	}
 
 	g_PresetMan.LoadAllDataModules();
+	// The modules are loaded and will not change under this process: read them once here, off the game
+	// thread, so the multiplayer landing and Create Lobby do not each walk every module on their frame.
+	NetIdentity::PrimeManifest();
 	if (!ContentFile::WaitForPendingSounds(LoadingScreen::LoadingSplashProgressReport)) return ShutDown(EXIT_FAILURE);
 	if (netMatchSelfTest) {
 		NetMatchService::Destruct();

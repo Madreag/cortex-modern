@@ -191,6 +191,10 @@ namespace RTE {
 		if (m_State != State::Open || !reachable || bytes.size() > c_MaxSignalBytes || m_Outbox.size() >= c_MaxPendingPosts) {
 			return false;
 		}
+		if (m_RequestKind == RequestKind::Poll && m_PollWaitS > 0) {
+			AbortRequest();
+			m_NextPollMs = 0;
+		}
 		m_Outbox.push_back({to, base64_encode(bytes, false)});
 		return true;
 	}
@@ -221,7 +225,7 @@ namespace RTE {
 				SetState(State::Closed);
 			} else {
 				m_DrainPolled = true;
-				IssuePoll();
+				IssuePoll(nowMs);
 			}
 			return;
 		}
@@ -231,7 +235,7 @@ namespace RTE {
 		if (!m_Outbox.empty() && nowMs >= m_NextPostMs) {
 			IssuePost();
 		} else if (m_PollArmed && nowMs >= m_NextPollMs) {
-			IssuePoll();
+			IssuePoll(nowMs);
 		}
 	}
 
@@ -315,7 +319,8 @@ namespace RTE {
 		StartRequest(RequestKind::Post, {"POST", m_SessionPath + "/signal", NetDirectoryCodec::EncodeSignalPost(post)});
 	}
 
-	void NetDirectorySignalChannel::IssuePoll() {
+	void NetDirectorySignalChannel::IssuePoll(uint64_t nowMs) {
+		m_PollStartedMs = nowMs;
 		++m_Polls;
 		// The drain poll is a last look before closing: never hold it open.
 		const int waitS = m_State == State::Draining ? 0 : m_PollWaitS;
@@ -368,9 +373,8 @@ namespace RTE {
 			return;
 		}
 		m_BackoffMs = 0;
-		// The service held a long poll until a signal or the deadline, so an idle gap would
-		// only add latency: re-poll at once. Short polls keep the 500 ms cadence.
-		m_NextPollMs = m_PollWaitS > 0 ? nowMs : nowMs + c_PollIntervalMs;
+		// A server that answers an empty long poll immediately must still respect the idle cadence.
+		m_NextPollMs = m_PollWaitS > 0 ? (inbound.empty() ? std::max(nowMs, m_PollStartedMs + c_PollIntervalMs) : nowMs) : nowMs + c_PollIntervalMs;
 		for (const Signal& signal : inbound) {
 			if (signal.seq <= m_Cursor) {
 				continue; // re-delivered: the sink already took it

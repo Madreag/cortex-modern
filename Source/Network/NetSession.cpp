@@ -6,6 +6,7 @@
 #include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
 #include "System/FaultInjection.h"
+#include "System/System.h"
 
 #include "nlohmann/json.hpp"
 
@@ -197,6 +198,13 @@ namespace RTE {
 		}
 		PumpChatOutbox();
 		MaybeSendHeartbeats();
+		// A survivor can be in the lockstep hold pause while its own seat is completing an H4
+		// admission.  Keep the reconnect transaction's retransmit/deadline clock alive even though
+		// the ordinary session timeout is intentionally suspended during the pause.
+		if (m_ReconnectClient) {
+			m_ReconnectClient->Tick(m_NowMs);
+		}
+		FlushReconnectOutbound();
 	}
 
 	void NetSession::NotePeerTraffic(NetPeerId peerId, uint64_t nowMs) {
@@ -217,10 +225,33 @@ namespace RTE {
 		if (m_Role != NetSessionRole::Host) return;
 		PeerState* peer = FindPeer(peerId);
 		if (!peer || peer->state != NetSessionState::Ready) return;
+		System::PrintDiagnosticLine(std::string("[net-session] ready peer refused reason=") + NetProtocol::RejectReasonName(reason) +
+		                            " role=host peer=" + std::to_string(peer->assignedPeerId + 1) + " detail=" + message);
 		Send(peerId, NetDisconnect{static_cast<uint16_t>(reason), message});
 		peer->state = NetSessionState::Closed;
 		DropPeerTransport(peerId, message);
 		RefreshHostState();
+	}
+
+	void NetSession::DisconnectJoiningPeers(NetRejectReason reason, const std::string& message) {
+		if (m_Role != NetSessionRole::Host) return;
+		for (PeerState& peer: m_Peers) {
+			if (peer.state != NetSessionState::Handshake && peer.state != NetSessionState::Accepted) continue;
+			System::PrintDiagnosticLine(std::string("[net-session] joining peer refused reason=") + NetProtocol::RejectReasonName(reason) +
+			                            " role=host connection=" + std::to_string(peer.transportPeerId) + " state=" + StateName(peer.state) + " detail=" + message);
+			Send(peer.transportPeerId, NetDisconnect{static_cast<uint16_t>(reason), message});
+			peer.state = NetSessionState::Closed;
+			DropPeerTransport(peer.transportPeerId, message);
+		}
+		RefreshHostState();
+	}
+
+	uint32_t NetSession::GetHandshakingPeerCount() const {
+		uint32_t count = 0;
+		for (const PeerState& peer : m_Peers) {
+			if (peer.state == NetSessionState::Handshake) ++count;
+		}
+		return count;
 	}
 
 	void NetSession::EnableParticipantProof(NetParticipantIdentityStore* localStore) {
@@ -716,6 +747,10 @@ namespace RTE {
 	void NetSession::HandleHostMessage(NetPeerId peerId, const NetMessage& message) {
 		PeerState* peer = FindPeer(peerId);
 		if (!peer || !IsActive(peer->state)) {
+			// A transport that hands us a payload before it announces the connection loses it here.
+			if (!peer)
+				System::PrintDiagnosticLine(std::string("[net-session] dropped ") + NetProtocol::MessageTypeName(NetProtocol::MessageTypeOf(message.payload)) +
+				                            " from unannounced transport peer " + std::to_string(peerId));
 			return;
 		}
 		if (const auto* chat = std::get_if<NetChat>(&message.payload)) {
@@ -1338,6 +1373,13 @@ namespace RTE {
 		const uint64_t a7EvaluationGap = m_NowMs >= m_LastTimeoutCheckMs ? m_NowMs - m_LastTimeoutCheckMs : 0;
 		m_TimeoutsEvaluated = true;
 		m_LastTimeoutCheckMs = m_NowMs;
+		// A rejoin phase is this peer's own handshake, so its silence window starts again every evaluation -
+		// and nothing else on the session is suspended: a stalled transfer and a silent peer keep their own
+		// watchdogs and their own clocks.
+		if (m_AdmissionSuspended) {
+			m_LastReceiveMs = m_NowMs;
+			m_ResumedWithoutTraffic = false;
+		}
 		// A park the engine declared is not silence from anyone: the round held this peer's own pump. The
 		// windows start again here, and the next full budget without a word still ends the peer.
 		if (m_PumpParked || m_SilenceSuspended) {
@@ -1404,7 +1446,8 @@ namespace RTE {
 					m_Transport->Disconnect(m_RemoteTransportPeerId, mismatch.summary);
 				}
 			}
-		} else if ((m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
+		} else if (!m_AdmissionSuspended &&
+		           (m_State == NetSessionState::Connecting || m_State == NetSessionState::HelloSent || m_State == NetSessionState::Ready) &&
 		           m_NowMs >= m_LastReceiveMs && m_NowMs - m_LastReceiveMs >
 		           ((NetA7Journal::ControlledSilentClient() && m_State == NetSessionState::HelloSent) ? NetA7Journal::SilentReceiveBudgetMs() : m_Config.timeoutMs)) {
 			++m_Stats.timeouts;
@@ -1473,7 +1516,8 @@ namespace RTE {
 	}
 
 	void NetSession::RecordReject(NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
-		if (reason == NetRejectReason::ParticipantBanned) std::cout << "[net-session] admission refused reason=ParticipantBanned" << std::endl;
+		System::PrintDiagnosticLine(std::string("[net-session] admission refused reason=") + NetProtocol::RejectReasonName(reason) +
+		                            " role=" + (m_Role == NetSessionRole::Host ? "host" : "client") + " key=" + key + " detail=" + summary);
 		m_RejectReason = reason;
 		m_HasReject = true;
 		m_MismatchKey = key;
@@ -1492,6 +1536,30 @@ namespace RTE {
 		RecordReject(reason, key, expected, actual, summary);
 		m_State = NetSessionState::Failed;
 		m_StateStartedMs = m_NowMs;
+	}
+
+	std::string NetSession::BuildPlayerRefusalText() const {
+		if (!m_HasReject) return {};
+		switch (m_RejectReason) {
+			case NetRejectReason::ModuleManifestMismatch: return m_RejectSummary.empty() ? "This host's mods do not match yours." : m_RejectSummary;
+			case NetRejectReason::ProtocolMismatch:
+			case NetRejectReason::GameVersionMismatch:
+			case NetRejectReason::BuildMismatch:
+			case NetRejectReason::ControllerFrameVersionMismatch:
+			case NetRejectReason::ControllerFrameSizeMismatch: return "This host uses a different game version.";
+			case NetRejectReason::DeterministicConfigMismatch: return "This match's simulation settings do not match yours.";
+			case NetRejectReason::SessionRulesMismatch: return "This match's rules do not match yours.";
+			case NetRejectReason::UserdataModulesNotAllowed: return "This host does not allow local userdata mods.";
+			case NetRejectReason::SessionFull: return "This match is full.";
+			case NetRejectReason::HostNotAccepting: return "The host is not accepting players right now.";
+			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
+			case NetRejectReason::SessionEnded: return "This session has ended.";
+			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
+			case NetRejectReason::ParticipantRemoved: return "The host removed you from this session";
+			case NetRejectReason::ParticipantBanned: return BuildRejectText();
+			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
+			default: return "The host could not admit this connection. Please try again.";
+		}
 	}
 
 	std::string NetSession::BuildRejectText() const {

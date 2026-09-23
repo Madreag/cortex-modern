@@ -7,6 +7,7 @@ import json
 import math
 from pathlib import Path
 import re
+from .records import open_record, record_path
 
 TICKS = 1200
 SIM_MS = 1000 / 60
@@ -24,7 +25,7 @@ class EarlyDecision(ValueError):
 
 def dump_ticks(path):
     ticks = set()
-    with Path(path).open(encoding='utf-8-sig') as stream:
+    with open_record(path, encoding='utf-8-sig') as stream:
         for line in stream:
             if re.match(r'^\d+ activity ', line):
                 ticks.add(int(line.split(' ', 1)[0]))
@@ -42,7 +43,7 @@ def early_decision_tick(run, peer):
             if 0 < tick < TICKS:
                 return tick
     dump = run / f'{peer}_trace.json.simdump.txt'
-    if dump.is_file():
+    if record_path(dump).is_file():
         ticks = dump_ticks(dump)
         if ticks and ticks != set(range(1, TICKS + 1)):
             return max(ticks)
@@ -60,7 +61,7 @@ def write_jsonl(path, rows):
 
 
 def read_jsonl(path):
-    with Path(path).open(encoding='utf-8-sig') as stream:
+    with open_record(path, encoding='utf-8-sig') as stream:
         for number, line in enumerate(stream, 1):
             row = json.loads(line, parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)))
             if not isinstance(row, dict):
@@ -89,7 +90,7 @@ def wrapped_delta(delta, size, wraps):
 
 def pin(value, rule, passed, evidence, detail=None):
     return dict(value=value, rule=rule, status='PASS' if passed and value is not None else 'MISS',
-                evidence=[str(path) for path in evidence], detail=detail)
+                evidence=[str(record_path(path)) for path in evidence], detail=detail)
 
 
 def peer_id_of(report_path):
@@ -108,11 +109,17 @@ def peer_id_of(report_path):
 
 def item9a_gates(run, peer='host', rows=None):
     run = Path(run)
-    raw = run / peer / 'feel/raw.jsonl'
+    raw = record_path(run / peer / 'feel/raw.jsonl')
     manifest_path = run / 'manifest.json'
     manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
     final_tick = manifest.get('ticks', TICKS)
     rows = list(read_jsonl(raw)) if rows is None and raw.is_file() else rows or []
+    clock_path = raw
+    if not rows:
+        live = run / f'{peer}-live.jsonl'
+        clock_path = live
+        rows = [dict(type='committed', tick=row['tick'], wall_ms=row['wall_ms'])
+                for row in read_jsonl(live) if 'wall_ms' in row] if live.is_file() else []
     committed = [row for row in rows if row.get('type') == 'committed' and 300 <= row.get('tick', 0) <= final_tick]
     by_tick = defaultdict(list)
     for row in committed:
@@ -147,7 +154,7 @@ def item9a_gates(run, peer='host', rows=None):
     valid_tick = isinstance(tick_ms, (int, float)) and math.isfinite(tick_ms) and tick_ms > 0
     horizon_lag_ms = (max(0.0, max(max(stamps) - min(by_tick[first_tick]) - (tick - first_tick) * tick_ms
                                   for tick, stamps in by_tick.items())) if valid_tick and wall_ms is not None else None)
-    evidence = [raw, log_path, report_path]
+    evidence = [clock_path, log_path, report_path]
     pins = {
         'item9a_wall_tps': pin(tps, '>= 59.5 after tick 300, including recovery time', tps is not None and tps >= 59.5, evidence),
         'item9a_net_wait': pin(wait_fraction, '< 0.01 of steady wall time', wait_fraction is not None and wait_fraction < .01, evidence),
@@ -207,7 +214,30 @@ def item9a_gates(run, peer='host', rows=None):
                              confirmed_horizon_lag_ms=horizon_lag_ms,
                              confirmed_horizon_lag_ticks=horizon_lag_ms / tick_ms if horizon_lag_ms is not None else None,
                              steady_missing_frame_stalls=missing, first_tick=first_tick, last_tick=final_tick if final_tick in by_tick else None,
-                             sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
+                             clock_path=str(clock_path), sim_tick_ms=latest.get('sim_tick_ms'), peer_input_delays=latest.get('peer_input_delays', {})))
+
+
+def apply_tps_call(result, reference):
+    """Apply the same-machine ruling while retaining the absolute measurements."""
+    measured = result['metrics'].get('steady_wall_tps')
+    baseline = reference.get('steady_wall_tps') if reference else None
+    if not isinstance(baseline, (int, float)) or not math.isfinite(baseline) or baseline <= 0:
+        return
+    pins = result['pins']
+    if 'item9a_wall_tps' not in pins:
+        return
+    limited = baseline < 59.5
+    minimum = baseline * .95 if limited else 59.5
+    original = dict(pins['item9a_wall_tps'])
+    evidence = original['evidence'] + [reference['evidence']]
+    pins['item9a_wall_tps'] = pin(measured,
+        f'>= {minimum:.6f}; within 5 percent of the matched single-player baseline' if limited else '>= 59.5; single-player clears the absolute gate',
+        measured is not None and measured >= minimum, evidence)
+    result['tps_call'] = dict(reference=reference, absolute=original, minimum_tps=minimum, box_limited=limited)
+    if limited and 'item9a_confirmed_horizon_lag' in pins:
+        pins['item9a_confirmed_horizon_lag']['required'] = False
+        pins['item9a_confirmed_horizon_lag']['detail'] = 'The nominal 60 Hz drift remains diagnostic under the same-machine TPS ruling; blocked time and longest block remain required.'
+    result['pass_check'] = all(value['status'] == 'PASS' for value in pins.values() if value.get('required', True))
 
 
 def input_latencies(inputs, frames):
@@ -318,8 +348,11 @@ def remote_commands(path, local_peer):
 
 
 def canonical_positions(path, wanted):
-    actors, ticks = {}, set()
-    with path.open(encoding='utf-8-sig') as stream:
+    actors, ticks, records = {}, set(), {}
+    duplicate = None
+    duplicate_count = 0
+    repeat_count = 0
+    with open_record(path, encoding='utf-8-sig') as stream:
         for number, line in enumerate(stream, 1):
             if re.match(r'^\d+ activity ', line):
                 ticks.add(int(line.split(' ', 1)[0]))
@@ -328,10 +361,23 @@ def canonical_positions(path, wanted):
                 key = int(match[1]), int(match[2])
                 if key in wanted:
                     if key in actors:
-                        raise ValueError(f'{path}:{number}: duplicate committed actor')
+                        # A resync restarts the simdump, so an epoch can be written again; an identical
+                        # record is that repetition. A record that differs at the same tick and actor is
+                        # the engine committing it twice, which is a failed pin, not a trace artefact.
+                        if records[key] == line:
+                            repeat_count += 1
+                            continue
+                        duplicate_count += 1
+                        if duplicate is None:
+                            duplicate = dict(tick=key[0], actor=key[1], line=number,
+                                             first_line=actors[key][1], path=str(path))
+                        continue
                     actors[key] = (dict(pos=[float.fromhex(match[3]), float.fromhex(match[4])]), number)
+                    records[key] = line
     if ticks != set(range(1, TICKS + 1)):
         raise EarlyDecision(max(ticks) if ticks else 0, path)
+    canonical_positions.last_duplicate = dict(first=duplicate, count=duplicate_count) if duplicate else None
+    canonical_positions.last_repeats = repeat_count
     return actors
 
 
@@ -342,6 +388,8 @@ def corrections(previews, committed, canonical_path, command_path, local_peer):
         if key not in forecasts or row['committed_tick'] > forecasts[key]['committed_tick']:
             forecasts[key] = row
     canonical = canonical_positions(canonical_path, forecasts)
+    candidate_duplicate = getattr(canonical_positions, 'last_duplicate', None)
+    corrections.last_duplicate = candidate_duplicate if isinstance(candidate_duplicate, dict) else None
     commands, commands_complete = remote_commands(command_path, local_peer)
     result, missing = [], []
     for (tick, uid), forecast in sorted(forecasts.items()):
@@ -422,7 +470,7 @@ def reduce_peer(run, peer, baseline=None):
     decided = early_decision_tick(run, peer)
     if decided is not None:
         raise EarlyDecision(decided, run / f'{peer}_trace.json.simdump.txt')
-    raw = run / peer / 'feel/raw.jsonl'
+    raw = record_path(run / peer / 'feel/raw.jsonl')
     rows = list(read_jsonl(raw))
     if len([row for row in rows if row['type'] == 'schema' and row['version'] == 1]) != 1:
         raise ValueError(f'{raw}: missing or invalid schema')
@@ -438,13 +486,14 @@ def reduce_peer(run, peer, baseline=None):
     if not frames or not iterations:
         raise ValueError(f'{raw}: no measured match frames or iterations')
     destination = run / peer / 'analysis'
-    destination.mkdir(exist_ok=False)
+    destination.mkdir(exist_ok=True)
     latency = input_latencies(inputs, frames)
     warps = warp_records(frames)
     controller = run / f'{peer}_controller.jsonl'
     canonical_dump = run / f'{peer}_trace.json.simdump.txt'
     command_log = run / 'replay-inspect/stdout.log'
     correction_rows, correction_missing, commands_complete = corrections(previews, committed, canonical_dump, command_log, frames[-1]['peer'])
+    duplicate_actor = getattr(corrections, 'last_duplicate', None)
     firing = firing_records(inputs, previews, frames, run / peer / 'stdout.log')
     paths = {name: destination / (name + '.jsonl') for name in ('latencies', 'warps', 'corrections', 'correction-missing', 'firing')}
     for name, values in [('latencies', latency), ('warps', warps), ('corrections', correction_rows),
@@ -523,10 +572,12 @@ def reduce_peer(run, peer, baseline=None):
                    frames_over_50_ms=over_50, warp_frames=len(warps), warp_frames_over_4_px=sum(row['over_4_px'] for row in warps),
                    capture_missing=capture_missing, frame_count=len(frames), cap_hz=cap,
                    effective_hz=(len(frames) - 1) * 1000 / (frames[-1]['present_end_ms'] - frames[0]['present_end_ms']) if len(frames) > 1 else None)
-    measured = bool(ended and coverage and latency and not missing_inputs and len(firing) == schedule['fire_presses'] and cpu_ms is not None
+    measured = bool(ended and coverage and latency and not missing_inputs and not duplicate_actor and len(firing) == schedule['fire_presses'] and cpu_ms is not None
                     and (auto_picks or peer == 'sp')
                     and not correction_missing and not capture_missing and (commands_complete or peer == 'sp'))
     pins = {}
+    pins['canonical_duplicate_actor'] = pin(duplicate_actor, 'no duplicate committed actor in the simdump', duplicate_actor is None,
+                                            [canonical_dump])
     pins['wall_tps'] = pin(pace_tps, '>= 59.5', pace_tps is not None and pace_tps >= 59.5, [raw])
     pins['sim_ms_per_tick'] = pin(sim_cost, '<= 8 ms', sim_cost is not None and sim_cost <= 8, [raw])
     pins['auto_delay'] = pin(delays, 'initial picks cover ceil(measured RTT / measured sim tick) + 1; final draw names the committed live delay',
@@ -567,8 +618,10 @@ def reduce_peer(run, peer, baseline=None):
     if peer == 'sp':
         measured = bool(ended and coverage and cpu_ms is not None and not capture_missing)
         pins = {name: pins[name] for name in ('auto_delay', 'violations', 'frame_max')}
-    elif peer == 'host':
+    elif network:
         pins.update(network['pins'])
+    if network:
+        metrics.update(network['metrics'])
     result = dict(peer=peer, raw_path=str(raw), metrics=metrics, pins=pins, measurement_complete=measured,
                   trace_1200_ticks=coverage, orderly_end_record=ended, analysis={key: str(value) for key, value in paths.items()})
     write_json(destination / 'metrics.json', result)
@@ -576,7 +629,7 @@ def reduce_peer(run, peer, baseline=None):
 
 
 def file_record(path):
-    path = Path(path)
+    path = record_path(path)
     digest = hashlib.sha256()
     with path.open('rb') as stream:
         while block := stream.read(1024 * 1024):

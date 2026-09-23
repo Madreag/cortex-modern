@@ -128,6 +128,16 @@ namespace RTE {
 		/// activity restart, a private catch-up replay). Nobody was listening, so that is not silence:
 		/// every silence window starts again at the next evaluation.
 		void NotePumpParked() { m_PumpParked = true; }
+
+		/// Where a rejoining seat is in its own handshake.  Every phase but Active is work this peer is doing
+		/// with nobody to answer, so the ordinary session timeout does not judge it.
+		enum class RejoinPhase : uint8_t { Active = 0, Connecting = 1, ImagePending = 2, Loading = 3, TailReplay = 4 };
+		void SetRejoinPhase(RejoinPhase phase) {
+			m_RejoinPhase = phase;
+			m_AdmissionSuspended = phase != RejoinPhase::Active;
+		}
+		RejoinPhase GetRejoinPhase() const { return m_RejoinPhase; }
+		bool IsAdmissionSuspended() const { return m_AdmissionSuspended; }
 		/// Holds the silence windows open for as long as this peer is the one not listening (a private
 		/// catch-up replaying on the game thread). A transport close still ends the link at once.
 		void SetSilenceSuspended(bool suspended) { m_SilenceSuspended = suspended; }
@@ -141,6 +151,11 @@ namespace RTE {
 		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
 		/// Refuses one Ready client without ending the host's session.
 		void DisconnectReadyPeer(NetPeerId peerId, NetRejectReason reason, const std::string& message);
+		/// Refuses every connection still in its handshake with the message, without ending the host's session.
+		void DisconnectJoiningPeers(NetRejectReason reason, const std::string& message);
+		/// Host: how many connections are still in their handshake. A rejoin that has reached us but not yet
+		/// been admitted lives here, and the goodbye drain must see it arrive.
+		uint32_t GetHandshakingPeerCount() const;
 		/// Host: one control payload to every active far peer. Kick/Ban notices ride this.
 		void BroadcastControl(const NetPayload& payload);
 		/// Feeds one transport event when another phase owns the queue (a reconnect handshake the
@@ -231,6 +246,7 @@ namespace RTE {
 		/// e.g. "deterministic config hash does not match (deterministic_config_hash: 4d31cc89.. vs 77ab01ff..)".
 		/// @return The reason text, or an empty string when nothing was rejected.
 		std::string BuildRejectText() const;
+		std::string BuildPlayerRefusalText() const;
 
 		bool IsReady() const { return m_State == NetSessionState::Ready; }
 		bool IsRejected() const { return m_State == NetSessionState::Rejected; }
@@ -351,6 +367,8 @@ namespace RTE {
 		bool m_ResumedWithoutTraffic = false;
 		// A worker thread evaluates silence while the game thread declares the park, so these cross threads.
 		std::atomic<bool> m_PumpParked{false};
+		std::atomic<RejoinPhase> m_RejoinPhase{RejoinPhase::Active};
+		std::atomic<bool> m_AdmissionSuspended{false};
 		std::atomic<bool> m_SilenceSuspended{false};
 		uint64_t m_NextHeartbeatMs = 0;
 		uint64_t m_SessionId = 0;

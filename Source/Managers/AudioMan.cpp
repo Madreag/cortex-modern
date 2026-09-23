@@ -2191,6 +2191,11 @@ std::string AudioMan::SaveCheckpoint(const std::function<bool(uint64_t, const So
 			}
 			state.voices.push_back(std::move(captured));
 		}
+		// A minimum-distance entry names a voice; the capture skips predicted and finished voices, so the map is
+		// pruned to what this archive actually carries or the loader refuses the whole snapshot.
+		std::set<int> capturedVoices;
+		for (const AudioCheckpoint::Voice& voice: state.voices) capturedVoices.insert(voice.identity);
+		std::erase_if(state.minimumDistances, [&](const auto& entry) { return !capturedVoices.contains(entry.first); });
 		TraceCheckpointBoundary("save-captured");
 	}
 	// One snapshot of both: the cursor is read after the voices and never below an owner this archive names.
