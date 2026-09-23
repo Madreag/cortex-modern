@@ -3911,46 +3911,96 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	const std::vector<MovableObject*> knownObjects = g_MovableMan.SnapshotKnownObjects();
 	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
 	mutable std::mutex frozenWorldMutex;
-	struct Fields {
-		std::unordered_map<const void*, VectorField> vectors;
-		std::unordered_map<const void*, long> controllers;
-	};
-	/// Whether an object existed when the capture began.
+	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
-		std::call_once(m_KnownBuilt, [this] { m_Known.insert(knownObjects.begin(), knownObjects.end()); });
-		return m_Known.contains(object);
+		std::call_once(m_KnownBuilt, [this] {
+			m_Known.assign(knownObjects.begin(), knownObjects.end());
+			std::sort(m_Known.begin(), m_Known.end());
+		});
+		return std::binary_search(m_Known.begin(), m_Known.end(), object);
+	}
+	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
+	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
+	/// The actor a Controller belongs to, if it is a known actor's.
+	const long* ControllerOwner(const void* address) const { return Find(Owners().controllers, address); }
+	/// Which objects an entity owns, and which of them are actors, for every question about the same root.
+	struct OwnedParts {
+		std::vector<const MovableObject*> objects;
+		std::vector<std::pair<const void*, const Actor*>> controllers;
+	};
+	std::shared_ptr<const OwnedParts> Owned(const Entity* root) const {
+		std::lock_guard lock(m_OwnedMutex);
+		auto& parts = m_Owned[root];
+		if (!parts) {
+			auto collected = std::make_shared<OwnedParts>();
+			std::unordered_set<const Entity*> entities;
+			std::unordered_set<const MovableObject*> objects;
+			CollectOwnedMovableObjects(root, entities, objects);
+			collected->objects.assign(objects.begin(), objects.end());
+			for (const MovableObject* object: collected->objects) {
+				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) collected->controllers.emplace_back(actor->GetController(), actor);
+			}
+			parts = std::move(collected);
+		}
+		return parts;
+	}
+
+private:
+	template <class Value> struct Entries {
+		std::vector<std::pair<const void*, Value>> sorted;
+	};
+	struct Fields {
+		Entries<VectorField> vectors;
+		Entries<long> controllers;
+	};
+	template <class Value> static const Value* Find(const Entries<Value>& entries, const void* address) {
+		const auto found = std::lower_bound(entries.sorted.begin(), entries.sorted.end(), address, [](const auto& entry, const void* key) { return entry.first < key; });
+		return found != entries.sorted.end() && found->first == address ? &found->second : nullptr;
 	}
 	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
 	const Fields& Owners() const {
 		std::call_once(m_OwnersBuilt, [this] {
-			m_Owners.vectors.reserve(knownObjects.size() * 6);
-			m_Owners.controllers.reserve(knownObjects.size());
+			auto& vectors = m_Owners.vectors.sorted;
+			auto& controllers = m_Owners.controllers.sorted;
+			vectors.reserve(knownObjects.size() * 6);
 			for (MovableObject* mo: knownObjects) {
 				const long uid = mo->GetUniqueID();
-				if (Actor* actor = dynamic_cast<Actor*>(mo)) m_Owners.controllers[actor->GetController()] = uid;
-				m_Owners.vectors[&mo->GetPos()] = {uid, "Pos"};
-				m_Owners.vectors[&mo->GetVel()] = {uid, "Vel"};
-				m_Owners.vectors[&mo->GetPrevPos()] = {uid, "PrevPos"};
-				m_Owners.vectors[&mo->GetPrevVel()] = {uid, "PrevVel"};
+				if (Actor* actor = dynamic_cast<Actor*>(mo)) controllers.emplace_back(actor->GetController(), uid);
+				vectors.emplace_back(&mo->GetPos(), VectorField{uid, "Pos"});
+				vectors.emplace_back(&mo->GetVel(), VectorField{uid, "Vel"});
+				vectors.emplace_back(&mo->GetPrevPos(), VectorField{uid, "PrevPos"});
+				vectors.emplace_back(&mo->GetPrevVel(), VectorField{uid, "PrevVel"});
 				if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
-					m_Owners.vectors[&rotating->GetRecoilForce()] = {uid, "RecoilForce"};
-					m_Owners.vectors[&rotating->GetRecoilOffset()] = {uid, "RecoilOffset"};
+					vectors.emplace_back(&rotating->GetRecoilForce(), VectorField{uid, "RecoilForce"});
+					vectors.emplace_back(&rotating->GetRecoilOffset(), VectorField{uid, "RecoilOffset"});
 				}
 				if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
-					m_Owners.vectors[&attachable->GetParentOffset()] = {uid, "ParentOffset"};
-					m_Owners.vectors[&attachable->GetJointOffset()] = {uid, "JointOffset"};
-					m_Owners.vectors[&attachable->GetJointPos()] = {uid, "JointPos"};
+					vectors.emplace_back(&attachable->GetParentOffset(), VectorField{uid, "ParentOffset"});
+					vectors.emplace_back(&attachable->GetJointOffset(), VectorField{uid, "JointOffset"});
+					vectors.emplace_back(&attachable->GetJointPos(), VectorField{uid, "JointPos"});
 				}
 			}
+			// A later object's entry wins an address, as the map it replaces let it.
+			const auto settle = [](auto& entries) {
+				std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+				auto last = entries.begin();
+				for (auto entry = entries.begin(); entry != entries.end(); ++entry) {
+					if (last != entry && last->first == entry->first) *last = *entry;
+					else if (last != entry) *++last = *entry;
+				}
+				if (!entries.empty()) entries.erase(last + 1, entries.end());
+			};
+			settle(vectors);
+			settle(controllers);
 		});
 		return m_Owners;
 	}
-
-private:
 	mutable std::once_flag m_OwnersBuilt;
 	mutable Fields m_Owners;
 	mutable std::once_flag m_KnownBuilt;
-	mutable std::unordered_set<const MovableObject*> m_Known;
+	mutable std::vector<const MovableObject*> m_Known;
+	mutable std::mutex m_OwnedMutex;
+	mutable std::unordered_map<const Entity*, std::shared_ptr<const OwnedParts>> m_Owned;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -5093,6 +5143,13 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			if (rep->ptr() == root) return found(editor, property, index);
 			const auto* movable = dynamic_cast<const MovableObject*>(root);
 			if (!movable) return 0;
+			// A world capture collects what a root owns once, for every question about it.
+			if (s_GraphNativeCapture) {
+				const auto parts = s_GraphNativeCapture->Owned(root);
+				for (const auto* object: parts->objects) if (rep->ptr() == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
+				for (const auto& [controller, actor]: parts->controllers) if (rep->ptr() == controller) return found(const_cast<Actor*>(actor), "actor-controller", 0);
+				return 0;
+			}
 			std::unordered_set<const Entity*> entities;
 			std::unordered_set<const MovableObject*> objects;
 			CollectOwnedMovableObjects(root, entities, objects);
@@ -5261,10 +5318,9 @@ static int ScriptGraphNative(lua_State* L) {
 		}
 	}
 	if (className == "Controller" && s_GraphNativeCapture) {
-		const auto& controllers = s_GraphNativeCapture->Owners().controllers;
-		if (const auto actor = controllers.find(rep->ptr()); actor != controllers.end()) {
+		if (const long* actor = s_GraphNativeCapture->ControllerOwner(rep->ptr())) {
 			lua_pushstring(L, "controller-ref");
-			lua_pushnumber(L, static_cast<lua_Number>(actor->second));
+			lua_pushnumber(L, static_cast<lua_Number>(*actor));
 			return 2;
 		}
 	}
@@ -5274,11 +5330,10 @@ static int ScriptGraphNative(lua_State* L) {
 			return 1;
 		}
 		if (s_GraphNativeCapture) {
-			const auto& vectors = s_GraphNativeCapture->Owners().vectors;
-			if (const auto field = vectors.find(rep->ptr()); field != vectors.end()) {
+			if (const VectorField* field = s_GraphNativeCapture->VectorOwner(rep->ptr())) {
 				lua_pushstring(L, "vector-ref");
-				lua_pushnumber(L, static_cast<lua_Number>(field->second.uid));
-				lua_pushstring(L, field->second.property);
+				lua_pushnumber(L, static_cast<lua_Number>(field->uid));
+				lua_pushstring(L, field->property);
 				return 3;
 			}
 		}
@@ -5302,7 +5357,7 @@ static int ScriptGraphNative(lua_State* L) {
 			lua_pushlightuserdata(L, rep->ptr());
 			return 6;
 		}
-		if (g_MovableMan.IsKnownObject(mo)) {
+		if (s_GraphNativeCapture ? s_GraphNativeCapture->Known(mo) : g_MovableMan.IsKnownObject(mo)) {
 			lua_pushstring(L, "entity");
 			lua_pushnumber(L, static_cast<lua_Number>(mo->GetUniqueID()));
 			lua_pushstring(L, className.c_str());
