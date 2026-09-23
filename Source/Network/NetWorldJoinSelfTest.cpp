@@ -2334,7 +2334,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 36");
+			return Fail("WorldTransition frame did not stamp lockstep version 37");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2375,8 +2375,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 36) {
-			return Fail("ordinary lockstep frame did not stamp version 36");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 37) {
+			return Fail("ordinary lockstep frame did not stamp version 37");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;

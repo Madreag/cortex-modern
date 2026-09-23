@@ -1523,11 +1523,15 @@ namespace RTE {
 				if (!ReadVarOrFail(reader, bindingsBefore, error, "observation_bindings_before")) {
 					return false;
 				}
-				if (dictionary && bindingsBefore != dictionary->BindingCount()) {
+				// On the unreliable lane a sender's first block can arrive after this peer read the ones after it: that is a tick
+				// it holds already, not a sender that started over, which spells from nothing at a tick beyond them.
+				const bool late = dictionary && version >= NetLockstepCodec::c_UnreliableFrameVersion && bindingsBefore == 0 && dictionary->BindingCount() != 0 &&
+				                  dictionary->HasReadTickAtOrAfter(payload.targetFrame, payload.roundId);
+				if (dictionary && (late || bindingsBefore != dictionary->BindingCount())) {
 					// A window copy of a tick that stands behind the table's place in this sender's stream is
 					// one this peer already read: it is read past, the table stays where it is, and the copy
 					// is not offered again.
-					if (windowCopy && bindingsBefore < dictionary->BindingCount()) {
+					if (late || (windowCopy && bindingsBefore < dictionary->BindingCount())) {
 						dictionary = nullptr;
 						discard = true;
 						if (outReadPast) {
@@ -1647,6 +1651,7 @@ namespace RTE {
 				for (const auto& [slot, key]: staged) {
 					dictionary->Bind(slot, key);
 				}
+				dictionary->NoteTickRead(payload.targetFrame, payload.roundId);
 			}
 			return true;
 		}
@@ -2396,12 +2401,14 @@ namespace RTE {
 				// so one round's slots never stand for another's keys and the counters stay for real holes.
 				const bool otherRound = tables && payload.roundId != 0 && tables->roundId != 0 && payload.roundId != tables->roundId;
 				NetSoundObservationDictionary* dictionary = tables && !otherRound ? &tables->For(payload.senderPeerId) : nullptr;
-				if (!ReadObservations(reader, payload, dictionary, error, version, otherRound)) {
+				bool readPast = false;
+				if (!ReadObservations(reader, payload, dictionary, error, version, otherRound, false, &readPast)) {
 					return false;
 				}
-				if (version >= NetLockstepCodec::c_ValueObservationVersion && reader.Remaining() != 0 && !ReadValueObservations(reader, payload, error, otherRound)) {
+				if (version >= NetLockstepCodec::c_ValueObservationVersion && reader.Remaining() != 0 && !ReadValueObservations(reader, payload, error, otherRound || readPast)) {
 					return false;
 				}
+				payload.observationsReadPast = readPast;
 			}
 			out = std::move(payload);
 			return true;
@@ -2650,6 +2657,9 @@ namespace RTE {
 		m_SlotOf.clear();
 		m_Recent.clear();
 		m_Bindings = 0;
+		m_LastTickRead = 0;
+		m_LastTickRound = 0;
+		m_HasReadTick = false;
 	}
 
 	bool NetLockstepCodec::Encode(const NetLockstepPacket& packet, std::vector<uint8_t>& outBytes, NetLockstepError* error, NetSoundObservationDictionary* dictionary, size_t* outObservationsEncoded, size_t* outValueObservationsEncoded, NetLockstepObservationBlocks* blocks) {
@@ -4341,6 +4351,8 @@ namespace RTE {
 		m_HeldForCongestion.clear();
 		m_RelayBacklog.clear();
 		m_RelayBacklogSinceMs.clear();
+		m_RelayedTicks.clear();
+		m_ReliableFramesThrough.clear();
 		m_LastLeaveMessage.clear();
 		m_WaitingFrame = std::numeric_limits<uint64_t>::max();
 		m_WaitStartMs = 0;
@@ -5812,7 +5824,7 @@ namespace RTE {
 			packet.appliedCommands = appliedCommands;
 			m_AuthoritativeCommandAcks = appliedCommands;
 		}
-		if (!SendPacket({packet}, m_Config.frameLane, error)) {
+		if (!SendPacket({packet}, NetTransportLane::ControlReliable, error)) {
 			return false;
 		}
 		++m_Stats.checksumSends;
@@ -5908,11 +5920,24 @@ namespace RTE {
 	}
 
 	uint8_t NetLockstepCoordinator::ConfiguredWindowTicks() const {
-		uint8_t ticks = m_Config.frameRedundancyTicks;
+		uint32_t ticks = m_Config.frameRedundancyTicks;
 		if (ticks == 0) {
 			ticks = 4;
 		}
-		return ticks > NetLockstepCodec::c_MaxWindowTicks ? NetLockstepCodec::c_MaxWindowTicks : ticks;
+		// On the unreliable lane the window is the only repair: it reaches back one round trip of the worst link and its
+		// jitter, and never fewer than eight ticks.
+		if (m_Config.frameLane != NetTransportLane::ControlReliable) {
+			uint32_t linkMs = 0;
+			for (const auto& [peer, stats]: m_Stats.peers) {
+				if (peer == m_Config.localPeerId) continue;
+				uint32_t ping = stats.pingMs;
+				if (const auto estimate = m_DelayEstimators.find(peer); estimate != m_DelayEstimators.end()) ping = std::max(ping, estimate->second.P95Ms());
+				linkMs = std::max(linkMs, ping + stats.jitterMs);
+			}
+			const uint32_t cover = std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0 ? static_cast<uint32_t>(std::ceil(linkMs / m_Config.simTickMs)) + 1 : 0;
+			ticks = std::max({ticks, uint32_t(8), cover});
+		}
+		return static_cast<uint8_t>(std::min<uint32_t>(ticks, NetLockstepCodec::c_MaxWindowTicks));
 	}
 
 	bool NetLockstepCoordinator::FrameWindowAllRemotesAdvertised() const {
@@ -5928,7 +5953,8 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::FrameWindowAgreedFor(uint8_t peerId) const {
-		return ConfiguredWindowTicks() > 1 && m_RemoteFrameWindow.contains(peerId);
+		// Every peer on the unreliable lane reads windows: it is how that lane is repaired.
+		return ConfiguredWindowTicks() > 1 && (m_Config.frameLane != NetTransportLane::ControlReliable || m_RemoteFrameWindow.contains(peerId));
 	}
 
 	bool NetLockstepCoordinator::FrameWindowAgreed() const {
@@ -5940,7 +5966,7 @@ namespace RTE {
 		if (ConfiguredWindowTicks() <= 1) {
 			return;
 		}
-		bool anyAdvertised = false;
+		bool anyAdvertised = m_Config.frameLane != NetTransportLane::ControlReliable;
 		for (uint8_t peerId : m_RemotePeerIds) {
 			if (m_RemoteFrameWindow.contains(peerId)) {
 				anyAdvertised = true;
@@ -7524,6 +7550,7 @@ namespace RTE {
 		out << "\"frames_accepted\":" << m_Stats.framesAccepted << ",";
 		out << "\"duplicate_frames\":" << m_Stats.duplicateFrames << ",";
 		out << "\"out_of_order_frames\":" << m_Stats.outOfOrderFrames << ",";
+		out << "\"frame_binding_gap_drops\":" << m_Stats.frameBindingGapDrops << ",";
 		out << "\"future_frame_drops\":" << m_Stats.futureFrameDrops << ",";
 		out << "\"missing_frame_stalls\":" << m_Stats.missingFrameStalls << ",";
 		out << "\"blocking_frame_waits\":" << m_Stats.blockingFrameWaits << ",";
@@ -7669,14 +7696,19 @@ namespace RTE {
 			if (frame && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
-			// Behind an undrained backlog, or this peer's stream would arrive out of order.
-			const bool backlogged = lane == m_Config.frameLane && [&] {
+			const NetTransportLane destinationLane = frame && lane == m_Config.frameLane ? LaneTo(peerId, packet, lane) : lane;
+			// Behind an undrained backlog, or this peer's stream would arrive out of order. An unreliable frame has no order to keep.
+			const bool backlogged = lane == m_Config.frameLane && destinationLane == NetTransportLane::ControlReliable && [&] {
 				const auto backlogIt = m_RelayBacklog.find(peerId);
 				return (backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId);
 			}();
 			std::string sendError;
 			bool congested = false;
-			if (!backlogged && m_Transport->Send(transportId, lane, bytes, &sendError, &congested)) {
+			if (!backlogged && m_Transport->Send(transportId, destinationLane, bytes, &sendError, &congested)) {
+				continue;
+			}
+			// A refused unreliable frame is what the window is for: the next packet repeats it.
+			if (!backlogged && destinationLane == NetTransportLane::InputUnreliable) {
 				continue;
 			}
 			// One client's refused send is that peer's problem, not the round's: a seat reclaimed by a
@@ -7693,7 +7725,7 @@ namespace RTE {
 				NoteRelayError(peerId, sendError);
 				NoteRelayRefusal(peerId, congested);
 			}
-			if (lane == m_Config.frameLane) {
+			if (lane == m_Config.frameLane && destinationLane == NetTransportLane::ControlReliable) {
 				QueueRelayBacklog(peerId, bytes);
 			}
 		}
@@ -7869,7 +7901,7 @@ namespace RTE {
 			if (FindLocalInput(target, own)) {
 				own.priorWindow.clear();
 				std::string error;
-				if (SendPacket({own}, m_Config.frameLane, &error, &scratch[m_Config.localPeerId], nullptr, peerId)) ++replayed;
+				if (SendPacket({own}, NetTransportLane::ControlReliable, &error, &scratch[m_Config.localPeerId], nullptr, peerId)) ++replayed;
 			}
 			for (uint8_t sender: m_RemotePeerIds) {
 				if (sender == peerId) {
@@ -7880,9 +7912,10 @@ namespace RTE {
 					continue;
 				}
 				std::string error;
-				if (SendPacket({held}, m_Config.frameLane, &error, &scratch[sender], nullptr, peerId)) ++replayed;
+				if (SendPacket({held}, NetTransportLane::ControlReliable, &error, &scratch[sender], nullptr, peerId)) ++replayed;
 			}
 		}
+		if (m_Config.frameLane != NetTransportLane::ControlReliable) m_ReliableFramesThrough[peerId] = m_LastQueuedTargetFrame + NetLockstepCodec::c_MaxWindowTicks;
 		std::cout << "[lockstep] replayed " << replayed << " frames for targets " << fromFrame << ".."
 		          << m_LastQueuedTargetFrame << " to the member admitted as peer " << static_cast<int>(peerId) << std::endl;
 		return replayed;
@@ -7957,18 +7990,23 @@ namespace RTE {
 			if (relayed && bytes.size() > NetLockstepCodec::c_HeaderBytes + 1) {
 				m_Stats.peers[peerId].lastFrameReserved = bytes[NetLockstepCodec::c_HeaderBytes + 1];
 			}
-			// Behind an undrained backlog, or this peer's stream would arrive out of order.
+			const NetTransportLane lane = relayed ? LaneTo(peerId, packet, m_Config.frameLane) : NetTransportLane::ControlReliable;
+			// Behind an undrained backlog, or this peer's stream would arrive out of order. An unreliable frame has no order to keep.
 			const auto backlogIt = m_RelayBacklog.find(peerId);
-			if ((backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId)) {
+			if (lane == NetTransportLane::ControlReliable && ((backlogIt != m_RelayBacklog.end() && !backlogIt->second.empty()) || m_TimingOutgoing.contains(peerId))) {
 				QueueRelayBacklog(peerId, bytes);
 				continue;
 			}
 			NetLockstepPeerStats& peerStats = m_Stats.peers[peerId];
 			std::string sendError;
 			bool congested = false;
-			if (m_Transport->Send(transportId, m_Config.frameLane, bytes, &sendError, &congested)) {
+			if (m_Transport->Send(transportId, lane, bytes, &sendError, &congested)) {
 				CountRelaySent(peerStats, bytes.size());
 				m_CongestedPeers.erase(peerId);
+				continue;
+			}
+			// A refused unreliable forward is what the window is for: the next one repeats it.
+			if (lane == NetTransportLane::InputUnreliable) {
 				continue;
 			}
 			// A refused forward was never queued, and on a reliable lane the receiver cannot ask for
@@ -8075,7 +8113,7 @@ namespace RTE {
 			while (!it->second.empty() && !m_TimingOutgoing.contains(peerId)) {
 				std::string sendError;
 				bool congested = false;
-				if (!m_Transport->Send(transportIt->second, m_Config.frameLane, it->second.front(), &sendError, &congested)) {
+				if (!m_Transport->Send(transportIt->second, NetTransportLane::ControlReliable, it->second.front(), &sendError, &congested)) {
 					NoteRelayError(peerId, sendError);
 					NoteRelayRefusal(peerId, congested);
 					break;
@@ -8273,6 +8311,11 @@ namespace RTE {
 					if (decoded.error.code == NetLockstepErrorCode::BadMagic && NetLobbyProtocol::Decode(event.bytes).ok) {
 						if (m_SessionEventSink) m_SessionEventSink(event);
 						else ++m_Stats.ignoredSessionPackets;
+						return;
+					}
+					// A frame on the unreliable lane whose bindings ran past every window is one packet lost, not a broken peer.
+					if (event.lane == NetTransportLane::InputUnreliable && decoded.error.code == NetLockstepErrorCode::ObservationBindingGap) {
+						if (m_Stats.frameBindingGapDrops++ == 0) std::cout << "[lockstep] dropped an unreliable frame packet: " << decoded.error.message << std::endl;
 						return;
 					}
 					// Malformed admission traffic cannot stop a round it never joined.
@@ -8586,7 +8629,8 @@ namespace RTE {
 					return;
 				}
 			} else if (!recovered) {
-				RelayToOtherRemotes({frame}, frame.senderPeerId);
+				if (m_Config.frameLane == NetTransportLane::ControlReliable) RelayToOtherRemotes({frame}, frame.senderPeerId);
+				else RelayArrivedTicks(frame);
 			}
 		}
 		// After a round restart a peer's first frames can outrun its start; hold them until it lands.
@@ -8618,9 +8662,53 @@ namespace RTE {
 				return;
 			}
 		}
+		// A tick read past arrived after this peer already held it; its readings were not read, so it is not taken again.
+		if (frame.observationsReadPast) {
+			++m_Stats.windowCopiesSkipped;
+			++peerStats.windowCopiesSkipped;
+			return;
+		}
 		NetLockstepFrame newest = frame;
 		newest.priorWindow.clear();
 		AcceptRemoteTick(newest, nowMs, false);
+	}
+
+	void NetLockstepCoordinator::RelayArrivedTicks(const NetLockstepFrame& frame) {
+		if (!m_RelayHost) return;
+		std::vector<NetLockstepFrame> ticks(frame.priorWindow.begin(), frame.priorWindow.end());
+		NetLockstepFrame newest = frame;
+		newest.priorWindow.clear();
+		ticks.push_back(std::move(newest));
+		auto& relayed = m_RelayedTicks[frame.senderPeerId];
+		const size_t window = ConfiguredWindowTicks();
+		const uint64_t keepFrom = m_Stats.nextFrame > 2 * NetLockstepCodec::c_MaxWindowTicks ? m_Stats.nextFrame - 2 * NetLockstepCodec::c_MaxWindowTicks : 0;
+		for (size_t index = 0; index < ticks.size(); ++index) {
+			const NetLockstepFrame& tick = ticks[index];
+			// A tick already sent on, one older than this host still tracks, or one it drops past the seat's boundary is none
+			// of the others' business.
+			if (tick.observationsReadPast || tick.targetFrame < keepFrom || relayed.contains(tick.targetFrame) ||
+			    IsPeerGoneAtFrame(frame.senderPeerId, tick.targetFrame)) continue;
+			NetLockstepFrame packet = tick;
+			packet.senderPeerId = frame.senderPeerId;
+			packet.roundId = frame.roundId;
+			for (size_t older = index + 1 > window ? index + 1 - window : 0; older < index; ++older) {
+				NetLockstepFrame copy = ticks[older];
+				copy.priorWindow.clear();
+				packet.priorWindow.push_back(std::move(copy));
+			}
+			RelayToOtherRemotes({packet}, frame.senderPeerId);
+			relayed.insert(tick.targetFrame);
+		}
+		relayed.erase(relayed.begin(), relayed.lower_bound(keepFrom));
+	}
+
+	NetTransportLane NetLockstepCoordinator::LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const {
+		const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&packet.payload);
+		if (!frame) return NetTransportLane::ControlReliable;
+		// A member admitted mid-round reads the replay on the reliable lane, and the frames after it there too until its
+		// tables hold what the replay spelled out.
+		const auto through = m_ReliableFramesThrough.find(peerId);
+		return through != m_ReliableFramesThrough.end() && frame->targetFrame <= through->second ? NetTransportLane::ControlReliable : lane;
 	}
 
 	void NetLockstepCoordinator::HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport) {

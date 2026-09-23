@@ -223,6 +223,13 @@ namespace RTE {
 		/// bindings, so a receiver that missed one refuses rather than reading a reused slot as the key
 		/// it held before.
 		uint64_t BindingCount() const { return m_Bindings; }
+		/// Decoder: the newest tick of a round whose block this table has read. A sender's next round starts it over.
+		void NoteTickRead(uint64_t tick, uint64_t round) {
+			if (!m_HasReadTick || round != m_LastTickRound || tick > m_LastTickRead) m_LastTickRead = tick;
+			m_LastTickRound = round;
+			m_HasReadTick = true;
+		}
+		bool HasReadTickAtOrAfter(uint64_t tick, uint64_t round) const { return m_HasReadTick && round == m_LastTickRound && m_LastTickRead >= tick; }
 
 	private:
 		struct Slot {
@@ -235,6 +242,9 @@ namespace RTE {
 		std::map<NetSoundObservationKey, uint16_t> m_SlotOf;
 		std::list<uint16_t> m_Recent; //!< Least recently assigned first: the slot to reuse once every slot is bound.
 		uint64_t m_Bindings = 0;
+		uint64_t m_LastTickRead = 0;
+		uint64_t m_LastTickRound = 0;
+		bool m_HasReadTick = false;
 	};
 
 	/// The observation tables one peer keeps for the senders it decodes and, on the relay host,
@@ -600,6 +610,7 @@ namespace RTE {
 		uint32_t windowCopiesSkipped = 0;
 		uint32_t windowCopiesApplied = 0;
 		uint32_t outOfOrderFrames = 0;
+		uint32_t frameBindingGapDrops = 0; //!< Unreliable frames whose bindings this peer missed past every window.
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
 		uint32_t blockingFrameWaits = 0;
@@ -653,8 +664,11 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 36;
-		static constexpr uint16_t c_WorldVersion = 36;
+		static constexpr uint16_t c_Version = 37;
+		static constexpr uint16_t c_WorldVersion = 37;
+		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
+		/// arrives after this peer read past it is read past again rather than taken for a sender that started over.
+		static constexpr uint16_t c_UnreliableFrameVersion = 37;
 		/// Version 35 carries the host-authored agreed-start record after the ordinary Start fields.
 		/// Older readers reject that packet as trailing bytes; they never interpret the record as a local start.
 		static constexpr uint16_t c_AgreedStartVersion = 35;
@@ -667,7 +681,7 @@ namespace RTE {
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
 		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
-		static constexpr uint8_t c_MaxWindowTicks = 8;
+		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -1320,6 +1334,8 @@ namespace RTE {
 		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.
 		std::set<uint8_t> m_HeldForCongestion; //!< Congestion episodes already reported, so the hold is logged once.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
+		std::map<uint8_t, std::set<uint64_t>> m_RelayedTicks; //!< Relay host: sender -> the ticks already sent on to the others.
+		std::map<uint8_t, uint64_t> m_ReliableFramesThrough; //!< A member catching up reads frames on the reliable lane through this tick.
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		struct PeerAdmission { uint64_t frame; uint16_t delay; };
@@ -1418,6 +1434,10 @@ namespace RTE {
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
 		bool IsKnownRemotePeer(uint8_t peerId) const;
 		void RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId);
+		/// Relay host on the unreliable lane: sends each tick of an arrived packet on once, oldest first, with the ticks before it.
+		void RelayArrivedTicks(const NetLockstepFrame& frame);
+		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
+		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
 	};
 
 } // namespace RTE

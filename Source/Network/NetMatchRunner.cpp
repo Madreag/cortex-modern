@@ -723,7 +723,9 @@ namespace RTE {
 		// A world joiner's round opens inside one that has been running: the members it joins owe it
 		// every frame from its own start, so none of them ramps in behind the input delay.
 		lockstepConfig.joinsRunningRound = m_WorldJoinStarting;
-		lockstepConfig.frameLane = NetTransportLane::ControlReliable;
+		// Input frames ride the unreliable lane: a lost packet is repaired by the next one's window, not by a
+		// retransmission every later frame waits behind.
+		lockstepConfig.frameLane = NetTransportLane::InputUnreliable;
 		// Peers compare the activity in the start handshake, so it comes from the adopted config like every
 		// other agreed field; a joining peer's own request only carries its local default.
 		lockstepConfig.scenario = m_UseLobbyProtocol ? m_MatchConfig.activityPreset : config.scenario;
