@@ -1046,6 +1046,8 @@ namespace RTE {
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
+		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
+		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
