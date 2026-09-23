@@ -1356,7 +1356,7 @@ namespace RTE {
 		/// relay-renew: the joiner starts with a stale TURN login and gets the valid one on its live connection, as a renewed relay offer
 		/// reaches it; then a rotated login, which its live allocation tries on a Refresh at once.
 		int RunRelayRenew(const std::string& server) {
-			Say("mode: relay-renew, single process, both sides relay only through " + server + "; the joiner starts with a stale TURN login, is handed the valid one on its live connection 3 s in, then a rotated one");
+			Say("mode: relay-renew, single process, both sides relay only through " + server + "; the joiner starts with a stale TURN login, is handed the valid one on its live connection 1 s in, then a rotated one");
 			std::string user;
 			std::string pass;
 			if (!RelayLogin(&user, &pass)) {
@@ -1396,11 +1396,12 @@ namespace RTE {
 					failure = "ConnectP2P: " + error;
 				} else {
 					joiner.peer = 1;
-					WaitUntil(3000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner)); });
+					// A relayed connect takes over 5 s and the attempt times out at 10 s, so the renewal comes early.
+					WaitUntil(1000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner)); });
 					if (joiner.connected || joiner.closed) {
 						failure = std::string("the joiner ") + (joiner.closed ? "closed (\"" + joiner.closeReason + "\")" : "connected") + " on its stale login before the renewal";
 					} else {
-						Say("joiner " + StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " 3 s in on the stale login; handing it the renewed login through UpdateListenerIceServers");
+						Say("joiner " + StateName(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " 1 s in on the stale login; handing it the renewed login through UpdateListenerIceServers");
 						const double renewMs = ElapsedMs();
 						joiner.transport.UpdateListenerIceServers(renewed);
 						if (!WaitUntil(15000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) || host.closed || joiner.closed) {
