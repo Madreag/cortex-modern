@@ -247,7 +247,8 @@ namespace RTE {
 		/// Blocks until the last frozen capture's page copy has landed; the VM may write its heap again after this.
 		void WaitFrozenCopy();
 		/// Captures every state off a frozen image, the states side by side; false when any state could not freeze.
-		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats);
+		/// whileWaiting runs on the calling thread once the master state is captured, while the pool captures the rest.
+		static bool CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting = {});
 
 		/// The unique ids of the objects a graph text holds fields for.
 		std::vector<long> ListScriptGraphRoots(const std::string& text);

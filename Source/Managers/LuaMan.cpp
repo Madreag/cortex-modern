@@ -6123,7 +6123,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	}
 }
 
-bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats) {
+bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting) {
 	std::vector<LuaStateWrapper*> order{&g_LuaMan.GetMasterScriptState()};
 	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) order.push_back(&state);
 	std::vector<CheckpointText> texts(order.size());
@@ -6150,6 +6150,7 @@ bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& gra
 	std::exception_ptr failure;
 	try {
 		capture(0);
+		if (whileWaiting) whileWaiting();
 	} catch (...) {
 		failure = std::current_exception();
 	}

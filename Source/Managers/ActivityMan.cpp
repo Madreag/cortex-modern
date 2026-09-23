@@ -690,6 +690,15 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const GraphDirt beforeWalk = graphIndex.Sample();
 	// A walk that recorded its tables and saw none of them or their values written can be reused whole.
 	const bool graphClean = beforeWalk.roots > 0 && beforeWalk.dirtyTables == 0 && beforeWalk.dirtyValues == 0 && !beforeWalk.unknownTable;
+	// The mixer lock belongs to this thread (a caller may already hold it), so the audio is read here, while the pool
+	// captures the other script states when there is a capture to wait for, else after the graphs.
+	int64_t audioReadUs = 0;
+	const auto readAudio = [&] {
+		if (audio) return;
+		const auto audioStart = std::chrono::steady_clock::now();
+		audio = g_AudioMan.CaptureCheckpointState();
+		audioReadUs = since(audioStart);
+	};
 	const auto graphStart = std::chrono::steady_clock::now();
 	bool frozenGraphs = false;
 	const SaveKind kind = matchId.empty() ? (compression == SaveCompression::Small ? SaveKind::Resync : SaveKind::Manual) : SaveKind::Autosave;
@@ -699,7 +708,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->luaReused = true;
 		image->graphs = cow.LastLua();
 	} else {
-		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs)) {
+		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio)) {
 			// Every refused script value reaches the player the same way a manual save reports it.
 			ReportScriptGraphSaveRefusal(kind, problems);
 			return false;
@@ -717,10 +726,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	// feeds no index and reuses no root, so it reports neither rather than the last live walk's sample.
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
-	// The mixer lock belongs to this thread (a caller may already hold it), so the audio is read here while the pool works.
-	const auto audioStart = std::chrono::steady_clock::now();
-	audio = g_AudioMan.CaptureCheckpointState();
-	const int64_t audioReadUs = since(audioStart);
+	readAudio();
 	captureAside([&audio] { g_AudioMan.WriteCapturedSamples(*audio); });
 	aside.Join();
 	for (LayerCapture& captured: layers) {
