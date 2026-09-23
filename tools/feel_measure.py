@@ -15,7 +15,9 @@ import time
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from feel.report import EarlyDecision, TICKS, file_record, reduce_peer, item9a_gates, write_json
+from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
+from feel.retained_resume import compare_live_hashes
+from feel.records import compress_case_records, record_path
 from run_sim_test import make_run
 from run_selftests import SELFTESTS
 from compare_sim_traces import strict_compare
@@ -26,13 +28,14 @@ HELPERS = REPO / 'tools/feel'
 SP_CONTROL = Path('D:/mx/opus-f24-20260913/sp-control')
 SP_COMPARATOR = Path('D:/Projects/reviews/takeover-20260909/grok-workers/opus-f24-first-update-20260913/scripts/compare_sp.py')
 BYTE_LIMIT = 5_000_000_000
+MATRIX_BYTE_LIMIT = 10_000_000_000
 
 
 def stamp():
     return datetime.now(MST).strftime('%Y-%m-%d %H:%M MST')
 
 
-def scratch_bytes(root):
+def scratch_bytes(root, limit=BYTE_LIMIT):
     total, pending = 0, [Path(root)]
     while pending:
         directory = pending.pop()
@@ -47,8 +50,8 @@ def scratch_bytes(root):
                     pending.append(Path(entry.path))
                 elif stat.S_ISREG(info.st_mode):
                     total += info.st_size
-    if total >= BYTE_LIMIT:
-        raise RuntimeError(f'scratch footprint {total} bytes reaches the {BYTE_LIMIT} byte limit; no cleanup performed')
+    if total >= limit:
+        raise RuntimeError(f'scratch footprint {total} bytes reaches the {limit} byte limit; no cleanup performed')
     return total
 
 
@@ -72,7 +75,7 @@ def private_settings(run, cap):
     write_json(Path(run.out) / 'runtime.json', manifest)
 
 
-def stage_baseline(run, window_ticks=TICKS):
+def stage_baseline(run, window_ticks=TICKS, humans=2):
     module = Path(run.cwd) / 'Userdata/UserScenes.rte'
     module.mkdir(exist_ok=True)
     script, rewritten = re.subn(r'(?m)^local WINDOW_TICKS = \d+;$', f'local WINDOW_TICKS = {window_ticks};',
@@ -86,7 +89,8 @@ def stage_baseline(run, window_ticks=TICKS):
         '\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n'
         '\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n'
         '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n'
-        '\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n', encoding='utf-8')
+        '\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n' +
+        ('\t\tTeamOfPlayer3 = 2\n\t\tPlayer3IsHuman = 1\n' if humans == 3 else ''), encoding='utf-8')
 
 
 def input_pattern(path):
@@ -119,19 +123,74 @@ TIMING_CASES = (
     ('200ms-loss5-silent600', 200, 5, 600),
 )
 
+AUTOSAVE_CASES = (
+    ('autosave-100ms', 100, 1),
+    ('autosave-200ms', 200, 1),
+)
 
-def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None):
+
+def engine_placements(peers):
+    """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
+    real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
+    Whole SMT pairs, the host's third rounded up."""
+    if len(peers) != 3 or sys.platform != 'win32':
+        return {}
+    pairs = (os.cpu_count() or 0) // 2
+    if pairs < 3:
+        return {}
+    host_pairs = -(-pairs // 3)
+    client_pairs = -(-(pairs - host_pairs) // 2)
+    spans = dict(host=(0, 2 * host_pairs), client=(2 * host_pairs, 2 * (host_pairs + client_pairs)),
+                 survivor=(2 * (host_pairs + client_pairs), 2 * pairs))
+    return {peer: dict(mask=sum(1 << cpu for cpu in range(*spans[peer])), logical=f'{spans[peer][0]}-{spans[peer][1] - 1}',
+                       priority='above_normal' if peer == 'host' else 'normal') for peer in peers}
+
+
+def place_engine(run, placement):
+    """Applies a placement to a started engine and records what the process reports back in its launch.json."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    kernel.SetProcessAffinityMask.restype = wintypes.BOOL
+    kernel.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+    kernel.GetProcessAffinityMask.restype = wintypes.BOOL
+    kernel.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.SetPriorityClass.restype = wintypes.BOOL
+    kernel.GetPriorityClass.argtypes = [wintypes.HANDLE]
+    kernel.GetPriorityClass.restype = wintypes.DWORD
+    handle = run.process
+    if not kernel.SetProcessAffinityMask(handle, placement['mask']):
+        raise OSError(f'SetProcessAffinityMask failed: {ctypes.get_last_error()}')
+    if not kernel.SetPriorityClass(handle, 0x8000 if placement['priority'] == 'above_normal' else 0x20):
+        raise OSError(f'SetPriorityClass failed: {ctypes.get_last_error()}')
+    process_mask, system_mask = ctypes.c_size_t(), ctypes.c_size_t()
+    if not kernel.GetProcessAffinityMask(handle, ctypes.byref(process_mask), ctypes.byref(system_mask)):
+        raise OSError(f'GetProcessAffinityMask failed: {ctypes.get_last_error()}')
+    applied = dict(requested_mask=hex(placement['mask']), logical=placement['logical'], priority=placement['priority'],
+                   process_mask=hex(process_mask.value), system_mask=hex(system_mask.value), priority_class=hex(kernel.GetPriorityClass(handle)))
+    if process_mask.value != placement['mask']:
+        raise OSError(f'the engine reports affinity {applied["process_mask"]}, not {applied["requested_mask"]}')
+    run.record['cpu_placement'] = applied
+    run._save()
+    return applied
+
+
+def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None):
     out = root / name
     out.mkdir(exist_ok=False)
-    final_tick = 2 * TICKS if silent_tick else TICKS
-    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop'),
+    final_tick = window_ticks if window_ticks is not None else 2 * TICKS if silent_tick else TICKS
+    manifest = dict(started=stamp(), mode='local single-player P4 Alpha Duel' if sp else ('autosave service e2e' if autosave_seconds else ('three-peer service e2e, private rejoin' if silent_tick else 'two-peer service e2e, normal render loop')),
                     ticks=final_tick, lag_ms=lag, cap_hz=cap, instrumentation=record, port=None if sp else port,
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
+                    live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
                     exe=file_record(REPO / 'Cortex Command.exe'))
     write_json(out / 'manifest.json', manifest)
     peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
+    placements = engine_placements(peers)
+    manifest['engine_placement'] = {}
     write_json(out / 'manifest.json', manifest)
     runs, records = {}, {}
     try:
@@ -139,6 +198,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             run_out = out / peer
             trace = out / f'{peer}_trace.json'
             flags = ['-seed', '42', '-max-ticks', str(final_tick), '-tick-hashes', '-num-lua-states', '4',
+                     '-net-live-tick-hashes', str(out / f'{peer}-live.jsonl'),
                      '-out', str(trace), '-input-script', str(script),
                      '-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
                      '-controller-debug-ticks', f'1-{final_tick}',
@@ -155,20 +215,29 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                           '-net-match-auto-delay', '-net-fake-lag', str(manifest['per_peer_lag_ms'][peer]), '-net-local-prediction', 'on',
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'),
                           '-net-match-report', str(out / f'{peer}_report.json')]
+                if autosave_seconds is not None and peer == 'host':
+                    flags += ['-net-autosave-seconds', str(autosave_seconds)]
                 flags += ['-net-host', '-net-replay-out', str(out / 'match.ccreplay')] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
             if peer == 'client' and silent_tick:
-                flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
+                if live_stalls:
+                    for tick, duration in live_stalls:
+                        flags += ['-net-test-live-stall', f'{tick}:{duration}']
+                else:
+                    flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
             run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
                            expected=[trace, Path(str(trace) + '.simdump.txt'), out / f'{peer}_controller.jsonl'])
             runs[peer] = run
             private_settings(run, cap)
             if record:
                 (run_out / 'feel').mkdir()
-            stage_baseline(run, final_tick)
+            stage_baseline(run, final_tick, sp_humans if sp else 2)
             run.start()
+            if peer in placements:
+                manifest['engine_placement'][peer] = place_engine(run, placements[peer])
+                write_json(out / 'manifest.json', manifest)
             if not sp and peer == 'host':
                 time.sleep(.75)
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(runs)) as executor:
@@ -183,6 +252,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
         write_json(out / 'run-result.json', records)
     if any(record.get('exe_sha256') != exe_hash for record in records.values()):
         raise RuntimeError('the executable changed during the matrix')
+    compress_case_records(out)
     manifest.update(finished=stamp(), scratch_bytes=scratch_bytes(out),
                     launches_complete=all(row.get('exit_code') == 0 and row.get('evidence_complete') and not row.get('timed_out') for row in records.values()))
     write_json(out / 'manifest.json', manifest)
@@ -237,7 +307,7 @@ def summarize_case(report, out):
             cells.append(f'{value_text(value)} / {row["status"]}')
         lines.append(f'| {key} | {cells[0]} | {cells[1]} |')
     lines += ['', f'Measurement complete: {report["measurement_complete"]}. Off-wire proof: {report["off_wire_pass"]}.',
-              f'RTT and D selection: {json.dumps(peers["client"]["metrics"]["auto_picks"], separators=(",", ":"))}',
+              f'RTT and D selection: {json.dumps(peers.get("client", {}).get("metrics", {}).get("auto_picks", []), separators=(",", ":"))}',
               '', 'Raw files and their hashes are in feel-report.json. Per-edge matches, every kinematic residual,',
               'all commit comparisons and firing matches are under each peer/analysis directory.', '',
               'The presentation boundary is UploadFrame return on the private desktop. Audio times are conservative',
@@ -257,24 +327,96 @@ def single_case_peer(root):
     return None
 
 
+def early_peer_report(run, peer, error):
+    """A peer that stopped before the window is a failed pin on its own arm.
+
+    Its numbers are whatever its clock did reach; the arm is marked incomplete and carries the tick
+    and the cause, and every other arm is still measured and reported.
+    """
+    run = Path(run)
+    report = item9a_gates(run, peer)
+    report['pins']['item9a_measurement_window'] = pin(
+        error.tick, f'the peer must reach tick {TICKS}', False, [error.path] if error.path else [], error.fail_line)
+    report['pass_check'] = False
+    report['measurement_complete'] = False
+    report['early_decision'] = dict(tick=error.tick, evidence=str(error.path), failure=error.fail_line)
+    report.setdefault('raw_path', str(record_path(run / peer / 'feel/raw.jsonl')))
+    return report
+
+
+def unreduced_peer_report(run, peer, reason, evidence=None):
+    """An arm the reducer could not read at all is a failed pin naming why, never a dead matrix."""
+    run = Path(run)
+    try:
+        report = item9a_gates(run, peer)
+    except Exception as error:  # the arm has no clock either: pin that too
+        report = dict(peer=peer, pins={}, metrics={}, pass_check=False, measurement_complete=False,
+                      clock_unreadable=f'{type(error).__name__}: {error}')
+    report['pins']['item9a_reduction'] = pin(
+        None, 'the arm must reduce to measured frames', False, [evidence] if evidence else [], reason)
+    report['pass_check'] = False
+    report['measurement_complete'] = False
+    report['reduction_failure'] = reason
+    report.setdefault('raw_path', str(record_path(run / peer / 'feel/raw.jsonl')))
+    return report
+
+
 def reduce_or_fail(run, peer, baseline=None):
     try:
         return reduce_peer(run, peer, baseline)
     except EarlyDecision as error:
-        print(error.fail_line, flush=True)
-        raise
+        print(f'{Path(run).name}/{peer}: {error.fail_line}', flush=True)
+        return early_peer_report(run, peer, error)
+    except (ValueError, KeyError, IndexError, OSError) as error:
+        reason = f'{type(error).__name__}: {error}'
+        print(f'{Path(run).name}/{peer}: {reason}', flush=True)
+        return unreduced_peer_report(run, peer, reason, record_path(Path(run) / peer / 'feel/raw.jsonl'))
 
 
-def reduce_timing_case(run):
+def timing_peer(run, peer):
+    try:
+        return item9a_gates(run, peer)
+    except (ValueError, KeyError, IndexError, OSError) as error:
+        reason = f'{type(error).__name__}: {error}'
+        print(f'{Path(run).name}/{peer}: {reason}', flush=True)
+        return unreduced_peer_report(run, peer, reason)
+
+
+def reduce_timing_case(run, reference=None):
     manifest = json.loads((run / 'manifest.json').read_text(encoding='utf-8'))
     silent = bool(manifest.get('silent_tick'))
-    peers = {peer: item9a_gates(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    peers = {peer: timing_peer(run, peer) for peer in (('host', 'survivor') if silent else ('host',))}
+    if reference is not None:
+        for value in peers.values():
+            apply_tps_call(value, reference)
     proof = compare_pair(run / 'host_trace.json', run / ('survivor_trace.json' if silent else 'client_trace.json'), manifest.get('ticks', TICKS))
-    return dict(name=run.name, peers=peers, measurement_complete=all(value['measurement_complete'] for value in peers.values()),
+    pairs = [('host', 'survivor'), ('host', 'client'), ('survivor', 'client')] if silent else [('host', 'client')]
+    live = {f'{left}/{right}': compare_live_hashes(run / f'{left}-live.jsonl', run / f'{right}-live.jsonl', 1)
+            for left, right in pairs}
+    live_pass = all(passes and all(row['compared_ticks'] >= 30 and row['mismatched_ticks'] == 0 for row in passes)
+                    for passes in live.values())
+    proof.update(live_passes=live, live_pass=live_pass)
+    proof['pass'] &= live_pass
+    write_json(run / 'hash-proof.json', proof)
+    return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
+                launches_complete=manifest['launches_complete'], engine_placement=manifest.get('engine_placement') or {},
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
 
-def analyze(root):
+def item9a_evidence_complete(report):
+    """Require network pins for every measured peer while retaining presentation findings separately."""
+    peers = report.get('peers') or {}
+    if not peers:
+        return False
+    for peer in peers.values():
+        pins = peer.get('pins', {})
+        names = [name for name in pins if name.startswith('item9a_')]
+        if not names or any(pin.get('value') is None for name, pin in pins.items() if name.startswith('item9a_')):
+            return False
+    return True
+
+
+def analyze(root, stock=None):
     root = Path(root)
     peer = single_case_peer(root)
     if peer:
@@ -282,12 +424,23 @@ def analyze(root):
         result = reduce_timing_case(root) if manifest.get('loss_percent') or manifest.get('silent_tick') else reduce_or_fail(root, peer)
         write_json(root / 'feel-report.json', result)
         return [result]
-    baselines = {}
+    baselines, plain_baselines = {}, {}
     for cap_name in ('60hz', 'uncapped'):
         run = root / f'baseline-{cap_name}'
         result = reduce_or_fail(run, 'sp')
         baselines[cap_name] = dict(result['metrics'], raw_path=result['raw_path'])
+        timing = item9a_gates(run, 'sp')
+        baselines[cap_name]['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
+        result['metrics']['steady_wall_tps'] = timing['metrics']['steady_wall_tps']
         write_json(run / 'feel-report.json', result)
+        plain = item9a_gates(root / f'baseline-{cap_name}-off', 'sp')
+        plain_baselines[cap_name] = dict(steady_wall_tps=plain['metrics']['steady_wall_tps'],
+            evidence=plain['metrics']['clock_path'], method='same build, scene, input script, hashes and render cap; recorder off')
+        write_json(root / f'baseline-{cap_name}-off' / 'feel-report.json', plain)
+    three = item9a_gates(root / 'baseline-three-60hz', 'sp')
+    write_json(root / 'baseline-three-60hz' / 'feel-report.json', three)
+    three_reference = dict(steady_wall_tps=three['metrics']['steady_wall_tps'], evidence=three['metrics']['clock_path'],
+        method='same build, six actors, three human seats, recorder and 60 Hz cap; single process with local seat views')
     results = []
     for lag in (100, 200):
         for cap_name in ('60hz', 'uncapped'):
@@ -295,6 +448,18 @@ def analyze(root):
             on, off = root / (name + '-on'), root / (name + '-off')
             manifest = json.loads((on / 'manifest.json').read_text(encoding='utf-8'))
             peers = {peer: reduce_or_fail(on, peer, baselines[cap_name]) for peer in ('host', 'client')}
+            for value in peers.values():
+                apply_tps_call(value, dict(steady_wall_tps=baselines[cap_name]['steady_wall_tps'],
+                    evidence=baselines[cap_name]['raw_path'], method='same build, scene, actor count, recorder and render cap'))
+            for peer in ('host', 'client'):
+                timing = item9a_gates(off, peer)
+                reference = plain_baselines[cap_name]
+                if stock and cap_name in stock:
+                    timing['stock_reference'] = stock[cap_name]
+                    if stock[cap_name]['steady_wall_tps'] < 59.5 or reference['steady_wall_tps'] >= 59.5:
+                        reference = stock[cap_name]
+                apply_tps_call(timing, reference)
+                peers[peer + '_off'] = timing
             proof = {'peers_on': compare_pair(on / 'host_trace.json', on / 'client_trace.json'),
                      'peers_off': compare_pair(off / 'host_trace.json', off / 'client_trace.json'),
                      **{peer + '_on_off': compare_pair(on / f'{peer}_trace.json', off / f'{peer}_trace.json') for peer in ('host', 'client')}}
@@ -312,8 +477,8 @@ def analyze(root):
                           reducer=file_record(HELPERS / 'report.py'), driver=file_record(Path(__file__)),
                           peers=peers, proof=proof, off_wire_pass=all(row['pass'] for row in proof.values()),
                           measurement_complete=manifest['launches_complete'] and all(row['measurement_complete'] for row in peers.values()),
-                          raw_files=[file_record(path) for path in raw_paths if path.is_file()],
-                          missing_raw_files=[str(path) for path in raw_paths if not path.is_file()])
+                          raw_files=[file_record(path) for path in raw_paths if record_path(path).is_file()],
+                          missing_raw_files=[str(path) for path in raw_paths if not record_path(path).is_file()])
             report['measurement_complete'] &= not report['missing_raw_files']
             write_json(on / 'feel-report.json', report)
             summarize_case(report, on)
@@ -323,16 +488,28 @@ def analyze(root):
         if not run.is_dir():
             results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
             continue
-        report = reduce_timing_case(run)
+        reference = three_reference if 'silent' in name else dict(steady_wall_tps=baselines['60hz']['steady_wall_tps'],
+            evidence=baselines['60hz']['raw_path'], method='same build, four actors, recorder and 60 Hz cap')
+        report = reduce_timing_case(run, reference)
+        write_json(run / 'feel-report.json', report)
+        results.append(report)
+    for name, _, _ in AUTOSAVE_CASES:
+        run = root / name
+        if not run.is_dir():
+            results.append(dict(name=name, peers={}, measurement_complete=False, off_wire_pass=False, item9a_pass=False, reason='case not measured'))
+            continue
+        report = reduce_timing_case(run, three_reference)
         write_json(run / 'feel-report.json', report)
         results.append(report)
     write_json(root / 'matrix-report.json', results)
     lines = [f'Measured {stamp()}', '', '| Configuration | Raw measurements complete | Off-wire proof | Findings |', '|---|---|---|---|']
     for report in results:
         misses = sum(row['status'] == 'MISS' for peer in report['peers'].values() for row in peer['pins'].values())
-        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES} else f'{report["name"]}-on/summary.md'
+        link = f'{report["name"]}/feel-report.json' if report['name'] in {case[0] for case in TIMING_CASES + tuple((name, lag, 0, None) for name, lag, _ in AUTOSAVE_CASES)} else f'{report["name"]}-on/summary.md'
         lines.append(f'| {report["name"]} | {report["measurement_complete"]} | {report["off_wire_pass"]} | {misses} MISS; [{report["name"]}]({link}) |')
-    lines += ['', 'Item 9a adds the 59.5 tps, 50 ms and one-percent wait gates. Missing records and failed',
+    lines += ['', 'Item 9a retains the 50 ms and one-percent wait gates. TPS uses the same-machine',
+              'single-player reference with a five-percent maximum gap when that reference is below 59.5.',
+              'Nominal 60 Hz horizon drift is retained as a diagnostic in that case. Missing records and failed',
               'determinism proofs remain incomplete work. The full per-peer table and raw-file manifest are in each run.']
     (root / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
     return results
@@ -394,6 +571,7 @@ def parse_args(argv=None):
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')
     parser.add_argument('--sp-control', type=Path, default=SP_CONTROL)
+    parser.add_argument('--stock-baseline', type=Path, help='same-machine stock measurements, keyed by 60hz and uncapped')
     return parser, parser.parse_args(argv)
 
 
@@ -401,12 +579,12 @@ def main(argv=None):
     parser, args = parse_args(argv)
     root = args.out.resolve()
     if not 48231 <= args.port <= 48240:
-        parser.error('the ten match ports must stay within 48231..48249')
+        parser.error('the ten match ports must stay within 48231..48240')
     if (Path('D:/mx/LEAD_FAMILY.lock')).exists():
         parser.error('Phase 1 lock is present; no driver or engine launch is permitted')
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
-    scratch_bytes(root)
+    scratch_bytes(root, MATRIX_BYTE_LIMIT)
     if not args.analyze_only:
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
@@ -416,13 +594,20 @@ def main(argv=None):
                     commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                     source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
                     ports=list(range(args.port, args.port + 10)), ticks=TICKS,
+                    scratch_byte_limits=dict(case=BYTE_LIMIT, matrix=MATRIX_BYTE_LIMIT),
                     mode='service e2e without -free-run-sim; the normal loop presents every render iteration',
-                    captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame')
+                    captures='own -feel-measure seam; frame-<requested tick>.png after UploadFrame',
+                    arms=[f'baseline-{cap}-on' for cap in ('60hz', 'uncapped')] +
+                         [f'{lag}ms-{cap}-{state}' for lag in (100, 200) for cap in ('60hz', 'uncapped') for state in ('on', 'off')] +
+                         [name for name, *_ in TIMING_CASES] + [name for name, *_ in AUTOSAVE_CASES])
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True)
+            launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True)
+        launch_case(root, 'baseline-three-60hz', 0, 60, True, 0, script, exe['sha256'], args.timeout, sp=True,
+                    window_ticks=2 * TICKS, sp_humans=3)
         port = args.port
         for lag in (100, 200):
             for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
@@ -430,22 +615,42 @@ def main(argv=None):
                     name = f'{lag}ms-{cap_name}-' + ('on' if enabled else 'off')
                     launch_case(root, name, lag, cap, enabled, port, script, exe['sha256'], args.timeout)
                     port += 1
-        for name, lag, loss, silent in TIMING_CASES:
-            launch_case(root, name, lag, 60, True, port, script, exe['sha256'], args.timeout, loss_percent=loss, silent_tick=silent)
-            port += 1
+        for index, (name, lag, loss, silent) in enumerate(TIMING_CASES):
+            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
+                        loss_percent=loss, silent_tick=silent)
+        for index, (name, lag, autosave_seconds) in enumerate(AUTOSAVE_CASES):
+            launch_case(root, name, lag, 60, True, args.port + 8 + index % 2, script, exe['sha256'], args.timeout,
+                        window_ticks=2 * TICKS, autosave_seconds=autosave_seconds)
     try:
-        results = analyze(root)
-    except EarlyDecision:
+        stock = json.loads(args.stock_baseline.read_text(encoding='utf-8')) if args.stock_baseline else None
+        results = analyze(root, stock)
+    except EarlyDecision as error:
+        write_json(root / 'completion.json', dict(finished=stamp(), measurement_complete=False,
+                   item9a_pass=False, gates_pass=False, gates_unverified=True, failure=error.fail_line,
+                   evidence=str(error.path)))
+        print(error.fail_line, flush=True)
+        return 1
+    except Exception as error:  # the matrix still owes its report: name the shape that broke it
+        import traceback
+        reason = f'{type(error).__name__}: {error}'
+        write_json(root / 'completion.json', dict(finished=stamp(), measurement_complete=False,
+                   item9a_pass=False, gates_pass=False, gates_unverified=True, failure=reason,
+                   traceback=traceback.format_exc().splitlines()[-6:]))
+        print(reason, flush=True)
         return 1
     skip_gates = args.skip_gates or args.analyze_only
     gate_result = None if skip_gates else gates(root, args.sp_control, args.timeout)
-    complete = all(row['measurement_complete'] and row.get('off_wire_pass', True) for row in results)
+    case_launches = {path.parent.name: json.loads(path.read_text(encoding='utf-8'))['launches_complete']
+                     for path in sorted(root.glob('*/manifest.json'))}
+    complete = bool(case_launches) and all(case_launches.values()) and all(item9a_evidence_complete(row) for row in results)
     item9a_rows = [pin for row in results for peer in (row.get('peers') or ({'single': row} if 'pins' in row else {})).values()
-                  for name, pin in peer['pins'].items() if name.startswith('item9a_')]
+                  for name, pin in peer['pins'].items() if name.startswith('item9a_') and pin.get('required', True)]
     item9a_pass = all(value['status'] == 'PASS' for value in item9a_rows) if item9a_rows else None
     gate_pass = bool(gate_result and all(gate_result[key] for key in ('selftests_pass', 'script_graph_pass', 'sp_compare_pass')))
-    completion = dict(finished=stamp(), measurement_complete=complete, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
-                      scratch_bytes=scratch_bytes(root), gates_unverified=skip_gates)
+    completion = dict(finished=stamp(), measurement_complete=complete, presentation_measurement_complete=all(row.get('measurement_complete', False) for row in results),
+                      launches_complete=bool(case_launches) and all(case_launches.values()),
+                      case_launches=case_launches, item9a_pass=item9a_pass, item9a_checks=len(item9a_rows), gates_pass=gate_pass,
+                      scratch_bytes=scratch_bytes(root, MATRIX_BYTE_LIMIT), gates_unverified=skip_gates)
     write_json(root / 'completion.json', completion)
     with (root / 'summary.md').open('a', encoding='utf-8') as stream:
         stream.write(f'\nGates passed: {gate_pass}. See gates/gates.json and completion.json.\n')

@@ -2223,7 +2223,7 @@ namespace RTE {
 			{"game_version", "7.0.0"},
 			{"build_id", "stage2-world"},
 			{"network_protocol_version", 1},
-			{"lockstep_codec_version", 33},
+			{"lockstep_codec_version", 35},
 			{"controller_frame_version", 7},
 			{"match_config_hash", std::string(64, 'a')},
 			{"session_identity_hash", std::string(64, 'b')},
@@ -2334,7 +2334,7 @@ namespace RTE {
 		}
 		const uint16_t worldVersion = static_cast<uint16_t>(worldBytes[4] | (worldBytes[5] << 8));
 		if (worldVersion != NetLockstepCodec::c_WorldVersion) {
-			return Fail("WorldTransition frame did not stamp lockstep version 33");
+			return Fail("WorldTransition frame did not stamp lockstep version 37");
 		}
 		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(worldBytes);
 		if (!decoded.ok) {
@@ -2375,8 +2375,8 @@ namespace RTE {
 			return Fail("ordinary frame did not encode: " + encodeError.message);
 		}
 		const uint16_t ordinaryVersion = static_cast<uint16_t>(ordinaryBytes[4] | (ordinaryBytes[5] << 8));
-		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 32) {
-			return Fail("ordinary lockstep frame did not stamp version 32");
+		if (ordinaryVersion != NetLockstepCodec::c_Version || ordinaryVersion != 37) {
+			return Fail("ordinary lockstep frame did not stamp version 37");
 		}
 		NetIdentityManifest manifest;
 		NetIdentityBuildOptions options;
@@ -2385,7 +2385,7 @@ namespace RTE {
 		}
 		if (manifest.deterministicConfig.lockstepCodecVersion != NetLockstepCodec::c_Version ||
 		    manifest.deterministicConfig.matchConfigVersion != NetMatchConfigUtil::c_Version) {
-			return Fail("ordinary identity did not stamp lockstep 30 and match config 6");
+			return Fail("ordinary identity did not stamp lockstep 36 and match config 6");
 		}
 		NetIdentity::StampOptionsForTarget(options, true);
 		if (!NetIdentity::BuildCurrentManifest(manifest, &error, options) ||
@@ -3030,6 +3030,66 @@ namespace RTE {
 		return exact ? 0 : Fail("a controller roster larger than one lobby chunk was truncated: " + error);
 	}
 
+	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
+	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
+	int TestPrivateActivationWaitsForTheCatchUp() {
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A21);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error) || !host.BeginRejoin(42, 2, 2, 3, "returning", 1, &error)) return Fail(error);
+		NetWorldCheckpointImage image;
+		image.privateSessionId = config.sessionId; image.round = 9; image.bytes = 8;
+		image.checkpointConfig = "config"; image.sideState = "state"; image.authorityPeerId = 1; image.tick = 40;
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		host.NoteRejoinLinkFit(42, true);
+		if (!host.NoteRejoinCapacity(42, 240, 3000000, 0)) return Fail("the compute headroom sample was refused");
+		// The first report carries the whole replay so far; then 42 ticks every 500 ms: 84 a second against the round's 60.
+		uint64_t activation = 0, applied = 900, round = 1000;
+		if (!host.NoteCatchUpProgress(42, applied, applied - 40, 1, round, &activation, &error)) return Fail(error);
+		while (activation == 0 && applied < 2000) {
+			applied += 42; round += 30;
+			if (!host.NoteCatchUpProgress(42, applied, 42, 500, round, &activation, &error)) return Fail(error);
+		}
+		// At 84 against 60 the seat closes 24 frames a second: it meets the round 60/24 frames on per frame behind.
+		const uint64_t caughtUp = round + (round - applied) * 60 / 24;
+		if (activation < caughtUp + c_NetWorldActivationLeadFrames) {
+			return Fail("a returning seat was activated before it could catch up: activation=" + std::to_string(activation) +
+			            " round=" + std::to_string(round) + " applied=" + std::to_string(applied) + " caught_up_at=" + std::to_string(caughtUp));
+		}
+		std::cout << "[net-world-join-selftest] PASS private_activation_waits_for_the_catch_up activation=" << activation
+		          << " caught_up_at=" << caughtUp << std::endl;
+		return 0;
+	}
+
+	/// Capturing a private base stalls every peer's simulation for the capture, so a seat's return buys no refresh whose
+	/// measured capture cannot fit the bound: the next rejoin replays a longer tail in private instead.
+	int TestAReturnedSeatTakesNoBaseThatStallsTheRound() {
+		if (NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 173.5)) {
+			return Fail("a returned seat refreshed the private base with a 173.5 ms capture, a stall of every peer past the 50 ms bound");
+		}
+		if (!NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(false, 1, 1, 12.0) ||
+		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5) ||
+		    NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 0.0)) {
+			return Fail("a private base refresh that fits the bound was refused, or one that does not was taken for a held seat");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returned_seat_takes_no_base_that_stalls_the_round capture_ms=173.5" << std::endl;
+		return 0;
+	}
+
+	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
+	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
+	int TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye() {
+		if (!NetMatchService::EndedRoundOwesGoodbye(true, true)) {
+			return Fail("a seat readmitted for frame 2409 of a round that ended at 2401 was left without the goodbye");
+		}
+		if (NetMatchService::EndedRoundOwesGoodbye(true, false) || !NetMatchService::EndedRoundOwesGoodbye(false, false)) {
+			return Fail("the goodbye went to a member playing at the round's end, or not to a returner the round does not use");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_readmitted_seat_held_at_the_end_is_owed_the_goodbye" << std::endl;
+		return 0;
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -3053,7 +3113,13 @@ namespace RTE {
 		if (DecodeWorldJoinOffer(EncodeWorldJoinOffer(badPause), decoded, &error)) return Fail("private checkpoint accepted more paused frames than committed frames");
 		if (DecodeWorldJoinOffer(R"({"schema":1,"private_session_id":"bad"})", decoded, &error)) return Fail("private offer accepted a mistyped identity");
 		host.PublishImage(image);
+		auto replacement = image; replacement.tick = 45;
+		host.PublishImage(replacement);
+		if (host.FindSession(42)->snapshotTick != 45) return Fail("an unstarted return kept the replaced checkpoint boundary");
 		if (!host.NoteTransferComplete(42, 8, &error)) return Fail(error);
+		replacement.tick = 50;
+		host.PublishImage(replacement);
+		if (host.FindSession(42)->snapshotTick != 45) return Fail("a replaying return changed its checkpoint boundary");
 		host.NoteRejoinLinkFit(42, true);
 		uint64_t activation = 0;
 		if (!host.NoteRejoinCapacity(42, 120, 2000000, 900) || !host.NoteCatchUpProgress(42, 600, 120, 2000, 610, &activation, &error) || activation != 0)
@@ -3064,6 +3130,9 @@ namespace RTE {
 		host.NoteRejoinLinkFit(42, true);
 		if (!host.NoteCatchUpProgress(42, 621, 1, 5, 631, &activation, &error) || activation <= 900)
 			return Fail("reclaim did not wait beyond every old input after proving capacity");
+		if (!host.HasBootstrapInFlight()) return Fail("an unfinished private return did not protect its checkpoint");
+		if (!host.CompleteActivation(42, activation, &error)) return Fail(error);
+		if (host.HasBootstrapInFlight()) return Fail("an active returned member prevented every later private checkpoint refresh");
 		return 0;
 	}
 
@@ -6520,6 +6589,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
+		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
+		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
+		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;

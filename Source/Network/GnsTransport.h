@@ -78,6 +78,11 @@ namespace RTE {
 		/// Test harness: adds a simulated round-trip lag (ms) to every connection made after the call.
 		static void SetSimulatedLagMs(int lagMs);
 
+		/// Diagnostics: prints GNS's own rendezvous and ICE spew at this debug level (0 = off).
+		static void SetRendezvousLogLevel(int level);
+		/// Exercises the pre-announcement payload queue without opening a socket.
+		static bool PayloadHoldSelfTest(std::string* error = nullptr);
+
 	private:
 		struct Impl;
 		Impl* m_Impl = nullptr;

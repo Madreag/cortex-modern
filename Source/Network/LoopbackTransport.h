@@ -52,6 +52,9 @@ namespace RTE {
 		void Stop() override;
 		std::vector<NetTransportEvent> PollEvents() override;
 
+		/// The round trip a packet makes on this link, so a lagged fixture measures the lag it injects.
+		uint32_t GetPeerPingMs(NetPeerId) const override { return m_Config.latencyMs * 2; }
+
 		/// Gets whether this transport still holds a connection to a peer.
 		bool IsPeerConnected(NetPeerId peerId) const;
 

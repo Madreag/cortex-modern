@@ -24,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -839,6 +840,41 @@ namespace RTE {
 			}, error);
 		}
 
+		/// A rejoining seat's handshake suspends that peer's own silence window and nothing else: every other
+		/// watchdog on the session keeps its own clock while the rejoin works.
+		bool TestARejoinPhaseSuspendsOnlyItsOwnSilence(std::string* error) {
+			const uint16_t port = 42251;
+			LoopbackTransport hostTransport;
+			LoopbackTransport rawClient;
+			NetSession host;
+			NetSessionConfig hostConfig = MakeConfig(port, 1051, "Host");
+			hostConfig.timeoutMs = 50;
+			if (!host.StartHost(hostTransport, hostConfig, error) || !rawClient.Connect("loopback", port, error)) {
+				return false;
+			}
+			host.SetRejoinPhase(NetSession::RejoinPhase::Loading);
+			if (!host.IsAdmissionSuspended()) {
+				*error = "the rejoin phase did not suspend this peer's own silence";
+				return false;
+			}
+			for (uint64_t now = 0; now <= 400; now += 10) {
+				host.Tick(now);
+				if (host.GetStats().timeouts > 0) {
+					break;
+				}
+				hostTransport.AdvanceTimeMs(10);
+				rawClient.AdvanceTimeMs(10);
+			}
+			if (!host.HasReject() || host.GetRejectReason() != NetRejectReason::Timeout || host.GetStats().timeouts != 1) {
+				*error = "a rejoin phase suspended a stalled handshake's own watchdog: timeouts=" +
+				         std::to_string(host.GetStats().timeouts);
+				return false;
+			}
+			std::cout << "[net-session-selftest] PASS a_rejoin_phase_suspends_only_its_own_silence timeouts="
+			          << host.GetStats().timeouts << std::endl;
+			return true;
+		}
+
 		bool TestLobbyMembership(std::string* error) {
 			constexpr uint16_t port = 42208;
 			LoopbackTransport hostTransport;
@@ -1065,6 +1101,7 @@ namespace RTE {
 				return false;
 			}
 			const std::string summary = client.GetRejectSummary();
+			if (client.BuildPlayerRefusalText() != summary || client.BuildPlayerRefusalText().find("module_manifest_hash") != std::string::npos) { *error = "the player refusal exposed the internal manifest field"; return false; }
 			if (summary.find("Install: Coalition.rte") == std::string::npos ||
 			    summary.find("Remove: MyTestMod.rte") == std::string::npos ||
 			    summary.find("Update: Ronin.rte (you 3, host 5)") == std::string::npos) {
@@ -1085,6 +1122,23 @@ namespace RTE {
 				return false;
 			}
 			std::cout << "[net-session-selftest] PASS module mismatch names the modules: " << summary << std::endl;
+			return true;
+		}
+
+		bool TestAdmissionRefusalIsLogged(std::string* error) {
+			std::ostringstream log;
+			auto* prior = std::cout.rdbuf(log.rdbuf());
+			const bool matched = TestModuleMismatchNamesModules(error);
+			std::cout.rdbuf(prior);
+			if (!matched) return false;
+			for (const std::string role : {"host", "client"}) {
+				const std::string expected = "admission refused reason=ModuleManifestMismatch role=" + role;
+				if (log.str().find(expected) == std::string::npos) {
+					*error = "admission refusal was not logged on the " + role;
+					return false;
+				}
+			}
+			std::cout << log.str() << "[net-session-selftest] PASS admission_refusal_logged host=ModuleManifestMismatch client=ModuleManifestMismatch" << std::endl;
 			return true;
 		}
 
@@ -1918,8 +1972,10 @@ namespace RTE {
 		if (!TestPeerTimeoutDoesNotStopHost(&error)) return fail(error);
 		if (!TestMalformedHandshake(&error)) return fail(error);
 		if (!TestTimeout(&error)) return fail(error);
+		if (!TestARejoinPhaseSuspendsOnlyItsOwnSilence(&error)) return fail(error);
 		if (!TestLatencyAndCleanDisconnect(&error)) return fail(error);
 		if (!TestModuleMismatchNamesModules(&error)) return fail(error);
+		if (!TestAdmissionRefusalIsLogged(&error)) return fail(error);
 		if (!TestModuleDigestJoinerSideMirror(&error)) return fail(error);
 		if (!TestModuleDigestSilentPeerExpires(&error)) return fail(error);
 		if (!TestOldWirePeerGetsItsRejection(&error)) return fail(error);

@@ -161,7 +161,7 @@ namespace RTE {
 		static constexpr uint8_t c_MaxPeerCount = 4;
 		static constexpr uint16_t c_MaxInputDelayFrames = 60; // Mirrors NetLockstepCodec::c_MaxInputDelayFrames.
 		static constexpr uint8_t c_DefaultFrameRedundancyTicks = 4;
-		static constexpr uint8_t c_MaxFrameRedundancyTicks = 8; // Mirrors NetLockstepCodec::c_MaxWindowTicks.
+		static constexpr uint8_t c_MaxFrameRedundancyTicks = 8; // The host's floor; the unreliable lane widens the window to a round trip.
 		static constexpr size_t c_MaxPlayers = 7; // Four co-op human peers plus the three peerless CPU teams left.
 		static constexpr size_t c_MaxNameBytes = 64;
 		static constexpr size_t c_MaxPresetBytes = 128;

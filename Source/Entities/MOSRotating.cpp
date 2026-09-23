@@ -702,6 +702,7 @@ float MOSRotating::RemoveWounds(int numberOfWoundsToRemove, bool includePositive
 		std::iter_swap(m_Wounds.begin(), m_Wounds.end() - 1);
 		m_Wounds.pop_back();
 		wound->DestroyScriptState();
+		if (wound == m_RadiusAffectingAttachable) m_RadiusAffectingAttachable = nullptr;
 		delete wound;
 		return woundDamage;
 	};
@@ -1784,6 +1785,7 @@ void MOSRotating::Update() {
 			std::iter_swap(woundItr, m_Wounds.end() - 1);
 			m_Wounds.pop_back();
 			m_AttachableAndWoundMass -= wound->GetMass();
+			if (wound == m_RadiusAffectingAttachable) m_RadiusAffectingAttachable = nullptr;
 			delete wound;
 		} else {
 			Vector totalImpulseForce;

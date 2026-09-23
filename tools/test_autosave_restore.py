@@ -50,8 +50,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from compare_sim_traces import strict_compare
+from feel.retained_resume import read_live_hashes, split_passes
 from run_sim_test import make_run
+from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
 RETAINED = re.compile(r"^\[autosave\] retained tick=(\d+) keep=(\d+) pinned=(\d+) removed=(\d+)$", re.MULTILINE)
@@ -96,11 +97,14 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
                 "-net-match-ticks", str(ticks), "-net-match-input-delay", "3",
                 "-net-autosave-seconds", str(seconds),
+                "-net-match-service-preset", "Determinism FeelBaseline", "-net-match-service-module", "UserScenes.rte",
+                "-net-live-tick-hashes", str(root / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, [])
         runs[who] = make_run(repo, args, root / who, 420, env={"CCCP_HEADLESS": "1"})
+        stage_baseline(runs[who], ticks)
 
     def drive(who: str) -> None:
         try:
@@ -223,6 +227,34 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
     return details
 
 
+def compare_live_window(root: Path, first_tick: int, last_tick: int) -> dict:
+    """Require the complete window and compare every replay of every shared tick."""
+    peers = {who: read_live_hashes(root / f"{who}-live.jsonl") for who in ("host", "client")}
+    required = set(range(first_tick, last_tick + 1))
+    by_tick = {}
+    for who, rows in peers.items():
+        indexed = {}
+        for row in rows:
+            indexed.setdefault(row["tick"], []).append(row)
+        missing = sorted(required - indexed.keys())
+        assert not missing, f"{who} missing {len(missing)} required ticks: {missing[:8]}"
+        by_tick[who] = indexed
+    shared = sorted((by_tick["host"].keys() & by_tick["client"].keys()) & set(range(first_tick, max(by_tick["host"]) + 1)))
+    mismatches, compared = [], 0
+    for tick in shared:
+        readings = by_tick["host"][tick] + by_tick["client"][tick]
+        reference = readings[0]
+        for row in readings[1:]:
+            compared += 1
+            if row["sim_gated"] != reference["sim_gated"] or row["subsystems"] != reference["subsystems"]:
+                mismatches.append(tick)
+    assert not mismatches, f"live passes disagree at {len(mismatches)} ticks: {mismatches[:8]}"
+    assert max(by_tick["host"]) == max(by_tick["client"]), f"peer tails differ: {max(by_tick['host'])} vs {max(by_tick['client'])}"
+    return {"passed": True, "required_ticks": len(required), "compared_readings": compared,
+            "shared_ticks": len(shared), "first_tick": first_tick, "last_tick": shared[-1],
+            "passes": {who: len(split_passes(rows)) for who, rows in peers.items()}}
+
+
 def arm_retention(repo: Path, root: Path, port: int) -> dict:
     """More checkpoints than the policy keeps leaves exactly the newest restorable ones, per peer."""
     ticks = 700
@@ -250,8 +282,7 @@ def arm_retention(repo: Path, root: Path, port: int) -> dict:
     assert details["host"]["descriptors"] == details["client"]["descriptors"], (
         "the peers' restore descriptors differ: "
         f"{details['host']['descriptors']} vs {details['client']['descriptors']}")
-    passed, comparison = strict_compare(root / "host_trace.json", root / "client_trace.json", ticks)
-    assert passed, comparison
+    comparison = compare_live_window(root, 1, ticks)
     details["peer_comparison"] = comparison
     return details
 
@@ -266,9 +297,11 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
     afterwards, so the named one can only survive by being pinned."""
     ticks, perturb_at = 1400, 700
     records = run_pair(repo, root, port, ticks, 2,
-                       {"host": ["-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
+                       {"host": ["-net-test-perturb-when-live", "-determinism-selftest-perturb", "-determinism-selftest-perturb-tick", str(perturb_at),
                                  "-net-match-e2e-resync"],
                         "client": ["-net-match-e2e-resync"]})
+    injection = re.search(r"\[net-test\] live perturb frame=(\d+)", peer_log(root, "host"))
+    assert injection and int(injection[1]) >= perturb_at, "the live-peer perturbation was never injected"
     anchors, captures = {}, {}
     for who in ("host", "client"):
         log = peer_log(root, who)
@@ -299,7 +332,7 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
         pinned = {int(row[2]) for row in RETAINED.findall(log)}
         assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
     return {"match_id": match_id, "tick": tick, "host": sorted(held["host"]), "client": sorted(held["client"]),
-            "captures": captures, "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
+            "captures": captures, "perturbed_tick": int(injection[1]), "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
 
 
 def arm_resume(repo: Path, root: Path, port: int) -> dict:
@@ -327,9 +360,12 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         args = ["-net-match-service-e2e", "-net-port", str(port), "-net-match-peers", "2",
                 "-net-match-ticks", "1200", "-net-match-input-delay", "3",
                 "-net-autosave-seconds", "1", "-net-match-e2e-resync",
+                "-net-match-service-preset", "Determinism FeelBaseline", "-net-match-service-module", "UserScenes.rte",
+                "-net-live-tick-hashes", str(first / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", "1200", "-out", str(first / f"{who}_trace.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
+        stage_baseline(runs[who], 1200)
 
     def drive(who: str) -> None:
         try:
@@ -377,9 +413,12 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         args = ["-net-match-service-e2e", "-net-port", str(port + 2), "-net-match-peers", "2",
                 "-net-match-ticks", str(resume_ticks), "-net-match-input-delay", "3",
                 "-net-autosave-seconds", "1", "-net-match-e2e-resync",
+                "-net-match-service-preset", "Determinism FeelBaseline", "-net-match-service-module", "UserScenes.rte",
+                "-net-live-tick-hashes", str(second / f"{who}-live.jsonl"),
                 "-tick-hashes", "-max-ticks", str(resume_ticks), "-out", str(second / f"{who}_trace.json")]
         args += ["-net-host", "-net-resume-match", match_id, "-net-resume-tick", str(resume_tick)] if who == "host" else ["-net-join", "127.0.0.1"]
         resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
+        stage_baseline(resumed[who], 1200)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
         # file and its ticket. Copied, never moved: the first round's evidence stays where it was.
         source = first / who / "runtime/Autosaves"
@@ -431,13 +470,7 @@ def arm_resume(repo: Path, root: Path, port: int) -> dict:
         assert resumed_records[who].get("exit_code") == 0, (who, resumed_records[who].get("exit_code"), resumed_records[who].get("error"))
         assert not resumed_records[who].get("timed_out"), who
     # The resumed round is lockstep: the two peers' per-tick hashes must agree, tick for tick.
-    traces = {who: second / f"{who}_trace.json" for who in ("host", "client")}
-    for who, path in traces.items():
-        assert path.exists(), f"{who} wrote no tick-hash trace"
-    # The resumed round starts behind the checkpoint's tick, so the peers are compared over the ticks
-    # they both ran, from the first one the resumed round applied.
-    passed, compared = strict_compare(traces["host"], traces["client"], first_tick=resume_tick + 1)
-    assert passed, f"the resumed round's peers diverged: {compared}"
+    compared = compare_live_window(second, resume_tick + 1, resume_tick + resume_ticks)
     reached = max(int(row[0]) for row in CAPTURE.findall(host_log)) if CAPTURE.search(host_log) else 0
     return {"match_id": match_id, "kill_tick": kill_tick, "resume_tick": resume_tick,
             "client_held_the_archive": held_locally, "manifests": [path.name for path in manifests],
@@ -448,7 +481,8 @@ def _world_peer_args(root: Path, who: str, port: int, ticks: int, extra: list) -
     """One peer of a persistent world: the host is the dedicated world daemon, the client an ordinary join."""
     args = ["-net-port", str(port), "-net-match-peers", "2", "-net-match-input-delay", "3",
             "-net-autosave-seconds", "1", "-net-match-ticks", str(ticks),
-            "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
+            "-net-live-tick-hashes", str(root / f"{who}-live.jsonl"),
+                "-tick-hashes", "-max-ticks", str(ticks), "-out", str(root / f"{who}_trace.json"),
             "-net-match-report", str(root / f"{who}_report.json")]
     if who == "host":
         args = ["-net-dedicated", "-net-persistent-world", *args]
@@ -557,28 +591,25 @@ def _run_world_round(repo: Path, root: Path, port: int, ticks: int, extra: dict,
     return records
 
 
+def world_offers(log: str) -> list[dict]:
+    decoder = json.JSONDecoder()
+    return [decoder.raw_decode(log[mark.end():])[0] for mark in re.finditer(r"\[net-world\] offer ", log)]
+
+
 def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick: int) -> dict:
     """Compare every tick the joiner can simulate, from its agreed checkpoint to the planned end."""
-    from compare_sim_traces import load_trace
-
-    host_path, client_path = root / "host_trace.json", root / "client_trace.json"
-    host_ticks, _ = load_trace(host_path)
-    client_ticks, _ = load_trace(client_path)
-    first_tick = next(iter(client_ticks))
-    assert next(iter(host_ticks)) == resumed_tick + 1, (next(iter(host_ticks)), resumed_tick)
+    host_rows = read_live_hashes(root / "host-live.jsonl")
+    client_rows = read_live_hashes(root / "client-live.jsonl")
+    assert host_rows and client_rows, "the world or joiner recorded no live hashes"
+    first_tick = client_rows[0]["tick"]
+    assert host_rows[0]["tick"] == resumed_tick + 1, (host_rows[0]["tick"], resumed_tick)
     assert first_tick >= resumed_tick + 1, (first_tick, resumed_tick)
     if first_tick != resumed_tick + 1:
-        offers = [json.loads(line) for line in re.findall(r"(?m)^\[net-world\] offer (\{.*\})$", peer_log(root, "host"))]
+        offers = world_offers(peer_log(root, "host"))
         assert any(offer["world_id"] == world_id and offer["tick"] + 1 == first_tick for offer in offers), \
             f"the joiner's first tick {first_tick} follows no world checkpoint offer"
-        # The host's earlier ticks precede the image the late joiner received; keep the raw trace intact.
-        shared = json.loads(host_path.read_text(encoding="utf-8-sig"))
-        shared["runs"][0]["tick_hashes"] = [row for row in shared["runs"][0]["tick_hashes"] if row["tick"] >= first_tick]
-        host_path = root / "host_joined_trace.json"
-        host_path.write_text(json.dumps(shared) + "\n", encoding="utf-8")
-    passed, compared = strict_compare(host_path, client_path, expected_ticks=last_tick - first_tick + 1,
-                                      first_tick=first_tick, min_ticks=100)
-    assert passed, f"the world's peers diverged: {compared}"
+    assert last_tick - first_tick + 1 >= 100, "the world shared fewer than 100 planned ticks"
+    compared = compare_live_window(root, first_tick, last_tick)
     compared["joined_first_tick"] = first_tick
     return compared
 
@@ -706,6 +737,30 @@ def arm_world_restart(repo: Path, root: Path, port: int) -> dict:
 
 
 class WorldRestartOracleTests(unittest.TestCase):
+    def test_world_offer_has_its_own_record_boundary(self):
+        expected = {"world_id": "retained", "tick": 367}
+        text = '[autosave] tick=367 graph_[net-world] offer ' + json.dumps(expected) + '\npart=callbacks\n'
+        self.assertEqual(world_offers(text), [expected])
+        with self.assertRaises(json.JSONDecodeError):
+            world_offers('[net-world] offer {"tick":')
+
+    def test_live_window_checks_earlier_replays_and_missing_ticks(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rows = [{"tick": tick, "sim_gated": str(tick), "subsystems": {"actors": str(tick)}} for tick in range(1, 4)]
+            def write(who, values):
+                (root / f"{who}-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in values))
+            write("host", rows); write("client", rows + rows)
+            self.assertEqual(compare_live_window(root, 1, 3)["passes"]["client"], 2)
+            corrupt = [dict(row) for row in rows]; corrupt[1]["sim_gated"] = "bad"
+            write("client", corrupt + rows)
+            with self.assertRaisesRegex(AssertionError, "live passes disagree"):
+                compare_live_window(root, 1, 3)
+            write("client", [rows[0], rows[2]])
+            with self.assertRaisesRegex(AssertionError, "missing 1 required ticks"):
+                compare_live_window(root, 1, 3)
+
     HOST_START = "[net-lockstep] start round=2610485712550324653 frame=1 local_peer=1 peers=2 input_delay=3\n"
     CLIENT_START = "[net-lockstep] start round=2610485712550324653 frame=1 local_peer=2 peers=2 input_delay=3\n"
     HOST_LOBBY = ("[net-match-service-e2e] lobby_snapshot: state=Running is_host=1 members=1 local_ready=1 "

@@ -142,6 +142,18 @@ namespace RTE {
 		uint64_t roundId = 0; //!< The host's tag for this lockstep round; a client adopts it from the host's start.
 		bool resumeFromSnapshot = false;
 		uint32_t activityRestartMs = 0; //!< This peer's own measured activity restart; 0 until it has one.
+		bool startupPublished = false; //!< Whether that measurement is a reading and not an absence.
+		// A host-authored start boundary. Ordinary starts carry one peer's publication; this record is
+		// the single fact every peer applies, including the host that authored it.
+		bool agreedStartRecord = false;
+		uint64_t agreedFirstFrame = 0;
+		uint64_t agreedEffectiveStartFrame = 0;
+		uint64_t agreedDeadlineMs = 0;
+		uint32_t publishedPeerMask = 0;
+		uint32_t heldPeerMask = 0;
+		std::array<uint64_t, 16> peerEffectiveStartFrames{};
+		std::array<uint32_t, 16> peerStartupParks{};
+		std::array<uint16_t, 16> peerInputDelays{};
 
 		bool operator==(const NetLockstepStart&) const = default;
 	};
@@ -211,6 +223,13 @@ namespace RTE {
 		/// bindings, so a receiver that missed one refuses rather than reading a reused slot as the key
 		/// it held before.
 		uint64_t BindingCount() const { return m_Bindings; }
+		/// Decoder: the newest tick of a round whose block this table has read. A sender's next round starts it over.
+		void NoteTickRead(uint64_t tick, uint64_t round) {
+			if (!m_HasReadTick || round != m_LastTickRound || tick > m_LastTickRead) m_LastTickRead = tick;
+			m_LastTickRound = round;
+			m_HasReadTick = true;
+		}
+		bool HasReadTickAtOrAfter(uint64_t tick, uint64_t round) const { return m_HasReadTick && round == m_LastTickRound && m_LastTickRead >= tick; }
 
 	private:
 		struct Slot {
@@ -223,6 +242,9 @@ namespace RTE {
 		std::map<NetSoundObservationKey, uint16_t> m_SlotOf;
 		std::list<uint16_t> m_Recent; //!< Least recently assigned first: the slot to reuse once every slot is bound.
 		uint64_t m_Bindings = 0;
+		uint64_t m_LastTickRead = 0;
+		uint64_t m_LastTickRound = 0;
+		bool m_HasReadTick = false;
 	};
 
 	/// The observation tables one peer keeps for the senders it decodes and, on the relay host,
@@ -276,11 +298,15 @@ namespace RTE {
 		uint8_t senderPeerId = 0;
 		uint64_t highestContiguousFrame = 0;
 		uint32_t receivedMask = 0;
+		uint64_t roundId = 0;
+		uint32_t seatIncarnation = 0;
+		uint64_t sessionId = 0;
+		uint64_t authorityGeneration = 0;
 
 		bool operator==(const NetLockstepAck&) const = default;
 	};
 
-	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4 };
+	enum class NetTimingAction : uint8_t { Delay = 1, Hold = 2, Reclaim = 3, WorldAdmission = 4, CapturePark = 5 };
 	enum class NetTimingPhase : uint8_t { Propose = 1, Acknowledge = 2, Commit = 3, Status = 4, HoldAtFrame = 5, HoldAppliedAck = 6, ReclaimAtFrame = 7 };
 
 	/// A round-scoped delay agreement or host-authored hold and its application acknowledgement.
@@ -302,6 +328,8 @@ namespace RTE {
 		uint64_t authorityGeneration = 0;
 		uint64_t cutoffFrame = 0;
 		uint64_t neutralThroughFrame = 0;
+		/// The proposal this decision replaces; every peer drops that revision when it applies this one.
+		uint64_t supersededRevision = 0;
 		std::array<uint32_t, 4> seatIncarnations{};
 		std::optional<NetGameWorldTransition> worldTransition;
 		bool operator==(const NetLockstepTiming&) const = default;
@@ -371,6 +399,7 @@ namespace RTE {
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> initialDelayChanges;
 		std::map<uint8_t, NetGameSeatHold> initialSeatHolds;
 		std::map<uint8_t, NetGameSeatReclaim> initialSeatReclaims;
+		uint64_t seatStateThroughFrame = 0; // A joining round's holds, departures and returns already cover every frame up to this one.
 		uint32_t timeoutMs = 500;
 		uint8_t localPeerId = 0;
 		uint8_t remotePeerId = 0; // 2-peer convenience; N-peer derives the remote set from peerCount.
@@ -401,6 +430,8 @@ namespace RTE {
 		std::function<void(const NetMatchConfig&)> publishLiveConfig;
 		bool substituteSlowPeers = false;
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+		// Service matches wait for every peer's measured activity startup before the agreed first frame.
+		bool requirePublishedStart = false;
 	};
 
 	enum class NetHostMigrationPhase : uint8_t {
@@ -530,8 +561,10 @@ namespace RTE {
 		uint32_t largestRelayPacketBytes = 0; //!< Host: the biggest single forward, so an oversized frame is visible.
 		uint32_t relayBacklogPackets = 0; //!< Host: forwards still held for this peer.
 		uint64_t highestTargetFrame = 0;
+		uint64_t acceptedThroughFrame = 0; //!< The newest tick of this sender's the round could consume.
 		uint64_t lastHeardMs = 0;
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
+		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t startParkMs = 0; //!< The start work THIS peer's machine measured, as it published it.
 		uint32_t pingMs = 0;
 		uint32_t jitterMs = 0;
@@ -542,6 +575,8 @@ namespace RTE {
 		uint32_t holds = 0;
 		uint32_t substitutions = 0;
 		uint32_t rejoins = 0;
+		uint64_t longestWaitMsSinceReclaim = 0; //!< What this seat has waited since it was last reclaimed; the match record above keeps the round's totals.
+		uint32_t waitsSinceReclaim = 0;
 	};
 
 	struct NetLockstepStats {
@@ -576,6 +611,7 @@ namespace RTE {
 		uint32_t windowCopiesSkipped = 0;
 		uint32_t windowCopiesApplied = 0;
 		uint32_t outOfOrderFrames = 0;
+		uint32_t frameBindingGapDrops = 0; //!< Unreliable frames whose bindings this peer missed past every window.
 		uint32_t futureFrameDrops = 0; //!< Frames beyond the skew window, dropped so the maps stay bounded.
 		uint32_t missingFrameStalls = 0;
 		uint32_t blockingFrameWaits = 0;
@@ -629,14 +665,24 @@ namespace RTE {
 	class NetLockstepCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x334C4343U;
-		static constexpr uint16_t c_Version = 32;
-		static constexpr uint16_t c_WorldVersion = 33;
+		static constexpr uint16_t c_Version = 37;
+		static constexpr uint16_t c_WorldVersion = 37;
+		/// Version 37 carries input frames on the unreliable lane: a window reaches back a round trip, and a tick that
+		/// arrives after this peer read past it is read past again rather than taken for a sender that started over.
+		static constexpr uint16_t c_UnreliableFrameVersion = 37;
+		/// Version 35 carries the host-authored agreed-start record after the ordinary Start fields.
+		/// Older readers reject that packet as trailing bytes; they never interpret the record as a local start.
+		static constexpr uint16_t c_AgreedStartVersion = 35;
+		/// Version 36 names the proposal a re-stamped timing decision withdraws, so no peer keeps the old one.
+		static constexpr uint16_t c_TimingWithdrawVersion = 36;
+		static constexpr uint16_t c_InputAcceptanceVersion = 34;
 		static constexpr uint16_t c_WorldAdmissionVersion = 28;
 		static constexpr uint16_t c_TimingVersion = 24;
 		static constexpr uint16_t c_HoldTransactionVersion = 26;
 		/// Advertised in Ack.receivedMask; the older peer decodes the Ack and ignores receivedMask.
 		static constexpr uint32_t c_FrameWindowCapabilityMask = 0x80000000U;
-		static constexpr uint8_t c_MaxWindowTicks = 8;
+		static constexpr uint32_t c_InputAcceptedMask = 0x40000000U;
+		static constexpr uint8_t c_MaxWindowTicks = 32;
 		// Versions 8 and 9 have the same layout minus the AIEquip and AIOrder commands; recordings made under them still decode.
 		// Version 11 adds the round tag to starts, frames and checksums, and sound observations to frames.
 		// Version 12 adds the system-authored Reseat command.
@@ -736,6 +782,10 @@ namespace RTE {
 		/// Starts in playback mode: no remotes, no handshake — every frame commits from the local
 		/// queue, which the replay reader feeds through QueueReplayFrame.
 		bool StartReplay(INetTransport& transport, const NetLockstepConfig& config, std::string* error = nullptr);
+		/// Installs the recording's host-authored startup boundary before playback queues its first frame.
+		bool ApplyReplayAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
+		bool IsReplayPlayback() const { return m_Playback; }
+		const std::optional<NetLockstepStart>& GetAgreedStartRecord() const { return m_AgreedStartRecord; }
 		/// Feeds one recorded tick straight into the commit path: command senders preserved, no
 		/// delay math, no wire — the replay's committed frame is exactly the recording's.
 		bool QueueReplayFrame(uint64_t frame, std::vector<ControllerFrame> frames, std::vector<NetGameCommand> commands, std::string* error = nullptr, std::vector<NetSoundObservation> observations = {}, std::vector<NetValueObservation> valueObservations = {});
@@ -758,6 +808,10 @@ namespace RTE {
 
 		/// This machine's own measured start work, published so every peer judges us by it and not by theirs.
 		void NoteLocalStartPark(uint32_t restartMs);
+		/// Marks the agreed autosave tick as a local park while every peer captures the same state.
+		void BeginSynchronizedCapture(uint64_t completedFrame);
+		void CompleteSynchronizedCapture(uint64_t completedFrame, double captureMs);
+		bool IsSynchronizedCapturePark(uint64_t frame) const;
 		void Complete(const std::string& message = "complete");
 		/// Announces a clean local leave: peers keep our frames through the last produced one, then
 		/// advance without us. The relay host cannot leave a 3+ match alive (it is the star's hub),
@@ -784,6 +838,16 @@ namespace RTE {
 		/// went away. Without one every seat reads as neither fenced nor held, which is the pre-H4 round.
 		void SetSeatStateSource(NetLockstepSeatState (*source)(void*, uint8_t, NetPeerId), void* context);
 		bool PopReadyFrame(NetLockstepReadyFrame& outFrame);
+		//! The timing proposals this peer is holding, by revision.
+		std::vector<uint64_t> PendingTimingRevisions() const {
+			std::vector<uint64_t> revisions;
+			for (const auto& [revision, decision]: m_TimingDecisions) revisions.push_back(revision);
+			return revisions;
+		}
+
+		//! Frames committed and not yet consumed: the round's runway.
+		size_t ReadyFrameCount() const { return m_ReadyFrames.size(); }
+		bool HasReadyFrame(uint64_t frame) const { return !NeedsMigrationSnapshot() && !m_ReadyFrames.empty() && m_ReadyFrames.front().frame == frame; }
 		/// The local frames already queued for a future frame; the local-actor preview runs them early.
 		bool PeekLocalFrames(uint64_t frame, std::vector<ControllerFrame>& outFrames) const;
 		bool PeekLocalInput(uint64_t frame, NetLockstepFrame& outFrame) const { return FindLocalInput(frame, outFrame); }
@@ -794,6 +858,8 @@ namespace RTE {
 		bool PeekQueuedCommands(uint64_t frame, uint8_t peerId, std::vector<NetGameCommand>& outCommands) const;
 		uint16_t InputDelayAt(uint8_t peerId, uint64_t producedFrame) const;
 		bool TimingDecisionPendingAt(uint64_t frame) const;
+		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.
+		std::string DescribePendingTimingDecisions(uint64_t frame) const;
 		bool DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames);
 		bool ProposeInputDelay(uint8_t peerId, uint16_t delayFrames, uint64_t applyFrame, std::string* error = nullptr);
 		bool ProposePeerHold(uint8_t peerId, uint64_t nowMs, std::string* error = nullptr);
@@ -801,6 +867,12 @@ namespace RTE {
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
+		/// Every peer's delay changes this round has applied, keyed by the frame each takes effect.
+		const std::map<uint8_t, std::map<uint64_t, uint16_t>>& GetDelayChanges() const { return m_DelayChanges; }
+		/// Marks the host's goodbye drain: the round has run its last tick and judges no seat from here.
+		void SetGoodbyeDrain(bool draining) { m_GoodbyeDrain = draining; }
+		/// The last frame this peer will simulate: every peer stops producing past it.
+		void SetFinalFrame(uint64_t frame) { m_FinalFrame = frame; }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		/// Moves every running deadline past a gap in our own ticks, so our park is not charged to a peer.
 		void ShiftDeadlinesPastOurOwnPark(uint64_t nowMs);
@@ -809,19 +881,37 @@ namespace RTE {
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { return m_Config.substituteSlowPeers; }
 		const std::map<uint8_t, NetGameSeatHold>& HeldTransactions() const { return m_HoldTransactions; }
+		/// Moves each seat the round took back before a joining seat's first frame out of the held state its replayed tail ended on.
+		/// @param config The joining round's configuration; its holds, departures, incarnations and reclaims are updated.
+		/// @param reclaims The host's ReclaimAtFrame decisions the joining seat has received.
+		/// @param firstFrame The joining round's first frame.
+		static void AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame);
 		bool HasAgreedSeatReclaim(uint8_t peer) const { return m_ReclaimTransactions.contains(peer); }
+		/// What a seat has waited SINCE it was last reclaimed: what the player is shown, while the
+		/// match record in GetStats()/BuildReportJson keeps the round's totals.
+		uint32_t WaitsSinceReclaim(uint8_t peerId) const;
+		uint64_t LongestWaitMsSinceReclaim(uint8_t peerId) const;
+		/// Counts reclaims applied to the local seat; the surfaces restart their own clocks when it moves.
+		uint32_t LocalSeatReclaims() const { return m_LocalSeatReclaims; }
+		/// Restarts a returning seat's presentation readings at the frame its reclaim commits.
+		void NoteSeatReclaimed(uint8_t peerId);
 		const std::map<uint8_t, NetPeerId>& RemoteTransports() const { return m_RemoteTransports; }
 		bool IsSeatUnderAI(uint8_t peerId, uint64_t frame) const;
+		bool IsSeatHoldGap(uint8_t peerId, uint64_t frame) const;
+		bool HasSeatHoldGap(uint64_t frame) const { for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
 		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
 		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
 		bool IsLocalSeatHeld() const { return m_LocalSeatHeld; }
 		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
+		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
+		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		std::vector<uint8_t> ResumePeerIds() const;
 
 		NetLockstepState GetState() const { return m_State; }
 		bool IsRunning() const { return m_State == NetLockstepState::Running; }
+		bool HasReceivedAllRemoteStarts() const { return AllRemoteStartsReceived(); }
 		bool IsFailed() const { return m_State == NetLockstepState::Failed; }
 		bool IsStopped() const { return m_State == NetLockstepState::Stopped; }
 		const NetLockstepStats& GetStats() const { return m_Stats; }
@@ -934,6 +1024,27 @@ namespace RTE {
 		/// Whether this relay host still owes a peer a forward it has not managed to send. The star's
 		/// hub cannot leave while this is true: a client waiting on that frame loses the round.
 		bool HasPendingRelayWork() const { return m_RelayHost && (!m_RelayBacklog.empty() || !m_RecoveryOutgoing.empty()); }
+		/// Whether a live remote has not reported reaching the frame this peer has committed to. A peer merely
+		/// behind owes nothing to the relay queues, so the goodbye drain would leave while it still needs us.
+		/// How far every live remote has told us it has come.  The goodbye drain watches this for progress
+		/// instead of spending a fixed budget on a peer that is never going to answer.
+		uint64_t RemoteProgressSum() const {
+			uint64_t sum = 0;
+			for (const auto& [peer, stats]: m_Stats.peers) {
+				if (peer == m_Config.localPeerId) continue;
+				sum += stats.reportedNextFrame + stats.acceptedThroughFrame + stats.highestTargetFrame;
+			}
+			return sum;
+		}
+		bool HasPeerBehindOurHorizon() const {
+			if (!IsRunning()) return false;
+			for (uint8_t peer: m_RemotePeerIds) {
+				if (IsPeerGoneAtFrame(peer, m_Stats.nextFrame)) continue;
+				const auto stats = m_Stats.peers.find(peer);
+				if (stats == m_Stats.peers.end() || stats->second.reportedNextFrame < m_Stats.nextFrame) return true;
+			}
+			return false;
+		}
 		/// Names the required peers the next frame still waits on; empty when none are missing.
 		std::string DescribeMissingPeers() const;
 		/// The peer's roster display name, or "peer N" when the roster has none.
@@ -942,8 +1053,15 @@ namespace RTE {
 
 		static const char* StateName(NetLockstepState state);
 
+		friend bool TestDelayPaddingPassesAParkedFrame(std::string* error);
+		friend bool TestACaptureReportsToItsOwnPark(std::string* error);
+		friend bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error);
 		friend bool TestHoldResolutionPumpDoesNotRelock(std::string* error);
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
+		friend bool TestAStarvedSeatIsNotLate(std::string* error);
+		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
+		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
+		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1025,6 +1143,7 @@ namespace RTE {
 		bool FindLocalInput(uint64_t targetFrame, NetLockstepFrame& out) const;
 		void AdvertiseFrameWindow();
 		void HandleAck(const NetLockstepAck& ack, NetPeerId fromTransport);
+		void AcknowledgeAcceptedInput(uint8_t peerId, uint64_t frame);
 		bool FrameWindowAllRemotesAdvertised() const;
 		bool FrameWindowAgreedFor(uint8_t peerId) const;
 		uint8_t ConfiguredWindowTicks() const;
@@ -1127,15 +1246,31 @@ namespace RTE {
 		static bool IsFrameWaiver(const NetLockstepStop& stop);
 		uint16_t PeerInputDelay(uint8_t peerId) const;
 		uint64_t EffectiveStartOf(uint8_t peerId) const;
+		/// Whether a reclaimed seat has yet to deliver any input at or past its new effective start.
+		bool IsReturningSeatBeforeItsFirstInput(uint8_t peerId) const;
+		/// Whether the wait for every peer's published startup has used the round's answer budget.
+		bool StartupWaitExpired(uint64_t nowMs) const;
+		void TickStartupWait(uint64_t nowMs);
+		void FormAgreedFirstFrame(uint64_t nowMs);
+		bool SendAgreedStart(uint8_t onlyPeerId = 0);
+		void ApplyAgreedStart(const NetLockstepStart& start, uint64_t nowMs);
 		uint8_t FirstAliveHumanPeerForTeam(uint8_t team, uint64_t frame) const;
 		void Fail(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void ScheduleRecoveryStop(NetLockstepStopReason reason, uint64_t frame, const std::string& message);
 		void HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport);
+		/// Takes a seat the host brought back before this joining round's first frame as a member from that frame.
+		void TakeReturnBeforeFirstFrame(const NetLockstepTiming& reclaim);
 		void TickTiming(uint64_t nowMs);
 		void QueueTiming(const NetLockstepTiming& timing, uint8_t onlyPeer = 0);
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing);
+		void PublishCapturePark(uint64_t startFrame);
+		void ApplyCapturePark(const NetLockstepTiming& timing);
+		uint64_t CaptureParkCapTicks() const;
+		void SendCaptureParkReport(uint64_t nowMs = 0);
+		void RetryLateStartReclaims();
+		void FlushDeferredParkTimings();
 		bool DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing);
 		uint64_t FutureTimingFrame() const;
 		struct TimingDecision {
@@ -1145,6 +1280,8 @@ namespace RTE {
 			uint64_t proposedAtMs = 0;
 		};
 		std::map<uint64_t, TimingDecision> m_TimingDecisions;
+		/// Whether a decision is committed, applied everywhere it must be and behind the frame the round resumes from.
+		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
@@ -1167,9 +1304,19 @@ namespace RTE {
 		uint64_t m_ConsumerWaitStartMs = 0;
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		uint32_t m_LocalStartParkMs = 0; //!< Our own activity restart, as it goes out in our start.
+		bool m_RequirePublishedStart = false;
+		bool m_StartWaitAnnounced = false;
+		uint64_t m_StartWaitSinceMs = 0;
+		bool m_LocalStartupPublished = false;
+		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
+		bool m_AgreedStartApplied = false;
+		std::optional<NetLockstepStart> m_AgreedStartRecord;
+		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
+		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.
 		bool m_ConsumerWaitCounted = false;
 		bool m_LocalSeatHeld = false;
 		bool m_Playback = false;
+		uint32_t m_LocalSeatReclaims = 0;
 
 		INetTransport* m_Transport = nullptr;
 		NetLockstepConfig m_Config;
@@ -1197,12 +1344,15 @@ namespace RTE {
 		std::set<uint8_t> m_CongestedPeers; //!< Remotes whose last refusal was our own full queue.
 		std::set<uint8_t> m_HeldForCongestion; //!< Congestion episodes already reported, so the hold is logged once.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
+		std::map<uint8_t, std::set<uint64_t>> m_RelayedTicks; //!< Relay host: sender -> the ticks already sent on to the others.
+		std::map<uint8_t, uint64_t> m_ReliableFramesThrough; //!< A member catching up reads frames on the reliable lane through this tick.
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		struct PeerAdmission { uint64_t frame; uint16_t delay; };
 		std::map<uint8_t, PeerAdmission> m_PeerAdmissions;
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
+		std::set<uint64_t> m_HostAcceptedLocalFrames;
 		std::map<uint8_t, uint64_t> m_ObservationEpochApplied; //!< sender -> the newest epoch its encode table was reset at.
 		size_t m_LastAdmissionReplayFrames = 0;        //!< What the last admission replayed, for the report.
 		std::function<void(const NetTransportEvent&)> m_SessionEventSink; //!< Forwards session traffic (reconnect handshakes) mid-match.
@@ -1212,6 +1362,28 @@ namespace RTE {
 		bool m_RelayHost = false; //!< Host-star relay: forward each remote's frames/checksums to the other remotes.
 		bool m_DeferStops = false;
 		bool m_ResyncPrimed = false;
+		bool m_ResumeAdmissionPending = false;
+		uint64_t m_SynchronizedCaptureStartFrame = UINT64_MAX;
+		uint64_t m_SynchronizedCaptureEndFrame = 0;
+		double m_SynchronizedCaptureBudgetMs = 250.0;
+		uint64_t m_CaptureParkRevision = 0;
+		uint64_t m_CaptureParkDeadlineMs = 0;
+		uint64_t m_CaptureParkPublishedEndFrame = UINT64_MAX;
+		uint64_t m_HighestParkEndFrame = 0;
+		uint32_t m_PendingCaptureReportMs = 0;
+		uint64_t m_PendingCaptureTick = UINT64_MAX; //!< The tick the pending capture report measured.
+		uint64_t m_ReportedCaptureParkStart = UINT64_MAX; //!< The park this peer's last capture report went to.
+		uint32_t m_ReportedCaptureParkMs = 0;
+		uint64_t m_CaptureReportSentMs = 0;
+		bool m_CaptureReportResent = false;
+		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		uint64_t m_FinalFrame = UINT64_MAX;
+		bool m_GoodbyeDrain = false;
+		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
+		std::vector<NetLockstepTiming> m_DeferredParkTimings;
+		bool m_ApplyingDeferredParkTiming = false;
+		bool m_CaptureParkAwaitingReports = false;
+		bool m_CaptureParkFinalized = false;
 		std::optional<NetLockstepStop> m_PendingRecoveryStop;
 		std::optional<NetLockstepStop> m_PendingCompleteStop;
 		std::optional<uint64_t> m_LastCompletedSimulationTick;
@@ -1272,6 +1444,10 @@ namespace RTE {
 		bool AllRemoteStartsReceived() const { return m_RemoteStartsReceived.size() == m_RemotePeerIds.size(); }
 		bool IsKnownRemotePeer(uint8_t peerId) const;
 		void RelayToOtherRemotes(const NetLockstepPacket& packet, uint8_t fromPeerId);
+		/// Relay host on the unreliable lane: sends each tick of an arrived packet on once, oldest first, with the ticks before it.
+		void RelayArrivedTicks(const NetLockstepFrame& frame);
+		/// The lane a packet takes to one peer: frames ride the frame lane unless that peer is still catching up.
+		NetTransportLane LaneTo(uint8_t peerId, const NetLockstepPacket& packet, NetTransportLane lane) const;
 	};
 
 } // namespace RTE

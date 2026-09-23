@@ -63,6 +63,8 @@ namespace RTE {
 		ScenarioRunner::LockstepChecksumCounters s_RetiredChecksumCounters;
 		uint64_t s_LockstepAppliedFrame = 0;
 		std::function<void()> s_SessionPump;
+		std::function<bool()> s_PendingSessionTail;
+		std::function<uint64_t()> s_SessionProgress;
 		const NetSeatPresence* s_SeatPresence = nullptr;
 		std::vector<NetGameCommand> s_PendingLocalGameCommands;
 		uint64_t s_NextLocalCommandSequence = 1;
@@ -142,6 +144,7 @@ namespace RTE {
 		std::optional<uint64_t> s_SlowMachineLastNoticeMs;
 		uint64_t s_SlowMachineNoticeUntilMs = 0;
 		long long s_LockstepWaitUs = 0;
+		std::optional<std::chrono::steady_clock::time_point> s_PreSimWait;
 		struct LockstepWaitTimer {
 			std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 			~LockstepWaitTimer() { s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(); }
@@ -797,8 +800,10 @@ namespace RTE {
 		return s_ControllerReplayError;
 	}
 
-	void ScenarioRunner::SetSessionPump(std::function<void()> pump) {
+	void ScenarioRunner::SetSessionPump(std::function<void()> pump, std::function<bool()> pendingTail, std::function<uint64_t()> sessionProgress) {
 		s_SessionPump = std::move(pump);
+		s_PendingSessionTail = std::move(pendingTail);
+		s_SessionProgress = std::move(sessionProgress);
 	}
 
 	void ScenarioRunner::SetLockstepSeatPresence(const NetSeatPresence* presence) {
@@ -821,6 +826,19 @@ namespace RTE {
 
 	void ScenarioRunner::ClearNetUiToasts() {
 		s_NetUiToasts.clear();
+	}
+
+	void ScenarioRunner::NoteLocalSeatReclaimed() {
+		// The rejoin is done: the held banner and the slow-machine notice it stood beside describe a
+		// state this peer has left, and a toast never drawn while the round was stopped has no lifetime
+		// to run out.
+		std::erase_if(s_NetUiToasts, [](const NetUiToast& toast) { return toast.record.kind == "seat_held" || toast.record.kind == "slow_machine"; });
+		s_SlowMachineNoticeUntilMs = 0;
+		s_SlowMachineLastNoticeMs.reset();
+	}
+
+	uint32_t ScenarioRunner::GetLockstepSeatReclaimEpoch() {
+		return s_LockstepCoordinator ? s_LockstepCoordinator->LocalSeatReclaims() : 0;
 	}
 
 	bool ScenarioRunner::IsLockstepLocalMachineSlow(uint64_t nowMs) {
@@ -942,6 +960,7 @@ namespace RTE {
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
 		s_LockstepCoordinator = coordinator;
+		s_PreSimWait.reset();
 		s_LocalStartParkPublished = false;
 		if (!coordinator) {
 			s_SeatPresence = nullptr;
@@ -1211,6 +1230,8 @@ namespace RTE {
 		s_WorldCatchUpHeld = false;
 		s_WorldCatchUpTail.clear();
 		s_CatchUpPriorInputThrough = 0;
+		std::erase_if(s_NetUiToasts, [](const NetUiToast& toast) { return toast.record.kind == "seat_held"; });
+		s_SlowMachineNoticeUntilMs = 0;
 	}
 
 	uint64_t ScenarioRunner::WorldCatchUpAppliedThrough() {
@@ -1277,7 +1298,7 @@ namespace RTE {
 		outFrame.remoteCommands = std::move(frame.commands);
 		outFrame.remoteObservations = std::move(frame.observations);
 		outFrame.remoteValueObservations = std::move(frame.valueObservations);
-		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning()) {
+		if (s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() && s_LockstepCoordinator->IsReplayPlayback()) {
 			if (!s_LockstepCoordinator->QueueReplayFrame(simTick, std::move(outFrame.remoteFrames), std::move(outFrame.remoteCommands), error,
 			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
 			s_LockstepCoordinator->Tick(0);
@@ -1342,6 +1363,10 @@ namespace RTE {
 		return s_LockstepAppliedFrame;
 	}
 
+	void ScenarioRunner::SetLockstepFinalFrame(uint64_t frame) {
+		if (s_LockstepCoordinator) s_LockstepCoordinator->SetFinalFrame(frame);
+	}
+
 	ScenarioRunner::LockstepChecksumCounters ScenarioRunner::GetLockstepChecksumCounters() {
 		LockstepChecksumCounters totals = s_RetiredChecksumCounters;
 		if (s_LockstepCoordinator) {
@@ -1385,8 +1410,15 @@ namespace RTE {
 		return seeded != 0 && s_LockstepCoordinator->IsSeatReclaimGap(seeded, frame) ? seeded : owner;
 	}
 
+	uint8_t ScenarioRunner::GetLockstepHeldSeat(int64_t actorUniqueID, int actorTeam, bool cpuControlled, uint64_t frame) {
+		const uint8_t owner = GetLockstepDropTimeActorOwner(actorUniqueID, actorTeam, cpuControlled);
+		if (!s_LockstepCoordinator || owner != GetLockstepHostPeerId()) return owner;
+		const uint8_t seeded = NetActorOwnership::GetSeededOwner(actorUniqueID);
+		return seeded != 0 && s_LockstepCoordinator->IsSeatHoldGap(seeded, frame) ? seeded : owner;
+	}
+
 	void ScenarioRunner::FilterReclaimControllerInputs(NetLockstepReadyFrame& ready) {
-		if (!s_LockstepCoordinator || !s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) || !MovableMan::IsConstructed()) return;
+		if (!s_LockstepCoordinator || (!s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) && !s_LockstepCoordinator->HasSeatHoldGap(ready.frame)) || !MovableMan::IsConstructed()) return;
 		size_t seen = 0, fenced = 0;
 		const auto suppressed = [&](const ControllerFrame& input) {
 			if (input.actorUniqueID < 0 || input.actorUniqueID > std::numeric_limits<long>::max()) return false;
@@ -1394,7 +1426,8 @@ namespace RTE {
 			if (!actor) return false;
 			const uint8_t seat = GetLockstepReclaimSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
 			++seen;
-			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame);
+			const uint8_t heldSeat = GetLockstepHeldSeat(input.actorUniqueID, actor->GetTeam(), !actor->IsPlayerControlled(), ready.frame);
+			const bool gap = s_LockstepCoordinator->IsSeatReclaimGap(seat, ready.frame) || s_LockstepCoordinator->IsSeatHoldGap(heldSeat, ready.frame);
 			if (gap) ++fenced;
 			return gap;
 		};
@@ -1410,7 +1443,7 @@ namespace RTE {
 			}
 		} else std::erase_if(ready.remoteFrames, suppressed);
 		// Every peer fences the same actors at the same frame: a count that disagrees is the desync.
-		std::cout << "[net-lockstep] reclaim gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
+		std::cout << "[net-lockstep] " << (s_LockstepCoordinator->HasSeatReclaimGap(ready.frame) ? "reclaim" : "hold") << " gap frame=" << ready.frame << " inputs=" << seen << " fenced=" << fenced << std::endl;
 		if (ready.localFrames.size() + ready.remoteFrames.size() != before) s_LockstepCoordinator->RememberAppliedFrameInputs(ready);
 	}
 
@@ -1699,6 +1732,30 @@ namespace RTE {
 		return s_LockstepCoordinator->IsActorOwnerGone(actorUniqueID, actorTeam, cpuControlled, frame);
 	}
 
+	static bool PrimeRestoredLockstepInputs(std::string* error) {
+		const auto& config = s_LockstepCoordinator->GetConfig();
+		if (s_LockstepCoordinator->NeedsResyncPriming()) {
+			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
+			for (size_t index = 0; index < batches.size(); ++index) {
+				const uint64_t target = config.startFrame + index;
+				auto& input = batches[index];
+				const auto previous = s_RequeuedInputs.find(target);
+				if (previous != s_RequeuedInputs.end()) input = previous->second;
+				input.senderPeerId = config.localPeerId; input.targetFrame = target; input.roundId = s_LockstepCoordinator->GetRoundId();
+				if (previous == s_RequeuedInputs.end()) {
+					if (const auto commands = s_RequeuedCommands.find(target); commands != s_RequeuedCommands.end()) input.commands = commands->second;
+					if (const auto bindings = s_RequeuedPlayerBindings.find(target); bindings != s_RequeuedPlayerBindings.end()) input.commands.push_back({config.localPeerId, bindings->second});
+				}
+			}
+			if (!s_LockstepCoordinator->PrimeResyncInputs(batches, error)) return false;
+			const uint64_t primedEnd = config.startFrame + config.inputDelayFrames;
+			s_RequeuedCommands.erase(s_RequeuedCommands.begin(), s_RequeuedCommands.lower_bound(primedEnd));
+			s_RequeuedPlayerBindings.erase(s_RequeuedPlayerBindings.begin(), s_RequeuedPlayerBindings.lower_bound(primedEnd));
+			s_RequeuedInputs.erase(s_RequeuedInputs.begin(), s_RequeuedInputs.lower_bound(primedEnd));
+		}
+		return true;
+	}
+
 	bool ScenarioRunner::QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error) {
 		if (!s_LockstepCoordinator) {
 			if (error) *error = "lockstep coordinator is not active";
@@ -1765,11 +1822,18 @@ namespace RTE {
 		NetLockstepCoordinator* producing = s_LockstepCoordinator;
 		if (producing->TimingDecisionPendingAt(tick)) {
 			LockstepWaitTimer waitTimer;
+			// A production wait longer than a round trip is a defect, not pacing: name what holds it once.
+			const auto waitBegan = std::chrono::steady_clock::now();
+			bool named = false;
 			while (producing->IsRunning() && producing->TimingDecisionPendingAt(tick)) {
 				producing->Tick(NetLockstepNowMs());
 				producing->NoteFrameWait(tick, NetLockstepNowMs(), true);
 				if (s_SessionPump) s_SessionPump();
 				if (producing != s_LockstepCoordinator) { if (error) *error = "the timing wait changed rounds"; return false; }
+				if (!named && std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - waitBegan).count() > 2000) {
+					named = true;
+					std::cout << "[net-frame-wait] producing held: " << producing->DescribePendingTimingDecisions(tick) << std::endl;
+				}
 				if (producing->TimingDecisionPendingAt(tick)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			producing->FinishFrameWait(NetLockstepNowMs());
@@ -1777,25 +1841,7 @@ namespace RTE {
 		const auto& config = producing->GetConfig();
 		producing->NoteLocalInputProduced(tick, static_cast<uint64_t>(g_TimerMan.GetAbsoluteTime()), static_cast<uint64_t>(GetLockstepWaitUs()));
 		if (producing->DeferLocalInput(tick, frames)) return true;
-		if (s_LockstepCoordinator->NeedsResyncPriming()) {
-			std::vector<NetLockstepFrame> batches(config.inputDelayFrames);
-			for (size_t index = 0; index < batches.size(); ++index) {
-				const uint64_t target = config.startFrame + index;
-				auto& input = batches[index];
-				const auto previous = s_RequeuedInputs.find(target);
-				if (previous != s_RequeuedInputs.end()) input = previous->second;
-				input.senderPeerId = config.localPeerId; input.targetFrame = target; input.roundId = s_LockstepCoordinator->GetRoundId();
-				if (previous == s_RequeuedInputs.end()) {
-					if (const auto commands = s_RequeuedCommands.find(target); commands != s_RequeuedCommands.end()) input.commands = commands->second;
-					if (const auto bindings = s_RequeuedPlayerBindings.find(target); bindings != s_RequeuedPlayerBindings.end()) input.commands.push_back({config.localPeerId, bindings->second});
-				}
-			}
-			if (!s_LockstepCoordinator->PrimeResyncInputs(batches, error)) return false;
-			const uint64_t primedEnd = config.startFrame + config.inputDelayFrames;
-			s_RequeuedCommands.erase(s_RequeuedCommands.begin(), s_RequeuedCommands.lower_bound(primedEnd));
-			s_RequeuedPlayerBindings.erase(s_RequeuedPlayerBindings.begin(), s_RequeuedPlayerBindings.lower_bound(primedEnd));
-			s_RequeuedInputs.erase(s_RequeuedInputs.begin(), s_RequeuedInputs.lower_bound(primedEnd));
-		}
+		if (!PrimeRestoredLockstepInputs(error)) return false;
 		const auto& acks = s_LockstepCoordinator->GetAuthoritativeCommandAcks();
 		if (const auto ack = acks.find(config.localPeerId); ack != acks.end()) {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
@@ -1929,6 +1975,10 @@ namespace RTE {
 
 	uint16_t ScenarioRunner::GetLockstepLocalInputDelay() {
 		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? GetLockstepInputDelayFrames() : 0;
+	}
+
+	uint64_t ScenarioRunner::GetLockstepEffectiveStartFrame() {
+		return s_LockstepCoordinator && s_LockstepCoordinator->IsRunning() ? s_LockstepCoordinator->GetStats().effectiveStartFrame : 0;
 	}
 
 	void ScenarioRunner::PeekPendingLocalQueuedPurchases(std::vector<PendingQueuedPurchase>& out, uint64_t canonicalTick) {
@@ -2490,6 +2540,16 @@ namespace RTE {
 		if (!s_ReplayWriter.Open(pending.path, pending.config, &pending.header, error)) {
 			return false;
 		}
+		if (s_LockstepCoordinator) {
+			if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed && !s_ReplayWriter.HasAgreedStart()) {
+				std::string startError;
+				if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
+					s_ReplayWriter.Close();
+					if (error) *error = startError;
+					return false;
+				}
+			}
+		}
 		s_WorldSegment = pending.header;
 		s_ReplayRecordClosed = false;
 		for (const HeldReplayFrame& held: pending.frames) {
@@ -2601,6 +2661,10 @@ namespace RTE {
 		return s_ReplayReader.GetStartFrame();
 	}
 
+	const std::optional<NetLockstepStart>& ScenarioRunner::GetLockstepReplayAgreedStart() {
+		return s_ReplayReader.GetAgreedStart();
+	}
+
 	bool ScenarioRunner::IsLockstepReplayWorldSegment() {
 		return s_ReplayReader.HasWorldSegment();
 	}
@@ -2630,14 +2694,38 @@ namespace RTE {
 			std::this_thread::sleep_for(std::chrono::milliseconds(lingerMs));
 			return true;
 		}
-		while (s_LockstepCoordinator->HasPendingRelayWork() && elapsed() < budgetMs) {
-			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+		const auto pending = [] {
+			return (s_LockstepCoordinator && (s_LockstepCoordinator->HasPendingRelayWork() || s_LockstepCoordinator->HasPeerBehindOurHorizon())) ||
+			    (s_PendingSessionTail && s_PendingSessionTail());
+		};
+		const auto pump = [] {
+			if (s_LockstepCoordinator) s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			if (s_SessionPump) s_SessionPump();
+		};
+		NetLockstepCoordinator* const draining = s_LockstepCoordinator;
+		draining->SetGoodbyeDrain(true);
+		pump();
+		// The budget is an IDLE bound, not a fixed spend: a peer whose rejoin is still advancing keeps the door
+		// open, and a peer that has stopped answering closes it after one budget.  The total is capped so an
+		// unattended run always ends.
+		constexpr uint32_t c_TotalDrainCapMs = 90000;
+		// A rejoin commits no frame while it authenticates, stages an image and replays a tail, so the round's
+		// own progress cannot witness it: the session's does.
+		const auto witness = [] {
+			return s_LockstepCoordinator->RemoteProgressSum() + (s_SessionProgress ? s_SessionProgress() : 0);
+		};
+		uint64_t progress = witness();
+		uint32_t idleFrom = elapsed();
+		while (pending() && elapsed() - idleFrom < budgetMs && elapsed() < c_TotalDrainCapMs) {
+			pump();
+			const uint64_t now = witness();
+			if (now != progress) { progress = now; idleFrom = elapsed(); }
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
-		const bool drained = !s_LockstepCoordinator->HasPendingRelayWork();
+		const bool drained = !pending();
 		const uint32_t drainMs = elapsed();
 		if (!drained) {
-			std::cout << "[net-match] quit with " << s_LockstepCoordinator->GetStats().relayBacklogBytes
+			std::cout << "[net-match] quit with " << (s_LockstepCoordinator ? s_LockstepCoordinator->GetStats().relayBacklogBytes : 0)
 			          << " bytes still owed to peers after " << drainMs << "ms" << std::endl;
 		} else if (drainMs > 0) {
 			std::cout << "[net-match] relay drained in " << drainMs << "ms" << std::endl;
@@ -2645,10 +2733,45 @@ namespace RTE {
 		// Keep relaying through the linger rather than idling it away: a client finishing its own last
 		// tick sends a frame its siblings still need, and we are the only route between them.
 		for (const uint32_t until = drainMs + lingerMs; elapsed() < until;) {
-			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			pump();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
+		if (s_LockstepCoordinator == draining) draining->SetGoodbyeDrain(false);
 		return drained;
+	}
+
+	bool ScenarioRunner::PollLockstepSimulationTick(uint64_t tick) {
+		if (!s_LockstepCoordinator || s_LockstepCoordinator->IsReplayPlayback() || WorldCatchUpActive()) return true;
+		const auto now = std::chrono::steady_clock::now();
+		if (s_PreSimWait) s_LockstepWaitUs += std::chrono::duration_cast<std::chrono::microseconds>(now - *s_PreSimWait).count();
+		s_PreSimWait.reset();
+		if (!s_LocalStartParkPublished) {
+			s_LocalStartParkPublished = true;
+			s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
+		}
+		s_LockstepCoordinator->Tick(NetLockstepNowMs());
+		if (s_SessionPump) s_SessionPump();
+		if (!s_LockstepCoordinator) return false;
+		if (s_LockstepCoordinator->IsFailed() || s_LockstepCoordinator->IsStopped()) {
+			SetControllerReplayError("tick " + std::to_string(tick) + " lockstep stopped: " + s_LockstepCoordinator->GetStats().timeoutReason);
+			return false;
+		}
+		// A service match measures and republishes activity startup after the
+		// lobby handshake. Keep the sim on the lobby countdown until the agreed
+		// first frame is installed; no AI hold can judge this interval.
+		if (!s_LockstepCoordinator->IsRunning()) {
+			s_PreSimWait = now;
+			return false;
+		}
+		std::string primeError;
+		if (!PrimeRestoredLockstepInputs(&primeError)) { SetControllerReplayError(primeError); return false; }
+		const auto& config = s_LockstepCoordinator->GetConfig();
+		if (s_LockstepCoordinator->HasReadyFrame(tick) || tick < s_LockstepCoordinator->GetStats().effectiveStartFrame ||
+		    (!s_LockstepCoordinator->IsMigrating() && (!s_LockstepCoordinator->UsesBoundedWait() || s_LockstepCoordinator->InputDelayAt(config.localPeerId, tick) == 0))) return true;
+		(void)s_LockstepCoordinator->NoteFrameWait(tick, NetLockstepNowMs());
+		if (s_LockstepCoordinator->HasReadyFrame(tick)) return true;
+		s_PreSimWait = now;
+		return false;
 	}
 
 	bool ScenarioRunner::WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error) {
@@ -2686,7 +2809,7 @@ namespace RTE {
 			s_LockstepCoordinator->NoteLocalStartPark(g_ActivityMan.GetLastRestartMs());
 		}
 		while (true) {
-			s_LockstepCoordinator->Tick(NetLockstepNowMs());
+			if (!s_LockstepCoordinator->HasReadyFrame(tick)) s_LockstepCoordinator->Tick(NetLockstepNowMs());
 			// A stalled round must not stall the admission plane with it: the peer we are waiting on may
 			// be waiting on an answer only this pump can send. Paced to the tick so the plane's own
 			// clock does not run ahead of the wall clock while we spin.
@@ -2736,6 +2859,17 @@ namespace RTE {
 								                                        std::move(allObservations), std::move(allValueObservations)});
 							}
 						} else {
+							if (!s_ReplayWriter.HasAgreedStart() && s_LockstepCoordinator) {
+								if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed) {
+									std::string startError;
+									if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
+										std::cout << "[net-match] replay recording stopped: " << startError << std::endl;
+										s_ReplayWriter.Close();
+										outFrame = std::move(ready);
+										return true;
+									}
+								}
+							}
 							std::string writeError;
 							if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
 								std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;

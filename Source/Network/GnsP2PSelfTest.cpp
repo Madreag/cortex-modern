@@ -626,6 +626,83 @@ namespace RTE {
 			return Finish(failure);
 		}
 
+		/// goodbye: the host sends one reliable goodbye and closes at once. The joiner reads both in one poll, and the goodbye
+		/// has to reach it ahead of the close that forgets the connection, with no fault from a receive on the closed link.
+		int RunGoodbye() {
+			Say("mode: single process; the host sends a goodbye and closes, and the joiner reads both in one poll");
+			EnableGnsOutput();
+			GnsP2PConfig hostConfig;
+			GnsP2PConfig joinerConfig;
+			SingleProcessConfigs(&hostConfig, &joinerConfig);
+
+			const auto toHost = std::make_shared<SignalQueue>("joiner->host");
+			const auto toJoiner = std::make_shared<SignalQueue>("host->joiner");
+			const auto releases = std::make_shared<std::atomic<int>>(0);
+			std::string failure;
+			{
+				Side host("host");
+				Side joiner("joiner");
+				StubRecvContext hostContext(toJoiner, releases, Answer::Accept);
+				StubRecvContext joinerContext(toHost, releases, Answer::Ignore);
+				bool joinerPolls = true;
+				const auto pump = [&] {
+					Deliver(*toHost, host.transport, hostContext, nullptr);
+					Deliver(*toJoiner, joiner.transport, joinerContext, nullptr);
+					Drain(host);
+					if (joinerPolls) Drain(joiner);
+				};
+
+				std::string error;
+				if (!host.transport.StartHostP2P(c_HostVirtualPort, hostConfig, &error)) {
+					failure = "StartHostP2P: " + error;
+				} else {
+					const std::string identity = host.transport.GetLocalIdentity();
+					if (!joiner.transport.ConnectP2P(new StubConnectionSignaling(toHost, releases), identity, c_HostVirtualPort, joinerConfig, &error)) {
+						failure = "ConnectP2P: " + error;
+					} else {
+						joiner.peer = 1;
+						if (!WaitUntil(15000, pump, [&] { return host.closed || joiner.closed || (joiner.connected && IsConnected(joiner) && IsConnected(host)); }) ||
+						    host.closed || joiner.closed) {
+							failure = "the connection did not reach Connected on both sides within 15s";
+						} else {
+							const std::vector<uint8_t> goodbye = Payload('G');
+							joinerPolls = false;
+							if (!host.transport.Send(host.peer, NetTransportLane::ControlReliable, goodbye, &error)) {
+								failure = "host Send: " + error;
+							} else {
+								host.transport.Disconnect(host.peer, "net-p2p-selftest says goodbye");
+								Say("host sent a goodbye and closed; the joiner stays unpolled while both cross");
+								// The close lands on the joiner's connection with no poll of either transport: both share this process's GNS, so a
+								// host poll would run the joiner's close callback too, and two processes never do that to each other.
+								const auto signalsOnly = [&] { Deliver(*toHost, host.transport, hostContext, nullptr); Deliver(*toJoiner, joiner.transport, joinerContext, nullptr); };
+								if (!WaitUntil(5000, signalsOnly, [&] { return joiner.transport.GetPeerConnectionInfo(joiner.peer).state == k_ESteamNetworkingConnectionState_ClosedByPeer; })) {
+									failure = "the host's close never reached the joiner's connection within 5s: state=" + std::to_string(joiner.transport.GetPeerConnectionInfo(joiner.peer).state) + " found=" + std::to_string(joiner.transport.GetPeerConnectionInfo(joiner.peer).found);
+								} else {
+									bool received = false, disconnected = false, faulted = false;
+									for (const NetTransportEvent& event : joiner.transport.PollEvents()) {
+										Say("joiner event " + EventName(event.type) + " reason=\"" + event.reason + "\" bytes=" + std::to_string(event.bytes.size()));
+										received |= event.type == NetTransportEventType::PacketReceived && event.bytes == goodbye && !disconnected;
+										disconnected |= event.type == NetTransportEventType::PeerDisconnected;
+										faulted |= event.type == NetTransportEventType::LocalTransportFault;
+									}
+									if (!received || !disconnected || faulted) {
+										failure = std::string("a goodbye delivered with its close was lost or faulted the joiner: goodbye_read=") + (received ? "1" : "0") +
+										          " disconnected=" + (disconnected ? "1" : "0") + " fault=" + (faulted ? "1" : "0");
+									}
+								}
+							}
+						}
+					}
+					joinerPolls = true;
+					pump();
+					host.transport.Stop();
+					joiner.transport.Stop();
+				}
+			}
+			Say("transports destroyed; GNS released " + std::to_string(releases->load()) + " stub signaling object(s)");
+			return Finish(failure);
+		}
+
 		int RunGather(int iceEnable) {
 			Say("mode: gather only; one joiner whose rendezvous the stub keeps, so ICE never learns a peer candidate and sends nothing");
 			EnableGnsOutput();
@@ -1198,8 +1275,17 @@ namespace RTE {
 		if ((args[0] == "host" || args[0] == "join") && args.size() == 2 && ParseNumber(args[1], &value) && value < 0xffff) {
 			return RunTwoProcess(args[0] == "host", value);
 		}
+		if (args.size() == 1 && args[0] == "goodbye") {
+			return RunGoodbye();
+		}
 		if (args.size() == 1 && args[0] == "identity-guard") {
 			return RunIdentityGuard();
+		}
+		if (args.size() == 1 && args[0] == "payload-hold") {
+			std::string error;
+			const bool passed = GnsTransport::PayloadHoldSelfTest(&error);
+			std::cout << "[net-p2p-selftest] " << (passed ? "PASS payload_hold_order_and_cap" : "FAIL: " + error) << std::endl;
+			return passed ? 0 : 1;
 		}
 		if (args[0] == "dir-host" || args[0] == "dir-join" || args[0] == "dir-reject" || args[0] == "dir-dup") {
 			const DirectoryCase variant = args[0] == "dir-reject" ? DirectoryCase::Reject : args[0] == "dir-dup" ? DirectoryCase::Dup : DirectoryCase::Plain;
@@ -1211,7 +1297,7 @@ namespace RTE {
 				return RunDirectory(variant, isHost, value, args[at + 1], args[at + 2], args[at + 3], isHost ? args[at + 4] : std::string());
 			}
 		}
-		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard"
+		std::cout << "[net-p2p-selftest] FAIL: usage: -net-p2p-selftest [reject | close-on-accept | gather <iceEnable> | drop j2h|h2j <n> | host <port> | join <port> | identity-guard | payload-hold | goodbye"
 		             " | dir-host <vport> <url> <pin> <session-id> <token> | dir-join <vport> <url> <pin> <session-id>"
 		             " | dir-reject|dir-dup host <vport> <url> <pin> <session-id> <token> | dir-reject|dir-dup join <vport> <url> <pin> <session-id>]" << std::endl;
 		return 1;

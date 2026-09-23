@@ -1,10 +1,13 @@
 #include "GnsTransport.h"
 #include "SettingsMan.h"
+#include "System.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <utility>
@@ -93,6 +96,18 @@ namespace RTE {
 		}
 		bool g_GnsInitialized = false;
 		uint32_t g_GnsRefCount = 0;
+		std::atomic<uint64_t> g_GnsLingerUntilMs{0};
+
+		uint64_t GnsNowMs() {
+			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		void KeepGnsForLingeringClose() {
+			const uint64_t deadline = GnsNowMs() + 100;
+			uint64_t prior = g_GnsLingerUntilMs.load();
+			while (prior < deadline && !g_GnsLingerUntilMs.compare_exchange_weak(prior, deadline)) {}
+		}
+
 
 		bool AcquireGns(std::string* error) {
 			if (!g_GnsInitialized) {
@@ -113,6 +128,8 @@ namespace RTE {
 			}
 			--g_GnsRefCount;
 			if (g_GnsRefCount == 0 && g_GnsInitialized) {
+				const uint64_t now = GnsNowMs(), deadline = g_GnsLingerUntilMs.load();
+				if (now < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(deadline - now));
 				GameNetworkingSockets_Kill();
 				g_GnsInitialized = false;
 			}
@@ -138,6 +155,54 @@ namespace RTE {
 		}
 
 		int s_SimulatedLagMs = 0;
+		int s_RendezvousLogLevel = 0;
+		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
+
+		std::string HeldPacketOverflowReason(size_t bytes) {
+			return "too much data before the connection was announced: " + std::to_string(bytes) + " > " + std::to_string(c_MaxHeldBytesBeforeAnnounce);
+		}
+
+#ifdef CCCP_WITH_GNS
+		bool QueueHeldPacket(std::map<HSteamNetConnection, std::vector<NetTransportEvent>>& heldPackets,
+		                    HSteamNetConnection connection, NetTransportEvent&& received) {
+			size_t bytes = received.bytes.size();
+			if (const auto found = heldPackets.find(connection); found != heldPackets.end())
+				for (const NetTransportEvent& event : found->second) bytes += event.bytes.size();
+			if (bytes > c_MaxHeldBytesBeforeAnnounce) return false;
+			heldPackets[connection].push_back(std::move(received));
+			return true;
+		}
+
+		void ReleaseHeldPackets(std::map<HSteamNetConnection, std::vector<NetTransportEvent>>& heldPackets,
+		                      std::vector<NetTransportEvent>& pending, HSteamNetConnection connection, NetPeerId peerId) {
+			pending.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			const auto held = heldPackets.find(connection);
+			if (held == heldPackets.end()) return;
+			for (NetTransportEvent& event : held->second) pending.push_back(std::move(event));
+			heldPackets.erase(held);
+		}
+#endif
+
+		// GNS calls this on its service thread while holding its lock: print, nothing else.
+		void GnsDebugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
+			static std::mutex mutex;
+			std::istringstream lines(message ? message : "");
+			std::lock_guard<std::mutex> lock(mutex);
+			for (std::string line; std::getline(lines, line);) {
+				if (!line.empty()) {
+					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + line);
+				}
+			}
+		}
+
+		// Diagnostics: routes GNS's own rendezvous spew into the run's log.
+		void ApplyRendezvousLog() {
+			if (s_RendezvousLogLevel <= 0) {
+				return;
+			}
+			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(s_RendezvousLogLevel), GnsDebugOutput);
+			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, s_RendezvousLogLevel);
+		}
 
 		// Test harness: splits the requested RTT across the send/recv legs of every connection.
 		void ApplySimulatedLag() {
@@ -187,6 +252,7 @@ namespace RTE {
 				SetError(error, "CreateListenSocketIP failed");
 				return false;
 			}
+			s_ListenerOwners[m_ListenSocket] = this;
 
 			m_PollGroup = m_Interface->CreatePollGroup();
 			if (m_PollGroup == k_HSteamNetPollGroup_Invalid) {
@@ -346,7 +412,7 @@ namespace RTE {
 			// Bypass the Nagle timer so queued reliable data (e.g. a join-reject) beats the close onto the wire.
 			m_Interface->FlushMessagesOnConnection(connection);
 			m_Interface->CloseConnection(connection, 0, reason.c_str(), true);
-			m_HasLingeringClose = true;
+			KeepGnsForLingeringClose();
 			ForgetConnection(connection);
 			// GNS reports nothing for a close we made ourselves, and forgetting the handle means its own
 			// later callback finds no peer either. A peer leaving must look the same to us however it
@@ -356,6 +422,7 @@ namespace RTE {
 
 		void Stop() {
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
+			m_Announced.clear(); m_HeldPackets.clear();
 			m_P2PMode = -1;
 			if (!m_Interface) {
 				m_IsHost = false;
@@ -374,17 +441,12 @@ namespace RTE {
 				// Flush + linger so a queued goodbye (lockstep stop, session close) reaches the peer.
 				m_Interface->FlushMessagesOnConnection(connection);
 				m_Interface->CloseConnection(connection, 0, "transport stopped", true);
-				m_HasLingeringClose = true;
+				KeepGnsForLingeringClose();
 				ForgetConnection(connection);
 			}
 
-			// A lingering close transmits on the GNS service thread; give it a beat before teardown.
-			if (m_HasLingeringClose) {
-				std::this_thread::sleep_for(std::chrono::milliseconds(100));
-				m_HasLingeringClose = false;
-			}
-
 			if (m_ListenSocket != k_HSteamListenSocket_Invalid) {
+				s_ListenerOwners.erase(m_ListenSocket);
 				m_Interface->CloseListenSocket(m_ListenSocket);
 				m_ListenSocket = k_HSteamListenSocket_Invalid;
 			}
@@ -405,16 +467,17 @@ namespace RTE {
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
+				// Drain delivered messages first: a close callback forgets the connection, which would
+				// drop a reject/goodbye that GNS already delivered alongside it.
+				PollIncomingMessages();
 				if (m_P2PMode >= 0) {
 					PollCallbacks();
 					const auto connections = m_PeersByConnection;
 					for (const auto& [connection, peer] : connections) {
 						if (!RouteAllowed(connection)) RefuseRoute(connection);
 					}
+					PollIncomingMessages();
 				}
-				// Drain delivered messages first: a close callback forgets the connection, which would
-				// drop a reject/goodbye that GNS already delivered alongside it.
-				PollIncomingMessages();
 				PollCallbacks();
 			}
 
@@ -454,14 +517,12 @@ namespace RTE {
 		}
 
 		void PollCallbacks() {
-			s_CallbackInstance = this;
 			m_Interface->RunCallbacks();
-			if (s_CallbackInstance == this) {
-				s_CallbackInstance = nullptr;
-			}
 		}
 
 		void PollIncomingMessages() {
+			// A client whose connection closed has nothing left to receive; asking for it is not a broken pump.
+			if (!m_IsHost && m_ServerConnection == k_HSteamNetConnection_Invalid) return;
 			while (m_Interface && m_IsStarted) {
 				SteamNetworkingMessage_t* message = nullptr;
 				const int count = m_IsHost
@@ -483,12 +544,20 @@ namespace RTE {
 				const auto peerIt = m_PeersByConnection.find(message->m_conn);
 				if (peerIt != m_PeersByConnection.end() && RouteAllowed(message->m_conn)) {
 					const uint8_t* data = static_cast<const uint8_t*>(message->m_pData);
-					m_PendingEvents.push_back({
+					NetTransportEvent received{
 						NetTransportEventType::PacketReceived,
 						peerIt->second,
 						LaneFromMessage(*message),
 						std::vector<uint8_t>(data, data + message->m_cbSize),
-						{}});
+						{}};
+					// GNS decrypts a P2P peer's payload as soon as the rendezvous is done, which over a
+					// relay routinely beats our own Connected callback. Handing it up before the session
+					// has been told the peer exists loses it, so it waits behind that announcement.
+					if (m_Announced.contains(message->m_conn)) {
+						m_PendingEvents.push_back(std::move(received));
+					} else {
+						HoldUntilAnnounced(message->m_conn, std::move(received));
+					}
 				}
 				message->Release();
 			}
@@ -545,7 +614,7 @@ namespace RTE {
 					}
 					if (m_IsHost && m_P2PMode >= 0) {
 						const auto peer = m_PeersByConnection.find(info->m_hConn);
-						if (peer != m_PeersByConnection.end()) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peer->second, NetTransportLane::ControlReliable, {}, {}});
+						if (peer != m_PeersByConnection.end()) AnnounceConnected(info->m_hConn, peer->second);
 					}
 					if (!m_IsHost && info->m_hConn == m_ServerConnection) {
 						EnsureClientConnected(info->m_hConn);
@@ -559,6 +628,40 @@ namespace RTE {
 				default:
 					break;
 			}
+		}
+
+		void HoldUntilAnnounced(HSteamNetConnection connection, NetTransportEvent&& received) {
+			size_t bytes = received.bytes.size();
+			if (const auto found = m_HeldPackets.find(connection); found != m_HeldPackets.end())
+				for (const NetTransportEvent& event : found->second) bytes += event.bytes.size();
+			if (!QueueHeldPacket(m_HeldPackets, connection, std::move(received))) {
+				const std::string reason = HeldPacketOverflowReason(bytes);
+				m_Interface->CloseConnection(connection, 0, reason.c_str(), false);
+				HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
+				return;
+			}
+		}
+
+		void AnnounceConnected(HSteamNetConnection connection, NetPeerId peerId) {
+			m_Announced.insert(connection);
+			ReleaseHeldPackets(m_HeldPackets, m_PendingEvents, connection, peerId);
+		}
+
+		bool PayloadHoldSelfTest(std::string* error) {
+			m_Announced.clear();
+			m_HeldPackets.clear();
+			m_PendingEvents.clear();
+			const HSteamNetConnection connection = static_cast<HSteamNetConnection>(41);
+			HoldUntilAnnounced(connection, NetTransportEvent{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}});
+			HoldUntilAnnounced(connection, NetTransportEvent{NetTransportEventType::PacketReceived, 2, NetTransportLane::InputUnreliable, {4, 5}, {}});
+			AnnounceConnected(connection, 2);
+			if (m_PendingEvents.size() != 3 || m_PendingEvents[0].type != NetTransportEventType::PeerConnected ||
+			    m_PendingEvents[1].bytes != std::vector<uint8_t>({1, 2, 3}) || m_PendingEvents[2].bytes != std::vector<uint8_t>({4, 5})) {
+				if (error) *error = "the announced transport did not release held packets in order: events=" + std::to_string(m_PendingEvents.size()) +
+				                  " first_type=" + std::to_string(static_cast<int>(m_PendingEvents.empty() ? NetTransportEventType::TransportError : m_PendingEvents[0].type));
+				return false;
+			}
+			return true;
 		}
 
 		void AcceptIncomingConnection(HSteamNetConnection connection) {
@@ -577,7 +680,7 @@ namespace RTE {
 			m_PeersByConnection[connection] = peerId;
 			m_ConnectionsByPeer[peerId] = connection;
 			s_ConnectionOwners[connection] = this;
-			if (m_P2PMode < 0) m_PendingEvents.push_back({NetTransportEventType::PeerConnected, peerId, NetTransportLane::ControlReliable, {}, {}});
+			if (m_P2PMode < 0) AnnounceConnected(connection, peerId);
 		}
 
 		void EnsureClientConnected(HSteamNetConnection connection) {
@@ -586,7 +689,7 @@ namespace RTE {
 				m_ConnectionsByPeer[1] = connection;
 				s_ConnectionOwners[connection] = this;
 			}
-			m_PendingEvents.push_back({NetTransportEventType::PeerConnected, 1, NetTransportLane::ControlReliable, {}, {}});
+			AnnounceConnected(connection, 1);
 		}
 
 		void HandleConnectionClosed(HSteamNetConnection connection, const std::string& reason, ESteamNetworkingConnectionState oldState) {
@@ -609,6 +712,8 @@ namespace RTE {
 
 		void ForgetConnection(HSteamNetConnection connection) {
 			m_RouteLogged.erase(connection);
+			m_Announced.erase(connection);
+			m_HeldPackets.erase(connection);
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt != m_PeersByConnection.end()) {
 				m_ConnectionsByPeer.erase(peerIt->second);
@@ -631,8 +736,10 @@ namespace RTE {
 				ownerIt->second->OnConnectionStatusChanged(info);
 				return;
 			}
-			if (s_CallbackInstance) {
-				s_CallbackInstance->OnConnectionStatusChanged(info);
+			// A process-wide callback belongs to its listener, not the transport polling it.
+			if (info->m_info.m_eState == k_ESteamNetworkingConnectionState_Connecting) {
+				const auto listener = s_ListenerOwners.find(info->m_info.m_hListenSocket);
+				if (listener != s_ListenerOwners.end()) listener->second->OnConnectionStatusChanged(info);
 			}
 		}
 
@@ -652,12 +759,14 @@ namespace RTE {
 				return false;
 			}
 			ApplySimulatedLag();
+			ApplyRendezvousLog();
 			std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 			m_ListenSocket = m_Interface->CreateListenSocketP2P(virtualPort, static_cast<int>(connectionConfigs.size()), connectionConfigs.data());
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
 				SetError(error, "CreateListenSocketP2P failed");
 				return false;
 			}
+			s_ListenerOwners[m_ListenSocket] = this;
 
 			m_PollGroup = m_Interface->CreatePollGroup();
 			if (m_PollGroup == k_HSteamNetPollGroup_Invalid) {
@@ -690,6 +799,7 @@ namespace RTE {
 				m_Interface = SteamNetworkingSockets();
 				if (ApplyP2PIdentity(config, error)) {
 					ApplySimulatedLag();
+					ApplyRendezvousLog();
 					std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 					if (config.localVirtualPort >= 0) {
 						connectionConfigs.emplace_back();
@@ -905,7 +1015,6 @@ namespace RTE {
 		bool m_IsHost = false;
 		bool m_IsStarted = false;
 		int m_P2PMode = -1;
-		bool m_HasLingeringClose = false;
 		ISteamNetworkingSockets* m_Interface = nullptr;
 		HSteamListenSocket m_ListenSocket = k_HSteamListenSocket_Invalid;
 		HSteamNetPollGroup m_PollGroup = k_HSteamNetPollGroup_Invalid;
@@ -916,8 +1025,10 @@ namespace RTE {
 		std::vector<NetTransportEvent> m_PendingEvents;
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
+		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
+		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 
-		static Impl* s_CallbackInstance;
+		static std::map<HSteamListenSocket, Impl*> s_ListenerOwners;
 		static std::map<HSteamNetConnection, Impl*> s_ConnectionOwners;
 		static std::set<const Impl*> s_LiveImpls;
 
@@ -929,7 +1040,7 @@ namespace RTE {
 		} m_LiveImplRegistration{this};
 	};
 
-	GnsTransport::Impl* GnsTransport::Impl::s_CallbackInstance = nullptr;
+	std::map<HSteamListenSocket, GnsTransport::Impl*> GnsTransport::Impl::s_ListenerOwners;
 	std::map<HSteamNetConnection, GnsTransport::Impl*> GnsTransport::Impl::s_ConnectionOwners;
 	std::set<const GnsTransport::Impl*> GnsTransport::Impl::s_LiveImpls;
 
@@ -1077,6 +1188,51 @@ namespace RTE {
 		s_SimulatedLagMs = lagMs;
 #else
 		(void)lagMs;
+#endif
+	}
+
+	void GnsTransport::SetRendezvousLogLevel(int level) {
+#ifdef CCCP_WITH_GNS
+		s_RendezvousLogLevel = level;
+#else
+		(void)level;
+#endif
+	}
+
+	bool GnsTransport::PayloadHoldSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		GnsTransport transport;
+		if (!transport.m_Impl->PayloadHoldSelfTest(error)) return false;
+		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> held;
+		const HSteamNetConnection connection = static_cast<HSteamNetConnection>(41);
+		NetTransportEvent first{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable, {1, 2, 3}, {}};
+		NetTransportEvent second{NetTransportEventType::PacketReceived, 2, NetTransportLane::InputUnreliable, {4, 5}, {}};
+		if (!QueueHeldPacket(held, connection, std::move(first)) || !QueueHeldPacket(held, connection, std::move(second))) {
+			if (error) *error = "the payload hold rejected a packet below its cap: first_bytes=3 second_bytes=2 cap=" + std::to_string(c_MaxHeldBytesBeforeAnnounce);
+			return false;
+		}
+		const auto found = held.find(connection);
+		if (found == held.end() || found->second.size() != 2 || found->second[0].bytes != std::vector<uint8_t>({1, 2, 3}) ||
+		    found->second[1].bytes != std::vector<uint8_t>({4, 5})) {
+			if (error) *error = "the payload hold did not preserve pre-announcement order: connections=" + std::to_string(held.size()) +
+			                  " packets=" + std::to_string(found == held.end() ? 0 : found->second.size());
+			return false;
+		}
+		NetTransportEvent oversized{NetTransportEventType::PacketReceived, 2, NetTransportLane::ControlReliable,
+		                            std::vector<uint8_t>(c_MaxHeldBytesBeforeAnnounce, 0), {}};
+		const size_t attemptedBytes = 5 + oversized.bytes.size();
+		const bool acceptedOversized = QueueHeldPacket(held, connection, std::move(oversized));
+		if (acceptedOversized || HeldPacketOverflowReason(attemptedBytes).find(std::to_string(attemptedBytes)) == std::string::npos ||
+		    HeldPacketOverflowReason(attemptedBytes).find(std::to_string(c_MaxHeldBytesBeforeAnnounce)) == std::string::npos) {
+			if (error) *error = "the payload hold did not enforce and name its byte cap: attempted_bytes=" + std::to_string(attemptedBytes) +
+			                  " cap=" + std::to_string(c_MaxHeldBytesBeforeAnnounce) + " accepted=" +
+			                  std::to_string(acceptedOversized);
+			return false;
+		}
+		return true;
+#else
+		if (error) *error = "GameNetworkingSockets support is not compiled in";
+		return false;
 #endif
 	}
 

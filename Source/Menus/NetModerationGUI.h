@@ -129,6 +129,19 @@ namespace RTE {
 		/// @param textBands Each seat message band as the editor reports it, ungrown, in any order.
 		/// @param reservedTop The highest top an open chat entry's run leaves the panel; 0 when no entry is open.
 		static PanelPlacement PlaceSeatsPanelOnScreen(int screenHeight, int rowHeight, const std::vector<PanelBand>& textBands, int reservedTop = 0);
+		/// Whether the in-match net surfaces draw. They belong to the match, not to the running round: a
+		/// round that completed or stopped still owes this peer its status box, chat and toasts until the
+		/// match activity itself is over. The service detaches the coordinator before it reports the end,
+		/// so an attached coordinator alone cannot answer this.
+		/// @param controllerSyncActive The lockstep round is running.
+		/// @param matchResyncing The service is rebuilding the round.
+		/// @param hostLost The snapshot's status names a lost host.
+		/// @param lockstepAttached A coordinator is still attached to this peer, running or not.
+		/// @param matchEnded The service has completed the match this peer is still standing in.
+		/// @param activityInMatch The match activity exists and is not over - a paused one still counts.
+		static bool MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch);
+		/// The match activity this peer is standing in, paused or not, until it ends.
+		static bool ActivityInMatch();
 
 		struct Controls {
 			GUILabel* name = nullptr;
@@ -176,6 +189,7 @@ namespace RTE {
 		int m_GhostWatchProbe = -1;      //!< The last frame's pixel inside the live band, so a blind scan shows.
 		void GhostWatchTick();
 		long long m_StatusWaitStartedUs = 0;
+		uint32_t m_StatusWaitReclaimEpoch = 0;
 		long long m_LastStatusObservationMs = 0;
 		bool m_LastSlowNotice = false;
 		bool m_LastHostLost = false;

@@ -7,6 +7,10 @@ from pathlib import Path
 import sys
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
+from contextlib import nullcontext
+import stat
+import tempfile
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -25,6 +29,55 @@ def frame(number, wall, pose, tick=10):
 
 
 class ReportTests(unittest.TestCase):
+    def test_host_earlier_replay_mismatch_is_not_hidden(self):
+        from feel.retained_resume import compare_live_hashes
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            good = {"tick": 1, "sim_gated": "good", "subsystems": {"actors": "same"}}
+            bad = dict(good, sim_gated="bad")
+            (root / 'host.jsonl').write_text(json.dumps(bad) + '\n' + json.dumps(good) + '\n')
+            (root / 'client.jsonl').write_text(json.dumps(good) + '\n')
+            self.assertEqual(compare_live_hashes(root / 'host.jsonl', root / 'client.jsonl', 1)[0]['mismatched_ticks'], 1)
+
+    def test_compressed_records_keep_the_original_bytes_and_detector(self):
+        from tempfile import TemporaryDirectory
+        from feel.records import compress_case_records, open_record
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            dump = root / 'host_trace.json.simdump.txt'
+            original = b'1 activity active\n2 activity active\n'
+            dump.write_bytes(original)
+            records = compress_case_records(root)
+            self.assertEqual(records[0]['original_bytes'], len(original))
+            with open_record(dump, 'rb') as stream:
+                self.assertEqual(stream.read(), original)
+            self.assertEqual(report.early_decision_tick(root, 'host'), 2)
+
+    def test_matrix_footprint_has_its_own_limit(self):
+        import feel_measure
+        entry = SimpleNamespace(stat=lambda **kwargs: SimpleNamespace(st_mode=stat.S_IFREG, st_size=7_000_000_000,
+                                                                      st_file_attributes=0))
+        with patch.object(Path, 'exists', return_value=True), patch.object(feel_measure.os, 'scandir', return_value=nullcontext([entry])):
+            self.assertEqual(feel_measure.scratch_bytes(Path('matrix'), feel_measure.MATRIX_BYTE_LIMIT), 7_000_000_000)
+        with patch.object(Path, 'exists', return_value=True), patch.object(feel_measure.os, 'scandir', return_value=nullcontext([entry])):
+            with self.assertRaisesRegex(RuntimeError, '5000000000 byte limit'):
+                feel_measure.scratch_bytes(Path('one-case'))
+
+    def test_live_hash_comparison_keeps_every_replayed_pass(self):
+        from tempfile import TemporaryDirectory
+        from feel.retained_resume import compare_live_hashes
+        with TemporaryDirectory() as folder:
+            host, client = Path(folder) / 'host.jsonl', Path(folder) / 'client.jsonl'
+            rows = [dict(tick=tick, sim_gated=str(tick), subsystems={'controller': str(tick)}) for tick in range(1, 61)]
+            host.write_text('\n'.join(map(json.dumps, rows)), encoding='utf-8')
+            repeated = copy.deepcopy(rows[:40] + rows[20:])
+            repeated[12]['subsystems']['controller'] = 'different'
+            client.write_text('\n'.join(map(json.dumps, repeated)), encoding='utf-8')
+            compared = compare_live_hashes(host, client, 1)
+            self.assertEqual([row['compared_ticks'] for row in compared], [40, 40])
+            self.assertEqual([row['mismatched_ticks'] for row in compared], [1, 0])
+            self.assertEqual(compared[0]['first_mismatches'], [13])
+
     def item9a(self, *, wall_ms=15000, waits='', missing=0, complete=True, silent=False, survivor_log='', client_log='', final_tick=1200):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
@@ -51,6 +104,24 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(self.item9a(waits='[net-frame-wait] frame=600 wait_ms=51')['pins']['item9a_longest_wait']['status'], 'MISS')
         waits = '\n'.join(f'[net-frame-wait] frame={tick} wait_ms=50' for tick in (600, 700, 800))
         self.assertEqual(self.item9a(waits=waits)['pins']['item9a_net_wait']['status'], 'MISS')
+
+    def test_same_machine_tps_ruling_retains_block_limits(self):
+        reference = dict(steady_wall_tps=55, evidence='single-player.jsonl')
+        measured = self.item9a(wall_ms=900000 / 54)
+        report.apply_tps_call(measured, reference)
+        self.assertTrue(measured['pass_check'])
+        self.assertEqual(measured['tps_call']['absolute']['status'], 'MISS')
+        self.assertFalse(measured['pins']['item9a_confirmed_horizon_lag']['required'])
+        blocked = self.item9a(wall_ms=900000 / 54, waits='[net-frame-wait] frame=600 wait_ms=51')
+        report.apply_tps_call(blocked, reference)
+        self.assertFalse(blocked['pass_check'])
+        too_slow = self.item9a(wall_ms=900000 / 52)
+        report.apply_tps_call(too_slow, reference)
+        self.assertEqual(too_slow['pins']['item9a_wall_tps']['status'], 'MISS')
+        fast_box = self.item9a(wall_ms=900000 / 59)
+        report.apply_tps_call(fast_box, dict(steady_wall_tps=60, evidence='stock.jsonl'))
+        self.assertEqual(fast_box['pins']['item9a_wall_tps']['status'], 'MISS')
+        self.assertNotIn('required', fast_box['pins']['item9a_confirmed_horizon_lag'])
 
     def test_item9a_recovery_elapsed_time_cannot_be_reset_away(self):
         result = self.item9a(wall_ms=15700)
@@ -165,6 +236,35 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(raised.exception.fail_line,
                              'FAIL: decided at tick 356; measurement window is 1200 ticks')
 
+    def test_duplicate_canonical_actor_is_a_failed_pin_with_identity(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            dump = Path(folder) / 'sp_trace.json.simdump.txt'
+            actor_line = '1 actor uid=7 Brain Robot pos=0x1.0p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            moved_line = '1 actor uid=7 Brain Robot pos=0x1.8p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            dump.write_text('1 activity running\n' + actor_line + moved_line +
+                            ''.join(f'{tick} activity running\n' for tick in range(2, 1201)), encoding='utf-8')
+            values = report.canonical_positions(dump, {(1, 7)})
+            duplicate = getattr(report.canonical_positions, 'last_duplicate', None)
+            self.assertEqual(values[(1, 7)][0]['pos'], [1.0, 1.0])
+            self.assertEqual(duplicate['first']['tick'], 1)
+            self.assertEqual(duplicate['first']['actor'], 7)
+            self.assertEqual(duplicate['first']['first_line'], 2)
+            self.assertEqual(report.pin(duplicate, 'no duplicate', duplicate is None, [dump])['status'], 'MISS')
+
+    def test_repeated_identical_canonical_record_is_not_a_duplicate(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as folder:
+            dump = Path(folder) / 'sp_trace.json.simdump.txt'
+            actor_line = '1 actor uid=7 Brain Robot pos=0x1.0p+0,0x1.0p+0 prev=0x1.0p+0,0x1.0p+0\n'
+            # A resync re-writes the epoch it restarted from; the record is the same one.
+            dump.write_text('1 activity running\n' + actor_line + actor_line +
+                            ''.join(f'{tick} activity running\n' for tick in range(2, 1201)), encoding='utf-8')
+            values = report.canonical_positions(dump, {(1, 7)})
+            self.assertEqual(values[(1, 7)][0]['pos'], [1.0, 1.0])
+            self.assertIsNone(getattr(report.canonical_positions, 'last_duplicate', None))
+            self.assertEqual(getattr(report.canonical_positions, 'last_repeats', 0), 1)
+
     def test_early_decision_tick_reads_killall_from_the_run_log(self):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as folder:
@@ -185,6 +285,79 @@ class ReportTests(unittest.TestCase):
             result = report.firing_records([press], [shot], [], Path('stdout'))[0]
         self.assertEqual(result['audio_ms_upper'], 10)
         self.assertFalse(result['once'])
+
+
+class EarlyDecidedArmTest(unittest.TestCase):
+    """An arm whose peer stopped early is a failed pin on that arm, not the end of the matrix."""
+
+    @staticmethod
+    def arm(folder, last_tick):
+        run = Path(folder) / '200ms-60hz-on'
+        (run / 'client').mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps(dict(ticks=1200, launches_complete=False, mode='two-peer')), encoding='utf-8')
+        lines = ['%d activity running' % tick for tick in range(1, last_tick + 1) if tick % 22]
+        (run / 'client_trace.json.simdump.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        (run / 'client-live.jsonl').write_text(''.join(
+            json.dumps(dict(tick=tick, wall_ms=1000 + tick * 19)) + '\n' for tick in range(1, last_tick + 1)), encoding='utf-8')
+        (run / 'client' / 'stdout.log').write_text('[net-match] recovery requested tick=1148\n', encoding='utf-8')
+        return run
+
+    def test_an_early_decided_peer_is_a_failed_pin_and_the_other_arms_still_measure(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1147)
+            result = feel_measure.reduce_or_fail(run, 'client')
+            pinned = result['pins']['item9a_measurement_window']
+            self.assertEqual(pinned['status'], 'MISS')
+            self.assertEqual(pinned['value'], 1147)
+            self.assertEqual(pinned['detail'], 'FAIL: decided at tick 1147; measurement window is 1200 ticks')
+            self.assertEqual(result['early_decision']['tick'], 1147)
+            self.assertIn('client_trace.json.simdump.txt', result['early_decision']['evidence'])
+            self.assertFalse(result['measurement_complete'])
+            self.assertFalse(result['pass_check'])
+
+
+    def test_an_arm_with_no_measured_frames_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1200)
+            # A complete dump: the reducer gets past the window check and fails on the records.
+            (run / 'client_trace.json.simdump.txt').write_text(
+                ''.join('%d activity running' % tick + chr(10) for tick in range(1, 1201)), encoding='utf-8')
+            (run / 'client' / 'feel').mkdir(parents=True)
+            (run / 'client' / 'feel' / 'raw.jsonl').write_text(
+                json.dumps(dict(type='schema', version=1)) + '\n', encoding='utf-8')
+            result = feel_measure.reduce_or_fail(run, 'client')
+            pinned = result['pins']['item9a_reduction']
+            self.assertEqual(pinned['status'], 'MISS')
+            self.assertIn('no measured match frames or iterations', pinned['detail'])
+            self.assertIn('ValueError', result['reduction_failure'])
+            self.assertFalse(result['measurement_complete'])
+            self.assertFalse(result['pass_check'])
+
+    def test_an_arm_with_no_run_files_at_all_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = Path(folder) / '200ms-loss5'
+            (run / 'host').mkdir(parents=True)
+            (run / 'manifest.json').write_text(json.dumps(dict(ticks=1200, launches_complete=False)), encoding='utf-8')
+            result = feel_measure.reduce_or_fail(run, 'host')
+            self.assertEqual(result['pins']['item9a_reduction']['status'], 'MISS')
+            self.assertFalse(result['measurement_complete'])
+
+    def test_a_missing_key_in_one_arm_is_a_failed_pin(self):
+        sys.path.insert(0, str(Path(report.__file__).resolve().parents[2]))
+        import feel_measure
+        with tempfile.TemporaryDirectory() as folder:
+            run = self.arm(folder, 1200)
+            with patch.object(feel_measure, 'reduce_peer', side_effect=KeyError('auto_picks')):
+                result = feel_measure.reduce_or_fail(run, 'client')
+            self.assertEqual(result['pins']['item9a_reduction']['status'], 'MISS')
+            self.assertIn('auto_picks', result['reduction_failure'])
+            self.assertFalse(result['pass_check'])
 
 
 if __name__ == '__main__':

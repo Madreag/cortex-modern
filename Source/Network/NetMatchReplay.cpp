@@ -127,6 +127,8 @@ namespace RTE {
 		m_DiagnosticBytes.clear();
 		m_DiagnosticFrames = 0;
 		m_DiagnosticTruncated = false;
+		m_AgreedStart.reset();
+		m_AgreedStartWritten = false;
 		m_Out.open(path, std::ios::binary | std::ios::trunc);
 		if (!m_Out) {
 			if (error) *error = "could not open replay file for writing: " + path;
@@ -166,6 +168,35 @@ namespace RTE {
 		if (header.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 			m_DiagnosticBytes = header;
 		} else m_DiagnosticTruncated = true;
+		return true;
+	}
+
+	bool NetMatchReplayWriter::SetAgreedStart(const NetLockstepStart& start, std::string* error) {
+		if (!m_Out.is_open()) {
+			if (error) *error = "replay writer is not open";
+			return false;
+		}
+		if (!start.agreedStartRecord) {
+			if (error) *error = "replay agreed start is not an agreed-start record";
+			return false;
+		}
+		if (m_AgreedStartWritten) return m_AgreedStart && *m_AgreedStart == start;
+		if (m_FramesWritten != 0) {
+			if (error) *error = "replay agreed start must precede the first frame";
+			return false;
+		}
+		NetLockstepError codecError;
+		std::vector<uint8_t> wire;
+		if (!NetLockstepCodec::Encode({start}, wire, &codecError)) {
+			if (error) *error = "could not encode replay agreed start: " + codecError.message;
+			return false;
+		}
+		std::vector<uint8_t> payload;
+		AppendU32(payload, static_cast<uint32_t>(wire.size()));
+		payload.insert(payload.end(), wire.begin(), wire.end());
+		if (!WriteRecordPayload(payload, error)) return false;
+		m_AgreedStart = start;
+		m_AgreedStartWritten = true;
 		return true;
 	}
 
@@ -277,23 +308,32 @@ namespace RTE {
 		for (const NetValueObservation& observation : valueObservations) {
 			bytes.push_back(observation.senderPeerId);
 		}
+		if (!WriteRecordPayload(bytes, error)) return false;
+		++m_FramesWritten;
+		return true;
+	}
+
+	bool NetMatchReplayWriter::WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error) {
+		if (!m_Out.is_open() || payload.empty()) {
+			if (error) *error = "replay writer is not open";
+			return false;
+		}
 		std::vector<uint8_t> lengthPrefix;
-		AppendU32(lengthPrefix, static_cast<uint32_t>(bytes.size()));
-		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(bytes));
+		AppendU32(lengthPrefix, static_cast<uint32_t>(payload.size()));
+		AppendU32(lengthPrefix, ControllerFrameCodec::PayloadChecksum(payload));
 		m_Out.write(reinterpret_cast<const char*>(lengthPrefix.data()), static_cast<std::streamsize>(lengthPrefix.size()));
-		m_Out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+		m_Out.write(reinterpret_cast<const char*>(payload.data()), static_cast<std::streamsize>(payload.size()));
 		if (!m_Out) {
-			if (error) *error = "could not write a replay frame";
+			if (error) *error = "could not write a replay record";
 			return false;
 		}
 		if (!m_DiagnosticTruncated) {
-			if (m_DiagnosticBytes.size() + lengthPrefix.size() + bytes.size() + 4 <= TelemetryBundle::c_MemberLimit) {
+			if (m_DiagnosticBytes.size() + lengthPrefix.size() + payload.size() + 4 <= TelemetryBundle::c_MemberLimit) {
 				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), lengthPrefix.begin(), lengthPrefix.end());
-				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), bytes.begin(), bytes.end());
+				m_DiagnosticBytes.insert(m_DiagnosticBytes.end(), payload.begin(), payload.end());
 				++m_DiagnosticFrames;
 			} else m_DiagnosticTruncated = true;
 		}
-		++m_FramesWritten;
 		return true;
 	}
 
@@ -317,6 +357,8 @@ namespace RTE {
 			m_Out.close();
 		}
 		m_FramesWritten = 0;
+		m_AgreedStart.reset();
+		m_AgreedStartWritten = false;
 	}
 
 	bool NetMatchReplayReader::Open(const std::string& path, std::string* error) {
@@ -431,6 +473,7 @@ namespace RTE {
 	}
 
 	bool NetMatchReplayReader::ReadFrameFromFile(NetLockstepFrame& outFrame, bool& outEof, std::string* error) {
+	while (true) {
 		outEof = false;
 		if (!m_In.is_open()) {
 			if (error) *error = "replay reader is not open";
@@ -491,6 +534,7 @@ namespace RTE {
 		}
 		size_t consumed = 0;
 		bool haveFrame = false;
+		std::optional<NetLockstepStart> agreedStart;
 		while (consumed < wireLength) {
 			const size_t packetSize = LockstepPacketSize(bytes.data() + wireOffset + consumed, wireLength - consumed);
 			if (packetSize == 0) {
@@ -502,25 +546,35 @@ namespace RTE {
 				if (error) *error = "could not decode a replay record: " + decoded.error.message;
 				return false;
 			}
-			const NetLockstepFrame* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload);
-			if (!frame) {
-				if (error) *error = "replay record is not a frame";
-				return false;
-			}
-			if (!haveFrame) {
-				outFrame = *frame;
-				haveFrame = true;
+			if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload)) {
+				if (!start->agreedStartRecord || agreedStart) {
+					if (error) *error = "replay metadata is not a single agreed-start record";
+					return false;
+				}
+				agreedStart = *start;
+			} else if (const auto* frame = std::get_if<NetLockstepFrame>(&decoded.packet.payload)) {
+				if (!haveFrame) {
+					outFrame = *frame;
+					haveFrame = true;
+				} else {
+					outFrame.frames.insert(outFrame.frames.end(), frame->frames.begin(), frame->frames.end());
+					outFrame.commands.insert(outFrame.commands.end(), frame->commands.begin(), frame->commands.end());
+					outFrame.observations.insert(outFrame.observations.end(), frame->observations.begin(), frame->observations.end());
+					outFrame.valueObservations.insert(outFrame.valueObservations.end(), frame->valueObservations.begin(), frame->valueObservations.end());
+				}
 			} else {
-				outFrame.frames.insert(outFrame.frames.end(), frame->frames.begin(), frame->frames.end());
-				outFrame.commands.insert(outFrame.commands.end(), frame->commands.begin(), frame->commands.end());
-				outFrame.observations.insert(outFrame.observations.end(), frame->observations.begin(), frame->observations.end());
-				outFrame.valueObservations.insert(outFrame.valueObservations.end(), frame->valueObservations.begin(), frame->valueObservations.end());
+				if (error) *error = "replay record is not a frame or agreed-start metadata";
+				return false;
 			}
 			consumed += packetSize;
 		}
 		if (!haveFrame) {
-			if (error) *error = "replay record is not a frame";
-			return false;
+			if (!agreedStart) {
+				if (error) *error = "replay record contains no frame";
+				return false;
+			}
+			m_AgreedStart = *agreedStart;
+			continue;
 		}
 		if (m_Version >= 5) {
 			const size_t senderOffset = wireOffset + wireLength;
@@ -557,6 +611,7 @@ namespace RTE {
 		}
 		m_LastStatus = NetReplayReadStatus::Frame;
 		return true;
+	}
 	}
 
 	std::string NetReplayVerifyReport::ToJson() const {
@@ -658,6 +713,7 @@ namespace RTE {
 		m_ControllerFrameVersion = 0;
 		m_HasSegment = false;
 		m_Segment = {};
+		m_AgreedStart.reset();
 	}
 
 } // namespace RTE

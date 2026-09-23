@@ -49,18 +49,40 @@ def split_passes(lines: list[dict]) -> list[list[dict]]:
     return passes
 
 
+# Which seat drives an actor on THIS machine is routing, not simulation: the owner's seat is CIM_PLAYER with its
+# player number on its own machine and CIM_NETWORK/NoPlayer on every other one, so "controller_route" is per-peer by
+# construction and can never match across peers. The input those seats APPLY is the "controller" subsystem and is
+# compared unchanged, so this exclusion cannot hide an input difference. Evidence: the live controller dumps of
+# D:/mx/item9a-20260919/r9h-11-matrix/autosave-200ms at ticks 1 and 181+ (ctrl_input_mode host=1 client=2,
+# ctrl_player host=0 client=-1 on the host's seat, mirrored on the client's), with sim_gated equal on every tick.
+PER_PEER_SUBSYSTEMS = frozenset({"controller_route"})
+
+
 def compare_live_hashes(host_path: Path, client_path: Path, first_tick: int) -> list[dict]:
-    """Every tick both peers ran carries the same gated hash and the same subsystem hashes."""
-    host = {entry["tick"]: entry for entry in read_live_hashes(host_path)}
+    """Every tick both peers ran carries the same gated hash and the same cross-peer subsystem hashes."""
+    host = {}
+    for entry in read_live_hashes(host_path):
+        host.setdefault(entry["tick"], []).append(entry)
+
+    def shared_subsystems(entry):
+        return {name: value for name, value in entry["subsystems"].items() if name not in PER_PEER_SUBSYSTEMS}
+
     results = []
     for index, run in enumerate(split_passes(read_live_hashes(client_path))):
         shared = [entry for entry in run if entry["tick"] >= first_tick and entry["tick"] in host]
         mismatched = [entry["tick"] for entry in shared
-                      if entry["sim_gated"] != host[entry["tick"]]["sim_gated"] or entry["subsystems"] != host[entry["tick"]]["subsystems"]]
-        subsystems = sorted({name for entry in shared for name, value in entry["subsystems"].items()
-                             if value != host[entry["tick"]]["subsystems"].get(name)})
+                      if any(entry["sim_gated"] != reference["sim_gated"]
+                             or shared_subsystems(entry) != shared_subsystems(reference)
+                             for reference in host[entry["tick"]])]
+        # The applied input per actor is its own assertion: the exclusion above must never be able to hide one.
+        applied = [entry["tick"] for entry in shared
+                   if any(entry["subsystems"].get("controller") != reference["subsystems"].get("controller")
+                          for reference in host[entry["tick"]])]
+        subsystems = sorted({name for entry in shared for name, value in shared_subsystems(entry).items()
+                             if any(value != reference["subsystems"].get(name) for reference in host[entry["tick"]])})
         results.append({"pass": index, "first_tick": run[0]["tick"], "last_tick": run[-1]["tick"], "compared_ticks": len(shared),
-                        "mismatched_ticks": len(mismatched), "first_mismatches": mismatched[:8], "subsystems": subsystems})
+                        "mismatched_ticks": len(mismatched), "first_mismatches": mismatched[:8], "subsystems": subsystems,
+                        "mismatched_applied_input_ticks": len(applied), "first_applied_input_mismatches": applied[:8]})
     return results
 
 

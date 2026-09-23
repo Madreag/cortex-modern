@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,9 @@ namespace RTE {
 		/// A committed tick with every peer's sound observations; their senders trail the record like the commands'.
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, std::string* error);
 		bool WriteFrame(uint64_t frame, const std::vector<ControllerFrame>& frames, const std::vector<NetGameCommand>& commands, const std::vector<NetSoundObservation>& observations, const std::vector<NetValueObservation>& valueObservations, std::string* error);
+		/// Stores the host's one-time agreed-start boundary before the first recorded tick.
+		bool SetAgreedStart(const NetLockstepStart& start, std::string* error = nullptr);
+		bool HasAgreedStart() const { return m_AgreedStart.has_value(); }
 		void Close();
 		bool IsOpen() const { return m_Out.is_open(); }
 		uint64_t GetFramesWritten() const { return m_FramesWritten; }
@@ -78,11 +82,14 @@ namespace RTE {
 		bool CopyDiagnosticReplay(std::string& bytes, bool& truncated) const;
 
 	private:
+		bool WriteRecordPayload(const std::vector<uint8_t>& payload, std::string* error);
 		std::ofstream m_Out;
 		uint64_t m_FramesWritten = 0;
 		std::vector<uint8_t> m_DiagnosticBytes;
 		uint64_t m_DiagnosticFrames = 0;
 		bool m_DiagnosticTruncated = false;
+		std::optional<NetLockstepStart> m_AgreedStart;
+		bool m_AgreedStartWritten = false;
 	};
 
 	class NetMatchReplayReader {
@@ -98,6 +105,7 @@ namespace RTE {
 		/// Whether this recording is a world segment; a version-5 or older file never is.
 		bool HasWorldSegment() const { return m_HasSegment; }
 		const NetWorldSegmentHeader& GetWorldSegment() const { return m_Segment; }
+		const std::optional<NetLockstepStart>& GetAgreedStart() const { return m_AgreedStart; }
 		uint16_t GetVersion() const { return m_Version; }
 		/// The ControllerFrame version the records decode with; pre-version-3 files carry the legacy frame.
 		uint16_t GetControllerFrameVersion() const { return m_ControllerFrameVersion; }
@@ -117,6 +125,7 @@ namespace RTE {
 		uint16_t m_ControllerFrameVersion = 0;
 		bool m_HasSegment = false;
 		NetWorldSegmentHeader m_Segment;
+		std::optional<NetLockstepStart> m_AgreedStart;
 		NetReplayReadStatus m_LastStatus = NetReplayReadStatus::None;
 	};
 

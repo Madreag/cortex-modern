@@ -78,11 +78,20 @@ namespace RTE {
 			m_Started = true;
 		}
 		bool IsStarted() const { return m_Started; }
+		/// Time this peer spent with its pump parked is not time an admission was given to answer: the origin
+		/// moves forward by exactly the parked span, so every deadline measured on this clock sees un-parked time.
+		void NotePark(uint64_t parkedMs, uint64_t steadyNowMs) {
+			const uint64_t moved = std::min(parkedMs, steadyNowMs > m_OriginMs ? steadyNowMs - m_OriginMs : 0);
+			m_OriginMs += moved;
+			m_ParkedMs += moved;
+		}
+		uint64_t ParkedMs() const { return m_ParkedMs; }
 		/// @return Milliseconds since Start; zero before it, and never backwards if the clock hiccups.
 		uint64_t NowMs(uint64_t steadyNowMs) const { return m_Started && steadyNowMs > m_OriginMs ? steadyNowMs - m_OriginMs : 0; }
 
 	private:
 		uint64_t m_OriginMs = 0;
+		uint64_t m_ParkedMs = 0;
 		bool m_Started = false;
 	};
 

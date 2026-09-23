@@ -36,7 +36,8 @@ MAX_BODY = 128 * 1024
 REG_PER_MIN = 10
 REQ_PER_MIN = 120
 IP_REG_PER_MIN = 30
-IP_REQ_PER_MIN = 300
+# Four seated installs keep their individual budgets behind one NAT.
+IP_REQ_PER_MIN = 4 * REQ_PER_MIN
 RATE_WINDOW_S = 60.0
 RATE_IDLE_S = 600.0
 PRUNE_EVERY_N = 256
@@ -1002,6 +1003,10 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                 self._send(413, {"error": "payload_too_large"})
             elif isinstance(exc, ValueError):
                 self._send(400, {"error": "malformed_json"})
+            elif isinstance(exc, ConnectionError):
+                # The peer drops a long poll it no longer needs; that is the client's call, not a server error.
+                LOGGER.info("client aborted %s", self.path)
+                self.close_connection = True
             else:
                 LOGGER.exception("handler error")
                 self._send(500, {"error": "internal"})
