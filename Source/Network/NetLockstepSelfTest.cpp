@@ -2911,6 +2911,80 @@ namespace RTE {
 			return true;
 		}
 
+		// A resumed round's agreed first frame sits past its restored start by the slowest restart, so the restored
+		// batch reaches below the first frame the round commits. Refusing it failed every heal and every resume.
+		bool TestAResumedRoundPrimesPastItsAgreedFirstFrame(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			const uint16_t delay = 8;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3A, delay, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3A, delay, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 41;
+			hostConfig.resumeFromSnapshot = clientConfig.resumeFromSnapshot = true;
+			hostConfig.roundId = clientConfig.roundId = 0x9A3A;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.peerInputDelayFrames = clientConfig.peerInputDelayFrames = {{1, delay}, {2, delay}};
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3A);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48903, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.NoteLocalStartPark(50);
+			client.NoteLocalStartPark(20);
+			uint64_t now = 0;
+			for (; now < 500 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			const uint64_t agreed = hostConfig.startFrame + static_cast<uint64_t>(std::ceil(50.0 / hostConfig.simTickMs));
+			if (!host.IsRunning() || !client.IsRunning() || host.GetStats().effectiveStartFrame != agreed || client.GetStats().effectiveStartFrame != agreed) {
+				*error = "the resumed round's agreed first frame never formed past its start: host_running=" + std::to_string(host.IsRunning()) +
+				         " client_running=" + std::to_string(client.IsRunning()) + " host_effective=" + std::to_string(host.GetStats().effectiveStartFrame) +
+				         " client_effective=" + std::to_string(client.GetStats().effectiveStartFrame) + " agreed=" + std::to_string(agreed);
+				return false;
+			}
+			// The restored batch covers the start frame through the delay, as ScenarioRunner builds it.
+			const auto batch = [&](NetLockstepCoordinator& round, uint8_t peer) {
+				std::vector<NetLockstepFrame> frames(delay);
+				for (uint16_t index = 0; index < delay; ++index)
+					frames[index] = {peer, hostConfig.startFrame + index, {MakeFrame(100 * peer, index)}, {}, round.GetRoundId()};
+				return frames;
+			};
+			std::string hostPrime, clientPrime;
+			const bool hostPrimed = host.PrimeResyncInputs(batch(host, 1), &hostPrime);
+			const bool clientPrimed = client.PrimeResyncInputs(batch(client, 2), &clientPrime);
+			if (!hostPrimed || !clientPrimed) {
+				*error = "a resumed round refused its restored batch below the agreed first frame: host=\"" + hostPrime + "\" client=\"" + clientPrime +
+				         "\" start=" + std::to_string(hostConfig.startFrame) + " agreed=" + std::to_string(agreed) + " next=" + std::to_string(host.GetStats().nextFrame);
+				return false;
+			}
+			// The sim free-runs below the agreed first frame and produces tick+delay from the start, exactly as ScenarioRunner does.
+			uint64_t hostCommitted = 0, clientCommitted = 0, hostFirst = 0, clientFirst = 0;
+			for (uint64_t tick = hostConfig.startFrame; tick <= agreed + 24; ++tick) {
+				std::string queueError;
+				if (!host.QueueLocalInput(tick, {MakeFrame(100, tick)}, {}, &queueError) || !client.QueueLocalInput(tick, {MakeFrame(200, tick)}, {}, &queueError)) {
+					*error = "a resumed round refused its input at tick " + std::to_string(tick) + ": " + queueError;
+					return false;
+				}
+				for (int step = 0; step < 4; ++step, ++now) {
+					hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+					host.Tick(now); client.Tick(now);
+					NetLockstepReadyFrame ready;
+					while (host.PopReadyFrame(ready)) { if (hostFirst == 0) hostFirst = ready.frame; (void)host.FinishSimulationTick(ready.frame); hostCommitted = ready.frame; }
+					while (client.PopReadyFrame(ready)) { if (clientFirst == 0) clientFirst = ready.frame; (void)client.FinishSimulationTick(ready.frame); clientCommitted = ready.frame; }
+				}
+			}
+			if (hostFirst != agreed || clientFirst != agreed || hostCommitted < agreed + 16 || clientCommitted < agreed + 16 || !host.IsRunning() || !client.IsRunning()) {
+				*error = "the resumed round did not commit from its agreed first frame: host_first=" + std::to_string(hostFirst) + " client_first=" + std::to_string(clientFirst) +
+				         " host_frame=" + std::to_string(hostCommitted) + " client_frame=" + std::to_string(clientCommitted) + " agreed=" + std::to_string(agreed) +
+				         " host=" + NetLockstepCoordinator::StateName(host.GetState()) + " client=" + NetLockstepCoordinator::StateName(client.GetState());
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_resumed_round_primes_past_its_agreed_first_frame start=" << hostConfig.startFrame << " agreed=" << agreed
+			          << " first=" << hostFirst << "," << clientFirst << " committed=" << hostCommitted << "," << clientCommitted << std::endl;
+			return true;
+		}
+
 		// A returning seat's frames reach our decoder long before its new start does, and until that start
 		// lands they sit in the pre-start buffer: nothing it sent can be consumed. Counting those frames as
 		// an answer skipped the seat's allowance and the bound took the seat back at the first frame it owed.
@@ -18569,6 +18643,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		}
 
 		std::string error;
+		// These rows each report their own failure, so one run names every red among them.
+		bool rowsPassed = true;
+		const auto row = [&](bool (*test)(std::string*), const char* name) {
+			std::string rowError;
+			if (test(&rowError)) return;
+			std::cerr << "[net-lockstep-selftest] FAIL " << name << ": " << rowError << std::endl;
+			rowsPassed = false;
+		};
+		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
+		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
 		for (const auto [skip, heal]: {std::pair{false, false}, std::pair{true, false}, std::pair{false, true}}) {

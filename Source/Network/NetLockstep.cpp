@@ -6291,8 +6291,15 @@ namespace RTE {
 			return false;
 		}
 		std::vector<bool> installed(batches.size(), false);
+		const auto agreedStart = m_PeerEffectiveStart.find(m_Config.localPeerId);
 		for (size_t index = 0; index < batches.size(); ++index) {
 			const auto& frame = batches[index];
+			// The agreed first frame can sit past the restored start: every peer commits nothing below it, so that
+			// input is dropped here exactly as production drops it.
+			if (agreedStart != m_PeerEffectiveStart.end() && frame.targetFrame < agreedStart->second) {
+				installed[index] = true;
+				continue;
+			}
 			if (frame.targetFrame < m_Stats.nextFrame || frame.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) {
 				if (error) *error = "resync input batch targets existing or applied input";
 				return false;
