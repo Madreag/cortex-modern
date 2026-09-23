@@ -284,7 +284,7 @@ DeterministicMORNGScope::~DeterministicMORNGScope() {
 }
 
 std::string LuaStateWrapper::DescribeScriptObjectIdentity(long uniqueID) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	lua_getglobal(m_State, "_ScriptedObjects");
 	std::string identity = "-";
 	if (lua_istable(m_State, -1)) {
@@ -1559,12 +1559,14 @@ local function visitFunction(value, ctx)
 				cellId = SCRATCH_BAND + ctx.scratch
 			elseif cellId < 1 or cellId > ctx.base then problem(ctx, "an upvalue cell with no birth number") return "z;" end
 			ctx.cells[cellKey] = cellId
-			-- A store into this cell reports nothing, so the chunk that carries it is rewritten every capture.
-			ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
 			local open = ctx.openUpvalues[cellKey]
 			if open then
+				-- An open cell lives on a coroutine's stack, which nothing watches.
+				ctx.rootUnwatched = ctx.rootUnwatched or ((ctx.location or "function") .. ".upvalue[" .. name .. "]")
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";O" .. visit(open.thread, ctx) .. "n" .. outputNumber(open.slot) .. ";")
 			else
+				-- A store into a cell reports nothing, so the chunk keys its reuse on the value the cell holds.
+				ctx.rootCells[#ctx.rootCells + 1] = setmetatable({ fn = value, index = i, value = upvalue, empty = upvalue == nil }, { __mode = "v" })
 				noteNode(ctx, cellId, "C" .. outputNumber(cellId) .. ";" .. visitAt(upvalue, ctx, (ctx.location or "function") .. ".upvalue[" .. name .. "]"))
 			end
 		end
@@ -1690,10 +1692,23 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		if cache and not samePaths(paths, cache.paths) then cache = nil end
 	end
 	phase("paths")
-	local ctx = { ids = {}, cells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
+	-- Whether every cell a chunk read still holds what it held; a collected closure or value holds nothing.
+	local function cellsHold(cells)
+		for _, cell in ipairs(cells) do
+			if cell.fn == nil then return false end
+			local _, current = debug.getupvalue(cell.fn, cell.index)
+			if cell.empty then
+				if current ~= nil then return false end
+			elseif current == nil or not rawequal(current, cell.value) then
+				return false
+			end
+		end
+		return true
+	end
 	local function chunk(uid, part, value, produce, force)
 		local key = uid .. ":" .. part
 		local dirty
@@ -1702,7 +1717,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 			else dirty = not tonumber(uid) or dirt.roots[uid] or dirt.roots[tostring(tonumber(uid))] end
 		end
 		local kept = cache and cache.chunks[key]
-		if kept and (force or dirty or not kept.cacheable or not rawequal(kept.source[1], value)) then kept = nil end
+		if kept and (force or dirty or not kept.cacheable or not rawequal(kept.source[1], value) or not cellsHold(kept.cells)) then kept = nil end
 		if kept then
 			for id, object in pairs(kept.values) do
 				if type(object) == "function" and not rawequal(getfenv(object), kept.envs[id]) then kept = nil; break end
@@ -1727,9 +1742,11 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		_ScriptGraphBeginRoot(uid, part)
 		local firstNode, firstBox = #ctx.order + 1, #ctx.boxRefs
 		local outerRefs = ctx.refs
-		ctx.refs, ctx.rootUnwatched = {}, false
+		local outerCells = ctx.rootCells
+		ctx.refs, ctx.rootUnwatched, ctx.rootCells = {}, false, {}
 		local token = produce()
-		local refs, unwatched = ctx.refs, ctx.rootUnwatched
+		local refs, unwatched, cells = ctx.refs, ctx.rootUnwatched, ctx.rootCells
+		ctx.rootCells = outerCells
 		if #ctx.boxRefs > firstBox then unwatched = unwatched or "deferred Box owner" end
 		ctx.refs = outerRefs
 		local text, order, owned, areas = {}, {}, {}, {}
@@ -1743,7 +1760,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		for address, link in pairs(ctx.areaBoxes) do
 			if defines[ctx.ids[link.owner]] then areas[address] = setmetatable({ owner = link.owner, index = link.index }, { __mode = "v" }) end
 		end
-		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched,
+		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched, cells = cells,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
 		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, envs = setmetatable({}, { __mode = "v" }) }
 		chunks[key] = written
@@ -3539,8 +3556,8 @@ do
 	local afterCall = _ScriptGraphDirtyRoots().roots["41"] ~= nil
 	check("userdata_write_marks_its_root", afterProperty and afterCall,
 	      "property=" .. tostring(afterProperty) .. " call=" .. tostring(afterCall))
-	-- A chunk that reached an upvalue cell or a coroutine carries state no barrier watches, so it is
-	-- written again every capture however quiet the barrier was.
+	-- No barrier watches a store into an upvalue cell, so a chunk that reached one is reused only while
+	-- every cell it read holds what it held; a store rewrites it however quiet the barrier was.
 	local unwatchedRoot = (function()
 		local held = 0
 		return { read = function() return held end, bump = function(to) held = to end }
@@ -3549,9 +3566,12 @@ do
 	local unwatchedFirst = _ScriptGraph.serialize(unwatchedRoots)
 	unwatchedRoot.bump(7)
 	local unwatchedText = _ScriptGraph.serialize(unwatchedRoots)
-	local unwatchedReused, unwatchedCacheable = _ScriptGraph.cacheState("51")
-	check("an_upvalue_cell_keeps_its_root_out_of_the_cache", not unwatchedReused and not unwatchedCacheable and unwatchedText ~= unwatchedFirst,
-	      "reused=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst))
+	local unwatchedReused = _ScriptGraph.cacheState("51")
+	local unwatchedQuiet = _ScriptGraph.serialize(unwatchedRoots)
+	local quietReused = _ScriptGraph.cacheState("51")
+	check("a_store_into_an_upvalue_cell_rewrites_its_root", not unwatchedReused and unwatchedText ~= unwatchedFirst and quietReused and unwatchedQuiet == unwatchedText,
+	      "reused_after_store=" .. tostring(unwatchedReused) .. " changed=" .. tostring(unwatchedText ~= unwatchedFirst) ..
+	      " reused_when_quiet=" .. tostring(quietReused) .. " quiet_same=" .. tostring(unwatchedQuiet == unwatchedText))
 	do
 		local previous = rawget(_G, "CheckpointWeakCacheProbe")
 		local weak = setmetatable({}, { __mode = "v" })
@@ -3606,6 +3626,24 @@ do
 		      "engine_kept=" .. tostring(engineKept) .. " engine_cacheable=" .. tostring(engineCacheable) ..
 		      " engine_unwatched=" .. tostring(engineUnwatched) .. " engine_reused_after_write=" .. tostring(patchedState) .. " patch_found=" .. tostring(patchFound))
 		rawset(string, "CheckpointCacheProbe", previousPatch)
+		-- A mod that wraps a library function keeps the original in an upvalue cell. While the cell holds the
+		-- same value the chunk that carries it is reused; a store into the cell rewrites it.
+		local realFloor = math.floor
+		local function wrap(original)
+			return function(value) return original(value) end, function(value) original = value end
+		end
+		local wrapper, setWrapped = wrap(math.floor)
+		math.floor = wrapper
+		_ScriptGraph.serialize(graphRoots)
+		local wrappedFirst = _ScriptGraph.serialize(graphRoots)
+		local wrappedKept, wrappedCacheable, wrappedUnwatched = _ScriptGraph.cacheState("0", "engine")
+		setWrapped(math.ceil)
+		local wrappedMoved = _ScriptGraph.serialize(graphRoots)
+		local wrappedAfter = _ScriptGraph.cacheState("0", "engine")
+		check("closure_wrapped_library_function_keeps_its_chunk", wrappedKept and not wrappedAfter and wrappedMoved ~= wrappedFirst,
+		      "engine_kept=" .. tostring(wrappedKept) .. " engine_cacheable=" .. tostring(wrappedCacheable) .. " engine_unwatched=" .. tostring(wrappedUnwatched) ..
+		      " reused_after_cell_write=" .. tostring(wrappedAfter) .. " text_moved=" .. tostring(wrappedMoved ~= wrappedFirst))
+		math.floor = realFloor
 		local restored, errors = _ScriptGraph.deserialize(second)
 		check("an_object_root_referencing_a_global_table_survives_a_globals_reuse", keptAlias and #errors == 0 and
 		      restored["61"] and rawequal(restored["61"].shared, CheckpointGlobalCacheProbe) and CheckpointGlobalCacheProbe.revision == 1)
@@ -3871,31 +3909,105 @@ struct VectorField {
 }
 
 struct RTE::LuaScriptGraphNativeCaptureData {
-	const std::vector<MovableObject*> knownObjects = g_MovableMan.SnapshotKnownObjects();
-	std::unordered_map<const void*, VectorField> vectorFields;
-	std::unordered_map<const void*, long> controllerOwners;
-	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
-	LuaScriptGraphNativeCaptureData() {
-		vectorFields.reserve(knownObjects.size() * 6);
-		controllerOwners.reserve(knownObjects.size());
-		for (MovableObject* mo: knownObjects) {
-			const long uid = mo->GetUniqueID();
-			if (Actor* actor = dynamic_cast<Actor*>(mo)) controllerOwners[actor->GetController()] = uid;
-			vectorFields[&mo->GetPos()] = {uid, "Pos"};
-			vectorFields[&mo->GetVel()] = {uid, "Vel"};
-			vectorFields[&mo->GetPrevPos()] = {uid, "PrevPos"};
-			vectorFields[&mo->GetPrevVel()] = {uid, "PrevVel"};
-			if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
-				vectorFields[&rotating->GetRecoilForce()] = {uid, "RecoilForce"};
-				vectorFields[&rotating->GetRecoilOffset()] = {uid, "RecoilOffset"};
-			}
-			if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
-				vectorFields[&attachable->GetParentOffset()] = {uid, "ParentOffset"};
-				vectorFields[&attachable->GetJointOffset()] = {uid, "JointOffset"};
-				vectorFields[&attachable->GetJointPos()] = {uid, "JointPos"};
-			}
-		}
+	/// The objects that existed when the capture began, copied by the first question asked of them.
+	const std::vector<MovableObject*>& KnownObjects() const {
+		std::call_once(m_KnownObjectsCopied, [this] { m_KnownObjects = g_MovableMan.SnapshotKnownObjects(); });
+		return m_KnownObjects;
 	}
+	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
+	mutable std::mutex frozenWorldMutex;
+	/// Whether an object existed when the capture began; only the pointer is read.
+	bool Known(const MovableObject* object) const {
+		std::call_once(m_KnownBuilt, [this] {
+			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
+			std::sort(m_Known.begin(), m_Known.end());
+		});
+		return std::binary_search(m_Known.begin(), m_Known.end(), object);
+	}
+	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
+	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
+	/// The actor a Controller belongs to, if it is a known actor's.
+	const long* ControllerOwner(const void* address) const { return Find(Owners().controllers, address); }
+	/// Which objects an entity owns, and which of them are actors, for every question about the same root.
+	struct OwnedParts {
+		std::vector<const MovableObject*> objects;
+		std::vector<std::pair<const void*, const Actor*>> controllers;
+	};
+	std::shared_ptr<const OwnedParts> Owned(const Entity* root) const {
+		std::lock_guard lock(m_OwnedMutex);
+		auto& parts = m_Owned[root];
+		if (!parts) {
+			auto collected = std::make_shared<OwnedParts>();
+			std::unordered_set<const Entity*> entities;
+			std::unordered_set<const MovableObject*> objects;
+			CollectOwnedMovableObjects(root, entities, objects);
+			collected->objects.assign(objects.begin(), objects.end());
+			for (const MovableObject* object: collected->objects) {
+				if (auto* actor = dynamic_cast<Actor*>(const_cast<MovableObject*>(object))) collected->controllers.emplace_back(actor->GetController(), actor);
+			}
+			parts = std::move(collected);
+		}
+		return parts;
+	}
+
+private:
+	template <class Value> struct Entries {
+		std::vector<std::pair<const void*, Value>> sorted;
+	};
+	struct Fields {
+		Entries<VectorField> vectors;
+		Entries<long> controllers;
+	};
+	template <class Value> static const Value* Find(const Entries<Value>& entries, const void* address) {
+		const auto found = std::lower_bound(entries.sorted.begin(), entries.sorted.end(), address, [](const auto& entry, const void* key) { return entry.first < key; });
+		return found != entries.sorted.end() && found->first == address ? &found->second : nullptr;
+	}
+	// Which object owns a Vector or a Controller, built by the first state that asks, for every state after it.
+	const Fields& Owners() const {
+		std::call_once(m_OwnersBuilt, [this] {
+			auto& vectors = m_Owners.vectors.sorted;
+			auto& controllers = m_Owners.controllers.sorted;
+			vectors.reserve(KnownObjects().size() * 6);
+			for (MovableObject* mo: KnownObjects()) {
+				const long uid = mo->GetUniqueID();
+				if (Actor* actor = dynamic_cast<Actor*>(mo)) controllers.emplace_back(actor->GetController(), uid);
+				vectors.emplace_back(&mo->GetPos(), VectorField{uid, "Pos"});
+				vectors.emplace_back(&mo->GetVel(), VectorField{uid, "Vel"});
+				vectors.emplace_back(&mo->GetPrevPos(), VectorField{uid, "PrevPos"});
+				vectors.emplace_back(&mo->GetPrevVel(), VectorField{uid, "PrevVel"});
+				if (const MOSRotating* rotating = dynamic_cast<const MOSRotating*>(mo)) {
+					vectors.emplace_back(&rotating->GetRecoilForce(), VectorField{uid, "RecoilForce"});
+					vectors.emplace_back(&rotating->GetRecoilOffset(), VectorField{uid, "RecoilOffset"});
+				}
+				if (const Attachable* attachable = dynamic_cast<const Attachable*>(mo)) {
+					vectors.emplace_back(&attachable->GetParentOffset(), VectorField{uid, "ParentOffset"});
+					vectors.emplace_back(&attachable->GetJointOffset(), VectorField{uid, "JointOffset"});
+					vectors.emplace_back(&attachable->GetJointPos(), VectorField{uid, "JointPos"});
+				}
+			}
+			// A later object's entry wins an address, as the map it replaces let it.
+			const auto settle = [](auto& entries) {
+				std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+				auto last = entries.begin();
+				for (auto entry = entries.begin(); entry != entries.end(); ++entry) {
+					if (last != entry && last->first == entry->first) *last = *entry;
+					else if (last != entry) *++last = *entry;
+				}
+				if (!entries.empty()) entries.erase(last + 1, entries.end());
+			};
+			settle(vectors);
+			settle(controllers);
+		});
+		return m_Owners;
+	}
+	mutable std::once_flag m_KnownObjectsCopied;
+	mutable std::vector<MovableObject*> m_KnownObjects;
+	mutable std::once_flag m_OwnersBuilt;
+	mutable Fields m_Owners;
+	mutable std::once_flag m_KnownBuilt;
+	mutable std::vector<const MovableObject*> m_Known;
+	mutable std::mutex m_OwnedMutex;
+	mutable std::unordered_map<const Entity*, std::shared_ptr<const OwnedParts>> m_Owned;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -3904,7 +4016,14 @@ LuaScriptGraphNativeCaptureScope::LuaScriptGraphNativeCaptureScope()
 	s_GraphNativeCapture = m_Data.get();
 }
 
+LuaScriptGraphNativeCaptureScope::LuaScriptGraphNativeCaptureScope(const LuaScriptGraphNativeCaptureData* shared) : m_Previous(s_GraphNativeCapture) {
+	s_GraphNativeCapture = shared;
+}
+
 LuaScriptGraphNativeCaptureScope::~LuaScriptGraphNativeCaptureScope() { s_GraphNativeCapture = m_Previous; }
+
+const LuaScriptGraphNativeCaptureData* LuaScriptGraphNativeCaptureScope::Current() { return s_GraphNativeCapture; }
+
 
 namespace {
 
@@ -4239,6 +4358,30 @@ static int ScriptGraphIteratorRestore(lua_State* L) {
 	return 1;
 }
 
+// Whether the native object behind a wrapper still exists: Lua keeps what it owns, an engine object lives while the
+// engine knows it, and a member (a gib, a limb path, a sound set) lives while something it hangs off does.
+static bool ScriptGraphNativeAlive(lua_State* L, const luabind::detail::object_rep* rep, int depth = 0) {
+	if (!rep || !rep->ptr()) return false;
+	if (rep->flags() & luabind::detail::object_rep::owner) return true;
+	if (rep->crep() && ClassDerivesFrom(rep->crep(), "MovableObject")) {
+		const auto* object = static_cast<const MovableObject*>(rep->ptr());
+		return s_GraphNativeCapture ? s_GraphNativeCapture->Known(object) : g_MovableMan.IsKnownObject(object);
+	}
+	if (depth >= 8 || !rep->get_dependencies().is_valid()) return true;
+	bool member = false, alive = false;
+	rep->get_dependencies().get(L);
+	lua_pushnil(L);
+	while (lua_next(L, -2) != 0) {
+		if (const auto* owner = luabind::detail::is_class_object(L, -1)) {
+			member = true;
+			alive = alive || ScriptGraphNativeAlive(L, owner, depth + 1);
+		}
+		lua_pop(L, 1);
+	}
+	lua_pop(L, 1);
+	return !member || alive;
+}
+
 static int ScriptGraphGibOwner(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->get_dependencies().is_valid()) return 0;
@@ -4246,7 +4389,7 @@ static int ScriptGraphGibOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && ClassDerivesFrom(owner->crep(), "MOSRotating")) {
+		if (owner && ClassDerivesFrom(owner->crep(), "MOSRotating") && ScriptGraphNativeAlive(L, owner)) {
 			const auto& gibs = *static_cast<MOSRotating*>(owner->ptr())->GetGibList();
 			const auto found = std::find(gibs.begin(), gibs.end(), rep->ptr());
 			if (found != gibs.end()) {
@@ -4402,7 +4545,7 @@ static int ScriptGraphGibReferences(lua_State* L) {
 		}
 		if (const auto* craft = dynamic_cast<const ACraft*>(object)) for (const MovableObject* item: craft->GetCollectedInventory()) collect(item);
 	};
-	for (const MovableObject* object: s_GraphNativeCapture->knownObjects) {
+	for (const MovableObject* object: s_GraphNativeCapture->KnownObjects()) {
 		if (g_MovableMan.ValidMO(object)) collect(object);
 	}
 	lua_pushnil(L);
@@ -4461,7 +4604,7 @@ static int ScriptGraphSoundSetOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && owner->crep()) {
+		if (owner && owner->crep() && ScriptGraphNativeAlive(L, owner)) {
 			if (std::strcmp(owner->crep()->name(), "SoundContainer") == 0 && &static_cast<SoundContainer*>(owner->ptr())->GetTopLevelSoundSet() == rep->ptr()) {
 				lua_pushinteger(L, -1);
 				return 2;
@@ -4512,7 +4655,7 @@ static int ScriptGraphLimbOwner(lua_State* L) {
 		lua_pushnil(L);
 		while (lua_next(L, -2) != 0) {
 			auto* owner = luabind::detail::is_class_object(L, -1);
-			if (owner && ClassDerivesFrom(owner->crep(), "MovableObject")) {
+			if (owner && ClassDerivesFrom(owner->crep(), "MovableObject") && ScriptGraphNativeAlive(L, owner)) {
 				if (const int index = FindActorLimb(static_cast<MovableObject*>(owner->ptr()), path); index >= 0) {
 					lua_pushinteger(L, index);
 					return 2;
@@ -4562,7 +4705,7 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 	lua_pushnil(L);
 	while (lua_next(L, -2) != 0) {
 		auto* owner = luabind::detail::is_class_object(L, -1);
-		if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "LimbPath") == 0) {
+		if (owner && owner->crep() && std::strcmp(owner->crep()->name(), "LimbPath") == 0 && ScriptGraphNativeAlive(L, owner)) {
 			auto* path = static_cast<LimbPath*>(owner->ptr());
 			int index = -1;
 			if (&path->GetStartOffset() != rep->ptr()) {
@@ -5008,6 +5151,13 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			if (rep->ptr() == root) return found(editor, property, index);
 			const auto* movable = dynamic_cast<const MovableObject*>(root);
 			if (!movable) return 0;
+			// A world capture collects what a root owns once, for every question about it.
+			if (s_GraphNativeCapture) {
+				const auto parts = s_GraphNativeCapture->Owned(root);
+				for (const auto* object: parts->objects) if (rep->ptr() == object) return found(movable, ("owned-movable-part:" + std::to_string(object->GetUniqueID())).c_str(), 0);
+				for (const auto& [controller, actor]: parts->controllers) if (rep->ptr() == controller) return found(const_cast<Actor*>(actor), "actor-controller", 0);
+				return 0;
+			}
 			std::unordered_set<const Entity*> entities;
 			std::unordered_set<const MovableObject*> objects;
 			CollectOwnedMovableObjects(root, entities, objects);
@@ -5176,9 +5326,9 @@ static int ScriptGraphNative(lua_State* L) {
 		}
 	}
 	if (className == "Controller" && s_GraphNativeCapture) {
-		if (const auto actor = s_GraphNativeCapture->controllerOwners.find(rep->ptr()); actor != s_GraphNativeCapture->controllerOwners.end()) {
+		if (const long* actor = s_GraphNativeCapture->ControllerOwner(rep->ptr())) {
 			lua_pushstring(L, "controller-ref");
-			lua_pushnumber(L, static_cast<lua_Number>(actor->second));
+			lua_pushnumber(L, static_cast<lua_Number>(*actor));
 			return 2;
 		}
 	}
@@ -5188,10 +5338,10 @@ static int ScriptGraphNative(lua_State* L) {
 			return 1;
 		}
 		if (s_GraphNativeCapture) {
-			if (const auto field = s_GraphNativeCapture->vectorFields.find(rep->ptr()); field != s_GraphNativeCapture->vectorFields.end()) {
+			if (const VectorField* field = s_GraphNativeCapture->VectorOwner(rep->ptr())) {
 				lua_pushstring(L, "vector-ref");
-				lua_pushnumber(L, static_cast<lua_Number>(field->second.uid));
-				lua_pushstring(L, field->second.property);
+				lua_pushnumber(L, static_cast<lua_Number>(field->uid));
+				lua_pushstring(L, field->property);
 				return 3;
 			}
 		}
@@ -5215,7 +5365,7 @@ static int ScriptGraphNative(lua_State* L) {
 			lua_pushlightuserdata(L, rep->ptr());
 			return 6;
 		}
-		if (g_MovableMan.IsKnownObject(mo)) {
+		if (s_GraphNativeCapture ? s_GraphNativeCapture->Known(mo) : g_MovableMan.IsKnownObject(mo)) {
 			lua_pushstring(L, "entity");
 			lua_pushnumber(L, static_cast<lua_Number>(mo->GetUniqueID()));
 			lua_pushstring(L, className.c_str());
@@ -5469,7 +5619,7 @@ static void VisitScriptOwnedObjects(lua_State* state, const std::function<void(M
 } // namespace
 
 bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& objects) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (!m_State || objects.empty()) return false;
 	// Integer registry slots and weak table entries are not strong script aliases.
 	struct Reach {
@@ -5560,7 +5710,7 @@ bool LuaStateWrapper::HasNativeAliases(const std::unordered_set<const void*>& ob
 }
 
 bool LuaStateWrapper::RekeyScriptObjects(const std::vector<std::pair<const MovableObject*, long>>& identities, bool validateOnly) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (identities.empty()) return true;
 	if (!m_State) return false;
 	const int top = lua_gettop(m_State);
@@ -5865,7 +6015,7 @@ bool LuaStateWrapper::CaptureScriptGraph(CheckpointText& text, std::vector<std::
 }
 
 bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const auto started = std::chrono::steady_clock::now();
 	const int top = lua_gettop(m_State);
 	// Every write to the live heap happens before the freeze: after it each first write to a page is a fault.
@@ -5935,8 +6085,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 		image->scratch = scratch.values;
 		// The stack and the birth counter go back before the protect; the objects the image names stay as they are until written.
 		restore.Run();
-		// The written pages are copied here into a pooled slab whose pages are already resident.
-		image->heap = m_CheckpointHeap->Freeze({});
+		// The copy runs off this thread; the gate holds every way into this VM until it lands.
+		image->heap = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
 		const size_t bytes = image->heap.ByteCount();
 		const auto frozenUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started).count();
 		if (FrozenCaptureStats* stats = LuaMan::s_FrozenCaptureStats) {
@@ -5981,6 +6131,61 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 	}
 }
 
+void LuaScriptGraphNativeCaptureScope::BuildWorld(const LuaScriptGraphNativeCaptureData* shared) {
+	if (!shared) return;
+	std::lock_guard worldLock(shared->frozenWorldMutex);
+	if (!shared->frozenWorld) shared->frozenWorld = CheckpointLua::CaptureScope::BuildWorld(shared->KnownObjects());
+}
+
+bool LuaStateWrapper::CaptureFrozenScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, FrozenCaptureStats& stats, const std::function<void()>& whileWaiting) {
+	std::vector<LuaStateWrapper*> order{&g_LuaMan.GetMasterScriptState()};
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) order.push_back(&state);
+	std::vector<CheckpointText> texts(order.size());
+	std::vector<std::vector<std::string>> refusals(order.size());
+	std::vector<FrozenCaptureStats> parts(order.size());
+	std::vector<char> complete(order.size(), 0);
+	CheckpointLua::NativeEffects effects;
+	const LuaScriptGraphNativeCaptureData* shared = LuaScriptGraphNativeCaptureScope::Current();
+	LuaScriptGraphNativeCaptureScope::BuildWorld(shared);
+	const auto capture = [&](size_t index) {
+		LuaScriptGraphNativeCaptureScope lookups(shared);
+		FrozenCaptureStats* const previous = LuaMan::s_FrozenCaptureStats;
+		LuaMan::s_FrozenCaptureStats = &parts[index];
+		complete[index] = order[index]->CaptureScriptGraph(texts[index], refusals[index], true);
+		LuaMan::s_FrozenCaptureStats = previous;
+	};
+	// Each state is its own VM behind its own lock, so the states are captured side by side.
+	std::vector<std::future<void>> tasks;
+	tasks.reserve(order.size());
+	for (size_t index = 1; index < order.size(); ++index) tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&capture, index] { capture(index); }));
+	std::exception_ptr failure;
+	try {
+		capture(0);
+		if (whileWaiting) whileWaiting();
+	} catch (...) {
+		failure = std::current_exception();
+	}
+	// Every task reads this frame's locals, so all of them end before anything leaves it.
+	for (std::future<void>& task: tasks) task.wait();
+	if (failure) std::rethrow_exception(failure);
+	for (std::future<void>& task: tasks) task.get();
+	bool all = true;
+	for (size_t index = 0; index < order.size(); ++index) {
+		const FrozenCaptureStats& part = parts[index];
+		stats.states += part.states; stats.nativeUs += part.nativeUs; stats.heapUs += part.heapUs; stats.copyUs += part.copyUs;
+		stats.pages += part.pages; stats.bytes += part.bytes; stats.userdata += part.userdata; stats.cached += part.cached;
+		stats.iterators += part.iterators; stats.owned += part.owned; stats.callbacksUs += part.callbacksUs; stats.faults += part.faults;
+		stats.faultUs += part.faultUs; stats.receiversUs += part.receiversUs; stats.activityUs += part.activityUs; stats.asyncUs += part.asyncUs;
+		stats.cacheUs += part.cacheUs; stats.objectsUs += part.objectsUs; stats.cachedScripts += part.cachedScripts; stats.rootsUs += part.rootsUs;
+		stats.enumUs += part.enumUs; stats.worldUs += part.worldUs; stats.answerUs += part.answerUs;
+		stats.copyMapped = std::max(stats.copyMapped, part.copyMapped); stats.copyIdle = std::max(stats.copyIdle, part.copyIdle);
+		problems.insert(problems.end(), refusals[index].begin(), refusals[index].end());
+		all = all && complete[index];
+	}
+	graphs = std::move(texts);
+	return all;
+}
+
 CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 	const RandomGenerator random = m_RandomGenerator;
 	auto engine = random.GetEngineState();
@@ -5992,7 +6197,7 @@ CheckpointText LuaStateWrapper::CaptureRandomGeneratorCheckpoint() const {
 }
 
 bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText* captured, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const auto nativeStart = std::chrono::steady_clock::now();
 	struct FinishTiming {
 		lua_State* state;
@@ -6090,7 +6295,7 @@ bool LuaStateWrapper::CollectScriptGraph(std::string* serialized, CheckpointText
 }
 
 std::vector<long> LuaStateWrapper::ListScriptGraphRoots(const std::string& text) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	std::vector<long> roots;
@@ -6117,7 +6322,7 @@ std::vector<long> LuaStateWrapper::ListScriptGraphRoots(const std::string& text)
 }
 
 bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
@@ -6134,7 +6339,7 @@ bool LuaStateWrapper::ValidateScriptGraph(const std::string& text, std::vector<s
 }
 
 bool LuaStateWrapper::PrepareScriptGraph(const std::string* text, std::vector<std::string>& problems, bool reuseHeld) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	const size_t before = problems.size();
@@ -6154,12 +6359,12 @@ bool LuaStateWrapper::PrepareScriptGraph(const std::string* text, std::vector<st
 }
 
 void LuaStateWrapper::ReleaseScriptOwnedObjects() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	VisitScriptOwnedObjects(m_State, ReleaseScriptOwnedTree);
 }
 
 bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
 	m_NativeCache.reset();
 	ScriptCallbackRootScope callbackRoot{m_State};
@@ -6251,7 +6456,7 @@ bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<st
 }
 
 void LuaStateWrapper::CallScriptGraph(const char* function) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptGraph");
 	if (lua_istable(m_State, -1)) {
@@ -6264,7 +6469,7 @@ void LuaStateWrapper::CallScriptGraph(const char* function) {
 }
 
 bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
@@ -6368,7 +6573,7 @@ void LuaStateWrapper::CaptureScriptCallbacks(uint64_t liveSerial) {
 	PushScriptGraphScratchTable(m_State);
 	// One world capture snapshots the known objects once for every state.
 	const std::vector<MovableObject*> known = s_GraphNativeCapture ? std::vector<MovableObject*>() : g_MovableMan.SnapshotKnownObjects();
-	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->knownObjects : known) {
+	for (const MovableObject* mo: s_GraphNativeCapture ? s_GraphNativeCapture->KnownObjects() : known) {
 		if (mo->GetLuaState() != this || mo->IsOriginalPreset() || mo->GetPendingPersistedUniqueID() > 0 || mo->m_FunctionsAndScripts.empty()) {
 			continue;
 		}
@@ -6556,7 +6761,7 @@ void LuaStateWrapper::UnstashScriptObject(long uniqueID) {
 }
 
 double LuaStateWrapper::GetScriptObjectNumberField(long uniqueID, const std::string& field, double fallback) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	PushScriptObjectInstanceTable(m_State, uniqueID);
 	double value = fallback;
 	if (lua_istable(m_State, -1)) {
@@ -7009,7 +7214,7 @@ void LuaMan::Initialize() {
 }
 
 void LuaStateWrapper::VisitScriptHeldMovableObjects(const std::function<void(MovableObject*)>& visit) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (m_State) VisitScriptOwnedObjects(m_State, visit);
 }
 
@@ -7407,7 +7612,7 @@ void RTE::ArmLuaCheckpointValueBarrier() {
 }
 
 bool LuaStateWrapper::RunScriptGraphSelfTest() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	// The rows below write to natives a capture recorded, and only an armed barrier reports that.
 	ArmLuaCheckpointBarrier();
@@ -7642,6 +7847,78 @@ end
 		std::cout << "[script-graph-selftest] " << (skipsFinalized ? "PASS" : "FAIL") << " capture_walks_userdata_by_the_live_rule finalized_present="
 		          << finalizedPresent << " finalized_visited=" << finalizedVisited << std::endl;
 		checkpointValues = skipsFinalized && checkpointValues;
+	}
+
+	if (m_CheckpointHeap) {
+		// A frozen heap is copied off the thread that froze it. Until the copy lands, the state's lock is the
+		// gate: a script run through it waits, so its writes are never in the image. The copy threads are
+		// kept busy first, so the copy is still queued when the script asks for the state.
+		RunScriptString("_ScriptGraphGateProbe = {} for index = 1, 4096 do _ScriptGraphGateProbe[index] = index end");
+		lua_getglobal(m_State, "_ScriptGraphGateProbe");
+		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
+		lua_pop(m_State, 1);
+		const TValue* array = table ? tvref(table->array) : nullptr;
+		const size_t bytes = table ? table->asize * sizeof(TValue) : 0;
+		std::vector<std::byte> before(bytes);
+		if (bytes) std::memcpy(before.data(), array, bytes);
+		constexpr auto c_Hold = std::chrono::milliseconds(150);
+		std::vector<std::future<void>> busy;
+		for (int thread = 0; thread < 8; ++thread) busy.push_back(CheckpointLua::CopyPool::Submit([c_Hold] { std::this_thread::sleep_for(c_Hold); }));
+		CheckpointLua::Snapshot frozen;
+		{
+			std::lock_guard<std::recursive_mutex> lock(GetMutex());
+			frozen = m_CheckpointHeap->Freeze(CheckpointLua::CopyPool::Submit);
+		}
+		const auto entered = std::chrono::steady_clock::now();
+		RunScriptString("for index = 1, 4096 do _ScriptGraphGateProbe[index] = -index end");
+		const auto waitedMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - entered).count();
+		for (auto& task: busy) task.wait();
+		bool imageHeld = false, liveWritten = false;
+		try {
+			const auto image = frozen.ReadBytes(array, bytes);
+			imageHeld = bytes > 0 && image.size() == bytes && std::memcmp(image.data(), before.data(), bytes) == 0;
+			liveWritten = bytes > 0 && std::memcmp(array, before.data(), bytes) != 0;
+		} catch (const std::exception& error) {
+			std::cout << "[script-graph-selftest] gate probe: " << error.what() << std::endl;
+		}
+		RunScriptString("_ScriptGraphGateProbe = nil");
+		const bool gated = imageHeld && liveWritten;
+		std::cout << "[script-graph-selftest] " << (gated ? "PASS" : "FAIL") << " a_state_entered_during_its_page_copy_waits_for_it image_held="
+		          << imageHeld << " live_written=" << liveWritten << " entry_waited_ms=" << waitedMs << std::endl;
+		checkpointValues = gated && checkpointValues;
+	}
+
+	{
+		// A capture answers every userdata in the heap, the unreachable ones too, so a member whose owner was
+		// destroyed may not be read through that owner. The owner's storage is written over once it is gone, as
+		// freed memory is; the capture has to finish and a gib still held has to refuse by name.
+		alignas(MOSRotating) std::byte storage[sizeof(MOSRotating)];
+		auto* owner = new (storage) MOSRotating();
+		owner->GetGibList()->push_back(new Gib());
+		Entity* previous = GetTempEntity();
+		SetTempEntity(owner);
+		const int held = RunScriptString("for gib in ToMOSRotating(LuaMan.TempEntity).Gibs do CheckpointHeldGibProbe = gib end");
+		SetTempEntity(previous);
+		owner->~MOSRotating();
+		std::memset(storage, 0xCD, sizeof(storage));
+		CheckpointText image;
+		std::vector<std::string> ownerProblems;
+		const bool captured = CaptureScriptGraph(image, ownerProblems, true);
+		std::string refusal;
+		if (captured) {
+			try {
+				image.Text();
+			} catch (const ScriptGraphRefusal& error) {
+				for (const std::string& problem: error.problems) refusal += problem + "; ";
+			} catch (const std::exception& error) {
+				refusal = error.what();
+			}
+		}
+		RunScriptString("CheckpointHeldGibProbe = nil");
+		const bool named = held == 0 && captured && refusal.find("a Gib whose owner is missing") != std::string::npos;
+		std::cout << "[script-graph-selftest] " << (named ? "PASS" : "FAIL") << " a_member_whose_owner_is_gone_is_never_read_through_it held="
+		          << (held == 0) << " captured=" << captured << " refusal=" << refusal << std::endl;
+		checkpointValues = named && checkpointValues;
 	}
 
 	// Two states that make tables in the same order hand out the same numbers, which is what makes
@@ -9115,8 +9392,8 @@ _PrimitiveQueueCapture = nil
 		    "return probe end)()",
 		    false);
 		luabind::object beforeWindow(m_State, 100);
-		// luabind keeps its free-list head in the registry at index 1 and its references in the slots it names, so
-		// those two reads are the array part the hash-key probe below cannot see (luabind-0.7.1/src/ref.cpp).
+		// Registry refs keep their free-list head at index 0 (luaL_ref's, which luabind's refs share) and each
+		// reference in the slot it names, so those two reads are the part the hash-key probe below cannot see.
 		const auto readRegistrySlot = [this](int index) {
 			lua_rawgeti(m_State, LUA_REGISTRYINDEX, index);
 			const int value = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
@@ -9128,7 +9405,7 @@ _PrimitiveQueueCapture = nil
 			luabind::object primeFirst(m_State, 97);
 			luabind::object primeSecond(m_State, 98);
 		}
-		const int freeListBefore = readRegistrySlot(1);
+		const int freeListBefore = readRegistrySlot(0);
 		const int linkBefore = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_pushinteger(m_State, 1);
 		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
@@ -9144,7 +9421,7 @@ _PrimitiveQueueCapture = nil
 			for (int value = 0; value < 3; ++value) {
 				windowBorn.push_back(std::make_unique<luabind::object>(m_State, 300 + value));
 			}
-			freeListInside = readRegistrySlot(1);
+			freeListInside = readRegistrySlot(0);
 			slotInside = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 			wrote = RunScriptString("_PreviewSlotProbe.write()", false);
 			lua_pushinteger(m_State, 2);
@@ -9158,7 +9435,7 @@ _PrimitiveQueueCapture = nil
 			}
 		}
 		ReleasePreviewGlobalFence();
-		const int freeListAfter = readRegistrySlot(1);
+		const int freeListAfter = readRegistrySlot(0);
 		const int slotAfter = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 		const int afterRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
@@ -9733,7 +10010,7 @@ int LuaStateWrapper::RunScriptFunctionString(const std::string& functionName, co
 	}
 
 	// Lock here, even though we also lock in RunScriptString(), to ensure that the temp entity vector isn't stomped by separate threads.
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	scriptString << functionName + "(";
@@ -9777,7 +10054,7 @@ int LuaStateWrapper::RunScriptString(const std::string& scriptString, bool conso
 	}
 	int error = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	lua_pushcfunction(m_State, &AddFileAndLineToError);
@@ -9801,7 +10078,7 @@ int LuaStateWrapper::RunScriptString(const std::string& scriptString, bool conso
 int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -9882,7 +10159,7 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 int LuaStateWrapper::RunScriptConditionalTestFunctionObject(const LuabindObjectWrapper* functionObject, const std::string& selfGlobalTableName, const std::string& selfGlobalTableKey, bool& returnParam, const std::vector<const Entity*>& functionEntityArguments, const std::vector<std::string_view>& functionLiteralArguments, const std::vector<LuabindObjectWrapper*>& functionObjectArguments) {
 	int status = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -9973,7 +10250,7 @@ int LuaStateWrapper::RunScriptFile(const std::string& filePath, bool consoleErro
 
 	int error = 0;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = filePath;
 
@@ -10032,7 +10309,7 @@ int LuaStateWrapper::RunScriptFile(const std::string& filePath, bool consoleErro
 }
 
 bool LuaStateWrapper::RetrieveFunctions(const std::string& funcObjectName, const std::vector<std::string>& functionNamesToLookFor, std::unordered_map<std::string, LuabindObjectWrapper*>& outFunctionNamesAndObjects) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	luabind::object funcHoldingObject = luabind::globals(m_State)[funcObjectName.c_str()];
@@ -10091,7 +10368,7 @@ int LuaStateWrapper::RunScriptFileAndRetrieveFunctions(const std::string& filePa
 		return 0;
 	}
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	s_currentLuaState = this;
 
 	if (int error = RunScriptFile(filePath); error < 0) {
@@ -10122,7 +10399,7 @@ bool LuaStateWrapper::ExpressionIsTrue(const std::string& expression, bool conso
 	}
 	bool result = false;
 
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the script string onto the stack so we can execute it, and then actually try to run it. Assign the result to a dedicated temp global variable.
 	if (luaL_dostring(m_State, std::string("ExpressionResult = " + expression + ";").c_str())) {
@@ -10143,7 +10420,7 @@ bool LuaStateWrapper::ExpressionIsTrue(const std::string& expression, bool conso
 }
 
 void LuaStateWrapper::SavePointerAsGlobal(void* objectToSave, const std::string& globalName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the pointer onto the Lua stack.
 	lua_pushlightuserdata(m_State, objectToSave);
@@ -10152,7 +10429,7 @@ void LuaStateWrapper::SavePointerAsGlobal(void* objectToSave, const std::string&
 }
 
 bool LuaStateWrapper::GlobalIsDefined(const std::string& globalName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Get the var you want onto the stack so we can check it.
 	lua_getglobal(m_State, globalName.c_str());
@@ -10165,7 +10442,7 @@ bool LuaStateWrapper::GlobalIsDefined(const std::string& globalName) {
 }
 
 bool LuaStateWrapper::TableEntryIsDefined(const std::string& tableName, const std::string& indexName) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
 	// Push the table onto the stack, checking if it even exists.
 	lua_getglobal(m_State, tableName.c_str());
@@ -10510,6 +10787,15 @@ bool LuaMan::FileEOF(int fileIndex) {
 
 void LuaMan::Update() {
 	ZoneScoped;
+
+	// The last capture's page copies land before this tick's first Lua work; what the gates waited is reported.
+	m_MasterScriptState.WaitFrozenCopy();
+	for (LuaStateWrapper& luaState: m_ScriptStates) luaState.WaitFrozenCopy();
+	static int64_t reportedGateWaitUs = 0;
+	if (const int64_t gateWaitUs = CheckpointLua::HeapOwner::GateWaitMicroseconds(); gateWaitUs != reportedGateWaitUs) {
+		System::PrintDiagnosticLine(std::format("[autosave-gate] tick={} waited_us={}\n", g_TimerMan.GetSimUpdateCount(), gateWaitUs - reportedGateWaitUs));
+		reportedGateWaitUs = gateWaitUs;
+	}
 
 	m_MasterScriptState.Update();
 	for (LuaStateWrapper& luaState: m_ScriptStates) {
@@ -11403,7 +11689,7 @@ namespace {
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	const int top = lua_gettop(m_State);
 	const std::string uid = std::to_string(uniqueID);
 	PushScriptObjectInstanceTable(m_State, uniqueID);
@@ -11434,7 +11720,7 @@ bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector
 }
 
 bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	text.clear();
@@ -11456,7 +11742,7 @@ bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std:
 }
 
 bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptGraph");
@@ -11530,7 +11816,7 @@ void LuaStateWrapper::CapturePreviewGlobalFence() {
 }
 
 void LuaStateWrapper::CapturePreviewGlobalFence(bool rootRegistry) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (m_PreviewGlobalFenceArmed) {
 		return;
 	}
@@ -11559,7 +11845,7 @@ bool LuaMan::PreviewRegistryRootEnabled() {
 }
 
 int LuaStateWrapper::DropPreviewWindowReferences() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (!m_PreviewGlobalFenceArmed) {
 		return 0;
 	}
@@ -11630,7 +11916,7 @@ int LuaStateWrapper::DropPreviewWindowReferences() {
 }
 
 int LuaStateWrapper::ReleasePreviewGlobalFence() {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	int changes = 0;
 	if (m_PreviewGlobalFenceArmed) {
 		// This state alone: its own references go back on luabind's free list before its rollback, not after it.
@@ -11693,7 +11979,7 @@ bool LuaStateWrapper::BindPreviewScriptObject(MovableObject* clone, bool sharedS
 }
 
 bool LuaStateWrapper::RemapPreviewHoldReferences(long uniqueID, std::string& freezeClass) {
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	freezeClass.clear();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptFieldsStash");
@@ -11722,7 +12008,7 @@ bool LuaStateWrapper::AttachPreviewInvStride(MovableObject* object) {
 	if (!object) {
 		return false;
 	}
-	std::lock_guard<std::recursive_mutex> lock(m_Mutex);
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 	if (RunScriptString("_PreviewInvOnStride = _PreviewInvOnStride or function(self) self.previewInvCounter = (self.previewInvCounter or 0) + 1 end") < 0) {
 		return false;
 	}
@@ -11991,6 +12277,51 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 	} catch (const std::exception& error) {
 		probe.error = error.what();
 	}
+	return probe;
+}
+
+RegistryRefProbe RTE::ProbeRegistryRefs() {
+	RegistryRefProbe probe;
+	lua_State* state = luaL_newstate();
+	if (!state) {
+		probe.error = "no state";
+		return probe;
+	}
+	luaL_openlibs(state);
+	luabind::open(state);
+	const auto take = [state](std::vector<std::pair<int, const void*>>& into, int count) {
+		for (int index = 0; index < count; ++index) {
+			lua_newtable(state);
+			const void* table = lua_topointer(state, -1);
+			into.emplace_back(luabind::detail::ref(state), table);
+		}
+	};
+	const auto names = [state](int ref, const void* table) {
+		lua_rawgeti(state, LUA_REGISTRYINDEX, ref);
+		const bool same = lua_topointer(state, -1) == table;
+		lua_pop(state, 1);
+		return same;
+	};
+	// A long-lived luaL_ref, then as many luabind refs as a busy state takes and gives back.
+	lua_newtable(state);
+	const void* held = lua_topointer(state, -1);
+	probe.heldRef = luaL_ref(state, LUA_REGISTRYINDEX);
+	std::vector<std::pair<int, const void*>> refs;
+	take(refs, 256);
+	for (const auto& [ref, table]: refs) probe.shared += ref == probe.heldRef;
+	for (const auto& [ref, table]: refs) luabind::detail::unref(state, ref);
+	probe.heldIntact = names(probe.heldRef, held);
+	// The other way round: luabind's refs held while luaL_ref takes one of its own.
+	refs.clear();
+	take(refs, 64);
+	lua_newtable(state);
+	const int later = luaL_ref(state, LUA_REGISTRYINDEX);
+	probe.luabindIntact = true;
+	for (const auto& [ref, table]: refs) {
+		probe.shared += ref == later;
+		probe.luabindIntact = names(ref, table) && probe.luabindIntact;
+	}
+	lua_close(state);
 	return probe;
 }
 

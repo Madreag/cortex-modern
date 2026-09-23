@@ -1,5 +1,6 @@
 #include "CheckpointImage.h"
 #include "CheckpointArchive.h"
+#include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
 #include "MovableMan.h"
@@ -46,16 +47,16 @@ using namespace RTE;
 namespace {
 	std::atomic<uint64_t> s_LuaWrites{0};
 	std::atomic<int> s_BarrierPaused{0};
-	std::atomic<std::thread::id> s_BarrierPauseOwner{};
+	thread_local int s_BarrierPauseDepth = 0;
 	std::atomic<uint64_t> s_PausedForeignWrites{0};
 	thread_local int s_BarrierIgnored = 0;
 
 	void OnLuaTableWrite(void* table) {
 		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
-			// The capture's own scratch writes are its business; the callback stays installed so
+			// A capturing thread's own scratch writes are its business; the callback stays installed so
 			// every table born in the capture still gets its trap.
-			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+			if (s_BarrierPauseDepth > 0) {
 				return;
 			}
 			// The freeze is meant to hold every Lua thread. One that wrote anyway would be lost
@@ -73,7 +74,7 @@ namespace {
 	void OnLuaValueWrite(void* value) {
 		if (s_BarrierIgnored > 0) return;
 		if (s_BarrierPaused.load(std::memory_order_relaxed) > 0) {
-			if (std::this_thread::get_id() == s_BarrierPauseOwner.load(std::memory_order_relaxed)) {
+			if (s_BarrierPauseDepth > 0) {
 				return;
 			}
 			s_PausedForeignWrites.fetch_add(1, std::memory_order_relaxed);
@@ -516,15 +517,14 @@ void RTE::CheckpointValueWritten(const void* value) {
 
 // A capture's own scratch tables are not gameplay writes, and the walk discards every write it sees.
 RTE::LuaCheckpointBarrierPause::LuaCheckpointBarrierPause() {
-	// The pausing thread's own writes are the capture's scratch; any other thread's are a defect.
-	s_BarrierPauseOwner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+	// Each pausing thread's own writes are the capture's scratch; any other thread's are a defect.
+	++s_BarrierPauseDepth;
 	s_BarrierPaused.fetch_add(1, std::memory_order_relaxed);
 }
 
 RTE::LuaCheckpointBarrierPause::~LuaCheckpointBarrierPause() {
-	if (s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed) == 1) {
-		s_BarrierPauseOwner.store(std::thread::id(), std::memory_order_relaxed);
-	}
+	s_BarrierPaused.fetch_sub(1, std::memory_order_relaxed);
+	--s_BarrierPauseDepth;
 }
 
 RTE::LuaCheckpointBarrierIgnore::LuaCheckpointBarrierIgnore() { ++s_BarrierIgnored; }
@@ -905,6 +905,12 @@ end
 	} else {
 		fail("a_stamped_write_is_not_reused_from_the_shadow", "front object is not an Actor");
 	}
+	// A capture answers which objects exist from a copy; a change to them while it lives must reach the answers.
+	{
+		const std::string missed = g_MovableMan.KnownObjectsScopeMissedChange();
+		if (missed.empty()) pass("a_known_objects_change_reaches_a_capture_scope", "ways=3");
+		else fail("a_known_objects_change_reaches_a_capture_scope", "missed_way=" + missed);
+	}
 	return passed;
 }
 
@@ -1082,6 +1088,35 @@ bool RTE::RunCheckpointImageSelfTest() {
 			} else {
 				pass(row, detail);
 			}
+		}
+
+		// luaL_ref and luabind both take registry slots on a luabind state. A slot one of them holds is never
+		// handed to the other, whichever took its ref first.
+		{
+			const RegistryRefProbe probe = ProbeRegistryRefs();
+			const char* row = "a_registry_ref_is_never_handed_to_a_second_owner";
+			const std::string detail = "held_ref=" + std::to_string(probe.heldRef) + " shared=" + std::to_string(probe.shared) +
+			                           " held_intact=" + std::to_string(probe.heldIntact) + " luabind_intact=" + std::to_string(probe.luabindIntact);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.shared != 0 || !probe.heldIntact || !probe.luabindIntact) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
+		// A registry scope that saves the registry only when something changes it must leave what an eager copy would.
+		{
+			if (!AudioMan::IsConstructed()) AudioMan::Construct();
+			const std::string missed = g_AudioMan.RegistryScopeMissedChange();
+			if (missed.empty()) pass("a_registry_scope_puts_back_what_any_change_moved", "ways=5");
+			else fail("a_registry_scope_puts_back_what_any_change_moved", "missed_way=" + missed);
+		}
+		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
+		{
+			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();
+			if (missed.empty()) pass("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "ways=12");
+			else fail("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "missed_way=" + missed);
 		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
