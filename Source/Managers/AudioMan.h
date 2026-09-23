@@ -129,7 +129,8 @@ namespace RTE {
 		};
 		class SoundCheckpointSaveScope {
 		public:
-			SoundCheckpointSaveScope();
+			/// A scope that does not remember its notes when it ends only collects them for its owner.
+			explicit SoundCheckpointSaveScope(bool remember = true);
 			~SoundCheckpointSaveScope();
 			SoundCheckpointSaveScope(const SoundCheckpointSaveScope&) = delete;
 			SoundCheckpointSaveScope& operator=(const SoundCheckpointSaveScope&) = delete;
@@ -152,6 +153,7 @@ namespace RTE {
 			std::mutex m_NoteMutex;
 			std::unordered_set<uint64_t> m_Carried;
 			SoundCheckpointSaveScope* m_Previous = nullptr;
+			bool m_Remember = true;
 		};
 		class RestoredSoundRegistryScope {
 		public:

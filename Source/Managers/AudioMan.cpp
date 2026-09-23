@@ -1297,12 +1297,12 @@ AudioMan::CheckpointRegistryScope::~CheckpointRegistryScope() {
 
 thread_local AudioMan::SoundCheckpointSaveScope* AudioMan::SoundCheckpointSaveScope::s_Current = nullptr;
 
-AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope() : m_Previous(s_Current) {
+AudioMan::SoundCheckpointSaveScope::SoundCheckpointSaveScope(bool remember) : m_Previous(s_Current), m_Remember(remember) {
 	s_Current = this;
 }
 
 AudioMan::SoundCheckpointSaveScope::~SoundCheckpointSaveScope() {
-	g_AudioMan.RememberCarriedSoundIdentities(m_Carried);
+	if (m_Remember) g_AudioMan.RememberCarriedSoundIdentities(m_Carried);
 	s_Current = m_Previous;
 }
 
