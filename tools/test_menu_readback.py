@@ -601,6 +601,8 @@ def connection_readback():
     text += "assert_label LabelNetworkConnection Connection\nassert_label ComboNetworkConnection Automatic\n"
     text += "assert_label LabelNetworkStunServers STUN server list\n"
     text += f"assert_label TextNetworkStunServers {STUN_DEFAULT}\n"
+    # The player's relay hint makes the host options hint's claim: UDP only, a self-renewing directory login.
+    text += "assert_label LabelNetworkRelayHint UDP TURN only; no TCP/TLS relays. A host's directory login renews while the session runs.\n"
     for control in CONNECTION_ROWS:
         text += f"assert_visible {control} 1\nassert_rect_inside {control} CollectionBoxNetPageConnection\nassert_rect_inside {control} viewport\n"
         if control != "TextNetworkStunServers":
