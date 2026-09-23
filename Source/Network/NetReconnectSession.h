@@ -315,6 +315,7 @@ namespace RTE {
 		uint32_t reclaimRetransmitsDropped = 0;
 		uint32_t seatHoldsExpired = 0;
 		uint32_t seatsReleasedInLobby = 0;
+		uint32_t removalSettleDrops = 0; //!< NewJoins that knocked on a still-settling kicked seat; their retransmit takes it.
 		uint32_t applicantsRegistered = 0;
 		uint32_t applicantsRefused = 0;
 		uint32_t applicantsExpired = 0;
@@ -348,6 +349,9 @@ namespace RTE {
 		static constexpr size_t c_MaxApplicants = 4;
 		static constexpr size_t c_MaxApplicantsPerSeat = 2;
 		static constexpr size_t c_MaxApplicantsPerConnection = 1;
+		// A kicked seat settles for one denial cadence before it is offered again, so the removal is
+		// what an observer reads off the lobby; the joiner's own retransmit lands the seat once it opens.
+		static constexpr uint64_t c_RemovalSettleMs = NetReconnectAdmission::c_DenialReleaseMs;
 
 		void Configure(NetSeatAuthRegistry* registry, uint64_t hostSessionId, NetH4Identity localIdentity);
 		NetAuthBytes16 GetEpoch() const;
@@ -474,6 +478,9 @@ namespace RTE {
 			bool dropped = false;
 			uint64_t droppedAtMs = 0;
 			bool holdExpired = false;
+			// The kick that opened this seat keeps it visibly open until this instant; only a lobby
+			// removal stamps it, so a clean leave or a drop re-offers as fast as it always did.
+			uint64_t removalSettleUntilMs = 0;
 			// The compare-and-swap value a pending substitution captures at approval. Anything that
 			// changes who may hold the seat moves it, so an approval that was overtaken cannot commit.
 			uint32_t seatGeneration = 1;

@@ -706,6 +706,12 @@ namespace RTE {
 			Send(connection, NetJoinRejected{NetRejectReason::SessionFull, "session is full", "seats", "", ""});
 			return;
 		}
+		if (m_NowMs < seat->removalSettleUntilMs) {
+			// The seat a kick opened is not offered while its removal is still settling. The drop is
+			// silent, so the joiner's own retransmit ladder lands it once the window has passed.
+			++m_Stats.removalSettleDrops;
+			return;
+		}
 		uint32_t holderGeneration = 0;
 		NetSeatCredential credential{};
 		if (!m_Registry->IssueCredential(seat->seat.stableSeat, holderGeneration, credential)) {
@@ -1216,9 +1222,11 @@ namespace RTE {
 			// leaves is what keeps anyone else out of it.
 			CloseSeatWithoutHold(*seat);
 		} else {
-			// A lobby removal releases the seat without banning its holder.
-
+			// A lobby removal releases the seat without banning its holder. The release stamps the
+			// seat's settle window, so the open seat is what an observer reads before it can be
+			// taken again - by the player it just removed or by anyone else.
 			ReleaseSeat(*seat);
+			seat->removalSettleUntilMs = m_NowMs + c_RemovalSettleMs;
 		}
 		m_LastRemovalTx = issued.notice.txId;
 		m_HasRemovalTx = true;
@@ -1240,6 +1248,7 @@ namespace RTE {
 		seat.saturated = false;
 		seat.dropped = false;
 		seat.holdExpired = false;
+		seat.removalSettleUntilMs = 0;
 		seat.identity = {};
 		seat.holderName.clear();
 		seat.participantId = {};
