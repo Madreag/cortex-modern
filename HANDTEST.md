@@ -95,14 +95,17 @@ Expect: host keeps playing; the client's seat shows `held - AI in control`
 (HUD toast - Source/System/ScenarioRunner.cpp:1424); the client resumes by itself.
 Proof in the host log:
 `[net-match] hold peer=<n> frame=<f> AI in control` (Source/Network/NetLockstep.cpp:4744)
-then on recovery `[net-match] rejoin: <name> reconnected - resyncing the match` (Source/Network/NetMatchService.cpp:4672)
+then on recovery `[net-match] private rejoin peer=<n> incarnation=<m>`
+(Source/Network/NetMatchService.cpp:3087) or `[net-match] rejoin: <name>
+reconnected - resyncing the match` (Source/Network/NetMatchService.cpp:4672)
 and `[net-match] seat-reclaimed peer=<id> ...` = the human taking the seat back
 (Source/Managers/MovableMan.cpp:978).
 Wrong: the host freezes waiting on the client's input (no `hold peer=` line).
 A long enough stall drops the peer instead - the leave lines under D apply.
 
 **D - Client quits mid-match.**
-Close the client window. Host keeps playing; the seat stays held by AI.
+Close the client window. Host keeps playing; the seat stays held by AI (the
+`held - AI in control` toast is on screen only - Source/System/ScenarioRunner.cpp:1424).
 Proof in the host log:
 `[net-match] <peer> left the match at frame <f> (<reason>)` (Source/Network/NetLockstep.cpp:8063)
 (or, if the peer was already held: `[net-lockstep] a leave becomes a hold for peer <n> at frame <f>: <detail>` - Source/Network/NetLockstep.cpp:8050).
@@ -127,7 +130,7 @@ Wrong: `[autosave] failed tick=<n> reason=...` (Source/Managers/ActivityMan.cpp:
 After the match ends, both peers are back in the lobby seats
 (Source/Menus/MainMenuGUI.cpp:3193-3196). Client presses **Ready**, host **Start Match** again.
 Proof: `NETWORK: Match complete: <result>` in each peer's LogConsole.txt
-(Source/Main.cpp:4735) - the same line in both collected instances proves both
+(Source/Main.cpp:4735,4748,6286) - the same line in both collected instances proves both
 sides saw the same match end; the new match writes a fresh `match-report-*.json`
 `last_match` block (Source/Network/NetMatchService.cpp:5711-5717).
 Wrong: `[net-match] rematch unavailable: ...` (Source/Network/NetMatchService.cpp:739).
