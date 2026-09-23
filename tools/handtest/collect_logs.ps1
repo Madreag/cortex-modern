@@ -4,78 +4,111 @@
   Collects every hand-test instance's evidence into one folder:
     pwsh tools\handtest\collect_logs.ps1 -Out <dir>
 
-  For each instance under D:\mx\handtest\<role>-<n>\ it copies the console log
-  (stdout/stderr), the engine log and runner records (launch.json, stdout.log,
-  match-report.json), autosaves (Autosaves\), crash dumps (*.dmp, AbortCode.txt)
-  and the effective Userdata\Settings.ini into <Out>\<instance>\, then writes
-  <Out>\MANIFEST.txt with the build sha, exe hash, timestamps and the exact
-  command line each instance ran.
+  Reads only the headed instances - D:\mx\handtest\<role>-<n>\. The self-check
+  writes under D:\mx\handtest\_selfcheck\ and is never mixed in; pass
+  -Source D:\mx\handtest\_selfcheck to pack a self-check run instead.
+
+  For each instance it copies the console logs (console-*.out.log / *.err.log /
+  console-*.log), the runner records (run-*\launch.json, run-*\stdout.log),
+  match reports (match-report-*.json), kit launch records (kit-launch-*.json),
+  autosaves (Autosaves\), match replays (Userdata\Replays\), crash dumps
+  (crash*.dmp, AbortCode*.txt), the menu script and the effective Settings.ini
+  into <Out>\<instance>\, then writes <Out>\MANIFEST.txt with the build sha and
+  dirty flag of the exe's tree, the exe hash, timestamps, the exact command
+  lines used, and every copied file with size and mtime.
+
+  reconnect.ticket is deliberately not copied - it is a live rejoin credential.
+  Recursive copies never follow junctions/symlinks (an instance's Data is one).
 #>
 [CmdletBinding()]
-param([Parameter(Mandatory)] [string]$Out)
+param(
+    [Parameter(Mandatory)] [string]$Out,
+    [string]$Source = 'D:\mx\handtest'
+)
 $ErrorActionPreference = 'Stop'
 
-$scratchRoot = 'D:\mx\handtest'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-if (-not (Test-Path $scratchRoot)) { throw "no hand-test instances found: $scratchRoot does not exist" }
-$instances = Get-ChildItem $scratchRoot -Directory | Where-Object { $_.Name -match '^(host|client)-\d+$' }
-if (-not $instances) { throw "no hand-test instances under $scratchRoot" }
+if (-not (Test-Path $Source)) { throw "no hand-test instances found: $Source does not exist" }
+$instances = Get-ChildItem $Source -Directory | Where-Object { $_.Name -match '^(host|client)-\d+$' }
+if (-not $instances) { throw "no hand-test instances under $Source" }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
 
-$buildSha = (git -C $repo rev-parse HEAD 2>$null)
 $collected = Get-Date
 $manifest = [System.Collections.Generic.List[string]]::new()
 $manifest.Add("handtest collect_logs  $($collected.ToUniversalTime().ToString('o'))")
-$manifest.Add("repo HEAD sha: $buildSha  (exe sha256 per instance is the binary identity)")
+$manifest.Add("source: $Source")
 $manifest.Add('')
+
+# Recursive copy that never follows a junction/symlink: a link itself is skipped
+# (its target's content is evidence of the build, not of this instance).
+function Copy-TreeNoLinks([string]$src, [string]$dest) {
+    $count = 0
+    Get-ChildItem $src -Force | ForEach-Object {
+        if ($_.LinkType) { return }
+        if ($_.PSIsContainer) {
+            $count += Copy-TreeNoLinks $_.FullName (Join-Path $dest $_.Name)
+        } else {
+            New-Item -ItemType Directory -Force $dest | Out-Null
+            Copy-Item $_.FullName (Join-Path $dest $_.Name) -Force
+            $count++
+        }
+    }
+    return $count
+}
 
 foreach ($inst in $instances) {
     $dest = Join-Path $Out $inst.Name
     New-Item -ItemType Directory -Force $dest | Out-Null
-    $kitLaunch = Join-Path $inst.FullName 'kit-launch.json'
-    $kit = $null
-    if (Test-Path $kitLaunch) { $kit = Get-Content $kitLaunch -Raw | ConvertFrom-Json }
     $manifest.Add("== $($inst.Name) ==")
     $manifest.Add("runtime: $($inst.FullName)")
-    if ($kit) {
-        $manifest.Add("exe: $($kit.executable)")
-        $manifest.Add("exe sha256: $($kit.exe_sha256)")
-        $manifest.Add("launched utc: $($kit.launched_utc)")
-        $manifest.Add("argv: $($kit.argv -join ' ')")
-        $manifest.Add("port: $($kit.port)   fake_lag_ms: $($kit.fake_lag_ms)")
-    }
-    $copied = 0
+
     $copyFile = {
-        param($src)
-        if (Test-Path $src) { Copy-Item $src $dest -Force; $script:copied++; return $true }
-        return $false
+        param($src, [string]$destName = '')
+        if (-not (Test-Path $src)) { return $false }
+        $f = Get-Item $src -Force
+        if ($f.LinkType) { return $false }
+        Copy-Item $src (Join-Path $dest ($destName ? $destName : $f.Name)) -Force
+        return $true
     }
-    foreach ($name in 'kit-launch.json', 'console.out.log', 'console.err.log', 'console.log',
-                     'match-report.json', 'reconnect.ticket', 'host-bans.txt',
-                     'crash.dmp', 'AbortCode.txt', 'LogConsole.txt', 'selftest.menu.txt') {
-        & $copyFile (Join-Path $inst.FullName $name) | Out-Null
-    }
-    foreach ($name in 'stdout.log', 'launch.json', 'wrapper.out.log', 'wrapper.err.log', 'runtime.json') {
-        & $copyFile (Join-Path $inst.FullName "run\$name") | Out-Null
-    }
+    # Per-launch files (timestamped) and fixed-name files.
+    Get-ChildItem $inst.FullName -File -Force | Where-Object {
+        $_.Name -match '^(kit-launch-|console-|match-report-|crash|AbortCode|LogConsole\.txt|selftest\.menu\.txt|host-bans\.txt)' -and -not $_.LinkType
+    } | ForEach-Object { & $copyFile $_.FullName | Out-Null }
     $effective = Join-Path $inst.FullName 'Userdata\Settings.ini'
-    if (Test-Path $effective) { Copy-Item $effective (Join-Path $dest 'Settings.ini.effective') -Force; $copied++ }
-    foreach ($dir in 'Autosaves', 'ScreenShots', 'Mods', 'Userdata\Replays') {
+    if (Test-Path $effective) { & $copyFile $effective 'Settings.ini.effective' | Out-Null }
+    # Runner records from every run-* directory.
+    Get-ChildItem $inst.FullName -Directory -Force | Where-Object { $_.Name -match '^run-' -and -not $_.LinkType } |
+        ForEach-Object { Copy-TreeNoLinks $_.FullName (Join-Path $dest $_.Name) | Out-Null }
+    # Evidence directories. reconnect.ticket is skipped: it is a live rejoin credential.
+    foreach ($dir in 'Autosaves', 'ScreenShots', 'Userdata\Replays') {
         $src = Join-Path $inst.FullName $dir
-        if (Test-Path $src) {
-            $files = Get-ChildItem $src -File -Recurse
-            if ($files) {
-                Copy-Item $src (Join-Path $dest (Split-Path $dir -Leaf)) -Recurse -Force
-                $copied += $files.Count
-            }
+        if (Test-Path $src) { Copy-TreeNoLinks $src (Join-Path $dest (Split-Path $dir -Leaf)) | Out-Null }
+    }
+
+    $launches = Get-ChildItem $inst.FullName -Filter 'kit-launch-*.json' -File -ErrorAction SilentlyContinue
+    foreach ($kitFile in $launches) {
+        $kit = Get-Content $kitFile.FullName -Raw | ConvertFrom-Json
+        $exeDir = Split-Path $kit.executable -Parent
+        $bsha = (git -C $exeDir rev-parse HEAD 2>$null)
+        $dirty = (git -C $exeDir status --porcelain 2>$null) ? 'dirty' : 'clean'
+        $manifest.Add("launch $($kit.launched_utc): exe=$($kit.executable)")
+        $manifest.Add("  exe sha256: $($kit.exe_sha256)")
+        $manifest.Add("  build sha: $bsha ($dirty)")
+        $manifest.Add("  argv: $($kit.argv -join ' ')")
+        $manifest.Add("  port: $($kit.port)   fake_lag_ms: $($kit.fake_lag_ms)   mode: $($kit.mode)")
+    }
+    Get-ChildItem $inst.FullName -Directory -Filter 'run-*' -ErrorAction SilentlyContinue | ForEach-Object {
+        $lj = Join-Path $_.FullName 'launch.json'
+        if (Test-Path $lj) {
+            $j = Get-Content $lj -Raw | ConvertFrom-Json
+            $manifest.Add("  $($_.Name): exit_code=$($j.exit_code) pid=$($j.pid) headless_env=$($j.headless_env)")
         }
     }
-    $exit = $null
-    $launchJson = Join-Path $inst.FullName 'run\launch.json'
-    if (Test-Path $launchJson) { $exit = ((Get-Content $launchJson -Raw | ConvertFrom-Json).exit_code) }
-    if ($null -ne $exit) { $manifest.Add("exit code: $exit") }
-    $manifest.Add("files copied: $copied")
+    $manifest.Add("files copied:")
+    Get-ChildItem $dest -Recurse -File | ForEach-Object {
+        $rel = $_.FullName.Substring($dest.Length + 1)
+        $manifest.Add(("  {0}  {1} bytes  mtime {2}" -f $rel, $_.Length, $_.LastWriteTimeUtc.ToString('o')))
+    }
     $manifest.Add('')
 }
 

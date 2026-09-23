@@ -1,57 +1,44 @@
-# tools/handtest - the hand-test kit
+# tools/handtest - manual multiplayer hand-test kit
 
-`play.ps1` launches isolated multiplayer instances of the game; `collect_logs.ps1`
-packs their evidence for review. The full runbook is `HANDTEST.md` at the root.
+`play.ps1` launches isolated headed instances for a person at this PC;
+`collect_logs.ps1` packs their logs for review. The full runbook is
+`HANDTEST.md` at the repo root.
 
 ## Isolation
 
-Each instance runs with its working directory set to its own runtime at
-`D:\mx\handtest\<role>-<n>\` (`host-1`, `client-1`, `client-2`). The runtime holds
-`Mods\`, `ScreenShots\`, `Userdata\`, `Temp\`, `Autosaves\`, a `Data` junction to
-the build's data, and a `Userdata\Settings.ini` copied from the tree's template
-and patched to: 1280x720 windowed, VSync off, sound on, `DeltaTime = 0.016667`
-(the deterministic timestep), `SkipIntro = 1`, the lobby name, and the lockstep
-pins the harness uses (`LocalPrediction`, `LocalPredictionMaxTicks`,
-`NetworkHostDelayPolicy = Auto`, `NetworkInputDelayFrames`,
-`NetworkSlowPlayerBoundTicks`, `NetworkSlowPlayerPolicy = Substitute`,
-`NetworkShowDiagnostics`). The engine has no user-directory flag - the working
-directory IS the isolation. Saves, settings and autosaves never collide.
+Each instance gets a private runtime `D:\mx\handtest\<role>-<n>\`:
 
-## Run
+- `Userdata\Settings.ini` copied from the build's template and pinned in place
+  (idempotent - keys are replaced, never duplicated): windowed 1280x720, sound
+  on, `DeltaTime = 0.016667`, `SkipIntro`, and the same lockstep pins the harness
+  uses (`tools/feel_measure.py` `private_settings`).
+- `Data` is a junction to the build's `Data` - shared read-only content,
+  zero copies. Never delete the runtime root with a junction-following tool.
+- `Mods`, `ScreenShots`, `Temp`, `Autosaves` are per-instance; `TEMP`/`TMP`
+  point inside it; `reconnect.ticket`, `host-bans.txt`, `match-report-*.json`,
+  `crash*.dmp`, `AbortCode*.txt` all land there too.
+- Every launch is recorded in `kit-launch-<stamp>.json` and writes
+  `console-<stamp>.out|err.log` - no shared file is overwritten between runs.
+- Headed instances are windowed and placed left-to-right (host left, clients
+  right, clamped to the work area).
 
-```powershell
-pwsh tools\handtest\play.ps1                          # host + client, headed
-pwsh tools\handtest\play.ps1 -Role client -FakeLagMs 100
-pwsh tools\handtest\play.ps1 -Mac                     # host + Mac join instructions
-```
+Headed mode refuses to run when `CCCP_HEADLESS` is in the environment (an
+automation shell - it would leave hidden engines). `-LossPct` is accepted only
+with `-Headless`: the engine honors `CC_TEST_GNS_LOSS_PERCENT` solely under
+headless+lockstep. `-FakeLagMs` works in both modes (`-net-fake-lag`).
 
-Headed instances are windowed 1280x720 and placed side by side (host left).
-Lobby port: `-Port` (default 47400; the kit owns 47400-47419, below every harness
-block). Flags passed are limited to those in `Source/Main.cpp` (`-headed`,
-`-net-match-report`, `-net-reconnect-ticket`, `-net-host-bans`, `-net-fake-lag`);
-`-LossPct` sets `CC_TEST_GNS_LOSS_PERCENT`, which the engine only honors
-headless+lockstep. Each instance writes `kit-launch.json` (argv, env, exe sha256)
-into its runtime dir.
+## Self-check (workers only)
 
-## Logs
+`play.ps1 -Headless` runs the same flow through `tools/isolated_launch.py`
+(CCCP_HEADLESS=1, private hidden desktop) with a menu-script driving the real
+lobby UI and `-net-match-ticks` bounding the match. Its runtimes live under
+`D:\mx\handtest\_selfcheck\` - the collector never mixes them into a user pack.
 
-```powershell
-pwsh tools\handtest\collect_logs.ps1 -Out <dir>
-```
+## Evidence
 
-Produces `<dir>\<instance>\` (console log, `run\stdout.log`, `launch.json`,
-`match-report.json`, `Autosaves\`, crash dumps, effective Settings.ini) plus
-`<dir>\MANIFEST.txt` with build sha, exe hash, timestamps and command lines.
-
-## Headless self-check (workers, not users)
-
-```powershell
-pwsh tools\handtest\play.ps1 -Headless -Role both -Clients 1 -Build <Final build dir>
-```
-
-Every launch goes through `tools/isolated_launch.py` (private hidden desktop,
-`CCCP_HEADLESS=1`, job object). Each instance runs `-headless -menu-script
-selftest.menu.txt -net-match-ticks 1200 ...`: the script drives the real lobby UI
-(Multiplayer -> Host Game / Join Game -> Create Lobby / Connect -> Ready ->
-Start), a bounded match runs ~20 sim-seconds, both peers return to the lobby and
-`exit` cleanly. Exit code 0 = pass; logs land in `<runtime>\run\`.
+`collect_logs.ps1 -Out <dir>` copies `console-*`, `run-*\`, `match-report-*`,
+`kit-launch-*`, autosaves, replays, crash dumps and the effective Settings.ini
+per instance, plus a `MANIFEST.txt` (build sha + dirty flag of the exe's tree,
+exe sha256, argv, exit codes, per-file sizes/mtimes). `reconnect.ticket` is not
+collected - a live rejoin credential. Recursive copies never follow junctions.
+`-Source <dir>` packs a different root (e.g. `D:\mx\handtest\_selfcheck`).
