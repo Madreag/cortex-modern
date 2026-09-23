@@ -3013,16 +3013,17 @@ void MainMenuGUI::StartMultiplayer(bool host) {
 	request.activityPreset = "P4 Alpha Duel";
 	request.activityModule = "Base.rte";
 	if (!host) {
+		const std::string joinTarget = NetDirectoryClient::WorldJoinTarget(request.address, request.sessionId);
 		bool targetWorld = m_JoinTargetPersistentWorld || m_JoinTargetActivity == "Persistent World";
 		if (!targetWorld) {
 			const int selected = m_MultiplayerLanGamesList ? m_MultiplayerLanGamesList->GetSelectedIndex() : -1;
-			targetWorld = NetDirectoryClient::TargetsPersistentWorld(m_GameRows, selected, request.address, request.port,
+			targetWorld = NetDirectoryClient::TargetsPersistentWorld(m_GameRows, selected, joinTarget, request.port,
 			                                                        m_LastWorldJoinAddress, m_LastWorldJoinPort, &m_JoinTargetActivity);
 		}
 		if (targetWorld) {
 			request.persistentWorld = true;
 			m_JoinTargetPersistentWorld = true;
-			m_LastWorldJoinAddress = request.address;
+			m_LastWorldJoinAddress = joinTarget;
 			m_LastWorldJoinPort = request.port;
 			g_NetMatchService.NoteJoinTargetPersistentWorld(true);
 			if (!m_JoinTargetActivity.empty()) {
