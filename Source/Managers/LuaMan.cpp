@@ -9156,8 +9156,8 @@ _PrimitiveQueueCapture = nil
 		    "return probe end)()",
 		    false);
 		luabind::object beforeWindow(m_State, 100);
-		// luabind keeps its free-list head in the registry at index 1 and its references in the slots it names, so
-		// those two reads are the array part the hash-key probe below cannot see (luabind-0.7.1/src/ref.cpp).
+		// Registry refs keep their free-list head at index 0 (luaL_ref's, which luabind's refs share) and each
+		// reference in the slot it names, so those two reads are the part the hash-key probe below cannot see.
 		const auto readRegistrySlot = [this](int index) {
 			lua_rawgeti(m_State, LUA_REGISTRYINDEX, index);
 			const int value = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
@@ -9169,7 +9169,7 @@ _PrimitiveQueueCapture = nil
 			luabind::object primeFirst(m_State, 97);
 			luabind::object primeSecond(m_State, 98);
 		}
-		const int freeListBefore = readRegistrySlot(1);
+		const int freeListBefore = readRegistrySlot(0);
 		const int linkBefore = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_pushinteger(m_State, 1);
 		lua_setfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
@@ -9185,7 +9185,7 @@ _PrimitiveQueueCapture = nil
 			for (int value = 0; value < 3; ++value) {
 				windowBorn.push_back(std::make_unique<luabind::object>(m_State, 300 + value));
 			}
-			freeListInside = readRegistrySlot(1);
+			freeListInside = readRegistrySlot(0);
 			slotInside = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 			wrote = RunScriptString("_PreviewSlotProbe.write()", false);
 			lua_pushinteger(m_State, 2);
@@ -9199,7 +9199,7 @@ _PrimitiveQueueCapture = nil
 			}
 		}
 		ReleasePreviewGlobalFence();
-		const int freeListAfter = readRegistrySlot(1);
+		const int freeListAfter = readRegistrySlot(0);
 		const int slotAfter = freeListBefore > 0 ? readRegistrySlot(freeListBefore) : -1;
 		lua_getfield(m_State, LUA_REGISTRYINDEX, "_PreviewRegistryRootProbe");
 		const int afterRegistry = lua_isnumber(m_State, -1) ? static_cast<int>(lua_tointeger(m_State, -1)) : -1;
@@ -12023,6 +12023,51 @@ CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
 	} catch (const std::exception& error) {
 		probe.error = error.what();
 	}
+	return probe;
+}
+
+RegistryRefProbe RTE::ProbeRegistryRefs() {
+	RegistryRefProbe probe;
+	lua_State* state = luaL_newstate();
+	if (!state) {
+		probe.error = "no state";
+		return probe;
+	}
+	luaL_openlibs(state);
+	luabind::open(state);
+	const auto take = [state](std::vector<std::pair<int, const void*>>& into, int count) {
+		for (int index = 0; index < count; ++index) {
+			lua_newtable(state);
+			const void* table = lua_topointer(state, -1);
+			into.emplace_back(luabind::detail::ref(state), table);
+		}
+	};
+	const auto names = [state](int ref, const void* table) {
+		lua_rawgeti(state, LUA_REGISTRYINDEX, ref);
+		const bool same = lua_topointer(state, -1) == table;
+		lua_pop(state, 1);
+		return same;
+	};
+	// A long-lived luaL_ref, then as many luabind refs as a busy state takes and gives back.
+	lua_newtable(state);
+	const void* held = lua_topointer(state, -1);
+	probe.heldRef = luaL_ref(state, LUA_REGISTRYINDEX);
+	std::vector<std::pair<int, const void*>> refs;
+	take(refs, 256);
+	for (const auto& [ref, table]: refs) probe.shared += ref == probe.heldRef;
+	for (const auto& [ref, table]: refs) luabind::detail::unref(state, ref);
+	probe.heldIntact = names(probe.heldRef, held);
+	// The other way round: luabind's refs held while luaL_ref takes one of its own.
+	refs.clear();
+	take(refs, 64);
+	lua_newtable(state);
+	const int later = luaL_ref(state, LUA_REGISTRYINDEX);
+	probe.luabindIntact = true;
+	for (const auto& [ref, table]: refs) {
+		probe.shared += ref == later;
+		probe.luabindIntact = names(ref, table) && probe.luabindIntact;
+	}
+	lua_close(state);
 	return probe;
 }
 
