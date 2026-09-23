@@ -559,7 +559,11 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	const auto captureStart = std::chrono::steady_clock::now();
 	try {
 		if (!QueueIncrementalAutosave(fileName, path, matchId, tick, task, bytes, SaveCompression::Fast, &identity)) {
-			std::cout << "[autosave] failed tick=" << tick << " reason=capture refused" << std::endl;
+			{
+				std::ostringstream line;
+				line << "[autosave] failed tick=" << tick << " reason=capture refused";
+				System::PrintDiagnosticLine(line.str());
+			}
 			return false;
 		}
 		m_AutosaveTasks.push_back(std::move(task));
@@ -568,12 +572,16 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		m_LastAutosaveTick = tick;
 		m_LastAutosaveBytes = bytes;
 		m_LastAutosaveCaptureMs = captureMs;
-		std::cout << std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes) << std::flush;
-		std::cout << std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} cursor_moves={} sound_cursor_moves={}\n", tick,
-		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.cursorMoves, m_LastCaptureEffects.soundCursorMoves) << std::flush;
+		System::PrintDiagnosticLine(std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes));
+		System::PrintDiagnosticLine(std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} cursor_moves={} sound_cursor_moves={}\n", tick,
+		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.cursorMoves, m_LastCaptureEffects.soundCursorMoves));
 		return true;
 	} catch (const std::exception& error) {
-		std::cout << "[autosave] failed tick=" << tick << " reason=" << error.what() << std::endl;
+		{
+			std::ostringstream line;
+			line << "[autosave] failed tick=" << tick << " reason=" << error.what();
+			System::PrintDiagnosticLine(line.str());
+		}
 		return false;
 	}
 }
@@ -976,7 +984,11 @@ void ActivityMan::ReportScriptGraphSaveRefusal(SaveKind kind, const std::vector<
 	std::vector<SaveRefusalRecord> fresh;
 	for (const std::string& problem: problems) {
 		g_ConsoleMan.PrintString("ERROR: the save cannot carry a script value: " + problem);
-		std::cout << "[scriptgraph] save refused: " << problem << std::endl;
+		{
+			std::ostringstream line;
+			line << "[scriptgraph] save refused: " << problem;
+			System::PrintDiagnosticLine(line.str());
+		}
 		SaveRefusalRecord record = ParseSaveRefusal(kind, problem);
 		if (m_SaveRefusalRecords.size() >= c_SaveRefusalRecordLimit) m_SaveRefusalRecords.pop_front();
 		m_SaveRefusalRecords.push_back(record);
@@ -1241,8 +1253,12 @@ bool ActivityMan::RunSaveCallbacksSelfTest() {
 	const bool repeated = savedAgain && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0 &&
 	                      LoadAndLaunchGame("save_callbacks_again") && scriptState.RunScriptString("assert(" + activityClass + ".save_callback_count == 2)") == 0;
 	const bool passed = callback && loaded && images && scene && objects && activityState && repeated;
-	std::cout << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
-	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated << std::endl;
+	{
+		std::ostringstream line;
+		line << "[save-callback-selftest] " << (passed ? "PASS" : "FAIL") << " callback=" << callback << " loaded=" << loaded
+	          << " images=" << images << " scene=" << scene << " objects=" << objects << " activity=" << activityState << " repeated=" << repeated;
+		System::PrintDiagnosticLine(line.str());
+	}
 	return passed;
 }
 
@@ -1259,7 +1275,11 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	const auto* craftPreset = g_PresetMan.GetEntityPreset("ACDropShip", "Dropship MK1", "Base.rte");
 	const auto* scriptPreset = g_PresetMan.GetEntityPreset("GlobalScript", "Checkpoint Global", "UserScenes.rte");
 	if (!script || !craftPreset || !scriptPreset) {
-		std::cout << "[global-callback-selftest] FAIL fixture missing: script=" << (script != nullptr) << " craft=" << (craftPreset != nullptr) << " preset=" << (scriptPreset != nullptr) << " (tools/test_global_callbacks.py installs UserScenes.rte/Checkpoint Global)" << std::endl;
+		{
+			std::ostringstream line;
+			line << "[global-callback-selftest] FAIL fixture missing: script=" << (script != nullptr) << " craft=" << (craftPreset != nullptr) << " preset=" << (scriptPreset != nullptr) << " (tools/test_global_callbacks.py installs UserScenes.rte/Checkpoint Global)";
+			System::PrintDiagnosticLine(line.str());
+		}
 		return false;
 	}
 	auto* craft = dynamic_cast<ACraft*>(craftPreset->Clone());
@@ -1309,8 +1329,12 @@ bool ActivityMan::RunGlobalCallbacksSelfTest() {
 	}
 	const bool index = g_MovableMan.RunContiguousActorIndexSelfTest(indexCraft);
 	const bool passed = guards && initial && memory && file && index;
-	std::cout << "[global-callback-selftest] " << (passed ? "PASS" : "FAIL") << " guards=" << guards << " initial=" << initial
-	          << " memory=" << memory << " file=" << file << " index=" << index << " error=" << error << std::endl;
+	{
+		std::ostringstream line;
+		line << "[global-callback-selftest] " << (passed ? "PASS" : "FAIL") << " guards=" << guards << " initial=" << initial
+	          << " memory=" << memory << " file=" << file << " index=" << index << " error=" << error;
+		System::PrintDiagnosticLine(line.str());
+	}
 	return passed;
 }
 
@@ -1318,7 +1342,11 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	constexpr const char* Tag = "[save-refusal-diagnosis-selftest]";
 	int failures = 0;
 	const auto check = [&](bool ok, const char* name, const std::string& detail) {
-		std::cout << Tag << (ok ? " PASS " : " FAIL ") << name << ": " << detail << std::endl;
+		{
+			std::ostringstream line;
+			line << Tag << (ok ? " PASS " : " FAIL ") << name << ": " << detail;
+			System::PrintDiagnosticLine(line.str());
+		}
 		if (!ok) ++failures;
 	};
 
@@ -1510,7 +1538,11 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	g_SceneMan.ReinstateScene(originalScene);
 	m_Activity = std::move(priorActivity);
 
-	std::cout << Tag << (failures == 0 ? " PASS" : " FAIL") << std::endl;
+	{
+		std::ostringstream line;
+		line << Tag << (failures == 0 ? " PASS" : " FAIL");
+		System::PrintDiagnosticLine(line.str());
+	}
 	return failures == 0;
 }
 
@@ -1537,8 +1569,12 @@ bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded
 	const bool restarted = RestartActivity();
 	const bool terrain = restarted && getpixel(g_SceneMan.GetTerrain()->GetBitmap(), 0, 0) == (expectLoaded ? 28 : firstPixel);
 	const bool passed = loaded == expectLoaded && preserved && restarted && terrain;
-	std::cout << "[load-selftest] " << (passed ? "PASS" : "FAIL") << " loaded=" << loaded << " preserved=" << preserved
-	          << " restarted=" << restarted << " terrain=" << terrain << std::endl;
+	{
+		std::ostringstream line;
+		line << "[load-selftest] " << (passed ? "PASS" : "FAIL") << " loaded=" << loaded << " preserved=" << preserved
+	          << " restarted=" << restarted << " terrain=" << terrain;
+		System::PrintDiagnosticLine(line.str());
+	}
 	return passed;
 }
 
@@ -1574,12 +1610,16 @@ bool ActivityMan::LoadAutosaveToRestart(const std::string& matchId, uint64_t tic
 	if (!checkpoint) {
 		const std::string message = "Could not restore the checkpoint at tick " + std::to_string(tick) + ": " + refusal;
 		g_ConsoleMan.PrintString("ERROR: " + message);
-		std::cout << "[autosave] restore refused match=" << matchId << " tick=" << tick << " reason=" << refusal << std::endl;
+		{
+			std::ostringstream line;
+			line << "[autosave] restore refused match=" << matchId << " tick=" << tick << " reason=" << refusal;
+			System::PrintDiagnosticLine(line.str());
+		}
 		return false;
 	}
 	if (!LoadArchiveToRestart(checkpoint->path.string(), matchId + "-" + std::to_string(tick))) return false;
-	std::cout << std::format("[autosave] restored match={} tick={} round={} world_hash={}\n",
-	                         checkpoint->matchId, checkpoint->savedTick, checkpoint->roundId, checkpoint->worldStructureHash) << std::flush;
+	System::PrintDiagnosticLine(std::format("[autosave] restored match={} tick={} round={} world_hash={}\n",
+	                         checkpoint->matchId, checkpoint->savedTick, checkpoint->roundId, checkpoint->worldStructureHash));
 	return true;
 }
 
@@ -1605,7 +1645,11 @@ bool ActivityMan::LoadArchiveToRestart(const std::string& archivePath, const std
 		return false;
 	}
 	m_RestartRestoresSnapshot = true;
-	std::cout << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count() << std::endl;
+	{
+		std::ostringstream line;
+		line << "[snapbench] read_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - readStart).count();
+		System::PrintDiagnosticLine(line.str());
+	}
 
 	candidate.scene->SetPresetName(candidate.restartPreset);
 	candidate.soundRegistrations = registryScope.GetStagedSoundRegistrations();
@@ -1845,7 +1889,11 @@ bool ActivityMan::RestartActivityCandidate() {
 		std::string error;
 		if (!g_MovableMan.RestoreScriptGraphs(m_PendingCheckpoint.scriptGraphs, &error)) {
 			g_ConsoleMan.PrintString("ERROR: the saved script state did not restore: " + error);
-			std::cout << "[scriptgraph] restore failed: " << error << std::endl;
+			{
+				std::ostringstream line;
+				line << "[scriptgraph] restore failed: " << error;
+				System::PrintDiagnosticLine(line.str());
+			}
 			activityStarted = -1;
 		}
 	}
@@ -1876,7 +1924,11 @@ bool ActivityMan::RestartActivityCandidate() {
 	if (!restoresSnapshot) g_TimerMan.PauseSim(false);
 
 	m_LastRestartMs = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - restartStart).count());
-	std::cout << "[snapbench] restart_ms=" << m_LastRestartMs << std::endl;
+	{
+		std::ostringstream line;
+		line << "[snapbench] restart_ms=" << m_LastRestartMs;
+		System::PrintDiagnosticLine(line.str());
+	}
 	if (activityStarted >= 0) {
 		m_InActivity = true;
 		return true;
@@ -2089,7 +2141,11 @@ bool ActivityMan::RestoreRuntimeGlobals(std::string_view text, bool validateOnly
 		reader.Finish();
 		return true;
 	} catch (const std::exception& error) {
-		std::cout << "[runtime-globals] " << (validateOnly ? "validation" : "apply") << " failed: " << error.what() << std::endl;
+		{
+			std::ostringstream line;
+			line << "[runtime-globals] " << (validateOnly ? "validation" : "apply") << " failed: " << error.what();
+			System::PrintDiagnosticLine(line.str());
+		}
 		return false;
 	}
 }

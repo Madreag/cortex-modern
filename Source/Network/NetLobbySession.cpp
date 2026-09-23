@@ -5,6 +5,7 @@
 #include "NetProtocol.h"
 #include "NetSession.h"
 #include "NetWorldJoin.h"
+#include "System.h"
 #include "TimerMan.h"
 
 #include "nlohmann/json.hpp"
@@ -533,7 +534,7 @@ namespace RTE {
 		if (start != 0) {
 			g_LastStateTransferMs.store(TransferSteadyMs() - start);
 		}
-		std::cout << "[net-match] state transfer complete: " << m_ReceivedState.size() << " bytes" << std::endl;
+		System::PrintDiagnosticLine("[net-match] state transfer complete: " + std::to_string(m_ReceivedState.size()) + " bytes");
 	}
 
 	bool NetLobbySession::IsRemoteReady(uint8_t peerId) const {
@@ -1242,8 +1243,8 @@ namespace RTE {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
 						return 0;
 					}, decoded.message.payload);
-					std::cout << "[net-lobby] sender mismatch type=" << NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))
-					          << " connection=" << event.peerId << " expected=" << static_cast<unsigned>(sender->first) << " claimed=" << claimedPeer << std::endl;
+					System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + std::string(NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))) +
+					          " connection=" + std::to_string(event.peerId) + " expected=" + std::to_string(sender->first) + " claimed=" + std::to_string(claimedPeer));
 					if (m_Config.host) RejectRemote(event.peerId, "lobby message does not match its connection");
 					else Fail("invalid host lobby message");
 					return;
@@ -1402,7 +1403,7 @@ namespace RTE {
 			// A remote that never answers is a remote without that checkpoint as far as this round is
 			// concerned: it is streamed the state, which is the path a peer without one always takes.
 			m_ResumeAnsweredPeers.insert(peerId);
-			std::cout << "[net-lobby] resume answer timed out for peer " << static_cast<int>(peerId) << "; streaming the state" << std::endl;
+			System::PrintDiagnosticLine("[net-lobby] resume answer timed out for peer " + std::to_string(peerId) + "; streaming the state");
 		}
 	}
 
