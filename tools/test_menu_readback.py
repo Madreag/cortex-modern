@@ -1320,6 +1320,9 @@ def scripts(case, port, root, size="960x540"):
         text += checks("LabelHostRecAutosaveHint", "CollectionBoxHostPageRecovery")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
+                 # Switching autosave on from off starts at the shortest cadence, not the off zero.
+                 "assert_label TextHostRecAutosaveInterval 60\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
                  # ENGINE 166: the caption follows the typed interval on the Changed notification,
                  # before any Apply or focus loss commits it. The product bounds the interval to
                  # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
