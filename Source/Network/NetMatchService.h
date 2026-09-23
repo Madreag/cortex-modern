@@ -429,6 +429,7 @@ namespace RTE {
 		/// Gets this run's checkpoint cadence, including its command-line override.
 		static uint32_t GetAutosaveSeconds() { return s_AutosaveSeconds; }
 		static constexpr uint32_t c_MaxAutosaveIntervalSeconds = 3600; // An hour is the longest cadence a host may announce.
+		static constexpr uint32_t c_MinAutosaveIntervalSeconds = 60; // A minute is the shortest; 0 stays off.
 		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
 		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
 			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;
@@ -1310,7 +1311,6 @@ namespace RTE {
 		bool m_RelayReady = false;
 		bool m_RelayPublishPending = false;
 		bool m_RelayAttempted = false;
-		uint64_t m_ActiveRelayExpiresAt = 0;
 		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.
 		uint64_t m_RelayReplies = 0;
 		uint64_t m_NextRelayRequestMs = 0;

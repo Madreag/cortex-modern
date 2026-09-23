@@ -27,6 +27,7 @@ GUITextPanel::GUITextPanel(GUIManager* Manager) :
 	m_MaxTextLength = 0;
 	m_NumericOnly = false;
 	m_MaxNumericValue = 0;
+	m_MinNumericValue = 0;
 }
 
 // TODO: Both constructors use a common clear function?? Same with other panels
@@ -45,7 +46,8 @@ GUITextPanel::GUITextPanel() :
 	m_SelectedColorIndex(0),
 	m_MaxTextLength(0),
 	m_NumericOnly(false),
-	m_MaxNumericValue(0) {
+	m_MaxNumericValue(0),
+	m_MinNumericValue(0) {
 
 	m_Font = nullptr;
 	m_CursorColor = 0;
@@ -296,6 +298,14 @@ void GUITextPanel::OnKeyPress(int KeyCode, int Modifier) {
 
 	// Enter key
 	if (KeyCode == '\n' || KeyCode == '\r') {
+		// The floor a typed number commits through; zero stays within reach of the keys.
+		if (m_NumericOnly && m_MinNumericValue > 0 && !m_Text.empty() && m_Text.find_first_not_of("0123456789") == std::string::npos) {
+			const int parsed = std::stoi(m_Text);
+			if (parsed > 0 && parsed < m_MinNumericValue) {
+				m_Text = std::to_string(m_MinNumericValue);
+				UpdateText();
+			}
+		}
 		SendSignal(Enter, 0);
 		return;
 	}
@@ -577,6 +587,11 @@ std::string GUITextPanel::GetSelectionText() const {
 
 void GUITextPanel::SetText(const std::string& Text) {
 	m_Text = Text;
+	// A written value answers to the panel's floor too; typing still reaches it digit by digit.
+	if (m_NumericOnly && m_MinNumericValue > 0 && !m_Text.empty() && m_Text.find_first_not_of("0123456789") == std::string::npos) {
+		const int parsed = std::stoi(m_Text);
+		if (parsed > 0 && parsed < m_MinNumericValue) m_Text = std::to_string(m_MinNumericValue);
+	}
 
 	// Clear the selection
 	ClearSelection();
