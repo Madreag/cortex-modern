@@ -2629,12 +2629,13 @@ namespace RTE {
 		uint16_t encodeVersion = c_Version;
 		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
 			for (const NetGameCommand& command: frame->commands) {
-				if (std::holds_alternative<NetGameCheckpoint>(command.payload)) {
-					encodeVersion = c_CheckpointVersion;
-					break;
-				}
 				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) encodeVersion = c_WorldVersion;
 			}
+			// A checkpoint entry in the tick or in any older tick the packet repeats needs the newest wire.
+			const auto carriesCheckpoint = [](const NetLockstepFrame& tick) {
+				return std::any_of(tick.commands.begin(), tick.commands.end(), [](const NetGameCommand& command) { return std::holds_alternative<NetGameCheckpoint>(command.payload); });
+			};
+			if (carriesCheckpoint(*frame) || std::any_of(frame->priorWindow.begin(), frame->priorWindow.end(), carriesCheckpoint)) encodeVersion = c_CheckpointVersion;
 		}
 
 		outBytes.clear();
