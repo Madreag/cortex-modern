@@ -9339,7 +9339,8 @@ namespace RTE {
 			hostLinkMs = std::max<uint64_t>(hostLinkMs, estimate->second.P95Ms());
 		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
 		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(500, 3 * hostLinkMs + silenceBoundMs));
-		if (hostSilenceMs > 0 && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs && BeginHostMigration(nowMs)) return;
+		// Past this peer's last tick the host has nothing left to send: its quiet there is the round's end, not a death.
+		if (hostSilenceMs > 0 && m_Stats.nextFrame <= m_FinalFrame && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
 			Fail(NetLockstepStopReason::MissingFrameTimeout, m_Stats.nextFrame, missing.empty() ? "missing lockstep frame" : "missing lockstep frame from " + missing);
