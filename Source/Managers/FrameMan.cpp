@@ -58,6 +58,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <future>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -91,6 +92,11 @@ namespace {
 		double lastPresentMS = 0;
 		double iterationCPUMS = 0;
 		bool iterationActive = false;
+		struct Capture {
+			FeelJson row;
+			std::future<bool> saved;
+		};
+		std::vector<Capture> captures;
 	};
 	FeelState s_Feel;
 
@@ -151,6 +157,15 @@ namespace {
 
 	void FeelWrite(const FeelJson& value) {
 		s_Feel.out << value.dump() << '\n';
+	}
+
+	void FeelWriteSavedCaptures(bool wait) {
+		std::erase_if(s_Feel.captures, [wait](auto& capture) {
+			if (!wait && capture.saved.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return false;
+			capture.row["saved"] = capture.saved.get();
+			FeelWrite(capture.row);
+			return true;
+		});
 	}
 
 	void FeelEvents(double lowerMS, double upperMS) {
@@ -301,11 +316,19 @@ void FrameMan::FeelAfterPresent() {
 	if (s_Feel.iterationActive && tick >= s_Feel.nextCaptureTick) {
 		const auto name = std::filesystem::path(s_Feel.directory) / ("frame-" + std::to_string(s_Feel.nextCaptureTick) + ".png");
 		SaveScreenToBitmap();
-		const bool saved = m_ScreenDumpBuffer && IMG_SavePNG(m_ScreenDumpBuffer.get(), name.string().c_str());
-		FeelWrite({{"type", "capture"}, {"requested_tick", s_Feel.nextCaptureTick}, {"tick", tick}, {"frame", s_Feel.frameNumber},
-		    {"path", name.generic_string()}, {"saved", saved}, {"capture_ms", FeelNowMS() - now}});
+		// The frame is copied here; the encode and the write run beside the game, so the recorder never stalls the
+		// match it is measuring.
+		SDL_Surface* copy = m_ScreenDumpBuffer ? SDL_DuplicateSurface(m_ScreenDumpBuffer.get()) : nullptr;
+		s_Feel.captures.push_back({{{"type", "capture"}, {"requested_tick", s_Feel.nextCaptureTick}, {"tick", tick}, {"frame", s_Feel.frameNumber},
+		    {"path", name.generic_string()}, {"capture_ms", FeelNowMS() - now}},
+		    std::async(std::launch::async, [copy, path = name.string()] {
+			    const bool saved = copy && IMG_SavePNG(copy, path.c_str());
+			    if (copy) SDL_DestroySurface(copy);
+			    return saved;
+		    })});
 		s_Feel.nextCaptureTick += 60;
 	}
+	FeelWriteSavedCaptures(false);
 }
 
 void FrameMan::FeelEndIteration(uint64_t ticks, long long simUS, long long updateUS, long long drawUS) {
@@ -320,6 +343,7 @@ void FrameMan::FeelFinish() {
 	if (!FeelRecordingEnabled()) return;
 	for (const auto& edge: s_Feel.pending) FeelWrite(edge);
 	s_Feel.pending.clear();
+	FeelWriteSavedCaptures(true);
 	FeelWrite({{"type", "end"}, {"wall_ms", FeelNowMS()}, {"cpu_ms", FeelProcessCPUMS()}, {"frames", s_Feel.frameNumber}});
 	s_Feel.out.close();
 }
