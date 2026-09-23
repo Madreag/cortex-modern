@@ -5130,7 +5130,7 @@ namespace RTE {
 		std::map<uint8_t, const NetLockstepTiming*> newest;
 		for (const NetLockstepTiming& reclaim: reclaims) {
 			if (reclaim.phase != NetTimingPhase::ReclaimAtFrame || reclaim.peerId == 0 || reclaim.peerId > config.peerCount || reclaim.peerId > 4 ||
-			    reclaim.peerId == config.localPeerId || reclaim.applyFrame >= firstFrame) continue;
+			    reclaim.peerId == config.localPeerId || reclaim.applyFrame > firstFrame) continue;
 			const NetLockstepTiming*& latest = newest[reclaim.peerId];
 			if (!latest || latest->revision < reclaim.revision) latest = &reclaim;
 		}
@@ -5421,22 +5421,37 @@ namespace RTE {
 		    reclaim.delayFrames, reclaim.neutralThroughFrame, reclaim.worldTransition};
 		m_Config.peerIncarnations[peer] = reclaim.seatIncarnations[peer - 1];
 		m_PeerEffectiveStart[peer] = std::max(m_Config.startFrame, reclaim.applyFrame + reclaim.delayFrames);
-		m_PeerAdmissions[peer] = {m_Config.startFrame, PeerInputDelay(peer)};
-		// The host answered our start before this return, and the seat's own start names a frame behind ours: the decision stands in for both.
+		m_PeerAdmissions[peer] = reclaim.applyFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+		    PeerAdmission{reclaim.applyFrame, reclaim.delayFrames};
+		// The host may have answered our start before this return: the decision stands in for the start it will not repeat.
 		m_RemoteStartsReceived.insert(peer);
 	}
 
 	void NetLockstepCoordinator::HandleTiming(const NetLockstepTiming& timing, uint64_t nowMs, NetPeerId fromTransport) {
-		// A return that lands before a joining round's first frame is taken at once, even before the round runs: the seat's own
-		// start may already be on its way, and nothing later in the round revisits a frame behind it.
-		if (m_Config.joinsRunningRound && timing.phase == NetTimingPhase::ReclaimAtFrame && timing.applyFrame < m_Config.startFrame) {
+		// A hold or a return that lands by a joining round's first frame is taken at once, even before the round runs: the starts
+		// the handshake waits for depend on it, and nothing later in the round revisits a frame behind its first.
+		if (m_Config.joinsRunningRound && timing.applyFrame <= m_Config.startFrame &&
+		    ((timing.phase == NetTimingPhase::ReclaimAtFrame && timing.peerId != m_Config.localPeerId) ||
+		     (timing.phase == NetTimingPhase::HoldAtFrame && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) == 0))) {
 			if (timing.senderPeerId != GetHostPeerId() || LockstepPeerOfTransport(fromTransport) != GetHostPeerId() || timing.sessionId != m_Config.sessionId ||
 			    (m_RoundId != 0 && timing.roundId != m_RoundId) || timing.authorityGeneration != m_Config.migrationGeneration || timing.peerId == 0 ||
-			    timing.peerId > 4 || timing.peerId > m_Config.peerCount || timing.peerId == m_Config.localPeerId) return;
-			const auto prior = m_ReclaimTransactions.find(timing.peerId);
-			if ((prior != m_ReclaimTransactions.end() && prior->second.eventSequence >= timing.revision) ||
-			    timing.seatIncarnations[timing.peerId - 1] <= m_Config.peerIncarnations[timing.peerId]) return;
-			TakeReturnBeforeFirstFrame(timing);
+			    timing.peerId > 4 || timing.peerId > m_Config.peerCount) return;
+			if (timing.phase == NetTimingPhase::ReclaimAtFrame) {
+				const auto prior = m_ReclaimTransactions.find(timing.peerId);
+				if ((prior != m_ReclaimTransactions.end() && prior->second.eventSequence >= timing.revision) ||
+				    timing.seatIncarnations[timing.peerId - 1] <= m_Config.peerIncarnations[timing.peerId]) return;
+				TakeReturnBeforeFirstFrame(timing);
+				return;
+			}
+			if (!UsesBoundedWait()) return;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				if ((timing.heldPeers & (1U << (peer - 1))) != 0 && timing.seatIncarnations[peer - 1] < m_Config.peerIncarnations[peer]) return;
+			if (!m_TimingDecisions.try_emplace(timing.revision, TimingDecision{timing, 0, true, nowMs}).second) return;
+			m_TimingNowMs = nowMs;
+			ApplyTiming(timing);
+			// A seat held when we arrive owes this round no start.
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				if ((timing.heldPeers & (1U << (peer - 1))) != 0 && IsKnownRemotePeer(peer)) m_RemoteStartsReceived.insert(peer);
 			return;
 		}
 		if (m_State == NetLockstepState::WaitingForStart && timing.senderPeerId == GetHostPeerId() &&
@@ -8506,6 +8521,15 @@ namespace RTE {
 			ReadoptRound(start.roundId, nowMs);
 		}
 		if (m_PeerAdmissions.contains(start.localPeerId) && m_RelayHost) {
+			// The seat set its round up from the tail it replayed while no decision reached it: the holds and returns decided for
+			// frames up to its first go to it ahead of the starts that assume them.
+			const uint8_t returning = static_cast<uint8_t>(1U << (start.localPeerId - 1));
+			for (const auto& [revision, decision]: m_TimingDecisions) {
+				const NetLockstepTiming& transition = decision.proposal;
+				if ((transition.phase != NetTimingPhase::HoldAtFrame && transition.phase != NetTimingPhase::ReclaimAtFrame) ||
+				    transition.applyFrame > start.startFrame || (transition.heldPeers & returning) != 0) continue;
+				SendPacket({transition}, NetTransportLane::ControlReliable, nullptr, nullptr, nullptr, start.localPeerId);
+			}
 			auto members = m_RemotePeerIds;
 			members.push_back(m_Config.localPeerId);
 			for (uint8_t peer: members) {
