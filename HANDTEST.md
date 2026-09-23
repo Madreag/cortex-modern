@@ -1,172 +1,192 @@
-# Multiplayer hand-test runbook
+# HANDTEST - manual multiplayer hand-test on this PC
 
-One command gives you a HOST window and a CLIENT window of Cortex Command on this
-PC - windowed, 1280x720, sound on, each with its own user directory under
-`D:\mx\handtest\<role>-<n>\` so saves and settings never collide. A Mac on the LAN
-can join as an extra peer. One more command collects every log for review.
+One command gives you a HOST window and a CLIENT window of the game - windowed
+1280x720, sound on, each with its own user directory so saves and settings never
+collide - and you drive them through the game's own multiplayer lobby. A second
+command packs both instances' logs for review.
 
-## Prerequisites (once)
+## Prerequisites
 
-1. A build: the kit defaults to this tree's own `Cortex Command.exe`. For a
-   different Final build pass `-Build <dir containing the exe>`.
-2. Firewall: the host instance binds a TCP listen port. Run **elevated** once:
-
-   ```
-   pwsh -NoProfile -File D:\Projects\reviews\takeover-20260909\grok-workers\firewall_allow_all_exes.ps1
-   ```
-
-   It adds an inbound-allow rule for every `Cortex Command*.exe` under
-   `D:\Projects`. If your `-Build` lives outside `D:\Projects`, allow that exe in
-   Windows Defender Firewall yourself or the first host launch prompts.
+- The merged build dir containing `Cortex Command.exe` and `Data\` - pass it as
+  `-Build`. On this PC the in-tree build works: `D:\Projects\alias-walk`.
+- Firewall, once ever, ELEVATED:
+  `pwsh D:\Projects\reviews\takeover-20260909\grok-workers\firewall_allow_all_exes.ps1`
+  (allows the exe to listen/serve; the lobby runs over UDP - GnsTransport.cpp:185).
+- Run play.ps1 from your own terminal (pwsh). It refuses to launch headed from
+  an automation shell - if `CCCP_HEADLESS` is set in the environment it prints
+  why and exits 2 rather than raising a hidden window. Workers use `-Headless`,
+  which runs the same lobby flow on a private hidden desktop.
 
 ## The one command
 
 ```powershell
-pwsh -NoProfile -File tools\handtest\play.ps1
+pwsh D:\Projects\alias-walk\tools\handtest\play.ps1 -Build D:\Projects\alias-walk
 ```
 
-Defaults: `-Role both -Clients 1 -Port 47400` - HOST window left, CLIENT window
-right. Useful switches:
+Two windows appear side by side: HOST (left) and CLIENT (right). Each instance
+runs from its own directory `D:\mx\handtest\<role>-<n>\` with its own
+`Userdata\Settings.ini`, so profiles/saves/settings never touch each other.
 
-| Switch | Effect |
-|---|---|
-| `-Role host` / `-Role client` | start only that side |
-| `-Clients 2` | two local client windows |
-| `-Port <n>` | different lobby port (kit block 47400-47419; default 47400) |
-| `-FakeLagMs 100` | fake send/recv lag on the client (`-net-fake-lag`, `Source/Main.cpp:1508`) |
-| `-LossPct <n>` | sets env `CC_TEST_GNS_LOSS_PERCENT` (`Source/Main.cpp:5056-5071`) - headless+lockstep only, **inert in a headed window** |
-| `-Mac` | no local client; prints the exact Mac join command instead |
-| `-Headless` | self-check only (runners, private desktop, CCCP_HEADLESS=1) |
+> If a window opens on a "Rejoin Match?" offer instead of the main menu, that is
+> last session's reconnect ticket doing its job - Cancel takes you to the menu.
 
-## Playing through the lobby (the game's own words)
+> `NetworkShowDiagnostics = 1` is pinned on every instance: the match HUD shows
+> a live net overlay (rtt, input delay, holds) - the on-screen counterpart of the
+> log lines quoted below.
 
-Both windows land on the main menu.
+## Into a match (the game's own words)
 
-1. In BOTH windows: **Multiplayer**. Type a name at **Multiplayer name:**.
-2. HOST window: **Host Game** -> set **Port** to `47400`, **Players** to `2`
-   (3 if the Mac joins) -> **Create Lobby**.
-3. CLIENT window: **Join Game** -> **Host IP** `127.0.0.1`, **Port** `47400` ->
-   **Connect**. You land in the **Lobby**; press **Ready**.
-4. HOST window: **Start Match** lights up once every peer is ready. Press it.
-5. In the lobby the host's **Host Options** button opens the pages used below:
-   **Seats** (kick/ban), Rules, Network, Recovery (**Autosave checkpoints**),
-   Files, Session. In match, Esc opens the pause menu; **End Match** is host-only.
-   Post-match the lobby offers **Start Match** again (rematch).
+HOST window:
+1. Main Menu -> **Multiplayer**
+2. Enter your callsign in **Name** -> **Host Game**
+3. **Host Setup**: Activity = **P4 Alpha Duel - Base.rte** (proven in the
+   self-check), Scene = **Grasslands**, Port = the port printed by play.ps1
+   (default **47400**), **Players = the exact number of peers that will play**
+   (2 for host + this client). The lobby refuses to start until that many peers
+   are connected (NetLobbySession.cpp:869).
+4. **Create Lobby** -> wait for the client to appear in the seats list.
 
-## Scenarios, in order
+CLIENT window:
+1. Main Menu -> **Multiplayer** -> enter a callsign -> **Join Game**
+2. **Host IP** `127.0.0.1`, **Port** `47400` -> **Connect**
+3. In the lobby press **Ready**.
 
-What to look for, what "wrong" looks like, and the exact log line that proves the
-mechanism. After the session, `collect_logs.ps1` gathers each instance's
-`console.out.log` / `run\stdout.log` where these lines live.
+HOST: once every seat shows Ready -> **Start Match**. (Labels are from
+`Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini`.)
 
-### A. Host/join and play ~2 minutes
+## Scenarios
 
-- Look for: client reaches the Lobby, **Ready** -> host **Start Match** -> both
-  peers play; inputs work on both sides.
-- Wrong: client stuck in **Join Game** / "connection refused", lobby shows 1
-  member, or either window freezes at start.
-- Proof in logs: `[menu-script]`-free manual run still emits the lockstep lines -
-  on the host, `[net-match] ...` activity (e.g.
-  `Source/Network/NetLockstep.cpp:978` prints `[net-match] seat-reclaimed peer=...`
-  once seats bind) and on both, the lobby roster. In the self-check the proof is
-  `connected:2 -> OK` and `assert_substate expected=Lobby actual=Lobby PASS`.
+Run them in order; the quoted lines are what the engine actually prints (they
+land in each instance's `console-*.out.log` / `LogConsole.txt` and in
+`match-report-*.json` at the instance root). "Wrong" = what failure looks like.
 
-### B. Fake lag on the client (`-FakeLagMs 100`, then 200)
+**A - Host, join, play ~2 minutes.**
+Proves: transport, lobby, seat assignment, match start.
+Proof in the client log:
+`[net-match] auto input delay: peer <n> rtt <ms>ms -> <f> frames (manual floor <n>)` (Source/Multiplayer/NetMatchRunner.cpp:100-101)
+`[net-match] recording the match to Userdata\Replays\...` (Source/Managers/ScenarioRunner.cpp:2418)
+Wrong: no `auto input delay` line, or `lobby connect failed` (NetMatchService.cpp:7270).
 
-- Quit the client (window X), relaunch it alone:
-  `pwsh tools\handtest\play.ps1 -Role client -FakeLagMs 100`, rejoin, play. Then
-  repeat with 200.
-- Look for: your own input stays instant; the remote player warps occasionally;
-  nobody freezes.
-- Wrong: both sides stutter (lag applied to host too), or the client's own input
-  delays (that would mean the flag hit the wrong peer).
-- Proof: `Source/Main.cpp:1508` parses `-net-fake-lag`;
-  `Source/Network/GnsTransport.cpp:143-148` applies the fake send/recv lag. The
-  client window's `console.out.log` carries the flag in `kit-launch.json`'s argv.
+**B - Lag the client: `-FakeLagMs 100`, then again with `200`.**
+Adds a constant N ms round trip, N/2 per leg (Source/Network/GnsTransport.cpp:147-148).
+Expect: your own input still feels instant (local prediction); the OTHER player
+warps occasionally; nobody freezes.
+Proof: the `auto input delay` line above shows the raised `rtt` and a larger
+frame delay, and `match-report-*.json` shows per-peer `holds` and `pace`
+(Source/Multiplayer/NetMatchService.cpp:5713-5717).
+Wrong: `[net-match] hold peer=<n> frame=<f> AI in control` appearing in the
+host log at 100ms (Source/Multiplayer/NetLockstep.cpp:4744) means the lag
+exceeded the slow-player bound.
 
-### C. Client pauses / alt-tabs ~5 s
-
-- Look for: host keeps playing; the client's seat shows the toast
-  **held - AI in control**; the client rejoins by itself.
-- Wrong: host stalls on a "waiting for peer" screen, or the client never resumes.
-- Proof: `Source/System/ScenarioRunner.cpp:1417-1425` emits
-  `PushNetUiToast("seat_held", "held - AI in control", peerId)`; the rejoin log on
-  the host is `[net-match] rejoin: <name> reconnected - resyncing the match`
-  (`Source/Network/NetMatchService.cpp:~4672`).
-
-### D. Client quits mid-match
-
-- Close the client window entirely.
-- Look for: host keeps playing; the departed seat is taken by AI (same
-  **held - AI in control** toast) - the round survives.
-- Wrong: host match aborts, lobby dissolves, or the seat freezes.
-- Proof: `[net-match] seat-reclaimed peer=... frame=... live_actors=...`
-  (`Source/Network/NetLockstep.cpp:978`) and
-  `[net-match] <peer> left the match at frame ...`
-  (`Source/Main.cpp:~8063`). The client can rejoin later - its runtime dir keeps a
-  `-net-reconnect-ticket` (`Source/Main.cpp:1101`); use **Rejoin Match** /
-  **Resume Match** on the multiplayer landing.
-
-### E. Autosave
-
-- Before starting: in the host's **Host Options -> Recovery** page turn on
-  **Autosave checkpoints** (interval in sim seconds, 30-3600; the setting key is
-  `AutosaveSeconds`, parsed at `Source/Managers/SettingsMan.cpp:~358`).
-- Look for: at each interval the match keeps flowing (a brief hitch is normal);
-  afterwards, a fresh lobby offers to resume the saved match and the reload works.
-- Wrong: capture errors, peers desyncing off a checkpoint, resume button absent.
-- Proof: `[autosave] tick=... capture_ms=... bytes=...`
-  (`Source/Managers/ActivityMan.cpp:572`), `[autosave] agreed match=... tick=...`
-  (`Source/Network/NetMatchService.cpp:2718`), and on reload
-  `[autosave] restored match=... tick=...` (`ActivityMan.cpp:~1581`). Files land in
-  `<runtime>\Autosaves\` (`Source/System/AutosaveStore.cpp:67`) - collect_logs
-  copies them.
-
-### F. Post-match rematch
-
-- Let a match end (host pause menu -> **End Match**, or a win). Both peers return
-  to the same live lobby.
-- Look for: **Start Match** re-arms once everyone readies again; round 2 plays.
-- Wrong: lobby dead/expired, Start Match greyed forever.
-- Proof: `Source/Menus/MainMenuGUI.cpp:3193-3197` returns completed matches to the
-  lobby (`g_NetMatchService.ReturnToLobby()`); service lines
-  `[net-match-service-e2e] rematch: ...` bracket the flow, and a refusal prints
-  `[net-match] rematch unavailable: ...`
-  (`Source/Network/NetMatchService.cpp:~739`).
-
-### G. Kick and ban
-
-- In the lobby (or during a match pause), host: **Host Options -> Seats**; select
-  the client's row -> **Kick player**. Repeat and choose **Ban this session**.
-  The **Banned players** list offers **Remove ban**.
-- Look for: kicked peer leaves with a notice; a banned peer's rejoin is refused;
-  the host sees `<host> removed seat <n>` / `<host> banned seat <n>`.
-- Wrong: the seat stays occupied, or a banned peer rejoins silently.
-- Proof: `[net-moderation] <action> seat=<seat> applicant=<id> result=<result>`
-  (`Source/Network/NetModerationUx.cpp:321-329`);
-  `[net-reconnect] admission refused reason=ParticipantBanned ...`
-  (`Source/Network/NetReconnectSession.cpp`); bans persist in the host instance's
-  `host-bans.txt` (`-net-host-bans`, `Source/Main.cpp:1106`).
-
-### H. Mac as a third peer
-
-- Run `pwsh tools\handtest\play.ps1 -Mac` (host + printed Mac command, no local
-  client), or keep a local client and just read the block it prints.
-- On the Mac: `cd <checkout of this tree> && ./build-gns/CortexCommand`, then
-  **Multiplayer -> Join Game -> Host IP** = this PC's LAN address (printed by
-  `-Mac`), **Port** `47400` -> **Connect -> Ready**.
-- The host must set **Players** to 3 before **Create Lobby**.
-- Look for: real LAN ping; same lobby behavior as local.
-- Wrong: the Mac can't reach the host (check the firewall rule above and that the
-  host binds the printed port).
-- Proof: same `[net-match]`/`dump_lobby` roster lines show 3 members.
-
-## Collecting logs for the lead
+**C - Client stalls ~5 s, then recovers.**
+In a headed game alt-tab and Esc do not stall the client's network thread.
+What does: freeze the process. Grab the client's PID from the launcher line
+`[handtest] client pid=<PID>` (or Task Manager) and in another pwsh:
 
 ```powershell
-pwsh -NoProfile -File tools\handtest\collect_logs.ps1 -Out D:\mx\handtest\collected
+Add-Type -MemberDefinition '[DllImport("ntdll.dll")] public static extern int NtSuspendProcess(System.IntPtr h); [DllImport("ntdll.dll")] public static extern int NtResumeProcess(System.IntPtr h);' -Name Ntp -Namespace W
+$p = Get-Process -Id <CLIENT_PID>; [W.Ntp]::NtSuspendProcess($p.Handle); Start-Sleep 5; [W.Ntp]::NtResumeProcess($p.Handle)
 ```
 
-One folder: `host-1\`, `client-1\`, ... each with console/engine logs, autosaves,
-crash dumps, settings, and `MANIFEST.txt` (build sha, exe hash, timestamps,
-command lines, runtime paths).
+(Or drag the client window's title bar and hold it ~5 s - the message pump stops.
+To see what stalled looks like without timing pressure, use resmon.exe ->
+right-click the process -> Suspend Process / Resume Process.)
+Expect: host keeps playing; the client's seat shows `held - AI in control`
+(HUD toast - Source/Managers/ScenarioRunner.cpp:1424); the client resumes by itself.
+Proof in the host log:
+`[net-match] hold peer=<n> frame=<f> AI in control` (NetLockstep.cpp:4744)
+then on recovery `[net-match] rejoin: <name> reconnected - resyncing the match` (NetMatchService.cpp:4672)
+and `[net-match] seat-reclaimed peer=<id> ...` = the human taking the seat back
+(Source/Managers/MovableMan.cpp:978).
+Wrong: the host freezes waiting on the client's input (no `hold peer=` line).
+A long enough stall drops the peer instead - the leave lines under D apply.
+
+**D - Client quits mid-match.**
+Close the client window. Host keeps playing; the seat stays held by AI.
+Proof in the host log:
+`[net-match] <peer> left the match at frame <f> (<reason>)` (NetLockstep.cpp:8063)
+(or, if the peer was already held: `[net-lockstep] a leave becomes a hold for peer <n> at frame <f>: <detail>` - NetLockstep.cpp:8050).
+Relaunch the client (`-Role client`) and pick **Rejoin Match** on the landing
+screen: the `rejoin:` and `seat-reclaimed` lines from C prove the seat hand-back.
+Wrong: host match ends when the peer leaves, or the rejoined player lands in a
+fresh seat instead of the held one (no `seat-reclaimed` line).
+
+**E - Autosave on.**
+HOST: Options -> **Recovery** -> **Autosave checkpoints** on (interval
+"sim seconds, 30-3600" - MainMenuSubMenuGUI.ini:3388/3414; parsed at
+SettingsMan.cpp:359). Checkpoints land in `Autosaves\` of the instance
+(Source/Managers/AutosaveStore.cpp:66-67).
+Expect: the match keeps flowing at each checkpoint - a small hitch is OK, a stall is not.
+Proof (each peer's log):
+`[autosave] tick=<n> capture_ms=<n> bytes=<n>` (Source/Managers/ActivityMan.cpp:572)
+`[autosave] agreed match=<hash>` (Source/Multiplayer/NetMatchService.cpp:2718)
+Load one via a rejoin/resume: `[autosave] restored match=<hash> ...` (ActivityMan.cpp:~1581).
+Wrong: `[autosave] hash mismatch: local=...` (ActivityMan.cpp:1652) - peers disagree on state.
+
+**F - Rematch.**
+After the match ends, both peers are back in the lobby seats
+(MainMenuGUI.cpp:3193-3196). Client presses **Ready**, host **Start Match** again.
+Proof: `NETWORK: Match complete: <result>` in each peer's LogConsole.txt
+(Source/Main.cpp:6286) - the same line in both collected instances proves both
+sides saw the same match end; the new match writes a fresh `match-report-*.json`
+`last_match` block (NetMatchService.cpp:5713-5717).
+Wrong: `[net-match] rematch unavailable: ...` (NetMatchService.cpp:739).
+
+**G - Kick and ban.**
+HOST, in the lobby's **Moderation** / seats panel (visible in the lobby right
+column): **kick** the client's seat, then **ban** the client's seat. The host
+sees `Seat <n>: <action> accepted.` and the log gets
+`[net-moderation] <action> seat=<n> applicant=<id> result=<result>`
+(Source/Menus/NetReconnectUx.cpp:326-329).
+The banned client re-dials and is refused:
+`[net-reconnect] admission refused reason=ParticipantBanned peer=<id> ...` (NetReconnectSession.cpp:1127)
+and sees `The host banned you from this session` (NetSession.cpp:1501).
+The ban list persists in `host-bans.txt` at the host instance root and reloads
+every time the host opens a lobby (NetMatchService.cpp:6803-6809) - finish the
+scenario with **Remove ban** (or delete the file) or the client stays banned
+next launch.
+Wrong: the refused line names a reason other than ParticipantBanned, or the
+kicked seat still holds the player.
+
+**H - Mac as a third (or second) peer.**
+Relaunch with `-Mac` - it prints this PC's LAN IP and the command for the Mac:
+
+```
+git -C <path-to-alias-walk> rev-parse HEAD    # must print <the build sha shown>
+cd <path-to-alias-walk> && ./build-gns/CortexCommand
+```
+
+The Mac checkout must be the same commit the PC build was built from (the sha
+is printed in the launcher output). On the Mac: MULTIPLAYER -> Join Game ->
+Host IP = the printed LAN IP, Port = the session port -> Connect -> Ready.
+Set the host's **Players** to the exact total peer count (NetLobbySession.cpp:869):
+Mac alone with the host = **2**; PC client + Mac = **3**; two PC clients + Mac = **4**.
+Proof: an `auto input delay` line per remote peer (peers 2 and 3 -
+NetMatchRunner.cpp:100) and `match-report-*.json` `players`/`human_seats`
+counting all of them (NetMatchService.cpp:5713+).
+Wrong: host's Players count higher than the peers present - Start stays disabled
+(no `wait_all_ready` reachable).
+
+## Collecting evidence
+
+```powershell
+pwsh D:\Projects\alias-walk\tools\handtest\collect_logs.ps1 -Out D:\handtest-logs
+```
+
+Copies every instance's console logs, runner records, match reports, autosaves,
+replays, crash dumps and the effective Settings.ini into
+`<Out>\<role>-<n>\` plus a `MANIFEST.txt` (build sha + dirty flag of the exe's
+tree, exe hash, exact command lines, per-file sizes/mtimes). `reconnect.ticket`
+is not collected - it is a live rejoin credential. Self-check runs under
+`D:\mx\handtest\_selfcheck\` are never mixed in; collect them explicitly with
+`-Source D:\mx\handtest\_selfcheck` if needed.
+
+WARNING: never delete `D:\mx\handtest` with a tool that follows junctions -
+each instance's `Data` is a junction into the build tree and a junction-following
+delete would eat the build. (Deleting `D:\mx\handtest` itself with Explorer or
+`Remove-Item` only removes the links, which is safe.)
+
+## Ports
+
+Default block 47400-47419 (kit-owned; every harness driver in this tree uses
+bases >= 47563 or 41210). Override with `-Port <base>`.
