@@ -93,6 +93,63 @@ ContentFile::LoadedBitmapIndexScope::~LoadedBitmapIndexScope() {
 	--Index().scopes;
 }
 
+std::string ContentFile::LoadedBitmapChangeMissedByIndex() {
+	// Only the scratch bitmaps' addresses are compared; nothing reads through them.
+	static const std::array<char, 2> scratch{};
+	BITMAP* first = reinterpret_cast<BITMAP*>(const_cast<char*>(&scratch[0]));
+	BITMAP* second = reinterpret_cast<BITMAP*>(const_cast<char*>(&scratch[1]));
+	const std::string key = "checkpoint-selftest/loaded-bitmap-index-row.png";
+	LoadedBitmaps& registry = s_LoadedBitmaps[BitDepths::Eight];
+	// The live entries step aside for the ways that clear or walk the whole registry, and come back after.
+	LoadedBitmaps::Base live;
+	registry.swap(live);
+	// A stale index answers with a path the registry no longer holds, so an absence is checked without reading it.
+	const auto present = [&key](const BITMAP* bitmap) {
+		LoadedBitmapIndexScope scope;
+		int depth = BitDepths::Eight;
+		const std::string* path = LoadedBitmapPath(bitmap, depth);
+		return path && *path == key;
+	};
+	const auto absent = [](const BITMAP* bitmap) {
+		LoadedBitmapIndexScope scope;
+		int depth = BitDepths::Eight;
+		return LoadedBitmapPath(bitmap, depth) == nullptr;
+	};
+	std::string missed;
+	const auto way = [&missed](const char* name, bool seen) {
+		if (!seen && missed.empty()) missed = name;
+	};
+	absent(first);
+	registry[key] = first;
+	way("operator[]", present(first));
+	registry.erase(key);
+	way("erase(key)", absent(first));
+	registry.try_emplace(key, first);
+	way("try_emplace", present(first));
+	registry.erase(std::as_const(registry).find(key));
+	way("erase(position)", absent(first));
+	registry.emplace(key, first);
+	way("emplace", present(first));
+	registry.find(key)->second = second;
+	way("find", present(second) && absent(first));
+	registry.at(key) = first;
+	way("at", present(first) && absent(second));
+	registry.begin()->second = second;
+	way("begin", present(second) && absent(first));
+	registry.clear();
+	way("clear", absent(second));
+	registry.insert(LoadedBitmaps::value_type(key, first));
+	way("insert", present(first));
+	LoadedBitmaps::Base emptied;
+	registry.swap(emptied);
+	way("swap", absent(first));
+	registry.merge(emptied);
+	way("merge", present(first));
+	registry.clear();
+	registry.swap(live);
+	return missed;
+}
+
 const std::string* ContentFile::LoadedBitmapPath(const BITMAP* bitmap, int& depth) {
 	const auto& registry = std::as_const(s_LoadedBitmaps);
 	const LoadedBitmapIndex& index = Index();
