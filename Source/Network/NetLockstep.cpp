@@ -5183,15 +5183,18 @@ namespace RTE {
 		// not evidence that one seat stopped producing input.
 		if (IsSynchronizedCapturePark(frame)) return false;
 		const uint64_t boundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
-		uint64_t noticeMs = 2;
+		// This host judges the deadline on its next pass and a survivor reads the decision on its next: a tick each.
+		const uint64_t tickPassesMs = std::isfinite(m_Config.simTickMs) && m_Config.simTickMs > 0 ? static_cast<uint64_t>(std::llround(2 * m_Config.simTickMs)) : 0;
+		uint64_t noticeMs = 2, passesMs = 0;
 		for (uint8_t survivor: m_RemotePeerIds) {
 			if (std::find(missing.begin(), missing.end(), survivor) != missing.end() || IsPeerGoneAtFrame(survivor, frame)) continue;
 			const auto estimate = m_DelayEstimators.find(survivor);
 			const auto& stats = m_Stats.peers[survivor];
 			noticeMs = std::max(noticeMs, uint64_t(2) + std::max(stats.pingMs, estimate == m_DelayEstimators.end() ? 0U : estimate->second.P95Ms()) + stats.jitterMs);
+			passesMs = tickPassesMs;
 		}
-		m_Stats.holdNoticeBudgetMs = noticeMs;
-		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs <= boundMs;
+		m_Stats.holdNoticeBudgetMs = noticeMs + passesMs;
+		m_Stats.holdDeadlineFeasible = m_Stats.holdDeadlineFeasible && noticeMs + passesMs <= boundMs;
 		// A park handshake is in flight: every boundary authored now is deferred to its final end, so declaring
 		// one would propose a seat hold that cannot take effect and the caller would ask again next tick.
 		if (m_CaptureParkAwaitingReports) return false;
@@ -5207,11 +5210,13 @@ namespace RTE {
 			if (produced >= delay) runwayFrames = std::min<uint64_t>(runwayFrames, frame > produced - delay + 1 ? frame - (produced - delay + 1) : 0);
 		}
 		const uint64_t runwayMs = static_cast<uint64_t>(std::llround(runwayFrames * m_Config.simTickMs));
-		if (runwayMs > noticeMs) return false;
+		if (runwayMs > noticeMs + passesMs) return false;
 		// Declaring early lets the decision land by the bound. When the notice alone costs more than the
 		// bound - a survivor on a long link - it cannot, and the survivors wait for the decision instead;
 		// the seat is still only declared after the bound of missing input, never the instant one is late.
-		const uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : boundMs;
+		uint64_t declarationDeadline = noticeMs < boundMs ? boundMs - noticeMs : boundMs;
+		// The passes come off the grace too while the whole notice still lands by the bound.
+		if (noticeMs + passesMs < boundMs) declarationDeadline -= passesMs;
 		if (nowMs >= firstMissingMs && nowMs - firstMissingMs >= declarationDeadline) {
 			m_Stats.lastHoldDeclarationMs = nowMs - firstMissingMs;
 			bool held = false;
