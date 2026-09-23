@@ -44,6 +44,8 @@ namespace RTE {
 		/// Writes a captured state as SaveCheckpoint would have at its instant, once the sound owners the rest of the
 		/// capture carries are known; the capture's disowned voices are cleared in place.
 		std::string SaveCaptured(AudioCheckpointCapture& captured, const std::function<bool(uint64_t, const SoundContainer*)>& contained) const;
+		/// Writes a captured state's samples ahead of the rest, on any thread; nothing about them waits for the owners.
+		void WriteCapturedSamples(AudioCheckpointCapture& captured) const;
 		static std::string_view CheckpointVersion(std::string_view text) { return text.starts_with("13 AudioRuntime3 ") ? "AudioRuntime3" : (text.starts_with("13 AudioRuntime2 ") ? "AudioRuntime2" : "AudioRuntime1"); }
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false, const std::vector<std::pair<SoundData*, std::string>>* sampleBindings = nullptr, std::string* refusal = nullptr);
 		std::string GetSoundContainerPlaybackCheckpoint(const SoundContainer* container) const;

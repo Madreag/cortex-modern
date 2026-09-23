@@ -718,7 +718,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->graphRootsReused = image->luaReused ? image->graph.roots : (frozenGraphs ? 0 : image->graph.rootsReused);
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
 	// The mixer lock belongs to this thread (a caller may already hold it), so the audio is read here while the pool works.
+	const auto audioStart = std::chrono::steady_clock::now();
 	audio = g_AudioMan.CaptureCheckpointState();
+	const int64_t audioReadUs = since(audioStart);
+	captureAside([&audio] { g_AudioMan.WriteCapturedSamples(*audio); });
 	aside.Join();
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
@@ -743,6 +746,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	const auto globalsStart = std::chrono::steady_clock::now();
 	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get()); });
 	image->globalParts.insert(image->globalParts.end(), managerTimings.begin(), managerTimings.end());
+	image->globalParts.emplace_back("audio_read", audioReadUs);
 	image->globalsUs = since(globalsStart);
 	effectsSoFar();
 	m_LastCaptureEffects = effects;
