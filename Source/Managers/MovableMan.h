@@ -140,6 +140,19 @@ namespace RTE {
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
+		bool RunThreadedSyncedUpdateOrderSelfTest();
+
+		/// The state an object's scripts land on is its unique ID modulo the state count, so a machine that
+		/// ran objects before the match assigns the same objects to the same states as one that did not.
+		bool RunLuaStateAssignmentSelfTest();
+
+		/// A spawn inside a serial pass takes its own state, and a restored object lands on the state the
+		/// image named - the one its saved script graph, and every live peer, has it on.
+		bool RunLuaStateRestoreBoundarySelfTest();
+
+		/// An object keeps its scripts through a new identity, a restore leaves no two objects sharing
+		/// one, the walk's key tells a shared identity apart, and a freed entry never stops the pass.
+		bool RunLuaStateIdentitySelfTest();
 
 		/// Checks that a world payload from before the brain record re-seeds it from the seats instead of
 		/// installing an empty one. Leaves the live record as it found it.
@@ -164,7 +177,6 @@ namespace RTE {
 			std::array<size_t, 4> m_QueueSizes{};
 			std::string m_Structure;
 			long m_Counter;
-			int m_Cursor;
 		};
 
 		/// An in-memory world snapshot for rollback: faithful clones of every resident MO, kept in list order.
@@ -186,7 +198,6 @@ namespace RTE {
 			std::vector<std::pair<uint64_t, long int>> joinQuarantine;
 			std::vector<CheckpointText> luaGraphs; //!< Owned graph values; text is formatted only for a restore.
 			long uniqueIDCounter = 0;
-			int luaStateCursor = 0;
 			WorldSnapshot() = default;
 			WorldSnapshot(const WorldSnapshot&) = delete;
 			WorldSnapshot& operator=(const WorldSnapshot&) = delete;
@@ -266,7 +277,6 @@ namespace RTE {
 			std::deque<std::pair<std::unordered_set<MovableObject*>, std::unordered_set<MovableObject*>>> scriptRegistrations;
 			std::vector<std::pair<LuaStateWrapper*, long>> scriptObjects;
 			long uniqueIDCounter = 0;
-			int luaStateCursor = 0;
 			bool held = false;
 
 			/// A record that dies still holding the world hands it back, so no caller can leave a hold nothing can reach.
@@ -952,6 +962,11 @@ namespace RTE {
 		/// @return Size of the objects registry.
 		unsigned int GetKnownObjectsCount() { return m_KnownObjects.size(); }
 
+		/// How many entries the last threaded SyncedUpdate pass left alone because a script in that
+		/// same pass had freed the object. Zero on an ordinary tick.
+		/// @return The count from the last pass.
+		uint64_t GetSyncedPassSkippedDeadEntries() const { return m_SyncedPassSkippedDeadEntries; }
+
 		/// Returns the current sim update frame number
 		/// @return Current sim update frame number.
 		unsigned int GetSimUpdateFrameNumber() const { return m_SimUpdateFrameNumber; }
@@ -1193,6 +1208,9 @@ namespace RTE {
 		/// This is needed because of a very awkward and ugly old code path where controllers were updated in the middle of update, and various mods relied of this behaviour for actions that were therefore delayed by a frame
 		/// Ideally we wouldn't need this, but this is all very fragile code and I'd prefer to avoid breaking things.
 		void PreControllerUpdate();
+		void RunThreadedSyncedUpdatePass(bool globalMoidOrder);
+
+		uint64_t m_SyncedPassSkippedDeadEntries = 0; //!< Entries the last threaded synced pass refused to touch because a script in that pass had freed the object.
 
 		// Disallow the use of some implicit methods.
 		MovableMan(const MovableMan& reference) = delete;

@@ -606,7 +606,7 @@ namespace {
 		    "  --runs <N>            Number of runs to median. Default 5.\n"
 		    "  --seed <N>            RNG seed. Default 42.\n"
 		    "  --max-ticks <N>       Sim-tick cap. Default 1800.\n"
-		    "  --num-lua-states <N>  Force Lua-state count (thread-pool size).\n"
+		    "  --num-lua-states <N>  Retired: the Lua-state count is a build constant. Accepted, ignored.\n"
 		    "  --out-dir <path>      Direct temp/output dir.\n"
 		    "  --game-bin <path>     Path to game binary. Default: auto-detect.\n"
 		    "  --json                JSON output. Default: human-readable summary.\n"
@@ -1103,7 +1103,6 @@ namespace {
 		int runs = 5;
 		uint64_t seed = 42;
 		uint64_t maxTicks = 1800;
-		int numLuaStates = -1;
 		fs::path gameBin;
 		OutputCtx out;
 
@@ -1115,7 +1114,7 @@ namespace {
 			if (ArgEq(a, "runs") && hasV) { runs = std::atoi(argv[++i]); continue; }
 			if (ArgEq(a, "seed") && hasV) { seed = std::strtoull(argv[++i], nullptr, 10); continue; }
 			if (ArgEq(a, "max-ticks") && hasV) { maxTicks = std::strtoull(argv[++i], nullptr, 10); continue; }
-			if (ArgEq(a, "num-lua-states") && hasV) { numLuaStates = std::atoi(argv[++i]); continue; }
+			if (ArgEq(a, "num-lua-states") && hasV) { ++i; continue; } // retired: the count is a build constant
 			if (ArgEq(a, "game-bin") && hasV) { gameBin = argv[++i]; continue; }
 			if (ArgEq(a, "out-dir") && hasV) { out.outDir = argv[++i]; continue; }
 			if (ArgEq(a, "json")) { out.json = true; continue; }
@@ -1152,7 +1151,6 @@ namespace {
 			    << " -seed " << seed
 			    << " -max-ticks " << maxTicks
 			    << " -out " << Quote(outPath.string());
-			if (numLuaStates >= 0) cmd << " -num-lua-states " << numLuaStates;
 
 			// Per-run progress goes to stderr so it doesn't pollute --json stdout.
 			if (!out.quiet) std::cerr << "[cccp-ctl] bench run " << (r + 1) << "/" << runs << "\n";
@@ -1178,7 +1176,6 @@ namespace {
 		json summary = {
 		    {"scenario", scenario},
 		    {"runs", runs},
-		    {"num_lua_states", numLuaStates},
 		    {"sim_compute_us", {
 		        {"min", minV},
 		        {"median", median},
@@ -1191,7 +1188,6 @@ namespace {
 		std::ostringstream text;
 		text << "Scenario:           " << scenario << "\n";
 		text << "Runs:               " << runs << "\n";
-		if (numLuaStates >= 0) text << "Lua states (forced): " << numLuaStates << "\n";
 		text << "Sim compute (us):\n";
 		text << "  min:              " << static_cast<int64_t>(minV) << "\n";
 		text << "  median:           " << static_cast<int64_t>(median) << "\n";

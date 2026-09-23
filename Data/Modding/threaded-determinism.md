@@ -25,6 +25,73 @@ A script asks for a `SyncedUpdate` by calling `self:RequestSyncedUpdate()`; the
 hook then runs that frame. This was always the designed boundary — this work
 makes it the one to rely on for determinism.
 
+`SyncedUpdate` runs the objects in one global order by unique ID across every Lua
+state, so there is no per-state grouping for a script to sequence its shared writes on.
+
+### Global tables are per Lua state, and which objects share one is fixed
+
+Every Lua state has its own globals, so a global table written in `SyncedUpdate` is
+shared by the objects that sit on the same state — not by every object in the world.
+The number of states is the same on every machine (32, a build constant — it is no
+longer a setting or a command-line option), and which state an object sits on is the
+same on every machine too, so two players in the same match group the same objects in
+the same table, whatever either machine did before the match started.
+
+The rule an object's state follows, in full:
+
+- normally, and for anything spawned from `SyncedUpdate`, it is the object's `UniqueID`
+  modulo the number of states;
+- an object spawned from `ThreadedUpdate` takes the *spawner's* state instead — that hook
+  runs in parallel, one thread per state, and a new object cannot be handed a state another
+  thread is using. It is the same answer on every peer, but it is not the object's own; one
+  more reason to spawn from `SyncedUpdate`;
+- a preset with `ForceIntoMasterLuaState = 1` (the Base.rte automovers) is always on the
+  master state;
+- an object restored from a save or received in a join goes back to the state the image
+  recorded for it, which is where its own saved fields are — the same state the peers that
+  stayed in the match have it on.
+
+An object's script fields live under its `UniqueID`, and both move together. A `Create`
+on an object that is already running draws it a new `UniqueID` and takes its script
+object along, so its hooks keep running and its fields are still there; a restore hands
+its saved `UniqueID` to the object the image describes, and a live object that happens to
+hold that ID is given a fresh one (with its own fields) instead, so no two registered
+objects ever share an identity.
+
+Three consequences worth knowing, all of them the same rule seen from different sides:
+
+- an object renumbered at a restore because its persisted ID was held keeps the state it
+  registered on — the `UniqueID` modulo the state count rule places an object when it
+  registers, and a running script is rekeyed where it lives, never moved between states.
+  The set of objects it shares a global table with is its current state's, not the one its
+  new ID names. This only happens to a save written before that rule existed;
+- a private or preview copy of an object (the local overlays) deliberately carries the
+  identity it shadows, so two copies of one `UniqueID` can be alive at once. They are kept
+  apart by the order they registered in, which is this machine's own fact;
+- an object deleted from inside its own hook stays registered until that hook returns: a
+  `MovableMan` lookup in the same hook still finds it, and the object's remaining scripts
+  for that hook still run. It is gone the moment the hook returns.
+
+`DeleteEntity` deletes only what Lua owns (it always has, here and upstream). An object the
+engine owns — anything added to `MovableMan` — is not deleted by it; set `ToDelete` on that
+object instead and the engine removes it at the end of the update.
+
+What a mod author needs to know: a global written in `SyncedUpdate` is visible to the
+objects whose unique IDs land on the writer's state, identically on every peer. If your
+script means "all of my objects", key a table by `UniqueID` and write it from every
+object, or keep the shared value on an object (an activity or a chosen owner) rather
+than in a global. Nothing here changes a script API, and a mod that only reads and
+writes its own object is unaffected.
+
+Running the game with `EnableLuaDebugging` puts every script on the single master state
+(no threaded states). That is a single-player debugging mode: hosting or joining a
+network match is refused while it is on, because the master state runs `SyncedUpdate`
+on a different schedule from the threaded ones.
+
+Memory: 32 states cost about 172 MB more than four on the same machine (about 6.2 MB
+per state), and startup is flat across that range — the priority thread pool is already
+as wide as the machine's cores, so the extra states queue as tasks rather than threads.
+
 **Rule of thumb: if your script changes state that is not its own object, do it
 in `SyncedUpdate`, not `ThreadedUpdate`.** A `ThreadedUpdate` that mutates shared
 state was always a latent data race — two objects' `ThreadedUpdate`s run at the

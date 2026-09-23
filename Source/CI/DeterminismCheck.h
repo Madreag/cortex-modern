@@ -16,10 +16,9 @@
 //   <bin> -determinism-check --scenario SimBaseline --ticks 600 --seed 42 --runs 10 \
 //                            --output divergence.json [--game-bin <path>] [--keep-runs]
 //
-// The thread-count matrix mode adds cross-thread-count diffing. With `--threads 1,2,4,8,16` the
-// orchestrator runs the scenario at each Lua-state count (via `-num-lua-states`)
-// and diffs the per-tick traces ACROSS counts — the acceptance test for the
-// "bit-identical regardless of thread count" contract:
+// The thread-count matrix mode keeps its arms, but the Lua-state count is a build constant now:
+// every arm runs the same count, so `--threads 1,2,4,8,16` is ten repeat runs whose traces are
+// diffed against each other. The count itself is pinned by the deterministic identity:
 //   <bin> -determinism-check --scenario ThreadStress --ticks 900 --seed 42 \
 //                            --threads 1,2,4,8,16 --runs 2 --output matrix.json
 //

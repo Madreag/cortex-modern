@@ -134,6 +134,64 @@ namespace RTE {
 		/// The Lua state index the save recorded for this object, -1 when none.
 		int GetPersistedLuaStateIndex() const { return m_PersistedLuaStateIndex; }
 
+		/// Stages what an image carries for this object, so a row can run the restore boundary itself.
+		void StageRestoredIdentity(long uniqueID, int luaStateIndex) {
+			m_PersistedUniqueID = uniqueID;
+			m_PersistedLuaStateIndex = luaStateIndex;
+		}
+
+		/// The place this object took in its Lua state's registration order, drawn on the sim thread when
+		/// its scripts initialized, or carried over from the image that described it. Two objects that
+		/// share a unique ID and a MOID are ordered on it, on every peer alike.
+		long GetScriptRegistrationSerial() const { return m_ScriptRegistrationSerial; }
+
+		/// Stages the registration serial an image recorded, so the restored object keeps the writer's
+		/// place in the order instead of drawing this machine's next one.
+		void StageRestoredScriptRegistration(long serial) { m_ScriptRegistrationSerial = serial; }
+
+		/// This object's runtime image, and the image applied to it - what a snapshot clone and a save
+		/// carry between them (SpecialBehaviour_MovableObjectRuntime).
+		std::string SaveRuntimeImage() const { return SaveMovableObjectRuntime(); }
+		bool LoadRuntimeImage(std::string_view text) { return LoadMovableObjectRuntime(text); }
+
+		/// The registration counter, saved and restored with an image the way the unique-ID counter is.
+		static long GetScriptRegistrationSerialCounter() { return s_ScriptRegistrationSerial; }
+		static void PinScriptRegistrationSerial(long serial) { s_ScriptRegistrationSerial = serial; }
+
+		/// Moves this object's live script object to another unique ID's key, so its hooks keep finding
+		/// self when the identity changes under them. Returns false when the key could not be moved.
+		bool MoveRunningScriptObjectToID(long newUniqueID);
+
+		/// Takes the next unique ID for this object, bringing its registration and script object along.
+		void TakeNextUniqueID();
+
+		/// Whether a hook loop of this object is running, so a script's delete of it waits for the loop.
+		bool InsideHookLoop() const { return m_HookCallDepth > 0; }
+
+		/// Marks this object for deletion the moment its running hook loop returns.
+		void DeleteWhenHookReturns() { m_DeleteWhenHookReturns = true; }
+
+		/// Holds an object alive for the length of one hook loop: a script may delete it from inside its
+		/// own hook, and the loop still has scripts of that object to run. A delete that does not come
+		/// through the script-facing one frees the object where it stands, and the destructor tells its
+		/// live scopes so, so neither the loop nor this scope ever reads the object again.
+		struct HookCallScope {
+			explicit HookCallScope(MovableObject* object);
+			~HookCallScope();
+			HookCallScope(const HookCallScope&) = delete;
+			HookCallScope& operator=(const HookCallScope&) = delete;
+
+			/// Whether the object was destroyed while this loop was running: the loop stops there.
+			bool ObjectIsGone() const { return m_Object == nullptr; }
+
+		private:
+			friend class MovableObject;
+			MovableObject* m_Object;
+		};
+
+		/// Counts the hook loops that ended on an object destroyed under them, for the row that proves it.
+		static uint64_t HookLoopsEndedOnADestroyedObject() { return s_HookLoopsEndedOnADestroyedObject; }
+
 		/// Reloads this object's scripts into another state before they run, so a restore lands them where the save had them.
 		void MoveScriptsToState(LuaStateWrapper& state);
 
@@ -1362,6 +1420,8 @@ namespace RTE {
 		static Entity::ClassInfo m_sClass;
 		// Global counter with unique ID's
 		static std::atomic<long> m_UniqueIDCounter;
+		static std::atomic<long> s_ScriptRegistrationSerial; //!< Counts registrations, so a shared identity still has an order.
+		static std::atomic<uint64_t> s_HookLoopsEndedOnADestroyedObject; //!< Loops whose object was destroyed under them.
 		// The type of MO this is, either Actor, Item, or Particle
 		int m_MOType;
 		float m_Mass; // In metric kilograms (kg).
@@ -1460,6 +1520,9 @@ namespace RTE {
 		};
 
 		std::string m_ScriptObjectName; //!< The name of this object for script usage.
+		long m_ScriptRegistrationSerial; //!< The place this object took in its Lua state's registration order.
+		int m_HookCallDepth; //!< How many hook loops of this object are running.
+		bool m_DeleteWhenHookReturns; //!< A script deleted this object from inside its own hook.
 		std::vector<std::string> m_AllLoadedScripts; //!< A vector of script for scripts applied to this object, in order of insertion.
 		std::unordered_map<std::string, bool> m_EnabledScripts; //!< A map of script paths to the enabled state of the given script.
 		std::unordered_map<std::string, std::vector<LuaFunction>> m_FunctionsAndScripts; //!< A map of function names to vectors of Lua functions. Used to maintain script execution order and avoid extraneous Lua calls.

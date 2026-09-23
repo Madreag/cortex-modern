@@ -414,6 +414,7 @@ int SettingsMan::ReadProperty(const std::string_view& propName, Reader& reader) 
 	MatchProperty("NetworkPathHorizonTicks", { int ticks = m_NetworkPathHorizonTicks; reader >> ticks; SetNetworkPathHorizonTicks(ticks); });
 	MatchProperty("NetworkAutosavesKept", { int kept = m_NetworkAutosavesKept; reader >> kept; SetNetworkAutosavesKept(kept); });
 	MatchProperty("NetworkHostVisibility", { m_NetworkHostVisibility = ParseHostVisibility(reader.ReadPropValue()); });
+	// Retired, and read only so an old settings file still parses: the count is a build constant.
 	MatchProperty("NumberOfLuaStatesOverride", { reader >> m_NumberOfLuaStatesOverride; });
 	MatchProperty("ForceImmediatePathingRequestCompletion", { reader >> m_ForceImmediatePathingRequestCompletion; });
 	MatchProperty("EnableParticleSettling", { reader >> g_MovableMan.m_SettlingEnabled; });
@@ -561,7 +562,6 @@ int SettingsMan::Save(Writer& writer) const {
 	writer.NewPropertyWithValue("LocalPrediction", m_LocalPrediction);
 	writer.NewPropertyWithValue("LocalPredictionMaxTicks", m_LocalPredictionMaxTicks);
 	WriteNetworkPreferences(writer);
-	writer.NewPropertyWithValue("NumberOfLuaStatesOverride", m_NumberOfLuaStatesOverride);
 	writer.NewPropertyWithValue("ForceImmediatePathingRequestCompletion", m_ForceImmediatePathingRequestCompletion);
 	writer.NewPropertyWithValue("EnableParticleSettling", g_MovableMan.m_SettlingEnabled);
 	writer.NewPropertyWithValue("EnableMOSubtraction", g_MovableMan.m_MOSubtractionEnabled);

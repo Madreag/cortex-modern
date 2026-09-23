@@ -44,6 +44,9 @@ using namespace RTE;
 AbstractClassInfo(MovableObject, SceneObject);
 
 std::atomic<long> MovableObject::m_UniqueIDCounter = 1;
+// Registrations are ordered by the sim, so the serial says which of two objects sharing an identity came first.
+std::atomic<long> MovableObject::s_ScriptRegistrationSerial = 0;
+std::atomic<uint64_t> MovableObject::s_HookLoopsEndedOnADestroyedObject = 0;
 int MovableObject::s_FaithfulCloneDepth = 0;
 bool MovableObject::s_FaithfulCloneRegisters = false;
 std::string MovableObject::ms_EmptyString = "";
@@ -149,7 +152,37 @@ MovableObject::MovableObject() {
 	Clear();
 }
 
+namespace {
+	// The hook loops running on this thread. A loop's object can be freed under it by any delete path,
+	// so the object's destructor tells the loops that hold it; nothing here outlives a stack frame.
+	thread_local std::vector<MovableObject::HookCallScope*> g_LiveHookScopes;
+} // namespace
+
+MovableObject::HookCallScope::HookCallScope(MovableObject* object) :
+    m_Object(object) {
+	++m_Object->m_HookCallDepth;
+	g_LiveHookScopes.push_back(this);
+}
+
+MovableObject::HookCallScope::~HookCallScope() {
+	std::erase(g_LiveHookScopes, this);
+	if (!m_Object) {
+		return;
+	}
+	if (--m_Object->m_HookCallDepth == 0 && m_Object->m_DeleteWhenHookReturns) {
+		m_Object->m_DeleteWhenHookReturns = false;
+		delete m_Object;
+	}
+}
+
 MovableObject::~MovableObject() {
+	// Whatever freed this object, a hook loop of it running on this thread must not read it again.
+	for (HookCallScope* scope: g_LiveHookScopes) {
+		if (scope->m_Object == this) {
+			scope->m_Object = nullptr;
+			s_HookLoopsEndedOnADestroyedObject.fetch_add(1, std::memory_order_relaxed);
+		}
+	}
 	Destroy(true);
 	g_MovableMan.ForgetDestroyedObject(this);
 }
@@ -230,6 +263,9 @@ void MovableObject::Clear() {
 	m_ThreadedLuaState = nullptr;
 	m_ForceIntoMasterLuaState = g_SettingsMan.EnableLuaDebugging();
 	m_ScriptObjectName.clear();
+	m_ScriptRegistrationSerial = 0;
+	m_HookCallDepth = 0;
+	m_DeleteWhenHookReturns = false;
 	m_ScreenEffectFile.Reset();
 	m_pScreenEffect = 0;
 	m_EffectRotAngle = 0;
@@ -277,13 +313,46 @@ void MovableObject::Clear() {
 	m_PersistedMOIgnoreTimerAnchor = {};
 }
 
+void MovableObject::TakeNextUniqueID() {
+	g_MovableMan.UnregisterObject(this);
+	const long nextUniqueID = MovableObject::GetNextUniqueID();
+	// A hook finds self under the object's unique ID, so a live script object follows the new identity.
+	if (!MoveRunningScriptObjectToID(nextUniqueID)) {
+		g_ConsoleMan.PrintString("ERROR: " + GetModuleAndPresetName() + " lost its script object when its identity changed");
+		std::cout << "[script] " << GetPresetName() << " kept script identity " << m_UniqueID << " while taking " << nextUniqueID << std::endl;
+	}
+	m_UniqueID = nextUniqueID;
+
+	m_MOIDHit = g_NoMOID;
+	m_TerrainMatHit = g_MaterialAir;
+	m_ParticleUniqueIDHit = 0;
+
+	g_MovableMan.RegisterObject(this);
+}
+
+bool MovableObject::MoveRunningScriptObjectToID(long newUniqueID) {
+	if (!m_ThreadedLuaState || !ObjectScriptsInitialized() || newUniqueID <= 0 || newUniqueID == m_UniqueID) {
+		return true;
+	}
+	// A preview clone keeps its own key: the preview drops it, and nothing outside the window reads it.
+	if (LuaMan::IsPreviewClone(this) || m_ScriptObjectName.find("#preview") != std::string::npos) {
+		return true;
+	}
+	std::lock_guard<std::recursive_mutex> lock(m_ThreadedLuaState->GetMutex());
+	if (!m_ThreadedLuaState->RekeyScriptObjects({{this, newUniqueID}})) {
+		return false;
+	}
+	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(newUniqueID) + "\"]";
+	return true;
+}
+
 LuaStateWrapper& MovableObject::GetAndLockStateForScript(const std::string& scriptPath, const LuaFunction* function) {
 	if (m_ForceIntoMasterLuaState) {
 		m_ThreadedLuaState = &g_LuaMan.GetMasterScriptState();
 	}
 
 	if (m_ThreadedLuaState == nullptr) {
-		m_ThreadedLuaState = g_LuaMan.GetAndLockFreeScriptState();
+		m_ThreadedLuaState = g_LuaMan.GetAndLockScriptStateForObject(m_UniqueID);
 	} else {
 		m_ThreadedLuaState->GetMutex().lock();
 	}
@@ -302,14 +371,7 @@ int MovableObject::Create() {
 	if (m_EffectStopTime <= 0)
 		m_EffectStopTime = m_Lifetime;
 
-	g_MovableMan.UnregisterObject(this);
-	m_UniqueID = MovableObject::GetNextUniqueID();
-
-	m_MOIDHit = g_NoMOID;
-	m_TerrainMatHit = g_MaterialAir;
-	m_ParticleUniqueIDHit = 0;
-
-	g_MovableMan.RegisterObject(this);
+	TakeNextUniqueID();
 
 	return 0;
 }
@@ -333,14 +395,7 @@ int MovableObject::Create(const float mass,
 	m_HitsMOs = hitMOs;
 	m_GetsHitByMOs = getHitByMOs;
 
-	g_MovableMan.UnregisterObject(this);
-	m_UniqueID = MovableObject::GetNextUniqueID();
-
-	m_MOIDHit = g_NoMOID;
-	m_TerrainMatHit = g_MaterialAir;
-	m_ParticleUniqueIDHit = 0;
-
-	g_MovableMan.RegisterObject(this);
+	TakeNextUniqueID();
 
 	return 0;
 }
@@ -501,21 +556,44 @@ void MovableObject::AdoptPersistedUniqueID() {
 	}
 	m_PersistedAgeTimerAnchor.Apply(m_AgeTimer);
 	m_PersistedMOIgnoreTimerAnchor.Apply(m_MOIgnoreTimer);
-	if (m_PersistedLuaStateIndex >= 0) {
-		MoveScriptsToState(g_LuaMan.GetStateByIndex(m_PersistedLuaStateIndex));
-		m_PersistedLuaStateIndex = -1;
-	}
+	// The state is settled after the adoption, because both answers depend on the ID this object ends up
+	// with. The image's own index wins when it has one: the saved script graph is restored into that state
+	// (MovableMan::RestoreScriptGraphs), so the object and its own _ScriptedObjects table land together,
+	// and that index is where every live peer has the object - the fresh-start assignment put it there.
+	const auto moveScriptsToTheStateTheImageNames = [this] {
+		const int savedIndex = std::exchange(m_PersistedLuaStateIndex, -1);
+		// A running script object lives in its state's VM and is rekeyed there, never moved.
+		if (m_ForceIntoMasterLuaState || ObjectScriptsInitialized()) {
+			return;
+		}
+		if (savedIndex >= 0) {
+			MoveScriptsToState(g_LuaMan.GetStateByIndex(savedIndex));
+		} else if (m_ThreadedLuaState) {
+			// No index in the image: the ID names the state, which is what a fresh object gets.
+			MoveScriptsToState(g_LuaMan.GetScriptStateForObject(m_UniqueID));
+		}
+	};
 	if (m_PersistedUniqueID <= 0) {
+		moveScriptsToTheStateTheImageNames();
 		return;
 	}
 	if (IsFaithfulClone() && !FaithfulCloneRegisters()) {
 		m_UniqueID = std::exchange(m_PersistedUniqueID, 0);
+		moveScriptsToTheStateTheImageNames();
 		return;
 	}
 	g_MovableMan.UnregisterObject(this);
-	if (const MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
-		g_ConsoleMan.PrintString("ERROR: restore adopted duplicate UniqueID " + std::to_string(m_PersistedUniqueID) + " (" + GetPresetName() + ")");
-		std::cout << "[restore] duplicate UniqueID " << m_PersistedUniqueID << " adopted by " << GetPresetName() << std::endl;
+	// The image's ID crossed the wire; a live holder of it drew its own from the counter, so the holder
+	// is the one that moves. Every peer restoring this image meets the same holders in the same order.
+	if (MovableObject* holder = g_MovableMan.FindObjectByUniqueID(m_PersistedUniqueID); holder && holder != this) {
+		const long replacement = GetNextUniqueID();
+		g_MovableMan.UnregisterObject(holder);
+		if (!holder->MoveRunningScriptObjectToID(replacement)) {
+			g_ConsoleMan.PrintString("ERROR: restore could not move the script object of " + holder->GetModuleAndPresetName() + " off UniqueID " + std::to_string(m_PersistedUniqueID));
+		}
+		holder->m_UniqueID = replacement;
+		g_MovableMan.RegisterObject(holder);
+		std::cout << "[restore] UniqueID " << m_PersistedUniqueID << " adopted by " << GetPresetName() << "; its live holder " << holder->GetPresetName() << " took " << replacement << std::endl;
 	}
 	m_UniqueID = m_PersistedUniqueID;
 	m_PersistedUniqueID = 0;
@@ -523,6 +601,7 @@ void MovableObject::AdoptPersistedUniqueID() {
 		PinUniqueIDCounter(m_UniqueID);
 	}
 	g_MovableMan.RegisterObject(this);
+	moveScriptsToTheStateTheImageNames();
 }
 
 void MovableObject::ResolveFaithfulLinks() {
@@ -618,6 +697,7 @@ int MovableObject::ReadProperty(const std::string_view& propName, Reader& reader
 	MatchProperty("ScriptsRestored", { reader >> m_ScriptStateRestored; });
 	MatchProperty("ScriptState", { reader >> m_PersistedScriptState; });
 	MatchProperty("LuaState", { reader >> m_PersistedLuaStateIndex; });
+	MatchProperty("ScriptRegistrationSerial", { reader >> m_ScriptRegistrationSerial; });
 	MatchProperty("PrevPosition", { reader >> m_PrevPos; });
 	MatchProperty("SpecialBehaviour_CheckTerrainIntersection", { reader >> m_CheckTerrIntersection; });
 	MatchProperty("SpecialBehaviour_VelOscillations", {
@@ -794,7 +874,7 @@ void MovableObject::ReadCustomValueProperty(Reader& reader) {
 }
 
 std::string MovableObject::SaveMovableObjectRuntime() const {
-	CheckpointWriter archive("MovableObjectRuntime1");
+	CheckpointWriter archive("MovableObjectRuntime2");
 	archive(static_cast<const Entity&>(*this), m_Pos, m_OzValue, m_Buyable, m_BuyableMode, m_Team, m_PlacedByPlayer);
 	archive(m_MOType, m_Mass, m_Vel, m_PrevPos, m_PrevVel, m_DistanceTravelled, m_Scale, m_GlobalAccScalar,
 		m_AirResistance, m_AirThreshold, m_PinStrength, m_RestThreshold, m_Forces, m_ImpulseForces,
@@ -802,6 +882,7 @@ std::string MovableObject::SaveMovableObjectRuntime() const {
 		m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
 		m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
 		m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+	archive(m_ScriptRegistrationSerial);
 	archive(static_cast<bool>(m_RequestedSyncedUpdate), m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile,
 		m_pScreenEffect != nullptr, m_ScreenEffectHash, m_EffectStartTime, m_EffectStopTime, m_EffectStartStrength, m_EffectStopStrength,
 		m_EffectAlwaysShows, CheckpointEffectRotAngle(), m_InheritEffectRotAngle, m_RandomizeEffectRotAngle,
@@ -814,7 +895,10 @@ std::string MovableObject::SaveMovableObjectRuntime() const {
 
 bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validateOnly) {
 	try {
-		CheckpointReader archive(text, "MovableObjectRuntime1", validateOnly);
+		// The registration serial joined the blob in version 2; a version 1 image still loads, and its
+		// objects draw a serial in registration order as they always did.
+		const bool carriesRegistrationSerial = CheckpointTypeName(text) == "MovableObjectRuntime2";
+		CheckpointReader archive(text, carriesRegistrationSerial ? "MovableObjectRuntime2" : "MovableObjectRuntime1", validateOnly);
 		std::string identity;
 		archive.Value(identity);
 		if (!Entity::LoadCheckpoint(identity, true)) return false;
@@ -826,6 +910,9 @@ bool MovableObject::LoadMovableObjectRuntime(std::string_view text, bool validat
 			m_GetsHitByMOs, m_IgnoresTeamHits, m_IgnoresAtomGroupHits, m_IgnoresAGHitsWhenSlowerThan, m_IgnoresActorHits,
 			m_MissionCritical, m_CanBeSquished, m_IsUpdated, m_WrapDoubleDraw, m_DidWrap, m_MOID, m_RootMOID, m_MOIDFootprint,
 			m_HasEverBeenAddedToMovableMan, m_AlreadyHitBy, m_VelOscillations, m_ToSettle, m_ToDelete, m_HUDVisible, m_IsTraveling);
+		if (carriesRegistrationSerial) {
+			archive(m_ScriptRegistrationSerial);
+		}
 		bool requested, hasEffect;
 		archive.Value(requested);
 		archive(m_StringValueMap, m_NumberValueMap, m_ScreenEffectFile);
@@ -1123,6 +1210,14 @@ int MovableObject::InitializeObjectScripts(bool runCreate) {
 		return 0;
 	}
 	m_ScriptObjectName = "_ScriptedObjects[\"" + std::to_string(m_UniqueID) + "\"]";
+	// The place this object takes in the registration order: the image's when it carried one, so a
+	// restored peer keeps the writer's order, otherwise the next one this machine draws.
+	if (m_ScriptRegistrationSerial > 0) {
+		long counter = s_ScriptRegistrationSerial.load(std::memory_order_relaxed);
+		while (counter < m_ScriptRegistrationSerial && !s_ScriptRegistrationSerial.compare_exchange_weak(counter, m_ScriptRegistrationSerial)) {}
+	} else {
+		m_ScriptRegistrationSerial = s_ScriptRegistrationSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+	}
 	m_ThreadedLuaState->RegisterMO(this);
 	m_ThreadedLuaState->SetTempEntity(this);
 	if (m_ThreadedLuaState->RunScriptString("_ScriptedObjects = _ScriptedObjects or {}; " + m_ScriptObjectName + " = To" + GetClassName() + "(LuaMan.TempEntity); ") < 0) {
@@ -1233,6 +1328,10 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		return -1;
 	}
 
+	// A script may delete this object from inside its own hook, and the loop still holds this object's
+	// script list: the object lives to the end of the loop and goes the moment it returns.
+	HookCallScope hookScope(this);
+
 	if (!ObjectScriptsInitialized()) {
 		status = InitializeObjectScripts(!LuaMan::IsPreviewClone(this));
 	}
@@ -1254,6 +1353,10 @@ int MovableObject::RunScriptedFunctionInAppropriateScripts(const std::string& fu
 		const std::string selfKey = LuaMan::PreviewScriptKey(this);
 
 		for (const LuaFunction& luaFunction: itr->second) {
+			// This list belongs to the object; a delete that did not wait for this loop ends it here.
+			if (hookScope.ObjectIsGone()) {
+				break;
+			}
 			const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 			if (runOnDisabledScripts || luaFunction.m_ScriptIsEnabled) {
 				LuaStateWrapper& usedState = GetAndLockStateForScript(luabindObjectWrapper->GetFilePath(), &luaFunction);
@@ -1276,10 +1379,17 @@ int MovableObject::RunFunctionOfScript(const std::string& scriptPath, const std:
 		return -1;
 	}
 
+	// The same hold as the hook loop above: this loop reads this object between two script calls.
+	HookCallScope hookScope(this);
+
 	LuaStateWrapper& usedState = GetAndLockStateForScript(scriptPath);
 	std::lock_guard<std::recursive_mutex> lock(usedState.GetMutex(), std::adopt_lock);
 
 	for (const LuaFunction& luaFunction: m_FunctionsAndScripts.at(functionName)) {
+		// The same end as the hook loop above: this list goes with the object.
+		if (hookScope.ObjectIsGone()) {
+			break;
+		}
 		const LuabindObjectWrapper* luabindObjectWrapper = luaFunction.m_LuaFunction.get();
 		if (scriptPath == luabindObjectWrapper->GetFilePath() && usedState.RunScriptFunctionObject(luabindObjectWrapper, "_ScriptedObjects", LuaMan::PreviewScriptKey(this), functionEntityArguments, functionLiteralArguments) < 0) {
 			g_ConsoleMan.PrintString("ERROR: An error occured while trying to run the " + functionName + " function for script at path " + scriptPath);

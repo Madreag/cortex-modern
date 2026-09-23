@@ -225,13 +225,10 @@ namespace RTE {
 		/// The most ticks the local preview runs ahead per frame.
 		int GetLocalPredictionMaxTicks() const { return m_LocalPredictionMaxTicks; }
 
-		/// Gets how many threaded Lua states we'll use. -1 represents no override, which defaults to the maximum number of concurrent hardware threads.
-		/// @return How many threaded Lua states we'll use.
-		int GetNumberOfLuaStatesOverride() const { return m_NumberOfLuaStatesOverride; }
-
-		/// Sets how many threaded Lua states we'll use. Used by the determinism-check thread-count matrix to pin a fixed count.
-		/// @param count How many threaded Lua states to use. -1 for no override.
-		void SetNumberOfLuaStatesOverride(int count) { m_NumberOfLuaStatesOverride = count; }
+		/// Gets the retired threaded-Lua-state override an old settings file may still carry. The count is
+		/// a build constant now, so this is only read to say once that the line is ignored.
+		/// @return The retired override, -1 when the file carries none.
+		int GetRetiredLuaStateCountOverride() const { return m_NumberOfLuaStatesOverride; }
 
 		/// Gets whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 		/// @return Whether pathing requests will be forced to immediately complete for the next frame
@@ -663,7 +660,7 @@ namespace RTE {
 		int m_NetworkHostIdleWaitMinutes;
 		int m_NetworkPathHorizonTicks;
 		int m_NetworkAutosavesKept;
-		int m_NumberOfLuaStatesOverride; //!< Overrides how many threaded Lua states we'll use. -1 for no override, which defaults to the maximum number of concurrent hardware threads.
+		int m_NumberOfLuaStatesOverride; //!< Retired: an old settings file's threaded-Lua-state override, read and ignored. -1 when there is none.
 		bool m_ForceImmediatePathingRequestCompletion; //!< Whether pathing requests will be forced to immediately complete for the next frame, or if they can take multiple frames to calculate.
 
 		bool m_SkipIntro; //!< Whether to play the intro of the game or skip directly to the main menu.

@@ -3,11 +3,13 @@
 #include "NetIdentity.h"
 #include "LuaMan.h"
 #include "MovableMan.h"
+#include "NetDirectoryCodec.h"
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "TimerMan.h"
 
 #include <iostream>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -313,85 +315,118 @@ namespace RTE {
 			return true;
 		}
 
-		bool TestLuaStateCountOutOfIdentity(std::string* error) {
-			NetIdentityDeterministicConfig four;
-			four.gameVersion = "7.0.0";
-			four.networkProtocolVersion = 1;
-			four.controllerFrameVersion = 5;
-			four.controllerFrameEncodedSize = 80;
-			four.deltaTimeBits = "0x3c6147ae";
-			four.aiUpdateInterval = 2;
-			four.pathfinderGridNodeSize = 20;
-			four.recommendedMoidCount = 240;
-			four.selectedModule = "Base.rte";
-			four.supportedLockstepCodecVersion = 1;
-			four.numLuaStates = 4;
-			four.numLuaStatesOverride = 4;
+		bool TestLuaStateCountIsABuildConstant(std::string* error) {
+			NetIdentityDeterministicConfig config;
+			config.gameVersion = "7.0.0";
+			config.networkProtocolVersion = 1;
+			config.controllerFrameVersion = 5;
+			config.controllerFrameEncodedSize = 80;
+			config.deltaTimeBits = "0x3c6147ae";
+			config.aiUpdateInterval = 2;
+			config.pathfinderGridNodeSize = 20;
+			config.recommendedMoidCount = 240;
+			config.selectedModule = "Base.rte";
+			config.supportedLockstepCodecVersion = 1;
+			config.numLuaStates = c_LuaStateCount;
+			config.numLuaStatesOverride = -1;
 
-			NetIdentityDeterministicConfig thirtyTwo = four;
-			thirtyTwo.numLuaStates = 32;
-			thirtyTwo.numLuaStatesOverride = 32;
-
-			const NetHash32 configFour = NetIdentity::HashDeterministicConfig(four);
-			const NetHash32 configThirtyTwo = NetIdentity::HashDeterministicConfig(thirtyTwo);
-
-			NetIdentityManifest manifestFour = MakeManifest();
-			manifestFour.deterministicConfig = four;
-			manifestFour.deterministicConfigHash = configFour;
-			NetIdentityManifest manifestThirtyTwo = manifestFour;
-			manifestThirtyTwo.deterministicConfig = thirtyTwo;
-			manifestThirtyTwo.deterministicConfigHash = configThirtyTwo;
-
-			const NetHash32 identityFour = NetIdentity::HashSessionIdentity(manifestFour);
-			const NetHash32 identityThirtyTwo = NetIdentity::HashSessionIdentity(manifestThirtyTwo);
-			if (configFour == configThirtyTwo || identityFour == identityThirtyTwo) {
-				*error = "the identity does not pin the Lua state count: deterministic_config_hash 4 states " + NetIdentity::HashHex(configFour) +
-				         " vs 32 states " + NetIdentity::HashHex(configThirtyTwo) + ", session_identity_hash 4 states " + NetIdentity::HashHex(identityFour) +
-				         " vs 32 states " + NetIdentity::HashHex(identityThirtyTwo);
+			// Two machines of different core counts, one of them still carrying a retired settings override.
+			// Neither picks the count any more, so both hash the same identity and may join.
+			NetIdentityDeterministicConfig otherMachine = config;
+			otherMachine.numLuaStatesOverride = 4;
+			const NetHash32 configHash = NetIdentity::HashDeterministicConfig(config);
+			const NetHash32 otherMachineHash = NetIdentity::HashDeterministicConfig(otherMachine);
+			if (configHash != otherMachineHash) {
+				*error = "the retired Lua-state override still moves deterministic_config_hash: " + NetIdentity::HashHex(configHash) +
+				         " vs " + NetIdentity::HashHex(otherMachineHash);
+				return false;
+			}
+			NetIdentityManifest manifest = MakeManifest();
+			manifest.deterministicConfig = config;
+			manifest.deterministicConfigHash = configHash;
+			NetIdentityManifest otherMachineManifest = manifest;
+			otherMachineManifest.deterministicConfig = otherMachine;
+			otherMachineManifest.deterministicConfigHash = otherMachineHash;
+			if (NetIdentity::HashSessionIdentity(manifest) != NetIdentity::HashSessionIdentity(otherMachineManifest) ||
+			    NetIdentity::Compare(manifest, otherMachineManifest)) {
+				*error = "two machines that differ only in their retired Lua-state override are refused";
 				return false;
 			}
 
-			if (manifestFour.deterministicConfig.numLuaStates != 4 || manifestThirtyTwo.deterministicConfig.numLuaStates != 32) {
-				*error = "the Lua state count stopped being carried in the manifest";
+			// A build that changed the constant is a different simulation: it refuses, on the config hash.
+			NetIdentityDeterministicConfig otherBuild = config;
+			otherBuild.numLuaStates = c_LuaStateCount / 2;
+			const NetHash32 otherBuildHash = NetIdentity::HashDeterministicConfig(otherBuild);
+			NetIdentityManifest otherBuildManifest = manifest;
+			otherBuildManifest.deterministicConfig = otherBuild;
+			otherBuildManifest.deterministicConfigHash = otherBuildHash;
+			const NetHash32 identity = NetIdentity::HashSessionIdentity(manifest);
+			const NetHash32 otherBuildIdentity = NetIdentity::HashSessionIdentity(otherBuildManifest);
+			if (configHash == otherBuildHash || identity == otherBuildIdentity) {
+				*error = "a build with another Lua state count hashes the same identity: " + NetIdentity::HashHex(configHash) +
+				         " vs " + NetIdentity::HashHex(otherBuildHash);
+				return false;
+			}
+			const std::optional<NetIdentityMismatch> buildMismatch = NetIdentity::Compare(manifest, otherBuildManifest);
+			if (!buildMismatch || buildMismatch->key != "deterministic_config_hash" || buildMismatch->summary != "deterministic config hash does not match") {
+				*error = "a build with another Lua state count is not refused on deterministic_config_hash: " +
+				         (buildMismatch ? buildMismatch->key + " / " + buildMismatch->summary : std::string("the manifests compared equal"));
+				return false;
+			}
+			NetDirectorySessionRow row;
+			row.networkProtocolVersion = config.networkProtocolVersion;
+			row.lockstepCodecVersion = config.lockstepCodecVersion;
+			row.controllerFrameVersion = config.controllerFrameVersion;
+			row.sessionIdentityHash = NetIdentity::HashHex(otherBuildIdentity);
+			row.moduleManifestHash = NetIdentity::HashHex(otherBuildManifest.moduleManifestHash);
+			NetDirectoryLocalIdentity local;
+			local.networkProtocolVersion = config.networkProtocolVersion;
+			local.lockstepCodecVersion = config.lockstepCodecVersion;
+			local.controllerFrameVersion = config.controllerFrameVersion;
+			local.sessionIdentityHash = NetIdentity::HashHex(identity);
+			local.moduleManifestHash = NetIdentity::HashHex(manifest.moduleManifestHash);
+			std::string joinReason;
+			if (NetDirectoryCodec::IsJoinable(row, local, &joinReason)) {
+				*error = "a session row from a build with another Lua state count is joinable";
+				return false;
+			}
+			// An older record that never carried the field joins on the identity it published, because the
+			// constant reaches admission through the build the peers run, never through the row.
+			NetDirectorySessionRow sameBuildRow = row;
+			sameBuildRow.sessionIdentityHash = NetIdentity::HashHex(identity);
+			std::string sameBuildReason;
+			if (!NetDirectoryCodec::IsJoinable(sameBuildRow, local, &sameBuildReason)) {
+				*error = "a row published by this build is not joinable: " + sameBuildReason;
 				return false;
 			}
 
-			// The identity must still move for the config fields the sim does depend on.
-			NetIdentityDeterministicConfig slowerAi = four;
-			slowerAi.aiUpdateInterval = 3;
-			if (NetIdentity::HashDeterministicConfig(slowerAi) == configFour) {
-				*error = "deterministic_config_hash stopped reacting to ai_update_interval";
+			// The live runtime publishes the constant, never its core count or a settings line.
+			if (!TimerMan::IsConstructed()) TimerMan::Construct();
+			if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+			if (!MovableMan::IsConstructed()) MovableMan::Construct();
+			if (!LuaMan::IsConstructed()) LuaMan::Construct();
+			if (!PresetMan::IsConstructed()) PresetMan::Construct();
+			NetIdentityManifest live;
+			if (!NetIdentity::CaptureManifestInputs(live, error)) return false;
+			if (live.deterministicConfig.numLuaStates != c_LuaStateCount) {
+				*error = "the published Lua state count is not the build constant: " + std::to_string(live.deterministicConfig.numLuaStates);
 				return false;
 			}
-			for (auto member : {&NetIdentityDeterministicConfig::supportedLockstepCodecVersion,
-			                   &NetIdentityDeterministicConfig::supportedWorldLockstepCodecVersion,
-			                   &NetIdentityDeterministicConfig::supportedMatchConfigVersion,
-			                   &NetIdentityDeterministicConfig::supportedWorldMatchConfigVersion,
-			                   &NetIdentityDeterministicConfig::lobbyProtocolVersion}) {
-				NetIdentityManifest incompatible = manifestFour;
-				++(incompatible.deterministicConfig.*member);
-				incompatible.deterministicConfigHash = NetIdentity::HashDeterministicConfig(incompatible.deterministicConfig);
-				if (!ExpectMismatchKey(manifestFour, incompatible, "deterministic_config_hash", error)) return false;
-			}
-			NetIdentityManifest otherRules = manifestFour;
-			otherRules.sessionRulesHash = MakeHash(203);
-			if (NetIdentity::HashSessionIdentity(otherRules) == identityFour) {
-				*error = "session_identity_hash stopped reacting to session_rules_hash";
-				return false;
-			}
-			std::cout << "[net-identity-selftest] PASS lua state count pinned: 4 and 32 states reject with distinct deterministic_config_hash values" << std::endl;
 
-			const bool wasExperiment = NetIdentity::LuaStateCountExperimentEnabled();
-			NetIdentity::SetLuaStateCountExperiment(true);
-			const NetHash32 experimentFour = NetIdentity::HashDeterministicConfig(four);
-			const NetHash32 experimentThirtyTwo = NetIdentity::HashDeterministicConfig(thirtyTwo);
-			NetIdentity::SetLuaStateCountExperiment(wasExperiment);
-			if (experimentFour != experimentThirtyTwo) {
-				*error = "the identity experiment still hashes the local Lua state count: 4 states " + NetIdentity::HashHex(experimentFour) +
-				         " vs 32 states " + NetIdentity::HashHex(experimentThirtyTwo);
+			// Row 1's other half: Lua debugging runs everything on the master state, so it refuses a match.
+			const std::string debuggingRefusal = NetIdentity::LocalMatchRefusal(0);
+			const std::string normalRefusal = NetIdentity::LocalMatchRefusal(c_LuaStateCount);
+			if (debuggingRefusal.empty() || debuggingRefusal.find("EnableLuaDebugging") == std::string::npos || !normalRefusal.empty()) {
+				*error = "a runtime with no threaded Lua states is not refused a match: refusal=\"" + debuggingRefusal +
+				         "\" normal_refusal=\"" + normalRefusal + "\"";
 				return false;
 			}
-			std::cout << "[net-identity-selftest] PASS lua state count experiment: 4 and 32 states share deterministic_config_hash" << std::endl;
+
+			std::cout << "[net-identity-selftest] PASS lua state count is a build constant: published=" << live.deterministicConfig.numLuaStates
+			          << " hash=" << NetIdentity::HashHex(configHash) << " retired_override_hash=" << NetIdentity::HashHex(otherMachineHash)
+			          << " other_build(" << otherBuild.numLuaStates << ")=" << NetIdentity::HashHex(otherBuildHash)
+			          << " hello_refusal=" << buildMismatch->summary << " directory_refusal=" << joinReason
+			          << " debugging_refusal=" << debuggingRefusal << std::endl;
 			return true;
 		}
 
@@ -473,7 +508,7 @@ namespace RTE {
 
 	int NetIdentitySelfTest::Run() {
 		std::string error;
-		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountOutOfIdentity(&error) ||
+		if (!TestCanonicalHelpers(&error) || !TestCompare(&error) || !TestDiffModules(&error) || !TestLuaStateCountIsABuildConstant(&error) ||
 		    !TestPresetIndependentAdmissionIdentity(&error) || !TestModuleRootOutOfIdentity(&error)) {
 			std::cerr << "[net-identity-selftest] FAIL: " << error << std::endl;
 			return 1;
