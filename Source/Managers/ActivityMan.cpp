@@ -573,8 +573,8 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 		m_LastAutosaveBytes = bytes;
 		m_LastAutosaveCaptureMs = captureMs;
 		System::PrintDiagnosticLine(std::format("[autosave] tick={} capture_ms={:.3f} bytes={}\n", tick, captureMs, bytes));
-		System::PrintDiagnosticLine(std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} cursor_moves={} sound_cursor_moves={}\n", tick,
-		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.cursorMoves, m_LastCaptureEffects.soundCursorMoves));
+		System::PrintDiagnosticLine(std::format("[autosave-effects] tick={} uids_allocated={} sim_draws={} render_draws={} sound_cursor_moves={}\n", tick,
+		                         m_LastCaptureEffects.uidsAllocated, m_LastCaptureEffects.simDraws, m_LastCaptureEffects.renderDraws, m_LastCaptureEffects.soundCursorMoves));
 		return true;
 	} catch (const std::exception& error) {
 		{
@@ -685,7 +685,6 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		effects.uidsAllocated += MovableObject::GetUniqueIDCounter() - allocation.uid;
 		effects.simDraws += g_SimRNG.GetDrawCount() - allocation.sim.GetDrawCount();
 		effects.renderDraws += g_RenderRNG.GetDrawCount() - allocation.render.GetDrawCount();
-		effects.cursorMoves += g_LuaMan.GetScriptStateCursor() != allocation.cursor;
 		effects.soundCursorMoves += g_AudioMan.GetCheckpointSoundContainerCursor() != liveSoundCursor;
 	};
 	effectsSoFar();
