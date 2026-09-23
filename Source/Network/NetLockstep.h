@@ -1382,6 +1382,8 @@ namespace RTE {
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
+		uint64_t m_ParkFrameSimulated = UINT64_MAX; //!< The last park frame this peer simulated.
+		uint64_t m_ParkFrameSimulatedMs = 0; //!< When it did: a seat's first post-park input is due a delay after the park's last frame.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		std::map<uint64_t, std::vector<NetGameCommand>> m_ParkCarriedCommands; //!< This peer's commands a park emptied, by the frame they targeted; they ride its next input.
 		bool m_ApplyingDeferredParkTiming = false;

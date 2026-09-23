@@ -4309,6 +4309,8 @@ namespace RTE {
 		m_CaptureReportResent = false;
 		m_CaptureParkReportsMs.clear();
 		m_CommittedAtMs.clear();
+		m_ParkFrameSimulated = UINT64_MAX;
+		m_ParkFrameSimulatedMs = 0;
 		m_GoodbyeDrain = false;
 		m_FinalFrame = UINT64_MAX;
 		m_DeferredParkTimings.clear();
@@ -5280,6 +5282,13 @@ namespace RTE {
 			bool held = false;
 			for (uint8_t peer: missing) {
 				const auto& peerStats = m_Stats.peers[peer];
+				// A park commits its frames with no input from anyone, so a seat owes nothing until the frames after it fall
+				// due: its first post-park inputs are due a delay after the park's last frame ran here, never at the release.
+				if (const uint16_t owed = InputDelayAt(peer, frame); m_ParkFrameSimulated != UINT64_MAX && m_ParkFrameSimulated == m_SynchronizedCaptureEndFrame &&
+				    frame > m_ParkFrameSimulated && frame <= m_ParkFrameSimulated + std::max<uint16_t>(1, owed)) {
+					const uint64_t dueMs = m_ParkFrameSimulatedMs + static_cast<uint64_t>(std::llround(owed * m_Config.simTickMs));
+					if (dueMs > firstMissingMs && (nowMs < dueMs || nowMs - dueMs < declarationDeadline)) continue;
+				}
 				// A seat produces this frame's input when it simulates the frame one delay earlier, which it could not
 				// do before we committed that frame and it crossed the seat's link: until then it waits on us.
 				const uint64_t producedFrom = frame - std::min<uint64_t>(frame, std::max<uint16_t>(1, InputDelayAt(peer, frame)));
@@ -7289,6 +7298,10 @@ namespace RTE {
 		FlushTimingOutgoing();
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
+			m_ParkFrameSimulated = completedTick;
+			m_ParkFrameSimulatedMs = m_TimingNowMs != 0 ? m_TimingNowMs : NetLockstepNowMs();
+		}
 		if (!m_DeferStops) return false;
 		if (!IsRunning()) return false;
 		if (m_MigrationResult.snapshotProviderPeerId == m_Config.localPeerId && completedTick == m_MigrationResult.boundary + 1) {
