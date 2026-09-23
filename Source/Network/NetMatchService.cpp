@@ -3693,13 +3693,15 @@ static std::string ResyncSaveName() {
 						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames, decision->neutralThroughFrame};
 				}
 				if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
-				// Every peer starts on the delay in force at the activation: the round committed those changes in the
-				// tail this seat has just replayed, and a seat on its opening delays would feed the round late.
-				for (uint8_t peer = 1; peer <= live.peerCount; ++peer)
-					live.matchConfig.peerInputDelayFrames[peer - 1] = m_CatchUpCoordinator->InputDelayAt(peer, m_WorldCatchUp.activationTick);
 				for (const auto& [peer, changes]: live.initialDelayChanges) {
 					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
 					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
+				}
+				// The delay changes the round committed in the tail this seat has just replayed stay changes: every peer's
+				// start still matches its opening delay, and each produces on the delay in force at the activation.
+				for (const auto& [peer, changes]: m_CatchUpCoordinator->GetDelayChanges()) {
+					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);
+					if (peer > 0 && peer <= live.peerCount && at != changes.begin()) live.initialDelayChanges[peer].emplace(std::prev(at)->first, std::prev(at)->second);
 				}
 				if (!live.initialSeatReclaims.contains(m_LocalPeerId)) return;
 				m_Runner->ConfigurePrivateJoin(live);
