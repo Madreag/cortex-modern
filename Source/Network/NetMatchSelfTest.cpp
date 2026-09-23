@@ -12106,26 +12106,48 @@ namespace RTE {
 		service.m_RelayReplies = 0;
 		service.m_FreshRelayRequested = true;
 		const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + 3600);
+		const uint64_t lifetime = NetDirectoryClient::c_MaxRelayTtlSeconds;
+		std::vector<std::string> failures;
+		const auto requestedTtl = [&] { return nlohmann::json::parse(script->sent.back().body).value("ttl", uint64_t{0}); };
+		NetRelayConfig relay = NetRelayConfig::Fixed("relay.example:3478", "temporary-user", "temporary-password", "11111111-2222-4333-8444-555555555555:1", now + lifetime);
 		script->replies.push_back({200, relay.ToJson(), ""});
 		service.UpdateRelayOffer(1);
 		NetRelayConfig offered;
 		if (!service.m_Directory.IceRequestPending() || service.ReadRelayOffer(offered)) { *error = "host did not wait for the match's relay request"; return false; }
-		if (nlohmann::json::parse(script->sent.back().body) != nlohmann::json{{"token", "host-token"}, {"match_id", relay.matchId}, {"ttl", 3600}}) { *error = "host requested an unbound relay lifetime"; return false; }
+		const auto body = nlohmann::json::parse(script->sent.back().body);
+		if (body.value("token", "") != "host-token" || body.value("match_id", "") != relay.matchId || body.size() != 3) { *error = "host sent an unexpected relay request: " + script->sent.back().body; return false; }
+		if (requestedTtl() != lifetime) failures.push_back("host minted its relay for " + std::to_string(requestedTtl()) + " s, not the service's longest " + std::to_string(lifetime) + " s");
 		service.m_Directory.Update(2); service.UpdateRelayOffer(2);
 		if (!service.ReadRelayOffer(offered) || offered != relay) { *error = "host did not publish its minted relay"; return false; }
-		relay.expiresAt = now + 299;
-		service.SetRelayOfferLocked(relay);
 		service.UpdateRelayOffer(15001);
-		if (!service.m_Directory.IceRequestPending()) { *error = "host did not refresh before relay expiry"; return false; }
-		relay.expiresAt = now + 3600;
+		if (service.m_Directory.IceRequestPending()) failures.push_back("host renewed a relay offer it had just minted");
+		// The same offer with half its lifetime spent.
+		relay.expiresAt = now + lifetime / 2;
+		service.SetRelayOfferLocked(relay);
+		service.m_RelayOfferIssuedAt = now - lifetime / 2;
+		service.UpdateRelayOffer(15002);
+		if (!service.m_Directory.IceRequestPending()) {
+			failures.push_back("host kept a relay offer with " + std::to_string(relay.expiresAt - now) + " of its " + std::to_string(lifetime) + " s left instead of renewing it at half its lifetime");
+			service.SetRelayOfferLocked({});
+			service.UpdateRelayOffer(30002);
+		}
+		if (service.m_Directory.IceRequestPending() && requestedTtl() != lifetime) failures.push_back("host renewed its relay for " + std::to_string(requestedTtl()) + " s");
+		relay.expiresAt = now + lifetime;
 		relay.iceServers.front().credential = "renewed-password";
 		script->replies.push_back({200, relay.ToJson(), ""});
-		service.m_Directory.Update(15002); service.UpdateRelayOffer(15002);
+		service.m_RelayPublishPending = false;
+		service.m_Directory.Update(30003); service.UpdateRelayOffer(30003);
+		if (!service.ReadRelayOffer(offered) || offered != relay || !service.m_RelayPublishPending) failures.push_back("host did not publish the renewed relay through the lobby config");
 		service.m_LastRoundId = 2;
 		service.m_FreshRelayRequested = true;
-		service.UpdateRelayOffer(30001);
-		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") { *error = "a fresh round reused the previous relay request"; return false; }
+		service.UpdateRelayOffer(45004);
+		if (!service.m_Directory.IceRequestPending() || nlohmann::json::parse(script->sent.back().body).value("match_id", "") != "11111111-2222-4333-8444-555555555555:2") failures.push_back("a fresh round reused the previous relay request");
+		if (!failures.empty()) {
+			*error = "relay renewal: " + failures.front();
+			for (size_t index = 1; index < failures.size(); ++index) *error += " | " + failures[index];
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS relay renewal: minted for " << lifetime << " s, renewed at half its lifetime and republished" << std::endl;
 		return true;
 	}
 

@@ -1256,6 +1256,7 @@ namespace RTE {
 		bool m_RelayPublishPending = false;
 		bool m_RelayAttempted = false;
 		uint64_t m_ActiveRelayExpiresAt = 0;
+		uint64_t m_RelayOfferIssuedAt = 0; //!< Wall seconds when the current offer was adopted.
 		uint64_t m_RelayReplies = 0;
 		uint64_t m_NextRelayRequestMs = 0;
 		std::atomic<bool> m_FreshRelayRequested{true};
