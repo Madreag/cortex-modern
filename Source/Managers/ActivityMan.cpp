@@ -593,6 +593,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	g_MovableMan.WaitForActorsSeeTask();
 	// Every part of the capture asks which objects exist; the fence answers from one copy instead of the registry's lock.
 	MovableMan::KnownObjectsScope knownObjects;
+	LuaScriptGraphNativeCaptureScope nativeLookups;
 	CaptureAllocationState allocation;
 	AudioMan::SoundCheckpointSaveScope carriedSounds;
 	ContentFile::LoadedBitmapIndexScope bitmapIndex;
@@ -649,6 +650,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 			work();
 		}));
 	};
+	// The script graphs' native answers need the world's trees walked; that starts first, off this thread.
+	captureAside([shared = LuaScriptGraphNativeCaptureScope::Current()] { LuaScriptGraphNativeCaptureScope::BuildWorld(shared); });
 	// Elapsed timer fields change even when their object's write stamp holds, so the scene keeps a cache of its own.
 	captureAside([&] {
 		const auto sceneStart = std::chrono::steady_clock::now();

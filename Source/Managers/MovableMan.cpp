@@ -2376,7 +2376,9 @@ bool MovableMan::ReinstateWorld(WorldSetAside& in) {
 bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::vector<std::string>& problems, bool* fromAnImage, const std::function<void()>& whileWaiting) const {
 	AudioMan::CheckpointRegistryScope captureSounds;
 	LuaCheckpointBarrierPause barrierPause;
-	LuaScriptGraphNativeCaptureScope nativeCapture;
+	// A world capture opens the lookups at its fence; a capture of the graphs alone opens its own.
+	std::optional<LuaScriptGraphNativeCaptureScope> nativeCapture;
+	if (!LuaScriptGraphNativeCaptureScope::Current()) nativeCapture.emplace();
 	struct PathCapture {
 		PathCapture() { g_LuaMan.BeginPathCallbackCapture(); }
 		~PathCapture() { g_LuaMan.EndPathCallbackCapture(); }
