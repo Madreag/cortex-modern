@@ -2740,6 +2740,7 @@ static std::string ResyncSaveName() {
 				}
 			} else {
 				// A capture this peer did not take holds nothing, and says so at once.
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning()));
 				output.send.push_back({0, NetGameCheckpoint::Written, tick});
 			}
 		}
