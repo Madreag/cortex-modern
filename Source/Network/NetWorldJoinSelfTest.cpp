@@ -5747,12 +5747,14 @@ namespace RTE {
 		// The refused capture: its segment was armed at the capture tick and holds frames until a verdict.
 		ScenarioRunner::ArmLockstepWorldSegment(MakeSegmentHeader(worldId, 900, 4242, 2, std::string(64, 'd')), first.string());
 		if (!ScenarioRunner::HasPendingLockstepWorldSegment()) {
-			*error = "world-verdict-armed-nothing: the capture at tick 900 left no segment waiting";
+			*error = "world-verdict-armed-nothing: the capture at tick 900 left no segment waiting (pending tick " +
+			         std::to_string(ScenarioRunner::GetPendingLockstepWorldSegmentTick()) + ")";
 			return false;
 		}
 		service.ApplyAutosaveVerdict(900, true, false);
 		if (!service.m_WorldCapturePending) {
-			*error = "world-verdict-consumed-the-request: a refused capture cleared the pending world capture";
+			*error = "world-verdict-consumed-the-request: a refused capture cleared the pending world capture (requested tick " +
+			         std::to_string(service.m_WorldCaptureRequestedTick) + ")";
 			return false;
 		}
 		if (service.m_WorldCaptureRequestedTick != 0) {
@@ -5766,7 +5768,8 @@ namespace RTE {
 			return false;
 		}
 		if (service.m_RestartAdmissionDue.load()) {
-			*error = "world-verdict-owed-an-admission: a refused capture asked for an admission file beside it";
+			*error = "world-verdict-owed-an-admission: a refused capture asked for an admission file beside it (requested tick " +
+			         std::to_string(service.m_WorldCaptureRequestedTick) + ")";
 			return false;
 		}
 
@@ -5780,7 +5783,8 @@ namespace RTE {
 			return false;
 		}
 		if (!ScenarioRunner::HasPendingLockstepWorldSegment()) {
-			*error = "world-verdict-dropped-a-landed-segment: the archive at tick 1800 left no segment to seal";
+			*error = "world-verdict-dropped-a-landed-segment: the archive at tick 1800 left no segment to seal (pending tick " +
+			         std::to_string(ScenarioRunner::GetPendingLockstepWorldSegmentTick()) + ")";
 			return false;
 		}
 		ScenarioRunner::DropPendingLockstepWorldSegment("the verdict row is done");
