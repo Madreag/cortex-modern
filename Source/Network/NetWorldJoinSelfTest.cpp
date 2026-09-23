@@ -3077,6 +3077,19 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A seat readmitted for a frame past the round's last one is a member that never played again: the round's goodbye is owed
+	/// to it as to any returner the round does not use, or it times out on a host that has already left and exits as a failure.
+	int TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye() {
+		if (!NetMatchService::EndedRoundOwesGoodbye(true, true)) {
+			return Fail("a seat readmitted for frame 2409 of a round that ended at 2401 was left without the goodbye");
+		}
+		if (NetMatchService::EndedRoundOwesGoodbye(true, false) || !NetMatchService::EndedRoundOwesGoodbye(false, false)) {
+			return Fail("the goodbye went to a member playing at the round's end, or not to a returner the round does not use");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_readmitted_seat_held_at_the_end_is_owed_the_goodbye" << std::endl;
+		return 0;
+	}
+
 	int TestPrivateRejoinHeadroom() {
 		NetCatchUpHeadroom capacity;
 		if (!capacity.Observe(120, 2000000, 1000.0 / 60.0) || capacity.Ready()) return Fail("60 tps was admitted without catch-up headroom");
@@ -6508,6 +6521,7 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
+		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
