@@ -4384,7 +4384,10 @@ namespace RTE {
 			m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 		}
 		m_ReclaimTransactions = m_Config.initialSeatReclaims;
-		for (const auto& [peer, reclaim]: m_ReclaimTransactions) m_PeerAdmissions[peer] = {reclaim.activationFrame, reclaim.delayFrames};
+		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
+		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
+			m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, PeerInputDelay(peer)} :
+			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
 	}
 
 	void NetLockstepCoordinator::ReadoptRound(uint64_t roundId, uint64_t nowMs) {
@@ -5123,6 +5126,26 @@ namespace RTE {
 		return frame - held->second <= delay;
 	}
 
+	void NetLockstepCoordinator::AdoptReturnsBefore(NetLockstepConfig& config, const std::vector<NetLockstepTiming>& reclaims, uint64_t firstFrame) {
+		std::map<uint8_t, const NetLockstepTiming*> newest;
+		for (const NetLockstepTiming& reclaim: reclaims) {
+			if (reclaim.phase != NetTimingPhase::ReclaimAtFrame || reclaim.peerId == 0 || reclaim.peerId > config.peerCount || reclaim.peerId > 4 ||
+			    reclaim.peerId == config.localPeerId || reclaim.applyFrame >= firstFrame) continue;
+			const NetLockstepTiming*& latest = newest[reclaim.peerId];
+			if (!latest || latest->revision < reclaim.revision) latest = &reclaim;
+		}
+		for (const auto& [peer, reclaim]: newest) {
+			const uint32_t incarnation = reclaim->seatIncarnations[peer - 1];
+			if (const auto known = config.peerIncarnations.find(peer); known != config.peerIncarnations.end() && known->second >= incarnation) continue;
+			// The seat is back before we are, so the host hands us its start with the rest of the round.
+			config.initialSeatHolds.erase(peer);
+			config.initialPeerLeaves.erase(peer);
+			config.peerIncarnations[peer] = incarnation;
+			config.initialSeatReclaims[peer] = {peer, reclaim->authorityGeneration, reclaim->revision, incarnation, reclaim->applyFrame, reclaim->delayFrames,
+			    reclaim->neutralThroughFrame, reclaim->worldTransition};
+		}
+	}
+
 	bool NetLockstepCoordinator::IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const {
 		const auto found = m_ReclaimTransactions.find(peerId);
 		if (found == m_ReclaimTransactions.end()) return false;
@@ -5492,9 +5515,12 @@ namespace RTE {
 			return;
 		}
 		if (!authority) return;
+		// A seat joining a running round replayed every frame before its first: a delay decided for one of them belongs to that
+		// tail, so it is taken for the frames after it and never acknowledged.
+		const bool tailDelay = m_Config.joinsRunningRound && timing.action == NetTimingAction::Delay && timing.applyFrame < m_Config.startFrame;
 		if (timing.phase == NetTimingPhase::Propose) {
 			const bool ownHold = timing.action == NetTimingAction::Hold && (timing.heldPeers & (1U << (m_Config.localPeerId - 1))) != 0;
-			if ((timing.action == NetTimingAction::Hold && !UsesBoundedWait()) || (!ownHold && timing.applyFrame < m_Stats.nextFrame) ||
+			if ((timing.action == NetTimingAction::Hold && !UsesBoundedWait()) || (!ownHold && !tailDelay && timing.applyFrame < m_Stats.nextFrame) ||
 			    (timing.applyFrame > m_Stats.nextFrame && timing.applyFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) || m_TimingDecisions.size() >= 16) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "timing proposal missed its boundary");
 				return;
@@ -5508,11 +5534,13 @@ namespace RTE {
 			ack.senderPeerId = m_Config.localPeerId;
 			ack.phase = NetTimingPhase::Acknowledge;
 			ack.nextFrame = m_Stats.nextFrame;
-			if ((timing.requiredPeers & (1U << (m_Config.localPeerId - 1))) != 0) QueueTiming(ack, GetHostPeerId());
+			if (!tailDelay && (timing.requiredPeers & (1U << (m_Config.localPeerId - 1))) != 0) QueueTiming(ack, GetHostPeerId());
 		} else if (timing.phase == NetTimingPhase::Commit) {
 			auto found = m_TimingDecisions.find(timing.revision);
 			NetLockstepTiming proposed = timing;
 			proposed.phase = NetTimingPhase::Propose;
+			// The tail's proposal can predate the link this round listens on; its commit alone is the host's decision.
+			if (found == m_TimingDecisions.end() && tailDelay) found = m_TimingDecisions.try_emplace(timing.revision, TimingDecision{proposed}).first;
 			if (found == m_TimingDecisions.end() || proposed != found->second.proposal) {
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "timing commit has no matching proposal");
 				return;

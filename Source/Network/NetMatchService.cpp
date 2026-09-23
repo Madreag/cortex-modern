@@ -3702,6 +3702,7 @@ static std::string ResyncSaveName() {
 				live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 				live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
 				live.initialPeerLeaves = m_CatchUpCoordinator->GetPeerLeaveFrames();
+				std::vector<NetLockstepTiming> returns;
 				for (const auto& event: m_CatchUpWirePackets) {
 					if (event.bytes.size() < NetLockstepCodec::c_HeaderBytes || event.bytes[8] != static_cast<uint8_t>(NetLockstepPacketType::Timing)) continue;
 					const auto decoded = NetLockstepCodec::Decode(event.bytes);
@@ -3713,7 +3714,9 @@ static std::string ResyncSaveName() {
 					if (decision->phase == NetTimingPhase::ReclaimAtFrame && decision->peerId == m_LocalPeerId && decision->applyFrame == m_WorldCatchUp.activationTick)
 						live.initialSeatReclaims[m_LocalPeerId] = {m_LocalPeerId, decision->authorityGeneration, decision->revision,
 						    decision->seatIncarnations[m_LocalPeerId - 1], decision->applyFrame, decision->delayFrames, decision->neutralThroughFrame};
+					else if (decision->phase == NetTimingPhase::ReclaimAtFrame) returns.push_back(*decision);
 				}
+				NetLockstepCoordinator::AdoptReturnsBefore(live, returns, m_WorldCatchUp.activationTick);
 				if (live.matchConfig.peerInputDelayFrames.empty()) live.matchConfig.peerInputDelayFrames.resize(live.peerCount, live.matchConfig.inputDelayFrames);
 				for (const auto& [peer, changes]: live.initialDelayChanges) {
 					const auto at = changes.upper_bound(m_WorldCatchUp.activationTick);

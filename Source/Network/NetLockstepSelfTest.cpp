@@ -2955,6 +2955,104 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat joining a running round replayed every frame before its first. A delay the host decided for one of those
+		// frames while it replayed reached the new round as a proposal already behind it, and the round stopped on
+		// "timing proposal missed its boundary" the moment it ran.
+		bool TestAJoinerTakesADelayDecidedForItsTail(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto a = MakeCoordinatorConfig(1, 2, 0x9A52, 2, NetTransportLane::ControlReliable);
+			auto b = MakeCoordinatorConfig(2, 1, 0x9A52, 2, NetTransportLane::ControlReliable);
+			a.roundId = b.roundId = 52; a.relayToOtherPeers = true; a.authorityPeerId = b.authorityPeerId = 1;
+			a.timeoutMs = b.timeoutMs = 60000;
+			a.simTickMs = b.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			a.startFrame = b.startFrame = 40; b.joinsRunningRound = true;
+			if (!StartCoordinatorPair(49541, hostWire, clientWire, host, client, a, b, error)) return false;
+			uint64_t now = 0;
+			for (; now < 400 && (!host.IsRunning() || !client.IsRunning()); ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!client.IsRunning()) { *error = "the pair never started"; return false; }
+			NetLockstepTiming delay;
+			delay.senderPeerId = 1; delay.peerId = 1; delay.action = NetTimingAction::Delay; delay.phase = NetTimingPhase::Propose;
+			delay.sessionId = b.sessionId; delay.roundId = 52; delay.revision = 7; delay.applyFrame = 30; delay.delayFrames = 5; delay.requiredPeers = 0x3;
+			for (const NetTimingPhase phase: {NetTimingPhase::Propose, NetTimingPhase::Commit}) {
+				delay.phase = phase;
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode({delay}, event.bytes)) { *error = "the tail's delay would not encode"; return false; }
+				client.InjectEvent(event, now);
+			}
+			for (uint64_t until = now + 50; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (!client.IsRunning() || client.InputDelayAt(1, 40) != 5) {
+				*error = std::string("a delay decided for the replayed tail stopped the joining round or was lost: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason +
+				         " delay_at_first_frame=" + std::to_string(client.InputDelayAt(1, 40));
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_takes_a_delay_decided_for_its_tail delay=" << client.InputDelayAt(1, 40) << std::endl;
+			return true;
+		}
+
+		// Two seats held at once come back one after the other. The second's round was set up from the tail it had
+		// replayed, where the first was still held, so the host's start for the first seat - back before the second's
+		// first frame - named a peer that round did not know and stopped it on "unknown_peer".
+		bool TestAJoinerTakesASeatReturnedBeforeIt(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49542, error) || !clientWire.Connect("loopback", 49542, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A53; config.roundId = 53; config.localPeerId = 2; config.peerCount = 3; config.authorityPeerId = 1;
+			config.startFrame = 40; config.joinsRunningRound = true; config.inputDelayFrames = 2;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 3; config.matchConfig.players.push_back({3, 2, false, "Returned"});
+			// The tail this seat replayed ended with peer 3 held since frame 20; the host took it back at frame 30.
+			config.initialSeatHolds[3] = NetGameSeatHold{3, 0, 1, 1, 20};
+			config.initialPeerLeaves[3] = 20;
+			config.peerIncarnations[3] = 1;
+			NetLockstepTiming reclaim;
+			reclaim.senderPeerId = 1; reclaim.peerId = 3; reclaim.action = NetTimingAction::Reclaim; reclaim.phase = NetTimingPhase::ReclaimAtFrame;
+			reclaim.sessionId = config.sessionId; reclaim.roundId = 53; reclaim.revision = 9; reclaim.applyFrame = 30; reclaim.delayFrames = 2;
+			reclaim.neutralThroughFrame = 32; reclaim.seatIncarnations[2] = 2;
+			NetLockstepCoordinator::AdoptReturnsBefore(config, {reclaim}, config.startFrame);
+			for (uint8_t peer = 1; peer <= config.peerCount; ++peer)
+				if (peer == config.localPeerId || !config.initialPeerLeaves.contains(peer)) config.activePeerIds.push_back(peer);
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			const auto startOf = [&config](uint8_t peer, uint64_t frame) {
+				NetLockstepStart start;
+				start.sessionId = config.sessionId; start.roundId = 53; start.localPeerId = peer; start.peerCount = 3;
+				start.startFrame = frame; start.inputDelayFrames = 2;
+				start.controllerFrameVersion = ControllerFrame::c_Version;
+				start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+				start.scenario = config.scenario; start.ownershipPolicy = config.ownershipPolicy;
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				(void)NetLockstepCodec::Encode({start}, event.bytes);
+				return event;
+			};
+			uint64_t now = 0;
+			// The host's own start, its start for the returned seat at our first frame, then that seat's own start at its frame.
+			for (const NetTransportEvent& event: {startOf(1, 40), startOf(3, 40), startOf(3, 30)}) {
+				client.InjectEvent(event, now);
+				for (uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			if (!client.IsRunning()) {
+				*error = std::string("the host's start for a seat back before this one's first frame stopped its round: state=") +
+				         NetLockstepCoordinator::StateName(client.GetState()) + " reason=" + client.GetStats().timeoutReason;
+				return false;
+			}
+			if (client.IsPeerGoneAtFrame(3, 40) || client.IsSeatUnderAI(3, 40)) { *error = "the joining round kept a returned seat under the AI"; return false; }
+			std::cout << "[net-lockstep-selftest] PASS a_joiner_takes_a_seat_returned_before_it stale_packets=" << client.GetStats().staleRoundPackets << std::endl;
+			return true;
+		}
+
 		// A link the round has measured must survive the connection that measured it: a peer that comes
 		// back on a new transport reports no samples yet, and reading that as an instant link left the
 		// returning seat's allowance with nothing to size itself from.
@@ -18288,6 +18386,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestReturnOnAFreshLinkKeepsItsWindow(&error) ||
 		    !TestReturnKeepsTheLinkItLastMeasured(&error) ||
 		    !TestOwnStartReturnedDoesNotFailTheRound(&error) ||
+		    !TestAJoinerTakesADelayDecidedForItsTail(&error) ||
+		    !TestAJoinerTakesASeatReturnedBeforeIt(&error) ||
 		    !TestReclaimedSeatRestartsItsWaitReadings(&error) ||
 		    !TestFutureDelaySurvivesSplitMigration(&error) ||
 		    !TestSenderDropsUncontrolledTeamCommands(&error) ||
