@@ -847,7 +847,7 @@ namespace RTE {
 			utils->SetConfigValue(k_ESteamNetworkingConfig_P2P_TURN_PassList, k_ESteamNetworkingConfig_ListenSocket, m_ListenSocket, k_ESteamNetworkingConfig_String, config.turnPassList.c_str());
 		}
 
-		// A renewed relay login reaches every live P2P connection, for its next TURN allocation.
+		// A renewed relay login reaches the TURN allocation of every live P2P connection.
 		void UpdateLiveTurnLogins(const GnsP2PConfig& config) {
 			const std::string login = config.turnServerList + '\n' + config.turnUserList + '\n' + config.turnPassList;
 			if (m_P2PMode < 0 || !m_Interface || config.turnServerList.empty() || login == m_LiveTurnLogin) return;
