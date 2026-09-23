@@ -7197,6 +7197,57 @@ namespace RTE {
 			return 0;
 		}
 
+		int TestKickSettleWindow() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			Endpoint player;
+			player.connection = 431;
+			ConfigureEndpoint(player, "settle", &unixNow);
+			wire.Add(&player);
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error) || player.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the settle arm could not seat its player: " + error);
+			}
+			const auto seats = wire.host.GetModerationView();
+			const uint64_t kickedAtMs = wire.nowMs;
+			NetParticipantRemovalIssue issued;
+			if (seats.empty() || wire.host.RemoveParticipant(NetSelectModerationSeat(seats.front()), NetParticipantRemovalAction::Kick, wire.nowMs, unixNow, 0x4831ULL, 1, 170, issued) != NetKickBanResult::Ok) {
+				return Fail("the settle arm could not kick its player");
+			}
+			player.client.SetRound(1);
+			if (!player.client.HandleMessage(issued.notice, wire.nowMs) || !player.client.WasRemoved()) {
+				return Fail("the kicked client did not take its notice");
+			}
+			wire.ClearDelivered();
+			// The kicked client walks back in through the front door while the seat is still settling:
+			// its NewJoin is dropped unanswered, so it keeps knocking on its own retransmit ladder.
+			wire.nowMs += 100;
+			if (!player.client.BeginNewJoin(wire.nowMs, &error) || !wire.Pump(&error)) {
+				return Fail("the kicked client's return could not start: " + error);
+			}
+			if (player.client.GetState() == NetH4ClientState::Joined || wire.host.GetStats().removalSettleDrops == 0) {
+				return Fail("a kicked seat offered itself inside its settle window");
+			}
+			for (uint32_t step = 0; step < 12 && player.client.GetState() != NetH4ClientState::Joined; ++step) {
+				wire.nowMs += NetReconnectHost::c_RetransmitIntervalMs;
+				if (!wire.Pump(&error)) {
+					return Fail(error);
+				}
+			}
+			if (player.client.GetState() != NetH4ClientState::Joined) {
+				return Fail("the kicked seat never re-opened to its joiner");
+			}
+			const uint64_t joinedAfterMs = wire.nowMs - kickedAtMs;
+			std::cout << "[net-reconnect-session-selftest] PASS kick_settle: a kicked seat stays visibly open for one denial cadence joined_after_ms=" << joinedAfterMs << std::endl;
+			return 0;
+		}
+
 		int TestBanScopes() {
 			ScriptedAuthCrypto crypto;
 			ScriptedParticipantCrypto participant;
@@ -7844,6 +7895,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestRemovedTransactionsDropped(); result != 0) {
+			return result;
+		}
+		if (const int result = TestKickSettleWindow(); result != 0) {
 			return result;
 		}
 		if (const int result = TestBanScopes(); result != 0) {
