@@ -7598,7 +7598,13 @@ static std::string ResyncSaveName() {
 		config.dedicated = request.dedicated;
 		// The host publishes the checkpoint cadence the whole match follows; a client's own setting never steers one.
 		if (request.host) {
-			const uint32_t seconds = std::min(request.autosaveSeconds.value_or(GetAutosaveSeconds()), c_MaxAutosaveIntervalSeconds);
+			// Every minute through every hour, or off; a run's own cadence override keeps its seconds.
+			uint32_t seconds = request.autosaveSeconds.value_or(GetAutosaveSeconds());
+			if (seconds != 0 && (request.autosaveSeconds.has_value() || !s_AutosaveSecondsOverridden)) {
+				seconds = std::clamp(seconds, c_MinAutosaveIntervalSeconds, c_MaxAutosaveIntervalSeconds);
+			} else {
+				seconds = std::min(seconds, c_MaxAutosaveIntervalSeconds);
+			}
 			config.autosaveEnabled = seconds > 0;
 			config.autosaveIntervalSeconds = seconds;
 			// The rest of the host's saved session options ride the same config to every peer.

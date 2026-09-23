@@ -1230,7 +1230,9 @@ def scripts(case, port, root, size="960x540"):
         # A seated human's kind never moves: the host's own row is locked, and the open row's edit
         # is refused with the reason in the status line instead of silently dropping the seat.
         text += "assert_enabled ComboHostSeatType0 0\n"
-        text += ("combo_select ComboHostSeatType1 CPU\nwait 3\n"
+        # The open seat's member row lands when the roster publishes: until then the row refuses
+        # with the not-yet-seated reason, so the select waits on the roster, not a wall clock.
+        text += ("wait_members 2\ncombo_select ComboHostSeatType1 CPU\nwait 3\n"
                  "assert_label LabelHostOptStatus A seated player is never dropped by an options edit\n")
         # H03: a two-peer lobby has no free peer id, so the closed tail refuses a human seat with
         # the reason in the status line, then accepts the peerless CPU seat the same row offers.
@@ -1310,12 +1312,21 @@ def scripts(case, port, root, size="960x540"):
         text += "assert_label LabelHostOptionsTitle M A T C H   R E C O V E R Y\n"
         text += checks("CheckHostRecRepair", "CollectionBoxHostPageRecovery")
         text += checks("CheckHostRecAutosave", "CollectionBoxHostPageRecovery")
+        text += checks("LabelHostRecAutosaveHint", "CollectionBoxHostPageRecovery")
         text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # ENGINE 166: the caption follows the typed interval on the Changed notification,
-                 # before any Apply or focus loss commits it.
-                 "set_text TextHostRecAutosaveInterval 30\nwait_ms 500\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 30 sim seconds - none saved yet\n"
+                 # before any Apply or focus loss commits it. The product bounds the interval to
+                 # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
+                 "set_text TextHostRecAutosaveInterval 5\nwait_ms 500\n"
+                 "assert_label TextHostRecAutosaveInterval 60\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
+                 "set_text TextHostRecAutosaveInterval 3600\nwait_ms 500\n"
+                 "assert_label TextHostRecAutosaveInterval 3600\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 3600 sim seconds - none saved yet\n"
+                 "set_text TextHostRecAutosaveInterval 0\nwait_ms 500\n"
+                 "assert_label LabelHostRecLastSave No autosaves while this is off\n"
+                 "assert_label LabelHostRecAutosaveHint Autosaves every 60 s to 60 min, or off\n"
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled TextHostRecAutosaveInterval 0\n")
         text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
