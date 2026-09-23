@@ -820,6 +820,8 @@
     </Bscmake>
   </ItemDefinitionGroup>
   <PropertyGroup>
+    <!-- GameNetworkingSockets built with external/patches/gns-turn-lifetime.patch installs beside the stock prefix. -->
+    <GNS_ROOT Condition="'$(GNS_ROOT)' != '' And Exists('$(GNS_ROOT)-turnfix\include\GameNetworkingSockets\steam\steamnetworkingtypes.h')">$(GNS_ROOT)-turnfix</GNS_ROOT>
     <GnsEnabled Condition="'$(GNS_ROOT)' != '' And '$(GNS_DEP_ROOT)' != ''">true</GnsEnabled>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(GnsEnabled)'=='true'">

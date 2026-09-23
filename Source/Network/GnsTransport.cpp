@@ -17,6 +17,10 @@
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingcustomsignaling.h>
 #include <steam/steamnetworkingsockets.h>
+// A relayed route dies once its TURN permission lapses unless the library refreshes it.
+#ifndef STEAMNETWORKINGSOCKETS_TURN_LIFETIME
+#error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
+#endif
 #endif
 
 namespace RTE {
