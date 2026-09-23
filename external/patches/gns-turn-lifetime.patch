@@ -16,12 +16,13 @@ The native ICE client keeps a relayed connection alive for its whole life:
   error answer to Refresh counted as success and ended the refreshes.
 - P2P_TURN_ServerList/UserList/PassList set on a live connection reach its
   ICE session: every allocation from then on uses the new login, a relay that
-  failed is tried again, and a live allocation keeps the username that
-  created it (another one is refused with 441, RFC 5766 section 4).
+  failed is tried again, and a live allocation tries the new login on a
+  Refresh at once. A server that holds the allocation to the username that
+  created it (RFC 5766 section 4, 441) keeps it on that login.
 - steamnetworkingtypes.h defines STEAMNETWORKINGSOCKETS_TURN_LIFETIME.
 
 diff --git a/include/steam/steamnetworkingtypes.h b/include/steam/steamnetworkingtypes.h
-index be18560..72d79dc 100644
+index be18560..ebd4868 100644
 --- a/include/steam/steamnetworkingtypes.h
 +++ b/include/steam/steamnetworkingtypes.h
 @@ -22,6 +22,9 @@
@@ -34,14 +35,15 @@ index be18560..72d79dc 100644
  // End SteamNetworkingSockets config.
  //-----------------------------------------------------------------------------
  
-@@ -1625,6 +1628,10 @@ enum ESteamNetworkingConfigValue
+@@ -1625,6 +1628,11 @@ enum ESteamNetworkingConfigValue
  	/// route ping time and is then adjusted.)
  	k_ESteamNetworkingConfig_P2P_Transport_ICE_Penalty = 105,
  	k_ESteamNetworkingConfig_P2P_Transport_SDR_Penalty = 106,
 +
 +	/// [connection string] Comma-separated TURN servers, and their usernames and
 +	/// passwords in the same order.  Set on a live connection, the lists apply to its
-+	/// next allocation; an allocation keeps the login that created it.
++	/// next allocation, and a live allocation tries the new login on a Refresh; a
++	/// server that refuses another username keeps the allocation on its first login.
  	k_ESteamNetworkingConfig_P2P_TURN_ServerList = 107,
  	k_ESteamNetworkingConfig_P2P_TURN_UserList = 108,
  	k_ESteamNetworkingConfig_P2P_TURN_PassList = 109,
@@ -84,7 +86,7 @@ index 5ce6b59..70f48e3 100644
  	/// We *mostly* work on top of the sockets system, but in a few places we
  	/// need to break the abstraction and do things other clients of the API
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
-index de4b490..5252cbb 100644
+index de4b490..0c5c900 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.cpp
 @@ -343,6 +343,40 @@ static const STUNAttribute* FindAttributeOfType( const STUNAttribute *pAttrs, ui
@@ -128,25 +130,48 @@ index de4b490..5252cbb 100644
  
  static uint32* ReserveFingerprintAttribute( uint32 *pBuffer )
  {
-@@ -1035,15 +1069,8 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+@@ -1024,7 +1058,7 @@ void ICESessionInterface::QueueBindRequest( const netadr_t &addrSTUNServer, Recv
+     m_pPendingSTUNRequest->Queue( k_nSTUN_BindingRequest, nEncoding, addrSTUNServer, cb );
+ }
+ 
+-bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs, int nExtraAttrs )
++bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs, int nExtraAttrs, bool bRenewedLogin )
+ {
+     Assert( !m_pPendingSTUNRequest );
+     m_pPendingSTUNRequest = new CSteamNetworkingSocketsSTUNRequest( this );
+@@ -1035,15 +1069,15 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
          return true;
      }
  
 -    const int nSrvIdx = index_of( m_session.m_vecTURNServers, addrTURNServer );
 -    if ( nSrvIdx < 0 )
--    {
++    const std::string &strUsername = bRenewedLogin ? m_strTURNRenewedUsername : m_strTURNUsername;
++    uint8 arrKey[16];
++    V_memcpy( arrKey, m_arrTURNKey, sizeof( arrKey ) );
++    if ( bRenewedLogin )
+     {
 -        AssertMsg( false, "TURN server address not in m_vecTURNServers" );
 -        delete m_pPendingSTUNRequest;
 -        m_pPendingSTUNRequest = nullptr;
 -        return false;
--    }
++        std::string strKeyInput = m_strTURNRenewedUsername + ":" + m_strTURNRealm + ":" + m_strTURNRenewedPassword;
++        CCrypto::GenerateMD5Digest( strKeyInput.c_str(), strKeyInput.size(), &arrKey );
++        m_pPendingSTUNRequest->m_bRenewedLogin = true;
+     }
 -    const std::string &strUsername = m_session.m_vecTURNCredentials[ nSrvIdx ].m_strUsername;
-+    // Always the login the allocation was made with; another username is refused with 441.
-+    const std::string &strUsername = m_strTURNUsername;
  
      // Build combined attr list: caller's request-specific attrs first, then auth attrs.
      if ( nExtraAttrs > 4 )
-@@ -1081,6 +1108,43 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+@@ -1073,7 +1107,7 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
+     allAttrs[ nAllAttrs ].m_pData   = reinterpret_cast<const uint32*>( m_strTURNNonce.c_str() );
+     ++nAllAttrs;
+ 
+-    m_pPendingSTUNRequest->m_strPassword.assign( (const char*)m_arrTURNKey, sizeof( m_arrTURNKey ) );
++    m_pPendingSTUNRequest->m_strPassword.assign( (const char*)arrKey, sizeof( arrKey ) );
+     // RFC 5766 mandates HMAC-SHA1 (not SHA256) for long-term credentials
+     m_pPendingSTUNRequest->Queue( nMsgType,
+         nEncoding | kSTUNPacketEncodingFlags_NoMappedAddress | kSTUNPacketEncodingFlags_MessageIntegrity,
+@@ -1081,6 +1115,45 @@ bool ICESessionInterface::QueueTURNRequest( uint32 nMsgType, int nEncoding, cons
      return true;
  }
  
@@ -184,13 +209,29 @@ index de4b490..5252cbb 100644
 +    V_memset( m_arrTURNKey, 0, sizeof( m_arrTURNKey ) );
 +    m_strTURNUsername.clear();
 +    m_strTURNPassword.clear();
++    m_strTURNRenewedUsername.clear();
++    m_strTURNRenewedPassword.clear();
 +    m_bTURNNonceResent = false;
 +}
 +
  void ICESessionInterface::QueueAllocateRequest( const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, int nEncoding )
  {
      // REQUESTED-TRANSPORT: UDP (IANA protocol 17), protocol byte + 3 RFFU bytes
-@@ -1216,15 +1280,27 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
+@@ -1093,11 +1166,11 @@ void ICESessionInterface::QueueAllocateRequest( const netadr_t &addrTURNServer,
+     QueueTURNRequest( k_nTURN_AllocateRequest, nEncoding, addrTURNServer, cb, &reqTransport, 1 );
+ }
+ 
+-void ICESessionInterface::QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int nEncoding )
++void ICESessionInterface::QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int nEncoding, bool bRenewedLogin )
+ {
+     Assert( m_addrTURNServer.IsValid() );
+ 
+-    QueueTURNRequest( k_nTURN_RefreshRequest, nEncoding, m_addrTURNServer, cb, nullptr, 0 );
++    QueueTURNRequest( k_nTURN_RefreshRequest, nEncoding, m_addrTURNServer, cb, nullptr, 0, bRenewedLogin && !m_strTURNRenewedUsername.empty() );
+ }
+ 
+ // Send a gathered packet to the pair, routing via TURN Send Indication if the
+@@ -1216,15 +1289,27 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
  		}
  	}
  
@@ -224,7 +265,7 @@ index de4b490..5252cbb 100644
  		if ( V_strnicmp( pszHostname, "turn:", 5 ) == 0 )
  			pszHostname = pszHostname + 5;
  		CUtlVector< SteamNetworkingIPAddr > turnServers;
-@@ -1243,6 +1319,7 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
+@@ -1243,6 +1328,7 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
  		}
  	}
  
@@ -232,7 +273,7 @@ index de4b490..5252cbb 100644
  	for ( const netadr_t &srv : m_vecTURNServers )
  	{
  		if ( ClassifyIP( srv ) & k_nIPClassify_LAN )
-@@ -1251,12 +1328,44 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
+@@ -1251,12 +1337,61 @@ CSteamNetworkingICESession::CSteamNetworkingICESession( const ICESessionConfig&
  			break;
  		}
  	}
@@ -266,22 +307,39 @@ index de4b490..5252cbb 100644
 +	++m_nTURNLoginRevision;
 +	SpewMsg( "ICE: TURN login updated (%d server address(es)); the next allocation uses it\n", len( m_vecTURNServers ) );
 +
-+	// A relay the server refused or never answered tries again with the new login.
++	const SteamNetworkingMicroseconds usecNow = SteamNetworkingSockets_GetLocalTimestamp();
 +	for ( const std::unique_ptr<ICESessionInterface> &pIntf : m_vecInterfaces )
 +	{
++		// A relay the server refused or never answered tries again with the new login.
 +		if ( pIntf->m_bRelayFailed && !pIntf->m_addrRelayed.IsValid() )
 +		{
 +			pIntf->m_addrTURNServer.Clear();
 +			pIntf->m_bRelayFailed = false;
 +			pIntf->ClearTURNAuth();
++			continue;
 +		}
++
++		// A live allocation tries the new login on a Refresh right away.
++		const int nSrvIdx = pIntf->m_addrRelayed.IsValid() ? index_of( m_vecTURNServers, pIntf->m_addrTURNServer ) : -1;
++		if ( nSrvIdx < 0 || m_vecTURNCredentials[ nSrvIdx ].m_strUsername.empty() || pIntf->m_strTURNRealm.empty() )
++			continue;
++		const TURNCredentials &cred = m_vecTURNCredentials[ nSrvIdx ];
++		if ( cred.m_strUsername == pIntf->m_strTURNUsername && cred.m_strPassword == pIntf->m_strTURNPassword )
++		{
++			pIntf->m_strTURNRenewedUsername.clear();
++			pIntf->m_strTURNRenewedPassword.clear();
++			continue;
++		}
++		pIntf->m_strTURNRenewedUsername = cred.m_strUsername;
++		pIntf->m_strTURNRenewedPassword = cred.m_strPassword;
++		pIntf->m_usecRefreshAfter = usecNow;
 +	}
 +	SetNextThinkTimeASAP();
 +}
  
  CSteamNetworkingICESession::~CSteamNetworkingICESession()
  {
-@@ -1986,63 +2095,75 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
+@@ -1986,63 +2121,75 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
                  pIntf->m_addrTURNServer = info.m_pRequest->m_remoteAddr;
                  pIntf->m_addrRelayed = addrRelayed;
                  pIntf->m_bRelayFailed = false;
@@ -400,7 +458,7 @@ index de4b490..5252cbb 100644
          // Response received but no usable relay address -- error response.
          pIntf->m_addrTURNServer = info.m_pRequest->m_remoteAddr;
          pIntf->m_bRelayFailed = true;
-@@ -2060,7 +2181,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
+@@ -2060,7 +2207,8 @@ void CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay( const RecvST
          return;
      }
  
@@ -410,45 +468,65 @@ index de4b490..5252cbb 100644
      pIntf->QueueAllocateRequest( m_vecTURNServers[nNextTURNServerIdx], &CSteamNetworkingICESession::STUNRequestCallback_AllocateRelay, m_nEncoding );
  }
  
-@@ -2069,24 +2191,51 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+@@ -2069,24 +2217,78 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
      ICESessionInterface * const pIntf = info.m_pRequest->m_pInterface;
      pIntf->m_pPendingSTUNRequest = nullptr;
  
 -    if ( info.m_pHeader != nullptr )
++    const bool bRenewedLogin = info.m_pRequest->m_bRenewedLogin;
 +    if ( info.m_pHeader != nullptr && !IsSTUNErrorResponse( info.m_pHeader ) )
      {
 -        // Refresh succeeded -- parse the returned LIFETIME and schedule the next one.
 -        const STUNAttribute *pLifetimeAttr = FindAttributeOfType( info.m_pAttributes, info.m_nAttributes, k_nTURN_Attr_Lifetime );
 -        if ( pLifetimeAttr != nullptr && pLifetimeAttr->m_nLength == 4 )
--        {
++        // The server took the renewed login for this allocation; it signs everything from now on.
++        if ( bRenewedLogin )
+         {
 -            SteamNetworkingMicroseconds usecLifetime = (SteamNetworkingMicroseconds)ntohl( pLifetimeAttr->m_pData[0] ) * k_nMillion;
 -            pIntf->m_usecRefreshAfter = info.m_usecNow + usecLifetime / 2;
--        }
-+        // Refresh succeeded -- the next one at half the granted lifetime.
++            pIntf->m_strTURNUsername.swap( pIntf->m_strTURNRenewedUsername );
++            pIntf->m_strTURNPassword.swap( pIntf->m_strTURNRenewedPassword );
++            pIntf->m_strTURNRenewedUsername.clear();
++            pIntf->m_strTURNRenewedPassword.clear();
++            pIntf->m_nTURNLoginRevision = m_nTURNLoginRevision;
++            pIntf->ComputeTURNKey();
++            SpewMsg( "ICE: TURN relay %s refreshed with the renewed login of user '%s'\n",
++                CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), pIntf->m_strTURNUsername.c_str() );
+         }
++
++        // Refresh succeeded -- the next one at half the granted lifetime, or at once for a login renewed meanwhile.
 +        const SteamNetworkingMicroseconds usecLifetime = TURNLifetime( info );
-+        pIntf->m_usecRefreshAfter = info.m_usecNow + usecLifetime / 2;
++        pIntf->m_usecRefreshAfter = pIntf->m_strTURNRenewedUsername.empty() ? info.m_usecNow + usecLifetime / 2 : info.m_usecNow;
 +        pIntf->m_usecAllocationExpires = info.m_usecNow + usecLifetime;
 +        pIntf->m_bTURNNonceResent = false;
 +        SpewVerboseGroup( GlobalConfig::LogLevel_P2PRendezvous.Get(), "ICE: TURN relay %s refreshed for %d s.\n",
 +            CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), (int)( usecLifetime / k_nMillion ) );
-         return;
-     }
- 
--    // Refresh timed out -- the allocation is gone.  Tear down relay state so
--    // Think_DiscoverRelayCandidate will re-allocate, and remove all candidate
--    // pairs that depended on this relay.
--    SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
--        CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
++        return;
++    }
++
 +    // A stale nonce: send once more with the nonce the server just gave us.
 +    const int nErrorCode = info.m_pHeader != nullptr ? STUNErrorCode( info ) : 0;
 +    if ( ( nErrorCode == 438 || nErrorCode == 401 ) && !pIntf->m_bTURNNonceResent && pIntf->AdoptTURNChallenge( info ) )
 +    {
 +        pIntf->m_bTURNNonceResent = true;
-+        pIntf->QueueRefreshRequest( &CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation, m_nEncoding );
++        pIntf->QueueRefreshRequest( &CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation, m_nEncoding, bRenewedLogin );
 +        return;
 +    }
 +    pIntf->m_bTURNNonceResent = false;
- 
++
++    // The server holds the allocation to the login that created it (441 by RFC 5766 section 4):
++    // refresh with that one at once, and keep the renewed login for the next Allocate.
++    if ( bRenewedLogin && nErrorCode != 437 && info.m_pHeader != nullptr )
++    {
++        SpewMsg( "ICE: TURN server %s refused the renewed login of user '%s' for relay %s with error %d; the relay keeps user '%s' and the next allocation uses the renewed login\n",
++            CUtlNetAdrRender( pIntf->m_addrTURNServer ).String(), pIntf->m_strTURNRenewedUsername.c_str(), CUtlNetAdrRender( pIntf->m_addrRelayed ).String(),
++            nErrorCode, pIntf->m_strTURNUsername.c_str() );
++        pIntf->m_strTURNRenewedUsername.clear();
++        pIntf->m_strTURNRenewedPassword.clear();
++        pIntf->m_usecRefreshAfter = info.m_usecNow;
++        return;
++    }
++
 +    // 437: the server holds no allocation for us.  Otherwise it lives until its lifetime
 +    // runs out, so keep refreshing until then.
 +    if ( nErrorCode == 437 || info.m_usecNow >= pIntf->m_usecAllocationExpires )
@@ -460,22 +538,27 @@ index de4b490..5252cbb 100644
 +            SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
 +                CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
 +        DropRelayAllocation( pIntf );
-+        return;
-+    }
-+
+         return;
+     }
+ 
+-    // Refresh timed out -- the allocation is gone.  Tear down relay state so
+-    // Think_DiscoverRelayCandidate will re-allocate, and remove all candidate
+-    // pairs that depended on this relay.
+-    SpewMsg( "ICE: TURN Refresh timed out for %s -- tearing down relay allocation\n",
+-        CUtlNetAdrRender( pIntf->m_addrTURNServer ).String() );
 +    SpewWarning( "ICE: TURN Refresh of relay %s %s; retrying before it lapses in %d s\n",
 +        CUtlNetAdrRender( pIntf->m_addrRelayed ).String(), info.m_pHeader != nullptr ? "refused" : "timed out",
 +        (int)( ( pIntf->m_usecAllocationExpires - info.m_usecNow ) / k_nMillion ) );
 +    pIntf->m_usecRefreshAfter = info.m_usecNow + k_usecTURNRetryBackoff;
 +}
-+
+ 
 +void CSteamNetworkingICESession::DropRelayAllocation( ICESessionInterface *pIntf )
 +{
 +    // Remove all candidate pairs that depended on this relay.
      for ( int j = len( m_vecCandidatePairs ) - 1; j >= 0; --j )
      {
          ICECandidatePair *pPair = m_vecCandidatePairs[j];
-@@ -2100,8 +2249,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
+@@ -2100,8 +2302,12 @@ void CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation( const Re
      pIntf->m_addrRelayed.Clear();
      pIntf->m_addrTURNServer.Clear();   // clears "discovery done" signal; re-allocation starts next tick
      pIntf->m_usecRefreshAfter  = 0;
@@ -489,7 +572,16 @@ index de4b490..5252cbb 100644
  }
  
  void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseconds usecNow )
-@@ -2126,7 +2279,10 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2118,7 +2324,7 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+         if ( pIntf->m_usecRefreshAfter != 0 && usecNow >= pIntf->m_usecRefreshAfter )
+         {
+             pIntf->m_usecRefreshAfter = 0; // cleared; callback resets on success or failure
+-            pIntf->QueueRefreshRequest( &CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation, m_nEncoding );
++            pIntf->QueueRefreshRequest( &CSteamNetworkingICESession::STUNRequestCallback_RefreshAllocation, m_nEncoding, true );
+             continue;
+         }
+ 
+@@ -2126,7 +2332,10 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
          const std_vector<CIPAddress> &vecPermitted = bIsIPv4 ? m_vecTURNPermittedIPv4 : m_vecTURNPermittedIPv6;
          int nSessionRevision = bIsIPv4 ? m_nTURNPermissionRevisionIPv4 : m_nTURNPermissionRevisionIPv6;
  
@@ -501,7 +593,7 @@ index de4b490..5252cbb 100644
              continue;
  
          // Build one XOR-PEER-ADDRESS attribute per permitted IP.
-@@ -2175,15 +2331,8 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
+@@ -2175,15 +2384,8 @@ void CSteamNetworkingICESession::Think_TURNMaintenance( SteamNetworkingMicroseco
          // Attach long-term credentials if the TURN server required auth.
          if ( !pIntf->m_strTURNRealm.empty() )
          {
@@ -519,7 +611,7 @@ index de4b490..5252cbb 100644
              // Append auth attrs after the peer-address attrs, reusing extra stack space.
              // k_nMaxPeers is 10, and we have 10 slots; bump is safe because we stop at k_nMaxPeers earlier.
              STUNAttribute authAttrs[3];
-@@ -2225,15 +2374,42 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
+@@ -2225,15 +2427,42 @@ void CSteamNetworkingICESession::STUNRequestCallback_CreatePermission( const Rec
  
      if ( info.m_pHeader == nullptr )
      {
@@ -563,7 +655,7 @@ index de4b490..5252cbb 100644
  }
  
  void CSteamNetworkingICESession::STUNRequestCallback_ServerReflexiveCandidate( const RecvSTUNPktInfo_t &info )
-@@ -2802,6 +2978,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
+@@ -2802,6 +3031,19 @@ void CConnectionTransportP2PICE_Valve::RecvRendezvous( const CMsgICERendezvous &
      }
  }
  
@@ -584,18 +676,22 @@ index de4b490..5252cbb 100644
  {
  	iovec temp;
 diff --git a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
-index 26e9572..eb12459 100644
+index 26e9572..1a5cbb5 100644
 --- a/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
 +++ b/src/steamnetworkingsockets/clientlib/steamnetworkingsockets_ice_client.h
-@@ -108,15 +108,46 @@ namespace SteamNetworkingSocketsLib {
+@@ -108,15 +108,50 @@ namespace SteamNetworkingSocketsLib {
          std::string m_strTURNNonce;
          uint8 m_arrTURNKey[16] = {};
  
-+        // The login the allocation authenticates with.  Every request on an allocation must
-+        // carry the username that created it (RFC 5766 section 4), so a renewed login is
-+        // used from the next Allocate on.
++        // The login the allocation authenticates with.
 +        std::string m_strTURNUsername;
 +        std::string m_strTURNPassword;
++
++        // A renewed login, tried on the live allocation's next Refresh.  A server that holds an
++        // allocation to the username that created it (RFC 5766 section 4) refuses it with 441,
++        // and the allocation keeps its own; the renewed login then waits for the next Allocate.
++        std::string m_strTURNRenewedUsername;
++        std::string m_strTURNRenewedPassword;
 +
 +        // The session's m_nTURNLoginRevision when this login was taken.
 +        int m_nTURNLoginRevision = 0;
@@ -634,7 +730,35 @@ index 26e9572..eb12459 100644
          /// Send a packet through this interface to the destination remote address.
          /// If relay address is non-zero, send via Send Indication to the TURN server
          bool SendPacketGather( int nChunks, const iovec *pChunks, int cbPayload, const netadr_t &addrPeer, const netadr_t &addrRelay );
-@@ -296,6 +327,10 @@ namespace SteamNetworkingSocketsLib {
+@@ -132,14 +167,14 @@ namespace SteamNetworkingSocketsLib {
+         // Send a TURN Allocate request
+         void QueueAllocateRequest( const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, int nEncoding );
+ 
+-        // Send a TURN Refresh request to keep the allocation alive
+-        void QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int nEncoding );
++        // Send a TURN Refresh request to keep the allocation alive; bRenewedLogin signs it with the renewed login.
++        void QueueRefreshRequest( RecvSTUNPacketCallback_t cb, int nEncoding, bool bRenewedLogin = false );
+ 
+         // Create and queue any TURN request, attaching long-term auth credentials when
+         // we have them.  pExtraAttrs/nExtraAttrs are request-specific attrs (e.g.
+         // REQUESTED-TRANSPORT for Allocate); auth attrs are appended after them.
+         // Returns false and cleans up m_pPendingSTUNRequest if credential lookup fails.
+-        bool QueueTURNRequest( uint32 nMsgType, int nEncoding, const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs, int nExtraAttrs );
++        bool QueueTURNRequest( uint32 nMsgType, int nEncoding, const netadr_t &addrTURNServer, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs, int nExtraAttrs, bool bRenewedLogin = false );
+ 
+         ICESessionInterface( CSteamNetworkingICESession &session, uint32 nPriority, int nPrefixLen )
+             : m_session( session ), m_nPriority( nPriority ), m_nPrefixLen( nPrefixLen ), m_pSocket( nullptr ) {}
+@@ -246,6 +281,9 @@ namespace SteamNetworkingSocketsLib {
+         // Not used for other request types
+         int m_nTURNPermissionRevision;
+ 
++        // A TURN Refresh signed with the interface's renewed login.
++        bool m_bRenewedLogin = false;
++
+         // Serialize the packet and start the retry loop.
+         void Queue( uint32 nMessageType, int nEncoding, netadr_t remoteAddr, RecvSTUNPacketCallback_t cb, STUNAttribute *pExtraAttrs = nullptr, int nExtraAttrs = 0 );
+ 
+@@ -296,6 +334,10 @@ namespace SteamNetworkingSocketsLib {
          void SetRemoteUsername( const char *pszUsername );
  		void SetRemotePassword( const char *pszPassword );
  
@@ -645,7 +769,7 @@ index 26e9572..eb12459 100644
          const char* GetLocalPassword() { return m_strLocalPassword.c_str(); }
          bool BCanSendEndToEnd() const { return m_pSelectedCandidatePair != nullptr; }
  		int GetPing() const;
-@@ -428,6 +463,12 @@ namespace SteamNetworkingSocketsLib {
+@@ -428,6 +470,12 @@ namespace SteamNetworkingSocketsLib {
          // really happen in production environments, it's only in weird test situations
          bool m_bAnyTURNServerLANAddress = false;
  
@@ -658,7 +782,7 @@ index 26e9572..eb12459 100644
          // De-duplicated lists of peer IP addresses (port zeroed) that we should
          // ask each relay to permit forwarding from.  LAN/loopback/link-local
          // addresses are excluded.  Updated whenever AddPeerCandidate() adds a
-@@ -471,6 +512,10 @@ namespace SteamNetworkingSocketsLib {
+@@ -471,6 +519,10 @@ namespace SteamNetworkingSocketsLib {
  
          void SetSelectedCandidatePair( ICECandidatePair *pPair );
  
@@ -669,7 +793,7 @@ index 26e9572..eb12459 100644
          // Delete a candidate pair and perform all associated cleanup:
          // clears the selected-pair state if this was the active path, cancels
          // any in-flight peer connectivity check, and removes the pair from the
-@@ -512,6 +557,7 @@ namespace SteamNetworkingSocketsLib {
+@@ -512,6 +564,7 @@ namespace SteamNetworkingSocketsLib {
  
      	virtual bool BCanSendEndToEndData() const override;
  		virtual void RecvRendezvous( const CMsgICERendezvous &msg, SteamNetworkingMicroseconds usecNow ) override;
