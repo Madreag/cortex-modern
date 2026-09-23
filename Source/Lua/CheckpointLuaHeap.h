@@ -15,6 +15,7 @@ extern "C" {
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <future>
 #include <limits>

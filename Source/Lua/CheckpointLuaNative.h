@@ -3,6 +3,7 @@
 #include "CheckpointLuaView.h"
 
 #include <array>
+#include <exception>
 #include <map>
 #include <optional>
 #include <string_view>

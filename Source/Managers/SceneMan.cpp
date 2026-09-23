@@ -26,6 +26,7 @@
 #include "tracy/Tracy.hpp"
 
 #include <algorithm>
+#include <exception>
 #include <future>
 #include <cstdio>
 #include <cstdlib>
