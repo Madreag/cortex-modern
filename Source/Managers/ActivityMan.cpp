@@ -660,17 +660,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	{
 		// Elapsed timer fields change even when their object's write stamp holds.
 		CheckpointWriter::CacheScope sceneValues(sceneCache.get());
-		if (std::getenv("CCCP_CHECKPOINT_SPLIT")) {
-			std::list<SceneObject*> objects;
-			g_MovableMan.GetAllActors(false, objects);
-			g_MovableMan.GetAllItems(false, objects);
-			g_MovableMan.GetAllParticles(false, objects);
-			for (const SceneObject* object: objects) {
-				Writer::Capture([object](Writer& writer) { Scene::SaveSceneObject(writer, object, false, true); }, 1);
-			}
-			image->movableUs = since(sceneStart);
-		}
 		image->scene = scene->CaptureSavedScene(fileName);
+		image->movableUs = Scene::LastObjectCaptureUs();
 	}
 	image->sceneUs = since(sceneStart);
 	// The counters are read against their values at the freeze, before anything puts them back.

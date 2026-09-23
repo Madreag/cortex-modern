@@ -13,6 +13,8 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <list>
 #include <map>
 #include <vector>
 
@@ -44,6 +46,10 @@ namespace RTE {
 
 		/// Saves an object's live state, including its owned parts.
 		static void SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave, bool isChildAttachable, bool saveFullData);
+		/// How long this thread's last side-by-side object capture took, in microseconds.
+		static int64_t LastObjectCaptureUs();
+		/// Captures the placeable objects side by side, each as the scene's object loop would write it, in their order.
+		static std::vector<CheckpointText> CaptureSceneObjects(const Writer& writer, const std::list<SceneObject*>& objects, const std::function<bool(const SceneObject*)>& placeable, bool saveFullData);
 
 		// Available placed objects sets
 		enum PlacedObjectSets {
