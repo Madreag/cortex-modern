@@ -17526,6 +17526,63 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A capture that completes while this peer still waits for the previous park's final belongs to the NEXT
+	/// park: a report spent on the old window leaves the new park without this seat's report.
+	bool TestACaptureReportsToItsOwnPark(std::string* error) {
+		LoopbackTransport hostWire, clientWire;
+		NetLockstepCoordinator host, client;
+		auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A7C, 0, NetTransportLane::ControlReliable);
+		auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A7C, 0, NetTransportLane::ControlReliable);
+		hostConfig.roundId = clientConfig.roundId = 0x9A7C;
+		hostConfig.relayToOtherPeers = true; hostConfig.timeoutMs = clientConfig.timeoutMs = 20000;
+		hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+		if (!StartCoordinatorPair(49491, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+		if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
+		uint64_t queued = 0, now = 0;
+		auto feed = [&](uint64_t through) {
+			for (; queued <= through; ++queued)
+				if (!host.QueueLocalInput(queued, {}, {}, error) || !client.QueueLocalInput(queued, {}, {}, error)) return false;
+			return true;
+		};
+		auto pump = [&](uint64_t spanMs, bool clientListens) {
+			for (const uint64_t until = now + spanMs; now < until; now += 2) {
+				if (!feed(std::max(host.GetStats().nextFrame, client.GetStats().nextFrame) + 8)) return false;
+				hostWire.AdvanceTimeMs(2); host.Tick(now);
+				if (clientListens) { clientWire.AdvanceTimeMs(2); client.Tick(now); }
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) (void)host.FinishSimulationTick(ready.frame);
+				while (clientListens && client.PopReadyFrame(ready)) (void)client.FinishSimulationTick(ready.frame);
+			}
+			return true;
+		};
+		if (!feed(20) || !pump(200, true)) return false;
+		if (host.GetStats().nextFrame < 4 || client.GetStats().nextFrame < 4) { *error = "the report row never committed its pre-park frames"; return false; }
+		// Park one: both peers capture the same tick and the client reports it once the window is in.
+		const uint64_t first = std::min(host.GetStats().nextFrame, client.GetStats().nextFrame) - 1;
+		host.BeginSynchronizedCapture(first); client.BeginSynchronizedCapture(first);
+		host.CompleteSynchronizedCapture(first, 100.0);
+		if (!pump(20, true)) return false;
+		client.CompleteSynchronizedCapture(first, 90.0);
+		// The host closes park one, but its final has not reached the client when the client's next capture ends.
+		if (!pump(4, false)) return false;
+		const uint64_t second = first + 60;
+		client.BeginSynchronizedCapture(second);
+		client.CompleteSynchronizedCapture(second, 95.0);
+		if (!pump(20, true)) return false;
+		host.BeginSynchronizedCapture(second);
+		host.CompleteSynchronizedCapture(second, 100.0);
+		if (!pump(60, true)) return false;
+		if (host.m_SynchronizedCaptureStartFrame <= second || !host.m_CaptureParkReportsMs.contains(2)) {
+			*error = "a capture's report was spent on the previous park: park_two=" + std::to_string(host.m_SynchronizedCaptureStartFrame) +
+			         " second=" + std::to_string(second) + " reports=" + std::to_string(host.m_CaptureParkReportsMs.size()) +
+			         " finalized=" + std::to_string(host.m_CaptureParkFinalized);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_capture_reports_to_its_own_park park_two=" << host.m_SynchronizedCaptureStartFrame
+		          << " report_ms=" << host.m_CaptureParkReportsMs.at(2) << std::endl;
+		return true;
+	}
+
 	bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error) {
 		LoopbackTransport hostWire, peerWire;
 		if (!hostWire.StartHost(49476, error) || !peerWire.Connect("loopback", 49476, error)) return false;
@@ -17778,6 +17835,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALateStartsReclaimIsRetriedUntilAdmitted(&error) ||
 		    !TestDelayPaddingPassesAParkedFrame(&error) ||
 		    !TestAnEndedRoundHandsAReturnToTheSession(&error) ||
+		    !TestACaptureReportsToItsOwnPark(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||
