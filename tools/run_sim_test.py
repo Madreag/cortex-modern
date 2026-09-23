@@ -86,7 +86,7 @@ def make_run(repo, args, out, timeout=120, env=None, expected=None, *, runtime=N
             "retained_runtime": str(runtime), "copied": False}, indent=2), encoding="utf-8")
         return IsolatedRun(argv, runtime, out, timeout, env=private_env, evidence_expected=expected)
     if sys.platform != "win32":
-        return posix_make_run(repo, args, out, timeout, env, expected)
+        return posix_make_run(repo, args, out, timeout, env, expected, fixtures=fixtures)
     out = Path(out).resolve()
     out.mkdir(parents=True, exist_ok=False)
     runtime = prepare_runtime(repo, out, fixtures=fixtures)

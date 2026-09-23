@@ -15,10 +15,34 @@
 #define AbortAction std::abort()
 #endif
 
+#include <cstdint>
 #include <source_location>
 #include <string>
 
 namespace RTE {
+
+#if defined(__APPLE__) && defined(__GNUC__) && !defined(__clang__)
+	/// A call site's location held by value: gcc for Darwin files std::source_location's records under assembler-local labels, which the linker drops with a coalesced weak object ahead of them.
+	class SourceLocation {
+	public:
+		constexpr SourceLocation() = default;
+		constexpr SourceLocation(const char* fileName, const char* functionName, std::uint_least32_t line) noexcept :
+		    m_FileName(fileName), m_FunctionName(functionName), m_Line(line) {}
+
+		constexpr const char* file_name() const noexcept { return m_FileName; }
+		constexpr const char* function_name() const noexcept { return m_FunctionName; }
+		constexpr std::uint_least32_t line() const noexcept { return m_Line; }
+
+	private:
+		const char* m_FileName = "";
+		const char* m_FunctionName = "";
+		std::uint_least32_t m_Line = 0;
+	};
+#define RTECurrentSourceLocation RTE::SourceLocation(__builtin_FILE(), __PRETTY_FUNCTION__, __builtin_LINE())
+#else
+	using SourceLocation = std::source_location;
+#define RTECurrentSourceLocation std::source_location::current()
+#endif
 
 	/// Class for runtime error handling.
 	class RTEError {
@@ -30,7 +54,7 @@ namespace RTE {
 		static int s_ShowMessageBoxCallCount; //!< ShowMessageBox calls this run, including the headless log path.
 		static int s_AssertMessageBoxCallCount; //!< ShowAssertMessageBox calls that reached the app main thread this run, including the forced test path.
 		static std::string s_LastIgnoredAssertDescription; //!< The last ignored assert message.
-		static std::source_location s_LastIgnoredAssertLocation; //!< The last ignored assert call site.
+		static SourceLocation s_LastIgnoredAssertLocation; //!< The last ignored assert call site.
 
 		/// Sets custom handlers for C++ and platform specific exceptions.
 		static void SetExceptionHandlers();
@@ -46,13 +70,13 @@ namespace RTE {
 
 		/// Abort on Error function. Will try save the current game, to dump a screenshot, dump the console log and show an abort message. Then quit the program immediately.
 		/// @param description Message explaining the reason for aborting.
-		/// @param srcLocation std::source_location corresponding to the location of the call site.
-		[[noreturn]] static void AbortFunc(const std::string& description, const std::source_location& srcLocation);
+		/// @param srcLocation SourceLocation corresponding to the location of the call site.
+		[[noreturn]] static void AbortFunc(const std::string& description, const SourceLocation& srcLocation);
 
 		/// An assert, which will prompt to abort or ignore it.
 		/// @param description The description of the assertion.
-		/// @param srcLocation std::source_location corresponding to the location of the call site.
-		static void AssertFunc(const std::string& description, const std::source_location& srcLocation);
+		/// @param srcLocation SourceLocation corresponding to the location of the call site.
+		static void AssertFunc(const std::string& description, const SourceLocation& srcLocation);
 
 		/// Whether any assert fired this run: an ignored dialog is still a failed run.
 		static bool AssertFired() { return s_AssertFired; }
@@ -113,11 +137,11 @@ namespace RTE {
 
 #define RTEAbort(description) \
 	if (!RTEError::s_CurrentlyAborting) { \
-		RTEError::AbortFunc(description, std::source_location::current()); \
+		RTEError::AbortFunc(description, RTECurrentSourceLocation); \
 	}
 
 #define RTEAssert(expression, description) \
 	if (!(expression)) { \
-		RTEError::AssertFunc(description, std::source_location::current()); \
+		RTEError::AssertFunc(description, RTECurrentSourceLocation); \
 	}
 } // namespace RTE
