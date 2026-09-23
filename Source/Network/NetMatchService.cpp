@@ -2611,15 +2611,38 @@ static std::string ResyncSaveName() {
 		m_RestartAdmissionDue.store(true);
 	}
 
+	void NetMatchService::ResolveAwaitedAutosave(uint64_t tick, bool archived) {
+		const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
+		                                  [&](const AwaitedAutosave& entry) { return entry.tick == tick; });
+		if (awaited == m_AwaitedAutosaves.end()) return;
+		const bool joinCapture = awaited->joinCapture;
+		m_AwaitedAutosaves.erase(awaited);
+		ApplyAutosaveVerdict(tick, joinCapture, archived);
+	}
+
 	void NetMatchService::TakeAutosaveVerdicts() {
 		while (const std::optional<ActivityMan::AutosaveVerdict> verdict = g_ActivityMan.TakeAutosaveVerdict()) {
-			const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
-			                                  [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
-			if (awaited == m_AwaitedAutosaves.end()) continue;
-			const bool joinCapture = awaited->joinCapture;
-			m_AwaitedAutosaves.erase(awaited);
-			ApplyAutosaveVerdict(verdict->tick, joinCapture, verdict->archived);
+			ResolveAwaitedAutosave(verdict->tick, verdict->archived);
 		}
+	}
+
+	NetMatchService::AutosaveCapture NetMatchService::PlanAutosaveCapture(int64_t now, size_t unwrittenCaptures) {
+		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		// A join asks for one capture and waits for its verdict; only a refused one asks again.
+		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
+		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
+		if (!joinCapture && seconds == 0) return AutosaveCapture::None;
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
+		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
+			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
+		}
+		m_LastAutosaveSimTime = now;
+		if (!joinCapture && now < m_NextAutosaveSimTime) return AutosaveCapture::None;
+		if (interval > 0 && now >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		// While the writer holds an image, a due interval is skipped to the next one and a join asks again next tick.
+		if (unwrittenCaptures >= c_MaxUnwrittenAutosaves) return AutosaveCapture::Deferred;
+		return joinCapture ? AutosaveCapture::Join : AutosaveCapture::Scheduled;
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
@@ -2634,19 +2657,15 @@ static std::string ResyncSaveName() {
 				if (!m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
 			} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
 		}
-		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
-		const uint32_t seconds = m_MatchAutosaveSeconds;
-		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured();
-		if ((!joinCapture && seconds == 0) || !ScenarioRunner::IsLockstepControllerSyncActive() ||
-		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
-		const int64_t now = g_TimerMan.GetSimTimeTicks();
-		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
-		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
-			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
+		const size_t unwritten = g_ActivityMan.UnwrittenAutosaves();
+		const AutosaveCapture capture = PlanAutosaveCapture(g_TimerMan.GetSimTimeTicks(), unwritten);
+		if (capture == AutosaveCapture::Deferred) {
+			System::PrintDiagnosticLine(std::format("[autosave] deferred tick={} unwritten={}", tick, unwritten));
+			return;
 		}
-		m_LastAutosaveSimTime = now;
-		if (!joinCapture && now < m_NextAutosaveSimTime) return;
-		if (interval > 0 && now >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		if (capture == AutosaveCapture::None) return;
+		const bool joinCapture = capture == AutosaveCapture::Join;
 		if (!SaveStampedAutosave(tick)) {
 			return;
 		}

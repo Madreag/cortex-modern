@@ -5788,6 +5788,73 @@ namespace RTE {
 		return true;
 	}
 
+	// A capture the writer has not finished holds a frozen copy of every Lua heap. A world whose join is
+	// waiting and whose writer is slower than its one-second schedule keeps one such capture in flight,
+	// asks for the join's capture once, and ends with nothing awaited once the writer catches up.
+	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000004";
+		service.m_MatchAutosaveSeconds = 1;
+		std::string configureError;
+		if (!service.m_WorldJoin.Configure(MakeWorldConfig(), MakeIdentity(), &configureError)) {
+			*error = "world-inflight-unconfigured: " + configureError;
+			return false;
+		}
+		// A joiner began: the world owes it one capture.
+		service.m_WorldCapturePending = true;
+		service.m_WorldCaptureRequestedTick = 0;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		// The measured world writes one archive in about 70 ticks against its 60-tick schedule.
+		constexpr uint64_t writeTicks = 70;
+		constexpr uint64_t lastTick = 1200;
+		struct Unwritten { uint64_t tick = 0; uint64_t doneAt = 0; };
+		std::vector<Unwritten> writer;
+		size_t mostUnwritten = 0, captures = 0, joinCaptures = 0, deferred = 0;
+		const auto finishThrough = [&](uint64_t tick) {
+			while (!writer.empty() && writer.front().doneAt <= tick) {
+				service.ResolveAwaitedAutosave(writer.front().tick, true);
+				writer.erase(writer.begin());
+			}
+		};
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			finishThrough(tick);
+			const NetMatchService::AutosaveCapture capture = service.PlanAutosaveCapture(static_cast<int64_t>(tick) * tickLength, writer.size());
+			if (capture == NetMatchService::AutosaveCapture::Deferred) ++deferred;
+			if (capture != NetMatchService::AutosaveCapture::Scheduled && capture != NetMatchService::AutosaveCapture::Join) continue;
+			++captures;
+			if (capture == NetMatchService::AutosaveCapture::Join) ++joinCaptures;
+			// As AutosaveAtTickBoundary queues a capture the writer took.
+			service.m_AwaitedAutosaves.push_back(NetMatchService::AwaitedAutosave{tick, capture == NetMatchService::AutosaveCapture::Join});
+			writer.push_back(Unwritten{tick, (writer.empty() ? tick : writer.back().doneAt) + writeTicks});
+			if (writer.size() > mostUnwritten) mostUnwritten = writer.size();
+		}
+		const size_t heldAtEnd = writer.size();
+		finishThrough(~uint64_t{0});
+		std::string failures;
+		const auto fail = [&](const std::string& text) { failures += (failures.empty() ? "" : " | ") + text; };
+		if (mostUnwritten > NetMatchService::c_MaxUnwrittenAutosaves) {
+			fail("world-captures-pile-up: " + std::to_string(mostUnwritten) + " captures waited for the writer at once (bound " +
+			     std::to_string(NetMatchService::c_MaxUnwrittenAutosaves) + "), " + std::to_string(heldAtEnd) + " still unwritten after " +
+			     std::to_string(lastTick) + " ticks");
+		}
+		if (joinCaptures != 1) fail("world-join-captured-" + std::to_string(joinCaptures) + "-times: one join owes one capture");
+		if (service.m_WorldCapturePending || service.m_WorldCaptureRequestedTick == 0) {
+			fail("world-join-capture-unanswered: pending=" + std::to_string(service.m_WorldCapturePending) +
+			     " requested=" + std::to_string(service.m_WorldCaptureRequestedTick));
+		}
+		// A skipped interval is taken at the next one, so a writer slower than the schedule keeps capturing at its own pace.
+		if (captures < lastTick / 180) fail("world-schedule-starved: " + std::to_string(captures) + " captures in " + std::to_string(lastTick) + " ticks");
+		if (!service.m_AwaitedAutosaves.empty()) fail("world-captures-never-released: " + std::to_string(service.m_AwaitedAutosaves.size()) + " still awaited");
+		if (!failures.empty()) {
+			*error = failures + " (captures=" + std::to_string(captures) + " deferred=" + std::to_string(deferred) + ")";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS world_capture_in_flight most_unwritten=" << mostUnwritten << " join_captures=" << joinCaptures
+		          << " captures=" << captures << " deferred=" << deferred << " ticks=" << lastTick << std::endl;
+		return true;
+	}
+
 	// The corrective: a round that opens ON a checkpoint records a segment from its FIRST frame, not an
 	// ordinary file that names no world.
 	bool TestResumedWorldRecordsASegment(std::string* error) {
@@ -6534,6 +6601,7 @@ namespace RTE {
 			if (!TestWorldSegmentHeaderRoundTrips(&error)) return Fail(error);
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
+			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
 			if (!TestHealCapIsAWindow(&error)) return Fail(error);
