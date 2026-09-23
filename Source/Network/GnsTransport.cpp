@@ -467,16 +467,17 @@ namespace RTE {
 
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
+				// Drain delivered messages first: a close callback forgets the connection, which would
+				// drop a reject/goodbye that GNS already delivered alongside it.
+				PollIncomingMessages();
 				if (m_P2PMode >= 0) {
 					PollCallbacks();
 					const auto connections = m_PeersByConnection;
 					for (const auto& [connection, peer] : connections) {
 						if (!RouteAllowed(connection)) RefuseRoute(connection);
 					}
+					PollIncomingMessages();
 				}
-				// Drain delivered messages first: a close callback forgets the connection, which would
-				// drop a reject/goodbye that GNS already delivered alongside it.
-				PollIncomingMessages();
 				PollCallbacks();
 			}
 
@@ -520,6 +521,8 @@ namespace RTE {
 		}
 
 		void PollIncomingMessages() {
+			// A client whose connection closed has nothing left to receive; asking for it is not a broken pump.
+			if (!m_IsHost && m_ServerConnection == k_HSteamNetConnection_Invalid) return;
 			while (m_Interface && m_IsStarted) {
 				SteamNetworkingMessage_t* message = nullptr;
 				const int count = m_IsHost
