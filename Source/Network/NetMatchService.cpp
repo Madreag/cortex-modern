@@ -593,7 +593,6 @@ static std::string ResyncSaveName() {
 			m_RelayReady = false;
 			m_RelayPublishPending = false;
 			m_RelayAttempted = false;
-			m_ActiveRelayExpiresAt = 0;
 			m_RelayReplies = m_Directory.IceReplies();
 			m_NextRelayRequestMs = 0;
 			m_FreshRelayRequested = true;
@@ -6333,11 +6332,8 @@ static std::string ResyncSaveName() {
 
 	std::string NetMatchService::GetRelayError() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		if (m_RelayError.empty() && m_ActiveRelayExpiresAt != 0) {
-			const uint64_t now = UnixNowMs(nullptr) / 1000;
-			if (now >= m_ActiveRelayExpiresAt) return "The active relay login expired; rejoin to use the refreshed offer.";
-			return "Rejoin before the active relay login expires in " + std::to_string((m_ActiveRelayExpiresAt - now + 59) / 60) + " min.";
-		}
+		// The offer re-mints at half its life, so a live connection never races the expiry it carries.
+		if (m_RelayError.empty() && m_RelayOffer.Usable(UnixNowMs(nullptr) / 1000)) return "The relay login renews itself at half its life; no rejoin is needed.";
 		return m_RelayError;
 	}
 
@@ -6441,7 +6437,6 @@ static std::string ResyncSaveName() {
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
 				m_RelayAttempted = !ice.turnServerList.empty();
-				m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() && m_HostRelayMode == 1 ? relay.expiresAt : 0;
 				m_IceBoundSessionId = sessionId;
 				m_IceIdentity = identity;
 				m_IceRoute = "ice";
@@ -6551,7 +6546,6 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			SetRelayOfferLocked(relay);
 			m_RelayAttempted = !spec.p2p.turnServerList.empty();
-			m_ActiveRelayExpiresAt = m_RelayAttempted && g_SettingsMan.GetNetworkPlayerTurnServers().empty() && !g_SettingsMan.HasNetworkTurnServersOverride() ? relay.expiresAt : 0;
 		}
 		GnsDirectorySignalDispatcher* dispatcher = m_Dispatcher.get();
 		spec.makeSignaling = [dispatcher] { return dispatcher->CreateJoinSignaling(); };

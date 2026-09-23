@@ -25,7 +25,7 @@ namespace RTE {
 		switch (settings.GetNetworkHostRelayMode()) {
 			case SettingsMan::NetworkHostRelayMode::Off: return "Off: direct connections have the lowest latency. Some routers need port forwarding.";
 			case SettingsMan::NetworkHostRelayMode::Fixed: return "Offer this private relay when direct fails; it adds the relay's round trip.\nAddress: host:port or comma-separated TURN URLs. Enter a login, never a signing secret.\nEach player can choose Direct only or their own relay in Settings > Network > Connection.";
-			default: return "The directory supplies a short-lived relay login; direct first has the lowest latency.\nRelay adds its round trip. A directory without relay credentials leaves direct only.\nUDP TURN only in this build; TCP/TLS and live credential renewal are unavailable.";
+			default: return "The directory supplies a short-lived relay login; direct first has the lowest latency.\nRelay adds its round trip. A directory without relay credentials leaves direct only.\nUDP TURN only in this build; the login renews itself while the session runs.";
 		}
 	}
 

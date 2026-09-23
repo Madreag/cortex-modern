@@ -583,6 +583,8 @@ def host_relay_readback(port):
         text += checks("LabelHostNetRelay", "CollectionBoxHostNetworkRouting")
         text += checks("ComboHostNetRelay", "CollectionBoxHostNetworkRouting")
         text += checks("LabelHostRelayHint", "CollectionBoxHostNetworkRouting")
+        if state == "Directory":
+            text += "assert_label LabelHostRelayHint the login renews itself while the session runs\n"
         if state == "Fixed":
             for suffix, value in (("Address", "relay.example:3478"), ("User", "fixed-user"), ("Pass", "fixed-password")):
                 text += f"set_text TextHostRelay{suffix} {value}\nwait 3\n"
