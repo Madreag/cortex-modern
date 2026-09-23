@@ -17778,9 +17778,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Stats.peers[2].pingMs = 0;
 		host.m_Stats.peers[3].pingMs = 200;
 		host.m_Stats.nextFrame = 615;
-		// This host still holds fourteen committed frames to simulate; the survivor on a 1-frame delay is already at 615.
+		// This host still holds fourteen committed frames to simulate; the survivor on a 1-frame delay produced 615 during
+		// tick 614 and now waits on 615 itself.
 		for (uint64_t frame = 601; frame < 615; ++frame) { NetLockstepReadyFrame ready; ready.frame = frame; host.m_ReadyFrames.push_back(ready); }
-		host.m_Stats.peers[2].highestTargetFrame = 616;
+		host.m_Stats.peers[2].highestTargetFrame = 615;
 		if (!host.DeclareOverdueInputs(615, 1060, 1000, {3})) {
 			*error = "a survivor that had run dry waited on this host's own runway: host_runway_frames=14 holds=" +
 			         std::to_string(host.GetStats().peers.at(3).holds);
