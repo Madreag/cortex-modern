@@ -2984,6 +2984,61 @@ namespace RTE {
 			return true;
 		}
 
+		// A seat whose link dies before it published its startup never will. Under the bounded wait the start holds it,
+		// as its answer budget would have; failing the round there ended a host whose client stalled in its launch.
+		bool TestALinkLostBeforeTheStartIsHeld(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			NetLockstepCoordinator host, client;
+			auto hostConfig = MakeCoordinatorConfig(1, 2, 0x9A3B, 1, NetTransportLane::ControlReliable);
+			auto clientConfig = MakeCoordinatorConfig(2, 1, 0x9A3B, 1, NetTransportLane::ControlReliable);
+			hostConfig.startFrame = clientConfig.startFrame = 1;
+			hostConfig.roundId = clientConfig.roundId = 0x9A3B;
+			hostConfig.simTickMs = clientConfig.simTickMs = 1000.0 / 60.0;
+			hostConfig.timeoutMs = clientConfig.timeoutMs = 30000;
+			hostConfig.relayToOtherPeers = true;
+			hostConfig.substituteSlowPeers = clientConfig.substituteSlowPeers = true;
+			hostConfig.matchConfig = clientConfig.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A3B);
+			hostConfig.requirePublishedStart = clientConfig.requirePublishedStart = true;
+			if (!StartCoordinatorPair(48905, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
+			host.NoteLocalStartPark(40);
+			uint64_t now = 0;
+			for (; now < 200; ++now) {
+				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1);
+				host.Tick(now); client.Tick(now);
+			}
+			if (host.GetState() != NetLockstepState::WaitingForStart) {
+				*error = std::string("the fixture's host did not wait for the unpublished startup: state=") + NetLockstepCoordinator::StateName(host.GetState());
+				return false;
+			}
+			host.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "Connection dropped"}, now);
+			for (const uint64_t until = now + 100; now < until; ++now) {
+				hostWire.AdvanceTimeMs(1);
+				host.Tick(now);
+			}
+			const uint64_t first = host.GetStats().effectiveStartFrame;
+			if (!host.IsRunning() || !host.IsSeatUnderAI(2, first)) {
+				*error = std::string("a link lost before the agreed start ended the round instead of holding the seat: state=") +
+				         NetLockstepCoordinator::StateName(host.GetState()) + " reason=\"" + host.GetStats().timeoutReason + "\" under_ai=" +
+				         std::to_string(host.IsSeatUnderAI(2, first)) + " first=" + std::to_string(first);
+				return false;
+			}
+			uint64_t committed = 0;
+			for (uint64_t tick = hostConfig.startFrame; tick <= first + 20; ++tick) {
+				std::string queueError;
+				if (!host.QueueLocalInput(tick, {}, {}, &queueError)) { *error = "the held round refused the host's input at tick " + std::to_string(tick) + ": " + queueError; return false; }
+				hostWire.AdvanceTimeMs(1);
+				host.Tick(now++);
+				NetLockstepReadyFrame ready;
+				while (host.PopReadyFrame(ready)) { (void)host.FinishSimulationTick(ready.frame); committed = ready.frame; }
+			}
+			if (committed < first + 10) {
+				*error = "the host did not play on past the held seat: committed=" + std::to_string(committed) + " first=" + std::to_string(first);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_link_lost_before_the_start_is_held first=" << first << " committed=" << committed << std::endl;
+			return true;
+		}
+
 		// A resumed round's agreed first frame sits past its restored start by the slowest restart, so the restored
 		// batch reaches below the first frame the round commits. Refusing it failed every heal and every resume.
 		bool TestAResumedRoundPrimesPastItsAgreedFirstFrame(std::string* error) {
@@ -18726,6 +18781,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		};
 		row(&TestAResumedRoundPrimesPastItsAgreedFirstFrame, "a_resumed_round_primes_past_its_agreed_first_frame");
 		row(&TestACommandAParkEmptiedCommitsAfterIt, "a_command_a_park_emptied_commits_after_it");
+		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		if (!rowsPassed) return fail("a reporting row failed");
 		bool leavePassed = true;
 		bool migrationsPassed = true;
