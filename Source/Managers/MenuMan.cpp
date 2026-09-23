@@ -276,6 +276,9 @@ bool MenuMan::Update() {
 		default:
 			break;
 	}
+	// The rematch lobby keeps the match's surfaces in the menu loop: the pump it already owes feeds
+	// them, and the lobby is the only menu they belong to.
+	if (m_NetworkPanel && NetModerationGUI::PostMatchLobbySurfaces()) UpdateNetworkUI();
 	if (quitResult) {
 		m_TitleScreen->SetTitleTransitionState(TitleScreen::TitleTransition::ScrollingFadeOutQuit);
 	} else if (m_TitleScreen->GetTitleTransitionState() != TitleScreen::TitleTransition::ScrollingFadeOutQuit) {
@@ -414,6 +417,11 @@ void MenuMan::Draw() const {
 		default:
 			m_TitleScreen->Draw();
 			break;
+	}
+	// The surfaces draw over the lobby the same way they drew over the match: panel, then toasts.
+	if (m_NetworkPanel && NetModerationGUI::PostMatchLobbySurfaces()) {
+		DrawNetworkUI();
+		m_NetworkPanel->DrawMatchToasts();
 	}
 	if (m_ActiveMenu != ActiveMenu::MenusDisabled && g_UInputMan.GetJoystickCount() > 0) {
 		int device = g_UInputMan.GetLastDeviceWhichControlledGUICursor();

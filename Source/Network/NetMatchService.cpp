@@ -4980,6 +4980,7 @@ static std::string ResyncSaveName() {
 		snapshot.running = m_State == NetMatchServiceState::Running || m_State == NetMatchServiceState::ReadyToLaunch;
 		snapshot.failed = m_State == NetMatchServiceState::Failed;
 		snapshot.playedAMatch = m_MatchWasRunning;
+		snapshot.leftMatch = m_LeftMatch;
 		snapshot.inputDelayText = LiveInputDelayTextLocked();
 		if (snapshot.isHost && snapshot.active) {
 			const PortMapStatus portMap = GetPortMapStatus();

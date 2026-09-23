@@ -8811,7 +8811,7 @@ namespace RTE {
 		// The live gate as Draw() asks it, with the two facts the managers cannot supply here.
 		const auto gate = [](bool matchEnded, bool activityInMatch) {
 			return NetModerationGUI::MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), false, false,
-			    ScenarioRunner::HasLockstepCoordinator(), matchEnded, activityInMatch);
+			    ScenarioRunner::HasLockstepCoordinator(), matchEnded, activityInMatch, false, false);
 		};
 		LoopbackTransport wire;
 		if (!wire.StartHost(45861, error)) return false;
@@ -8842,7 +8842,7 @@ namespace RTE {
 		// The service's own detach, the call FinishMatch and LeaveMatch make before they report the end.
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		if (ScenarioRunner::HasLockstepCoordinator()) {
-			*error = "the service's detach left a coordinator attached to the ScenarioRunner";
+			*error = "the service's detach left HasLockstepCoordinator()=" + std::to_string(ScenarioRunner::HasLockstepCoordinator());
 			return false;
 		}
 		// Then Completed, with the player still standing in the match - paused or not, it is not over.
@@ -8859,22 +8859,50 @@ namespace RTE {
 			return false;
 		}
 		// A resync and a lost host keep drawing with no coordinator of their own, as they always did.
-		if (!NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false) ||
-		    !NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false)) {
+		if (!NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false, false, false) ||
+		    !NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false, false, false)) {
 			*error = "a resyncing or host-lost peer's surfaces read resync=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false))) + " host_lost=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false)));
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, true, false, false, false, false, false, false))) + " host_lost=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, true, false, false, false, false, false)));
 			return false;
 		}
 		// Out of a match nothing in-match draws: the lobby and the main menu are not a match.
-		if (NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true) ||
-		    NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false)) {
+		if (NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true, false, false) ||
+		    NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false, false, false)) {
 			*error = "the in-match surfaces drew outside a match: no_coordinator=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true))) + " no_activity=" +
-			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false)));
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, false, true, false, false))) + " no_activity=" +
+			         std::string(say(NetModerationGUI::MatchSurfacesDrawn(false, false, false, true, false, false, false, false)));
 			return false;
 		}
 		std::cout << "[net-match-selftest] PASS overlay: the surfaces outlive the detach-then-Completed end of a match" << std::endl;
+		return true;
+	}
+
+	// The menu-loop arm: the rematch lobby a completed match leaves is the screen its peers stand in,
+	// and it draws the same surfaces with no activity at all. The lobby still standing on this peer is
+	// the arm's match half; the lobby menu being up is its menu half - title and settings never draw them.
+	bool TestPostMatchLobbySurfacesDraw(std::string* error) {
+		const auto say = [](bool drawn) { return drawn ? "drawn" : "gone"; };
+		// Completed, no activity: the pair the menu loop cannot supply is the lobby's standing and its menu.
+		const auto gate = [](bool postMatchLobby, bool lobbyMenu) {
+			return NetModerationGUI::MatchSurfacesDrawn(false, false, false, false, true, false, postMatchLobby, lobbyMenu);
+		};
+		if (!gate(true, true)) {
+			*error = "the completed match's lobby surfaces read " + std::string(say(gate(true, true))) +
+			         ": post_match_lobby=1 lobby_menu=1 ended=1 activity_in_match=0";
+			return false;
+		}
+		if (gate(false, true)) {
+			*error = "a lobby the peer does not stand in read " + std::string(say(gate(false, true))) +
+			         ": post_match_lobby=0 lobby_menu=1 ended=1 activity_in_match=0";
+			return false;
+		}
+		if (gate(true, false)) {
+			*error = "the standing lobby on the title or settings screen read " + std::string(say(gate(true, false))) +
+			         ": post_match_lobby=1 lobby_menu=0 ended=1 activity_in_match=0";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS overlay: the menu-loop arm draws the completed match's lobby surfaces" << std::endl;
 		return true;
 	}
 
@@ -13209,6 +13237,7 @@ namespace RTE {
 		if (!TestLobbyModerationRows(&error)) return fail(error);
 		if (!TestSeatsPanelClearsBands(&error)) return fail(error);
 		if (!TestMatchSurfacesOutliveTheRound(&error)) return fail(error);
+		if (!TestPostMatchLobbySurfacesDraw(&error)) return fail(error);
 		if (!TestPrimedManifestSkipsTheDiskWalk(&error)) return fail(error);
 		if (!TestManifestPrimingStopsOnRequest(&error)) return fail(error);
 		if (!TestUnseatedSlotNameForms(&error)) return fail(error);

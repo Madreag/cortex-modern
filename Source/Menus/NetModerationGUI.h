@@ -139,9 +139,16 @@ namespace RTE {
 		/// @param lockstepAttached A coordinator is still attached to this peer, running or not.
 		/// @param matchEnded The service has completed the match this peer is still standing in.
 		/// @param activityInMatch The match activity exists and is not over - a paused one still counts.
-		static bool MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch);
+		/// @param postMatchLobby The finished match's lobby still stands on this peer: its pump is owed
+		/// or the snapshot's playedAMatch mark is on.
+		/// @param lobbyMenuActive The post-match lobby is the menu on screen.
+		static bool MatchSurfacesDrawn(bool controllerSyncActive, bool matchResyncing, bool hostLost, bool lockstepAttached, bool matchEnded, bool activityInMatch, bool postMatchLobby, bool lobbyMenuActive);
 		/// The match activity this peer is standing in, paused or not, until it ends.
 		static bool ActivityInMatch();
+		/// The menu-loop arm as the menu loop asks it: a finished match's lobby stands while its
+		/// playedAMatch mark is on, and while the multiplayer lobby is the screen up it draws the
+		/// surfaces the game loop did. The title screen, settings and every other menu leave it off.
+		static bool PostMatchLobbySurfaces();
 
 		struct Controls {
 			GUILabel* name = nullptr;
