@@ -93,7 +93,16 @@ static void gc_mark(global_State *g, GCobj *o)
 static void gc_mark_gcroot(global_State *g)
 {
   ptrdiff_t i;
-  if (g->preview && g->preview->active) gc_markobj(g, g->preview->root);
+  if (g->preview && g->preview->active) {
+    LJPreview *p = g->preview;
+    size_t k;
+    gc_markobj(g, p->root);
+    /* The window puts these slots back, so what they held lives as long as it does. */
+    for (k = 0; k < p->nupvalues; k++) {
+      gc_markobj(g, p->upvalues[k].uv);
+      gc_marktv(g, &p->upvalues[k].saved);
+    }
+  }
   for (i = 0; i < GCROOT_MAX; i++)
     if (gcref(g->gcroot[i]) != NULL)
       gc_markobj(g, gcref(g->gcroot[i]));
