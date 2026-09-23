@@ -16835,6 +16835,64 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return true;
 		}
 
+		/// A reliable lane holds everything behind a lost packet for a round trip, so a live host behind a 200 ms link can
+		/// be silent for longer than one on a LAN: the survivors wait out its retransmission before they take it for gone.
+		bool TestALongLinkedHostIsNotLostInsideItsRetransmission(std::string* error) {
+			LoopbackTransport hostWire, aWire, bWire;
+			if (!hostWire.StartHost(49500, error) || !aWire.Connect("loopback", 49500, error) || !bWire.Connect("loopback", 49500, error)) return false;
+			// The survivors' link to the host measures 200 ms a round trip.
+			LoopbackTransportConfig lagged; lagged.latencyMs = 100;
+			aWire.SetFaultConfig(lagged); bWire.SetFaultConfig(lagged);
+			auto match = NetMatchConfigUtil::MakeDefault(0x153);
+			match.peerCount = 3; match.players.push_back({3, 2, false, "Third"}); match.successorOrder = {2, 3};
+			for (uint8_t peer = 1; peer <= 3; ++peer) match.migrationPeers.push_back({peer, static_cast<uint16_t>(49500 + peer), {"loopback"}});
+			auto config = [&](uint8_t peer) {
+				NetLockstepConfig value; value.sessionId = match.sessionId; value.matchConfig = match; value.peerCount = 3; value.localPeerId = peer;
+				value.startFrame = 1; value.timeoutMs = 20000; value.roundId = peer == 1 ? 0x15301 : 0; value.relayToOtherPeers = peer == 1;
+				value.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+				value.migrationKey.fill(0x39); value.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); }; return value;
+			};
+			NetLockstepCoordinator host, a, b;
+			if (!host.Start(hostWire, config(1), error) || !a.Start(aWire, config(2), error) || !b.Start(bWire, config(3), error)) return false;
+			for (auto* peer: {&host, &a, &b}) peer->DeferStopsToTickBoundary();
+			uint64_t now = 0;
+			auto step = [&](bool hostAlive) {
+				if (hostAlive) { host.Tick(now); hostWire.AdvanceTimeMs(5); }
+				a.Tick(now); b.Tick(now); aWire.AdvanceTimeMs(5); bWire.AdvanceTimeMs(5);
+				for (auto* peer: {&host, &a, &b}) { NetLockstepReadyFrame ready; while (peer->PopReadyFrame(ready)) peer->FinishSimulationTick(ready.frame); }
+				now += 5;
+			};
+			for (int turn = 0; turn < 60; ++turn) step(true);
+			for (uint64_t frame = 1; frame <= 5; ++frame) {
+				for (auto* peer: {&host, &a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+				for (int turn = 0; turn < 40; ++turn) step(true);
+			}
+			if (!a.IsRunning() || !b.IsRunning() || a.GetStats().nextFrame != 6) {
+				*error = "the long-link fixture did not share frame 5: next=" + std::to_string(a.GetStats().nextFrame); return false;
+			}
+			for (uint64_t frame = 6; frame <= 7; ++frame)
+				for (auto* peer: {&a, &b}) if (!peer->QueueLocalInput(frame, {MakeFrame(100 + peer->GetConfig().localPeerId, frame)}, {}, error)) return false;
+			// The host's last word is its frame 6; after it the survivors wait on the host with the host silent.
+			if (!host.QueueLocalInput(6, {MakeFrame(101, 6)}, {}, error)) return false;
+			const uint64_t silentFrom = now;
+			// A survivor that took the host for gone has begun, or already finished, handing the round to a successor.
+			const auto lost = [&](const NetLockstepCoordinator& peer) { return peer.IsMigrating() || peer.GetHostPeerId() != 1; };
+			while (now - silentFrom < 600) step(false);
+			if (lost(a) || lost(b)) {
+				*error = "a host silent for 600 ms behind a 200 ms link was taken for gone: a_lost=" + std::to_string(lost(a)) +
+				         " b_lost=" + std::to_string(lost(b)) + " ping=" + std::to_string(aWire.GetPeerPingMs(1));
+				return false;
+			}
+			while (now - silentFrom < 1500 && !lost(a)) step(false);
+			if (!lost(a)) {
+				*error = "a host silent past its retransmission and the bound was never taken for gone: state=" + std::string(NetLockstepCoordinator::StateName(a.GetState())) +
+				         " next=" + std::to_string(a.GetStats().nextFrame);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_long_linked_host_is_not_lost_inside_its_retransmission migrated_after_ms=" << (now - silentFrom) << std::endl;
+			return true;
+		}
+
 		bool TestLoadingHostKeepsItsAuthority(std::string* error) {
 			LoopbackTransport hostWire, aWire, bWire;
 			if (!hostWire.StartHost(49458, error) || !aWire.Connect("loopback", 49458, error) || !bWire.Connect("loopback", 49458, error)) return false;
@@ -17930,6 +17988,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		if (!leavePassed) return fail(error);
 		if (!followupsPassed) return fail(followupError);
 		if (!TestSilentHostResumesWithinTwoSeconds(&error) ||
+		    !TestALongLinkedHostIsNotLostInsideItsRetransmission(&error) ||
 		    !TestLoadingHostKeepsItsAuthority(&error) ||
 		    !TestHoldArrivesBeforeFailedSend(&error) ||
 		    !TestSlowMachineWarningCadence(&error) ||

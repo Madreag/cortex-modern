@@ -9329,7 +9329,15 @@ namespace RTE {
 			m_Stats.lastMissingPeers = DescribeMissingPeers();
 		}
 		const uint64_t lastAuthorityTraffic = std::max(m_WaitStartMs, m_AuthorityLastHeardMs);
-		const uint64_t hostSilenceMs = std::min<uint32_t>(500, m_Config.timeoutMs);
+		// A reliable lane holds everything behind a lost packet for a round trip at a time, so a live host is silent for
+		// as long as its link can make it: the host is gone only past a few of those and the bound.
+		uint64_t hostLinkMs = 0;
+		if (const auto transport = m_RemoteTransports.find(GetHostPeerId()); transport != m_RemoteTransports.end() && m_Transport)
+			hostLinkMs = m_Transport->GetPeerPingMs(transport->second);
+		if (const auto estimate = m_DelayEstimators.find(GetHostPeerId()); estimate != m_DelayEstimators.end())
+			hostLinkMs = std::max<uint64_t>(hostLinkMs, estimate->second.P95Ms());
+		const uint64_t silenceBoundMs = static_cast<uint64_t>(std::max(1.0, std::floor(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+		const uint64_t hostSilenceMs = std::min<uint64_t>(m_Config.timeoutMs, std::max<uint64_t>(500, 3 * hostLinkMs + silenceBoundMs));
 		if (hostSilenceMs > 0 && nowMs >= lastAuthorityTraffic && nowMs - lastAuthorityTraffic >= hostSilenceMs && BeginHostMigration(nowMs)) return;
 		if (m_Config.timeoutMs > 0 && nowMs >= m_WaitStartMs && nowMs - m_WaitStartMs >= m_Config.timeoutMs) {
 			const std::string missing = DescribeMissingPeers();
