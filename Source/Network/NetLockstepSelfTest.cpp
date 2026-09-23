@@ -1333,8 +1333,8 @@ namespace RTE {
 			frame.commands = {{1, NetGameSeatHold{2, 7, 91, 3, 40}}, {1, NetGameInputDelay{2, 26}}, {1, NetGameSeatReclaim{2, 7, 92, 4, 40, 26}}};
 			std::vector<uint8_t> recovery;
 			NetLockstepFrame decoded;
-			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 4 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
-				*error = "recovery v4 lost a committed hold identity"; return false;
+			if (!NetLockstepCodec::EncodeRecoveryInput(frame, recovery) || recovery[4] != 5 || !NetLockstepCodec::DecodeRecoveryInput(recovery, decoded) || decoded != frame) {
+				*error = "recovery v5 lost a committed hold identity"; return false;
 			}
 			recovery[4] = 1;
 			if (NetLockstepCodec::DecodeRecoveryInput(recovery, decoded)) { *error = "recovery v1 reinterpreted a new timing command"; return false; }

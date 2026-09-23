@@ -33,6 +33,7 @@ namespace RTE {
 		SeatHold = 18,
 		InputDelay = 19,
 		SeatReclaim = 20,
+		Checkpoint = 21,
 	};
 
 	// Set a team's funds to an exact value. Integer, trivially deterministic. Owner: the team owner.
@@ -382,7 +383,16 @@ namespace RTE {
 		bool operator==(const NetGameSeatReclaim&) const = default;
 	};
 
-	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay, NetGameSeatReclaim>;
+	/// The match's checkpoint schedule on the committed stream: the host names the tick every peer
+	/// captures at, and each peer says when its writer has finished one.
+	struct NetGameCheckpoint {
+		enum Kind : uint8_t { Capture = 1, Written = 2 };
+		uint8_t kind = Capture;
+		uint64_t tick = 0; //!< Capture: the tick every peer captures at. Written: the capture this peer's writer finished.
+		bool operator==(const NetGameCheckpoint&) const = default;
+	};
+
+	using NetGameCommandPayload = std::variant<NetGameSetTeamFunds, NetGameSpawnActor, NetGameDeliverCargo, NetGameScuttleCraft, NetGameInventoryOp, NetGamePauseMatch, NetGameSetActorAIMode, NetGameSwitchControl, NetGameAIEquip, NetGameAIOrder, NetGameReseat, NetGameSoundOp, NetGamePlayerBindings, NetGameAIScriptMessage, NetGameAIGib, NetGamePlaceBrain, NetGameWorldTransition, NetGameSeatHold, NetGameInputDelay, NetGameSeatReclaim, NetGameCheckpoint>;
 
 	struct NetGameCommand {
 		uint8_t senderPeerId = 0;

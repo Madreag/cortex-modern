@@ -31,7 +31,7 @@ namespace RTE {
 	namespace {
 		constexpr uint64_t c_StartRetransmitMs = 250;
 		constexpr uint32_t c_RecoveryInputMagic = 0x314e4952;
-		constexpr uint16_t c_RecoveryInputVersion = 4;
+		constexpr uint16_t c_RecoveryInputVersion = 5;
 
 		std::optional<uint64_t> TestFrameFromEnvironment(const char* name) {
 			const char* text = std::getenv(name);
@@ -721,6 +721,16 @@ namespace RTE {
 							AppendU8(out, reclaim.worldTransition.has_value());
 							if (reclaim.worldTransition && !EncodeWorldTransition(*reclaim.worldTransition, out, error)) return false;
 						}
+						break;
+					}
+					case NetGameCommandType::Checkpoint: {
+						const auto& checkpoint = std::get<NetGameCheckpoint>(command.payload);
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, out.size(), "checkpoint kind is not a known kind");
+							return false;
+						}
+						AppendU8(out, checkpoint.kind);
+						AppendU64LE(out, checkpoint.tick);
 						break;
 					}
 					case NetGameCommandType::SeatHold: {
@@ -1688,6 +1698,20 @@ namespace RTE {
 						command.payload = reclaim;
 						break;
 					}
+					case NetGameCommandType::Checkpoint: {
+						NetGameCheckpoint checkpoint;
+						if (version < NetLockstepCodec::c_CheckpointVersion) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "checkpoint commands require the checkpoint wire");
+							return false;
+						}
+						if (!ReadOrTruncated(reader.ReadU8(checkpoint.kind) && reader.ReadU64LE(checkpoint.tick), reader, error, "checkpoint")) return false;
+						if (checkpoint.kind != NetGameCheckpoint::Capture && checkpoint.kind != NetGameCheckpoint::Written) {
+							SetError(error, NetLockstepErrorCode::InvalidValue, reader.Offset(), "checkpoint kind is not a known kind");
+							return false;
+						}
+						command.payload = checkpoint;
+						break;
+					}
 					case NetGameCommandType::SeatHold: {
 						NetGameSeatHold hold;
 						if (version < NetLockstepCodec::c_TimingVersion || command.sequence != 0) {
@@ -2605,10 +2629,11 @@ namespace RTE {
 		uint16_t encodeVersion = c_Version;
 		if (const auto* frame = std::get_if<NetLockstepFrame>(&packet.payload)) {
 			for (const NetGameCommand& command: frame->commands) {
-				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) {
-					encodeVersion = c_WorldVersion;
+				if (std::holds_alternative<NetGameCheckpoint>(command.payload)) {
+					encodeVersion = c_CheckpointVersion;
 					break;
 				}
+				if (std::holds_alternative<NetGameWorldTransition>(command.payload)) encodeVersion = c_WorldVersion;
 			}
 		}
 
@@ -2655,7 +2680,7 @@ namespace RTE {
 		}
 		NetLockstepPayload payload;
 		// Each recovery layout keeps the command vocabulary it recorded.
-		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : c_WorldVersion, nullptr, true) || !reader.AtEnd()) return false;
+		if (!DecodeFrame(reader, payload, error, controllerVersion, version == 1 ? c_WorldTransitionVersion : version == 2 ? 25 : version == 3 ? 27 : version == 4 ? c_WorldVersion : c_CheckpointVersion, nullptr, true) || !reader.AtEnd()) return false;
 		NetLockstepFrame frame = std::get<NetLockstepFrame>(std::move(payload));
 		std::vector<uint8_t> canonical;
 		AppendU32LE(canonical, c_RecoveryInputMagic);
@@ -2698,7 +2723,7 @@ namespace RTE {
 		if (magic != c_Magic) {
 			return Fail(NetLockstepErrorCode::BadMagic, 0, "packet magic mismatch");
 		}
-		if (version < c_MinVersion || version > c_WorldVersion) {
+		if (version < c_MinVersion || version > c_CheckpointVersion) {
 			return Fail(NetLockstepErrorCode::UnsupportedVersion, 4, "unsupported lockstep packet version");
 		}
 		if (headerBytes != c_HeaderBytes) {
@@ -2812,7 +2837,7 @@ namespace RTE {
 			default:
 				return false;
 		}
-		return magic == c_Magic && version >= c_MinVersion && version <= c_WorldVersion && headerBytes == c_HeaderBytes &&
+		return magic == c_Magic && version >= c_MinVersion && version <= c_CheckpointVersion && headerBytes == c_HeaderBytes &&
 		       flags == 0 && bytes.size() == static_cast<size_t>(c_HeaderBytes) + payloadLength;
 	}
 

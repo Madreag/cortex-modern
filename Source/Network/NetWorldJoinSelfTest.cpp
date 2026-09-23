@@ -5810,22 +5810,38 @@ namespace RTE {
 		constexpr uint64_t lastTick = 1200;
 		struct Unwritten { uint64_t tick = 0; uint64_t doneAt = 0; };
 		std::vector<Unwritten> writer;
-		size_t mostUnwritten = 0, captures = 0, joinCaptures = 0, deferred = 0;
+		size_t mostUnwritten = 0, captures = 0, joinCaptures = 0;
+		// The world's own reports come back through its committed stream four ticks after it sends them.
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::vector<uint64_t> finished;
 		const auto finishThrough = [&](uint64_t tick) {
 			while (!writer.empty() && writer.front().doneAt <= tick) {
 				service.ResolveAwaitedAutosave(writer.front().tick, true);
+				finished.push_back(writer.front().tick);
 				writer.erase(writer.begin());
 			}
 		};
 		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
 			finishThrough(tick);
-			const NetMatchService::AutosaveCapture capture = service.PlanAutosaveCapture(static_cast<int64_t>(tick) * tickLength, writer.size());
-			if (capture == NetMatchService::AutosaveCapture::Deferred) ++deferred;
-			if (capture != NetMatchService::AutosaveCapture::Scheduled && capture != NetMatchService::AutosaveCapture::Join) continue;
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			input.unwritten = writer.size();
+			if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+			input.finished = std::exchange(finished, {});
+			input.writers = {1};
+			input.lead = 5;
+			const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+			for (NetMatchService::CheckpointNote note: output.send) {
+				note.sender = 1;
+				stream[tick + 4].push_back(note);
+			}
+			if (!output.capture) continue;
 			++captures;
-			if (capture == NetMatchService::AutosaveCapture::Join) ++joinCaptures;
+			const bool join = service.IsJoinCaptureTick(tick);
+			if (join) ++joinCaptures;
 			// As AutosaveAtTickBoundary queues a capture the writer took.
-			service.m_AwaitedAutosaves.push_back(NetMatchService::AwaitedAutosave{tick, capture == NetMatchService::AutosaveCapture::Join});
+			service.m_AwaitedAutosaves.push_back(NetMatchService::AwaitedAutosave{tick, join});
 			writer.push_back(Unwritten{tick, (writer.empty() ? tick : writer.back().doneAt) + writeTicks});
 			if (writer.size() > mostUnwritten) mostUnwritten = writer.size();
 		}
@@ -5833,10 +5849,9 @@ namespace RTE {
 		finishThrough(~uint64_t{0});
 		std::string failures;
 		const auto fail = [&](const std::string& text) { failures += (failures.empty() ? "" : " | ") + text; };
-		if (mostUnwritten > NetMatchService::c_MaxUnwrittenAutosaves) {
-			fail("world-captures-pile-up: " + std::to_string(mostUnwritten) + " captures waited for the writer at once (bound " +
-			     std::to_string(NetMatchService::c_MaxUnwrittenAutosaves) + "), " + std::to_string(heldAtEnd) + " still unwritten after " +
-			     std::to_string(lastTick) + " ticks");
+		if (mostUnwritten > 1) {
+			fail("world-captures-pile-up: " + std::to_string(mostUnwritten) + " captures waited for the writer at once (bound 1), " +
+			     std::to_string(heldAtEnd) + " still unwritten after " + std::to_string(lastTick) + " ticks");
 		}
 		if (joinCaptures != 1) fail("world-join-captured-" + std::to_string(joinCaptures) + "-times: one join owes one capture");
 		if (service.m_WorldCapturePending || service.m_WorldCaptureRequestedTick == 0) {
@@ -5847,11 +5862,129 @@ namespace RTE {
 		if (captures < lastTick / 180) fail("world-schedule-starved: " + std::to_string(captures) + " captures in " + std::to_string(lastTick) + " ticks");
 		if (!service.m_AwaitedAutosaves.empty()) fail("world-captures-never-released: " + std::to_string(service.m_AwaitedAutosaves.size()) + " still awaited");
 		if (!failures.empty()) {
-			*error = failures + " (captures=" + std::to_string(captures) + " deferred=" + std::to_string(deferred) + ")";
+			*error = failures + " (captures=" + std::to_string(captures) + ")";
 			return false;
 		}
 		std::cout << "[net-world-join-selftest] PASS world_capture_in_flight most_unwritten=" << mostUnwritten << " join_captures=" << joinCaptures
-		          << " captures=" << captures << " deferred=" << deferred << " ticks=" << lastTick << std::endl;
+		          << " captures=" << captures << " ticks=" << lastTick << std::endl;
+		return true;
+	}
+
+	// The schedule rides the committed stream: both entries cross the lockstep wire on the checkpoint
+	// version, and the committed tail a joiner replays carries them unchanged.
+	bool TestCheckpointCommandCrossesTheWire(std::string* error) {
+		NetLockstepFrame frame;
+		frame.senderPeerId = 1;
+		frame.targetFrame = 1201;
+		frame.roundId = 9;
+		frame.commands.push_back(NetGameCommand{1, NetGameCheckpoint{NetGameCheckpoint::Capture, 1206}, 7});
+		frame.commands.push_back(NetGameCommand{1, NetGameCheckpoint{NetGameCheckpoint::Written, 1140}, 8});
+		const auto sameCommands = [&frame](const std::vector<NetGameCommand>& decoded) {
+			if (decoded.size() != frame.commands.size()) return false;
+			for (size_t index = 0; index < decoded.size(); ++index) {
+				if (decoded[index].payload != frame.commands[index].payload || decoded[index].sequence != frame.commands[index].sequence) return false;
+			}
+			return true;
+		};
+		std::vector<uint8_t> bytes;
+		NetLockstepError failure;
+		if (!NetLockstepCodec::Encode({frame}, bytes, &failure) || bytes.size() < 6) {
+			*error = "checkpoint-command-unencodable: " + failure.message;
+			return false;
+		}
+		const uint16_t version = static_cast<uint16_t>(bytes[4] | (bytes[5] << 8));
+		const NetLockstepDecodeResult decoded = NetLockstepCodec::Decode(bytes);
+		const auto* back = decoded.ok ? std::get_if<NetLockstepFrame>(&decoded.packet.payload) : nullptr;
+		if (version != NetLockstepCodec::c_CheckpointVersion || !back || !sameCommands(back->commands)) {
+			*error = "checkpoint-command-lost-on-the-wire: version=" + std::to_string(version) + " decoded=" + std::to_string(decoded.ok) + " " + decoded.error.message;
+			return false;
+		}
+		std::vector<uint8_t> tail;
+		NetLockstepFrame replayed;
+		std::string tailError;
+		if (!EncodeCommittedJoinFrame(frame, tail, &tailError) || !DecodeCommittedJoinFrame(tail, replayed, &tailError) || !sameCommands(replayed.commands)) {
+			*error = "checkpoint-command-lost-in-the-tail: " + tailError;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS checkpoint_command_crosses_the_wire version=" << version << " bytes=" << bytes.size() << " tail_bytes=" << tail.size() << std::endl;
+		return true;
+	}
+
+	// Autosave is the host's match option and every peer follows it: two peers whose writers run at
+	// different speeds keep the same checkpoints, at the same ticks, and neither holds more than one
+	// unwritten capture while the slower writer stretches the schedule for both.
+	bool TestPeersCheckpointTheSameTicks(std::string* error) {
+		struct Peer {
+			uint8_t id = 0;
+			uint64_t writeTicks = 0;
+			NetMatchService service;
+			std::vector<std::pair<uint64_t, uint64_t>> writer; //!< Unwritten captures: tick, the tick the writer finishes it.
+			std::vector<uint64_t> captures;
+			size_t mostUnwritten = 0;
+		};
+		std::array<Peer, 2> peers;
+		peers[0].id = 1; peers[0].writeTicks = 70; peers[0].service.m_IsHost = true;
+		peers[1].id = 2; peers[1].writeTicks = 130;
+		for (Peer& peer: peers) {
+			peer.service.m_AutosaveMatchId = "00000000deadbeef-0000000000000005";
+			peer.service.m_MatchAutosaveSeconds = 1;
+		}
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		// Ten one-second intervals; a stream entry reaches both peers four ticks after it is sent.
+		constexpr uint64_t lastTick = 600, streamDelay = 4;
+		constexpr uint16_t lead = 5;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		for (uint64_t tick = 1; tick <= lastTick; ++tick) {
+			std::vector<NetMatchService::CheckpointNote> applied;
+			if (const auto due = stream.find(tick); due != stream.end()) applied = due->second;
+			for (Peer& peer: peers) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick;
+				input.now = static_cast<int64_t>(tick) * tickLength;
+				input.applied = applied;
+				input.lead = lead;
+				input.writers = {1, 2};
+				while (!peer.writer.empty() && peer.writer.front().second <= tick) {
+					input.finished.push_back(peer.writer.front().first);
+					peer.writer.erase(peer.writer.begin());
+				}
+				input.unwritten = peer.writer.size();
+				const NetMatchService::AutosaveTickOutput output = peer.service.StepAutosaveSchedule(input);
+				if (output.capture) {
+					peer.captures.push_back(tick);
+					peer.writer.emplace_back(tick, (peer.writer.empty() ? tick : peer.writer.back().second) + peer.writeTicks);
+					peer.mostUnwritten = std::max(peer.mostUnwritten, peer.writer.size());
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = peer.id;
+					stream[tick + streamDelay].push_back(note);
+				}
+			}
+		}
+		const auto list = [](const std::vector<uint64_t>& ticks) {
+			std::string text;
+			for (const uint64_t tick: ticks) text += (text.empty() ? "" : ",") + std::to_string(tick);
+			return text;
+		};
+		const auto kept = [](std::vector<uint64_t> ticks) {
+			if (ticks.size() > 3) ticks.erase(ticks.begin(), ticks.end() - 3);
+			return ticks;
+		};
+		std::string failures;
+		const auto fail = [&](const std::string& text) { failures += (failures.empty() ? "" : " | ") + text; };
+		if (kept(peers[0].captures) != kept(peers[1].captures)) fail("checkpoint-sets-differ: host keeps " + list(kept(peers[0].captures)) + ", client keeps " + list(kept(peers[1].captures)));
+		if (peers[0].captures != peers[1].captures) fail("capture-ticks-differ: host " + list(peers[0].captures) + " client " + list(peers[1].captures));
+		for (const Peer& peer: peers) {
+			if (peer.mostUnwritten > 1) fail("peer-" + std::to_string(peer.id) + "-held-" + std::to_string(peer.mostUnwritten) + "-unwritten-captures");
+		}
+		// The slower writer finishes one archive per 130 ticks, so ten seconds still hold four checkpoints.
+		if (peers[1].captures.size() < 4) fail("schedule-starved: " + std::to_string(peers[1].captures.size()) + " captures in " + std::to_string(lastTick) + " ticks");
+		if (!failures.empty()) {
+			*error = failures;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS peers_checkpoint_the_same_ticks ticks=" << list(peers[0].captures) << " most_unwritten=" << peers[0].mostUnwritten
+		          << "," << peers[1].mostUnwritten << std::endl;
 		return true;
 	}
 
@@ -6602,6 +6735,8 @@ namespace RTE {
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
+			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
+			if (!TestCheckpointCommandCrossesTheWire(&error)) return Fail(error);
 			if (!TestResumedWorldRecordsASegment(&error)) return Fail(error);
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
 			if (!TestHealCapIsAWindow(&error)) return Fail(error);

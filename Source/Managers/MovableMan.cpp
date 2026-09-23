@@ -480,6 +480,15 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			continue;
 		}
 		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
+		if (const auto* checkpoint = std::get_if<NetGameCheckpoint>(&command.payload)) {
+			// The schedule is the host's; any peer may report its own writer.
+			if (checkpoint->kind == NetGameCheckpoint::Capture && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a checkpoint schedule from a peer that is not the host");
+				continue;
+			}
+			ScenarioRunner::NoteAppliedCheckpoint(command.senderPeerId, *checkpoint);
+			continue;
+		}
 		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
 		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);
