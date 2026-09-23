@@ -150,6 +150,7 @@ namespace RTE {
 		/// row confirmed_listed is null and supports_unlisted false, and the token is never included.
 		std::string BuildReportJson() const;
 
+		static constexpr uint32_t c_MaxRelayTtlSeconds = 86400; //!< The service's longest relay credential lifetime.
 		static constexpr uint64_t c_ListIntervalMs = 5000;
 		static constexpr uint64_t c_ShutdownBudgetMs = 2000;
 		static constexpr uint64_t c_RetryBaseMs = 5000;  //!< Backoff starts here, doubles to the cap.
