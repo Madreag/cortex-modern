@@ -17490,6 +17490,42 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// A round that has ended still owns the wire through the host's goodbye drain: a held seat knocking to come
+	/// back is session traffic, so its connection and hello reach the session instead of ending with the round.
+	bool TestAnEndedRoundHandsAReturnToTheSession(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A45, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 45; config.authorityPeerId = 1;
+		config.simTickMs = 1000.0 / 60.0; config.activePeerIds = {1}; config.relayToOtherPeers = true;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId); config.matchConfig.peerCount = 2;
+		if (!host.Start(wire, config, error)) return false;
+		for (uint64_t now = 0; now <= 200 && !host.IsRunning(); now += 10) {
+			host.Tick(now);
+			wire.AdvanceTimeMs(10);
+		}
+		if (!host.IsRunning()) { *error = "the ended-round fixture never ran its round"; return false; }
+		std::vector<NetTransportEvent> handed;
+		host.SetSessionEventSink([&handed](const NetTransportEvent& event) { handed.push_back(event); });
+		host.Complete("e2e complete");
+		NetClientHello hello;
+		hello.clientNonce = 45;
+		hello.minProtocolVersion = hello.maxProtocolVersion = NetProtocol::c_Version;
+		hello.displayName = "Returner";
+		std::vector<uint8_t> helloBytes;
+		NetProtocolError protocolError;
+		if (!NetProtocol::Encode({1, 0, hello}, helloBytes, &protocolError)) { *error = "the returning hello did not encode: " + protocolError.message; return false; }
+		constexpr NetPeerId c_Returner = 77;
+		host.InjectEvent({NetTransportEventType::PeerConnected, c_Returner, NetTransportLane::ControlReliable, {}, {}}, 600);
+		host.InjectEvent({NetTransportEventType::PacketReceived, c_Returner, NetTransportLane::ControlReliable, helloBytes, {}}, 610);
+		if (handed.size() != 2 || handed[0].type != NetTransportEventType::PeerConnected || handed[1].bytes != helloBytes) {
+			*error = "an ended round swallowed a returning seat's handshake: handed=" + std::to_string(handed.size()) + " stopped=" + std::to_string(host.IsStopped());
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS an_ended_round_hands_a_return_to_the_session handed=" << handed.size() << std::endl;
+		return true;
+	}
+
 	bool TestALateStartsReclaimIsRetriedUntilAdmitted(std::string* error) {
 		LoopbackTransport hostWire, peerWire;
 		if (!hostWire.StartHost(49476, error) || !peerWire.Connect("loopback", 49476, error)) return false;
@@ -17741,6 +17777,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestLateStartPreservesHoldBoundary(&error) ||
 		    !TestALateStartsReclaimIsRetriedUntilAdmitted(&error) ||
 		    !TestDelayPaddingPassesAParkedFrame(&error) ||
+		    !TestAnEndedRoundHandsAReturnToTheSession(&error) ||
 		    !TestPrivateCheckpointKeepsDepartures(&error) ||
 		    !TestFinalRelayDrainIncludesPrivateTail(&error) ||
 		    !TestTheDrainWaitsOnARejoinsOwnProgress(&error) ||

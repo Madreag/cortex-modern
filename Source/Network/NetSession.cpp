@@ -225,6 +225,8 @@ namespace RTE {
 		if (m_Role != NetSessionRole::Host) return;
 		PeerState* peer = FindPeer(peerId);
 		if (!peer || peer->state != NetSessionState::Ready) return;
+		System::PrintDiagnosticLine(std::string("[net-session] ready peer refused reason=") + NetProtocol::RejectReasonName(reason) +
+		                            " role=host peer=" + std::to_string(peer->assignedPeerId + 1) + " detail=" + message);
 		Send(peerId, NetDisconnect{static_cast<uint16_t>(reason), message});
 		peer->state = NetSessionState::Closed;
 		DropPeerTransport(peerId, message);

@@ -8065,6 +8065,12 @@ namespace RTE {
 			return;
 		}
 		if (m_State == NetLockstepState::Failed || m_State == NetLockstepState::Stopped) {
+			// An ended round still owns the wire through the host's goodbye drain: a seat knocking to come back
+			// is the session's traffic, and the round that ended must not be what swallows its handshake.
+			if (m_State == NetLockstepState::Stopped && m_SessionEventSink && m_Config.localPeerId == GetHostPeerId() && !UsesTransportPeer(event.peerId) &&
+			    (event.type == NetTransportEventType::PeerConnected || event.type == NetTransportEventType::PeerDisconnected ||
+			     event.type == NetTransportEventType::PacketReceived))
+				m_SessionEventSink(event);
 			return;
 		}
 		switch (event.type) {
