@@ -4364,6 +4364,7 @@ namespace RTE {
 		m_LastHoldHeartbeatMs = 0;
 		m_RequirePublishedStart = m_Config.requirePublishedStart;
 		m_PeerStartupPublished.clear();
+		m_StartupLinksLost.clear();
 		m_LocalStartupPublished = false;
 		m_AgreedStartApplied = false;
 		m_AgreedStartRecord.reset();
@@ -7039,6 +7040,7 @@ namespace RTE {
 			m_StartupHeldSeatStamps.insert(peer);
 			++m_Stats.peers[peer].holds;
 			if (peer == m_Config.localPeerId) m_LocalSeatHeld = true;
+			std::cout << "[net-match] hold peer=" << static_cast<int>(peer) << " frame=" << start.agreedFirstFrame << " AI in control" << std::endl;
 		}
 		RefreshLeftSeatHolds();
 		std::cout << "[net-match] agreed first frame=" << start.agreedFirstFrame
@@ -7097,7 +7099,7 @@ namespace RTE {
 			record.peerStartupParks[peer - 1] = peer == m_Config.localPeerId ? m_LocalStartParkMs : m_Stats.peers[peer].startParkMs;
 			record.peerInputDelays[peer - 1] = delay;
 			firstCommitFrame = std::min(firstCommitFrame, record.peerEffectiveStartFrames[peer - 1]);
-			if (expired && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
+			if ((expired || m_StartupLinksLost.contains(peer)) && m_Config.substituteSlowPeers && peer != m_Config.localPeerId &&
 			    std::find(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), peer) != m_RemotePeerIds.end() &&
 			    !IsPeerGoneAtFrame(peer, record.agreedFirstFrame) &&
 			    (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0)
@@ -7134,7 +7136,8 @@ namespace RTE {
 			// announced leave is already the host-authored boundary for that seat; it must not hold the
 			// surviving seats behind the startup publication budget.
 			if (IsPeerGoneAtFrame(peer, m_Config.startFrame)) continue;
-			allPublished = allPublished && m_PeerStartupPublished.contains(peer);
+			// A seat whose link died before it published never will; the start holds it instead of waiting out the budget.
+			allPublished = allPublished && (m_PeerStartupPublished.contains(peer) || (m_Config.substituteSlowPeers && m_StartupLinksLost.contains(peer)));
 		}
 		if (allPublished || StartupWaitExpired(nowMs)) FormAgreedFirstFrame(nowMs);
 	}
@@ -8379,6 +8382,16 @@ namespace RTE {
 				// before it holds everything the leave references.
 				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::Running) {
 					ApplyPeerLeave(lockstepPeer, FirstFrameWithout(lockstepPeer), "connection lost", nowMs, false);
+					break;
+				}
+				// Before the agreed start the bounded wait holds a seat whose link died, as its answer budget would.
+				if (m_RelayHost && lockstepPeer != 0 && m_State == NetLockstepState::WaitingForStart && UsesBoundedWait() && m_RequirePublishedStart &&
+				    m_Config.localPeerId == GetHostPeerId() && !m_AgreedStartApplied) {
+					m_StartupLinksLost.insert(lockstepPeer);
+					m_RemoteTransports.erase(lockstepPeer);
+					m_RemoteFrameWindow.erase(lockstepPeer);
+					std::cout << "[net-lockstep] " << DescribePeer(lockstepPeer) << " lost its link before the agreed start; the start holds its seat" << std::endl;
+					TickStartupWait(nowMs);
 					break;
 				}
 				// A transport peer outside the round — a leaver's stale socket finally timing out, a
