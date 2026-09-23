@@ -129,6 +129,53 @@ AUTOSAVE_CASES = (
 )
 
 
+def engine_placements(peers):
+    """Three engines on one box each get their own cores and the host a third of them at above-normal priority: a
+    real match runs one engine per machine, so a host starved by its neighbours is the harness's limit, not the round's.
+    Whole SMT pairs, the host's third rounded up."""
+    if len(peers) != 3 or sys.platform != 'win32':
+        return {}
+    pairs = (os.cpu_count() or 0) // 2
+    if pairs < 3:
+        return {}
+    host_pairs = -(-pairs // 3)
+    client_pairs = -(-(pairs - host_pairs) // 2)
+    spans = dict(host=(0, 2 * host_pairs), client=(2 * host_pairs, 2 * (host_pairs + client_pairs)),
+                 survivor=(2 * (host_pairs + client_pairs), 2 * pairs))
+    return {peer: dict(mask=sum(1 << cpu for cpu in range(*spans[peer])), logical=f'{spans[peer][0]}-{spans[peer][1] - 1}',
+                       priority='above_normal' if peer == 'host' else 'normal') for peer in peers}
+
+
+def place_engine(run, placement):
+    """Applies a placement to a started engine and records what the process reports back in its launch.json."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+    kernel.SetProcessAffinityMask.restype = wintypes.BOOL
+    kernel.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(ctypes.c_size_t)]
+    kernel.GetProcessAffinityMask.restype = wintypes.BOOL
+    kernel.SetPriorityClass.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel.SetPriorityClass.restype = wintypes.BOOL
+    kernel.GetPriorityClass.argtypes = [wintypes.HANDLE]
+    kernel.GetPriorityClass.restype = wintypes.DWORD
+    handle = run.process
+    if not kernel.SetProcessAffinityMask(handle, placement['mask']):
+        raise OSError(f'SetProcessAffinityMask failed: {ctypes.get_last_error()}')
+    if not kernel.SetPriorityClass(handle, 0x8000 if placement['priority'] == 'above_normal' else 0x20):
+        raise OSError(f'SetPriorityClass failed: {ctypes.get_last_error()}')
+    process_mask, system_mask = ctypes.c_size_t(), ctypes.c_size_t()
+    if not kernel.GetProcessAffinityMask(handle, ctypes.byref(process_mask), ctypes.byref(system_mask)):
+        raise OSError(f'GetProcessAffinityMask failed: {ctypes.get_last_error()}')
+    applied = dict(requested_mask=hex(placement['mask']), logical=placement['logical'], priority=placement['priority'],
+                   process_mask=hex(process_mask.value), system_mask=hex(system_mask.value), priority_class=hex(kernel.GetPriorityClass(handle)))
+    if process_mask.value != placement['mask']:
+        raise OSError(f'the engine reports affinity {applied["process_mask"]}, not {applied["requested_mask"]}')
+    run.record['cpu_placement'] = applied
+    run._save()
+    return applied
+
+
 def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, sp=False, loss_percent=0, silent_tick=None, live_stalls=None, window_ticks=None, sp_humans=2, autosave_seconds=None):
     out = root / name
     out.mkdir(exist_ok=False)
@@ -142,6 +189,8 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
     write_json(out / 'manifest.json', manifest)
     peers = ['sp'] if sp else (['host', 'client', 'survivor'] if silent_tick else ['host', 'client'])
     manifest['per_peer_lag_ms'] = {peer: (2 * lag if peer == 'client' else 0) if loss_percent or silent_tick else lag for peer in peers}
+    placements = engine_placements(peers)
+    manifest['engine_placement'] = {}
     write_json(out / 'manifest.json', manifest)
     runs, records = {}, {}
     try:
@@ -186,6 +235,9 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                 (run_out / 'feel').mkdir()
             stage_baseline(run, final_tick, sp_humans if sp else 2)
             run.start()
+            if peer in placements:
+                manifest['engine_placement'][peer] = place_engine(run, placements[peer])
+                write_json(out / 'manifest.json', manifest)
             if not sp and peer == 'host':
                 time.sleep(.75)
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(runs)) as executor:
@@ -347,7 +399,7 @@ def reduce_timing_case(run, reference=None):
     proof['pass'] &= live_pass
     write_json(run / 'hash-proof.json', proof)
     return dict(name=run.name, peers=peers, measurement_complete=manifest['launches_complete'] and all(value['measurement_complete'] for value in peers.values()),
-                launches_complete=manifest['launches_complete'],
+                launches_complete=manifest['launches_complete'], engine_placement=manifest.get('engine_placement') or {},
                 proof=proof, off_wire_pass=proof['pass'], item9a_pass=all(value['pass_check'] for value in peers.values()))
 
 
