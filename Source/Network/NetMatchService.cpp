@@ -624,6 +624,7 @@ static std::string ResyncSaveName() {
 			m_AutosaveMatchId.clear();
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			ResetCheckpointSchedule();
 			m_FinalCheckpointWritten = false;
 			m_ResumeSegmentTick = 0;
 			m_WorkerDone = false;
@@ -1833,6 +1834,7 @@ static std::string ResyncSaveName() {
 		m_LastJoinRoute.reset();
 		m_WorldCaptureRequestedTick = 0;
 		m_WorldCapturePending = false;
+		ResetCheckpointSchedule();
 		m_PrivateActivations.clear(); m_PrivateJoinBlobs.clear(); m_CatchUpWirePackets.clear(); m_CatchUpWireBytes = 0;
 		ScenarioRunner::ReleaseWorldCatchUp();
 		m_WorldJoinImageArchive.reset(); m_WorldJoinImageDigest.clear();
@@ -2626,6 +2628,7 @@ static std::string ResyncSaveName() {
 			m_PinnedAutosave->Store(0, 0);
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
+			ResetCheckpointSchedule();
 		}
 		// Every round writes its checkpoints under the configuration it is actually played on, so a
 		// resumed match's own checkpoints can be resumed again.
@@ -2850,20 +2853,95 @@ static std::string ResyncSaveName() {
 		m_RestartAdmissionDue.store(true);
 	}
 
-	void NetMatchService::TakeAutosaveVerdicts() {
+	void NetMatchService::ResolveAwaitedAutosave(uint64_t tick, bool archived) {
+		const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
+		                                  [&](const AwaitedAutosave& entry) { return entry.tick == tick; });
+		if (awaited == m_AwaitedAutosaves.end()) return;
+		const bool joinCapture = awaited->joinCapture;
+		m_AwaitedAutosaves.erase(awaited);
+		ApplyAutosaveVerdict(tick, joinCapture, archived);
+	}
+
+	std::vector<uint64_t> NetMatchService::TakeAutosaveVerdicts() {
+		std::vector<uint64_t> finished;
 		while (const std::optional<ActivityMan::AutosaveVerdict> verdict = g_ActivityMan.TakeAutosaveVerdict()) {
-			const auto awaited = std::find_if(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(),
-			                                  [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
-			if (awaited == m_AwaitedAutosaves.end()) continue;
-			const bool joinCapture = awaited->joinCapture;
-			m_AwaitedAutosaves.erase(awaited);
-			ApplyAutosaveVerdict(verdict->tick, joinCapture, verdict->archived);
+			const bool awaited = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [&](const AwaitedAutosave& entry) { return entry.tick == verdict->tick; });
+			ResolveAwaitedAutosave(verdict->tick, verdict->archived);
+			if (awaited) finished.push_back(verdict->tick);
 		}
+		return finished;
+	}
+
+	void NetMatchService::ResetCheckpointSchedule() {
+		m_ScheduledCaptures.clear();
+		m_OpenCaptureTick = 0;
+		m_CaptureWriters.clear();
+		m_OpenCaptureForJoin = false;
+		(void)ScenarioRunner::TakeAppliedCheckpoints();
+	}
+
+	std::set<uint8_t> NetMatchService::CheckpointWriters(uint64_t tick) const {
+		std::set<uint8_t> writers;
+		if (!m_Coordinator) return writers;
+		writers.insert(GetLocalPeerId());
+		// A held or departed seat is not simulating the tick live, so it neither captures nor reports.
+		for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) {
+			if (!m_Coordinator->HasHeldAISeat(peer) && !m_Coordinator->IsPeerGoneAtFrame(peer, tick)) writers.insert(peer);
+		}
+		return writers;
+	}
+
+	NetMatchService::AutosaveTickOutput NetMatchService::StepAutosaveSchedule(const AutosaveTickInput& input) {
+		AutosaveTickOutput output;
+		for (const CheckpointNote& note: input.applied) {
+			if (note.kind == NetGameCheckpoint::Capture) {
+				// A capture named for a tick already behind this frame is taken here, on every peer alike.
+				m_ScheduledCaptures.insert(std::max(note.tick, input.tick));
+			} else if (note.kind == NetGameCheckpoint::Written && m_IsHost && note.tick == m_OpenCaptureTick) {
+				m_CaptureWriters.erase(note.sender);
+			}
+		}
+		// A finished capture frees this peer's writer, and the host schedules on nothing else.
+		for (const uint64_t finished: input.finished) output.send.push_back({0, NetGameCheckpoint::Written, finished});
+		if (!m_ScheduledCaptures.empty() && *m_ScheduledCaptures.begin() <= input.tick) {
+			m_ScheduledCaptures.erase(m_ScheduledCaptures.begin(), m_ScheduledCaptures.upper_bound(input.tick));
+			output.capture = true;
+		}
+		if (!m_IsHost) return output;
+		for (auto writer = m_CaptureWriters.begin(); writer != m_CaptureWriters.end();) {
+			writer = input.writers.contains(*writer) ? std::next(writer) : m_CaptureWriters.erase(writer);
+		}
+		if (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty())) return output;
+		m_OpenCaptureTick = 0;
+		m_OpenCaptureForJoin = false;
+		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		// A join asks for one capture and waits for its verdict; only a refused one asks again.
+		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
+		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
+		if (!joinCapture && seconds == 0) return output;
+		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
+		if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
+			m_NextAutosaveSimTime = input.now - tickLength + interval;
+		}
+		m_LastAutosaveSimTime = input.now;
+		// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
+		const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
+		if (!joinCapture && takenAt < m_NextAutosaveSimTime) return output;
+		if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
+		m_OpenCaptureTick = input.tick + input.lead;
+		m_OpenCaptureForJoin = joinCapture;
+		m_CaptureWriters = input.writers;
+		output.send.push_back({0, NetGameCheckpoint::Capture, m_OpenCaptureTick});
+		return output;
 	}
 
 	void NetMatchService::AutosaveAtTickBoundary(uint64_t tick) {
+		std::vector<CheckpointNote> applied;
+		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
-		TakeAutosaveVerdicts();
+		const std::vector<uint64_t> finished = TakeAutosaveVerdicts();
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		if (m_WorldJoin.IsConfigured() && m_Coordinator) {
 			NetLockstepReadyFrame ready;
@@ -2873,38 +2951,51 @@ static std::string ResyncSaveName() {
 				if (!m_WorldJoin.Tail().Append(frame, &error) && m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "committed catch-up history: " + error;
 			} else if (m_WorldJoin.IsPrivateMatch()) m_PrivateJoinError = "the completed tick has no committed catch-up input";
 		}
-		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
-		const uint32_t seconds = m_MatchAutosaveSeconds;
-		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured();
-		if ((!joinCapture && seconds == 0) || !ScenarioRunner::IsLockstepControllerSyncActive() ||
-		    !g_ActivityMan.ActivityRunning() || m_AutosaveMatchId.empty()) return;
-		const int64_t now = g_TimerMan.GetSimTimeTicks();
-		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
-		if (m_NextAutosaveSimTime < 0 || now < m_LastAutosaveSimTime) {
-			m_NextAutosaveSimTime = now - g_TimerMan.GetDeltaTimeTicks() + interval;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
+		AutosaveTickInput input;
+		input.tick = tick;
+		input.now = g_TimerMan.GetSimTimeTicks();
+		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
+		input.applied = std::move(applied);
+		input.finished = finished;
+		if (m_IsHost) {
+			input.writers = CheckpointWriters(tick);
+			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 		}
-		m_LastAutosaveSimTime = now;
-		if (!joinCapture && now < m_NextAutosaveSimTime) return;
-		if (interval > 0 && now >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((now - m_NextAutosaveSimTime) / interval + 1) * interval;
-		if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
-		const auto captureBegan = std::chrono::steady_clock::now();
-		if (!SaveStampedAutosave(tick)) {
-			if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count());
-			return;
-		}
-		if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, std::max(g_ActivityMan.LastAutosaveCaptureMs(), std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count()));
-		// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
-		m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
-		// The segment holds this tick's frames from here; it opens when the archive validates and is
-		// dropped with it when the capture is refused.
-		RollWorldReplaySegment(tick);
-		if (m_WorldJoin.IsConfigured()) {
-			// The image is published when the writer thread has finished this archive, from the pump.
-			{
-				std::ostringstream line;
-				line << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson();
-				System::PrintDiagnosticLine(line.str());
+		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		if (output.capture) {
+			const bool joinCapture = IsJoinCaptureTick(tick);
+			// A peer replaying its catch-up is not live at this tick, and the host does not wait on it.
+			bool taken = false;
+			if (!ScenarioRunner::WorldCatchUpActive() && g_ActivityMan.ActivityRunning()) {
+				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
+				const auto captureBegan = std::chrono::steady_clock::now();
+				taken = SaveStampedAutosave(tick);
+				const double captureMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureBegan).count();
+				if (m_Coordinator) m_Coordinator->CompleteSynchronizedCapture(tick, taken ? std::max(g_ActivityMan.LastAutosaveCaptureMs(), captureMs) : captureMs);
 			}
+			if (taken) {
+				if (input.unwritten > 0) System::PrintDiagnosticLine(std::format("[autosave] named tick={} taken with unwritten={}", tick, input.unwritten));
+				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
+				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
+				// The segment holds this tick's frames from here; it opens when the archive validates and is
+				// dropped with it when the capture is refused.
+				RollWorldReplaySegment(tick);
+				if (m_WorldJoin.IsConfigured()) {
+					// The image is published when the writer thread has finished this archive, from the pump.
+					std::ostringstream line;
+					line << "[net-world] metrics " << m_WorldJoin.Metrics().BuildReportJson();
+					System::PrintDiagnosticLine(line.str());
+				}
+			} else {
+				// A capture this peer did not take holds nothing, and says so at once.
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning()));
+				output.send.push_back({0, NetGameCheckpoint::Written, tick});
+			}
+		}
+		for (const CheckpointNote& note: output.send) {
+			if (note.kind == NetGameCheckpoint::Capture) System::PrintDiagnosticLine(std::format("[autosave] named tick={} at={} writers={}", note.tick, tick, input.writers.size()));
+			(void)ScenarioRunner::SubmitCheckpoint(NetGameCheckpoint{note.kind, note.tick});
 		}
 	}
 

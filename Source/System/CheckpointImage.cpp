@@ -1051,6 +1051,38 @@ bool RTE::RunCheckpointImageSelfTest() {
 				pass(row, "the flag was raised and the walk that followed cleared it");
 			}
 		}
+
+		// Pages that go quiet at different freezes each hold the copy buffer they were copied into. A heap
+		// keeps a bounded set of those buffers mapped, and its last snapshot still reads as the heap it froze.
+		{
+			const CopyBufferProbe probe = ProbeCheckpointCopyBuffers();
+			const char* row = "settled_pages_keep_a_bounded_set_of_copy_buffers";
+			const std::string detail = "most_live=" + std::to_string(probe.mostLive) + " bound=" + std::to_string(probe.bound) +
+			                           " freezes=" + std::to_string(probe.freezes) + " pages_match=" + std::to_string(probe.pagesMatch);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.mostLive > probe.bound || !probe.pagesMatch) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
+
+		// A checkpoint image can outlive the Lua state it froze (the last image at shutdown). Releasing it
+		// afterwards must not reach into the destroyed heap, and its copy buffers must still be unmapped.
+		{
+			const OrphanSnapshotProbe probe = ProbeSnapshotAfterItsHeap();
+			const char* row = "a_snapshot_released_after_its_heap_never_calls_into_it";
+			const std::string detail = "dead_heap_calls=" + std::to_string(probe.deadHeapCalls) + " mapped_after=" + std::to_string(probe.mappedAfter) +
+			                           " pages_read=" + std::to_string(probe.pagesRead);
+			if (!probe.error.empty()) {
+				fail(row, detail + " error=" + probe.error);
+			} else if (probe.deadHeapCalls != 0 || probe.mappedAfter != 0 || !probe.pagesRead) {
+				fail(row, detail);
+			} else {
+				pass(row, detail);
+			}
+		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());
 	}

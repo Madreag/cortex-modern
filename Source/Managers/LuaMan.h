@@ -45,7 +45,28 @@ namespace RTE {
 		int64_t enumUs = 0;
 		int64_t worldUs = 0;
 		int64_t answerUs = 0;
+		size_t copyMapped = 0; // Every Lua heap copy mapped after the capture, idle buffers included, and the idle part.
+		size_t copyIdle = 0;
 	};
+
+	/// What a tracked heap whose pages go quiet at different freezes kept mapped, for the checkpoint self-test.
+	struct CopyBufferProbe {
+		size_t freezes = 0;
+		size_t mostLive = 0; //!< The most copy buffers the heap held after any freeze, once the snapshot before it was released.
+		size_t bound = 0;
+		bool pagesMatch = false; //!< Every array the last snapshot froze reads back as the live heap.
+		std::string error;
+	};
+	CopyBufferProbe ProbeCheckpointCopyBuffers();
+
+	/// A snapshot released after the heap it froze, for the checkpoint self-test.
+	struct OrphanSnapshotProbe {
+		size_t deadHeapCalls = 0; //!< Buffers handed back to the destroyed heap.
+		size_t mappedAfter = 0; //!< Copy bytes still mapped once the snapshot is gone, beyond what was mapped before the heap.
+		bool pagesRead = false; //!< The snapshot still read its frozen array after the heap was destroyed.
+		std::string error;
+	};
+	OrphanSnapshotProbe ProbeSnapshotAfterItsHeap();
 
 	class LuabindObjectWrapper;
 	class MovableObject;

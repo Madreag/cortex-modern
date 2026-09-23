@@ -650,6 +650,15 @@ static void ApplyLockstepGameCommands(const NetLockstepReadyFrame& readyFrame) {
 			continue;
 		}
 		if (!ScenarioRunner::ConsumeLockstepGameCommand(command)) continue;
+		if (const auto* checkpoint = std::get_if<NetGameCheckpoint>(&command.payload)) {
+			// The schedule is the host's; any peer may report its own writer.
+			if (checkpoint->kind == NetGameCheckpoint::Capture && command.senderPeerId != ScenarioRunner::GetLockstepHostPeerId()) {
+				g_ConsoleMan.PrintString("ERROR: Rejected a checkpoint schedule from a peer that is not the host");
+				continue;
+			}
+			ScenarioRunner::NoteAppliedCheckpoint(command.senderPeerId, *checkpoint);
+			continue;
+		}
 		// Only a peer that controls a team may issue economy commands for it — ANY of a shared
 		// co-op team's human peers counts; every peer resolves this identically.
 		const int32_t commandTeam = NetGameCommandTeam(command.payload);
@@ -2581,7 +2590,8 @@ bool MovableMan::CaptureScriptGraphs(std::vector<CheckpointText>& graphs, std::v
 		          << " userdata=" << stats.userdata << " cached=" << stats.cached << " iterators=" << stats.iterators << " owned=" << stats.owned
 		          << " callbacks_us=" << stats.callbacksUs << " roots_us=" << stats.rootsUs << " enum_us=" << stats.enumUs << " world_us=" << stats.worldUs << " answer_us=" << stats.answerUs
 		          << " receivers_us=" << stats.receiversUs << " activity_us=" << stats.activityUs << " async_us=" << stats.asyncUs << " cache_us=" << stats.cacheUs << " objects_us=" << stats.objectsUs << " scripts=" << stats.cachedScripts
-		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs << std::endl;
+		          << " prev_faults=" << stats.faults << " prev_fault_us=" << stats.faultUs
+		          << " copy_mapped=" << stats.copyMapped << " copy_idle=" << stats.copyIdle << std::endl;
 		if (complete) {
 			if (fromAnImage) *fromAnImage = true;
 			return true;

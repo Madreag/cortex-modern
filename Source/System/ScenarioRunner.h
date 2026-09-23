@@ -217,6 +217,12 @@ namespace RTE {
 		static bool SubmitWorldTransition(const NetGameWorldTransition& transition);
 		/// Refuses a WorldTransition whose generation or membership revision is already stale.
 		static bool AcceptWorldTransition(const NetGameWorldTransition& transition, std::string* error = nullptr);
+		/// Puts one checkpoint schedule entry on this peer's committed stream.
+		static bool SubmitCheckpoint(const NetGameCheckpoint& checkpoint);
+		/// Records a checkpoint schedule entry a committed frame carried; the tick boundary takes it.
+		static void NoteAppliedCheckpoint(uint8_t sender, const NetGameCheckpoint& checkpoint);
+		/// The entries applied since the last call, in the order the frames applied them.
+		static std::vector<std::pair<uint8_t, NetGameCheckpoint>> TakeAppliedCheckpoints();
 		/// Installs the committed tail a world joiner applies faster than the paced lockstep wait.
 		static bool InstallWorldCatchUp(uint64_t snapshotTick, std::vector<NetLockstepFrame> tail, std::string* error = nullptr, bool initialSnapshot = false);
 		static bool RestoreCommittedCatchUpState(const NetResyncState& state, std::string* error = nullptr);

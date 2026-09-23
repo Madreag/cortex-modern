@@ -82,6 +82,7 @@ extern "C" {
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -5956,6 +5957,8 @@ bool LuaStateWrapper::CaptureFrozenScriptGraph(CheckpointText& text, std::vector
 			stats->enumUs += image->native->EnumUs();
 			stats->worldUs += image->native->WorldUs();
 			stats->answerUs += image->native->AnswerUs();
+			stats->copyMapped = CheckpointLua::HeapOwner::MappedCopyBytes();
+			stats->copyIdle = CheckpointLua::HeapOwner::IdleCopyBytes();
 		}
 		(void)frozenUs;
 		// A refusal is the archive's verdict and travels back whole; any other failure retires this state's frozen path.
@@ -11937,4 +11940,93 @@ void LuaMan::EndPreviewScripts() {
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
+}
+
+CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {
+	CopyBufferProbe probe;
+	probe.bound = CheckpointLua::HeapOwner::c_LiveSlabs + 1;
+	try {
+		const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
+		lua_State* state = owner->State();
+		// Only the chunks below write the heap, so each freeze copies what they touched.
+		lua_gc(state, LUA_GCSTOP, 0);
+		const auto run = [state](const std::string& code) {
+			if (luaL_loadstring(state, code.c_str()) != 0 || lua_pcall(state, 0, 0, 0) != 0) {
+				const char* message = lua_tostring(state, -1);
+				throw std::runtime_error(message ? message : "a probe chunk failed");
+			}
+		};
+		// Eight arrays on pages of their own, each written in one round only, and one written in every round.
+		constexpr int rounds = 8;
+		run("groups = {} for g = 1, " + std::to_string(rounds) + " do local t = {} for i = 1, 16384 do t[i] = i end groups[g] = t end "
+		    "hot = {} for i = 1, 16384 do hot[i] = 0 end");
+		CheckpointLua::Snapshot held = owner->Freeze({});
+		probe.freezes = 1;
+		for (int round = 1; round <= rounds; ++round) {
+			run("for i = 1, 16384 do hot[i] = hot[i] + 1 end local t = groups[" + std::to_string(round) + "] for i = 1, 16384 do t[i] = -i end");
+			// Each freeze replaces the snapshot before it, as a world keeps one capture in flight.
+			held = owner->Freeze({});
+			++probe.freezes;
+			probe.mostLive = std::max(probe.mostLive, owner->LiveSlabs());
+		}
+		// Nothing wrote the arrays after the last freeze, so its snapshot reads them back byte for byte.
+		const auto matches = [&held, state]() {
+			const GCtab* table = static_cast<const GCtab*>(lua_topointer(state, -1));
+			const TValue* array = tvref(table->array);
+			const size_t bytes = table->asize * sizeof(TValue);
+			const auto frozen = held.ReadBytes(array, bytes);
+			return frozen.size() == bytes && std::memcmp(frozen.data(), array, bytes) == 0;
+		};
+		probe.pagesMatch = true;
+		lua_getglobal(state, "groups");
+		for (int group = 1; group <= rounds; ++group) {
+			lua_rawgeti(state, -1, group);
+			probe.pagesMatch = matches() && probe.pagesMatch;
+			lua_pop(state, 1);
+		}
+		lua_pop(state, 1);
+		lua_getglobal(state, "hot");
+		probe.pagesMatch = matches() && probe.pagesMatch;
+		lua_pop(state, 1);
+	} catch (const std::exception& error) {
+		probe.error = error.what();
+	}
+	return probe;
+}
+
+OrphanSnapshotProbe RTE::ProbeSnapshotAfterItsHeap() {
+	OrphanSnapshotProbe probe;
+	try {
+		const size_t mappedBefore = CheckpointLua::HeapOwner::MappedCopyBytes();
+		const size_t deadBefore = CheckpointLua::HeapOwner::CallsIntoDestroyedHeaps();
+		std::optional<CheckpointLua::Snapshot> held;
+		std::vector<std::byte> frozen;
+		const void* array = nullptr;
+		{
+			const std::unique_ptr<CheckpointLua::HeapOwner> owner = CheckpointLua::HeapOwner::Create();
+			lua_State* state = owner->State();
+			lua_gc(state, LUA_GCSTOP, 0);
+			if (luaL_loadstring(state, "kept = {} for i = 1, 16384 do kept[i] = i end") != 0 || lua_pcall(state, 0, 0, 0) != 0) {
+				const char* message = lua_tostring(state, -1);
+				throw std::runtime_error(message ? message : "the probe chunk failed");
+			}
+			held = owner->Freeze({});
+			lua_getglobal(state, "kept");
+			const GCtab* table = static_cast<const GCtab*>(lua_topointer(state, -1));
+			array = tvref(table->array);
+			const auto bytes = held->ReadBytes(array, table->asize * sizeof(TValue));
+			frozen.assign(bytes.begin(), bytes.end());
+			lua_pop(state, 1);
+		}
+		// The heap is gone and the snapshot is not, as the checkpoint image outlives a state at shutdown.
+		const auto after = held->ReadBytes(array, frozen.size());
+		probe.pagesRead = !frozen.empty() && after.size() == frozen.size() && std::memcmp(after.data(), frozen.data(), frozen.size()) == 0;
+		held.reset();
+		probe.deadHeapCalls = CheckpointLua::HeapOwner::CallsIntoDestroyedHeaps() - deadBefore;
+		const size_t mappedAfter = CheckpointLua::HeapOwner::MappedCopyBytes();
+		probe.mappedAfter = mappedAfter > mappedBefore ? mappedAfter - mappedBefore : 0;
+	} catch (const std::exception& error) {
+		probe.error = error.what();
+	}
+	return probe;
 }
