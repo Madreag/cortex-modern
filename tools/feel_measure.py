@@ -604,6 +604,8 @@ def main(argv=None):
     branch = subprocess.check_output(['git', '-C', str(REPO), 'branch', '--show-current'], text=True).strip()
     os.environ.update(CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1')
     scratch_bytes(root, MATRIX_BYTE_LIMIT)
+    counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
+                  host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
     if args.cases:
         selected = [(index, case) for index, case in enumerate(AUTOSAVE_CASES) if case[0] in args.cases]
         if not args.analyze_only:
@@ -620,7 +622,7 @@ def main(argv=None):
             input_pattern(script)
             for index, (name, lag, seconds) in selected:
                 launch_case(root, name, lag, 60, True, args.port + 8 + index, script, exe['sha256'],
-                            args.timeout, window_ticks=2 * TICKS, autosave_seconds=seconds)
+                            args.timeout, window_ticks=2 * TICKS, autosave_seconds=seconds, **counts)
         results = [reduce_timing_case(root / case[0]) for _, case in selected]
         for result in results:
             write_json(root / result['name'] / 'feel-report.json', result)
@@ -651,8 +653,6 @@ def main(argv=None):
         write_json(root / 'matrix-plan.json', plan)
         script = root / 'input.txt'
         input_pattern(script)
-        counts = dict(host_lua_states=args.host_lua_states, client_lua_states=args.client_lua_states,
-                      host_pre_match_history=args.host_pre_match_history, client_pre_match_history=args.client_pre_match_history)
         for cap, cap_name in ((60, '60hz'), (0, 'uncapped')):
             launch_case(root, 'baseline-' + cap_name, 0, cap, True, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
             launch_case(root, 'baseline-' + cap_name + '-off', 0, cap, False, 0, script, exe['sha256'], args.timeout, sp=True, **counts)
