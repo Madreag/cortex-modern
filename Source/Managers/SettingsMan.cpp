@@ -14,6 +14,7 @@
 #include "NetMatchConfig.h"
 #include "System.h"
 
+#include <algorithm>
 #include <cctype>
 #include <charconv>
 #include <cstdlib>
@@ -254,8 +255,9 @@ int SettingsMan::Initialize() {
 }
 
 void SettingsMan::SetAutosaveSeconds(uint32_t seconds) {
-	m_AutosaveSeconds = seconds;
-	NetMatchService::SetAutosaveSecondsSetting(seconds);
+	// Every minute through every hour, or off: the saved cadence is the one a hosted match uses.
+	m_AutosaveSeconds = seconds == 0 ? 0 : std::clamp(seconds, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds);
+	NetMatchService::SetAutosaveSecondsSetting(m_AutosaveSeconds);
 }
 
 void SettingsMan::GenerateSessionDirectoryInstallKey() {

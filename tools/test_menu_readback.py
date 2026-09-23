@@ -841,8 +841,9 @@ def scripts(case, port, root, size="960x540"):
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
                         "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
             text += checks(control, "CollectionBoxNetPageFiles")
+        # The seeded 45 is under the minute a hosted match clamps to; the page shows that 60 s.
         text += ("assert_label LabelNetAutosave Enabled\n"
-                 "assert_label LabelNetAutosaveInterval 45 s\n"
+                 "assert_label LabelNetAutosaveInterval 60 s\n"
                  "assert_label LabelNetAutosaveHost Set by the host\n"
                  "assert_label LabelNetAutosaveIntervalHost Set by the host\n"
                  "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
@@ -2210,7 +2211,7 @@ def run_case(options, case, root, failing=None):
                 assert result["saved"] == RECOVERY_SAVED, result["saved"]
             if case == "net-files":
                 assert rows["LabelNetAutosave"]["text"] == "Enabled", rows["LabelNetAutosave"]
-                assert rows["LabelNetAutosaveInterval"]["text"] == "45 s", rows["LabelNetAutosaveInterval"]
+                assert rows["LabelNetAutosaveInterval"]["text"] == "60 s", rows["LabelNetAutosaveInterval"]
                 assert rows["TextNetworkDiagDir"]["text"] == FILES_SAVED["NetworkDiagnosticsDirectory"], rows["TextNetworkDiagDir"]
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(FILES_SAVED))
                 assert result["saved"] == FILES_SAVED, result["saved"]

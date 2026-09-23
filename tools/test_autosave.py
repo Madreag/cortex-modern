@@ -162,7 +162,8 @@ def main() -> int:
     arms = {"off": {"host": 0, "client": 0}, "on": {"host": 2, "client": 2},
             "asymmetric": {"host": 2, "client": 0}, "rotation": {"host": 1, "client": 1}}
     if args.arm == "default":
-        arms = {"default": {"host": None, "client": None}, "setting": {"host": None, "client": None},
+        # Only the run lever goes below a minute, so the persisted-setting row takes its 2 s from the flag.
+        arms = {"default": {"host": None, "client": None}, "setting": {"host": 2, "client": 2},
                 "setting-off": {"host": None, "client": None}, "flag-off": {"host": 0, "client": 0}}
     elif args.arm == "host-option":
         arms = {"host-option": {"host": 2, "client": None}}
@@ -192,9 +193,9 @@ def main() -> int:
                 enabled = autosaving or cadence[who] is not None and cadence[who] > 0
                 details[who] = inspect_autosaves(arm_root, who, enabled)
                 if args.arm == "default":
-                    if arm == "flag-off":
+                    if arm in ("setting", "flag-off"):
                         flag = records[who]["argv"].index("-net-autosave-seconds")
-                        assert records[who]["argv"][flag + 1] == "0", "flag-off override is not zero"
+                        assert records[who]["argv"][flag + 1] == str(cadence[who]), f"{arm} override is not {cadence[who]}"
                     else:
                         assert "-net-autosave-seconds" not in records[who]["argv"], f"{arm} row supplied the autosave flag"
                     details[who]["setting"] = inspect_setting(arm_root, who, setting)
