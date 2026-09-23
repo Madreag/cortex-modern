@@ -132,7 +132,7 @@ namespace RTE {
 		/// Where a rejoining seat is in its own handshake. Connecting talks to the host live and keeps every timeout. The
 		/// host staging this seat's image, this peer loading it and this peer replaying the committed tail are work with
 		/// nobody to answer, so the session-silence timeout does not judge them; a transport close still ends the link,
-		/// the host's goodbye completes the seat in any of them, and the service bounds the image and the load itself.
+		/// and the host's goodbye completes the seat in any of them.
 		enum class RejoinPhase : uint8_t { Active = 0, Connecting = 1, ImagePending = 2, Loading = 3, TailReplay = 4 };
 		static constexpr bool SuspendsSilence(RejoinPhase phase) {
 			return phase == RejoinPhase::ImagePending || phase == RejoinPhase::Loading || phase == RejoinPhase::TailReplay;
