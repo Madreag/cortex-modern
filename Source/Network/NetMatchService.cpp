@@ -600,7 +600,7 @@ static std::string ResyncSaveName() {
 			m_HostRelayMode = static_cast<int>(g_SettingsMan.GetNetworkHostRelayMode());
 			m_ConnectionMode = static_cast<int>(g_SettingsMan.GetNetworkConnectionMode());
 			m_FixedRelayOffer = NetRelayConfig::Fixed(g_SettingsMan.GetNetworkTurnServers(), g_SettingsMan.GetNetworkTurnUser(), g_SettingsMan.GetNetworkTurnPass(),
-			                                         "host", UnixNowMs(nullptr) / 1000 + 3600);
+			                                         "host", UnixNowMs(nullptr) / 1000 + NetDirectoryClient::c_MaxRelayTtlSeconds);
 			if (m_HostRelayMode == 2) {
 				SetRelayOfferLocked(m_FixedRelayOffer);
 				if (m_RelayOffer.Empty()) m_RelayError = "Fixed relay needs an address, username and password";
@@ -6222,6 +6222,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::SetRelayOfferLocked(const NetRelayConfig& offer) {
 		if (m_RelayOffer == offer && m_RelaySnapshot.load()) return;
+		if (m_RelayOffer != offer) m_RelayOfferIssuedAt = UnixNowMs(nullptr) / 1000;
 		m_RelayOffer = offer;
 		m_RelaySnapshot.store(std::make_shared<const NetRelayConfig>(offer));
 	}
@@ -6268,7 +6269,9 @@ static std::string ResyncSaveName() {
 			if (!m_RelayOffer.Empty() && !m_RelayOffer.Usable(wall)) { SetRelayOfferLocked({}); m_RelayPublishPending = true; }
 			if (m_Directory.GetState() != NetDirectoryClient::State::Registered || m_Directory.IceRequestPending()) return;
 			const bool fresh = m_FreshRelayRequested.load();
-			request = (fresh || m_RelayOffer.expiresAt <= wall + 300) && nowMs >= m_NextRelayRequestMs;
+			// Renew at half the offer's lifetime, so a connection opened on it still has the other half.
+			const uint64_t issued = std::min(m_RelayOfferIssuedAt, m_RelayOffer.expiresAt);
+			request = (fresh || wall >= m_RelayOffer.expiresAt - (m_RelayOffer.expiresAt - issued) / 2) && nowMs >= m_NextRelayRequestMs;
 			if (!request) return;
 			m_FreshRelayRequested = false;
 			if (fresh) m_RelayReady = false;
@@ -6278,12 +6281,12 @@ static std::string ResyncSaveName() {
 				fixed = m_FixedRelayOffer;
 				if (fixed.Empty()) { m_RelayReady = true; return; }
 				fixed.matchId = matchId;
-				fixed.expiresAt = wall + 3600;
+				fixed.expiresAt = wall + NetDirectoryClient::c_MaxRelayTtlSeconds;
 				SetRelayOfferLocked(fixed);
 				m_RelayPublishPending = true;
 			}
 		}
-		if (request) m_Directory.RequestIceServers(matchId, 3600, fixed.Empty() ? nullptr : &fixed);
+		if (request) m_Directory.RequestIceServers(matchId, NetDirectoryClient::c_MaxRelayTtlSeconds, fixed.Empty() ? nullptr : &fixed);
 	}
 
 	void NetMatchService::PublishRelayOfferLocked(NetSession& session, INetTransport& wire) {
