@@ -47,6 +47,7 @@ namespace RTE {
 		std::mutex s_OutputMutex;
 		std::vector<std::string> s_LocalCandidates; //!< Every candidate GNS queued for a peer, as "address port typ type".
 		std::set<std::string> s_RemoteHostCandidates; //!< "address:port" of every host candidate a peer sent.
+		std::atomic<int> s_RenewedLoginAnswers{0}; //!< GNS lines reporting a TURN server's answer to a renewed login on a live allocation.
 
 		double ElapsedMs() {
 			return std::chrono::duration<double, std::milli>(Clock::now() - s_Start).count();
@@ -119,6 +120,9 @@ namespace RTE {
 				if (!line.empty()) {
 					std::cout << "[net-p2p-selftest] t=" << Ms(ElapsedMs()) << "ms gns(" << static_cast<int>(type) << ") " << line << '\n';
 					NoteCandidates(line);
+					if (line.find("the renewed login") != std::string::npos) {
+						++s_RenewedLoginAnswers;
+					}
 				}
 			}
 			std::cout.flush();
@@ -1349,9 +1353,10 @@ namespace RTE {
 			return Finish(failure);
 		}
 
-		/// relay-renew: the joiner starts with a stale TURN login, then gets the valid one on its live connection, as a renewed relay offer reaches it.
+		/// relay-renew: the joiner starts with a stale TURN login and gets the valid one on its live connection, as a renewed relay offer
+		/// reaches it; then a rotated login, which its live allocation tries on a Refresh at once.
 		int RunRelayRenew(const std::string& server) {
-			Say("mode: relay-renew, single process, both sides relay only through " + server + "; the joiner starts with a stale TURN login and is handed the valid one on its live connection 3 s in");
+			Say("mode: relay-renew, single process, both sides relay only through " + server + "; the joiner starts with a stale TURN login, is handed the valid one on its live connection 3 s in, then a rotated one");
 			std::string user;
 			std::string pass;
 			if (!RelayLogin(&user, &pass)) {
@@ -1412,8 +1417,27 @@ namespace RTE {
 								failure = "the 64-byte messages did not cross both ways intact over the renewed relay";
 							} else {
 								Say("host and joiner exchanged 64 bytes each way intact over the renewed relay");
-								joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
-								WaitUntil(5000, pump, [&] { return host.closed; });
+								// A live allocation tries the next renewed login on a Refresh at once, and stays up whatever the server answers.
+								GnsP2PConfig rotated = renewed;
+								rotated.turnUserList = "relay-renew-rotated";
+								rotated.turnPassList = std::to_string(random()) + std::to_string(random());
+								const int answersBefore = s_RenewedLoginAnswers.load();
+								Say("handing the joiner's live connection a rotated login (user 'relay-renew-rotated')");
+								joiner.transport.UpdateListenerIceServers(rotated);
+								WaitUntil(8000, pump, [&] { return host.closed || joiner.closed; });
+								if (s_RenewedLoginAnswers.load() == answersBefore) {
+									failure = "the joiner's live allocation never refreshed with the rotated login within 8 s";
+								} else if (!(failure = CheckRelayed(joiner)).empty() || !(failure = CheckRelayed(host)).empty()) {
+									failure = "the relay did not survive the rotated login: " + failure;
+								} else if (!joiner.transport.Send(joiner.peer, NetTransportLane::ControlReliable, fromJoiner, &error) || !host.transport.Send(host.peer, NetTransportLane::ControlReliable, fromHost, &error)) {
+									failure = "Send after the rotated login: " + error;
+								} else if (!WaitUntil(5000, pump, [&] { return host.received.size() > 1 && joiner.received.size() > 1; })) {
+									failure = "the 64-byte messages did not cross both ways after the rotated login";
+								} else {
+									Say("the relay answered the rotated login and the host and joiner still exchange 64 bytes each way");
+									joiner.transport.Disconnect(joiner.peer, "net-p2p-selftest done");
+									WaitUntil(5000, pump, [&] { return host.closed; });
+								}
 							}
 						}
 					}

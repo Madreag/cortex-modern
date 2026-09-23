@@ -1,4 +1,4 @@
-"""The TURN relay rows: a relayed connection outlives its permissions, and takes a renewed login live.
+"""The TURN relay rows: a relayed connection outlives its permissions, and takes renewed logins live.
 
     python tools/turn_relay_rows.py hold --seconds 360 --turn 192.168.50.122:3479 --out <dir>
     python tools/turn_relay_rows.py renew --turn 192.168.50.122:3479 --out <dir>
@@ -29,6 +29,7 @@ GNS_LINES = {
     "allocation_refreshed": re.compile(r"ICE: TURN relay \S+ refreshed for"),
     "login_updated": re.compile(r"ICE: TURN login updated"),
     "relay_login_renewed": re.compile(r"\[net-relay\] relay login renewed on \d+ live connection"),
+    "renewed_login_answers": re.compile(r"ICE: TURN .*the renewed login"),
     "turn_warnings": re.compile(r"ICE: TURN .*(refused|timed out|holds no allocation)"),
 }
 COTURN_LINES = {
@@ -37,6 +38,7 @@ COTURN_LINES = {
     "peer_deleted": re.compile(r"peer \S+ deleted"),
     "allocate": re.compile(r"ALLOCATE processed, success"),
     "error_401": re.compile(r"error 401"),
+    "error_441": re.compile(r"error 441"),
 }
 
 
