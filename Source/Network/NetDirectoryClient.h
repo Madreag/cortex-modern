@@ -136,11 +136,14 @@ namespace RTE {
 		                                         const NetDirectoryLocalIdentity* worldLocal = nullptr);
 
 		/// Whether a typed join addresses a persistent world: a listed row at that very address and
-		/// port, or the last world this process joined. A highlighted row for another host says nothing
-		/// about the address that was typed.
+		/// port (a session address names its row by session id), or the last world this process joined.
+		/// A highlighted row for another host says nothing about the address that was typed.
 		/// @param outActivity Receives the row's activity preset when a row decided it.
 		static bool TargetsPersistentWorld(const std::vector<GameRow>& rows, int selectedIndex, const std::string& address, uint16_t port,
 		                                   const std::string& lastWorldAddress, uint16_t lastWorldPort, std::string* outActivity = nullptr);
+		/// The join target TargetsPersistentWorld compares and the last-world memory keeps: the typed address, or
+		/// the session address of a directory row, whose dial address is empty.
+		static std::string WorldJoinTarget(const std::string& address, const std::string& sessionId);
 
 		/// The service.directory report section: {state, session_id, registers, heartbeats, deletes,
 		/// last_status, last_error, desired_listed, confirmed_listed, supports_unlisted}; without a held

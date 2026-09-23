@@ -1799,6 +1799,27 @@ namespace RTE {
 			if (NetDirectoryClient::TargetsPersistentWorld(rows, -1, "192.0.2.5", 7001, "192.0.2.5", 7000, nullptr)) {
 				return Fail("typed-address-targeted-the-wrong-world: another port on the last world's host was taken for it");
 			}
+			// A world joined from its Internet row dials no address, so the memory keeps the row's session address.
+			NetDirectoryClient::GameRow listed = world;
+			listed.sessionId = "5f2d9c61-8a4b-4c3e-9d7f-0b1a2c3d4e5f";
+			listed.address.clear();
+			NetMatchServiceRequest joined;
+			joined.SetJoinAddress(NetIceMenuJoinAddress(listed));
+			joined.port = listed.port;
+			const std::string memory = NetDirectoryClient::WorldJoinTarget(joined.address, joined.sessionId);
+			if (memory.empty() || !NetDirectoryClient::TargetsPersistentWorld({}, -1, NetDirectoryClient::WorldJoinTarget(joined.address, joined.sessionId), joined.port, memory, joined.port, nullptr)) {
+				return Fail("session-row-world-forgotten: a session:<id> world join left the last-world memory as \"" + memory + "\" (address \"" + joined.address + "\", session " + joined.sessionId + ")");
+			}
+			activity.clear();
+			if (!NetDirectoryClient::TargetsPersistentWorld({listed}, -1, memory, 0, "", 0, &activity) || activity != listed.activity) {
+				return Fail("session-row-world-forgotten: the listed world row with that session did not answer for " + memory);
+			}
+			if (NetDirectoryClient::TargetsPersistentWorld({listed}, -1, "session:0f2d9c61-8a4b-4c3e-9d7f-0b1a2c3d4e5f", joined.port, memory, joined.port, nullptr)) {
+				return Fail("session-row-world-forgotten: another session was taken for the remembered world " + memory);
+			}
+			if (NetDirectoryClient::TargetsPersistentWorld({}, -1, "", joined.port, "", joined.port, nullptr)) {
+				return Fail("session-row-world-forgotten: an empty address matched an empty last-world memory");
+			}
 			return 0;
 		}
 
