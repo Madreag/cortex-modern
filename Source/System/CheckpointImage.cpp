@@ -1,5 +1,6 @@
 #include "CheckpointImage.h"
 #include "CheckpointArchive.h"
+#include "ContentFile.h"
 #include "Writer.h"
 #include "Scene.h"
 #include "MovableMan.h"
@@ -1099,6 +1100,12 @@ bool RTE::RunCheckpointImageSelfTest() {
 			} else {
 				pass(row, detail);
 			}
+		}
+		// A capture's bitmap index is kept while the loaded bitmaps' version holds, so every way that changes them moves it.
+		{
+			const std::string missed = ContentFile::LoadedBitmapChangeMissedByIndex();
+			if (missed.empty()) pass("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "ways=12");
+			else fail("a_loaded_bitmap_change_by_any_way_reaches_the_next_index", "missed_way=" + missed);
 		}
 	} catch (const std::exception& error) {
 		fail("no_unexpected_exception", error.what());

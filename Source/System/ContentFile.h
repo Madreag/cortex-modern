@@ -220,6 +220,10 @@ namespace RTE {
 		/// depth holding it, which is written back. Null when none does.
 		static const std::string* LoadedBitmapPath(const BITMAP* bitmap, int& depth);
 
+		/// Changes the loaded bitmaps by each way in, on a scratch entry, and checks the next index sees each change.
+		/// @return The first way whose change the index missed, or empty. The loaded bitmaps are left as they were.
+		static std::string LoadedBitmapChangeMissedByIndex();
+
 		/// Encodes an 8-bit bitmap without changing its palette indices.
 		/// @return Whether the complete PNG was written to the output buffer.
 		static bool EncodeIndexedPNG(BITMAP* bitmap, std::vector<unsigned char>& output);
