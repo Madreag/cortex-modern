@@ -852,6 +852,8 @@ namespace RTE {
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
 		void InjectEvent(const NetTransportEvent& event, uint64_t nowMs) { HandleEvent(event, nowMs); }
+		/// Marks the host's goodbye drain: the round has run its last tick and judges no seat from here.
+		void SetGoodbyeDrain(bool draining) { m_GoodbyeDrain = draining; }
 		bool NoteFrameWait(uint64_t frame, uint64_t nowMs, bool waitingForDecision = false);
 		/// Moves every running deadline past a gap in our own ticks, so our park is not charged to a peer.
 		void ShiftDeadlinesPastOurOwnPark(uint64_t nowMs);
@@ -1034,6 +1036,7 @@ namespace RTE {
 		friend bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 		friend bool TestAStarvedSeatIsNotLate(std::string* error);
 		friend bool TestASurvivorsRunwayIsTheRounds(std::string* error);
+		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1343,6 +1346,7 @@ namespace RTE {
 		uint64_t m_CaptureReportSentMs = 0;
 		bool m_CaptureReportResent = false;
 		std::map<uint8_t, uint32_t> m_CaptureParkReportsMs;
+		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
 		std::vector<NetLockstepTiming> m_DeferredParkTimings;
 		bool m_ApplyingDeferredParkTiming = false;

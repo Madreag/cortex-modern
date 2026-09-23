@@ -72,6 +72,7 @@ namespace RTE {
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error);
 	bool TestAStarvedSeatIsNotLate(std::string* error);
 	bool TestASurvivorsRunwayIsTheRounds(std::string* error);
+	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 
 	namespace {
 		bool TestSnapshotConstructionKeepsPendingCommands(std::string* error) {
@@ -17730,6 +17731,39 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	/// The goodbye drain runs after this host's last tick: nothing simulates the frames past it, so no survivor waits on
+	/// a seat's input there and a hold proposed in it is a hold of a round that is over.
+	bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error) {
+		LoopbackTransport wire;
+		NetLockstepCoordinator host;
+		auto config = MakeCoordinatorConfig(1, 2, 0x9A10, 1, NetTransportLane::ControlReliable);
+		config.peerCount = 2; config.startFrame = 1; config.roundId = 34;
+		config.substituteSlowPeers = true; config.simTickMs = 1000.0 / 60.0; config.slowPlayerBoundTicks = 3;
+		config.relayToOtherPeers = true;
+		config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+		config.remoteTransportPeerIds = {{2, 1}};
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(0x9A10);
+		if (!wire.StartHost(48895, error) || !host.Start(wire, config, error)) return false;
+		host.m_State = NetLockstepState::Running;
+		host.m_RemotePeerIds = {2};
+		host.m_PeersPlayedThisRound = {2};
+		host.m_PeerEffectiveStart[2] = 2;
+		host.m_Stats.nextFrame = 2403;
+		bool declared = false;
+		unsigned int pumps = 0;
+		ScenarioRunner::SetLockstepCoordinator(&host);
+		ScenarioRunner::SetSessionPump([&] { if (++pumps == 2) declared = host.DeclareOverdueInputs(2403, 5000, 1000, {2}); }, [&] { return pumps < 3; });
+		(void)ScenarioRunner::DrainLockstepRelay(20, 0);
+		ScenarioRunner::SetSessionPump(nullptr);
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		if (pumps < 2 || declared || host.m_Stats.peers[2].holds != 0) {
+			*error = "the goodbye drain held a seat of a round that is over: pumps=" + std::to_string(pumps) + " holds=" + std::to_string(host.m_Stats.peers[2].holds);
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS the_goodbye_drain_judges_no_seat pumps=" << pumps << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -17894,6 +17928,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		    !TestALongLinkedSurvivorDoesNotCollapseTheBound(&error) ||
 		    !TestAStarvedSeatIsNotLate(&error) ||
 		    !TestASurvivorsRunwayIsTheRounds(&error) ||
+		    !TestTheGoodbyeDrainJudgesNoSeat(&error) ||
 		    !TestTimingAcknowledgementLossIsBounded(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error) ||
 		    !TestHoldWaitsForSurvivorDecision(&error, true) ||

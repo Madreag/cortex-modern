@@ -2690,6 +2690,8 @@ namespace RTE {
 			if (s_LockstepCoordinator) s_LockstepCoordinator->Tick(NetLockstepNowMs());
 			if (s_SessionPump) s_SessionPump();
 		};
+		NetLockstepCoordinator* const draining = s_LockstepCoordinator;
+		draining->SetGoodbyeDrain(true);
 		pump();
 		// The budget is an IDLE bound, not a fixed spend: a peer whose rejoin is still advancing keeps the door
 		// open, and a peer that has stopped answering closes it after one budget.  The total is capped so an
@@ -2722,6 +2724,7 @@ namespace RTE {
 			pump();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
+		if (s_LockstepCoordinator == draining) draining->SetGoodbyeDrain(false);
 		return drained;
 	}
 
