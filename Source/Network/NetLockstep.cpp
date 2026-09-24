@@ -9115,7 +9115,13 @@ namespace RTE {
 			Fail(stop.reason, stop.frame, "successor receives the boundary snapshot");
 			return;
 		}
-		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft && BeginHostMigration(nowMs))
+		// A host that announces its leave hands the match to the survivors; with no other survivor there is no one to hand it to,
+		// and the leave ends this seat's match as the host's own decision.
+		const bool otherSurvivor = std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+			return peer != GetHostPeerId() && !IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !m_AiHeldSeats.contains(peer);
+		});
+		if (stop.senderPeerId == GetHostPeerId() && IsRoundAuthority(stop.senderPeerId, fromTransport) && stop.reason == NetLockstepStopReason::PeerLeft && otherSurvivor &&
+		    BeginHostMigration(nowMs))
 			return;
 		if (IsHoldResolutionReason(stop.reason)) {
 			if (m_RelayHost) {
