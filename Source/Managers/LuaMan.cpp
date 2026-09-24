@@ -69,6 +69,7 @@ extern "C" {
 
 #include <atomic>
 #include <algorithm>
+#include <cctype>
 #include <list>
 #include <cmath>
 #include <charconv>
@@ -88,6 +89,7 @@ extern "C" {
 #include <sstream>
 #include <thread>
 #include <type_traits>
+#include <typeinfo>
 #include <iostream>
 #include <unordered_map>
 #include <unordered_set>
