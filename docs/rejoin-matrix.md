@@ -334,32 +334,32 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 
 | event | tier | expected outcome | source | gap | walk |
 |---|---|---|---|---|---|
-| hold-proposed | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'hold-proposed' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| hold-resolved | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'hold-resolved' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| park-begin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'park-begin' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| park-end | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'park-end' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| private-capture-complete | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'private-capture-complete' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| world-image-offered | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'world-image-offered' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| opening-resume-offer | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'opening-resume-offer' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| tail-replay-complete | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'tail-replay-complete' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| resync-relaunch | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'resync-relaunch' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| hold-proposed | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| hold-resolved | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| park-begin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| park-end | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| private-capture-complete | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| world-image-offered | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| opening-resume-offer | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| tail-replay-complete | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| resync-relaunch | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | host-goodbye | 2 | ignore: the host is already gone | R1-392ii |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | host-lost | 2 | ignore: the host is already gone | R1-392ii |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | migration-begin | 2 | ignore: a migration already running is not restarted | DESIGN-MIGRATION |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | migration-complete | 2 | legal: the successor hosts; a held seat stays with the AI on the migrated host and rejoins it through resync | R1-392ii |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | migration-fail | 2 | legal: the survivors leave to the landing with 'The host left the match' | R1-392ii |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | migration-successor-lost | 2 | legal: the migration moves to the next successor | DESIGN-MIGRATION |  | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| late-join | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'late-join' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| ticket-rejoin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'ticket-rejoin' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| held-rejoin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'held-rejoin' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| kick | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'kick' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| ban | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'ban' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| seat-release | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'seat-release' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| own-cap | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'own-cap' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| resume-from-disk | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'resume-from-disk' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| late-join | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| ticket-rejoin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| held-rejoin | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| kick | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| ban | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| seat-release | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| own-cap | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| resume-from-disk | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 | match-over | 2 | refuse: no host remains to end the match until the successor hosts | GAP | GAP: an end of match requested while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| link-blip | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'link-blip' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
-| link-restore | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: event 'link-restore' during a host migration | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| link-blip | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
+| link-restore | 2 | ignore until the migration completes or fails (conservative) | GAP | GAP: an event other than the migration's own steps arriving while the host is being replaced | not walked: needs a three-peer rig with a successor in migration; not composed in this row |
 
 ## Draining
 
@@ -489,26 +489,26 @@ A walked expectation is a list of tokens that must all hold. A not-walked expect
 | Relaunching | private-capture-complete | a private image completing for a seat that is not waiting on one |
 | Relaunching | world-image-offered | a world image offered to a seat that is not waiting on one |
 | Relaunching | held-rejoin | a returner arriving during a relaunch (conservative: the running round refuses; the relaunch's own admission carries it) |
-| Migrating | hold-proposed | event 'hold-proposed' during a host migration |
-| Migrating | hold-resolved | event 'hold-resolved' during a host migration |
-| Migrating | park-begin | event 'park-begin' during a host migration |
-| Migrating | park-end | event 'park-end' during a host migration |
-| Migrating | private-capture-complete | event 'private-capture-complete' during a host migration |
-| Migrating | world-image-offered | event 'world-image-offered' during a host migration |
-| Migrating | opening-resume-offer | event 'opening-resume-offer' during a host migration |
-| Migrating | tail-replay-complete | event 'tail-replay-complete' during a host migration |
-| Migrating | resync-relaunch | event 'resync-relaunch' during a host migration |
-| Migrating | late-join | event 'late-join' during a host migration |
-| Migrating | ticket-rejoin | event 'ticket-rejoin' during a host migration |
-| Migrating | held-rejoin | event 'held-rejoin' during a host migration |
-| Migrating | kick | event 'kick' during a host migration |
-| Migrating | ban | event 'ban' during a host migration |
-| Migrating | seat-release | event 'seat-release' during a host migration |
-| Migrating | own-cap | event 'own-cap' during a host migration |
-| Migrating | resume-from-disk | event 'resume-from-disk' during a host migration |
+| Migrating | hold-proposed | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | hold-resolved | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | park-begin | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | park-end | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | private-capture-complete | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | world-image-offered | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | opening-resume-offer | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | tail-replay-complete | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | resync-relaunch | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | late-join | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | ticket-rejoin | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | held-rejoin | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | kick | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | ban | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | seat-release | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | own-cap | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | resume-from-disk | an event other than the migration's own steps arriving while the host is being replaced |
 | Migrating | match-over | an end of match requested while the host is being replaced |
-| Migrating | link-blip | event 'link-blip' during a host migration |
-| Migrating | link-restore | event 'link-restore' during a host migration |
+| Migrating | link-blip | an event other than the migration's own steps arriving while the host is being replaced |
+| Migrating | link-restore | an event other than the migration's own steps arriving while the host is being replaced |
 | Draining | park-begin | a capture park opened after the round's last tick |
 | Draining | park-end | a park end with no park open |
 | Draining | private-capture-complete | a private image completing for a seat that is not waiting on one |
