@@ -7289,8 +7289,10 @@ void MovableMan::UpdateControllers() {
 			ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep remote apply: " + error);
 			return;
 		}
-		NeutralizeUnframedLockstepActors(m_Actors, applied,
-		    static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame());
+		const bool canonicalStartup = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) < ScenarioRunner::GetLockstepEffectiveStartFrame();
+		NeutralizeUnframedLockstepActors(m_Actors, applied, canonicalStartup);
+		// The round's opening actors join after this apply; before the first frame they take the same route on every peer.
+		if (canonicalStartup) NeutralizeUnframedLockstepActors(m_AddedActors, applied, true);
 		ApplyLockstepLeaveHandoffs(readyFrame, m_Actors, false);
 		DumpControllerDebugSnapshot("lockstep_post_apply", simTick, m_Actors, &readyFrame.remoteFrames);
 		g_AudioMan.CommitSoundObservations(readyFrame.frame, readyFrame.localObservations, readyFrame.remoteObservations);
