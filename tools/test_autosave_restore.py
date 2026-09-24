@@ -96,6 +96,27 @@ def fullstate_pairs(root: Path) -> dict:
     return results
 
 
+PERTURB = re.compile(r"^\[net-test\] live perturb frame=(\d+)$", re.MULTILINE)
+
+
+def expect_injected_divergence(root: Path, verdicts: dict) -> None:
+    """The anchor arm advances the host's sim RNG at one tick (Main.cpp's live perturbation) so the match heals: the
+    oracle must name exactly that sample, in the sim RNG alone, and nothing else. Anything more or less fails."""
+    host = Path(root) / "host" / "stdout.log"
+    injected = PERTURB.search(host.read_text(encoding="utf-8", errors="replace")) if host.is_file() else None
+    for verdict in verdicts.values():
+        divergences = verdict.get("divergences", [])
+        expected = [{"tick": int(injected[1]), "sections": ["globals.sim_rng"]}] if injected else []
+        seen = [{"tick": entry["tick"], "sections": entry["sections"]} for entry in divergences]
+        verdict["injected_divergence"] = expected
+        if seen == expected and verdict.get("compared_samples", 0) > 0:
+            verdict["passed"] = True
+            verdict["reasons"] = []
+        elif injected and seen != expected:
+            verdict["passed"] = False
+            verdict["reasons"] = [f"the injected divergence at tick {injected[1]} was expected alone in globals.sim_rng, the oracle saw {seen}"]
+
+
 def _seat_rows(root: Path, who: str) -> dict:
     """The seats the peer's own match report names, keyed by stable seat."""
     path = root / f"{who}_report.json"
@@ -1031,6 +1052,8 @@ def main() -> int:
             print(f"FAIL {arm}: {error}", flush=True)
         if FULLSTATE_EVERY:
             details["fullstate"] = fullstate_pairs(root / arm)
+            if arm == "anchor":
+                expect_injected_divergence(root / arm, details["fullstate"])
             tripped = [name for name, verdict in details["fullstate"].items() if not verdict["passed"]]
             if tripped or not details["fullstate"]:
                 details["passed"] = False
