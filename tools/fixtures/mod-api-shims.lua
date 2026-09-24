@@ -44,6 +44,27 @@ end)
 check("getsetlimpathspeed_methods", limbOk, limbErr)
 check("getsetlimpathspeed_roundtrip", limbOk and type(baseSpeed) == "number" and math.abs(actor:GetLimbPathSpeed(1) - baseSpeed * 0.5) < 0.0001, baseSpeed)
 
+-- LuaMan:WriteLine is FileWriteLine under the name Void Wanderers' Lib_Config.lua calls; both lines land in order.
+local writePath = "UserSavedGames.rte/mod-api-shims-writeline.txt"
+local writeFile = LuaMan:FileOpen(writePath, "w")
+local writeOk, writeErr = pcall(function()
+	LuaMan:FileWriteLine(writeFile, "first=1\n")
+	LuaMan:WriteLine(writeFile, "second=2\n")
+end)
+LuaMan:FileClose(writeFile)
+check("writeline", writeFile >= 0 and writeOk, writeErr)
+local firstLine, secondLine
+local readFile = LuaMan:FileOpen(writePath, "r")
+local readOk, readErr = pcall(function()
+	firstLine = LuaMan:FileReadLine(readFile)
+	secondLine = LuaMan:FileReadLine(readFile)
+end)
+LuaMan:FileClose(readFile)
+check("writeline_matches_filewriteline", writeOk and readOk and firstLine == "first=1\n" and secondLine == "second=2\n", tostring(readErr) .. " first=" .. tostring(firstLine) .. " second=" .. tostring(secondLine))
+if LuaMan:FileExists(writePath) then
+	LuaMan:FileRemove(writePath)
+end
+
 if actor then
 	DeleteEntity(actor)
 	actor = nil

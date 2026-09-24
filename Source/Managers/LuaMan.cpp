@@ -6903,6 +6903,8 @@ void LuaStateWrapper::Initialize() {
 	                             .def("DirectoryRename", &LuaStateWrapper::DirectoryRename)
 	                             .def("FileReadLine", &LuaStateWrapper::FileReadLine)
 	                             .def("FileWriteLine", &LuaStateWrapper::FileWriteLine)
+	                             // Mods written against older docs call FileWriteLine by this name (Void Wanderers' Lib_Config.lua).
+	                             .def("WriteLine", &LuaStateWrapper::FileWriteLine)
 	                             .def("FileEOF", &LuaStateWrapper::FileEOF),
 
 	                         luabind::def("DeleteEntity", &LuaAdaptersUtility::DeleteEntity, luabind::adopt(_1)), // NOT a member function, so adopting _1 instead of the _2 for the first param, since there's no "this" pointer!!
