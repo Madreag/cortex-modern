@@ -6617,7 +6617,265 @@ namespace RTE {
 		return true;
 	}
 
+	/// A goodbye belongs to the round it ended. A round that closed with a seat under the AI owes its returner the goodbye, and
+	/// that debt must not refuse the next round's joiners, finish its failed rejoins as "match over" or turn its catch-up link drops
+	/// into a finished match; a torn-down service carries none of it either.
+	bool TestTheGoodbyeEndsWithItsRound(std::string* error) {
+		const auto config = [](uint8_t local, std::map<uint8_t, NetPeerId> transports, bool relay, uint64_t round) {
+			NetLockstepConfig lockstep;
+			lockstep.sessionId = 0x474F4F4442594531ULL;
+			lockstep.roundId = round;
+			lockstep.timeoutMs = 2000;
+			lockstep.localPeerId = local;
+			lockstep.peerCount = 2;
+			lockstep.remoteTransportPeerIds = std::move(transports);
+			lockstep.relayToOtherPeers = relay;
+			lockstep.substituteSlowPeers = true;
+			lockstep.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			lockstep.scenario = "LockstepSelfTest";
+			lockstep.ownershipPolicy = "unique-id-split";
+			return lockstep;
+		};
+		// One round on its own loopback pair, played 80 ms with seat 2 then held by the AI; the host's coordinator goes to the service.
+		const auto playHeldRound = [&](NetMatchService& service, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport,
+		                               NetLockstepCoordinator& client, uint16_t port, uint64_t round, std::string& why) {
+			if (!hostTransport.StartHost(port, &why) || !clientTransport.Connect("loopback", port, &why)) return false;
+			NetPeerId hostRemote = c_InvalidNetPeerId, clientRemote = c_InvalidNetPeerId;
+			for (const NetTransportEvent& event: hostTransport.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) hostRemote = event.peerId;
+			for (const NetTransportEvent& event: clientTransport.PollEvents()) if (event.type == NetTransportEventType::PeerConnected) clientRemote = event.peerId;
+			auto host = std::make_unique<NetLockstepCoordinator>();
+			if (hostRemote == c_InvalidNetPeerId || clientRemote == c_InvalidNetPeerId || !host->Start(hostTransport, config(1, {{2, hostRemote}}, true, round), &why) ||
+			    !client.Start(clientTransport, config(2, {{1, clientRemote}}, false, round), &why)) return false;
+			for (uint64_t now = 0; now < 80; now += 5) {
+				host->Tick(now);
+				client.Tick(now);
+				hostTransport.AdvanceTimeMs(5);
+				clientTransport.AdvanceTimeMs(5);
+			}
+			if (!host->IsRunning() || !host->ProposePeerHold(2, 80, &why) || !host->AnyHeldAISeat()) {
+				why = "round " + std::to_string(round) + " did not hold seat 2: " + why;
+				return false;
+			}
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_Coordinator = std::move(host);
+			return true;
+		};
+		const auto goodbye = [](NetMatchService& service, uint64_t& finalFrame, bool& owed, bool& catchUpReadsOver) {
+			const bool seen = service.HostGoodbyeSeen(finalFrame);
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			owed = service.m_GoodbyeOwedToRejoiners;
+			catchUpReadsOver = service.NoteHostGoodbyeLocked(nullptr);
+			return seen;
+		};
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_MatchWasRunning = true;
+		service.m_State = NetMatchServiceState::Running;
+		LoopbackTransport hostOne, clientOne, hostTwo, clientTwo;
+		NetLockstepCoordinator clientRoundOne, clientRoundTwo;
+		std::string why;
+		if (!playHeldRound(service, hostOne, clientOne, clientRoundOne, 43701, 1, why)) {
+			*error = "the held-round fixture: " + why;
+			return false;
+		}
+		service.FinishMatch("match over");
+		uint64_t finalFrame = 0;
+		bool owed = false, catchUpReadsOver = false;
+		if (!goodbye(service, finalFrame, owed, catchUpReadsOver) || !owed) {
+			*error = "the held round ended without owing its returner the goodbye";
+			service.Destroy();
+			return false;
+		}
+		// The next round launches through the path every round takes.
+		if (!playHeldRound(service, hostTwo, clientTwo, clientRoundTwo, 43703, 2, why)) {
+			*error = "the second-round fixture: " + why;
+			service.Destroy();
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.m_State = NetMatchServiceState::ReadyToLaunch;
+		}
+		std::string preset;
+		const bool launched = service.ConsumeReadyToLaunch(preset);
+		const bool seen = goodbye(service, finalFrame, owed, catchUpReadsOver);
+		if (!launched || seen || owed || finalFrame != 0 || catchUpReadsOver) {
+			*error = "the second round started under the first round's goodbye: launched=" + std::to_string(launched) + " goodbye_seen=" + std::to_string(seen) +
+			         " owed_to_rejoiners=" + std::to_string(owed) + " final_frame=" + std::to_string(finalFrame) + " catch_up_reads_match_over=" + std::to_string(catchUpReadsOver);
+			service.Destroy();
+			ScenarioRunner::SetLockstepSeatPresence(nullptr);
+			return false;
+		}
+		// The second round ends held too; a teardown ends that goodbye with it.
+		service.FinishMatch("match over");
+		if (!goodbye(service, finalFrame, owed, catchUpReadsOver) || !owed) {
+			*error = "the second held round ended without owing its returner the goodbye";
+			service.Destroy();
+			ScenarioRunner::SetLockstepSeatPresence(nullptr);
+			return false;
+		}
+		service.Destroy();
+		ScenarioRunner::SetLockstepSeatPresence(nullptr);
+		const bool seenAfterTeardown = goodbye(service, finalFrame, owed, catchUpReadsOver);
+		if (seenAfterTeardown || owed || finalFrame != 0 || catchUpReadsOver) {
+			*error = "a torn-down service kept the last round's goodbye: goodbye_seen=" + std::to_string(seenAfterTeardown) + " owed_to_rejoiners=" + std::to_string(owed) +
+			         " final_frame=" + std::to_string(finalFrame);
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS the_goodbye_ends_with_its_round rounds=2 second_round_goodbye=0 after_teardown=0" << std::endl;
+		return true;
+	}
+
+	/// Only the host's departure lands a seat that has committed nothing: an error on the peer's own side (a held client's private
+	/// catch-up that could not restore, say) keeps the seat's reconnect, so the seat the host still holds is rejoined, not abandoned.
+	bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error) {
+		const std::filesystem::path scratch = std::filesystem::temp_directory_path() / ("cccp-own-side-" + std::to_string(System::GetProcessID()));
+		std::error_code ignored;
+		std::filesystem::create_directories(scratch, ignored);
+		const auto startPair = [](uint16_t port, LoopbackTransport& hostTransport, LoopbackTransport& clientTransport, NetSession& host, NetSession& client, std::string& why) {
+			NetSessionConfig hostConfig;
+			hostConfig.port = port;
+			hostConfig.displayName = "Host";
+			hostConfig.maxPeers = 1;
+			hostConfig.heartbeatIntervalMs = 25;
+			hostConfig.timeoutMs = 30000;
+			NetIdentityManifest& identity = hostConfig.localIdentity;
+			identity.gameVersion = "7.0.0-test";
+			identity.networkProtocolVersion = NetProtocol::c_Version;
+			identity.controllerFrameVersion = ControllerFrame::c_Version;
+			identity.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+			identity.buildId = "own-side-error-selftest";
+			identity.platform = "test";
+			NetSessionConfig clientConfig = hostConfig;
+			clientConfig.displayName = "Client";
+			++clientConfig.localNonce;
+			if (!hostTransport.StartHost(port, &why) || !clientTransport.Connect("loopback", port, &why) ||
+			    !host.StartHost(hostTransport, hostConfig, &why) || !client.StartClient(clientTransport, "loopback", clientConfig, &why)) return false;
+			for (uint64_t now = 0; now <= 4000 && host.GetReadyPeerCount() != 1; now += 10) {
+				host.Tick(now);
+				client.Tick(now);
+				hostTransport.AdvanceTimeMs(10);
+				clientTransport.AdvanceTimeMs(10);
+			}
+			if (host.GetReadyPeerCount() != 1 || !client.IsReady()) {
+				why = "the fixture never seated its client session";
+				return false;
+			}
+			return true;
+		};
+		struct Outcome { bool landed = false; bool reconnecting = false; std::string errorText; };
+		const auto run = [&](bool hostLeaves, uint16_t port, Outcome& outcome, std::string& why) {
+			LoopbackTransport hostWire, clientWire;
+			NetSession hostSession;
+			NetMatchService service;
+			service.m_IsHost = false;
+			service.m_Session = std::make_unique<NetSession>();
+			service.m_Runner = std::make_unique<NetMatchRunner>();
+			service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+			if (!startPair(port, hostWire, clientWire, hostSession, *service.m_Session, why)) return false;
+			const std::filesystem::path ticket = scratch / ("reconnect-" + std::to_string(port) + ".ticket");
+			std::ofstream(ticket, std::ios::binary) << "held";
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				service.m_TicketStore.SetPath(ticket.string());
+				service.m_State = NetMatchServiceState::Running;
+				service.m_MatchWasRunning = true;
+			}
+			if (hostLeaves) {
+				hostSession.Close("host left");
+				hostWire.AdvanceTimeMs(10);
+				clientWire.AdvanceTimeMs(10);
+				for (const NetTransportEvent& event: clientWire.PollEvents()) service.m_Session->InjectEvent(event, 0);
+				if (service.m_Session->IsReady()) {
+					why = "the host's close never reached the client's session";
+					return false;
+				}
+				service.ReportRuntimeError("PeerDisconnected: peer 1 disconnected");
+			} else {
+				// The link is alive; the failure is this peer's own.
+				service.ReportRuntimeError("private catch-up activation: the committed state did not restore");
+			}
+			service.m_TicketStore.SetPath(ticket.string());
+			service.DriveReconnectUx(1000);
+			outcome.errorText = service.GetLobbySnapshot().errorText;
+			{
+				std::lock_guard<std::mutex> lock(service.m_Mutex);
+				outcome.landed = service.m_LandedWithoutFrame;
+			}
+			outcome.reconnecting = service.m_ReconnectUx.GetState() != NetReconnectUxState::Idle;
+			return true;
+		};
+		Outcome own, departed;
+		std::string why;
+		if (!run(false, 43705, own, why) || !run(true, 43707, departed, why)) {
+			*error = "the own-side error fixture: " + why;
+			std::filesystem::remove_all(scratch, ignored);
+			return false;
+		}
+		std::filesystem::remove_all(scratch, ignored);
+		if (own.landed || own.errorText == "The host left the match" || !own.reconnecting) {
+			*error = "an error on the held client's own side landed its seat as if the host had left: landed=" + std::to_string(own.landed) +
+			         " error='" + own.errorText + "' reconnecting=" + std::to_string(own.reconnecting);
+			return false;
+		}
+		if (!departed.landed || departed.errorText != "The host left the match") {
+			*error = "a seat with nothing committed stayed on after its host left: landed=" + std::to_string(departed.landed) + " error='" + departed.errorText + "'";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS an_own_side_error_keeps_the_seats_reconnect own_side=reconnect host_left=landed" << std::endl;
+		return true;
+	}
+
+	/// A world member taking back the seat the AI holds for it closes on the round only by the difference of the two rates, as a
+	/// private return does: it is activated once it has shown it replays faster than the round plays, never before.
+	int TestAHeldWorldSeatProvesItsHeadroom() {
+		std::string error;
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) return Fail("held-world-headroom fixture: " + error);
+		host.NoteReclaimHolds(NetMatchService::WorldReclaimHoldSlots({}, host.Membership(), {2}));
+		// The seat's first connection is gone; its holder comes back on a new one.
+		if (!host.BeginJoin(8, 2, "alice", 2000, &error, true)) return Fail("held-world-headroom returner: " + error);
+		NetWorldCheckpointImage image;
+		image.worldId = c_WorldId;
+		image.boot = 1;
+		image.round = 1;
+		image.tick = 40;
+		image.bytes = 64;
+		image.digest = "d";
+		image.path = "Worlds/image.bin";
+		host.PublishImage(image);
+		if (!host.NoteTransferComplete(8, 64, &error)) return Fail("held-world-headroom transfer: " + error);
+		// The returner replays at the round's own rate: it would never close on the round.
+		uint64_t activation = 0;
+		(void)host.NoteRejoinCapacity(8, 120, 2000000, 0);
+		if (!host.NoteCatchUpProgress(8, 70, 30, 500, 80, &activation, &error) || activation != 0) {
+			return Fail("a returning world seat with no replay headroom was activated at " + std::to_string(activation) + ": every peer would wait on it");
+		}
+		// Sustained headroom lets it in, far enough ahead that it has caught up by then.
+		(void)host.NoteRejoinCapacity(8, 240, 2400000, 0);
+		(void)host.NoteRejoinCapacity(8, 360, 2800000, 0);
+		if (!host.NoteCatchUpProgress(8, 76, 6, 20, 82, &activation, &error) || activation == 0) {
+			return Fail("a returning world seat with replay headroom was never activated: " + error);
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_proves_its_headroom activation=" << activation << std::endl;
+		return 0;
+	}
+
 	int RunNamed(const char* name) {
+		if (std::strcmp(name, "-net-world-second-round-selftest") == 0) {
+			s_FailTag = "net-world-second-round-selftest";
+			std::string error;
+			return TestTheGoodbyeEndsWithItsRound(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "-net-world-own-side-error-selftest") == 0) {
+			s_FailTag = "net-world-own-side-error-selftest";
+			std::string error;
+			return TestAnOwnSideErrorKeepsTheSeatsReconnect(&error) ? 0 : Fail(error);
+		}
+		if (std::strcmp(name, "-net-world-held-seat-headroom-selftest") == 0) {
+			s_FailTag = "net-world-held-seat-headroom-selftest";
+			return TestAHeldWorldSeatProvesItsHeadroom();
+		}
 		if (std::strcmp(name, "-net-world-agreed-activation-selftest") == 0) { s_FailTag = "net-world-agreed-activation-selftest"; return TestAgreedWorldActivation(); }
 		if (std::strcmp(name, "identity") == 0 || std::strcmp(name, "-net-world-identity-selftest") == 0) {
 			s_FailTag = "net-world-identity-selftest";
@@ -7076,6 +7334,7 @@ namespace RTE {
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
+		if (const int result = TestAHeldWorldSeatProvesItsHeadroom(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
 		if (const int result = TestCommittedTailJournal(); result != 0) return result;
@@ -7101,6 +7360,8 @@ namespace RTE {
 			if (!TestWorldSegmentPlaybackStandsOnTheCheckpoint(&error)) return Fail(error);
 			if (!TestHealCapIsAWindow(&error)) return Fail(error);
 			if (!TestBrowserWorldRowText(&error)) return Fail(error);
+			if (!TestTheGoodbyeEndsWithItsRound(&error)) return Fail(error);
+			if (!TestAnOwnSideErrorKeepsTheSeatsReconnect(&error)) return Fail(error);
 		}
 		return Pass();
 	}
