@@ -151,11 +151,11 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 	// What the renderer drew, read from its own record: a visible flag only says what a panel would
-	// draw if its parents did. A menu frame is 1/60 s, so a quarter second covers the last one.
+	// draw if its parents did. A manager that has not drawn for a quarter second is off the screen.
 	constexpr double c_DrawWindowSeconds = 0.25;
 	GUIControl* FirstDrawn(GUIControl* control) {
 		if (!control || !control->GetPanel()) return nullptr;
-		if (PanelDrewRecently(control->GetPanel(), c_DrawWindowSeconds)) return control;
+		if (PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds)) return control;
 		if (std::vector<GUIControl*>* children = control->GetChildren()) {
 			for (GUIControl* child: *children) {
 				if (GUIControl* drawn = FirstDrawn(child)) return drawn;
@@ -659,6 +659,7 @@ namespace RTE::MenuAutomation {
 				auto* control = manager->GetControl(name);
 				GUIControl* drawn = FirstDrawn(control);
 				observation = name + (control ? "" : " missing") + " drawn=" + (drawn ? drawn->GetName() : std::string("none"));
+				if (control) System::PrintDiagnosticLine("[draw-record] " + name + " last_drawn_ms=" + std::to_string(static_cast<long long>(PanelDrawAgeMs(control->GetPanel()))) + " in_latest_pass=" + (drawn == control ? "1" : "0"));
 				return control != nullptr && drawn == nullptr;
 			}
 			if (command == "assert_opaque_panel") {
