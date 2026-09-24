@@ -592,7 +592,8 @@ namespace RTE {
 			std::string error;
 			NetIdentityManifest work = *inputs;
 			if (!WalkManifestModules(work, &error, options, &s_PrimingStopRequested)) {
-				std::cout << "[net-identity] manifest priming stopped: " << error << std::endl;
+				// A worker thread: the whole line under the print lock, never formatted output racing the main thread's.
+				System::PrintDiagnosticLine("[net-identity] manifest priming stopped: " + error);
 			}
 		});
 	}

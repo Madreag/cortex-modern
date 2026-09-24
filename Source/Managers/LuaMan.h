@@ -437,6 +437,13 @@ namespace RTE {
 		/// @return Whether that global var has been defined yet in the Lua state.
 		bool GlobalIsDefined(const std::string& globalName);
 
+		/// When a global var holds the bound C++ object at object, points it at replacement instead, so the script table the
+		/// var carries stays; with no replacement the var is cleared. A var holding anything else is left alone.
+		/// @param globalName The name of the global var in the Lua state.
+		/// @param object The bound pointer, as the var's class sees it, of the object that is going away.
+		/// @param replacement The object of the same class to bind instead, or nullptr to clear the var.
+		void RetargetGlobalObject(const std::string& globalName, const void* object, void* replacement);
+
 		/// Checks if there is anything defined in a specific index of a table.
 		/// @param tableName The name of the table to look inside.
 		/// @param indexName The name of the index to check inside that table.
