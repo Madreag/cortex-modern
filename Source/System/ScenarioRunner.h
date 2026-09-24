@@ -468,12 +468,16 @@ namespace RTE {
 		static bool QueueLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame> frames, std::string* error = nullptr);
 		/// Pumps a delayed tick before simulation mutation, leaving rendering free while input is owed.
 		static bool PollLockstepSimulationTick(uint64_t tick);
+		/// Publishes this machine's startup reading and seat device to the round, once per round.
+		static void PublishLocalStartup();
 		static bool WaitForLockstepControllerFrame(uint64_t tick, NetLockstepReadyFrame& outFrame, std::string* error = nullptr);
 		/// The local frames already queued for a future lockstep tick (the input-delay pipeline).
 		static bool PeekLockstepLocalControllerFrames(uint64_t tick, std::vector<ControllerFrame>& outFrames);
 		/// The local sender's input delay in ticks; 0 outside a delayed lockstep match.
 		static uint16_t GetLockstepLocalInputDelay();
 		static uint64_t GetLockstepEffectiveStartFrame();
+		/// The device class the round's agreed start names for a seat; 0 outside a round or before its record.
+		static uint8_t GetLockstepAgreedSeatDeviceClass(int seat);
 		static bool UsesBoundedLockstepWait();
 		static bool IsLockstepPeerGone(uint8_t peerId, uint64_t frame);
 		static void DiscardHeldLocalInputs();
