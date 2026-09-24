@@ -305,7 +305,7 @@
       "id": "migration-loss-overlay-clienta",
       "peer": "clienta",
       "mark": "migration-host-drop",
-      "screen": "LockstepWaitOverlay",
+      "screen": "game",
       "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
       "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
@@ -350,7 +350,7 @@
       "id": "migration-loss-overlay-clientb",
       "peer": "clientb",
       "mark": "migration-host-drop",
-      "screen": "LockstepWaitOverlay",
+      "screen": "game",
       "what": "During host loss the survivor's status panel shows the loss on screen: it names the loss and blanks RTT, with no LIVE band, and the recorder observes the host-lost status state.",
       "assert": "Native readback of LabelNetMatchStatus at the probe's wait for the loss text, plus the recorded host_lost=1 status.",
       "events": [
