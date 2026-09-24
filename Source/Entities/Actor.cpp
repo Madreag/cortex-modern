@@ -694,6 +694,8 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 		writer.NewPropertyWithValue("SpecialBehaviour_AIWaypointUniqueID", uid);
 		++waypointIndex;
 	}
+	// The move path is this machine's own pathfinder answer (the owner's AI loads and walks it), and so is what it derives.
+	writer.PerPeerBegin();
 	for (const Vector& point: m_MovePath) {
 		writer.NewPropertyWithValue("SpecialBehaviour_AddMovePathPoint", point);
 	}
@@ -702,6 +704,7 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	writer.NewPropertyWithValue("SpecialBehaviour_PrevPathTarget", m_PrevPathTarget);
 	writer.NewPropertyWithValue("SpecialBehaviour_MoveVector", m_MoveVector);
 	writer.NewPropertyWithValue("SpecialBehaviour_UpdateMovePath", m_UpdateMovePath);
+	writer.PerPeerEnd();
 	writer.NewPropertyWithValue("PassengerSlots", m_PassengerSlots);
 	writer.NewPropertyWithValue("ImpulseDamageThreshold", m_TravelImpulseDamage);
 	writer.NewPropertyWithValue("StableVelocityThreshold", m_StableVel);
@@ -2933,9 +2936,12 @@ std::string Actor::SaveActorRuntime() const {
 	// The HUD stack is laid out by this machine's own draw.
 	archive.PerPeer(m_HUDStack);
 	archive(m_DeploymentID, m_PassengerSlots);
-	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
+	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode);
+	// The owner's AI walks its own move path and draws its own waypoints; the ordered waypoint is the shared order.
+	archive.PerPeer(m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
-	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
+	archive.PerPeer(m_MoveVector, m_UpdateMovePath);
+	archive(m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);
 	archive(CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[0].empty() ? CaptureActorIconReference(m_pTeamIcon) : m_PersistedActorIconReferences[0]; }),
 	    CheckpointWriter::Native([&] { return m_PersistedActorIconReferences[1].empty() ? CaptureActorIconReference(m_pControllerIcon) : m_PersistedActorIconReferences[1]; }));
 	return archive.Text();
@@ -2981,6 +2987,14 @@ std::vector<long> Actor::GetCheckpointBorrowedReferences() const {
 	identities.push_back(m_pMOMoveTarget ? m_pMOMoveTarget->GetUniqueID() : 0);
 	for (const auto& [position, target]: m_Waypoints) identities.push_back(target ? target->GetUniqueID() : 0);
 	return identities;
+}
+
+std::vector<bool> Actor::GetCheckpointPerPeerReferences() const {
+	auto perPeer = MovableObject::GetCheckpointPerPeerReferences();
+	// The loaded MO target is this machine's own pathfinder state; the waypoints' targets are the shared queue.
+	perPeer.push_back(true);
+	perPeer.resize(perPeer.size() + m_Waypoints.size(), false);
+	return perPeer;
 }
 
 bool Actor::RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly) {

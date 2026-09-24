@@ -656,6 +656,7 @@ namespace RTE {
 		void SetMOMoveTarget(const MovableObject* object);
 		static bool RunBorrowedReferenceSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
+		std::vector<bool> GetCheckpointPerPeerReferences() const override;
 		bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false) override;
 
 		/// Sets this' perceptiveness to alarming events going on around him.

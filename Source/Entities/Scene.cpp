@@ -2154,9 +2154,12 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			if (const long itemInReach = actorToSave->GetItemInReachUniqueID(); itemInReach > 0) {
 				writer.NewPropertyWithValue("ItemInReachUniqueID", itemInReach);
 			}
+			// The loaded MO target is this machine's own pathfinder state.
+			writer.PerPeerBegin();
 			if (const long moveTarget = actorToSave->GetMOMoveTargetUniqueID(); moveTarget > 0) {
 				writer.NewPropertyWithValue("MOMoveTargetUniqueID", moveTarget);
 			}
+			writer.PerPeerEnd();
 			writer.NewPropertyWithValue("SpecialBehaviour_LastAlarmPos", actorToSave->GetLastAlarmPosRaw());
 			writer.NewPropertyWithValue("SpecialBehaviour_ViewPoint", actorToSave->GetViewPointRaw());
 			writer.NewPropertyWithValue("SpecialBehaviour_GoldPicked", actorToSave->GetGoldPicked());
