@@ -959,7 +959,9 @@ std::string SoundContainer::SaveCheckpoint() const {
 	for (int identity: m_PlayingChannels) {
 		if (!g_AudioMan.IsPredictedVoice(identity)) playing.insert(identity);
 	}
-	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity, playing);
+	archive(static_cast<const Entity&>(*this), m_CheckpointIdentity);
+	// The voices are this machine's playback; the logical playback below is what every peer shares.
+	archive.PerPeer(playing);
 	archive(m_SoundOverlapMode, m_BusRouting, m_Immobile, m_AttenuationStartDistance, m_CustomPanValue, m_PanningStrengthMultiplier, m_Loops, m_SoundPropertiesUpToDate, m_Priority, m_AffectedByGlobalPitch, m_Pos, m_Pitch, m_PitchVariation, m_Volume, m_WasFadedOut, m_Paused, m_MusicPreEntryTime, m_MusicExitTime);
 	archive(m_LogicalPlayback);
 	return archive.Text();

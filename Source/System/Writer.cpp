@@ -29,7 +29,7 @@ std::string RTE::CheckpointFieldText(const std::function<std::string()>& observe
 }
 
 namespace {
-	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime };
+	enum class CaptureValue : uint8_t { Raw, Integer, Unsigned, SpacedInteger, SpacedUnsigned, Float, Double, String, Child, SizedChild, Base64, UrlBase64, GraphString, NewLine, Property, ElapsedSimTime, PeerBegin, PeerEnd };
 	template<class T> T ReadCaptureValue(std::string_view values, size_t& cursor) {
 		if (sizeof(T) > values.size() - cursor) throw std::logic_error("truncated owned checkpoint values");
 		T value;
@@ -72,6 +72,7 @@ struct CheckpointText::Data {
 	std::function<std::string()> produce;
 	std::string identity;
 	size_t ownedBytes = 0;
+	bool hasPeer = false;
 	bool usesSimTime = false;
 	int64_t simTimeTicks = 0;
 	mutable std::once_flag ready;
@@ -138,6 +139,7 @@ CheckpointText CheckpointText::AtSimTime(int64_t ticks) const {
 		node->values = source->values;
 		node->children.reserve(source->children.size());
 		node->ownedBytes = source->ownedBytes;
+		node->hasPeer = source->hasPeer;
 		node->simTimeTicks = ticks;
 		bound.emplace(source, node);
 		pending.push_back({source, node});
@@ -235,6 +237,7 @@ CheckpointText CheckpointText::ReuseChildren(const CheckpointText& previous) con
 			value->values = frame.current->values;
 			value->children = frame.current->children;
 			value->ownedBytes = frame.current->ownedBytes;
+			value->hasPeer = frame.current->hasPeer;
 			value->usesSimTime = frame.current->usesSimTime;
 			value->simTimeTicks = frame.current->simTimeTicks;
 			for (size_t index = 0; index < count; ++index) {
@@ -333,6 +336,8 @@ const std::string& CheckpointText::Text() const {
 						text.push_back('\n'); text.append(static_cast<size_t>(indent), '\t'); text += ReadCaptureString(values, cursor); text += " = ";
 						break;
 					}
+					case CaptureValue::PeerBegin:
+					case CaptureValue::PeerEnd: break;
 					default: throw std::logic_error("unknown owned checkpoint value");
 				}
 			}
@@ -342,6 +347,81 @@ const std::string& CheckpointText::Text() const {
 		pending.pop_back();
 	}
 	return root->text;
+}
+
+std::string CheckpointText::SharedText(int64_t simTimeTicks) const {
+	if (!m_Data || !m_Data->hasPeer) return BindSimTime(simTimeTicks).Text();
+	return m_Data->usesSimTime ? AtSimTime(simTimeTicks).SharedText() : SharedText();
+}
+
+std::string CheckpointText::SharedText() const {
+	if (!m_Data || !m_Data->hasPeer) return Text();
+	if (m_Data->usesSimTime) return AtSimTime(m_Data->simTimeTicks).SharedText();
+	const Data& node = *m_Data;
+	const std::string_view values = node.values;
+	std::string text;
+	size_t cursor = 0;
+	int peer = 0;
+	// Appends what the full text would, unless it lies inside a per-peer run.
+	const auto put = [&text, &peer](std::string_view part) { if (peer == 0) text += part; };
+	const auto number = [&put](auto value) { std::string formatted; AppendCaptureNumber(formatted, value); put(formatted); };
+	while (cursor < values.size()) {
+		const auto kind = ReadCaptureValue<CaptureValue>(values, cursor);
+		switch (kind) {
+			case CaptureValue::Raw: put(ReadCaptureString(values, cursor)); break;
+			case CaptureValue::Integer:
+			case CaptureValue::SpacedInteger:
+				number(ReadCaptureValue<int64_t>(values, cursor));
+				if (kind == CaptureValue::SpacedInteger) put(" ");
+				break;
+			case CaptureValue::Unsigned:
+			case CaptureValue::SpacedUnsigned:
+				number(ReadCaptureValue<uint64_t>(values, cursor));
+				if (kind == CaptureValue::SpacedUnsigned) put(" ");
+				break;
+			case CaptureValue::Float: number(ReadCaptureValue<float>(values, cursor)); break;
+			case CaptureValue::Double: number(ReadCaptureValue<double>(values, cursor)); break;
+			case CaptureValue::ElapsedSimTime: {
+				const int64_t startTicks = ReadCaptureValue<int64_t>(values, cursor);
+				const double ticksPerMS = ReadCaptureValue<double>(values, cursor);
+				number(static_cast<double>(node.simTimeTicks - startTicks) / ticksPerMS);
+				break;
+			}
+			case CaptureValue::String: {
+				const auto string = ReadCaptureString(values, cursor);
+				number(string.size()); put(" "); put(string); put(" ");
+				break;
+			}
+			case CaptureValue::Child:
+			case CaptureValue::SizedChild:
+			case CaptureValue::Base64:
+			case CaptureValue::UrlBase64:
+			case CaptureValue::GraphString: {
+				const auto index = ReadCaptureValue<uint64_t>(values, cursor);
+				const std::string child = node.children.at(static_cast<size_t>(index)).SharedText();
+				if (kind == CaptureValue::SizedChild) { number(child.size()); put(" "); }
+				if (kind == CaptureValue::GraphString) { put("s"); number(child.size()); put(":"); }
+				if (kind == CaptureValue::Base64 || kind == CaptureValue::UrlBase64) put(base64_encode(child, kind == CaptureValue::UrlBase64));
+				else put(child);
+				if (kind == CaptureValue::SizedChild) put(" ");
+				break;
+			}
+			case CaptureValue::NewLine: {
+				const int indent = ReadCaptureValue<int>(values, cursor), count = ReadCaptureValue<int>(values, cursor);
+				for (int i = 0; i < count; ++i) { put("\n"); if (indent > 0) put(std::string(static_cast<size_t>(indent), '\t')); }
+				break;
+			}
+			case CaptureValue::Property: {
+				const int indent = ReadCaptureValue<int>(values, cursor);
+				put("\n"); put(std::string(static_cast<size_t>(indent), '\t')); put(ReadCaptureString(values, cursor)); put(" = ");
+				break;
+			}
+			case CaptureValue::PeerBegin: ++peer; break;
+			case CaptureValue::PeerEnd: --peer; break;
+			default: throw std::logic_error("unknown owned checkpoint value");
+		}
+	}
+	return text;
 }
 
 void CheckpointBuffer::Raw(std::string_view text) { Copy(CaptureValue::Raw); Copy(static_cast<uint64_t>(text.size())); m_Values.append(text); }
@@ -360,16 +440,20 @@ void CheckpointBuffer::Base64(const CheckpointText& value, bool url) { Copy(url 
 void CheckpointBuffer::GraphString(const CheckpointText& value) { Copy(CaptureValue::GraphString); Copy(static_cast<uint64_t>(m_Children.size())); m_Children.push_back(value); }
 void CheckpointBuffer::NewLine(int indent, int count) { Copy(CaptureValue::NewLine); Copy(indent); Copy(count); }
 void CheckpointBuffer::Property(std::string_view name, int indent) { Copy(CaptureValue::Property); Copy(indent); Copy(static_cast<uint64_t>(name.size())); m_Values.append(name); }
+void CheckpointBuffer::PeerBegin() { Copy(CaptureValue::PeerBegin); m_HasPeer = true; }
+void CheckpointBuffer::PeerEnd() { Copy(CaptureValue::PeerEnd); }
 
 CheckpointText CheckpointBuffer::Finish() {
 	auto data = std::make_shared<CheckpointText::Data>();
 	data->values = std::move(m_Values);
 	data->children = std::move(m_Children);
 	data->ownedBytes = data->values.size();
+	data->hasPeer = m_HasPeer;
 	data->usesSimTime = m_UsesSimTime;
 	data->simTimeTicks = m_SimTimeTicks;
 	for (const auto& child: data->children) {
 		data->ownedBytes += child.OwnedBytes();
+		data->hasPeer = data->hasPeer || (child.m_Data && child.m_Data->hasPeer);
 		if (!data->usesSimTime && child.m_Data && child.m_Data->usesSimTime) {
 			data->usesSimTime = true;
 			data->simTimeTicks = child.m_Data->simTimeTicks;

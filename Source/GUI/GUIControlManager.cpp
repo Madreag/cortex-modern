@@ -1126,17 +1126,20 @@ bool GUICheckpoint::LoadPanel(GUIPanel& panel, std::string_view text, bool valid
 
 std::string GUICheckpoint::SaveFont(const GUIFont& font) {
 	CheckpointWriter writer("GUIFont1");
-	writer(font.m_Name, font.m_FontHeight, font.m_MainColor, font.m_CurrentColor, font.m_CharIndexCap, font.m_Kerning, font.m_Leading, CheckpointWriter::Native([&] { return SaveImage(font.m_Font); }));
+	// The colors this machine drew text in, and the one it drew last, are its own render cache.
+	writer(font.m_Name, font.m_FontHeight, font.m_MainColor);
+	writer.PerPeer(font.m_CurrentColor);
+	writer(font.m_CharIndexCap, font.m_Kerning, font.m_Leading, CheckpointWriter::Native([&] { return SaveImage(font.m_Font); }));
 	for (const auto& character: font.m_Characters) writer(character.m_Width, character.m_Height, character.m_Offset);
-	writer(font.m_ColorCache.size());
+	writer.PerPeer(font.m_ColorCache.size());
 	int current = font.m_CurrentBitmap == font.m_Font ? -1 : -2;
 	for (size_t index = 0; index < font.m_ColorCache.size(); ++index) {
 		const auto& color = font.m_ColorCache[index];
-		writer(color.m_Color, CheckpointWriter::Native([&] { return SaveImage(color.m_Bitmap); }));
+		writer.PerPeer(color.m_Color, CheckpointWriter::Native([&] { return SaveImage(color.m_Bitmap); }));
 		if (font.m_CurrentBitmap == color.m_Bitmap) current = static_cast<int>(index);
 	}
 	if (current == -2 && font.m_CurrentBitmap) throw std::runtime_error("GUI font bitmap has no cache owner");
-	writer(current);
+	writer.PerPeer(current);
 	return writer.Text();
 }
 

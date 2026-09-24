@@ -1833,8 +1833,10 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		writer.NewPropertyWithValue("BurstTimerStart", pEmitterToSave->GetBurstTimerStart());
 		writer.NewPropertyWithValue("LastEmitTimerStart", pEmitterToSave->GetLastEmitTimerStart());
 		writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", pEmitterToSave->WasEmitting());
+		writer.PerPeerBegin();
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", pEmitterToSave->GetAvgBurstImpulse());
 		writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", pEmitterToSave->GetAvgImpulse());
+		writer.PerPeerEnd();
 		for (double accumulator: pEmitterToSave->GetEmissionAccumulators()) {
 			writer.NewPropertyWithValue("EmissionAccumulator", accumulator);
 		}
@@ -1856,7 +1858,12 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 			writer.NewPropertyWithValue("PrevRotation", moSpriteToSave->GetPrevRotMatrix());
 			writer.NewPropertyWithValue("AngularVel", moSpriteToSave->GetAngularVel());
 			writer.NewPropertyWithValue("SpecialBehaviour_AngOscillations", moSpriteToSave->GetAngOscillations());
+			// A firearm's flash shows the frame this machine's draw picked with the render stream.
+			const auto* firearm = dynamic_cast<const HDFirearm*>(moSpriteToSave->GetParent());
+			const bool drawnFrame = firearm && firearm->GetFlash() == moSpriteToSave;
+			if (drawnFrame) writer.PerPeerBegin();
 			writer.NewPropertyWithValue("Frame", static_cast<int>(moSpriteToSave->GetFrame()));
+			if (drawnFrame) writer.PerPeerEnd();
 			writer.NewPropertyWithValue("SpecialBehaviour_PrevAngVel", moSpriteToSave->GetPrevAngularVel());
 			writer.NewPropertyWithValue("SpriteAnimTimerStart", moSpriteToSave->GetSpriteAnimTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_SpriteAnimIsReversingFrames", moSpriteToSave->GetSpriteAnimIsReversingFrames());
@@ -1962,8 +1969,11 @@ void Scene::SaveSceneObject(Writer& writer, const SceneObject* sceneObjectToSave
 		if (const AEmitter* aemitterToSave = dynamic_cast<const AEmitter*>(sceneObjectToSave)) {
 			writer.NewPropertyWithValue("BurstTimerStart", aemitterToSave->GetBurstTimerStart());
 			writer.NewPropertyWithValue("SpecialBehaviour_WasEmitting", aemitterToSave->WasEmitting());
+			// The impulse averages are filled when this machine's own AI first asks.
+			writer.PerPeerBegin();
 			writer.NewPropertyWithValue("SpecialBehaviour_AvgBurstImpulse", aemitterToSave->GetAvgBurstImpulse());
 			writer.NewPropertyWithValue("SpecialBehaviour_AvgImpulse", aemitterToSave->GetAvgImpulse());
+			writer.PerPeerEnd();
 			writer.NewPropertyWithValue("LastEmitTimerStart", aemitterToSave->GetLastEmitTimerStart());
 			for (double accumulator: aemitterToSave->GetEmissionAccumulators()) {
 				writer.NewPropertyWithValue("EmissionAccumulator", accumulator);

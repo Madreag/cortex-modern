@@ -578,10 +578,17 @@ CheckpointText RTE::AssembleCheckpointIndex(const CheckpointImage& image) {
 }
 
 void RTE::VisitCheckpointSections(const CheckpointImage& image, const std::function<void(const std::string& name, CheckpointScope scope, std::string_view bytes)>& visit) {
-	// Timer fields are written relative to the capture's sim time, as the archive binds them.
+	// Timer fields are written relative to the capture's sim time, as the archive binds them. A shared section's values
+	// only this machine holds leave it, and its whole text is named beside it as this machine's own.
 	const auto part = [&](const std::string& name, CheckpointScope scope, const CheckpointText& value) {
 		const CheckpointText bound = value.BindSimTime(image.simTimeTicks);
-		visit(name, scope, bound.Text());
+		if (scope != CheckpointScope::Shared) {
+			visit(name, scope, bound.Text());
+			return;
+		}
+		const std::string shared = value.SharedText(image.simTimeTicks);
+		visit(name, scope, shared);
+		if (shared != bound.Text()) visit(name + ".local", CheckpointScope::PerPeer, bound.Text());
 	};
 	std::ostringstream header;
 	header << "ActivityName " << image.activityName << "\nOriginalScenePresetName " << image.originalScenePresetName
@@ -593,7 +600,7 @@ void RTE::VisitCheckpointSections(const CheckpointImage& image, const std::funct
 	for (const CheckpointSection& section: image.globalSections) part("globals." + section.name, section.scope, section.text);
 	part("structure", CheckpointScope::Shared, image.structure);
 	part("scene_runtime", CheckpointScope::Shared, image.sceneRuntime);
-	for (size_t i = 0; i < image.graphs.size(); ++i) part("graph." + std::to_string(i), CheckpointScope::Shared, image.graphs[i]);
+	for (size_t i = 0; i < image.graphs.size(); ++i) part("graph." + std::to_string(i), i < image.graphScopes.size() ? image.graphScopes[i] : CheckpointScope::Shared, image.graphs[i]);
 	part("scene", CheckpointScope::Shared, image.scene);
 	for (const auto& [name, layer]: image.layers) {
 		if (layer) visit("layer." + name, CheckpointScope::Shared, layer->PixelBytes());

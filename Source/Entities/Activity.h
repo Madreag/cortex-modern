@@ -848,15 +848,22 @@ namespace RTE {
 		void ConfigureHumanRoster(const NetMatchConfig& config, uint8_t localPeer);
 		void MapLocalPlayers(const NetMatchConfig& config, uint8_t localPeer);
 
+		// The screens, the players' controllers and their death and message timers are what a network restore keeps from
+		// the local machine (CaptureNetLocalPlayerState), so they are this machine's own.
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
 			archive(self.m_ActivityState, self.m_Paused, self.m_AllowsUserSaving, self.m_IsTestActivity,
 				self.m_Description, self.m_SceneName, self.m_MaxPlayerSupport, self.m_MinTeamsRequired,
 				self.m_Difficulty, self.m_CraftOrbitAtTheEdge, self.m_InCampaignStage, self.m_PlayerCount,
-				self.m_IsActive, self.m_IsHuman, self.m_PlayerScreen, self.m_ViewState,
-				self.m_DeathTimer, self.m_TeamNames, self.m_TeamCount, self.m_TeamActive,
+				self.m_IsActive, self.m_IsHuman);
+			archive.PerPeer(self.m_PlayerScreen);
+			archive(self.m_ViewState);
+			archive.PerPeer(self.m_DeathTimer);
+			archive(self.m_TeamNames, self.m_TeamCount, self.m_TeamActive,
 				self.m_Team, self.m_TeamDeaths, self.m_TeamAISkillLevels, self.m_TeamFunds,
 				self.m_TeamFundsShare, self.m_FundsChanged, self.m_FundsContribution, self.m_HadBrain,
-				self.m_BrainEvacuated, self.m_PlayerController, self.m_MessageTimer, self.m_SavedValues.m_SavedEncodedStrings.m_Data,
+				self.m_BrainEvacuated);
+			archive.PerPeer(self.m_PlayerController, self.m_MessageTimer);
+			archive(self.m_SavedValues.m_SavedEncodedStrings.m_Data,
 				self.m_SavedValues.m_SavedStrings.m_Data, self.m_SavedValues.m_SavedNumbers.m_Data);
 		}
 		/// Shared method to get the amount of human or AI controlled brains that are left in this Activity.

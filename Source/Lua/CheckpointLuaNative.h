@@ -615,7 +615,10 @@ namespace RTE::CheckpointLua {
 				className = object->crep()->name();
 				movable = ClassDerivesFrom(object->crep(), "MovableObject");
 				owned = (object->flags() & luabind::detail::object_rep::owner) != 0;
-				detached = !object->ptr() && (!movable || owned);
+				// The values read below through their own properties are never read once a script outlived their owner (a
+				// gone movable object's field, a past frame's alarm).
+				const bool readsProperties = className == "Vector" || className == "Timer" || className == "AlarmEvent";
+				detached = (!object->ptr() && (!movable || owned)) || (readsProperties && object->ptr() && !owned && !ScriptGraphNativeAlive(State(), object));
 				if (movable && object->ptr() && ScriptGraphNativeAlive(State(), object)) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
 					entry.movable = reinterpret_cast<uintptr_t>(mo);
