@@ -4394,6 +4394,7 @@ namespace RTE {
 		m_RelayedTicks.clear();
 		m_ReliableFramesThrough.clear();
 		m_ResendRequests.clear();
+		m_DecisionCommittedAtMs.clear();
 		m_MissingSinceFrame = UINT64_MAX;
 		m_MissingSinceMs = 0;
 		m_LastLeaveMessage.clear();
@@ -5320,6 +5321,13 @@ namespace RTE {
 					const uint64_t answerableMs = given->second + peerStats.pingMs + peerStats.jitterMs;
 					if (answerableMs > firstMissingMs && (nowMs < answerableMs || nowMs - answerableMs < declarationDeadline)) continue;
 				}
+				// Nor can it produce at or past a timing decision's frame before our commit of it has crossed its link.
+				uint64_t gateCommittedMs = 0;
+				for (const auto& [applyFrame, committedMs]: m_DecisionCommittedAtMs) if (applyFrame <= frame) gateCommittedMs = std::max(gateCommittedMs, committedMs);
+				if (gateCommittedMs != 0) {
+					const uint64_t answerableMs = gateCommittedMs + peerStats.pingMs + peerStats.jitterMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs));
+					if (answerableMs > firstMissingMs && (nowMs < answerableMs || nowMs - answerableMs < declarationDeadline)) continue;
+				}
 				// A sender's first frames of the round are its pipeline filling: the round starts skewed by
 				// the start message's own trip and each machine's startup work, and the sender's delay
 				// window is the budget that fill was agreed to take. Its first second of play is judged by
@@ -5468,6 +5476,12 @@ namespace RTE {
 		commit.phase = NetTimingPhase::Commit;
 		QueueTiming(commit);
 		decision.committed = true;
+		// A peer produces nothing at or past this frame until the commit reaches it; its lateness there is ours.
+		if (UsesBoundedWait()) {
+			auto& committedMs = m_DecisionCommittedAtMs[commit.applyFrame];
+			committedMs = std::max(committedMs, m_TimingNowMs);
+			while (m_DecisionCommittedAtMs.size() > 64) m_DecisionCommittedAtMs.erase(m_DecisionCommittedAtMs.begin());
+		}
 		FlushTimingOutgoing();
 		ApplyTiming(commit);
 		if (commit.action == NetTimingAction::Hold) {

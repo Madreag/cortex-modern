@@ -1085,6 +1085,7 @@ namespace RTE {
 		friend bool TestTheGoodbyeDrainJudgesNoSeat(std::string* error);
 		friend bool TestNoSeatIsJudgedPastTheLastTick(std::string* error);
 		friend bool TestAReturningSeatsRampIsTheBound(std::string* error);
+		friend bool TestASeatIsNotLateForOurOwnDecision(std::string* error);
 		friend bool TestPendingSessionEventSurvivesTeardown(std::string* error);
 		friend bool TestFinishMatchDrainsFencedDisconnect(std::string* error);
 		friend bool TestServiceKick(std::string* error);
@@ -1416,6 +1417,7 @@ namespace RTE {
 		std::deque<uint32_t> m_ParkCaptureHistoryMs; //!< Host: the slowest capture of each recent park, newest last.
 		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_ResendRequests; //!< Sender -> (the tick last asked for, when).
 		uint64_t m_MissingSinceFrame = UINT64_MAX; //!< The committed frame this peer has waited on, for the resend request.
+		std::map<uint64_t, uint64_t> m_DecisionCommittedAtMs; //!< Host: a timing decision's frame -> when this host committed it.
 		uint64_t m_MissingSinceMs = 0;
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
