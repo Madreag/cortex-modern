@@ -6972,6 +6972,7 @@ void LuaStateWrapper::Initialize() {
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SceneArea),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, StaticSceneLayer),
 	                         RegisterLuaBindingsOfType(EntityLuaBindings, SLBackground),
+	                         luabind::class_<SLTerrain, Entity>("SLTerrain"),
 	                         RegisterLuaBindingsOfAbstractType(EntityLuaBindings, Deployment),
 	                         RegisterLuaBindingsOfType(SystemLuaBindings, DataModule),
 	                         RegisterLuaBindingsOfType(ActivityLuaBindings, Activity),
@@ -11818,17 +11819,18 @@ namespace {
 
 	// Every binding here was read and writes nothing, though its declaration does not say so: the non-const readers of any
 	// class, and the manager reads without a reading verb. Anything else that is not a const read is dropped on an object the
-	// window does not own, so a binding added later stays out of a preview until it is read and listed. EstimateImpulse fills
-	// its cache only where MOSprite::MayFillCaches lets it. Left out on purpose: the firearm's AI aim getters fill caches, and
+	// window does not own, so a binding added later stays out of a preview until it is read and listed. EstimateImpulse and the
+	// firearm's AI aim getters fill their caches only where MOSprite::MayFillCaches lets them. The operators are bound as free
+	// functions, which luabind never calls const; every one registered reads its operands. Left out on purpose:
 	// TeamFundsChanged clears the flag it reports.
 	bool PreviewFenceListedReader(std::string_view name) {
 		static constexpr std::string_view listed[] = {
 		    "ActivityPaused", "ActivityRunning", "AnalogAimValues", "AnalogAxisValue", "AnalogMoveValues", "AnyInput", "AnyJoyButtonPress", "AnyJoyInput", "AnyJoyPress",
 		    "AnyKeyPress", "AnyMouseButtonPress", "AnyPress", "AnyStartPress", "AnythingUnseen", "CalculateTextHeight", "CalculateTextWidth", "CanTriggerBurst",
 		    "CastAllMOsRay", "CastFindMORay", "CastMORay", "CastMaterialRay", "CastMaxStrengthRay", "CastNotMaterialRay", "CastObstacleRay", "CastStrengthRay",
-		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
-		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "EstimateImpulse", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAlarmPoint",
-		    "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside",
+		    "CastStrengthSumRay", "CastTerrainPenetrationRay", "CastWeaknessRay", "CompareTrajectories", "DetectObstacle", "DirectoryExists", "DrawnSimUpdate", "ElementHeld", "ElementPressed",
+		    "ElementPressedSim", "ElementReleased", "ElementReleasedSim", "EstimateImpulse", "FileExists", "FindAltitude", "FindObjectByUniqueID", "ForceBounds", "GetAIBulletLifeTime", "GetAIFireVel",
+		    "GetAlarmPoint", "GetAllEntities", "GetAllEntitiesOfGroup", "GetAllSpritePixelPositions", "GetAllVisibleSpritePixelPositions", "GetAltitude", "GetArea", "GetBoxInside", "GetBulletAccScalar",
 		    "GetCalculatedMaxThrowVelIncludingArmThrowStrength", "GetClosestActor", "GetClosestEnemyActor", "GetClosestTeamActor", "GetControlledActor", "GetController",
 		    "GetCrabToHumanSpawnRatio", "GetDataModule", "GetDeliveryCount", "GetDirectoryList", "GetEntityDataLocation", "GetFileList", "GetFirstTeamActor",
 		    "GetFogOfWarEnabled", "GetForceOffset", "GetForceVector", "GetForcesCount", "GetImpulseOffset", "GetImpulseVector", "GetImpulsesCount", "GetLandingZone",
@@ -11844,7 +11846,7 @@ namespace {
 		    "MouseButtonPressedSim", "MouseButtonReleased", "MouseButtonReleasedSim", "MouseUsedByPlayer", "MouseWheelMoved", "MovePointToGround", "NoTeamLeft",
 		    "ObscuredPoint", "OneOrNoneTeamsLeft", "OnlyOneTeamLeft", "OtherTeam", "PathFindingUpdated", "ScancodeHeld", "ScancodePressed", "ScancodeReleased",
 		    "ShortestDistance", "SnapPosition", "SplitStringToFitWidth", "TargetDistanceScalar", "TimeForSimUpdate", "ValidMO", "WhichJoyButtonPressed", "WhichTeamLeft",
-		    "WrapBox", "WrapPosition"};
+		    "WrapBox", "WrapPosition", "__add", "__div", "__eq", "__mul", "__sub", "__tostring"};
 		return std::binary_search(std::begin(listed), std::end(listed), name);
 	}
 

@@ -590,8 +590,13 @@ int HDFirearm::GetRoundInMagCapacity() const {
 }
 
 float HDFirearm::GetAIFireVel() {
-	if (m_AIFireVel < 0 && m_pMagazine)
+	if (m_AIFireVel < 0 && m_pMagazine) {
+		// A preview reads the world's firearms without filling the caches their checkpoint holds.
+		if (!MayFillCaches()) {
+			return m_pMagazine->GetAIAimVel();
+		}
 		m_AIFireVel = m_pMagazine->GetAIAimVel();
+	}
 
 	return m_AIFireVel;
 }
@@ -600,11 +605,12 @@ unsigned long HDFirearm::GetAIBulletLifeTime() {
 	if (m_AIBulletLifeTime == 0 && m_pMagazine) {
 		const Round* pRound = m_pMagazine->GetNextRound();
 		if (pRound) {
-			m_AIBulletLifeTime = pRound->GetAILifeTime();
-
 			// Set a default if the lifetime is zero (i.e. infinite)
-			if (m_AIBulletLifeTime == 0)
-				m_AIBulletLifeTime = 20000;
+			const unsigned long lifeTime = pRound->GetAILifeTime() == 0 ? 20000 : pRound->GetAILifeTime();
+			if (!MayFillCaches()) {
+				return lifeTime;
+			}
+			m_AIBulletLifeTime = lifeTime;
 		}
 	}
 
@@ -612,8 +618,12 @@ unsigned long HDFirearm::GetAIBulletLifeTime() {
 }
 
 float HDFirearm::GetBulletAccScalar() {
-	if (m_AIBulletAccScalar < 0 && m_pMagazine)
+	if (m_AIBulletAccScalar < 0 && m_pMagazine) {
+		if (!MayFillCaches()) {
+			return m_pMagazine->GetBulletAccScalar();
+		}
 		m_AIBulletAccScalar = m_pMagazine->GetBulletAccScalar();
+	}
 
 	return m_AIBulletAccScalar;
 }
