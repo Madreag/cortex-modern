@@ -743,7 +743,7 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
 
 
 def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600,
-                      client_lacks_checkpoint: bool = False) -> dict:
+                      client_lacks_checkpoint: bool = False, rejoin_from_first_capture: bool = False) -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -766,7 +766,24 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "",
         tick, milliseconds = (int(part) for part in client_stall.split(":"))
         return {**extra, "client": [*extra.get("client", []), "-net-test-live-stall", f"{start + tick}:{milliseconds}"]}
 
-    records = _run_world_round(repo, first, port, 1200, stall(0, {}), kill_past=kill_tick)
+    first_extra = stall(0, {})
+    if rejoin_from_first_capture:
+        # The rejoin lever: the world keeps serving its first capture (CC_TEST_WORLD_JOIN_FIRST_IMAGE) and the client is held
+        # at tick 124, so it rejoins from the first capture and catches up across everything since it, the old-image rejoin
+        # a loaded box produced by chance.
+        first_extra = {**first_extra, "client": [*first_extra.get("client", []), *([] if client_stall else ["-net-test-live-stall", "124:300"])]}
+        os.environ["CC_TEST_WORLD_JOIN_FIRST_IMAGE"] = "1"
+    try:
+        records = _run_world_round(repo, first, port, 1200, first_extra, kill_past=kill_tick)
+    finally:
+        os.environ.pop("CC_TEST_WORLD_JOIN_FIRST_IMAGE", None)
+    if rejoin_from_first_capture:
+        first_capture = min((int(row[0]) for row in CAPTURE.findall(peer_log(first, "host"))), default=None)
+        images = [int(tick) for tick in re.findall(r"^\[net-match\] bootstrap checkpoint=(\d+) ", peer_log(first, "client"), re.MULTILINE)]
+        assert images and first_capture is not None and images[0] == first_capture, \
+            f"the lever did not rejoin the client from the first capture: capture {first_capture}, images {images}"
+        desync = re.findall(r"^\[lockstep\] desync at frame \d+[^\n]*$", peer_log(first, "host"), re.MULTILINE)
+        assert not desync, f"the rejoin from capture {first_capture} diverged: {desync[:2]}"
     assert records["_killed"], f"the world host was never killed: captures {CAPTURE.findall(peer_log(first, 'host'))[:6]}"
     identity = WORLD_IDENTITY.findall(peer_log(first, "host"))
     assert identity, "the world host never printed its identity"
@@ -1016,6 +1033,9 @@ def main() -> int:
                         help="every N committed ticks both peers hash their whole capture (-net-fullstate-hash-every); 0 is off")
     parser.add_argument("--client-lacks-checkpoint", action="store_true",
                         help="world-restart only: the client loses its copy of the resume checkpoint and is streamed the host's")
+    parser.add_argument("--rejoin-from-first-capture", action="store_true",
+                        help="world-restart only: the first boot's world keeps serving its first capture and the client is held at "
+                        "tick 124, so its rejoin takes the first capture and catches up across everything since it")
     parser.add_argument("--pause-slow-peers", action="store_true",
                         help="anchor only: the host pauses for a slow peer instead of holding it, so a sanitizer build's heal lands")
     args = parser.parse_args()
@@ -1033,7 +1053,7 @@ def main() -> int:
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.pause_slow_peers), "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
-                                                                        args.client_lacks_checkpoint),
+                                                                        args.client_lacks_checkpoint, args.rejoin_from_first_capture),
             "park": arm_park}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
