@@ -826,6 +826,7 @@ void MainMenuGUI::OfferHostLeftLandingOnEntry() {
 	}
 	SetActiveMenuScreen(MenuScreen::MultiplayerScreen, false);
 	m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
+	m_MultiplayerLandingStatusLabel->SetText(PlayerFacingStatus("The host left the match"));
 }
 
 void MainMenuGUI::OfferRematchLobbyOnEntry() {
@@ -3273,6 +3274,14 @@ void MainMenuGUI::RefreshReconnectControls() {
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetVisible(landing && (offering || applying || awaiting || recovering));
 	m_MainMenuButtons[MenuButton::MultiplayerCancelReconnectButton]->SetEnabled(offering || applying || awaiting || reconnect.CanCancel());
 	if (!landing) {
+		return;
+	}
+	// A match its host ended by leaving is over: the landing names that, and nothing is offered to reconnect to.
+	if (!recovering && !offering && !awaiting && g_NetMatchService.GetState() == NetMatchServiceState::Failed &&
+	    g_NetMatchService.GetLobbySnapshot().errorText == "The host left the match") {
+		const std::string landed = PlayerFacingStatus("The host left the match");
+		if (m_MultiplayerLandingStatusLabel->GetText() != landed) m_MultiplayerLandingStatusLabel->SetText(landed);
+		m_ReconnectStatusShown.clear();
 		return;
 	}
 	if (awaiting && offering) {
