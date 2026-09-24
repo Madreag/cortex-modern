@@ -27,7 +27,8 @@ namespace RTE::CheckpointLua {
 			setnilV(&package);
 		}
 
-		std::string Serialize(const char* helperSource, std::unordered_set<uint64_t>& carried) const {
+		/// A non-empty peerMark brackets each fragment only this machine holds.
+		std::string Serialize(const char* helperSource, std::unordered_set<uint64_t>& carried, const std::string& peerMark = {}) const {
 			if (!helperSource || !heap.State() || !native) throw std::runtime_error("a frozen Lua graph is incomplete");
 			if (!tvistab(&roots) || !tvistab(&globals)) throw std::runtime_error("a frozen Lua graph has invalid roots");
 			if (!labels || !tvistab(&*labels)) throw std::runtime_error("a frozen Lua graph has no captured key-label table");
@@ -59,6 +60,7 @@ namespace RTE::CheckpointLua {
 			Check(worker, luaL_loadstring(worker, helperSource), "could not load the frozen graph helper");
 			lua_newtable(worker);
 			lua_pushcfunction(worker, NotCapturing); lua_setfield(worker, -2, "active");
+			if (!peerMark.empty()) { lua_pushlstring(worker, peerMark.data(), peerMark.size()); lua_setfield(worker, -2, "peerMark"); }
 			context.view.Push(worker, *labels); lua_setfield(worker, -2, "keyLabels");
 			Check(worker, lua_pcall(worker, 1, 0, 0), "could not initialize the frozen graph helper");
 			lua_getglobal(worker, "_ScriptGraph");

@@ -7547,13 +7547,29 @@ std::string MovableMan::SaveCheckpoint() const {
 	};
 	shared(g_ActivityMan.GetActivity());
 	shared(g_ActivityMan.GetCheckpointStartActivity());
+	std::map<long, std::vector<bool>> perPeer;
 	for (const auto& [identity, object]: m_KnownObjects) {
 		if (!carried.contains(object)) continue;
 		std::vector<long> links = object->GetCheckpointBorrowedReferences();
 		if (std::none_of(links.begin(), links.end(), [](long target) { return target != 0; })) continue;
 		references.emplace(identity, std::move(links));
+		perPeer.emplace(identity, object->GetCheckpointPerPeerReferences());
 	}
-	writer(references);
+	// Written as the map is, with the links only this machine holds (an actor's loaded move target) and a row that holds
+	// nothing else marked as its own, and so the count.
+	writer.PerPeer(references.size());
+	for (const auto& [identity, links]: references) {
+		const std::vector<bool>& own = perPeer.at(identity);
+		const auto ownLink = [&own](size_t index) { return index < own.size() && own[index]; };
+		bool shared = false;
+		for (size_t index = 0; index < links.size(); ++index) shared = shared || (links[index] != 0 && !ownLink(index));
+		if (!shared) writer.BeginPerPeer();
+		writer(identity, links.size());
+		for (size_t index = 0; index < links.size(); ++index) {
+			if (shared && ownLink(index)) writer.PerPeer(links[index]); else writer(links[index]);
+		}
+		if (!shared) writer.EndPerPeer();
+	}
 	return writer.Text();
 }
 
@@ -7612,7 +7628,10 @@ namespace {
 		std::set<long> playerBrains; // The actors human players depend on as their brains.
 		// A WorldStructure1 payload predates the owner map, a WorldStructure2 payload the brain record.
 		template <class Archive> void Fields(Archive& archive, int version = 3) {
-			archive(cohorts, rosters, sortRoster, alarms, quarantine, moidIndex, contiguousActorIDs);
+			archive(cohorts);
+			// A roster is re-sorted when a seat's own interface asks for the next actor, so its order is this machine's own.
+			archive.PerPeer(rosters, sortRoster);
+			archive(alarms, quarantine, moidIndex, contiguousActorIDs);
 			if (version >= 2) archive(actorOwners);
 			archive(teamMOIDCount, validObjects);
 			if (version >= 3) archive(playerBrains);
