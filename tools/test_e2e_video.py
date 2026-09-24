@@ -392,6 +392,40 @@ def check_item_assertions(results, scratch):
     return ok
 
 
+def check_listed_rows(results, scratch):
+    root = scratch / "listed-rows"
+    root.mkdir(parents=True)
+    record = {"root": str(root), "video_dir": str(root / "video"), "index": [], "probe_dir": str(root / "probe")}
+    own = "[LAN] Host - P4 A... Duel (1/2) 127.0.0.1:49402"
+    other = "[LAN] Host - P4 A... Duel (1/2) 127.0.0.1:49466"
+
+    def listing(rows, shown):
+        text = ("[menu-script] assert_text_fits ListLanGames " + "".join(f" row={json.dumps(r)} width=221 available=244" for r in rows)
+                + " PASS\n" + f'[menu-script] assert_label TextJoinPort "" text="{shown}" PASS\n')
+        (root / "stdout.log").write_text(text, encoding="utf-8")
+
+    rows_item = {"own_session_rows": {"control": "ListLanGames", "expected": 1, "address": "127.0.0.1"}}
+    port_item = {"join_port_follows_list": {"control": "ListLanGames", "field": "TextJoinPort"}}
+    listing([other, own], "49466")
+    _, evidence = driver.item_evidence(record, rows_item, 49402)
+    ok = row(results, "listed-rows/other-session-not-counted", evidence["probe"] == "pass" and evidence["own_session_rows"]["other_sessions"] == [other])
+    _, evidence = driver.item_evidence(record, port_item, 49402)
+    ok &= row(results, "listed-rows/port-follows-first-listed-row", evidence["probe"] == "pass")
+    listing([other, own], "49402")
+    _, evidence = driver.item_evidence(record, port_item, 49402)
+    ok &= row(results, "listed-rows/port-not-following-list-fails", evidence["probe"] == "fail")
+    listing([own, own.replace("127.0.0.1", "192.168.50.130")], "49402")
+    _, evidence = driver.item_evidence(record, rows_item, 49402)
+    ok &= row(results, "listed-rows/own-session-twice-fails", evidence["probe"] == "fail" and len(evidence["own_session_rows"]["own_rows"]) == 2)
+    listing([own.replace("127.0.0.1", "192.168.50.130")], "49402")
+    _, evidence = driver.item_evidence(record, rows_item, 49402)
+    ok &= row(results, "listed-rows/own-session-off-loopback-fails", evidence["probe"] == "fail")
+    (root / "stdout.log").write_text("[menu-script] assert_label TextJoinPort \"\" text=\"49402\" PASS\n", encoding="utf-8")
+    _, evidence = driver.item_evidence(record, rows_item, 49402)
+    ok &= row(results, "listed-rows/missing-readback-fails", evidence["probe"] == "fail" and evidence["own_session_rows"]["rows"] is None)
+    return ok
+
+
 def check_frame_gaps(results, scratch):
     root = scratch / "frame-gaps"
     root.mkdir(parents=True)
@@ -861,6 +895,7 @@ def main():
         ok &= check_review(results, scratch)
         ok &= check_interruption(results, scratch)
         ok &= check_item_assertions(results, scratch)
+        ok &= check_listed_rows(results, scratch)
         ok &= check_frame_gaps(results, scratch)
         ok &= check_stop_request(results, scratch)
         ok &= check_finalizer(results, scratch)
