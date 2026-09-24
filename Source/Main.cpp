@@ -188,6 +188,9 @@ using namespace RTE;
 // Per-tick state hashing — armed by the -tick-hashes CLI flag, off in normal play.
 static bool s_recordTickHashes = false;
 static std::string s_netLiveTickHashPath;
+// Test lever: every N committed lockstep ticks each peer hashes its whole capture; 0 is off.
+static uint32_t s_netFullStateEvery = 0;
+static std::string s_netFullStateDump;
 // The live desync check. On everywhere by default; -net-desync-check off opts a measurement run out.
 static bool s_netDesyncCheck = true;
 static bool s_telemetryBundleOnExit = false;
@@ -837,6 +840,24 @@ bool HandleMainArgs(int argCount, char** argValue) {
 		if (currentArg == "-net-live-tick-hashes") {
 			if (lastArg) return false;
 			s_netLiveTickHashPath = argValue[i + 1];
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-fullstate-hash-every") {
+			uint32_t every = 0;
+			const std::string value = lastArg ? "" : argValue[i + 1];
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), every);
+			if (value.empty() || parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || every == 0) {
+				System::PrintDiagnosticErrorLine("[fullstate] -net-fullstate-hash-every requires a positive 32-bit integer");
+				return false;
+			}
+			s_netFullStateEvery = every;
+			i += 2;
+			continue;
+		}
+		if (currentArg == "-net-fullstate-dump") {
+			if (lastArg) return false;
+			s_netFullStateDump = argValue[i + 1];
 			i += 2;
 			continue;
 		}
@@ -6031,6 +6052,11 @@ void RunGameLoop() {
 					     << " sound_cursor_moves=" << effects.soundCursorMoves;
 					System::PrintDiagnosticLine(line.str());
 				}
+			}
+			// Test lever: the full-state oracle samples the same boundary the autosave captures at, on every live peer alike.
+			if (s_netFullStateEvery > 0 && !lockstepPausedTick && simTick % s_netFullStateEvery == 0 && ScenarioRunner::IsLockstepControllerSyncActive() &&
+			    !ScenarioRunner::WorldCatchUpActive() && ScenarioRunner::GetLockstepAppliedFrame() == simTick && g_ActivityMan.ActivityRunning()) {
+				g_ActivityMan.CaptureFullStateHash(simTick, ScenarioRunner::GetLockstepRoundId(), s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();

@@ -5,9 +5,11 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -40,6 +42,16 @@ namespace RTE {
 		std::vector<GraphWalkPart> walkParts;
 	};
 
+	/// Whether a captured part is the world every peer of a match holds alike, or this machine's own view of it.
+	enum class CheckpointScope : uint8_t { Shared, PerPeer };
+
+	/// One named part of a capture's runtime globals, with the scope its writer gives it.
+	struct CheckpointSection {
+		std::string name;
+		CheckpointScope scope = CheckpointScope::Shared;
+		CheckpointText text;
+	};
+
 	/// Frozen checkpoint values at one sim tick. The worker formats this image.
 	struct CheckpointImage {
 		uint64_t tick = 0;
@@ -49,6 +61,7 @@ namespace RTE {
 		CheckpointText structure;
 		CheckpointText sceneRuntime;
 		CheckpointText globals;
+		std::vector<CheckpointSection> globalSections; //!< The runtime globals' parts in the archive's order; filled only when asked for.
 		std::vector<CheckpointText> graphs;
 		std::string activityName;
 		std::string originalScenePresetName;
@@ -145,6 +158,14 @@ namespace RTE {
 
 	CheckpointText AssembleCheckpointSave(const CheckpointImage& image);
 	CheckpointText AssembleCheckpointIndex(const CheckpointImage& image);
+
+	/// Visits every part of a capture that carries its globals' sections, in the archive's order, with the part's scope.
+	/// Formats deferred text, so it belongs off the simulation thread.
+	void VisitCheckpointSections(const CheckpointImage& image, const std::function<void(const std::string& name, CheckpointScope scope, std::string_view bytes)>& visit);
+
+	/// The full-state oracle's line for a capture: a hash per shared section and one over them all. With a dump
+	/// directory, every section's bytes are written there too.
+	std::string FullStateHashLine(const CheckpointImage& image, const std::string& dumpDirectory = {});
 
 
 	/// The table-to-root index a script graph walk fills and the write barrier marks.

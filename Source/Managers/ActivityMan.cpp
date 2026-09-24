@@ -260,6 +260,12 @@ namespace {
 		return writer;
 	}
 
+	/// The full-state oracle hashes on its own thread, so a sampled capture never delays an autosave's archive.
+	AutosaveArchiveWriter& FullStateWriter() {
+		static AutosaveArchiveWriter writer;
+		return writer;
+	}
+
 	using CheckpointPalette = std::array<unsigned char, 256 * 3>;
 	CheckpointPalette CaptureCheckpointPalette() {
 		CheckpointPalette palette;
@@ -609,7 +615,7 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 
 bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const std::string& path, const std::string& matchId, uint64_t tick,
                                           std::shared_future<bool>& task, size_t& bytes, SaveCompression compression,
-                                          const AutosaveIdentity* identity) {
+                                          const AutosaveIdentity* identity, bool fullStateOnly) {
 	Scene* scene = g_SceneMan.GetScene();
 	GAScripted* activity = dynamic_cast<GAScripted*>(GetActivity());
 	if (!scene || !activity || activity->GetActivityState() == Activity::Over) return false;
@@ -699,8 +705,8 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	for (size_t part = 0; part < managerSavers.size(); ++part) {
 		captureAside([&managerParts, &managerTimings, &managerSavers, &since, part] {
 			const auto start = std::chrono::steady_clock::now();
-			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].second);
-			managerTimings[part] = {managerSavers[part].first, since(start)};
+			managerParts[part] = CheckpointWriter::CaptureNative(managerSavers[part].save);
+			managerTimings[part] = {managerSavers[part].name, since(start)};
 		});
 	}
 	captureAside([&] {
@@ -743,6 +749,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->graphs = cow.LastLua();
 	} else {
 		if (!g_MovableMan.CaptureScriptGraphs(image->graphs, problems, &frozenGraphs, readAudio)) {
+			if (fullStateOnly) {
+				System::PrintDiagnosticLine(std::format("[fullstate] tick={} refused: {}", tick, problems.empty() ? "no reason" : problems.front()));
+				return false;
+			}
 			// Every refused script value reaches the player the same way a manual save reports it.
 			ReportScriptGraphSaveRefusal(kind, problems);
 			return false;
@@ -782,7 +792,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->structure = CheckpointWriter::CaptureNative([] { return g_MovableMan.SaveWorldStructure(); });
 	image->structureUs = since(structureStart);
 	const auto globalsStart = std::chrono::steady_clock::now();
-	image->globals = CheckpointWriter::CaptureNative([&] { return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get()); });
+	image->globals = CheckpointWriter::CaptureNative([&] {
+		return CaptureRuntimeGlobals(carriedSounds.Carried(), false, &image->globalParts, &managerParts, audio.get(), audioSamples.get(), fullStateOnly ? &image->globalSections : nullptr);
+	});
 	image->globalParts.insert(image->globalParts.end(), managerTimings.begin(), managerTimings.end());
 	image->globalParts.emplace_back("audio_read", audioReadUs);
 	image->globalsUs = since(globalsStart);
@@ -816,6 +828,26 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->freezeUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - freezeStart).count();
 	bytes = image->imageBytes;
 	auto previousImage = cow.FinishImage(image);
+	if (fullStateOnly) {
+		task = FullStateWriter().Submit([image, dump = m_FullStateDumpDirectory, round = m_FullStateRound, sceneCache, previousImage, retired = std::move(retired),
+		                                retiredLayers = std::move(retiredLayers)]() mutable {
+			retired.clear();
+			retiredLayers.clear();
+			previousImage.reset();
+			sceneCache.reset();
+			const auto start = std::chrono::steady_clock::now();
+			try {
+				System::PrintDiagnosticLine(FullStateHashLine(*image, dump) + " round=" + std::to_string(round));
+				System::PrintDiagnosticLine(std::format("[fullstate-cost] tick={} freeze_us={} hash_us={} image_bytes={}", image->tick, image->freezeUs,
+				    std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count(), image->imageBytes));
+				return true;
+			} catch (const std::exception& error) {
+				System::PrintDiagnosticLine(std::format("[fullstate] tick={} failed: {}", image->tick, error.what()));
+				return false;
+			}
+		});
+		return true;
+	}
 	const CheckpointPalette palette = CaptureCheckpointPalette();
 	const int zipLevel = ZipLevelFor(compression);
 	const auto simThread = std::this_thread::get_id();
@@ -927,6 +959,29 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 
 void ActivityMan::WaitForAutosaveTasks() const {
 	for (const auto& task: m_AutosaveTasks) task.wait();
+	for (const auto& task: m_FullStateTasks) task.wait();
+}
+
+bool ActivityMan::CaptureFullStateHash(uint64_t tick, uint64_t round, const std::string& dumpDirectory) {
+	std::erase_if(m_FullStateTasks, [](const auto& task) { return task.wait_for(std::chrono::seconds(0)) == std::future_status::ready; });
+	m_FullStateDumpDirectory = dumpDirectory;
+	m_FullStateRound = round;
+	std::shared_future<bool> task;
+	size_t bytes = 0;
+	const auto captureStart = std::chrono::steady_clock::now();
+	try {
+		if (!QueueIncrementalAutosave("fullstate-" + std::to_string(tick), "", "", tick, task, bytes, SaveCompression::Fast, nullptr, true)) {
+			System::PrintDiagnosticLine(std::format("[fullstate] tick={} not taken", tick));
+			return false;
+		}
+	} catch (const std::exception& error) {
+		System::PrintDiagnosticLine(std::format("[fullstate] tick={} not taken: {}", tick, error.what()));
+		return false;
+	}
+	m_FullStateTasks.push_back(std::move(task));
+	System::PrintDiagnosticLine(std::format("[fullstate-capture] tick={} capture_ms={:.3f} bytes={}", tick,
+	    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - captureStart).count(), bytes));
+	return true;
 }
 
 size_t ActivityMan::UnwrittenAutosaves() {
@@ -2133,50 +2188,77 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 	return CaptureRuntimeGlobals(worldCarried, true);
 }
 
-const std::vector<std::pair<const char*, std::string (*)()>>& ActivityMan::RuntimeManagerSavers() {
-	static const std::vector<std::pair<const char*, std::string (*)()>> savers = {
-		{"movable", [] { return g_MovableMan.SaveCheckpoint(); }},
-		{"scene", [] { return g_SceneMan.SaveCheckpoint(); }},
-		{"camera", [] { return g_CameraMan.SaveCheckpoint(); }},
-		{"frame", [] { return g_FrameMan.SaveCheckpoint(); }},
-		{"gui_input", [] { return GUIInput::SaveSharedCheckpoint(); }},
-		{"input", [] { return g_UInputMan.SaveCheckpoint(); }},
-		{"post_process", [] { return g_PostProcessMan.SaveCheckpoint(); }},
-		{"primitives", [] { return g_PrimitiveMan.SaveCheckpoint(); }},
-		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }},
-		{"music", [] { return g_MusicMan.SaveCheckpoint(); }},
+const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManagerSavers() {
+	// The camera is each machine's own screens; the two inputs are what a network restore keeps from the local machine.
+	static const std::vector<RuntimeManagerSaver> savers = {
+		{"movable", [] { return g_MovableMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"scene", [] { return g_SceneMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"camera", [] { return g_CameraMan.SaveCheckpoint(); }, CheckpointScope::PerPeer},
+		{"frame", [] { return g_FrameMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"gui_input", [] { return GUIInput::SaveSharedCheckpoint(); }, CheckpointScope::PerPeer},
+		{"input", [] { return g_UInputMan.SaveCheckpoint(); }, CheckpointScope::PerPeer},
+		{"post_process", [] { return g_PostProcessMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"primitives", [] { return g_PrimitiveMan.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"music", [] { return g_MusicMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 	};
 	return savers;
 }
 
 std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t>& worldCarried, bool collectGarbage,
                                               std::vector<std::pair<std::string, int64_t>>* timings, const std::vector<CheckpointText>* managerParts,
-                                              AudioCheckpointCapture* audio, const AudioCheckpointCapture* audioSamples) const {
+                                              AudioCheckpointCapture* audio, const AudioCheckpointCapture* audioSamples,
+                                              std::vector<CheckpointSection>* sections) const {
 	// A script-owned SoundContainer that has lost its last Lua reference still owns its playing
 	// voices until the collector sweeps it, so an unsettled heap names owners no restore can produce.
 	if (collectGarbage) g_LuaMan.CollectGarbageForCheckpoint();
+	if (sections && !managerParts) throw std::logic_error("the runtime globals' sections need the manager parts");
 	CheckpointWriter writer("RuntimeGlobals9");
 	const auto record = [&](const char* name, const std::function<void()>& capture) {
 		const auto start = std::chrono::steady_clock::now();
 		capture();
 		if (timings) timings->emplace_back(name, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - start).count());
 	};
-	record("rng", [&] { writer(CheckpointWriter::Native([] { return g_SimRNG.SerializeCheckpoint(); }), CheckpointWriter::Native([] { return g_RenderRNG.SerializeCheckpoint(); })); });
-	record("timer", [&] { writer(g_TimerMan); });
+	// Each part is written from the text its section keeps, so a section is exactly what the archive carries.
+	const auto write = [&](const char* name, CheckpointScope scope, const CheckpointText& text) {
+		writer(text);
+		if (sections) sections->push_back({name, scope, text});
+	};
+	record("rng", [&] {
+		write("sim_rng", CheckpointScope::Shared, CheckpointWriter::Native([] { return g_SimRNG.SerializeCheckpoint(); }));
+		// The render stream draws per drawn frame, and each machine paces its own frames.
+		write("render_rng", CheckpointScope::PerPeer, CheckpointWriter::Native([] { return g_RenderRNG.SerializeCheckpoint(); }));
+	});
+	record("timer", [&] {
+		// As the writer takes a manager: its text, kept by the capture's cache.
+		CheckpointText timer = CheckpointWriter::Native([] { return g_TimerMan.SaveCheckpoint(); });
+		if (CheckpointWriter::IsCapturing() && CheckpointWriter::CurrentCache()) timer = CheckpointWriter::CurrentCache()->Remember(&g_TimerMan, 0, std::move(timer));
+		write("timer", CheckpointScope::Shared, timer);
+	});
 	// Parts captured elsewhere take the same places; the archive cannot tell them apart.
 	if (managerParts && managerParts->size() != RuntimeManagerSavers().size()) throw std::logic_error("the runtime globals need every manager part");
 	if (managerParts) {
-		for (size_t part = 0; part < 4; ++part) writer((*managerParts)[part]);
+		for (size_t part = 0; part < 4; ++part) write(RuntimeManagerSavers()[part].name, RuntimeManagerSavers()[part].scope, (*managerParts)[part]);
 	} else {
 		record("movable", [&] { writer(g_MovableMan); });
 		record("scene", [&] { writer(g_SceneMan); });
 		record("camera", [&] { writer(g_CameraMan); });
 		record("frame", [&] { writer(g_FrameMan); });
 	}
-	writer(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
-		m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+	const auto activityState = [this](CheckpointWriter& out) {
+		out(m_DefaultActivityType, m_DefaultActivityName, m_InActivity, m_ActivityNeedsRestart, m_ActivityNeedsResume,
+			m_ResumingActivityFromPauseMenu, m_SkipPauseMenuWhenPausingActivity, m_StartActivityResumed);
+	};
+	activityState(writer);
+	if (sections) {
+		sections->push_back({"activity_state", CheckpointScope::Shared, CheckpointWriter::Native([&activityState] {
+			CheckpointWriter state("ActivityState");
+			activityState(state);
+			return state.Text();
+		})});
+	}
 	if (managerParts) {
-		for (size_t part = 4; part < managerParts->size(); ++part) writer((*managerParts)[part]);
+		for (size_t part = 4; part < managerParts->size(); ++part) write(RuntimeManagerSavers()[part].name, RuntimeManagerSavers()[part].scope, (*managerParts)[part]);
 	} else {
 		record("gui_input", [&] { writer(CheckpointWriter::Native([] { return GUIInput::SaveSharedCheckpoint(); })); });
 		record("input", [&] { writer(CheckpointWriter::Native([] { return g_UInputMan.SaveCheckpoint(); })); });
@@ -2191,11 +2273,11 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 			return audio ? g_AudioMan.SaveCaptured(*audio, contained, audioSamples) : g_AudioMan.SaveCheckpoint(contained);
 		};
 		if (worldCarried.empty() && !AudioMan::SoundCheckpointSaveScope::Current()) {
-			writer(CheckpointWriter::Native([&save] { return save({}); }));
+			write("audio", CheckpointScope::Shared, CheckpointWriter::Native([&save] { return save({}); }));
 		} else {
 			std::unordered_set<uint64_t> managers;
 			g_AudioMan.CollectManagerSoundIdentities(managers);
-			writer(CheckpointWriter::Native([&worldCarried, &managers, &save] {
+			write("audio", CheckpointScope::Shared, CheckpointWriter::Native([&worldCarried, &managers, &save] {
 				return save([&worldCarried, &managers](uint64_t identity, const SoundContainer*) {
 					return !identity || worldCarried.contains(identity) || managers.contains(identity);
 				});
