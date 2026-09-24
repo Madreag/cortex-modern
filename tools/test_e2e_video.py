@@ -934,6 +934,29 @@ def check_recorder_flush(results, scratch):
     return ok
 
 
+def check_log_gates(results, scratch):
+    """A gate on a peer's own stdout line: a drop or a start waits for the product to print it."""
+    log = scratch / "log-gate" / "stdout.log"
+    log.parent.mkdir()
+    log.write_text("[net-match] held client: replaying the private committed tail\n")
+    pattern = r"\[net-match\] private catch-up complete frame=\d+"
+    ok = row(results, "log-gate/unprinted-line-is-unmet", not driver.log_line_seen(log, pattern))
+    ok &= row(results, "log-gate/missing-log-is-unmet", not driver.log_line_seen(log.parent / "absent.log", pattern))
+    log.write_text(log.read_text() + "[net-match] private catch-up complete frame=742\n")
+    ok &= row(results, "log-gate/printed-line-is-met", driver.log_line_seen(log, pattern))
+    peers = [{"name": "client", "kill_when": {"peer": "client", "log": pattern}}]
+    ok &= row(results, "log-gate/drop-on-a-log-line-passes-preflight", driver.run_preflight({"peers": peers}, {"name": "run0", "peers": peers}, [], {}) is None)
+    both = [{"name": "client", "kill_when": {"peer": "client", "log": pattern, "event": "video_mark x"}}]
+    ok &= row(results, "log-gate/drop-with-two-triggers-is-refused",
+              driver.run_preflight({"peers": both}, {"name": "run0", "peers": both}, [], {})["class"] == "harness")
+    scenario = driver.load_scenario("mp-rollback-lag")
+    peers = {peer["name"]: peer for peer in scenario["runs"][0]["peers"]}
+    ok &= row(results, "log-gate/rollback-lag-drops-the-client-after-catch-up", peers["client"].get("kill_when", {}).get("log") == pattern)
+    ok &= row(results, "log-gate/rollback-lag-survivor-waits-for-the-client-route", peers["survivor"].get("start_when", {}).get("peer") == "host"
+              and "RouteAllowed" in peers["survivor"]["start_when"].get("log", ""))
+    return ok
+
+
 def check_fullstate_applicability(results, scratch):
     """A pair that never started a lockstep round has no full-state verdict; one that started and shares no sample is red."""
     root = scratch / "fullstate-applicability"
@@ -994,6 +1017,7 @@ def main():
         ok &= check_migration_timing(results, scratch)
         ok &= check_recorder_flush(results, scratch)
         ok &= check_fullstate_applicability(results, scratch)
+        ok &= check_log_gates(results, scratch)
     summary = {"schema": 1, "pass": bool(ok), "rows": results,
                "needs_a_real_capture": ["the engine's -record-video output itself",
                                         "ffmpeg encode of a real frame sequence",

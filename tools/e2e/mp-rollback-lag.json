@@ -164,7 +164,11 @@
             "CC_TRACE_PREVIEW_EVENT": "1",
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
-          "observe_after_failure": true
+          "observe_after_failure": true,
+          "kill_when": {
+            "peer": "client",
+            "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+          }
         },
         {
           "name": "survivor",
@@ -241,7 +245,13 @@
           "env": {
             "CCCP_HEADLESS": "1",
             "CC_TRACE_PREVIEW_EVENT": "1"
-          }
+          },
+          "start_when": {
+            "peer": "host",
+            "log": "\\[net-route\\] RouteAllowed",
+            "timeout_s": 90
+          },
+          "after_gate_delay_s": 1
         },
         {
           "name": "client-rejoined",
@@ -498,7 +508,11 @@
             "CC_TRACE_PREVIEW_EVENT": "1",
             "CC_TEST_GNS_LOSS_PERCENT": "5"
           },
-          "observe_after_failure": true
+          "observe_after_failure": true,
+          "kill_when": {
+            "peer": "client",
+            "log": "\\[net-match\\] private catch-up complete frame=\\d+"
+          }
         },
         {
           "name": "survivor",
@@ -575,7 +589,13 @@
           "env": {
             "CCCP_HEADLESS": "1",
             "CC_TRACE_PREVIEW_EVENT": "1"
-          }
+          },
+          "start_when": {
+            "peer": "host",
+            "log": "\\[net-route\\] RouteAllowed",
+            "timeout_s": 90
+          },
+          "after_gate_delay_s": 1
         },
         {
           "name": "client-rejoined",
@@ -716,8 +736,8 @@
       "gate": "item9a_longest_wait"
     },
     {
-      "id": "lag-100-item9a_missing_frame_stalls",
-      "what": "The fast peer has zero steady missing-frame stalls.",
+      "id": "lag-100-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
       "assert": "unchanged tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -726,7 +746,7 @@
         300,
         1200
       ],
-      "gate": "item9a_missing_frame_stalls"
+      "gate": "item9a_confirmed_horizon_lag"
     },
     {
       "id": "lag-100-item9a_loss_armed",
@@ -782,7 +802,7 @@
     },
     {
       "id": "lag-100-rejoin",
-      "what": "The relaunched peer returns to the same running world.",
+      "what": "The relaunched peer returns to the same running world while the round still runs.",
       "screen": "game",
       "assert": "rejoin report and gameplay frames",
       "peer": "client-rejoined",
@@ -828,8 +848,8 @@
       "gate": "item9a_longest_wait"
     },
     {
-      "id": "lag-200-item9a_missing_frame_stalls",
-      "what": "The fast peer has zero steady missing-frame stalls.",
+      "id": "lag-200-item9a_confirmed_horizon_lag",
+      "what": "The fast peer's confirmed tick stays within 50 ms of the steady clock, recovery included.",
       "screen": "game",
       "assert": "unchanged tools/feel/report.py item9a_gates",
       "peer": "host",
@@ -838,7 +858,7 @@
         300,
         1200
       ],
-      "gate": "item9a_missing_frame_stalls"
+      "gate": "item9a_confirmed_horizon_lag"
     },
     {
       "id": "lag-200-item9a_loss_armed",
@@ -894,7 +914,7 @@
     },
     {
       "id": "lag-200-rejoin",
-      "what": "The relaunched peer returns to the same running world.",
+      "what": "The relaunched peer returns to the same running world while the round still runs.",
       "screen": "game",
       "assert": "rejoin report and gameplay frames",
       "peer": "client-rejoined",
