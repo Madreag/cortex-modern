@@ -1810,6 +1810,19 @@ namespace RTE {
 			NetLockstepFrame record;
 			NetReplayReadStatus status = NetReplayReadStatus::None;
 			std::string readError;
+			// A world segment records the startup ticks before the round's agreed first frame, which the live round ran with
+			// empty input and no ready frame; playback reads each one, requires it empty and runs the tick the same way.
+			if (tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) {
+				if (!NextReplayRecord(record, status, &readError)) {
+					if (error) *error = readError.empty() ? "replay ended inside the round's startup" : readError;
+					return false;
+				}
+				if (record.targetFrame != tick || !record.frames.empty() || !record.commands.empty() || !record.observations.empty() || !record.valueObservations.empty()) {
+					if (error) *error = "replay startup frame " + std::to_string(record.targetFrame) + " is not the empty frame of tick " + std::to_string(tick);
+					return false;
+				}
+				return true;
+			}
 			bool read = NextReplayRecord(record, status, &readError);
 			if (!read && status == NetReplayReadStatus::CleanEnd) {
 				std::string chainError;
@@ -2835,12 +2848,56 @@ namespace RTE {
 		}
 		LockstepWaitTimer waitTimer;
 
+		// The recorder captures every committed tick: all peers' frames and commands. The codec wants one
+		// UID-sorted set; command order re-sorts by sender at apply.
+		const auto record = [tick](const NetLockstepReadyFrame& ready) {
+			std::vector<ControllerFrame> allFrames = ready.localFrames;
+			allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
+			std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
+				return lhs.actorUniqueID < rhs.actorUniqueID;
+			});
+			std::vector<NetGameCommand> allCommands = ready.localCommands;
+			allCommands.insert(allCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
+			std::vector<NetSoundObservation> allObservations = ready.localObservations;
+			allObservations.insert(allObservations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
+			std::vector<NetValueObservation> allValueObservations = ready.localValueObservations;
+			allValueObservations.insert(allValueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
+			if (s_PendingWorldSegment) {
+				if (s_PendingWorldSegment->frames.size() >= c_MaxPendingSegmentFrames) {
+					DropPendingLockstepWorldSegment("the checkpoint's archive did not land within " +
+					                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
+				} else {
+					s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
+					                                        std::move(allObservations), std::move(allValueObservations)});
+				}
+				return;
+			}
+			if (!s_ReplayWriter.HasAgreedStart() && s_LockstepCoordinator) {
+				if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed) {
+					std::string startError;
+					if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
+						std::cout << "[net-match] replay recording stopped: " << startError << std::endl;
+						s_ReplayWriter.Close();
+						return;
+					}
+				}
+			}
+			std::string writeError;
+			if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
+				std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
+				s_ReplayWriter.Close();
+			}
+		};
+
 		// Input-delay priming: with D>0 the first D frames have no committed input yet (the pipeline
 		// is still filling), and the coordinator emits no ready frame before effectiveStartFrame. The
 		// sim free-runs those ticks with empty input so both peers advance identically. No-op at D=0.
 		if (tick < s_LockstepCoordinator->GetStats().effectiveStartFrame) {
 			outFrame = NetLockstepReadyFrame{};
 			outFrame.frame = tick;
+			// A world segment carries every committed frame from its checkpoint on, these empty ones included.
+			const uint64_t segmentTick = s_PendingWorldSegment ? s_PendingWorldSegment->header.tick : (s_ReplayWriter.IsOpen() ? s_WorldSegment.tick : 0);
+			if (segmentTick != 0 && tick > segmentTick) record(outFrame);
 			return true;
 		}
 
@@ -2890,47 +2947,7 @@ namespace RTE {
 							PushNetUiToast("resumed", "Match resumed");
 						}
 					}
-					// The recorder captures every committed tick: all peers' frames and commands. The
-					// codec wants one UID-sorted set; command order re-sorts by sender at apply.
-					if (s_ReplayWriter.IsOpen() || s_PendingWorldSegment) {
-						std::vector<ControllerFrame> allFrames = ready.localFrames;
-						allFrames.insert(allFrames.end(), ready.remoteFrames.begin(), ready.remoteFrames.end());
-						std::sort(allFrames.begin(), allFrames.end(), [](const ControllerFrame& lhs, const ControllerFrame& rhs) {
-							return lhs.actorUniqueID < rhs.actorUniqueID;
-						});
-						std::vector<NetGameCommand> allCommands = ready.localCommands;
-						allCommands.insert(allCommands.end(), ready.remoteCommands.begin(), ready.remoteCommands.end());
-						std::vector<NetSoundObservation> allObservations = ready.localObservations;
-						allObservations.insert(allObservations.end(), ready.remoteObservations.begin(), ready.remoteObservations.end());
-						std::vector<NetValueObservation> allValueObservations = ready.localValueObservations;
-						allValueObservations.insert(allValueObservations.end(), ready.remoteValueObservations.begin(), ready.remoteValueObservations.end());
-						if (s_PendingWorldSegment) {
-							if (s_PendingWorldSegment->frames.size() >= c_MaxPendingSegmentFrames) {
-								DropPendingLockstepWorldSegment("the checkpoint's archive did not land within " +
-								                               std::to_string(c_MaxPendingSegmentFrames) + " committed ticks");
-							} else {
-								s_PendingWorldSegment->frames.push_back({tick, std::move(allFrames), std::move(allCommands),
-								                                        std::move(allObservations), std::move(allValueObservations)});
-							}
-						} else {
-							if (!s_ReplayWriter.HasAgreedStart() && s_LockstepCoordinator) {
-								if (const auto& agreed = s_LockstepCoordinator->GetAgreedStartRecord(); agreed) {
-									std::string startError;
-									if (!s_ReplayWriter.SetAgreedStart(*agreed, &startError)) {
-										std::cout << "[net-match] replay recording stopped: " << startError << std::endl;
-										s_ReplayWriter.Close();
-										outFrame = std::move(ready);
-										return true;
-									}
-								}
-							}
-							std::string writeError;
-							if (!s_ReplayWriter.WriteFrame(tick, allFrames, allCommands, allObservations, allValueObservations, &writeError)) {
-								std::cout << "[net-match] replay recording stopped: " << writeError << std::endl;
-								s_ReplayWriter.Close();
-							}
-						}
-					}
+					if (s_ReplayWriter.IsOpen() || s_PendingWorldSegment) record(ready);
 					outFrame = std::move(ready);
 					return true;
 				}
