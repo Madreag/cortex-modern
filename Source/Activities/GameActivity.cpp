@@ -57,7 +57,9 @@
 #include <fstream>
 #include <iostream>
 #include <list>
+#include <mutex>
 #include <sstream>
+#include <thread>
 
 #define BRAINLZWIDTHDEFAULT 640
 
@@ -431,7 +433,10 @@ void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame)
 // gets an inert object of the same type: it is never created, so its every method is a no-op and its every getter
 // answers neutral. Offline every seat is this machine's own and the live objects are handed out as before.
 namespace {
+// Threaded scripts and a capture's side-by-side states ask for one seat's stand-in at once.
+std::array<std::mutex, 64> g_SeatStubLocks;
 template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
+	std::lock_guard lock(g_SeatStubLocks[(reinterpret_cast<uintptr_t>(&stub) >> 3) % g_SeatStubLocks.size()]);
 	if (!stub) stub = std::make_unique<T>();
 	return stub.get();
 }
@@ -4093,6 +4098,32 @@ bool GameActivity::RunNetLocalUIRestoreSelfTest() {
 			System::PrintDiagnosticLine(line.str());
 		}
 	};
+	// The states a capture takes side by side, and threaded scripts, ask for the same seat's stand-ins at once.
+	{
+		constexpr int c_Threads = 8;
+		bool single = true;
+		for (int round = 0; round < 32 && single; ++round) {
+			const auto activity = std::make_unique<GameActivity>();
+			std::atomic<int> waiting{c_Threads};
+			std::array<std::array<const void*, 4 * Players::MaxPlayerCount>, c_Threads> seen{};
+			std::vector<std::thread> threads;
+			for (int thread = 0; thread < c_Threads; ++thread) {
+				threads.emplace_back([&activity, &waiting, &seen, thread] {
+					--waiting;
+					while (waiting.load() > 0) {}
+					for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+						seen[thread][4 * player] = activity->GetBuyGUI(player);
+						seen[thread][4 * player + 1] = activity->GetEditorGUI(player);
+						seen[thread][4 * player + 2] = activity->GetBanner(YELLOW, player);
+						seen[thread][4 * player + 3] = activity->GetBanner(RED, player);
+					}
+				});
+			}
+			for (std::thread& thread: threads) thread.join();
+			for (int thread = 1; thread < c_Threads; ++thread) single = single && seen[thread] == seen[0];
+		}
+		check("seat_stands_in_once_across_threads", single);
+	}
 	auto& lua = g_LuaMan.GetMasterScriptState();
 	const auto graphRoundTrip = [&](const char* name, const std::string& script) {
 		std::string graph;
