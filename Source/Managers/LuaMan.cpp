@@ -10693,6 +10693,23 @@ bool LuaStateWrapper::GlobalIsDefined(const std::string& globalName) {
 	return isDefined;
 }
 
+void LuaStateWrapper::RetargetGlobalObject(const std::string& globalName, const void* object, void* replacement) {
+	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	if (!m_State || !object) {
+		return;
+	}
+	lua_getglobal(m_State, globalName.c_str());
+	if (luabind::detail::object_rep* rep = luabind::detail::is_class_object(m_State, -1); rep && rep->ptr() == object) {
+		if (replacement) {
+			rep->set_object(replacement);
+		} else {
+			lua_pushnil(m_State);
+			lua_setglobal(m_State, globalName.c_str());
+		}
+	}
+	lua_pop(m_State, 1);
+}
+
 bool LuaStateWrapper::TableEntryIsDefined(const std::string& tableName, const std::string& indexName) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
 
