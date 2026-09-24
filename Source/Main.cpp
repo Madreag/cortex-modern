@@ -209,13 +209,15 @@ struct MenuTraceCoverage {
 		if (firstOfRun) {
 			*this = MenuTraceCoverage{};
 		} else if (tick != lastTick + 1) {
-			if (heldResume != 0 && tick == heldResume && tick > lastTick) ++heldGaps; else unexplained = true;
+			// A held rejoin resumes at the image it loaded, past its gap or over ticks an abandoned catch-up recorded.
+			if (heldResume != 0 && tick == heldResume) ++heldGaps; else unexplained = true;
 		}
 		heldResume = 0;
 		lastTick = tick;
 	}
-	bool ReachedCap(size_t count, uint64_t cap) const { return count >= cap || (heldGaps > 0 && lastTick >= cap); }
-	bool CoversCap(size_t count, uint64_t cap) const { return count == cap || (heldGaps > 0 && !unexplained && lastTick == cap); }
+	// Past a held rejoin the count also holds the ticks it skipped or replayed twice, so only the cap tick itself counts.
+	bool ReachedCap(size_t count, uint64_t cap) const { return heldGaps > 0 ? lastTick >= cap : count >= cap; }
+	bool CoversCap(size_t count, uint64_t cap) const { return heldGaps > 0 ? !unexplained && lastTick == cap : count == cap; }
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
