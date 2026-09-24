@@ -10024,8 +10024,14 @@ void LuaMan::PushPathCallbacks(lua_State* state) {
 		std::scoped_lock lock(context->mutex);
 		const auto found = context->nextId.find(state);
 		nextId = found == context->nextId.end() ? 0 : found->second;
-		nextOrder = context->nextOrder;
-		for (const auto& callback: context->callbacks) if (callback.state == state) callbacks.push_back(callback);
+		// The counter is machine-wide and each machine's own AI states draw from it, so a state carries only the bound its
+		// own callbacks need: a restore still orders every later callback after them.
+		nextOrder = 0;
+		for (const auto& callback: context->callbacks) {
+			if (callback.state != state) continue;
+			callbacks.push_back(callback);
+			nextOrder = std::max(nextOrder, callback.order + 1);
+		}
 		for (const auto& request: context->pending) if (request.state == state) pending.push_back(request);
 	}
 	PushScriptGraphScratchTable(state);
