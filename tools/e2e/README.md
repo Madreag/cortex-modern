@@ -92,7 +92,7 @@ probes can wait for that file before interpreting the menu's simulation counter 
 holds use `wait_ms`; probes use `elapsed_ms`, since an unrestricted menu can render hundreds of frames per second.
 
 The UI scenario serves the project's real session directory locally over TLS on port 49479. Each run retains its
-certificate, listing observations, and service log. The listed-game selector is `activate GameRow0` (zero-based).
+certificate, listing observations, and service log. The listed-game selector is `activate GameRowPort{PORT}`, the row of this run's own session (`activate GameRow<n>` still picks by zero-based index).
 
 Missing required modules produce a `requires-missing` review and manifest without starting the engine. Void Wanderers
 must be installed as `<repo>/Data/VoidWanderers.rte`; its download page is

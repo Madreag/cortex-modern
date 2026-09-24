@@ -2330,26 +2330,36 @@ def run_case(options, case, root, failing=None):
                 rules = report["service"]["runner"]["match_config"]["rules"]
                 result["match_rules"][who] = {name: rules[name] for name in MATCH_RULES}
                 assert result["match_rules"][who] == MATCH_RULES, (who, result["match_rules"][who])
-            # The host's post-leave menu reads the adopted delay; the survivor takes over the match.
+            # The host's post-leave menu reads the adopted delay. Its announced leave with no other survivor is
+            # the host ending the match: the client's round stops at the leave frame, no election runs and no
+            # reconnect is kept or offered.
             lobby = [line for line in logs["host"].splitlines() if "[menu-script] dump_lobby" in line]
             assert lobby and 'input_delay="Input delay: 3 (fixed)"' in lobby[-1], lobby
             reports = {who: json.loads((root / f"{who}-match.json").read_text(encoding="utf-8"))
                        for who in ("host", "client")}
-            assert reports["host"]["service"]["status"] == "Match left", reports["host"]["service"]["status"]
-            handovers = re.findall(r"\[net-match\] Host left - Client is now hosting; boundary=(\d+) round=(\d+)", logs["client"])
-            assert len(handovers) == 1, handovers
-            boundary, round_id = map(int, handovers[0])
-            survivor = reports["client"]
-            service = survivor["service"]
+            host_service = reports["host"]["service"]
+            assert host_service["status"] == "Match left", host_service["status"]
+            host_lockstep = host_service["runner"]["lockstep"]
+            departures = re.findall(r"\[net-match\] Host left the match at frame (\d+) \(Match left\)", logs["client"])
+            assert len(departures) == 1, departures
+            leave_frame = int(departures[0])
+            for line in ("is now hosting", "host lost; collecting", "Host lost - arranging handover"):
+                assert line not in logs["client"], (line, logs["client"][-4000:])
+            client = reports["client"]
+            service = client["service"]
             lockstep = service["runner"]["lockstep"]
-            assert service["is_host"] is True and service["local_peer_id"] == lockstep["host_peer_id"] == 2, service
-            assert lockstep["migration_boundary"] == boundary and lockstep["round_id"] == round_id, lockstep
-            assert lockstep["migration_generation"] == 1 and 0 < boundary < 400, lockstep
-            assert survivor["frames_planned"] == 400 and survivor["running_ticks"] >= 400, survivor["running_ticks"]
-            assert lockstep["completed_simulation_tick"] >= 400, lockstep["completed_simulation_tick"]
-            assert service["status"] == "e2e complete", service["status"]
-            result["host_departure"] = {"boundary": boundary, "round_id": round_id,
-                "new_host_peer_id": service["local_peer_id"], "completed_tick": lockstep["completed_simulation_tick"]}
+            assert service["is_host"] is False and service["local_peer_id"] == 2, service["local_peer_id"]
+            assert lockstep["host_peer_id"] == host_service["local_peer_id"] == 1, lockstep["host_peer_id"]
+            assert lockstep["round_id"] == host_lockstep["round_id"], (lockstep["round_id"], host_lockstep["round_id"])
+            assert lockstep["migration_generation"] == 0 and lockstep["migration_boundary"] == 0, lockstep
+            assert lockstep["peer_leave_frames"] == {"1": leave_frame}, lockstep["peer_leave_frames"]
+            assert 0 < lockstep["completed_simulation_tick"] < leave_frame, (lockstep["completed_simulation_tick"], leave_frame)
+            assert client["frames_planned"] == 400 and client["running_ticks"] < 400, client["running_ticks"]
+            assert service["state"] == "Completed", service["state"]
+            reconnect = service["reconnect"]
+            assert reconnect["ticket_stored"] is False and reconnect["ux_attempts"] == 0, reconnect
+            result["host_departure"] = {"leave_frame": leave_frame, "round_id": lockstep["round_id"],
+                "client_completed_tick": lockstep["completed_simulation_tick"], "client_status": service["status"]}
         if case in ("net-host-left", "net-host-left-early"):
             if case == "net-host-left-early":
                 # A dead launch leaves no seat to reclaim, so the departure verdict is the
