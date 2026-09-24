@@ -12,10 +12,10 @@ import uuid
 
 if __package__:
     from .compare_sim_traces import strict_compare
-    from .run_sim_test import make_run
+    from .run_sim_test import engine_executable, make_run
 else:
     from compare_sim_traces import strict_compare
-    from run_sim_test import make_run
+    from run_sim_test import engine_executable, make_run
 
 
 def sha256(path):
@@ -108,8 +108,8 @@ def main():
     if build:
         frozen_files[str(options.build_manifest.resolve())] = sha256(options.build_manifest)
         assert all(Path(name).is_file() and sha256(name) == digest for name, digest in frozen_files.items()), "compiled source artifacts changed"
-        assert sha256(options.repo / "Cortex Command.exe") == build["exe_sha256"], "executable differs from compiled-source manifest"
-    for path in (options.recording, options.script, options.global_script, options.repo / "Cortex Command.exe"):
+        assert sha256(engine_executable(options.repo)) == build["exe_sha256"], "executable differs from compiled-source manifest"
+    for path in (options.recording, options.script, options.global_script, engine_executable(options.repo)):
         if path: frozen_files[str(path.resolve())] = sha256(path)
     changed = [] if build else subprocess.check_output(["git", "ls-files", "--modified", "--others", "--exclude-standard", "-z"], cwd=options.repo).decode().split("\0")
     root = options.out / (datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:8])

@@ -14,7 +14,7 @@ import threading
 import zipfile
 from pathlib import Path
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 
 CAP = 8 * 1024 * 1024
 LOG_CAP = 512 * 1024
@@ -100,7 +100,7 @@ def check_no_secrets(contents: dict, original: bytes, planted: dict | None) -> N
 
 def sha(path: Path) -> str:
     with path.open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
+        return file_sha256(source)
 
 
 def read_log(root: Path) -> str:
@@ -395,7 +395,7 @@ def main() -> int:
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    result = {"exe_sha256": sha(repo / "Cortex Command.exe"), "arms": {}}
+    result = {"exe_sha256": sha(engine_executable(repo)), "arms": {}}
     for arm in (("menu", "replay") if args.arm == "all" else (args.arm,)):
         try:
             if arm == "pause":

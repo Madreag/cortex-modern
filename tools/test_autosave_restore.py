@@ -51,7 +51,7 @@ import zipfile
 from pathlib import Path
 
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, read_live_hashes, split_passes
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
@@ -912,8 +912,8 @@ def main() -> int:
     os.environ["CCCP_HEADLESS"] = "1"
     repo, root = args.repo.resolve(), args.out.resolve()
     root.mkdir(parents=True, exist_ok=False)
-    with (repo / "Cortex Command.exe").open("rb") as exe:
-        exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
+    with engine_executable(repo).open("rb") as exe:
+        exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks)}

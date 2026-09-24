@@ -25,14 +25,14 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "tools"))
-from run_sim_test import make_run  # noqa: E402
+from run_sim_test import make_run, engine_executable, file_sha256  # noqa: E402
 
 SERVICE = REPO / "tools" / "session_directory" / "session_directory.py"
 
 
 def sha256(path: Path) -> str:
     with Path(path).open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def patch_settings(runtime: Path, values: dict[str, str]) -> None:
@@ -132,7 +132,7 @@ def main() -> int:
         "NetworkStunServers": "",
     }
     verdict = {"directory_url": directory_url, "cert_pin": pin, "ticks": options.ticks,
-               "executable_sha256": sha256(REPO / "Cortex Command.exe"), "checks": []}
+               "executable_sha256": sha256(engine_executable(REPO)), "checks": []}
 
     def check(name, ok, detail=""):
         verdict["checks"].append({"check": name, "ok": bool(ok), "detail": str(detail)})

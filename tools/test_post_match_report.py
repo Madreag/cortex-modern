@@ -14,7 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable, file_sha256
 from test_lobby_chat import read_log, set_resolution
 from test_lobby_lifecycle import wait_for_log
 from test_viewport_fit import panel_extent, panel_vertical, png_size
@@ -27,11 +27,11 @@ LABELS = re.compile(r'^\[menu-script\] assert_label (\S+) "[^"\n]*" text="(.*?)"
 
 def sha256(path):
     with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+        return file_sha256(stream)
 
 
 def pin(repo, expected):
-    actual = sha256(repo / "Cortex Command.exe")
+    actual = sha256(engine_executable(repo))
     if actual.lower() != expected.lower():
         raise RuntimeError(f"executable SHA256 differs: expected {expected}, actual {actual}")
     return {"exe_sha256": actual,

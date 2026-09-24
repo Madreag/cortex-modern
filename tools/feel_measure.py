@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feel.report import EarlyDecision, TICKS, file_record, pin, record_path, reduce_peer, item9a_gates, apply_tps_call, write_json
 from feel.retained_resume import PER_PEER_SUBSYSTEMS, compare_live_hashes
 from feel.records import compress_case_records, record_path
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 from run_selftests import SELFTESTS
 from compare_sim_traces import strict_compare
 
@@ -206,7 +206,7 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
                     loss_percent=loss_percent, loss_scope='GNS client send and receive packet loss, each direction', silent_tick=silent_tick,
                     live_stalls=live_stalls, autosave_seconds=autosave_seconds, baseline_humans=sp_humans if sp else None,
                     auto_input_delay=not sp, input_script=file_record(script), input_schedule=file_record(script.with_name('input-schedule.json')),
-                    exe=file_record(REPO / 'Cortex Command.exe'), lua_states=lua_states, pre_match_history=pre_match_history,
+                    exe=file_record(engine_executable(REPO)), lua_states=lua_states, pre_match_history=pre_match_history,
                     lua_states_note='retired: the engine fixes the count at build time')
     write_json(out / 'manifest.json', manifest)
     peers = case_peers(sp, silent_tick)
@@ -686,7 +686,7 @@ def main(argv=None):
             root.mkdir(parents=True, exist_ok=True)
             if (root / 'matrix-plan.json').exists():
                 parser.error('matrix-plan.json already exists; use a fresh output directory')
-            exe = file_record(REPO / 'Cortex Command.exe')
+            exe = file_record(engine_executable(REPO))
             write_json(root / 'matrix-plan.json', dict(started=stamp(), exe=exe, branch=branch,
                 commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                 source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),
@@ -730,7 +730,7 @@ def main(argv=None):
         root.mkdir(parents=True, exist_ok=True)
         if (root / 'matrix-plan.json').exists():
             parser.error('matrix-plan.json already exists; retain it and use a fresh child output directory')
-        exe = file_record(REPO / 'Cortex Command.exe')
+        exe = file_record(engine_executable(REPO))
         plan = dict(started=stamp(), exe=exe, branch=branch,
                     commit=subprocess.check_output(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], text=True).strip(),
                     source=file_record(Path(__file__)), reducer=file_record(HELPERS / 'report.py'),

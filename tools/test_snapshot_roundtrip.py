@@ -13,7 +13,7 @@ import subprocess
 import sys
 import zipfile
 
-from run_sim_test import make_run
+from run_sim_test import make_run, engine_executable
 
 
 def digest(path):
@@ -58,7 +58,7 @@ def main():
     runtime_spec.loader.exec_module(runtime)
     harness_files = {str(options.out / name): digest(options.out / name)
         for name in ("harness_source.py", "compare_snapshots.py", "snapshot_runtime.py")}
-    binary = digest(options.repo / "Cortex Command.exe")
+    binary = digest(engine_executable(options.repo))
     build = json.loads(options.build_manifest.read_text()) if options.build_manifest else None
     build_files = dict(build["artifacts"]) if build else {}
     if build:
@@ -173,7 +173,7 @@ def main():
         shared["after"] = compare(*(result["restored"] for result in results), options.out / "shared-after")
     guards = {"source_unchanged": unchanged(build_files if build else sources), "inputs_unchanged": unchanged(inputs),
         "captured_inputs_unchanged": unchanged(captured_hashes), "harness_unchanged": unchanged(harness_files),
-        "binary_unchanged": digest(options.repo / "Cortex Command.exe") == binary}
+        "binary_unchanged": digest(engine_executable(options.repo)) == binary}
     passed = all(guards.values()) and all(result["pass"] for result in results) and all(result["pass"] for result in shared.values())
     (options.out / "result.json").write_text(json.dumps({"pass": passed, **guards, "shared": shared, "results": results}, indent=2))
     print(json.dumps({"pass": passed, **guards, "checks": [result["checks"] for result in results],

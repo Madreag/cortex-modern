@@ -20,6 +20,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from run_sim_test import engine_executable, file_sha256  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 ACTIVITY = REPO / "tools/fixtures/ai_pass_writes_activity.lua"
@@ -51,7 +52,7 @@ INDEX = (
 
 def sha256(path: Path) -> str:
     with Path(path).open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        return file_sha256(handle)
 
 
 def refuse_on_locks() -> None:
@@ -106,7 +107,7 @@ def main() -> int:
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     exe_repo = args.exe_repo.resolve()
-    exe = exe_repo / "Cortex Command.exe"
+    exe = engine_executable(exe_repo)
     if not exe.exists():
         raise SystemExit(f"no executable at {exe}")
 
