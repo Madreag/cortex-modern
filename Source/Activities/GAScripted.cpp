@@ -39,6 +39,14 @@ GAScripted::GAScripted() {
 }
 
 GAScripted::~GAScripted() {
+	// The global named after the Lua class holds whichever instance bound it last: the preset as PresetMan read it in, before
+	// keeping a copy and deleting the read one, or a running activity. It goes to the kept preset, with the script table it
+	// carries; a preset whose module is no longer loaded has nothing to go to.
+	if (!m_LuaClassName.empty()) {
+		const Entity* preset = GetModuleID() < g_PresetMan.GetTotalModuleCount() ? GetPresetForCopy() : nullptr;
+		const GameActivity* kept = preset != this ? dynamic_cast<const GameActivity*>(preset) : nullptr;
+		g_LuaMan.GetMasterScriptState().RetargetGlobalObject(m_LuaClassName, static_cast<const GameActivity*>(this), const_cast<GameActivity*>(kept));
+	}
 	Destroy(true);
 }
 

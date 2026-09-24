@@ -141,7 +141,7 @@ static uint32_t bcread_uleb128_33(LexState *ls)
     int sh = -1;
     v &= 0x3f;
     do {
-     v |= ((*p & 0x7f) << (sh += 7));
+     v |= ((uint32_t)(*p & 0x7f) << (sh += 7));
    } while (*p++ >= 0x80);
   }
   ls->p = (char *)p;

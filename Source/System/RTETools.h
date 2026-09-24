@@ -316,9 +316,9 @@ namespace RTE {
 	/// Rounds an integer to the specified nearest multiple.
 	/// For example, if the arguments are 63 and 5, the returned value will be 65.
 	/// @param num The number to round to the nearest multiple.
-	/// @param multiple The multiple to round to.
+	/// @param multiple The multiple to round to. Zero has no multiples to round to, so num comes back unchanged.
 	/// @return An integer rounded to the specified nearest multiple.
-	inline int RoundToNearestMultiple(int num, int multiple) { return static_cast<int>(std::round(static_cast<float>(num) / static_cast<float>(multiple)) * static_cast<float>(multiple)); }
+	inline int RoundToNearestMultiple(int num, int multiple) { return multiple == 0 ? num : static_cast<int>(std::round(static_cast<float>(num) / static_cast<float>(multiple)) * static_cast<float>(multiple)); }
 #pragma endregion
 
 #pragma region Angle Helpers

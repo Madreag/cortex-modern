@@ -180,6 +180,19 @@ cmake --install D:/Projects/stage2_p2/gns_spike/build-win-vcpkg-release-turnfix 
 
 On macOS and Linux build the same checkout and patch with the flags the stock prefix used, install into `<stock prefix>-turnfix`, and keep passing the stock prefix as `-Dgns_root`.
 
+A UBSan build (`-Db_sanitize=` naming `undefined`) links `<prefix>-ubsan` beside the prefix it resolved, when that exists: the same checkout and patch configured with `-DSANITIZE_UNDEFINED=ON`, which keeps RTTI and instruments GNS itself. GNS release builds use `-fno-rtti`, so against them UBSan's vptr check reports every call the engine makes into `ISteamNetworkingSockets` and `ISteamNetworkingUtils`, and meson warns. On the Mac, for the libc++ prefix (`D` the dependency root):
+
+```sh
+cmake -S gns-src -B build-gns-ubsan -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER=/usr/bin/clang -DCMAKE_CXX_COMPILER=/usr/bin/clang++ -DCMAKE_CXX_FLAGS=-stdlib=libc++ \
+  -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++ \
+  -DBUILD_STATIC_LIB=ON -DBUILD_SHARED_LIB=OFF -DBUILD_EXAMPLES=OFF -DBUILD_TESTS=OFF -DBUILD_TOOLS=OFF \
+  -DENABLE_ICE=ON -DUSE_STEAMWEBRTC=OFF -DUSE_CRYPTO=OpenSSL -DOPENSSL_ROOT_DIR=/opt/homebrew/opt/openssl@3 \
+  -DProtobuf_DIR=$D/protobuf-libcxx/lib/cmake/protobuf -DProtobuf_PROTOC_EXECUTABLE=$D/protobuf-libcxx/bin/protoc \
+  -DSANITIZE_UNDEFINED=ON -DCMAKE_INSTALL_PREFIX=$D/gns-libcxx-turnfix-ubsan
+ninja -C build-gns-ubsan install
+```
+
 `tools/turn_relay_rows.py hold|renew --turn <host:port> --out <dir>` runs the two relay rows (`-net-p2p-selftest relay-hold <seconds> <server>` and `relay-renew <server>`) through the runner against a real TURN server, with the login from `CC_TEST_TURN_USER` / `CC_TEST_TURN_PASS` or a coturn `user=` line; `--coturn-log <ssh host>:<log>` adds the server's own log lines for the run.
 
 Ordinary match config is version 6; persistent-world config is version 7. Versions 2-5 remain readable as recordings. The relay JSON suffix is appended after migration data; `NetLobbyProtocol` owns that encoder/decoder. Relay metadata is outside the deterministic simulation hash so rotating a login cannot alter simulation identity. Transport authorization comes from the host connection. Lua names and behavior are unchanged.
