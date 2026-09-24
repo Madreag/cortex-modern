@@ -4072,6 +4072,15 @@ namespace RTE {
 			if (error) *error = "lockstep has no remote transport targets";
 			return false;
 		}
+		// A client's one link is its host's. A successor hosts the session from session seat 0, so a seat that joins it after a
+		// migration is handed that link under the first seat's id; the round's authority is the peer it talks to.
+		if (const uint8_t authority = config.authorityPeerId != 0 ? config.authorityPeerId : config.matchConfig.hostPeerId;
+		    !config.relayToOtherPeers && authority != 0 && authority != config.localPeerId && authority <= config.peerCount &&
+		    remoteTransports.size() == 1 && !remoteTransports.contains(authority)) {
+			const NetPeerId link = remoteTransports.begin()->second;
+			remoteTransports.clear();
+			remoteTransports[authority] = link;
+		}
 		// A relay host forwards between clients, so it must reach every remote directly.
 		if (config.relayToOtherPeers) {
 			for (uint8_t peerId : remotePeerIds) {
