@@ -874,6 +874,8 @@ namespace RTE {
 		/// Moves a returning seat's activation to the first frame the agreed park cannot reach and tells the returner.
 		/// @return Whether the returner was told a new frame; false when it already used its re-announce.
 		bool MovePrivateActivationPastPark(const NetWorldJoinSession& session);
+		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does.
+		void SendSuccessorCapsuleToLocked(uint8_t member);
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
