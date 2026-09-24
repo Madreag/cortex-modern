@@ -1859,6 +1859,9 @@ static std::string ResyncSaveName() {
 			m_Worker.join();
 		}
 		m_IdentityPending = false;
+		SealPendingWorldSegmentAtEnd();
+		// A restart imports the seats as the round left them: a clean leave in its last seconds releases its seat there too.
+		PublishRestartAdmission();
 		// A clean stop of a world leaves the tick it stopped on, before anything is torn down.
 		WriteFinalWorldCheckpoint();
 		RunCleanLeave();
@@ -2118,6 +2121,7 @@ static std::string ResyncSaveName() {
 			}
 		}
 		// The recording gets its end marker at the match's end, not at process exit.
+		SealPendingWorldSegmentAtEnd();
 		ScenarioRunner::CloseLockstepReplayRecord();
 		if (heldSeatNeedsAnswer || ShouldKeepIceDirectoryLease()) {
 			HideDirectoryListing();
@@ -2150,6 +2154,7 @@ static std::string ResyncSaveName() {
 			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
 			DrainPendingSessionEventsLocked(false);
 		}
+		SealPendingWorldSegmentAtEnd();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::ResetRetiredChecksumCounters();
 		ScenarioRunner::SetSessionPump(nullptr);
@@ -2184,6 +2189,7 @@ static std::string ResyncSaveName() {
 			m_LeftMatch = true;
 			DrainPendingSessionEventsLocked(false);
 		}
+		SealPendingWorldSegmentAtEnd();
 		ScenarioRunner::SetLockstepCoordinator(nullptr);
 		ScenarioRunner::SetSessionPump(nullptr);
 		if (handover)
@@ -3194,6 +3200,17 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine(line.str());
 			}
 		}
+	}
+
+	void NetMatchService::SealPendingWorldSegmentAtEnd() {
+		// The round's last checkpoint still waits on its archive when the round ends; the recorder holds the ticks since it, and
+		// they are the segment's. Waiting out the writer here, at the round's end, opens that segment instead of losing them.
+		if (!ScenarioRunner::HasPendingLockstepWorldSegment()) return;
+		const uint64_t tick = ScenarioRunner::GetPendingLockstepWorldSegmentTick();
+		g_ActivityMan.WaitForAutosaveTasks();
+		SealWorldReplaySegment();
+		if (ScenarioRunner::HasPendingLockstepWorldSegment())
+			ScenarioRunner::DropPendingLockstepWorldSegment("the checkpoint at tick " + std::to_string(tick) + " never validated before the round ended");
 	}
 
 	bool NetMatchService::SaveStampedAutosave(uint64_t tick) {

@@ -1796,8 +1796,11 @@ namespace RTE {
 		// up, it reaches its first frame after the round does and every peer waits on it.
 		const double roundRate = 1000.0 / m_SimTickMs;
 		const double replayRate = session->wallCatchUpMs > 0 ? session->wallCatchUpTicks * 1000.0 / session->wallCatchUpMs : 0.0;
-		if (provesHeadroom && replayRate > roundRate && nowFrame > appliedThrough) {
-			const double frames = std::ceil((nowFrame - appliedThrough) * roundRate / (replayRate - roundRate));
+		// A returner that kept the round's pace at the head of its tail has nothing to close: the lead primes it. One that showed
+		// headroom closes by at least the margin its headroom proved, never by a wall-rate difference that may be near zero.
+		const double provenGap = session->headroom.Ready() ? std::max(replayRate - roundRate, (session->headroom.Ratio() - 1.0) * roundRate) : 0.0;
+		if (provesHeadroom && provenGap > 0.0 && nowFrame > appliedThrough) {
+			const double frames = std::ceil((nowFrame - appliedThrough) * roundRate / provenGap);
 			activation = std::max(activation, nowFrame + static_cast<uint64_t>(frames) + c_NetWorldActivationLeadFrames);
 		}
 		session->activationTick = activation;
