@@ -488,11 +488,19 @@ bool UInputMan::ScriptReadsCommittedSeat(int whichPlayer) const {
 	return luaState && lua_getstack(luaState, 0, &frame) != 0;
 }
 
-void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, int64_t simTick) {
+void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, int64_t simTick) {
 	if (whichPlayer < 0 || whichPlayer >= Players::MaxPlayerCount) {
 		return;
 	}
-	m_CommittedSeatMouse[whichPlayer] = {movement, simTick};
+	m_CommittedSeatMouse[whichPlayer] = {movement, deviceClass, simTick};
+}
+
+bool UInputMan::ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const {
+	if (!ScriptReadsCommittedSeat(whichPlayer) || m_CommittedSeatMouse[whichPlayer].tick < 0 || m_CommittedSeatMouse[whichPlayer].deviceClass == 0) {
+		return false;
+	}
+	deviceClass = m_CommittedSeatMouse[whichPlayer].deviceClass;
+	return true;
 }
 
 Vector UInputMan::GetMouseMovement(int whichPlayer) const {
