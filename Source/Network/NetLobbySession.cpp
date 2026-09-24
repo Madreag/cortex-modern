@@ -16,6 +16,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <type_traits>
 #include <utility>
@@ -1251,12 +1252,19 @@ namespace RTE {
 					return true;
 				}, decoded.message.payload);
 				if (!allowed) {
-					const uint32_t claimedPeer = std::visit([](const auto& payload) -> uint32_t {
+					const std::string type = NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload));
+					const std::optional<uint32_t> claimedPeer = std::visit([](const auto& payload) -> std::optional<uint32_t> {
 						if constexpr (requires { payload.peerId; }) return payload.peerId;
-						return 0;
+						return std::nullopt;
 					}, decoded.message.payload);
-					System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + std::string(NetLobbyProtocol::MessageTypeName(NetLobbyProtocol::MessageTypeOf(decoded.message.payload))) +
-					          " connection=" + std::to_string(event.peerId) + " expected=" + std::to_string(sender->first) + " claimed=" + std::to_string(claimedPeer));
+					// A payload that names no peer claims nothing: it is refused by its own rule, and the line says which.
+					if (claimedPeer) {
+						System::PrintDiagnosticLine("[net-lobby] sender mismatch type=" + type + " connection=" + std::to_string(event.peerId) +
+						                            " expected=" + std::to_string(sender->first) + " claimed=" + std::to_string(*claimedPeer));
+					} else {
+						System::PrintDiagnosticLine("[net-lobby] refused " + type + " connection=" + std::to_string(event.peerId) + " peer=" + std::to_string(sender->first) + ": " +
+						                            (event.lane != NetTransportLane::ControlReliable ? "not on the reliable control lane" : "no transfer is bound to that peer"));
+					}
 					if (m_Config.host) RejectRemote(event.peerId, "lobby message does not match its connection");
 					else Fail("invalid host lobby message");
 					return;
