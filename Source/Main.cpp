@@ -278,6 +278,8 @@ static long long s_frameStallTick = 0;
 static int s_frameStallMs = 0;
 struct NetLiveStall { uint64_t tick; int milliseconds; bool fired = false; };
 static std::vector<NetLiveStall> s_netLiveStalls;
+// Test lever: how many ticks the e2e synced pause lasts before its unpause.
+static uint64_t s_netTestPauseTicks = 180;
 static std::optional<uint64_t> s_netLiveStallActivation;
 static bool s_netPerturbWhenLive = false;
 
@@ -1011,6 +1013,14 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			continue;
 		}
 		if (currentArg == "-net-test-perturb-when-live") { s_netPerturbWhenLive = true; ++i; continue; }
+		if (currentArg == "-net-test-pause-ticks" && i + 1 < argCount) {
+			const std::string value = argValue[++i];
+			uint64_t ticks = 0;
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), ticks);
+			if (parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size() && ticks > 0) s_netTestPauseTicks = ticks;
+			++i;
+			continue;
+		}
 		if (currentArg == "-net-test-live-stall" && i + 1 < argCount) {
 			const std::string spec = argValue[++i];
 			const size_t separator = spec.find(':');
@@ -5425,7 +5435,7 @@ void RunGameLoop() {
 				const uint64_t pauseTick = ScenarioRunner::GetArgs().selftestPauseTick;
 				if (simTick == pauseTick) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, true}});
-				} else if (simTick == pauseTick + 180) {
+				} else if (simTick == pauseTick + s_netTestPauseTicks) {
 					ScenarioRunner::EnqueueLocalGameCommand(NetGameCommand{0, NetGamePauseMatch{0, false}});
 				}
 			}
@@ -5489,6 +5499,11 @@ void RunGameLoop() {
 				g_MovableMan.RunLockstepPausedTick();
 				if (lockstepPaused) {
 					ScenarioRunner::AdvanceLockstepPausedTick();
+				}
+				// The session plane keeps running through a pause: a seat held during it is served its image and its tail.
+				g_NetMatchService.PumpSessionEvents();
+				if (const NetMatchServiceState netServiceState = g_NetMatchService.GetState(); g_NetMatchService.IsHost() && netServiceState == NetMatchServiceState::Running) {
+					g_NetMatchService.Update();
 				}
 			}
 			if (!lockstepPausedTick) {
@@ -6120,6 +6135,7 @@ void RunGameLoop() {
 				if (roundStart || simTick % s_netFullStateEvery == 0) g_ActivityMan.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			if (!lockstepPausedTick) g_NetMatchService.AutosaveAtTickBoundary(simTick);
+			else g_NetMatchService.AppendCommittedJoinFrame(simTick);
 			TelemetryBundle::CaptureAtTickBoundary();
 
 			g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::SimTotal);
