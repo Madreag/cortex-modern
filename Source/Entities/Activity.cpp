@@ -33,6 +33,7 @@
 #include <cstdio>
 #include <limits>
 #include <map>
+#include <optional>
 #include <iostream>
 #include <sstream>
 
@@ -414,9 +415,23 @@ void Activity::End() {
 	m_ActivityState = ActivityState::Over;
 }
 
+namespace {
+	// The roster a world rejoin's restore maps its own seats from before the round's coordinator has one.
+	std::optional<std::pair<NetMatchConfig, uint8_t>> s_RestoreRoster;
+}
+
+void Activity::SetRestoreRoster(const NetMatchConfig* config, uint8_t localPeer) {
+	if (config) s_RestoreRoster.emplace(*config, localPeer); else s_RestoreRoster.reset();
+}
+
 void Activity::SetupPlayers() {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_PlayerCount, m_PlayerScreen, m_TeamActive, m_TeamCount); });
-	if (!m_SharedPlayerSeats) ConfigureLockstepPlayers();
+	// A restored lockstep world keeps its seat facts; only which seats are this machine's comes from the roster, so a
+	// seat another peer plays is never switched here.
+	if (!m_SharedPlayerSeats && !ConfigureLockstepPlayers() && s_RestoreRoster && g_MovableMan.IsRestoringSnapshot() && ScenarioRunner::HasLockstepCoordinator()) {
+		MapLocalPlayers(s_RestoreRoster->first, s_RestoreRoster->second);
+		s_RestoreRoster.reset();
+	}
 	RefreshLockstepLocalPlayers();
 	m_TeamCount = 0;
 	m_PlayerCount = 0;
