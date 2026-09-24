@@ -1177,6 +1177,8 @@ namespace RTE {
 		void RequestMissingFrames(uint8_t senderPeerId, uint64_t frame, uint64_t nowMs);
 		/// Resends this peer's own ticks from a frame to one peer on the reliable lane, repeating each tick's first bytes.
 		size_t ResendOwnFramesFrom(uint8_t requesterPeerId, uint64_t fromFrame);
+		/// Relay host: resends the ticks it forwarded for another sender, from a frame, to the peer that asked.
+		size_t ResendRelayedFramesFrom(uint8_t requesterPeerId, uint8_t senderPeerId, uint64_t fromFrame);
 		/// Sends one admitted member everything this peer still holds for targets from its first
 		/// required frame to the highest already sent, in target order, own frame before the members'.
 		size_t ReplaySentFramesTo(uint8_t peerId, uint64_t fromFrame);
@@ -1383,6 +1385,7 @@ namespace RTE {
 		std::set<uint8_t> m_HeldForCongestion; //!< Congestion episodes already reported, so the hold is logged once.
 		std::map<uint8_t, std::deque<std::vector<uint8_t>>> m_RelayBacklog; //!< peerId -> forwards the transport refused, awaiting retry.
 		std::map<uint8_t, std::set<uint64_t>> m_RelayedTicks; //!< Relay host: sender -> the ticks already sent on to the others.
+		std::map<uint8_t, std::map<uint64_t, NetLockstepFrame>> m_RelayedTickFrames; //!< Relay host: sender -> those ticks, whole, for a resend.
 		std::map<uint8_t, uint64_t> m_ReliableFramesThrough; //!< A member catching up reads frames on the reliable lane through this tick.
 		std::map<uint8_t, uint64_t> m_RelayBacklogSinceMs; //!< peerId -> when its backlog stopped draining.
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
@@ -1420,6 +1423,7 @@ namespace RTE {
 		uint64_t m_MissingSinceFrame = UINT64_MAX; //!< The committed frame this peer has waited on, for the resend request.
 		std::map<uint64_t, uint64_t> m_DecisionCommittedAtMs; //!< Host: a timing decision's frame -> when this host committed it.
 		uint64_t m_MissingSinceMs = 0;
+		uint64_t m_DescribedWaitFrame = UINT64_MAX; //!< The waited frame whose long wait was already named.
 		uint64_t m_FinalFrame = UINT64_MAX;
 		bool m_GoodbyeDrain = false;
 		std::map<uint64_t, uint64_t> m_CommittedAtMs; //!< Host: when each recent frame was committed, the moment a seat could first act on it.
