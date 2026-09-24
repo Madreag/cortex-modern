@@ -222,9 +222,11 @@ def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
         kill_gate = node.get("kill_when")
-        if kill_gate and (kill_gate.get("peer") not in {peer["name"] for peer in peers} or
-                          [bool(kill_gate.get("event")), kill_gate.get("probe_complete") is True, bool(kill_gate.get("log"))].count(True) != 1):
-            return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe or a log line"}
+        # A list of gates drops the peer at the first one met.
+        for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
+            if gate.get("peer") not in {peer["name"] for peer in peers} or \
+                    [bool(gate.get("event")), gate.get("probe_complete") is True, bool(gate.get("log")), "sim_tick" in gate].count(True) != 1:
+                return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -943,11 +945,13 @@ def run_one(options, scenario, run, run_index, out):
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")
                 return
 
-    def kill_when(name, gate):
+    def kill_when(name, gates):
+        gates = gates if isinstance(gates, list) else [gates]
         while not stop_watchers.wait(.05):
             if name in records:
                 return
-            if gate_met(gate):
+            gate = next((candidate for candidate in gates if gate_met(candidate)), None)
+            if gate:
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
                 flushed = await_recorder(shared[f"VIDEO_{gate['peer']}"], stop_watchers) if gate.get("probe_complete") else None
@@ -955,7 +959,7 @@ def run_one(options, scenario, run, run_index, out):
                 write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None,
                                                                                   "recorder_flush": flushed})
                 description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
-                               else "peer event " + gate["event"])
+                               else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
