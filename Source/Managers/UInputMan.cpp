@@ -1,4 +1,7 @@
 #include "UInputMan.h"
+#include "LuaMan.h"
+#include "ScenarioRunner.h"
+#include "lua.hpp"
 #include "CheckpointArchive.h"
 #include <iostream>
 #include "InputScript.h"
@@ -473,7 +476,41 @@ void UInputMan::SetAbsoluteMousePosition(const Vector& pos, int whichPlayer) {
 	}
 }
 
+bool UInputMan::ScriptReadsCommittedSeat(int whichPlayer) const {
+	if (whichPlayer < 0 || whichPlayer >= Players::MaxPlayerCount || !ScenarioRunner::IsLockstepControllerSyncActive() || !LuaMan::IsConstructed()) {
+		return false;
+	}
+	// Only a Lua call in progress on this thread asks as a script; the engine's own reads (the seat's controller building
+	// the frame it sends) stay this machine's.
+	LuaStateWrapper* state = g_LuaMan.GetThreadCurrentLuaState();
+	lua_State* luaState = state ? state->GetLuaState() : nullptr;
+	lua_Debug frame;
+	return luaState && lua_getstack(luaState, 0, &frame) != 0;
+}
+
+void UInputMan::NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, uint8_t deviceClass, int64_t simTick) {
+	if (whichPlayer < 0 || whichPlayer >= Players::MaxPlayerCount) {
+		return;
+	}
+	m_CommittedSeatMouse[whichPlayer] = {movement, deviceClass, simTick};
+}
+
+bool UInputMan::ScriptSeatDeviceClass(int whichPlayer, uint8_t& deviceClass) const {
+	if (!ScriptReadsCommittedSeat(whichPlayer) || m_CommittedSeatMouse[whichPlayer].tick < 0 || m_CommittedSeatMouse[whichPlayer].deviceClass == 0) {
+		return false;
+	}
+	deviceClass = m_CommittedSeatMouse[whichPlayer].deviceClass;
+	return true;
+}
+
 Vector UInputMan::GetMouseMovement(int whichPlayer) const {
+	// A script in the round reads the seat's committed movement, the same on every peer; a seat with no frame at the
+	// last applied tick has not moved.
+	if (ScriptReadsCommittedSeat(whichPlayer)) {
+		const CommittedSeatMouse& seat = m_CommittedSeatMouse[whichPlayer];
+		const int64_t now = static_cast<int64_t>(g_TimerMan.GetSimUpdateCount());
+		return seat.tick >= 0 && now - seat.tick <= 1 ? seat.movement : Vector(0, 0);
+	}
 	if (whichPlayer != Players::NoPlayer && InputScript::DrivesPlayer(whichPlayer)) {
 		Vector movement;
 		return InputScript::MouseAt(whichPlayer, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), movement) ? movement : Vector(0, 0);
