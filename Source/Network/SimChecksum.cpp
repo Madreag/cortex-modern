@@ -11,6 +11,7 @@
 #include <iostream>
 #include <map>
 #include <random>
+#include <thread>
 #include <vector>
 
 namespace RTE {
@@ -53,6 +54,8 @@ namespace RTE {
 		constexpr size_t c_RowBlockBuildsInFlight = 16;
 		// Calls a block must hold still through before its table is worth building.
 		constexpr uint8_t c_RowBlockStillCalls = 2;
+		// Pool threads asked to help compare a key's blocks with the calling thread.
+		constexpr int c_CompareHelpers = 7;
 
 		using RowBlockTable = std::array<uint64_t, 256>;
 
@@ -258,18 +261,30 @@ namespace RTE {
 				}
 			}
 		};
-		constexpr int c_CompareBands = 8;
-		if (m_Impl->buildRowTablesInPlace || height < c_CompareBands * 8) {
+		constexpr int c_CompareBands = 16;
+		if (m_Impl->buildRowTablesInPlace || height < c_CompareBands * 4) {
 			compareRows(0, height);
 		} else {
-			// Reading the whole terrain twice is most of what an unchanged tick costs, so the bands share it out.
-			BS::multi_future<void> bands;
-			for (int band = 0; band < c_CompareBands; ++band) {
-				bands.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&compareRows, height, band]() {
+			// Reading the whole terrain twice is most of what an unchanged tick costs, so pool threads share the bands out.
+			// This thread claims bands too and waits only for bands a helper has started: a busy pool never holds it up.
+			struct Bands {
+				std::atomic<int> next{0};
+				std::atomic<int> done{0};
+			};
+			const auto bands = std::make_shared<Bands>();
+			const auto claim = [bands, &compareRows, height]() {
+				for (int band = bands->next.fetch_add(1); band < c_CompareBands; band = bands->next.fetch_add(1)) {
 					compareRows(height * band / c_CompareBands, height * (band + 1) / c_CompareBands);
-				}));
+					bands->done.fetch_add(1);
+				}
+			};
+			for (int helper = 0; helper < c_CompareHelpers; ++helper) {
+				g_ThreadMan.GetPriorityThreadPool().push_task(claim);
 			}
-			bands.wait();
+			claim();
+			while (bands->done.load() < c_CompareBands) {
+				std::this_thread::yield();
+			}
 		}
 
 		uint64_t state = hasher->second.state;
