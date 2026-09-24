@@ -228,8 +228,9 @@ def arm_restore(repo: Path, root: Path, port: int) -> dict:
     return details
 
 
-def compare_live_window(root: Path, first_tick: int, last_tick: int) -> dict:
-    """Require the complete window and compare every replay of every shared tick."""
+def compare_live_window(root: Path, first_tick: int, last_tick: int, away: dict | None = None) -> dict:
+    """Require the complete window and compare every replay of every shared tick. `away` names, per peer, the
+    inclusive tick ranges it was held and rejoined past on a newer image: the AI played them, the peer never did."""
     peers = {who: read_live_hashes(root / f"{who}-live.jsonl") for who in ("host", "client")}
     required = set(range(first_tick, last_tick + 1))
     by_tick = {}
@@ -237,7 +238,8 @@ def compare_live_window(root: Path, first_tick: int, last_tick: int) -> dict:
         indexed = {}
         for row in rows:
             indexed.setdefault(row["tick"], []).append(row)
-        missing = sorted(required - indexed.keys())
+        skipped = {tick for low, high in (away or {}).get(who, []) for tick in range(low, high + 1)}
+        missing = sorted(required - skipped - indexed.keys())
         assert not missing, f"{who} missing {len(missing)} required ticks: {missing[:8]}"
         by_tick[who] = indexed
     shared = sorted((by_tick["host"].keys() & by_tick["client"].keys()) & set(range(first_tick, max(by_tick["host"]) + 1)))
@@ -604,6 +606,16 @@ def world_offers(log: str) -> list[dict]:
     return [decoder.raw_decode(log[mark.end():])[0] for mark in re.finditer(r"\[net-world\] offer ", log)]
 
 
+def held_away(log: str) -> list:
+    """The ticks a held world client never simulated: from the tick its seat was held at through the image it rejoined on,
+    when that image is newer. Its coverage starts again on the image; every tick from there is compared."""
+    ranges = []
+    for stop, image in re.findall(r"\[net-match\] recovery requested tick=(\d+) [^\n]*PeerHeld:[^\n]*\n(?:[^\n]*\n)*?\[net-match\] bootstrap checkpoint=(\d+) ", log):
+        if int(image) >= int(stop):
+            ranges.append((int(stop), int(image)))
+    return ranges
+
+
 def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick: int) -> dict:
     """Compare every tick the joiner can simulate, from its agreed checkpoint to the planned end."""
     host_rows = read_live_hashes(root / "host-live.jsonl")
@@ -617,7 +629,7 @@ def _compare_world_round(root: Path, world_id: str, resumed_tick: int, last_tick
         assert any(offer["world_id"] == world_id and offer["tick"] + 1 == first_tick for offer in offers), \
             f"the joiner's first tick {first_tick} follows no world checkpoint offer"
     assert last_tick - first_tick + 1 >= 100, "the world shared fewer than 100 planned ticks"
-    compared = compare_live_window(root, first_tick, last_tick)
+    compared = compare_live_window(root, first_tick, last_tick, {"client": held_away(peer_log(root, "client"))})
     compared["joined_first_tick"] = first_tick
     return compared
 
@@ -638,7 +650,7 @@ def _world_checkpoint_state(manifest: str, host_log: str, world_id: str, tick: i
             "binding_peers": sorted(peers)}
 
 
-def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
+def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "", round_ticks: int = 600) -> dict:
     """A persistent world host is KILLED and restarted on the same install with the same UUID,
     the seats the checkpoint held, and the client's stored ticket.
 
@@ -652,7 +664,7 @@ def arm_world_restart(repo: Path, root: Path, port: int, client_stall: str = "")
     root.mkdir(parents=True, exist_ok=False)
     first, second, fresh = root / "boot1", root / "boot2", root / "fresh"
     first.mkdir(parents=True, exist_ok=False)
-    kill_tick, round_ticks = 400, 600
+    kill_tick = 400
 
     def stall(start: int, extra: dict) -> dict:
         """The stress lever: the client stalls once past `start`, so its seat is held and has to rejoin."""
@@ -760,6 +772,25 @@ class WorldRestartOracleTests(unittest.TestCase):
         self.assertEqual(world_offers(text), [expected])
         with self.assertRaises(json.JSONDecodeError):
             world_offers('[net-world] offer {"tick":')
+
+    def test_live_window_skips_only_a_held_clients_away_ticks(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            host = [{"tick": tick, "sim_gated": str(tick), "subsystems": {"actors": str(tick)}} for tick in range(1, 7)]
+            client = [row for row in host if row["tick"] not in (3, 4)]
+            (root / "host-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in host))
+            (root / "client-live.jsonl").write_text("".join(json.dumps(row) + "\n" for row in client))
+            with self.assertRaisesRegex(AssertionError, "client missing 2 required ticks"):
+                compare_live_window(root, 1, 6)
+            self.assertTrue(compare_live_window(root, 1, 6, {"client": [(3, 4)]})["passed"])
+            with self.assertRaisesRegex(AssertionError, "client missing 1 required ticks"):
+                compare_live_window(root, 1, 6, {"client": [(3, 3)]})
+        log = ("[net-match] recovery requested tick=462 catch_up=0 reason=tick 462 lockstep stopped: PeerHeld:held\n"
+               "[net-match] rejoin phase Active -> Connecting\n[net-match] bootstrap checkpoint=522 local_peer=2\n"
+               "[net-match] recovery requested tick=73 catch_up=0 reason=tick 73 lockstep stopped: PeerHeld:held\n"
+               "[net-match] bootstrap checkpoint=61 local_peer=2\n")
+        self.assertEqual(held_away(log), [(462, 522)])
 
     def test_live_window_checks_earlier_replays_and_missing_ticks(self):
         import tempfile
@@ -872,6 +903,7 @@ def main() -> int:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48720)
     parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
+    parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
     parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
     args = parser.parse_args()
@@ -884,7 +916,7 @@ def main() -> int:
         exe_sha = hashlib.file_digest(exe, "sha256").hexdigest()
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
-            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall)}
+            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks)}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
     for index, (arm, run) in enumerate(arms.items()):
