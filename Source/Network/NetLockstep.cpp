@@ -9046,6 +9046,13 @@ namespace RTE {
 		// A seat the round has already dropped cannot end it: a link that fails one way leaves the evicted
 		// peer able to send, and its own grace runs out on a round it is no longer in.
 		const auto leftIt = m_PeerLeaveFrames.find(stop.senderPeerId);
+		// A seat the bound held before its announced leave arrived is released: a clean leaver's return is a new join.
+		if (leftIt != m_PeerLeaveFrames.end() && stop.reason == NetLockstepStopReason::PeerLeft && m_RelayHost && UsesBoundedWait() && HasHeldAISeat(stop.senderPeerId)) {
+			std::cout << "[net-lockstep] " << DescribePeer(stop.senderPeerId) << " announced its leave while held at frame " << leftIt->second
+			          << ": the seat is released" << std::endl;
+			ReleaseHeldSeat(stop.senderPeerId, nowMs, true);
+			return;
+		}
 		if (leftIt != m_PeerLeaveFrames.end()) {
 			std::cout << "[lockstep] ignored a " << NetLockstepCodec::StopReasonName(stop.reason) << " from peer "
 			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << std::endl;
