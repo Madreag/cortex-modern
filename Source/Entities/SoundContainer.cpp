@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <utility>
 
 using namespace RTE;
@@ -300,16 +301,24 @@ bool SoundContainer::HasAnySounds() const {
 	return m_TopLevelSoundSet->HasAnySounds();
 }
 
+thread_local bool (*SoundContainer::s_PreviewReadsWorld)() = nullptr;
+thread_local bool SoundContainer::s_PreviewWindowOpen = false;
+
 float SoundContainer::GetLength(LengthOfSoundType type) const {
 	NoteAIActor();
-	if (!m_SoundPropertiesUpToDate) {
+	std::optional<SoundSet> scratch;
+	if (!m_SoundPropertiesUpToDate && s_PreviewWindowOpen) {
+		// A preview reads the length the first selection gives from a copy; the selection itself is not its to make.
+		scratch.emplace(*m_TopLevelSoundSet);
+		scratch->SelectNextSoundsNow();
+	} else if (!m_SoundPropertiesUpToDate) {
 		// Todo - use a post-load fixup stage instead of lazily initializing shit everywhere... Eugh.
 		const_cast<SoundContainer*>(this)->UpdateSoundProperties();
 		const_cast<SoundContainer*>(this)->m_TopLevelSoundSet->SelectNextSounds();
 	}
 
 	std::vector<const SoundData*> flattenedSoundData;
-	m_TopLevelSoundSet->GetFlattenedSoundData(flattenedSoundData, type == LengthOfSoundType::NextPlayed);
+	std::as_const(scratch ? *scratch : *m_TopLevelSoundSet).GetFlattenedSoundData(flattenedSoundData, type == LengthOfSoundType::NextPlayed);
 
 	float lengthMilliseconds = 0.0f;
 	for (const SoundData* selectedSoundData: flattenedSoundData) {
@@ -528,6 +537,8 @@ void SoundContainer::FadeOut(int fadeOutTime) {
 
 const Vector& SoundContainer::GetScriptPosition() const {
 	std::lock_guard<std::recursive_mutex> pending(m_PendingMutex);
+	// A preview reading the world's container gets a copy of what it holds, so there is no alias to note.
+	if (s_PreviewReadsWorld && s_PreviewReadsWorld()) return Deferring() && (m_Pending.written & LocalPos) ? m_Pending.m_Pos : m_Pos;
 	SoundContainer* self = const_cast<SoundContainer*>(this);
 	if (!Deferring()) {
 		// A write Lua made through the position this pass holds is a shared write when a shared hook
