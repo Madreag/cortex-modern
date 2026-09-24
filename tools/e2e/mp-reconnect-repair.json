@@ -29,13 +29,33 @@
             "{OUT}/host.ticket",
             "-input-script",
             "{INPUT_SCRIPT}",
-            "-net-host"
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
             "NetworkDisplayName": "Host",
             "NetworkAutoReconnect": "1"
-          }
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "client-dropped",
@@ -58,7 +78,11 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -67,7 +91,23 @@
             "NetworkOfferStoredRejoin": "1"
           },
           "start_delay_s": 3.0,
-          "kill_at_tick": 900
+          "kill_at_tick": 900,
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "client-rejoined",
@@ -90,7 +130,11 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "play-input.txt",
           "settings": {
@@ -107,7 +151,23 @@
             "run": "reconnect",
             "peer": "client-dropped"
           },
-          "probe": "mp-reconnect-repair.rejoined.probe.json"
+          "probe": "mp-reconnect-repair.rejoined.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 3000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         }
       ]
     },
@@ -133,11 +193,31 @@
             "{OUT}/host-match.json",
             "-input-script",
             "{INPUT_SCRIPT}",
-            "-net-host"
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
-          "probe": "mp-reconnect-repair.host.probe.json"
+          "probe": "mp-reconnect-repair.host.probe.json",
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1200;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "client",
@@ -159,12 +239,32 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-join",
-            "127.0.0.1"
+            "127.0.0.1",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
           ],
           "input_script": "ui-surfaces.input.txt",
           "menu_script": "wait-for-probe.txt",
           "probe": "mp-reconnect-repair.client.probe.json",
-          "start_delay_s": 3.0
+          "start_delay_s": 3.0,
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1200;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         }
       ]
     }
@@ -185,7 +285,10 @@
     {
       "id": "rc-drop-seen",
       "peer": "host",
-      "peer_drop": {"peer": "client-dropped", "tick": 900},
+      "peer_drop": {
+        "peer": "client-dropped",
+        "tick": 900
+      },
       "screen": "game",
       "sim_ticks": [
         900,
