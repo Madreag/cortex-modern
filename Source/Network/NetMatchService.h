@@ -449,6 +449,7 @@ namespace RTE {
 			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
 			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
+			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 		};
 		struct AutosaveTickOutput {
 			bool capture = false; //!< This peer captures at this tick.
@@ -618,7 +619,10 @@ namespace RTE {
 		bool ConsumeReadyToLaunch(std::string& outActivityPreset);
 		void PreparePrivateRejoinCheckpoint();
 		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
-		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double lastCaptureMs);
+		/// steadyCaptureMs is the median of the last captures past the round's first, or negative before there is one.
+		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs);
+		/// The median of the given capture costs, or -1 when there are none.
+		static double SteadyCaptureMs(const std::deque<double>& costs);
 		/// Whether the round's goodbye is owed to a ready seat at the round's end: one the round does not use, or one still under the AI at its last frame.
 		static bool EndedRoundOwesGoodbye(bool coordinatorUsesPeer, bool seatUnderAIAtEnd);
 		/// Refuses, with the round's goodbye, every ready peer of the session the ended round does not use, and with
@@ -698,7 +702,9 @@ namespace RTE {
 		/// The world slots a dropped or reclaiming seat is waiting for, by the slot each seat holds.
 		/// A promoted watcher plays on a slot its seat's lockstep id does not name, so a hold keyed on
 		/// that id would leave its slot open and fence a slot nobody is coming back to.
-		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership);
+		/// A held slot whose seat the AI plays waits for its own player the same way.
+		static std::vector<uint8_t> WorldReclaimHoldSlots(const std::vector<NetH4SeatStatus>& statuses, const NetWorldMembership& membership,
+		                                                  const std::set<uint8_t>& aiHeldPeers = {});
 		/// The sim id and team the holder of an admission seat plays on. The world plane owns that
 		/// answer: a member plays the slot its seat is bound to, whatever id its seat table names.
 		/// An unbound seat is not the world's, so the caller keeps the seat's own pair.
@@ -1052,6 +1058,7 @@ namespace RTE {
 		friend bool TestWorldBootstrapWaitsForLobby(std::string* error);
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
+		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestPeersCheckpointTheSameTicks(std::string* error);
 		friend bool TestACaptureNamedIntoAParkOpensTheNext(std::string* error);
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
@@ -1257,6 +1264,9 @@ namespace RTE {
 		bool m_AdmissionAttached = false;
 		bool m_LeaveExchangeRun = false; //!< The §7 exchange has been attempted for this session; Destroy must not repeat it.
 		bool m_MatchWasRunning = false;  //!< This session reached a running match, so §11's recovery applies to losing it.
+		bool m_LandedWithoutFrame = false; //!< The host dropped before this seat committed a frame: it landed with nothing to reclaim.
+		bool m_FailedWithoutFrame = false; //!< The failed round's coordinator had simulated no frame when it was torn down.
+		std::set<NetPeerId> m_HeldWorldReclaims; //!< Host: world joins returning to a seat the AI held, agreed by the reclaim itself.
 		uint64_t m_LastUpdateMs = 0;     //!< The millisecond Update() last ran, so two callers in one frame do one pump.
 		std::vector<NetH4SeatStatus> m_SeatStatuses; //!< Published from the sim pump for the roster (§11).
 		std::string m_InputDelayText; //!< The announced input-delay line, built beside each lobby publish.
@@ -1437,7 +1447,9 @@ namespace RTE {
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
 		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
-		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: measured capture cost used to gate another refresh.
+		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: the last capture's measured cost.
+		std::deque<double> m_PrivateCaptureCosts; //!< Host: the last three capture costs past the round's first, which the refresh rule reads.
+		bool m_PrivateCaptureCold = false; //!< Host: the capture in flight is the round's first, whose one-time warm-up is not the steady cost.
 		static constexpr uint64_t c_PrivateImageMinIntervalMs = 10000; //!< The shortest wall gap between two captures.
 		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.

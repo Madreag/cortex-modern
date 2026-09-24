@@ -94,6 +94,11 @@
 
 #ifdef _WIN32
 #include <Windows.h>
+#else
+#include <pthread.h>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #endif
 
 using namespace RTE;
@@ -197,9 +202,21 @@ namespace {
 		}
 	};
 
+	/// Lowers the calling thread below normal priority, so the archive work never competes with the simulation.
+	void YieldToSimulation() {
+#ifdef _WIN32
+		SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+#elif defined(__APPLE__)
+		pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#else
+		setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+#endif
+	}
+
 	class AutosaveArchiveWriter {
 	public:
 		AutosaveArchiveWriter() : m_Worker([this] {
+			YieldToSimulation();
 			while (true) {
 				std::packaged_task<bool()> task;
 				{

@@ -4772,7 +4772,7 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 		}
 	} else {
 		const uint64_t e2eTickBudget = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-		const uint64_t e2eTickCap = !ScenarioRunner::IsPersistentWorld() && s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
+		const uint64_t e2eTickCap = s_netMatchE2ETicks.matchFirstFrame != UINT64_MAX
 		    ? e2eTickBudget + s_netMatchE2ETicks.matchFirstFrame - 1 : e2eTickBudget;
 		const uint64_t matchTick = ParseLockstepStopTick(error, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		const bool e2ePeerStoppedAfterCap = s_netMatchServiceE2E &&
@@ -4949,9 +4949,9 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 				ScenarioRunner::ClearNetUiToasts();
 				ScenarioRunner::PushNetUiToast(heldRejoin ? "seat_held" : "resync_finish", heldRejoin ? "Held - AI in control - rejoining" : "Match resynced (healed at frame " + std::to_string(ScenarioRunner::GetLockstepResumeFrame()) + ")");
 				if (s_netMatchServiceE2E) {
-					const uint64_t resumeFrame = ScenarioRunner::HasLockstepCoordinator()
-						                             ? ScenarioRunner::GetLockstepResumeFrame()
-						                             : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+					// A world rejoin names no lockstep resume frame: its budget runs from the image it loaded, as a private return's does.
+					const uint64_t lockstepResume = ScenarioRunner::HasLockstepCoordinator() ? ScenarioRunner::GetLockstepResumeFrame() : 0;
+					const uint64_t resumeFrame = lockstepResume > 0 ? lockstepResume : static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
 					s_netMatchE2ETicks.OnResyncRelaunch(resumeFrame);
 					// The relaunch restarts the editor phase, so its budget restarts.
 					s_netMatchE2EEditorTicks = 0;
@@ -6554,7 +6554,8 @@ void RunGameLoop() {
 					s_netMatchE2EActorCensusPeak = std::max(s_netMatchE2EActorCensusPeak, s_netMatchE2EActorCensus);
 					const bool unlimitedWorld = (s_netWorldDaemon || s_netPersistentWorld) && !s_netMatchTicksExplicit;
 					const uint64_t tickCap = s_netLockstepTicks > 0 ? s_netLockstepTicks : 600;
-					const uint64_t completedTicks = ScenarioRunner::IsPersistentWorld() ? simTick : s_netMatchE2ETicks.Total();
+					// A peer counts its cap from its own first tick, a world joiner too.
+					const uint64_t completedTicks = s_netMatchE2ETicks.Total();
 					// Every peer stops at the cap, so the round knows the last frame anyone will feed.
 					if (!unlimitedWorld && completedTicks <= tickCap && ScenarioRunner::HasLockstepCoordinator())
 						ScenarioRunner::SetLockstepFinalFrame(ScenarioRunner::GetLockstepAppliedFrame() + (tickCap + 1 - completedTicks));

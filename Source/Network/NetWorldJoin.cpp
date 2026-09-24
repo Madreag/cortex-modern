@@ -1835,8 +1835,8 @@ namespace RTE {
 
 	const NetWorldJoinSession* NetWorldJoinHost::SlowActivation(uint64_t nowFrame) const {
 		const auto found = std::find_if(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& session) {
-			return session.phase == NetWorldJoinPhase::CatchingUp && !session.activationProposed && session.activationTick != 0 && nowFrame > session.activationTick &&
-			       session.acknowledgedThrough + 1 < session.activationTick;
+			// A joiner already waiting at E-1 is slow too once the round passed an E it never agreed.
+			return session.phase == NetWorldJoinPhase::CatchingUp && !session.activationProposed && session.activationTick != 0 && nowFrame > session.activationTick;
 		});
 		return found == m_Sessions.end() ? nullptr : &*found;
 	}

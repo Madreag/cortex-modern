@@ -2043,6 +2043,49 @@ namespace RTE {
 			return 0;
 		}
 
+		/// A joiner waits at the frame before its activation until the round agrees it; an activation the round passed
+		/// without agreeing (a park moved the input horizon past it) is announced again instead of leaving the seat there.
+		int TestAJoinerWaitingOnAnUnagreedActivationIsReannounced() {
+			std::string error;
+			NetWorldJoinHost host;
+			if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) {
+				return Fail("waiting join did not open: " + error);
+			}
+			NetWorldCheckpointImage image;
+			image.worldId = c_WorldId;
+			image.boot = 1;
+			image.round = 1;
+			image.tick = 10;
+			image.bytes = 4;
+			image.digest = "d";
+			image.path = "Worlds/image.bin";
+			host.PublishImage(image);
+			if (!host.NoteTransferComplete(7, 4, &error)) {
+				return Fail(error);
+			}
+			uint64_t firstE = 0;
+			if (!host.NoteCatchUpProgress(7, 10, 1, 1, 20, &firstE, &error) || firstE == 0) {
+				return Fail("waiting join did not announce E: " + error);
+			}
+			// The joiner replays to the frame before E and waits there for the round to agree E.
+			if (!host.NoteCatchUpProgress(7, firstE - 1, firstE - 11, 200, firstE - 4, nullptr, &error)) {
+				return Fail("waiting joiner's progress was refused: " + error);
+			}
+			if (host.SlowActivation(firstE) != nullptr) {
+				return Fail("a joiner waiting at E-1 was moved before the round passed E");
+			}
+			if (host.SlowActivation(firstE + 1) == nullptr) {
+				return Fail("the round passed an E it never agreed and the joiner waiting at E-1 was left there: e=" + std::to_string(firstE));
+			}
+			uint64_t later = 0;
+			if (!host.ReannounceActivation(7, firstE + 1, &later, &error) || later <= firstE + 1) {
+				return Fail("the waiting joiner did not get a later E: " + error);
+			}
+			std::cout << "[net-world-join-selftest] PASS a_joiner_waiting_on_an_unagreed_activation_is_reannounced e=" << firstE
+			          << " later=" << later << std::endl;
+			return 0;
+		}
+
 		int TestSlowJoinerReannounceThenFree() {
 			std::string error;
 			NetWorldJoinHost host;
@@ -3085,17 +3128,53 @@ namespace RTE {
 	}
 
 	/// Capturing a private base stalls every peer's simulation for the capture, so a seat's return buys no refresh whose
-	/// measured capture cannot fit the bound: the next rejoin replays a longer tail in private instead.
+	/// steady capture cost cannot fit the bound: the next rejoin replays a longer tail in private instead.
 	int TestAReturnedSeatTakesNoBaseThatStallsTheRound() {
 		if (NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 173.5)) {
 			return Fail("a returned seat refreshed the private base with a 173.5 ms capture, a stall of every peer past the 50 ms bound");
 		}
 		if (!NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(false, 1, 1, 12.0) ||
-		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5) ||
-		    NetMatchService::PrivateBaseRefreshDue(false, 2277, 1, 0.0)) {
+		    !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 12.0) || NetMatchService::PrivateBaseRefreshDue(true, 0, 1, 173.5)) {
 			return Fail("a private base refresh that fits the bound was refused, or one that does not was taken for a held seat");
 		}
 		std::cout << "[net-world-join-selftest] PASS a_returned_seat_takes_no_base_that_stalls_the_round capture_ms=173.5" << std::endl;
+		return 0;
+	}
+
+	int TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh() {
+		// The round's first capture pays its warm-up (146 ms before the merge, 51-55 ms after); only the captures after it count.
+		std::deque<double> costs;
+		if (NetMatchService::SteadyCaptureMs(costs) >= 0.0 || !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("a held seat was refused a fresh base before any steady capture was measured: the cold first capture decided alone");
+		}
+		costs = {38.0, 41.0, 175.0};
+		if (NetMatchService::SteadyCaptureMs(costs) != 41.0 || !NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("one slow capture among three steady ones refused the refresh: median " + std::to_string(NetMatchService::SteadyCaptureMs(costs)));
+		}
+		costs = {38.0, 120.0, 175.0};
+		if (NetMatchService::PrivateBaseRefreshDue(true, 0, 1, NetMatchService::SteadyCaptureMs(costs))) {
+			return Fail("a steady capture cost of 120 ms past the 50 ms bound still took a refresh");
+		}
+		std::cout << "[net-world-join-selftest] PASS the_cold_first_capture_never_decides_a_held_seats_refresh" << std::endl;
+		return 0;
+	}
+
+	/// A member whose seat the AI holds comes back to that seat: the slot waits for its returner, who never lands as a watcher.
+	int TestAHeldWorldSeatWaitsForItsReturner() {
+		std::string error;
+		NetWorldJoinHost host;
+		if (!host.Configure(MakeWorldConfig(), MakeIdentity(), &error) || !host.BeginJoin(7, 2, "alice", 1000, &error)) return Fail("held-seat fixture: " + error);
+		const NetWorldJoinSession* seated = host.FindSession(7);
+		if (seated == nullptr || seated->spectator || seated->assignedPeerId != 2) return Fail("held-seat fixture: alice did not take slot 2");
+		// Her seat is held by the AI while her connection lives on, so no drop names her slot.
+		if (!NetMatchService::WorldReclaimHoldSlots({}, host.Membership()).empty()) return Fail("a live seat nobody holds for the AI was fenced for a reclaim");
+		host.NoteReclaimHolds(NetMatchService::WorldReclaimHoldSlots({}, host.Membership(), {2}));
+		if (!host.BeginJoin(8, 2, "alice", 2000, &error, true)) return Fail("held-seat-refused-its-own-holder: " + error);
+		const NetWorldJoinSession* returned = host.FindSession(8);
+		if (returned == nullptr || returned->spectator || returned->assignedPeerId != 2) {
+			return Fail("held-seat-returner-watches: the member whose seat the AI holds came back as a watcher, not on slot 2");
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_waits_for_its_returner" << std::endl;
 		return 0;
 	}
 
@@ -5965,6 +6044,31 @@ namespace RTE {
 		return true;
 	}
 
+	// A park commits empty frames: a capture named while a seat's activation is still ahead would drop the activation it covers.
+	bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_AutosaveMatchId = "00000000deadbeef-0000000000000005";
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		uint64_t firstNamed = 0;
+		for (uint64_t tick = 1; tick <= 400 && firstNamed == 0; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick;
+			input.now = static_cast<int64_t>(tick) * tickLength;
+			input.writers = {1};
+			input.lead = 5;
+			input.activationPending = tick <= 300;
+			for (const NetMatchService::CheckpointNote& note: service.StepAutosaveSchedule(input).send) if (note.kind == NetGameCheckpoint::Capture) firstNamed = tick;
+		}
+		if (firstNamed == 0 || firstNamed <= 300) {
+			*error = "capture-named-over-a-pending-activation: first named at tick " + std::to_string(firstNamed) + " while an activation was ahead through 300";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS no_capture_is_named_over_a_pending_activation first_named=" << firstNamed << std::endl;
+		return true;
+	}
+
 	// The schedule rides the committed stream: both entries cross the lockstep wire on the checkpoint
 	// version, and the committed tail a joiner replays carries them unchanged.
 	bool TestCheckpointCommandCrossesTheWire(std::string* error) {
@@ -6878,6 +6982,9 @@ namespace RTE {
 		if (const int result = TestSlowJoinerReannounceThenFree(); result != 0) {
 			return result;
 		}
+		if (const int result = TestAJoinerWaitingOnAnUnagreedActivationIsReannounced(); result != 0) {
+			return result;
+		}
 		if (const int result = TestJoinPlaneAndLeave(); result != 0) {
 			return result;
 		}
@@ -6966,6 +7073,8 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
+		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
+		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
 		if (const int result = TestAReadmittedSeatHeldAtTheEndIsOwedTheGoodbye(); result != 0) return result;
 		if (const int result = TestLargePrivateTailChunks(); result != 0) return result;
 		if (const int result = TestPrivateNeutralPrelude(); result != 0) return result;
@@ -6982,6 +7091,7 @@ namespace RTE {
 			if (!TestWorldRecorderRollsAtCheckpoint(&error)) return Fail(error);
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
+			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestPeersCheckpointTheSameTicks(&error)) return Fail(error);
 			if (!TestACaptureNamedIntoAParkOpensTheNext(&error)) return Fail(error);
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);

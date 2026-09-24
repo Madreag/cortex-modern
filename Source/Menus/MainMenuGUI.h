@@ -79,6 +79,10 @@ namespace RTE {
 		/// Opens the multiplayer screen on the lobby panel when the match that just ended left a
 		/// rematch lobby waiting, so the player comes out of the match where the rematch is.
 		void OfferRematchLobbyOnEntry();
+
+		/// Opens the multiplayer screen on the landing panel when the match failed because its host left, so the verdict is
+		/// the first thing the player reads.
+		void OfferHostLeftLandingOnEntry();
 #pragma endregion
 
 #pragma region Automation

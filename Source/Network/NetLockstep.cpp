@@ -6896,6 +6896,11 @@ namespace RTE {
 		return static_cast<uint64_t>(std::max(1.0, std::ceil(budgetMs / m_Config.simTickMs)));
 	}
 
+	bool NetLockstepCoordinator::CaptureParkMayReach(uint64_t frame) const {
+		if (m_SynchronizedCaptureStartFrame == UINT64_MAX || frame < m_SynchronizedCaptureStartFrame) return false;
+		return frame <= (m_CaptureParkFinalized ? m_SynchronizedCaptureEndFrame : std::max(m_SynchronizedCaptureEndFrame, m_SynchronizedCaptureStartFrame + CaptureParkCapTicks()));
+	}
+
 	void NetLockstepCoordinator::RetryLateStartReclaims() {
 		if (m_LateStartReclaims.empty() || m_Config.localPeerId != GetHostPeerId()) return;
 		for (auto it = m_LateStartReclaims.begin(); it != m_LateStartReclaims.end();) {
@@ -8949,6 +8954,13 @@ namespace RTE {
 			std::cout << "[lockstep] ignored a " << NetLockstepCodec::StopReasonName(stop.reason) << " from peer "
 			          << static_cast<int>(stop.senderPeerId) << ", which left at frame " << leftIt->second << std::endl;
 			++m_Stats.stopsFromLeftPeers;
+			return;
+		}
+		// A world member reaching its own planned end leaves the world; only the host's end closes the round.
+		if (stop.reason == NetLockstepStopReason::Complete && IsPersistentWorldRound() && stop.senderPeerId != GetHostPeerId()) {
+			NetLockstepStop leave = stop;
+			leave.reason = NetLockstepStopReason::PeerLeft;
+			HandleStop(leave, nowMs, fromTransport);
 			return;
 		}
 		if (m_DeferStops && stop.reason == NetLockstepStopReason::Complete &&
