@@ -861,6 +861,7 @@
     <ClInclude Include="Source\GUI\Wrappers\GUIInputWrapper.h" />
     <ClInclude Include="Source\Lua\LuaAdapterDefinitions.h" />
     <ClInclude Include="Source\Lua\LuabindObjectWrapper.h" />
+    <ClInclude Include="Source\Lua\LuaBindingExhaustiveSelfTest.h" />
     <ClInclude Include="Source\Lua\LuabindDefinitions.h" />
     <ClInclude Include="Source\Lua\LuaBindingRegisterDefinitions.h" />
     <ClInclude Include="Source\GUI\GUIWriter.h" />
@@ -1132,6 +1133,11 @@
     <ClCompile Include="Source\GUI\Wrappers\AllegroScreen.cpp" />
     <ClCompile Include="Source\GUI\Wrappers\GUIInputWrapper.cpp" />
     <ClCompile Include="Source\Lua\LuaAdapters.cpp">
+      <ConformanceMode>false</ConformanceMode>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <LanguageStandard Condition="'$(VisualStudioVersion)'=='16.0'">stdcpp17</LanguageStandard>
+    </ClCompile>
+    <ClCompile Include="Source\Lua\LuaBindingExhaustiveSelfTest.cpp">
       <ConformanceMode>false</ConformanceMode>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <LanguageStandard Condition="'$(VisualStudioVersion)'=='16.0'">stdcpp17</LanguageStandard>

@@ -1,6 +1,7 @@
 lua_sources = files(
 'LuabindObjectWrapper.cpp',
 'LuaAdapters.cpp',
+'LuaBindingExhaustiveSelfTest.cpp',
 'LuaBindingsActivities.cpp',
 'LuaBindingsEntities.cpp',
 'LuaBindingsGUI.cpp',
