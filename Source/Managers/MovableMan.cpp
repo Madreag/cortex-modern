@@ -7864,7 +7864,9 @@ bool MovableMan::RunContiguousActorIndexSelfTest(Actor* craft) {
 	bool brainLastDitch = false;
 	const bool brainSeats = g_ActivityMan.GetActivity() && recordActor && m_Actors.size() > 1 &&
 	                        g_ActivityMan.GetActivity()->RunPlayerBrainRecordSelfTest(recordActor, m_Actors[1], &brainLegacyReseeded, &brainLastDitch);
-	const bool sharedSeats = Activity::RunSharedSeatSelfTest();
+	Actor* switchable = nullptr;
+	for (Actor* actor: m_Actors) if (IsActor(actor) && actor->IsPlayerControllable() && !actor->GetController()->IsPlayerControlled()) { switchable = actor; break; }
+	const bool sharedSeats = Activity::RunSharedSeatSelfTest(switchable);
 
 	// The shape the crashed resync archives carried: an index entry for an actor the world does not have.
 	WorldStructure clean;

@@ -283,7 +283,7 @@ namespace RTE {
 		void RefreshLockstepLocalPlayers();
 
 		/// Checks roster order, local input mapping and unchanged offline seats.
-		static bool RunSharedSeatSelfTest();
+		static bool RunSharedSeatSelfTest(Actor* switchable = nullptr);
 
 		/// Turns off a player if they were active. Should only be done if brain etc are already taken care of and disposed of properly.
 		/// Will also deactivate the team this player is on, if there's no other active players still on it.
