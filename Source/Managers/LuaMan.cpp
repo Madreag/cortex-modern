@@ -3924,7 +3924,10 @@ static std::vector<const void*> LoadedActivityPresets() {
 struct RTE::LuaScriptGraphNativeCaptureData {
 	/// The objects that existed when the capture began, copied by the first question asked of them.
 	const std::vector<MovableObject*>& KnownObjects() const {
-		std::call_once(m_KnownObjectsCopied, [this] { m_KnownObjects = g_MovableMan.SnapshotKnownObjects(); });
+		std::call_once(m_KnownObjectsCopied, [this] {
+			CaptureSentinel::NoteCreation("capture known-objects copy", &m_KnownObjects);
+			m_KnownObjects = g_MovableMan.SnapshotKnownObjects();
+		});
 		return m_KnownObjects;
 	}
 	mutable std::shared_ptr<const void> frozenWorld; // The first frozen state's walk of the world's trees, shared by the rest.
@@ -3932,6 +3935,7 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	/// Whether an object existed when the capture began; only the pointer is read.
 	bool Known(const MovableObject* object) const {
 		std::call_once(m_KnownBuilt, [this] {
+			CaptureSentinel::NoteCreation("capture known-objects lookup", &m_Known);
 			m_Known.assign(KnownObjects().begin(), KnownObjects().end());
 			std::sort(m_Known.begin(), m_Known.end());
 		});

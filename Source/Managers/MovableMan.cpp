@@ -1,3 +1,4 @@
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "Constants.h"
@@ -2654,6 +2655,7 @@ MovableMan::KnownObjectsScope::KnownObjectsScope() {
 
 void MovableMan::KnownObjectsScope::Copy() const {
 	std::call_once(m_Copied, [this] {
+		CaptureSentinel::NoteCreation("known-objects index", this);
 		MovableMan& manager = g_MovableMan;
 		{
 			std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);

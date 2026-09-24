@@ -1,4 +1,5 @@
 #include "MovableObject.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "OwnedMovableObjects.h"
 #include "SoundSimulation.h"
@@ -150,6 +151,7 @@ bool MovableObject::RebindCheckpointBorrowedReferences(const std::vector<long>& 
 
 MovableObject::MovableObject() {
 	Clear();
+	CaptureSentinel::NoteCreation("MovableObject", this);
 }
 
 namespace {
