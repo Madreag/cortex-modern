@@ -4,6 +4,7 @@
 #include "NetGameCommand.h"
 #include "NetMatchConfig.h"
 #include "NetTransport.h"
+#include <algorithm>
 
 #include <array>
 #include <cstdint>
@@ -905,8 +906,11 @@ namespace RTE {
 		bool HasSeatHoldGap(uint64_t frame) const { for (const auto& [peer, hold]: m_AiHeldSeats) if (IsSeatHoldGap(peer, frame)) return true; return false; }
 		bool IsSeatReclaimGap(uint8_t peerId, uint64_t frame) const;
 		bool HasSeatReclaimGap(uint64_t frame) const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (IsSeatReclaimGap(peer, frame)) return true; return false; }
-		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId); }
-		bool AnyHeldAISeat() const { return !m_AiHeldSeats.empty(); }
+		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
+		bool HasHeldAISeat(uint8_t peerId) const { return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
+		bool AnyHeldAISeat() const { return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
+		/// Whether the seat's hold was ended by a kick, a ban, a release or a clean leave: its units stay with the AI and a return is a new join.
+		bool IsSeatReleased(uint8_t peerId) const { return m_ReleasedAiSeats.contains(peerId); }
 		/// A seat's reclaim or admission is agreed and its activation frame is still ahead.
 		bool HasPendingSeatActivation() const { for (const auto& [peer, reclaim]: m_ReclaimTransactions) if (reclaim.activationFrame >= m_Stats.nextFrame) return true; return false; }
 		/// Host: the current capture park covers the frame or may still grow to cover it.
@@ -1211,6 +1215,8 @@ namespace RTE {
 		/// grace: past the silence bound, so a transient episode still costs nobody a seat, and a clear
 		/// quarter short of the missing-frame timeout, so a hold can never be what ends the round.
 		uint64_t CongestionHoldLeaveMs() const { return m_Config.timeoutMs * 3 / 4; }
+		/// Ends an AI-held seat's wait for its returner: an agreed reclaim still ahead of every peer is withdrawn, the AI keeps the units.
+		void ReleaseHeldSeat(uint8_t peerId, uint64_t nowMs, bool relay);
 		/// Relay host: a required remote that has blocked the round this long has left, whatever its
 		/// socket still says. Waiting for the transport means waiting on the dead peer's own process.
 		void AdjudicateSilentPeers(uint64_t nowMs);
@@ -1318,6 +1324,10 @@ namespace RTE {
 		bool m_LocalStartupPublished = false;
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		std::set<uint8_t> m_StartupLinksLost; //!< Host: seats whose link died before the agreed start; the start holds them.
+		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
+		std::set<uint8_t> m_ReleaseWhenHeld; //!< Host: clean leavers whose hold releases the seat as soon as it lands.
+		std::map<uint8_t, std::string> m_EvictAfterReclaim; //!< Host: removals that meet a return too close to withdraw; applied once it lands.
+		std::optional<NetLockstepStop> m_OwnEndDuringMigration; //!< This peer's own end while its host was being replaced; the new host hears it.
 		bool m_AgreedStartApplied = false;
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
