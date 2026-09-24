@@ -3486,12 +3486,13 @@ std::string GameActivity::SaveValueCheckpoint() const {
 	CheckpointWriter writer("GameActivity3");
 	writer(CheckpointWriter::Native([&] { return Activity::SaveCheckpoint(); }));
 	VisitCheckpoint(writer, *this);
+	// Each player's menus and banners are the interface this machine draws for its own seats.
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 		if (!menus.empty()) {
 			const size_t first = static_cast<size_t>(player) * c_MenuParts;
-			writer(menus[first], menus[first + 1], menus[first + 2], menus[first + 3], menus[first + 4]);
+			writer.PerPeer(menus[first], menus[first + 1], menus[first + 2], menus[first + 3], menus[first + 4]);
 		} else {
-			writer(CheckpointWriter::Native(menu(player, 0)), CheckpointWriter::Native(menu(player, 1)), CheckpointWriter::Native(menu(player, 2)),
+			writer.PerPeer(CheckpointWriter::Native(menu(player, 0)), CheckpointWriter::Native(menu(player, 1)), CheckpointWriter::Native(menu(player, 2)),
 				CheckpointWriter::Native(menu(player, 3)), CheckpointWriter::Native(menu(player, 4)));
 		}
 	}

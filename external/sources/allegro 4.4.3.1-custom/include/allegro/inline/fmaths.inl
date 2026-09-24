@@ -165,7 +165,7 @@ AL_INLINE(fixed, fixsub, (fixed x, fixed y),
 	 return (x < 0) ? -0x7FFFFFFF : 0x7FFFFFFF;
       }
       else
-	 return (fixed)(((LONG_LONG)(x) << 16) / (LONG_LONG)(y));
+	 return (fixed)(((LONG_LONG)(x) * 65536) / (LONG_LONG)(y));
    })
 #endif
 

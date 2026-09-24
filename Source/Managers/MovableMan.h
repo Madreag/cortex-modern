@@ -833,6 +833,14 @@ namespace RTE {
 		/// @return The const list of AlarmEvent:s.
 		const std::vector<AlarmEvent*>& GetAlarmEvents() const { return m_AlarmEvents; }
 
+		/// Whether an alarm event is one of last frame's or this frame's; a script can keep one past its frame.
+		/// @param event The event, compared by address only.
+		bool IsLiveAlarmEvent(const AlarmEvent* event) {
+			if (std::find(m_AlarmEvents.begin(), m_AlarmEvents.end(), event) != m_AlarmEvents.end()) return true;
+			std::lock_guard<std::mutex> lock(m_AddedAlarmEventsMutex);
+			return std::find(m_AddedAlarmEvents.begin(), m_AddedAlarmEvents.end(), event) != m_AddedAlarmEvents.end();
+		}
+
 		/// Shows whetehr particles are set to get copied to the terrain upon
 		/// settling
 		/// @return Whether enabled or not.
@@ -1163,7 +1171,7 @@ namespace RTE {
 		std::mutex m_AddedParticlesMutex;
 
 		// Mutex to ensure objects aren't registered/deregistered from separate threads at the same time
-		std::mutex m_ObjectRegisteredMutex;
+		mutable std::mutex m_ObjectRegisteredMutex;
 
 		// Mutex to ensure actors don't change team roster from seperate threads at the same time
 		std::mutex m_ActorRosterMutex;

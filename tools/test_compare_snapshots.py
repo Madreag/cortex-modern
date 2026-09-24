@@ -431,6 +431,29 @@ class StateBirthNumberTests(unittest.TestCase):
         with self.assertRaises(checker.GraphMismatch):
             checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
 
+    def horizon_pair(self, first, second):
+        """Each (serial, live horizon) as a capture writes them: the horizon in _ScriptGraphCallbacks.liveSerial."""
+        return [birth_graph("SG6", (table(2, ((string("liveSerial"), f"n{live};"),)),), globals=(("_ScriptGraphCallbacks", "#2;"),), serial=serial)
+                for serial, live in (first, second)]
+
+    def test_a_threaded_states_live_horizon_is_its_own_counter(self):
+        first, second = self.horizon_pair((5, 5), (6, 6))
+        report = checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
+        self.assertEqual((report["serial"], report["live_serial"]), ({"a": 5, "b": 6}, {"a": 5, "b": 6}))
+        # The master state's horizon is shared, so it is compared as a value.
+        with self.assertRaises(checker.GraphMismatch):
+            checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second))
+
+    def test_a_threaded_states_live_horizon_follows_its_counter(self):
+        for pair, wanted in ((((6, 6), (7, 5)), "horizon offset opposes the state counters"),
+                             (((5, 5), (5, 4)), "horizon offset opposes the state counters"),
+                             (((5, 5), (6, 7)), "lies outside the state counter")):
+            with self.subTest(pair=pair):
+                first, second = self.horizon_pair(*pair)
+                with self.assertRaises(checker.GraphMismatch) as raised:
+                    checker.compare_graphs(checker.parse_graph(first), checker.parse_graph(second), lockstep_master=False)
+                self.assertIn(wanted, str(raised.exception))
+
     def test_a_threaded_state_still_requires_the_shared_birth_order(self):
         nodes = lambda a, b: (table(2, ((string("k"), a),)), table(3, ((string("k"), b),)))
         first = birth_graph("SG6", nodes("n1;", "n2;"), globals=(("a", "#2;"), ("b", "#3;")), serial=5)

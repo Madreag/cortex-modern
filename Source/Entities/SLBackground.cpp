@@ -267,9 +267,14 @@ std::string SLBackground::SaveCheckpoint() const {
 	if (m_BitmapClearTask.valid()) m_BitmapClearTask.wait();
 	CheckpointWriter writer("SLBackground2");
 	writer(m_BitmapFile, m_FrameCount, m_Frame, m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimIsReversingFrames, m_SpriteAnimTimer,
-		m_IsAnimatedManually, m_CanAutoScrollX, m_CanAutoScrollY, m_AutoScrollStep, m_AutoScrollStepInterval, m_AutoScrollStepTimer, m_AutoScrollOffset,
-		m_FillColorLeft, m_FillColorRight, m_FillColorUp, m_FillColorDown, m_IgnoreAutoScale, m_LastClearColor, m_MainBitmapUpdated, m_DrawMasked,
-		m_WrapX, m_WrapY, m_OriginOffset, m_Offset, m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
+		m_IsAnimatedManually, m_CanAutoScrollX, m_CanAutoScrollY, m_AutoScrollStep, m_AutoScrollStepInterval);
+	// The auto-scroll steps as this machine draws.
+	writer.PerPeer(m_AutoScrollStepTimer, m_AutoScrollOffset);
+	writer(m_FillColorLeft, m_FillColorRight, m_FillColorUp, m_FillColorDown, m_IgnoreAutoScale, m_LastClearColor, m_MainBitmapUpdated, m_DrawMasked,
+		m_WrapX, m_WrapY, m_OriginOffset);
+	// Where this machine's camera scrolled the layer, and the back buffer it draws through, are its own.
+	writer.PerPeer(m_Offset);
+	writer(m_ZOrder, m_ScrollInfo, m_ScrollRatio, m_ScaleFactor, m_ScaledDimensions);
 	writer(m_Drawings.size());
 	for (const auto& rectangle: m_Drawings) writer(rectangle.m_Left, rectangle.m_Top, rectangle.m_Right, rectangle.m_Bottom);
 	std::vector<CheckpointText> frames;
@@ -278,8 +283,8 @@ std::string SLBackground::SaveCheckpoint() const {
 		frames.push_back(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_Bitmaps[index]); }));
 		if (m_Bitmaps[index] == m_MainBitmap) mainIndex = static_cast<int>(index);
 	}
-	writer(frames, mainIndex, CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(mainIndex < 0 ? m_MainBitmap : nullptr); }),
-	    CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_BackBitmap); }));
+	writer(frames, mainIndex, CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(mainIndex < 0 ? m_MainBitmap : nullptr); }));
+	writer.PerPeer(CheckpointWriter::Native([&] { return GUICheckpoint::SaveBitmap(m_BackBitmap); }));
 	return writer.Text();
 }
 

@@ -841,16 +841,20 @@ namespace RTE {
 		bool m_HasCheckpointMarkedActorIDs = false;
 
 		template <class Archive, class Self> static void VisitCheckpoint(Archive& archive, Self& self) {
-			archive(self.m_CPUTeam, self.m_TeamIsCPU, self.m_ObservationTarget, self.m_DeathViewTarget,
-				self.m_ActorSelectTimer, self.m_ActorCursor, self.m_LandingZone, self.m_AIReturnCraft,
-				self.m_NextMultiOrderYOffset, self.m_LuaLockActor, self.m_LuaLockActorMode, self.m_BannerRepeats,
-				self.m_ReadyToStart, self.m_LandingZoneArea, self.m_BrainLZWidth, self.m_Objectives,
+			// Each seat's views, cursors, landing zone and banners are this machine's interface; an order carries its own zone.
+			archive(self.m_CPUTeam, self.m_TeamIsCPU);
+			archive.PerPeer(self.m_ObservationTarget, self.m_DeathViewTarget, self.m_ActorSelectTimer, self.m_ActorCursor, self.m_LandingZone);
+			archive(self.m_AIReturnCraft, self.m_NextMultiOrderYOffset, self.m_LuaLockActor, self.m_LuaLockActorMode);
+			archive.PerPeer(self.m_BannerRepeats);
+			archive(self.m_ReadyToStart, self.m_LandingZoneArea, self.m_BrainLZWidth, self.m_Objectives,
 				self.m_TeamTech, self.m_TeamTechSwitchEnabled, self.m_StartingGold, self.m_FogOfWarEnabled,
 				self.m_RequireClearPathToOrbit, self.m_DefaultFogOfWar, self.m_DefaultRequireClearPathToOrbit, self.m_DefaultDeployUnits,
 				self.m_DefaultGoldCakeDifficulty, self.m_DefaultGoldEasyDifficulty, self.m_DefaultGoldMediumDifficulty, self.m_DefaultGoldHardDifficulty,
 				self.m_DefaultGoldNutsDifficulty, self.m_DefaultGoldMaxDifficulty, self.m_FogOfWarSwitchEnabled, self.m_DeployUnitsSwitchEnabled,
 				self.m_GoldSwitchEnabled, self.m_RequireClearPathToOrbitSwitchEnabled, self.m_BuyMenuEnabled, self.m_LZCursorWidth,
-				self.m_DeliveryDelay, self.m_CursorTimer, self.m_GameTimer, self.m_GameOverTimer,
+				self.m_DeliveryDelay);
+			archive.PerPeer(self.m_CursorTimer);
+			archive(self.m_GameTimer, self.m_GameOverTimer,
 				self.m_GameOverPeriod, self.m_WinnerTeam, self.m_NetworkPlayerNames);
 			// The synchronized setup editor's state is shared state: a resync taken while the seats are
 			// still placing has to restore the same placements and the same id base on every peer.

@@ -85,6 +85,10 @@ namespace RTE {
 		CheckpointText ReuseChildren(const CheckpointText& previous) const;
 		CheckpointText Base64(bool url = true) const;
 		CheckpointText BindSimTime(int64_t ticks) const;
+		/// The text without the values only this machine holds; the same as Text() when it names none.
+		std::string SharedText() const;
+		/// SharedText() with its timers bound at a capture's sim time, as BindSimTime(ticks).Text() binds the whole text.
+		std::string SharedText(int64_t simTimeTicks) const;
 		static CheckpointText Deferred(std::function<std::string()> produce, size_t ownedBytes = 0, std::string identity = {});
 	private:
 		struct Data;
@@ -109,10 +113,14 @@ namespace RTE {
 		void GraphString(const CheckpointText& value);
 		void NewLine(int indent, int count);
 		void Property(std::string_view name, int indent);
+		/// Opens and closes a run of values only this machine holds; the text is unchanged, SharedText() leaves the run out.
+		void PeerBegin();
+		void PeerEnd();
 		CheckpointText Finish();
 	private:
 		std::string m_Values;
 		std::vector<CheckpointText> m_Children;
+		bool m_HasPeer = false;
 		bool m_UsesSimTime = false;
 		int64_t m_SimTimeTicks = 0;
 		template<class T> void Copy(const T& value) {
@@ -296,6 +304,10 @@ namespace RTE {
 
 		/// Marks that there is a null reference to an object here.
 		void NoObject() const { if (m_Capture) m_Capture->Raw("None"); else *m_Stream << "None"; }
+
+		/// Opens and closes a run of properties only this machine holds; the text is unchanged, a capture's shared text leaves them out.
+		void PerPeerBegin() const { if (m_Capture) m_Capture->PeerBegin(); }
+		void PerPeerEnd() const { if (m_Capture) m_Capture->PeerEnd(); }
 #pragma endregion
 
 #pragma region Writer Status
