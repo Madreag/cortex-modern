@@ -30,8 +30,10 @@ assert_substate JoinSetup
 wait_file {DIRECTORY_ROOT}/listed.json 30
 wait_ms 4000
 assert_visible ListLanGames 1
-activate GameRow0
+# LAN rows list first; with the runner's LAN free of other sessions, row 1 is this host's Internet row.
+activate GameRow1
 wait_ms 900
+assert_label TextJoinAddress session:
 assert_label TextJoinPort {PORT}
 wait_ms 495
 activate ButtonMultiplayerConnect
