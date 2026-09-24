@@ -3909,10 +3909,10 @@ struct VectorField {
 };
 }
 
-// The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
-static std::vector<const void*> LoadedActivityPresets() {
+// The loaded presets by address; an unowned entity that is none of them may belong to a world that is gone.
+static std::vector<const void*> LoadedPresets() {
 	std::list<Entity*> presets;
-	g_PresetMan.GetAllOfType(presets, "Activity");
+	g_PresetMan.GetAllOfType(presets, "Entity");
 	std::vector<const void*> addresses(presets.begin(), presets.end());
 	std::sort(addresses.begin(), addresses.end());
 	return addresses;
@@ -3934,10 +3934,10 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		});
 		return std::binary_search(m_Known.begin(), m_Known.end(), object);
 	}
-	/// Whether an address is a loaded activity preset; only the pointer is read.
-	bool ActivityPreset(const void* address) const {
-		std::call_once(m_ActivityPresetsBuilt, [this] { m_ActivityPresets = LoadedActivityPresets(); });
-		return std::binary_search(m_ActivityPresets.begin(), m_ActivityPresets.end(), address);
+	/// Whether an address is a loaded preset; only the pointer is read.
+	bool LoadedPreset(const void* address) const {
+		std::call_once(m_PresetsBuilt, [this] { m_Presets = LoadedPresets(); });
+		return std::binary_search(m_Presets.begin(), m_Presets.end(), address);
 	}
 	/// The object a Vector field belongs to, if it is one of a known object's aliased fields.
 	const VectorField* VectorOwner(const void* address) const { return Find(Owners().vectors, address); }
@@ -4015,8 +4015,8 @@ private:
 		});
 		return m_Owners;
 	}
-	mutable std::once_flag m_ActivityPresetsBuilt;
-	mutable std::vector<const void*> m_ActivityPresets;
+	mutable std::once_flag m_PresetsBuilt;
+	mutable std::vector<const void*> m_Presets;
 	mutable std::once_flag m_KnownObjectsCopied;
 	mutable std::vector<MovableObject*> m_KnownObjects;
 	mutable std::once_flag m_OwnersBuilt;
@@ -5418,11 +5418,11 @@ static int ScriptGraphNative(lua_State* L) {
 	}
 	if (ClassDerivesFrom(crep, "Entity")) {
 		const Entity* entity = static_cast<const Entity*>(rep->ptr());
-		// A scripted activity's class global stays bound to the instance its preset was read into, which is deleted once
-		// the preset is in its module: only a loaded preset is read through, never that instance.
-		if (!owned && ClassDerivesFrom(crep, "Activity")) {
-			const bool loaded = s_GraphNativeCapture ? s_GraphNativeCapture->ActivityPreset(entity)
-			                                         : [&] { const auto presets = LoadedActivityPresets(); return std::binary_search(presets.begin(), presets.end(), static_cast<const void*>(entity)); }();
+		// An unowned entity is read only when it is a loaded preset: a scripted activity's class global stays bound to the
+		// instance its preset was read into, and a relaunch leaves a script holding entities of the world it tore down.
+		if (!owned) {
+			const bool loaded = s_GraphNativeCapture ? s_GraphNativeCapture->LoadedPreset(entity)
+			                                         : [&] { const auto presets = LoadedPresets(); return std::binary_search(presets.begin(), presets.end(), static_cast<const void*>(entity)); }();
 			if (!loaded) {
 				lua_pushnil(L);
 				lua_pushstring(L, className.c_str());
