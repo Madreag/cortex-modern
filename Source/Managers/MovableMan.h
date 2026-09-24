@@ -1150,7 +1150,7 @@ namespace RTE {
 		std::mutex m_AddedParticlesMutex;
 
 		// Mutex to ensure objects aren't registered/deregistered from separate threads at the same time
-		std::mutex m_ObjectRegisteredMutex;
+		mutable std::mutex m_ObjectRegisteredMutex;
 
 		// Mutex to ensure actors don't change team roster from seperate threads at the same time
 		std::mutex m_ActorRosterMutex;
