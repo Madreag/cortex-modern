@@ -646,6 +646,31 @@ namespace RTE {
 				}
 				std::cout << "[net-session-selftest] lockstep_codec_refusal " << (hostCurrent ? "current_host previous_client" : "previous_host current_client") << " reason=DeterministicConfigMismatch key=" << client.GetMismatchKey()
 				          << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
+				// The player is told which side is newer, never that the settings differ.
+				const std::string expectedText = hostCurrent ? "This host runs a newer game version." : "This host runs an older game version.";
+				if (client.BuildPlayerRefusalText() != expectedText) {
+					*error = "the lockstep codec refusal told the player \"" + client.BuildPlayerRefusalText() + "\" where it must say \"" + expectedText + "\"";
+					return false;
+				}
+			}
+			// A game version refusal names the newer side too, whichever of the two noticed it.
+			for (size_t index = 0; index < 2; ++index) {
+				const uint16_t port = static_cast<uint16_t>(42158 + index);
+				const bool hostNewer = index == 0;
+				LoopbackTransport hostTransport, clientTransport;
+				NetSession host, client;
+				auto hostConfig = MakeConfig(port, 1505, "Host");
+				auto clientConfig = MakeConfig(port, 1506, "Client");
+				hostConfig.localIdentity.gameVersion = hostNewer ? "7.1.0" : "7.0.9";
+				clientConfig.localIdentity.gameVersion = hostNewer ? "7.0.9" : "7.1.0";
+				if (!StartPair(port, host, client, hostTransport, clientTransport, hostConfig, clientConfig, error) ||
+				    !DrivePair(hostTransport, clientTransport, host, client, [&] { return (host.IsReady() && client.IsReady()) || client.IsRejected(); }, error)) return false;
+				const std::string expectedText = hostNewer ? "This host runs a newer game version." : "This host runs an older game version.";
+				if (!client.IsRejected() || client.GetRejectReason() != NetRejectReason::GameVersionMismatch || client.BuildPlayerRefusalText() != expectedText) {
+					*error = "a game version refusal told the player \"" + client.BuildPlayerRefusalText() + "\" where it must say \"" + expectedText + "\"";
+					return false;
+				}
+				std::cout << "[net-session-selftest] game_version_refusal " << (hostNewer ? "newer_host" : "older_host") << " text=\"" << client.BuildPlayerRefusalText() << "\"" << std::endl;
 			}
 			std::cout << "[net-session-selftest] PASS lockstep_codec_admission current/current, current/15, 15/current, current/previous, previous/current" << std::endl;
 			return true;
