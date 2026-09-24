@@ -1509,7 +1509,8 @@ void GameActivity::DriveScriptedActorSelect(int player) {
 	}
 	if (craft && passenger) {
 		SwitchToActor(craft, player, m_Team[player]);
-		craft->HandoffExitingPassenger(passenger);
+		// A gesture is the seat's input alone; the passenger's update belongs to the exit every peer runs.
+		craft->SwitchSeatToPassenger(passenger);
 	}
 	s_ScriptedEditorGestures[player].pop_front();
 }
