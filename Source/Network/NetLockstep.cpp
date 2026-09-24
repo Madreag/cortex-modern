@@ -5774,8 +5774,12 @@ namespace RTE {
 					const auto& stats = m_Stats.peers[peer];
 					const uint64_t budget = boundMs + stats.pingMs + stats.jitterMs;
 					// A peer still filling its pipeline owes its delay window before it counts as silent, and a
-					// peer still starting cannot acknowledge anything: its own start work is part of the ramp.
-					const uint64_t ramp = m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer) ? 0 :
+					// peer still starting cannot acknowledge anything: its own start work is part of the ramp. A
+					// reclaimed seat refills the same way until its activation and its delay window have passed.
+					const auto reclaim = m_ReclaimTransactions.find(peer);
+					const bool refilling = reclaim != m_ReclaimTransactions.end() &&
+					    *m_ConsumerWaitingFrame <= reclaim->second.activationFrame + InputDelayAt(peer, *m_ConsumerWaitingFrame);
+					const uint64_t ramp = !refilling && (m_PeersPlayedThisRound.contains(peer) || m_PeerAdmissions.contains(peer)) ? 0 :
 					    static_cast<uint64_t>(std::llround(InputDelayAt(peer, *m_ConsumerWaitingFrame) * m_Config.simTickMs)) +
 					        std::max(stats.startParkMs, m_Stats.longestOwnParkMs);
 					if ((decision.proposal.requiredPeers & bit) != 0 && (decision.acknowledgedPeers & bit) == 0 &&
