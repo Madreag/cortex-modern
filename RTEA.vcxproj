@@ -971,6 +971,7 @@
     <ClInclude Include="Source\Network\NetReconnectTxCache.h" />
     <ClInclude Include="Source\Network\NetSeatAuth.h" />
     <ClInclude Include="Source\Network\NetSession.h" />
+    <ClInclude Include="Source\Network\NetRejoinMatrixSelfTest.h" />
     <ClInclude Include="Source\Network\NetSessionSelfTest.h" />
     <ClInclude Include="Source\Network\NetTransport.h" />
     <ClInclude Include="Source\Network\SimChecksum.h" />
@@ -1603,6 +1604,7 @@
     <ClCompile Include="Source\Network\NetReconnectTxCache.cpp" />
     <ClCompile Include="Source\Network\NetSeatAuth.cpp" />
     <ClCompile Include="Source\Network\NetSession.cpp" />
+    <ClCompile Include="Source\Network\NetRejoinMatrixSelfTest.cpp" />
     <ClCompile Include="Source\Network\NetSessionSelfTest.cpp" />
     <ClCompile Include="Source\Network\SimChecksum.cpp" />
     <ClCompile Include="Source\Network\NetA7Journal.cpp" />
