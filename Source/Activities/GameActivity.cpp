@@ -1,4 +1,5 @@
 #include "CheckpointArchive.h"
+#include "CaptureSentinel.h"
 #include "GameActivity.h"
 
 #include "CameraMan.h"
@@ -437,10 +438,25 @@ namespace {
 std::array<std::mutex, 64> g_SeatStubLocks;
 template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	std::lock_guard lock(g_SeatStubLocks[(reinterpret_cast<uintptr_t>(&stub) >> 3) % g_SeatStubLocks.size()]);
-	if (!stub) stub = std::make_unique<T>();
+	if (!stub) {
+		CaptureSentinel::NoteCreation("seat stand-in", &stub);
+		stub = std::make_unique<T>();
+	}
 	return stub.get();
 }
 } // namespace
+
+void GameActivity::PrepareCheckpointCapture() const {
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		GetBuyGUI(player);
+		GetEditorGUI(player);
+		GetBanner(YELLOW, player);
+		GetBanner(RED, player);
+		if (g_MovableMan.IsRestoringSnapshot()) continue;
+		if (m_pEditorGUI[player]) m_pEditorGUI[player]->ReclaimNetRetainedOwners();
+		if (m_SeatStubEditorGUI[player]) m_SeatStubEditorGUI[player]->ReclaimNetRetainedOwners();
+	}
+}
 
 BuyMenuGUI* GameActivity::GetBuyGUI(unsigned int which) const {
 	if (which >= Players::MaxPlayerCount) return nullptr;
@@ -3458,7 +3474,8 @@ std::string GameActivity::SaveValueCheckpoint() const {
 		AudioMan::SoundCheckpointSaveScope* const sounds = AudioMan::SoundCheckpointSaveScope::Current();
 		std::vector<std::future<void>> tasks;
 		for (size_t index = 0; index < menus.size(); ++index) {
-			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index] {
+			tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([&menus, &menu, sounds, index, task = CaptureSentinel::CurrentTask()] {
+				CaptureSentinel::WorkerScope worker(task);
 				AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 				menus[index] = CheckpointWriter::CaptureNative(menu(static_cast<int>(index) / c_MenuParts, static_cast<int>(index) % c_MenuParts));
 			}));

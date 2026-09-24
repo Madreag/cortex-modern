@@ -1,3 +1,4 @@
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "GUICheckpoint.h"
 #include <iostream>
@@ -28,6 +29,10 @@
 #include "SettingsMan.h"
 #include "Deployment.h"
 #include "BunkerAssemblyScheme.h"
+#include "Loadout.h"
+
+#include <atomic>
+#include <thread>
 
 #include "GLResourceMan.h"
 #include "tracy/Tracy.hpp"
@@ -1536,9 +1541,43 @@ void SceneEditorGUI::ReclaimNetRetainedOwners() const {
 	for (auto& owner: m_NetRetainedOwners) if (owner && !NetEditorOwnerReferenced(owner.get())) owner.reset();
 }
 
+bool SceneEditorGUI::RunRetainedOwnerCaptureSelfTest() {
+	SceneEditorGUI editor;
+	editor.m_NetRetainedOwners.push_back(std::make_unique<Loadout>());
+	editor.m_NetRetainedPrivateOwners.push_back(true);
+	const Entity* const owner = editor.GetCheckpointRetainedOwner(0);
+	bool kept = false;
+	int reads = 0;
+	{
+		CaptureSentinel::ParallelPhase parallel;
+		std::atomic<bool> saved{false};
+		// One worker saves the editor as the menu capture does while another reads its owners as a script's state does.
+		std::thread reader([&] {
+			CaptureSentinel::WorkerScope worker("selftest-state");
+			for (int pass = 0; !saved.load() || pass < 64; ++pass) {
+				for (const auto& retained: editor.GetCheckpointRetainedOwners()) if (const Entity* held = retained.get()) reads += !held->GetClassName().empty();
+			}
+		});
+		std::thread saver([&] {
+			CaptureSentinel::WorkerScope worker("selftest-menu-save");
+			editor.SaveCheckpoint();
+			saved = true;
+		});
+		saver.join();
+		reader.join();
+		kept = editor.GetCheckpointRetainedOwner(0) == owner;
+	}
+	editor.SaveCheckpoint();
+	const bool dropped = editor.GetCheckpointRetainedOwner(0) == nullptr;
+	std::cout << "[script-graph-selftest] " << (kept && dropped ? "PASS" : "FAIL") << " capture_workers_never_drop_an_editors_retained_owner kept_through_capture=" << kept
+	          << " dropped_after=" << dropped << " reads=" << reads << std::endl;
+	return kept && dropped;
+}
+
 std::string SceneEditorGUI::SaveCheckpoint() const {
 	if (!m_PendingCheckpoint.empty()) return m_PendingCheckpoint;
-	if (!g_MovableMan.IsRestoringSnapshot()) ReclaimNetRetainedOwners();
+	// A capture reclaims before its workers start; while they run they read these owners, so nothing drops one.
+	if (!g_MovableMan.IsRestoringSnapshot() && !CaptureSentinel::InParallelPhase()) ReclaimNetRetainedOwners();
 	const bool retainedOwners = !GUICheckpoint::IsCapturingNetLocalUI() && !m_NetRetainedOwners.empty();
 	const bool netOwners = retainedOwners || m_NetPrivateCurrentObject;
 	CheckpointWriter writer(netOwners ? "SceneEditorGUI3" : "SceneEditorGUI2");

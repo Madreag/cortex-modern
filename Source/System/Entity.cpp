@@ -1,4 +1,5 @@
 #include "Entity.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "RTETools.h"
@@ -43,6 +44,7 @@ namespace RTE {
 
 	Entity::Entity() {
 		Clear();
+		CaptureSentinel::NoteCreation("Entity", this);
 	}
 
 	Entity::~Entity() {

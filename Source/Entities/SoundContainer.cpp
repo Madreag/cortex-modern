@@ -1,4 +1,5 @@
 #include "SoundContainer.h"
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "TimerMan.h"
 #include "Base64/base64.h"
@@ -33,10 +34,12 @@ const std::unordered_map<std::string, SoundContainer::BusRouting> SoundContainer
 
 SoundContainer::SoundContainer() {
 	Clear();
+	CaptureSentinel::NoteCreation("SoundContainer", this);
 }
 
 SoundContainer::SoundContainer(const SoundContainer& reference) {
 	Clear();
+	CaptureSentinel::NoteCreation("SoundContainer", this);
 	Create(reference);
 }
 
