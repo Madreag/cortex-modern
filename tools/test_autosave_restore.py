@@ -42,6 +42,7 @@ digest against the digest the checkpoint recorded, and the retained set is compa
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -57,6 +58,8 @@ from feel_measure import stage_baseline
 
 CAPTURE = re.compile(r"^\[autosave\] tick=(\d+) capture_ms=(\d+(?:\.\d+)?) bytes=(\d+)$", re.MULTILINE)
 HOLD = re.compile(r"^\[net-match\] hold peer=\d+ frame=\d+ AI in control$", re.MULTILINE)
+PARK_RELEASED = re.compile(r"^\[net-lockstep\] capture park released frame=(\d+) end=(\d+) capture_ms=(\d+)$", re.MULTILINE)
+PARK_COMMITTED = re.compile(r"^\[net-lockstep\] capture park committed frame=(\d+) end=(\d+) frames=(\d+) with_input=(\d+)$", re.MULTILINE)
 RETAINED = re.compile(r"^\[autosave\] retained tick=(\d+) keep=(\d+) pinned=(\d+) removed=(\d+)$", re.MULTILINE)
 RESTORE = re.compile(r"^\[autosave\] restore_check (PASS|FAIL) match=(\S+) tick=(\d+) sim_update_count=(\d+) "
                      r"world_hash=(\S+) expected=(\S+) policy=(\d)$", re.MULTILINE)
@@ -359,6 +362,36 @@ def arm_anchor(repo: Path, root: Path, port: int) -> dict:
         assert tick in pinned, f"{who} never pinned the agreed rewind point: {sorted(pinned)}"
     return {"match_id": match_id, "tick": tick, "host": sorted(held["host"]), "client": sorted(held["client"]),
             "captures": captures, "perturbed_tick": int(injection[1]), "anchor_lines": {who: [" ".join(row) for row in anchors[who]] for who in anchors}}
+
+
+def arm_park(repo: Path, root: Path, port: int) -> dict:
+    """At the product's shortest autosave interval (60 s) every capture park commits each player's input: no frame of the
+    window is committed empty for the players, and the window is the capture's own cost, not a round trip on a 250 ms seed.
+    RED before the change: every park frame's input was erased on every peer, so no peer reports a park frame committed with
+    input, and a loopback window ran 16 frames or more against a capture of a few frames."""
+    ticks = 4200
+    records = run_pair(repo, root, port, ticks, 60, {})
+    details = {}
+    tick_ms = 1000.0 / 60.0
+    for who in ("host", "client"):
+        record = records.get(who, {})
+        assert "error" not in record and not record.get("timed_out"), (who, record)
+        log = peer_log(root, who)
+        captures = [float(ms) for _, ms, _ in CAPTURE.findall(log)]
+        windows = sorted({(int(start), int(end)) for start, end, _ in PARK_RELEASED.findall(log)})
+        assert captures and windows, f"{who} took no capture park in a 70 s match at 60 s autosave: captures={captures} windows={windows}"
+        committed = PARK_COMMITTED.findall(log)
+        assert committed, f"{who}: no park frame was committed with the players' input; windows={windows}"
+        frames, with_input = int(committed[-1][2]), int(committed[-1][3])
+        assert frames > 0 and frames == with_input, f"{who}: {frames - with_input} of {frames} park frames were committed empty"
+        # Before any park was measured the window is the slow-player bound (3 ticks); after, the slowest capture's frames.
+        allowed = max(3, math.ceil(max(captures) / tick_ms))
+        wide = [(start, end) for start, end in windows if end - start + 1 > allowed]
+        assert not wide, f"{who}: park windows wider than the capture costs: {wide} allowed={allowed} frames (slowest capture {max(captures)} ms)"
+        holds = HOLD.findall(log)
+        assert not holds, (who, holds)
+        details[who] = dict(windows=windows, captures_ms=captures, park_frames=frames, park_frames_with_input=with_input, allowed_frames=allowed)
+    return details
 
 
 def arm_resume(repo: Path, root: Path, port: int) -> dict:
@@ -921,7 +954,8 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--port", type=int, default=48720)
-    parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart"), default="all")
+    parser.add_argument("--arm", choices=("all", "restore", "retention", "anchor", "resume", "world-restart", "park"), default="all",
+                        help="all runs every arm but park; park is the 60 s autosave input-keeping run")
     parser.add_argument("--round-ticks", type=int, default=600, help="world-restart only: the resumed and fresh rounds' length")
     parser.add_argument("--client-stall", default="", help="world-restart only: TICK:MS, the client stalls once past each "
                         "round's start so the host holds its seat and the seat has to rejoin")
@@ -941,14 +975,17 @@ def main() -> int:
         exe_sha = file_sha256(exe)
     result = {"exe_sha256": exe_sha, "arms": {}}
     arms = {"restore": arm_restore, "retention": arm_retention, "anchor": arm_anchor, "resume": arm_resume,
-            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks)}
+            "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks),
+            "park": arm_park}
     if args.arm != "all":
         arms = {args.arm: arms[args.arm]}
+    else:
+        arms.pop("park")
     for index, (arm, run) in enumerate(arms.items()):
         details = {}
         result["arms"][arm] = details
         # The resume and world-restart arms run several rounds of two peers, each on its own ports.
-        armPort = {"resume": args.port + 5, "world-restart": args.port + 10}.get(arm, args.port + index)
+        armPort = {"resume": args.port + 5, "world-restart": args.port + 10, "park": args.port + 16}.get(arm, args.port + index)
         try:
             details.update(run(repo, root / arm, armPort), passed=True)
             print(f"PASS {arm}", flush=True)
