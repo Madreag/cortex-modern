@@ -36,6 +36,7 @@ SELFTESTS = [
     "net-rejoin-matrix",
     "camera-null-scene",
     "rotate-primitive",
+    "sim-checksum",
     "cow-checkpoint",
     "frame-recorder",
     "float-text",

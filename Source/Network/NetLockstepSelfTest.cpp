@@ -17490,7 +17490,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 
 			// A Lua GC finalizer frees sound containers on whichever pool thread collects its state, and
-			// LuaMan::StartAsyncGarbageCollection collects every state at once, so releases really do overlap.
+			// LuaMan::StartAsyncGarbageCollection collects several states at once, so releases really do overlap.
 			constexpr int releaseThreads = 8;
 			constexpr int perThread = 300;
 			const auto before = g_AudioMan.CaptureCheckpointSoundRegistry();
