@@ -62,6 +62,7 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--out", type=Path)
     parser.add_argument("--size", default="640x360")
+    parser.add_argument("--fps", type=int, default=2, help="frames per second the capture keeps; the judge reads logs and traces, not frames")
     parser.add_argument("--judge", type=Path, help="judge an existing capture directory without launching")
     options = parser.parse_args()
     out = options.judge or options.out
@@ -70,7 +71,7 @@ def main() -> int:
     if not options.judge:
         env = dict(os.environ, CCCP_HEADLESS="1")
         command = [sys.executable, str(options.repo / "tools" / "e2e_video.py"), "--repo", str(options.repo), "--out", str(out),
-                   "--scenario", "mp-held-seat", "--size", options.size]
+                   "--scenario", "mp-held-seat", "--size", options.size, "--fps", str(options.fps)]
         subprocess.run(command, env=env, check=False)
     verdict = judge(out)
     (out / "held-seat-verdict.json").write_text(json.dumps(verdict, indent=2) + "\n", encoding="utf-8")
