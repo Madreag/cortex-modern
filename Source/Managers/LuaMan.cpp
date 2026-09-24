@@ -848,6 +848,15 @@ end
 		return PushScriptGraphCapturedText(state, ScriptGraphNumber(luaL_checknumber(state, 1), lua_toboolean(state, 2) != 0));
 	}
 
+	// A fragment only this machine holds: the text is unchanged, the shared text leaves it out.
+	static int ScriptGraphCapturePeer(lua_State* state) {
+		CheckpointBuffer buffer;
+		buffer.PeerBegin();
+		buffer.Child(ScriptGraphTextValue(state, 1));
+		buffer.PeerEnd();
+		return PushScriptGraphCapturedText(state, buffer.Finish());
+	}
+
 	static int ScriptGraphCaptureString(lua_State* state) {
 		CheckpointBuffer buffer;
 		if (lua_type(state, 1) == LUA_TSTRING) {
@@ -917,6 +926,7 @@ end
 		lua_pushcfunction(state, [](lua_State* value) -> int { lua_pushboolean(value, s_ScriptGraphCapture != nullptr); return 1; });
 		lua_setfield(state, -2, "active");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureNumber>); lua_setfield(state, -2, "number");
+		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCapturePeer>); lua_setfield(state, -2, "peer");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureString>); lua_setfield(state, -2, "string");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureJoin>); lua_setfield(state, -2, "join");
 		lua_pushcfunction(state, ScriptGraphCaptureCall<ScriptGraphCaptureBytecode>); lua_setfield(state, -2, "bytecode");
@@ -1126,6 +1136,12 @@ end
 local function stringToken(s)
 	if capturing then return captureNative.string(s) end
 	return "s" .. #s .. ":" .. s
+end
+
+-- A fragment only this machine holds (a timer's wall clock); the text is the same either way.
+local function peerText(text)
+	if capturing then return captureNative.peer(text) end
+	return text
 end
 
 -- Capture-owned nodes are numbered in walk order in a band of their own above every birth, so the
@@ -1379,7 +1395,7 @@ local function visitUserdata(value, ctx)
 		for _, number in ipairs(native[2]) do fields[#fields + 1] = "n" .. numberText(number) .. ";" end
 		return userdataNode(value, ctx, "P" .. outputNumber(#fields) .. ";" .. concatenate(fields))
 	elseif kind == "timer" then
-		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. "," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks) .. ";")
+		return userdataNode(value, ctx, "m" .. numberText(value.StartSimTimeTicks) .. "," .. numberText(value.SimTimeLimitTicks) .. peerText("," .. numberText(value.StartRealTimeTicks) .. "," .. numberText(value.RealTimeLimitTicks)) .. ";")
 	elseif kind == "vector-ref" then
 		return userdataNode(value, ctx, "w" .. numberText(native[2]) .. ":" .. stringToken(native[3]))
 	elseif kind == "controller-ref" then
@@ -5200,7 +5216,16 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			return {};
 		};
 		if (s_ScriptGraphCapture && hasCheckpoint) {
-			const CheckpointText checkpoint = CheckpointWriter::CaptureNative(save);
+			CheckpointText checkpoint = CheckpointWriter::CaptureNative(save);
+			// A seat's controller, menus and banners are this machine's interface, as the activity keeps them.
+			static const std::unordered_set<std::string_view> seatInterface = {"player-controller", "buy-menu", "editor-menu", "yellow-banner", "red-banner"};
+			if (seatInterface.contains(property)) {
+				CheckpointBuffer buffer;
+				buffer.PeerBegin();
+				buffer.Child(checkpoint);
+				buffer.PeerEnd();
+				checkpoint = buffer.Finish();
+			}
 			lua_pushlstring(L, type.data(), type.size());
 			PushScriptGraphCapturedText(L, checkpoint);
 			return 7;
