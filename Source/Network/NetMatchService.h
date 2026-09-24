@@ -1445,6 +1445,7 @@ namespace RTE {
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint64_t m_HeldRejoinPriorInput = 0;
+		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;

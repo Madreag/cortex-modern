@@ -1963,6 +1963,7 @@ static std::string ResyncSaveName() {
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_DiagnosticRuntimeError = error;
+			m_HeldRejoinDriving = false;
 		}
 		m_CancelRequested.store(true);
 		if (m_Worker.joinable()) {
@@ -2124,6 +2125,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
 			if (heldSeatNeedsAnswer) m_KeepEndedDirectoryLease = true;
@@ -2173,11 +2175,11 @@ static std::string ResyncSaveName() {
 		bool exchangeOwed = false;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
-			// §7 runs while the link is still up, so the round is told only once the ack has settled or
-			// the P21 budget has run out. Without a ticket to answer for there is nothing to wait on.
+			// The round hears the leave at once: this seat stopped producing here, and a leave that waited on §7's
+			// ack would be held as a slow player first. The notice leaves the link up, so §7 still runs on it.
 			exchangeOwed = !m_LeaveExchangeRun && m_AdmissionAttached && !m_IsHost && m_Session &&
 			               m_Session->IsReady() && m_TicketStore.HasRecord();
-			if (!exchangeOwed && m_Coordinator) {
+			if (m_Coordinator) {
 				m_Coordinator->Leave(reason);
 			}
 			if (m_State == NetMatchServiceState::Running) {
@@ -2498,6 +2500,8 @@ static std::string ResyncSaveName() {
 			hasRecord = m_TicketStore.HasRecord();
 			matchWasRunning = m_MatchWasRunning;
 			reason = m_ErrorText;
+			// The held seat's own rejoin is trying the hosts the match named; the prompt takes over only once it gives up.
+			if (m_HeldRejoinDriving) return;
 		}
 		if (state == NetMatchServiceState::Running || state == NetMatchServiceState::ReadyToLaunch) {
 			if (m_ReconnectUx.IsActive()) {
@@ -2710,6 +2714,7 @@ static std::string ResyncSaveName() {
 			++m_CurrentMatchSummary.resyncs;
 		}
 		ResetRoundGoodbyeLocked();
+		m_HeldRejoinDriving = false;
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
@@ -7754,6 +7759,10 @@ static std::string ResyncSaveName() {
 		}
 		m_LeaveExchangeRun = true;
 		ScenarioRunner::DiscardHeldLocalInputs();
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_HeldRejoinDriving = true;
+		}
 		const bool started = BeginTicketRejoinOnRoute(error, liveRoute ? &*liveRoute : nullptr);
 		if (started) ScenarioRunner::SetWorldCatchUpPriorInputThrough(prior);
 		return started;
@@ -7764,7 +7773,8 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			// Only a host that is gone sends the seat on; a refusal from a live host is that host's answer.
 			const bool hostGone = !m_IsHost && ((m_Runner && m_Runner->DidLoseHostDuringSetup()) || (m_Session && ClientSessionLossIsHostDeparture(*m_Session)));
-			if (!hostGone || m_HeldRejoinRoutes.empty()) return false;
+			// A host that answered the round is over is not gone: the seat completes on what it holds.
+			if (!hostGone || NoteHostGoodbyeLocked(m_Session.get()) || m_HeldRejoinRoutes.empty()) return false;
 		}
 		while (!m_HeldRejoinRoutes.empty()) {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
