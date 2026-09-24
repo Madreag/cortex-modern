@@ -218,6 +218,7 @@ RED_SEGMENT_DIGEST = "world-segment-digest-differs-from-its-archive"
 RED_SEGMENT_BOOTED_THE_PRESET = "world-segment-playback-booted-the-preset"
 RED_SEGMENT_CHAIN_BROKE = "world-segment-chain-broke"
 RED_SEGMENT_HASHES_DIVERGED = "world-segment-playback-hashes-diverged"
+RED_SEGMENT_TAIL_UNRECORDED = "world-segment-chain-left-the-host-tail-unrecorded"
 RED_RESUMED_NO_SEGMENT = "resumed-world-wrote-no-segment"
 RED_RESUMED_ORDINARY_FILE = "resumed-world-recorded-an-ordinary-file"
 RED_RESUMED_HEADER_WRONG = "resumed-world-segment-header-wrong"
@@ -910,12 +911,16 @@ def world_segment_replay(repo: Path, out: Path, port: int = SEGMENT_PORT, fullst
         data = json.loads(source.read_text(encoding="utf-8-sig"))
         windowed[name] = data
     host_last = max(entry["tick"] for entry in windowed["host"]["runs"][0]["tick_hashes"])
+    replay_last = max(entry["tick"] for entry in windowed["replay"]["runs"][0]["tick_hashes"])
+    last = min(host_last, replay_last)
     for name, data in windowed.items():
-        data["runs"][0]["tick_hashes"] = [entry for entry in data["runs"][0]["tick_hashes"] if first_tick < entry["tick"] <= host_last]
+        data["runs"][0]["tick_hashes"] = [entry for entry in data["runs"][0]["tick_hashes"] if first_tick < entry["tick"] <= last]
         (out / f"{name}_from_checkpoint.json").write_text(json.dumps(data), encoding="utf-8")
     passed, compared = strict_compare(str(out / "host_from_checkpoint.json"), str(out / "replay_from_checkpoint.json"),
-                                      expected_ticks=host_last - first_tick, first_tick=first_tick + 1)
+                                      expected_ticks=last - first_tick, first_tick=first_tick + 1)
     assert passed, f"{RED_SEGMENT_HASHES_DIVERGED}: {compared}"
+    # The chain plays every tick the host ran: a tail the segments never recorded is its own failure.
+    assert replay_last >= host_last, f"{RED_SEGMENT_TAIL_UNRECORDED}: the host ran to {host_last}, the segments end at {replay_last}"
 
     # The restarted world: its round opens ON a checkpoint, so its FIRST recording is a segment named
     # for the tick it resumed from - not an ordinary file that names no world.
