@@ -4465,6 +4465,8 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_Coordinator->SetSessionEventSink([this](const NetTransportEvent& event) {
+			// The session keeps talking while the round stops; a client's only remote is its host.
+			if (!m_IsHost && event.type == NetTransportEventType::PacketReceived) m_LastHostSessionTrafficMs = SteadyNowMs();
 			if (event.type == NetTransportEventType::PacketReceived && NetLobbyProtocol::Decode(event.bytes).ok) {
 				const auto message = NetLobbyProtocol::Decode(event.bytes);
 				if (const auto* config = std::get_if<NetLobbyMatchConfig>(&message.message.payload)) {
@@ -5040,8 +5042,12 @@ static std::string ResyncSaveName() {
 		// A handover is the survivors' election. A peer that finds nobody but itself cannot tell the host's loss from its own
 		// link's, so it rejoins the host it knew instead of hosting a match the host may still be playing.
 		if (std::none_of(result.members.begin(), result.members.end(), [&](uint8_t peer) { return peer != m_LocalPeerId; })) {
-			System::PrintDiagnosticLine("[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
-			ScenarioRunner::SetControllerReplayError("PeerHeld:The host connection was lost - rejoining");
+			// A host whose session still talks left the round on purpose: the match is over for this seat. A silent one may
+			// only be this peer's own link, so the seat goes back to it through its private rejoin.
+			const bool hostStillTalks = m_LastHostSessionTrafficMs != 0 && SteadyNowMs() - m_LastHostSessionTrafficMs < c_HostTalkingWindowMs;
+			System::PrintDiagnosticLine(hostStillTalks ? "[net-match] host left with no other survivor: the match is over for this seat"
+			                                           : "[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
+			ScenarioRunner::SetControllerReplayError(hostStillTalks ? "PeerLeft:The host left the match" : "PeerHeld:The host connection was lost - rejoining");
 			return;
 		}
 		const auto& config = m_Coordinator->GetConfig().matchConfig;

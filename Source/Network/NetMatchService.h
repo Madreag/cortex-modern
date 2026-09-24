@@ -1448,6 +1448,8 @@ namespace RTE {
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint64_t m_HeldRejoinPriorInput = 0;
 		bool m_HeldRejoinDriving = false; //!< The held seat's rejoin loop owns the attempts until a launch or its last failure.
+		std::atomic<uint64_t> m_LastHostSessionTrafficMs{0}; //!< Client: when the host's session last sent anything, steady ms.
+		static constexpr uint64_t c_HostTalkingWindowMs = 1000; //!< A host heard within this is alive, whatever its round did.
 		NetWorldCatchUpClient m_WorldCatchUp;
 		std::set<NetPeerId> m_PrivateActivations;
 		std::map<NetPeerId, std::future<std::vector<uint8_t>>> m_PrivateJoinBlobs;
