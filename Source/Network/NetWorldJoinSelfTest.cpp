@@ -6934,7 +6934,8 @@ namespace RTE {
 			if (activation != 0) reportedAt = applied;
 		}
 		if (activation == 0) return Fail("a returner that kept the round's pace at the head of its tail for 190 ticks was never activated");
-		if (reportedAt != 410) return Fail("a returner inside the activation lead was activated at " + std::to_string(reportedAt) + " instead of its first report there");
+		if (reportedAt != 410 + c_NetWorldClosingWindowFrames)
+			return Fail("a returner at the round's pace inside the lead was activated at " + std::to_string(reportedAt) + " instead of its first measured report there");
 		std::cout << "[net-world-join-selftest] PASS a_returner_keeping_pace_at_the_head_is_activated applied=" << reportedAt << " activation=" << activation << std::endl;
 		return 0;
 	}
@@ -6966,9 +6967,12 @@ namespace RTE {
 		}
 		// Its replay closes on the round and comes inside the lead: it is let in there.
 		(void)host.NoteRejoinCapacity(8, 240, 2400000, 0);
-		if (!host.NoteCatchUpProgress(8, 150, 80, 400, 205, &activation, &error) || activation == 0) {
+		if (!host.NoteCatchUpProgress(8, 170, 100, 400, 220, &activation, &error) || activation == 0) {
 			return Fail("a returning world seat inside the activation lead was never activated: " + error);
 		}
+		// It closes four frames per round frame and stands 50 behind: its activation leaves it the frames that takes.
+		if (activation < 220 + 50 / 4 + c_NetWorldActivationLeadFrames)
+			return Fail("a returning world seat was activated at " + std::to_string(activation) + ", before its replay reaches the round");
 		std::cout << "[net-world-join-selftest] PASS a_held_world_seat_proves_its_headroom activation=" << activation << std::endl;
 		return 0;
 	}

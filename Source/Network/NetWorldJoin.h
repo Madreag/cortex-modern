@@ -181,6 +181,9 @@ namespace RTE {
 		uint64_t lastCatchUpReportMs = 0; //!< Host clock of the last catch-up report, for elapsed.
 		uint64_t catchUpSinceMs = 0; //!< Host clock of the first catch-up report; a returner's headroom is judged over the time since.
 		uint64_t atHeadSinceFrame = 0; //!< The applied frame from which it has replayed within the lead of the round's horizon; 0 while behind.
+		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
+		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
+		bool closingMeasured = false;
 		uint8_t spectatorLobbyPeer = 0;   //!< Non-member lobby id in [32, 47]; 0 if none remains.
 		std::string refusal;              //!< Why the bootstrap failed; empty while it is alive.
 	};
@@ -340,6 +343,8 @@ namespace RTE {
 	/// A returner that replays within the activation lead of the round for this many ticks keeps the round's pace: the tail it
 	/// replays arrives at that pace, so its measured rate cannot exceed the round's and is no evidence of a slow machine.
 	inline constexpr uint64_t c_NetWorldPaceProofTicks = 120;
+	/// The round frames a returner's closing rate is measured over.
+	inline constexpr uint64_t c_NetWorldClosingWindowFrames = 20;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
 	inline constexpr uint64_t c_NetWorldHeadroomWaitMs = 30000;
 	/// World-join plane schema on the offer, the transition and the membership report.
