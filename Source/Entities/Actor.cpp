@@ -495,7 +495,14 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("SpecialBehaviour_ControllerCheckpoint", {
 		m_PersistedControllerCheckpoint = base64_decode(reader.ReadPropValue());
-		if (!m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint, true)) reader.ReportError("invalid Controller checkpoint");
+		Controller saved;
+		if (!saved.LoadCheckpoint(m_PersistedControllerCheckpoint)) {
+			reader.ReportError("invalid Controller checkpoint");
+		} else if (saved.GetWireApplyTick() >= 0) {
+			// A controller the committed frames drove stays theirs from the read, so the activity's Start before the
+			// deferred restore moves only this machine's seat, as a live seat switch does.
+			m_Controller.SetWireApplyTick(saved.GetWireApplyTick());
+		}
 	});
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
 	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
