@@ -28,6 +28,7 @@
 
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 
 namespace luabind { namespace detail { namespace free_functions {
@@ -93,6 +94,14 @@ namespace luabind { namespace detail { namespace free_functions {
 
     void function_rep::add_overload(overload_rep const& o)
     {
+        // A name built for the registration (To<Class>, Create<Class>) dies with its statement; the function keeps its own copy.
+        static std::mutex mutex;
+        static std::set<std::string> names;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            m_name = names.insert(m_name).first->c_str();
+        }
+
         std::vector<overload_rep>::iterator i = std::find(
             m_overloads.begin(), m_overloads.end(), o);
 
