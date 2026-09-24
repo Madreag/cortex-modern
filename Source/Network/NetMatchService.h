@@ -1064,6 +1064,8 @@ namespace RTE {
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
 		friend bool TestWorldReturnWatchKeysOnWorldId(std::string* error);
+		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
+		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
 		/// Points the coordinator's handover at the service queue the pump drains. Caller holds the lock
 		/// only where the match is already launched.
 		void AttachCoordinatorSessionSink();
