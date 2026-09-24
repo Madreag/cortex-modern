@@ -1287,6 +1287,25 @@ static std::string ResyncSaveName() {
 			const SimCensusScope census;
 			m_ReconnectHost.RecordMigrationDepartures(m_Coordinator->GetConfig().startFrame);
 		}
+		// The moderation the host asked for while the match relaunched lands on the round the relaunch opened, in order.
+		if (m_IsHost && m_Session && m_State == NetMatchServiceState::Running && !m_PendingModeration.empty()) {
+			std::vector<PendingModeration> pending;
+			pending.swap(m_PendingModeration);
+			NetKickBanResult issue = NetKickBanResult::Ok;
+			for (const PendingModeration& action: pending) {
+				const NetKickBanResult result = action.unban ? ApplyUnbanLocked(action.identity) : ApplyRemovalLocked(action.selection, action.action, *m_Session);
+				if (issue == NetKickBanResult::Ok) issue = result;
+			}
+			m_LastKickBanResult = issue;
+			System::PrintDiagnosticLine("[net-match] moderation held through the relaunch applied: " + std::to_string(pending.size()) + " action(s)");
+		}
+	}
+
+	bool NetMatchService::RelaunchInFlightLocked() const {
+		if (m_ResyncHealOpen) return true;
+		// Between the round's end for a relaunch and the relaunch itself the service still reads as running.
+		return m_Coordinator && (m_Coordinator->HasPendingRecoveryStop() ||
+		    (!m_Coordinator->IsRunning() && m_Coordinator->GetStats().timeoutReason.starts_with(NetLockstepCodec::StopReasonName(NetLockstepStopReason::ResyncRequested))));
 	}
 
 	void NetMatchService::WorkerResyncMain(TransportLink link, NetSession* sessionRaw, NetLockstepCoordinator* coordinatorRaw, NetMatchRunner* runnerRaw, std::vector<uint8_t> stateBytes) {
@@ -2541,7 +2560,18 @@ static std::string ResyncSaveName() {
 		}
 		m_ReconnectUx.NoteAttemptStarted(nowMs);
 		std::string attemptError;
-		if (!BeginTicketRejoin(&attemptError)) {
+		std::optional<NetMatchServiceRequest> successor;
+		{
+			// The match may be hosted by one of the successors it published: every other attempt asks the next of them.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			if (!m_HeldRejoinRoutes.empty() && (m_ReconnectRouteTurn++ % 2) == 1) {
+				successor = m_HeldRejoinRoutes.front();
+				m_HeldRejoinRoutes.pop_front();
+				m_HeldRejoinRoutes.push_back(*successor);
+			}
+		}
+		if (successor) System::PrintDiagnosticLine("[net-match] reconnect: trying the successor at " + successor->address + ":" + std::to_string(successor->port));
+		if (!(successor ? RejoinSuccessorRoute(*successor, &attemptError) : BeginTicketRejoin(&attemptError))) {
 			m_ReconnectUx.NoteAttemptFailed(nowMs, attemptError);
 		}
 	}
@@ -2677,8 +2707,15 @@ static std::string ResyncSaveName() {
 			m_AutosaveIdentity.roundId = launchRound;
 			m_AutosaveIdentity.intervalSeconds = m_MatchAutosaveSeconds;
 			m_AutosaveIdentity.pinnedCheckpointSource = m_PinnedAutosave;
-			// A new match pins nothing: the previous round's rewind point must not hold an archive here.
-			m_PinnedAutosave->Store(0, 0);
+			// A new match pins nothing: the previous round's rewind point must not hold an archive here. A seat rejoining its
+			// own round is not a new match: it keeps the checkpoint that round agreed to rewind to.
+			const bool privateReturn = m_WorldCatchUp.active && m_WorldCatchUp.privateMatch;
+			if (privateReturn && m_RewindAnchorTick != 0 && m_RewindAnchorMatchId == m_AutosaveMatchId) {
+				const std::optional<AutosaveDescriptor> anchor = AutosaveStore::Find(m_RewindAnchorMatchId, m_RewindAnchorTick, nullptr);
+				m_PinnedAutosave->Store(anchor ? anchor->roundId : launchRound, m_RewindAnchorTick);
+			} else {
+				m_PinnedAutosave->Store(0, 0);
+			}
 			m_NextAutosaveSimTime = -1;
 			m_LastAutosaveSimTime = -1;
 			ResetCheckpointSchedule();
@@ -2715,6 +2752,7 @@ static std::string ResyncSaveName() {
 		}
 		ResetRoundGoodbyeLocked();
 		m_HeldRejoinDriving = false;
+		m_HeldRejoinRoutes.clear();
 		m_State = NetMatchServiceState::Running;
 		m_StatusText = "Match running";
 		m_MatchAutosaveSeconds = m_Runner ? MatchAutosaveSeconds(m_Runner->GetMatchConfig()) : 0;
@@ -3569,6 +3607,7 @@ static std::string ResyncSaveName() {
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		RefuseReturnersWithoutHeadroomLocked(nowMs);
 		BoundPrivateImageWait(SteadyNowMs());
 		const auto ready = m_Session->GetReadyPeers();
 		std::vector<NetPeerId> live;
@@ -3588,8 +3627,6 @@ static std::string ResyncSaveName() {
 			std::string error;
 			if (!m_WorldJoin.BeginRejoin(holder, seat, member, incarnation, peer.displayName, nowMs, &error)) continue;
 			m_Runner->GetLobbySession().BindWorldTransferRemote(member, holder, nullptr);
-			m_Runner->GetLobbySession().SendMatchConfigTo(member);
-			SendSuccessorCapsuleToLocked(member);
 			{
 				std::ostringstream line;
 				line << "[net-match] private rejoin peer=" << static_cast<int>(member) << " incarnation=" << incarnation;
@@ -3601,6 +3638,13 @@ static std::string ResyncSaveName() {
 		std::erase_if(m_PrivateJoinBlobs, [&](const auto& task) { return m_WorldJoin.FindSession(task.first) == nullptr &&
 		    task.second.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; });
 		for (const auto& session: m_WorldJoin.Sessions()) {
+			// The returner's lobby answers only once it is up: its seat, config and successor capsule go then, and before the image,
+			// or it waits for a config that was sent while it could not hear it.
+			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.matchConfigSent && m_Runner->GetLobbySession().IsRemoteConnectionLobbyUp(session.assignedPeerId) &&
+			    m_Runner->GetLobbySession().SendMatchConfigTo(session.assignedPeerId)) {
+				SendSuccessorCapsuleToLocked(session.assignedPeerId);
+				m_WorldJoin.NoteMatchConfigSent(session.connection);
+			}
 			m_WorldJoin.NoteRejoinLinkFit(session.connection, PrepareHeldPeerRejoinLocked(session.assignedPeerId));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted && m_WorldJoin.Image().IsValid() && !m_PrivateImageTask.valid() &&
@@ -3652,6 +3696,35 @@ static std::string ResyncSaveName() {
 		(void)lobby.SendPayloadTo(member, capsule, nullptr);
 	}
 
+	void NetMatchService::RefuseReturnersWithoutHeadroomLocked(uint64_t nowMs) {
+		// A returner that replays slower than the round plays could only be activated by making every peer wait on it: its rejoin
+		// ends with the reason and its client tries again, rather than replaying behind the round for the rest of the match.
+		for (const NetPeerId connection: m_WorldJoin.ReturnersWithoutHeadroom(nowMs, c_NetWorldHeadroomWaitMs)) {
+			const NetWorldJoinSession* session = m_WorldJoin.FindSession(connection);
+			std::ostringstream line;
+			line << "[net-match] rejoin refused peer=" << static_cast<int>(session ? session->assignedPeerId : 0) << ": the returner replayed at "
+			     << (session ? session->headroom.Ratio() : 0.0) << " of the round's rate for " << c_NetWorldHeadroomWaitMs << "ms, below the 1.2 its activation needs";
+			System::PrintDiagnosticLine(line.str());
+			RefuseReturnerLocked(connection, "the returner replayed slower than the round plays", "Your machine could not catch up with the match; rejoining again");
+		}
+		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
+		std::vector<NetPeerId> unserved;
+		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
+			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || m_PrivateImageTask.valid() || session.openedAtMs == 0) continue;
+			if (m_WorldJoin.IsPrivateMatch() && nowMs > session.openedAtMs && nowMs - session.openedAtMs > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
+		}
+		for (const NetPeerId connection: unserved) {
+			System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": no image could be staged for it in " + std::to_string(2 * c_PrivateImageWaitMs) + "ms" +
+			                            (m_PrivateBaseHeldReason ? std::string(" (") + m_PrivateBaseHeldReason + ")" : std::string()));
+			RefuseReturnerLocked(connection, "no image could be staged for the returner", "The host could not stage your rejoin; rejoining again");
+		}
+	}
+
+	void NetMatchService::RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text) {
+		if (m_Session) m_Session->DisconnectReadyPeer(connection, NetRejectReason::HostNotAccepting, text);
+		m_WorldJoin.CancelJoin(connection, reason);
+	}
+
 	bool NetMatchService::MovePrivateActivationPastPark(const NetWorldJoinSession& session) {
 		const uint64_t previous = session.activationTick;
 		uint64_t clear = previous;
@@ -3676,6 +3749,7 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		m_WorldJoin.ExpireStaleJoins(nowMs);
+		RefuseReturnersWithoutHeadroomLocked(nowMs);
 		// The opening checkpoint is the round's state only at its anchor; past it a returning seat takes the newest image.
 		if (m_Runner && m_Coordinator->IsRunning()) {
 			NetLobbySession& lobby = m_Runner->GetLobbySession();
@@ -7510,7 +7584,7 @@ static std::string ResyncSaveName() {
 			m_PendingModeration.clear();
 			return;
 		}
-		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting) {
+		if (m_PendingModeration.empty() || m_State != NetMatchServiceState::Starting || m_ResyncHealOpen) {
 			return;
 		}
 		std::vector<PendingModeration> pending;
@@ -7540,6 +7614,10 @@ static std::string ResyncSaveName() {
 			m_LastKickBanResult = NetKickBanResult::ActionUnavailable;
 			return m_LastKickBanResult;
 		}
+		if (RelaunchInFlightLocked()) {
+			// A relaunch completes for everyone it was started for; the removal lands on the round it opens.
+			return QueueModerationLocked(PendingModeration{false, selection, action, {}});
+		}
 		if (m_State == NetMatchServiceState::Starting) {
 			// The setup worker owns the session for the whole of Start, so the kick is applied there and
 			// the result is not known yet.
@@ -7568,7 +7646,7 @@ static std::string ResyncSaveName() {
 			m_LastKickBanResult = NetKickBanResult::NotHosting;
 			return m_LastKickBanResult;
 		}
-		if (m_State == NetMatchServiceState::Starting) {
+		if (m_State == NetMatchServiceState::Starting || RelaunchInFlightLocked()) {
 			// The setup worker owns admission for the whole of Start, so the store is written there and
 			// never from this thread; the unban keeps its place among the queued kicks.
 			return QueueModerationLocked(PendingModeration{true, {}, NetParticipantRemovalAction::Kick, identity});
@@ -7798,6 +7876,7 @@ static std::string ResyncSaveName() {
 		const auto liveRoute = m_LastJoinRoute;
 		// The match published who hosts it next; a seat that finds its host gone asks them in that order.
 		m_HeldRejoinRoutes.clear();
+		m_ReconnectRouteTurn = 0;
 		m_HeldRejoinPriorInput = prior;
 		if (m_Coordinator) {
 			const NetMatchConfig& config = m_Coordinator->GetConfig().matchConfig;
@@ -7841,23 +7920,26 @@ static std::string ResyncSaveName() {
 			const NetMatchServiceRequest route = m_HeldRejoinRoutes.front();
 			m_HeldRejoinRoutes.pop_front();
 			System::PrintDiagnosticLine("[net-match] held rejoin: the host is gone; rejoining the successor at " + route.address + ":" + std::to_string(route.port));
-			{
-				// The ticket names the host its match is on; the successor hosts that match now, as a survivor's ticket says.
-				std::lock_guard<std::mutex> lock(m_Mutex);
-				NetH4TicketRecord record;
-				m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
-				if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != route.address) {
-					record.hostAddress = route.address;
-					(void)m_TicketStore.Store(record, nullptr);
-				}
-			}
-			m_LeaveExchangeRun = true;
-			if (BeginTicketRejoinOnRoute(error, &route)) {
-				ScenarioRunner::SetWorldCatchUpPriorInputThrough(m_HeldRejoinPriorInput);
-				return true;
-			}
+			if (RejoinSuccessorRoute(route, error)) return true;
 		}
 		return false;
+	}
+
+	bool NetMatchService::RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error) {
+		{
+			// The ticket names the host its match is on; the successor hosts that match now, as a survivor's ticket says.
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			NetH4TicketRecord record;
+			m_TicketStore.SetPath(s_TicketStorePath.empty() ? NetReconnectTicketStore::DefaultPath() : s_TicketStorePath);
+			if (m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr) == NetH4TicketLoadResult::Loaded && record.hostAddress != route.address) {
+				record.hostAddress = route.address;
+				(void)m_TicketStore.Store(record, nullptr);
+			}
+		}
+		m_LeaveExchangeRun = true;
+		if (!BeginTicketRejoinOnRoute(error, &route)) return false;
+		ScenarioRunner::SetWorldCatchUpPriorInputThrough(m_HeldRejoinPriorInput);
+		return true;
 	}
 
 	bool NetMatchService::BeginTicketRejoin(std::string* error) {
