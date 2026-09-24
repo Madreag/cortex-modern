@@ -18,6 +18,7 @@
 #include "Actor.h"
 #include "Attachable.h"
 #include "AudioMan.h"
+#include "Base64/base64.h"
 #include "Box.h"
 #include "Gib.h"
 #include "HeldDevice.h"
@@ -342,6 +343,68 @@ namespace {
 		return lines;
 	}
 
+	std::vector<std::string> Tokens(const std::string& text) {
+		std::vector<std::string> tokens;
+		std::istringstream stream(text);
+		for (std::string token; stream >> token;) {
+			tokens.push_back(token);
+		}
+		return tokens;
+	}
+
+	// The first difference between two serialized lines; a base64 runtime block is decoded and compared token by token.
+	std::string DescribeLineChange(const std::string& before, const std::string& after) {
+		const size_t equals = before.find(" = ");
+		const auto encoded = [equals](const std::string& line) {
+			return line.size() >= equals + 3 + 24 && line.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=.", equals + 3) == std::string::npos;
+		};
+		if (equals != std::string::npos && after.compare(0, equals + 3, before, 0, equals + 3) == 0 && encoded(before) && encoded(after)) {
+			const std::string field = before.substr(0, equals);
+			std::vector<std::string> was;
+			std::vector<std::string> now;
+			// A runtime block pads with '.', or not at all.
+			const auto decode = [equals](const std::string& line) {
+				std::string payload = line.substr(equals + 3);
+				while (!payload.empty() && (payload.back() == '.' || payload.back() == '=')) {
+					payload.pop_back();
+				}
+				payload.append((4 - payload.size() % 4) % 4, '=');
+				return Tokens(base64_decode(payload));
+			};
+			try {
+				was = decode(before);
+				now = decode(after);
+			} catch (const std::exception&) {
+				was.clear();
+			}
+			if (!was.empty() && !now.empty()) {
+				size_t at = 0;
+				while (at < was.size() && at < now.size() && was[at] == now[at]) {
+					++at;
+				}
+				const auto window = [at](const std::vector<std::string>& tokens) {
+					std::string text;
+					for (size_t i = at >= 4 ? at - 4 : 0; i < tokens.size() && i < at + 6; ++i) {
+						text += (text.empty() ? "" : " ") + (i == at ? "[" + tokens[i].substr(0, 40) + "]" : tokens[i].substr(0, 40));
+					}
+					// A runtime block can carry pixels; only text is printed.
+					for (char& c: text) {
+						c = (c >= 32 && c < 127) ? c : '?';
+					}
+					return text;
+				};
+				size_t differing = 0;
+				for (size_t i = 0; i < was.size() && i < now.size(); ++i) {
+					differing += was[i] != now[i] ? 1 : 0;
+				}
+				return field + " decoded token " + std::to_string(at) + " of " + std::to_string(was.size()) + " (" + std::to_string(differing) + " tokens differ, " +
+				       std::to_string(was.size()) + " -> " + std::to_string(now.size()) + " tokens): ..." + window(was) + "... -> ..." + window(now) + "...";
+			}
+		}
+		const auto clip = [](const std::string& text) { return text.size() > 300 ? text.substr(0, 300) + "..." : text; };
+		return clip(before) + " -> " + clip(after);
+	}
+
 	WorldHash HashWorld() {
 		g_SimChecksum.BeginTick(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		g_MovableMan.FeedTickEndChecksum();
@@ -459,6 +522,7 @@ namespace {
 		void Probe(Instance& target, const std::string& call, const std::function<int()>& push);
 		void Check(Instance& target, const std::string& call);
 		void Sweep(const std::string& after);
+		bool Control();
 		void WalkClass(Instance& instance);
 	};
 
@@ -472,8 +536,18 @@ namespace {
 		}
 	}
 
-	// Keeps the handle on top of the stack as its class's instance when that class has none; pops it either way.
+	// Keeps the handle on top of the stack as its class's instance when that class has none; pops it either way. An iterator
+	// stands for the first object it hands out.
 	bool Walk::AdoptTop(const std::string& origin) {
+		if (lua_type(L, -1) == LUA_TFUNCTION) {
+			unsigned long code = 0;
+			const int top = lua_gettop(L);
+			if (GuardedCall(L, 0, 1, &code) != 0) {
+				lua_settop(L, top - 1);
+				return false;
+			}
+			return AdoptTop(origin + " first element");
+		}
 		object_rep* rep = luabind::detail::is_class_object(L, -1);
 		if (!rep || !rep->ptr() || !rep->crep() || rep->crep()->get_class_type() != class_rep::cpp_class || m_Instances.count(rep->crep()->name()) > 0) {
 			lua_pop(L, 1);
@@ -530,11 +604,12 @@ namespace {
 				}
 			}
 		};
-		// Residents first, then what they carry; exact classes first, then the nearest registered one.
-		for (int pass = 0; pass < 4; ++pass) {
-			exact = pass < 2;
+		// The objects in the world and what they carry; exact classes first, then the nearest registered one. A known object
+		// outside the world (a placeholder with no material) is not what a script walks.
+		for (int pass = 0; pass < 2; ++pass) {
+			exact = pass == 0;
 			for (const MovableObject* mo: known) {
-				if (g_MovableMan.IsResident(mo) == (pass % 2 == 0)) {
+				if (g_MovableMan.IsResident(mo)) {
 					visit(mo);
 				}
 			}
@@ -667,7 +742,10 @@ namespace {
 			}
 			for (size_t i = 0; i < now.size(); ++i) {
 				if (now[i] != instance.lines[i] && instance.maskedLines.count(i) == 0) {
-					first = "line " + std::to_string(i + 1) + ": " + instance.lines[i] + " -> " + now[i];
+					first = "line " + std::to_string(i + 1) + ": " + DescribeLineChange(instance.lines[i], now[i]);
+					// Both whole lines, for the report to decode.
+					static std::ofstream changedLines("preview_binding_exhaustive.lines", std::ios::trunc);
+					changedLines << instance.crep->name() << " line " << (i + 1) << "\n" << instance.lines[i] << "\n" << now[i] << "\n" << std::flush;
 					return true;
 				}
 			}
@@ -744,8 +822,10 @@ namespace {
 					const int status = GuardedCall(L, 2, 1, &code);
 					if (status == 0) {
 						AdoptTop("discovered " + name + "." + property);
+					} else if (status == c_Crashed) {
+						++m_DiscoveryCrashes;
+						std::cout << "[bindx] CRASH during discovery " << name << "." << property << " (get) fault 0x" << std::hex << code << std::dec << std::endl;
 					}
-					m_DiscoveryCrashes += status == c_Crashed ? 1 : 0;
 					lua_settop(L, top);
 				}
 				source.crep->get_table(L);
@@ -781,8 +861,9 @@ namespace {
 						const int status = GuardedCall(L, count + 1, 1, &code);
 						if (status == 0) {
 							AdoptTop("discovered " + name + ":" + method + args);
-						} else {
-							m_DiscoveryCrashes += status == c_Crashed ? 1 : 0;
+						} else if (status == c_Crashed) {
+							++m_DiscoveryCrashes;
+							std::cout << "[bindx] CRASH during discovery " << name << ":" << method << args << " fault 0x" << std::hex << code << std::dec << std::endl;
 						}
 						lua_settop(L, top);
 					}
@@ -815,18 +896,24 @@ namespace {
 
 	// A class the engine only makes through a subclass is walked on an object of that subclass.
 	void Walk::FillBases() {
-		std::vector<std::pair<std::string, const Entity*>> entities;
+		std::vector<std::string> names;
 		for (const auto& [name, instance]: m_Instances) {
-			if (instance.entity) {
-				entities.emplace_back(name, instance.entity);
-			}
+			names.push_back(name);
 		}
-		for (const auto& [name, entity]: entities) {
-			for (const Entity::ClassInfo* info = entity->GetClass().GetParent(); info; info = info->GetParent()) {
-				if (const auto found = m_Classes.find(info->GetName()); found != m_Classes.end() && m_Instances.count(info->GetName()) == 0) {
-					AddPointer(found->second, EntityPointerAs(entity, found->second), "the " + name + " instance (" + m_Instances.at(name).origin + ")");
+		for (const std::string& name: names) {
+			const std::string origin = "the " + name + " instance (" + m_Instances.at(name).origin + ")";
+			std::function<void(class_rep*, char*)> climb = [&](class_rep* crep, char* object) {
+				for (const class_rep::base_info& base: crep->bases()) {
+					char* basePointer = object + base.pointer_offset;
+					if (base.base && m_Instances.count(base.base->name()) == 0) {
+						AddPointer(base.base, basePointer, origin);
+					}
+					if (base.base) {
+						climb(base.base, basePointer);
+					}
 				}
-			}
+			};
+			climb(m_Instances.at(name).crep, static_cast<char*>(m_Instances.at(name).object));
 		}
 	}
 
@@ -931,6 +1018,30 @@ namespace {
 				Baseline(instance);
 			}
 		}
+	}
+
+	// The oracle's own detecting run: a write to a fixture's health must show in its bytes and in the world hash, and its undo in neither.
+	bool Walk::Control() {
+		const auto found = m_Instances.find("AHuman");
+		Actor* actor = found == m_Instances.end() ? nullptr : const_cast<Actor*>(dynamic_cast<const Actor*>(found->second.entity));
+		if (!actor) {
+			std::cout << "[bindx] control: no AHuman fixture to write" << std::endl;
+			return false;
+		}
+		const float health = actor->GetHealth();
+		actor->SetHealth(health - 1.0F);
+		std::string where;
+		std::string first;
+		const bool seenBytes = ObjectChanged(found->second, where, first);
+		const bool seenWorld = HashWorld().total != m_World.total;
+		actor->SetHealth(health);
+		std::string firstAfter;
+		const bool bytesUndone = !ObjectChanged(found->second, where, firstAfter);
+		const bool worldUndone = HashWorld().total == m_World.total;
+		std::cout << "[bindx] control: AHuman health written one lower: object bytes " << (seenBytes ? "changed (" + first + ")" : std::string("unchanged")) << ", world hash "
+		          << (seenWorld ? "changed" : "unchanged") << "; written back: object bytes " << (bytesUndone ? "as before" : "still changed (" + firstAfter + ")") << ", world hash "
+		          << (worldUndone ? "as before" : "still changed") << std::endl;
+		return seenBytes && seenWorld && bytesUndone && worldUndone;
 	}
 
 	void Walk::WalkClass(Instance& instance) {
@@ -1058,12 +1169,16 @@ namespace {
 			std::cout << c_Tag << " FAIL the tick hash is being taken this tick; walk on another tick" << std::endl;
 			return false;
 		}
-		// Every binding runs under dummy arguments; an assert is listed, not raised.
+		// Every binding runs under dummy arguments; an assert they raise is listed by the walk, not counted against the run.
 		const bool ignoredAsserts = RTEError::s_IgnoreAllAsserts;
+		const bool assertFired = RTEError::s_AssertFired;
+		const std::string lastAssert = RTEError::s_LastIgnoredAssertDescription;
 		RTEError::s_IgnoreAllAsserts = true;
 		RTEError::s_LastIgnoredAssertDescription.clear();
 		const bool passed = RunWalk();
 		RTEError::s_IgnoreAllAsserts = ignoredAsserts;
+		RTEError::s_AssertFired = assertFired;
+		RTEError::s_LastIgnoredAssertDescription = lastAssert;
 		return passed;
 	}
 
@@ -1114,6 +1229,10 @@ namespace {
 			}
 		}
 
+		if (!Control()) {
+			std::cout << c_Tag << " FAIL the oracle did not see a native write to a fixture, or did not see it undone" << std::endl;
+			return false;
+		}
 		const std::string setupAssert = RTEError::s_LastIgnoredAssertDescription;
 		if (!setupAssert.empty()) {
 			std::cout << "[bindx] ASSERT during the fixture discovery (the last one): " << setupAssert << std::endl;
@@ -1151,7 +1270,9 @@ namespace {
 			}
 		};
 		for (const MovableObject* mo: g_MovableMan.SnapshotKnownObjects()) {
-			note(mo);
+			if (g_MovableMan.IsResident(mo)) {
+				note(mo);
+			}
 		}
 		std::vector<std::pair<int, std::string>> order;
 		for (const auto& [name, crep]: classes) {
