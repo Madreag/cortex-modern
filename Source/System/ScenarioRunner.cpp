@@ -1325,6 +1325,15 @@ namespace RTE {
 			    std::move(outFrame.remoteObservations), std::move(outFrame.remoteValueObservations))) return false;
 			s_LockstepCoordinator->Tick(0);
 			if (!s_LockstepCoordinator->PopReadyFrame(outFrame)) return false;
+		} else {
+			// The committed frame names every seat the AI takes at it with a hold record; the replay hands those seats over at
+			// that frame as the live round did, or the catching-up peer keeps a seat the survivors gave the AI.
+			for (const NetGameCommand& command: outFrame.remoteCommands) {
+				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload);
+				    hold && std::find(outFrame.aiHeldPeerIds.begin(), outFrame.aiHeldPeerIds.end(), hold->peerId) == outFrame.aiHeldPeerIds.end()) {
+					outFrame.aiHeldPeerIds.push_back(hold->peerId);
+				}
+			}
 		}
 		// A replayed tick is committed state like any other: the reclaim gap the survivors fenced is
 		// fenced here too, or the catching-up peer alone applies the seat's input through its reclaim.
