@@ -362,6 +362,13 @@ namespace RTE {
 		/// @return The relative mouse movements, in both axes.
 		Vector GetMouseMovement(int whichPlayer = -1) const;
 
+		/// Records a seat's mouse as its committed lockstep frame applied it. A script asking about that seat inside the
+		/// round reads this on every peer, never the mouse of the machine it runs on.
+		/// @param whichPlayer The seat's player.
+		/// @param movement The mouse movement the committed frame carries.
+		/// @param simTick The sim tick the frame was applied at.
+		void NoteCommittedSeatMouse(int whichPlayer, const Vector& movement, int64_t simTick);
+
 		/// Set the mouse's analog emulation output to be of a specific normalized magnitude.
 		/// @param magCap The normalized magnitude, between 0 and 1.0.
 		/// @param whichPlayer Which player to set magnitude for. Only relevant when in online multiplayer mode.
@@ -536,6 +543,16 @@ namespace RTE {
 #pragma endregion
 
 	private:
+		/// A seat's mouse as the round committed it, for the scripts the round runs.
+		struct CommittedSeatMouse {
+			Vector movement;
+			int64_t tick = -1;
+		};
+		std::array<CommittedSeatMouse, Players::MaxPlayerCount> m_CommittedSeatMouse{};
+
+		/// Whether this query comes from a script inside a lockstep round, where it must read the seat's committed input.
+		bool ScriptReadsCommittedSeat(int whichPlayer) const;
+
 		/// Enumeration for the different states an input element or button can be in.
 		enum InputState {
 			Held,
