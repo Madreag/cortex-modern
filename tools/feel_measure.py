@@ -249,12 +249,12 @@ def launch_case(root, name, lag, cap, record, port, script, exe_hash, timeout, s
             environment = dict(CCCP_HEADLESS='1', CC_TRACE_PREVIEW_EVENT='1', CC_SIM_DUMP=f'1:{final_tick}', PYTHONDONTWRITEBYTECODE='1')
             if peer == 'client' and loss_percent:
                 environment['CC_TEST_GNS_LOSS_PERCENT'] = str(loss_percent)
-            if peer == 'client' and silent_tick:
-                if live_stalls:
-                    for tick, duration in live_stalls:
-                        flags += ['-net-test-live-stall', f'{tick}:{duration}']
-                else:
-                    flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
+            # A live stall holds the client's seat in any form; the three-peer form without one freezes a frame instead.
+            if peer == 'client' and live_stalls:
+                for tick, duration in live_stalls:
+                    flags += ['-net-test-live-stall', f'{tick}:{duration}']
+            elif peer == 'client' and silent_tick:
+                flags += ['-selftest-frame-stall', f'{silent_tick}:1500']
             run = make_run(REPO, flags, run_out, timeout=timeout, env=environment,
                            expected=[trace, Path(str(trace) + '.simdump.txt'), out / f'{peer}_controller.jsonl'])
             runs[peer] = run

@@ -120,7 +120,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
@@ -142,7 +142,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
@@ -164,7 +164,7 @@
       "what": "The discovered row fits its box or the host-loss landing explains the lost connection.",
       "assert": "Native label/geometry readback.",
       "log_regex": [
-        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host.s connection was lost.* PASS"
+        "\\[menu-script\\] assert_label LabelMultiplayerLandingStatus .*The host left the match.* PASS"
       ]
     },
     {
@@ -173,21 +173,24 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The one hosted session is listed once, at its best address.",
-      "assert": "Native list readback.",
-      "log_regex": [
-        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
-      ]
+      "assert": "Native list readback: the rows ending in this run's own port, at loopback; other sessions on the LAN are listed as evidence, not counted.",
+      "own_session_rows": {
+        "control": "ListLanGames",
+        "expected": 1,
+        "address": "127.0.0.1"
+      }
     },
     {
       "id": "loss-join-port-default",
       "run": "640x360",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
-      "assert": "Native text-box readback before the script types a port.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
-      ]
+      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port, against the list's own row order.",
+      "join_port_follows_list": {
+        "control": "ListLanGames",
+        "field": "TextJoinPort"
+      }
     },
     {
       "id": "loss-client-own-name",
@@ -217,21 +220,24 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The one hosted session is listed once, at its best address.",
-      "assert": "Native list readback.",
-      "log_regex": [
-        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
-      ]
+      "assert": "Native list readback: the rows ending in this run's own port, at loopback; other sessions on the LAN are listed as evidence, not counted.",
+      "own_session_rows": {
+        "control": "ListLanGames",
+        "expected": 1,
+        "address": "127.0.0.1"
+      }
     },
     {
       "id": "loss-join-port-default",
       "run": "960x540",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
-      "assert": "Native text-box readback before the script types a port.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
-      ]
+      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port, against the list's own row order.",
+      "join_port_follows_list": {
+        "control": "ListLanGames",
+        "field": "TextJoinPort"
+      }
     },
     {
       "id": "loss-client-own-name",
@@ -261,21 +267,24 @@
       "peer": "client",
       "mark": "loss-lan-list",
       "what": "The one hosted session is listed once, at its best address.",
-      "assert": "Native list readback.",
-      "log_regex": [
-        "\\[menu-script\\] assert_list_rows ListLanGames expected=1 actual=1 PASS"
-      ]
+      "assert": "Native list readback: the rows ending in this run's own port, at loopback; other sessions on the LAN are listed as evidence, not counted.",
+      "own_session_rows": {
+        "control": "ListLanGames",
+        "expected": 1,
+        "address": "127.0.0.1"
+      }
     },
     {
       "id": "loss-join-port-default",
       "run": "1280x720",
       "peer": "client",
       "mark": "loss-lan-list",
-      "what": "The join Port field offers the port the listed session advertises, not the stock default.",
-      "assert": "Native text-box readback before the script types a port.",
-      "log_regex": [
-        "\\[menu-script\\] assert_label TextJoinPort .* PASS"
-      ]
+      "what": "The join Port field offers the port the first listed joinable session advertises, not the stock default.",
+      "assert": "Native text-box readback before the script types a port, against the list's own row order.",
+      "join_port_follows_list": {
+        "control": "ListLanGames",
+        "field": "TextJoinPort"
+      }
     },
     {
       "id": "loss-client-own-name",

@@ -1,3 +1,4 @@
+#include "CaptureSentinel.h"
 #include "CheckpointArchive.h"
 #include "CheckpointImage.h"
 #include "Constants.h"
@@ -1924,7 +1925,7 @@ MovableObject* MovableMan::LookupMOID(MOID whichID) const {
 		// Anyways, until we can fix the god-awful abomination that is this game's memory ownership semantics, we're stuck with this
 		// Which is also technically undefined behaviour
 		MovableObject* candidate = m_MOIDIndex[whichID];
-		if (candidate->GetID() != whichID) {
+		if (!candidate || candidate->GetID() != whichID) {
 			return nullptr;
 		}
 
@@ -2654,6 +2655,7 @@ MovableMan::KnownObjectsScope::KnownObjectsScope() {
 
 void MovableMan::KnownObjectsScope::Copy() const {
 	std::call_once(m_Copied, [this] {
+		CaptureSentinel::NoteCreation("known-objects index", this);
 		MovableMan& manager = g_MovableMan;
 		{
 			std::lock_guard<std::mutex> guard(manager.m_ObjectRegisteredMutex);
@@ -4224,7 +4226,8 @@ void MovableMan::AddActor(Actor* actorToAdd) {
 			// wire takes over from the next tick's controller update.
 			if (!m_RestoringSnapshot && ScenarioRunner::IsLockstepControllerSyncActive()) {
 				actorToAdd->GetController()->SetDisabled(true);
-				m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
+				// A preview's spawn is discarded with the preview, so only the canonical add holds a seat in the quarantine.
+				if (!m_Speculation.active) m_LockstepJoinQuarantine.emplace_back(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), actorToAdd->GetUniqueID());
 			}
 
 			// This will call SetTeam and subsequently force the team as active.
@@ -7625,7 +7628,21 @@ std::string MovableMan::SaveWorldStructure() const {
 	identities(m_Actors, state.cohorts[0]); identities(m_Items, state.cohorts[1]); identities(m_Particles, state.cohorts[2]);
 	identities(m_AddedActors, state.cohorts[3]); identities(m_AddedItems, state.cohorts[4]); identities(m_AddedParticles, state.cohorts[5]);
 	identities(m_ValidActors, state.validObjects[0]); identities(m_ValidItems, state.validObjects[1]); identities(m_ValidParticles, state.validObjects[2]);
-	identities(m_MOIDIndex, state.moidIndex);
+	// A slot can outlive the object drawn into it (a script that took the object may have freed it), so only a
+	// registered object names its slot; a freed one is never read.
+	std::vector<const MovableObject*> registered;
+	const std::vector<const MovableObject*>* known = &registered;
+	if (const KnownObjectsScope* scope = m_KnownObjectsScope.load(std::memory_order_acquire); scope && scope->m_Version == m_KnownObjectsVersion.load(std::memory_order_acquire)) {
+		scope->Copy();
+		known = &scope->m_ByAddress;
+	} else {
+		std::lock_guard<std::mutex> guard(m_ObjectRegisteredMutex);
+		registered.reserve(m_KnownObjects.size());
+		for (const auto& [uid, object]: m_KnownObjects) registered.push_back(object);
+		std::sort(registered.begin(), registered.end());
+	}
+	state.moidIndex.reserve(m_MOIDIndex.size());
+	for (const MovableObject* object: m_MOIDIndex) state.moidIndex.push_back(object && std::binary_search(known->begin(), known->end(), object) ? object->GetUniqueID() : 0);
 	for (int team = 0; team < Activity::MaxTeamCount; ++team) {
 		identities(m_ActorRoster[team], state.rosters[team]); state.sortRoster[team] = m_SortTeamRoster[team];
 		state.teamMOIDCount[team] = m_TeamMOIDCount[team];

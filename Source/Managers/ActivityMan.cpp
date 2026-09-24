@@ -1,5 +1,6 @@
 #include "ActivityMan.h"
 #include "AutosaveStore.h"
+#include "CaptureSentinel.h"
 #include "GameVersion.h"
 #include "GUIInput.h"
 #include "GUISound.h"
@@ -665,6 +666,9 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	std::shared_ptr<AudioCheckpointCapture> audio, audioSamples;
 	auto sceneCache = std::make_shared<CheckpointCache>();
 	sceneCache->Begin();
+	// What the workers would make on first use is made here; from the first worker to the join they only read.
+	LuaScriptGraphNativeCaptureScope::PreTouch();
+	std::optional<CaptureSentinel::ParallelPhase> parallel(std::in_place);
 	struct Aside {
 		std::vector<std::future<void>> tasks;
 		~Aside() { for (std::future<void>& task: tasks) if (task.valid()) task.wait(); }
@@ -677,6 +681,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	AudioMan::SoundCheckpointSaveScope* const sounds = &carriedSounds;
 	const auto captureAside = [&aside, sounds](std::function<void()> work, CheckpointCache* cache = nullptr) {
 		aside.tasks.push_back(g_ThreadMan.GetPriorityThreadPool().submit([sounds, cache, work = std::move(work)] {
+			CaptureSentinel::WorkerScope worker("capture-aside");
 			AudioMan::SoundCheckpointSaveScope::Lend lend(sounds);
 			CheckpointCache values;
 			values.Begin();
@@ -698,7 +703,10 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		image->activity = Writer::Capture([&](Writer& writer) {
 			writer.NewPropertyWithValue("Activity", activity);
 			writer.NewPropertyWithValue("HasCheckpointStartActivity", m_StartActivity != nullptr);
+			// The start activity is the restart this machine configured for its own seats, not the match being played.
+			writer.PerPeerBegin();
 			if (m_StartActivity) writer.NewPropertyWithValue("CheckpointStartActivity", m_StartActivity.get());
+			writer.PerPeerEnd();
 		});
 		image->activityUs = since(activityStart);
 	});
@@ -761,6 +769,13 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 		cow.RememberLua(image->graphs, LuaCheckpointWriteGeneration());
 	}
 	image->graphUs = since(graphStart);
+	// Each machine runs its own actors' AI (Controller-sync), so a threaded state that runs an actor's scripts holds this
+	// machine's own objects and birth numbers; the master state and the rest are shared.
+	image->graphScopes.assign(image->graphs.size(), CheckpointScope::Shared);
+	for (size_t state = 1; state < image->graphs.size() && state <= g_LuaMan.GetThreadedScriptStates().size(); ++state) {
+		const auto& objects = g_LuaMan.GetThreadedScriptStates()[state - 1].GetRegisteredMOs();
+		if (std::any_of(objects.begin(), objects.end(), [](const MovableObject* object) { return object->IsActor(); })) image->graphScopes[state] = CheckpointScope::PerPeer;
+	}
 	image->graph = graphIndex.Sample();
 	image->graphBeforeWalk = beforeWalk;
 	// The walk is what the freeze paid for the graph; the worker's formatting is timed where it runs.
@@ -772,6 +787,7 @@ bool ActivityMan::QueueIncrementalAutosave(const std::string& fileName, const st
 	image->graphRootsRewritten = image->luaReused || frozenGraphs ? 0 : image->graph.rootsRewritten;
 	readAudio();
 	aside.Join();
+	parallel.reset();
 	for (LayerCapture& captured: layers) {
 		image->layers.emplace_back(captured.name, std::move(captured.snapshot));
 		std::move(captured.retired.begin(), captured.retired.end(), std::back_inserter(retiredLayers));
@@ -2189,7 +2205,8 @@ std::string ActivityMan::CaptureRuntimeGlobals(const std::unordered_set<uint64_t
 }
 
 const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManagerSavers() {
-	// The camera is each machine's own screens; the two inputs are what a network restore keeps from the local machine.
+	// The camera is each machine's own screens; the two inputs are what a network restore keeps from the local machine; the
+	// GUI sounds play this machine's own interface.
 	static const std::vector<RuntimeManagerSaver> savers = {
 		{"movable", [] { return g_MovableMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"scene", [] { return g_SceneMan.SaveCheckpoint(); }, CheckpointScope::Shared},
@@ -2199,7 +2216,7 @@ const std::vector<ActivityMan::RuntimeManagerSaver>& ActivityMan::RuntimeManager
 		{"input", [] { return g_UInputMan.SaveCheckpoint(); }, CheckpointScope::PerPeer},
 		{"post_process", [] { return g_PostProcessMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 		{"primitives", [] { return g_PrimitiveMan.SaveCheckpoint(); }, CheckpointScope::Shared},
-		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }, CheckpointScope::Shared},
+		{"gui_sound", [] { return g_GUISound.SaveCheckpoint(); }, CheckpointScope::PerPeer},
 		{"music", [] { return g_MusicMan.SaveCheckpoint(); }, CheckpointScope::Shared},
 	};
 	return savers;

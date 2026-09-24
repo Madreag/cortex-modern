@@ -13,6 +13,20 @@
     },
     {
       "op": "key_down",
+      "key": "P",
+      "sim_at_least": 1
+    },
+    {
+      "op": "key_up",
+      "key": "P",
+      "sim_at_least": 1
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 300
+    },
+    {
+      "op": "key_down",
       "key": "F6"
     },
     {
@@ -215,6 +229,14 @@
     {
       "op": "wait",
       "elapsed_ms": 450
+    },
+    {
+      "op": "menu",
+      "command": "activate ButtonPauseMatch"
+    },
+    {
+      "op": "wait",
+      "elapsed_ms": 300
     },
     {
       "op": "menu",

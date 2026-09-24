@@ -1233,7 +1233,9 @@ Actor* Activity::GetControlledActor(int player) {
 		return m_RenderSubstituteActor[player];
 	}
 	if (m_SharedPlayerSeats) {
-		return ResolveNetActor(m_LockstepControlUID[player]);
+		// A seat nothing has named yet plays the brain a script gave it this tick, which the brain record names on the next update.
+		const bool unnamed = m_LockstepControlUID[player] == 0 && ScenarioRunner::HasLockstepCoordinator() && IsSeatActive(player) && IsHumanSeat(player);
+		return ResolveNetActor(unnamed ? NetActorUID(m_Brain[player]) : m_LockstepControlUID[player]);
 	}
 	return m_ControlledActor[player];
 }
@@ -1984,7 +1986,12 @@ std::string Activity::SaveCheckpoint() const {
 	VisitCheckpoint(writer, *this);
 	std::array<std::array<long, 3>, Players::MaxPlayerCount> links{};
 	for (int player = 0; player < Players::MaxPlayerCount; ++player) links[player] = m_HasCheckpointActorIDs ? m_CheckpointActorIDs[player] : SlotActorIDs(player);
-	writer(links, m_LockstepControlUID, CheckpointWriter::Native([&] { return Icon::SaveCheckpointSet(m_TeamIcons); }));
+	// The brain is shared; the actor a seat drives here is bound only for this machine's own seats.
+	for (const auto& link: links) {
+		writer(link[0]);
+		writer.PerPeer(link[1], link[2]);
+	}
+	writer(m_LockstepControlUID, CheckpointWriter::Native([&] { return Icon::SaveCheckpointSet(m_TeamIcons); }));
 	return writer.Text();
 }
 

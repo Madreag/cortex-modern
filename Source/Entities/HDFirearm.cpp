@@ -590,8 +590,13 @@ int HDFirearm::GetRoundInMagCapacity() const {
 }
 
 float HDFirearm::GetAIFireVel() {
-	if (m_AIFireVel < 0 && m_pMagazine)
+	if (m_AIFireVel < 0 && m_pMagazine) {
+		// A preview reads the world's firearms without filling the caches their checkpoint holds.
+		if (!MayFillCaches()) {
+			return m_pMagazine->GetAIAimVel();
+		}
 		m_AIFireVel = m_pMagazine->GetAIAimVel();
+	}
 
 	return m_AIFireVel;
 }
@@ -600,11 +605,12 @@ unsigned long HDFirearm::GetAIBulletLifeTime() {
 	if (m_AIBulletLifeTime == 0 && m_pMagazine) {
 		const Round* pRound = m_pMagazine->GetNextRound();
 		if (pRound) {
-			m_AIBulletLifeTime = pRound->GetAILifeTime();
-
 			// Set a default if the lifetime is zero (i.e. infinite)
-			if (m_AIBulletLifeTime == 0)
-				m_AIBulletLifeTime = 20000;
+			const unsigned long lifeTime = pRound->GetAILifeTime() == 0 ? 20000 : pRound->GetAILifeTime();
+			if (!MayFillCaches()) {
+				return lifeTime;
+			}
+			m_AIBulletLifeTime = lifeTime;
 		}
 	}
 
@@ -612,8 +618,12 @@ unsigned long HDFirearm::GetAIBulletLifeTime() {
 }
 
 float HDFirearm::GetBulletAccScalar() {
-	if (m_AIBulletAccScalar < 0 && m_pMagazine)
+	if (m_AIBulletAccScalar < 0 && m_pMagazine) {
+		if (!MayFillCaches()) {
+			return m_pMagazine->GetBulletAccScalar();
+		}
 		m_AIBulletAccScalar = m_pMagazine->GetBulletAccScalar();
+	}
 
 	return m_AIBulletAccScalar;
 }
@@ -1238,7 +1248,10 @@ std::string HDFirearm::SaveHDFirearmRuntime() const {
 	archive(m_BaseReloadTime, m_FullAuto, m_FireIgnoresThis, m_Reloadable, m_OneHandedReloadTimeMultiplier, m_DualReloadable, m_ReloadAngle);
 	archive(m_OneHandedReloadAngle, m_LastFireTmr, m_ReloadTmr, m_MuzzleOff, m_EjectOff, m_MagOff, m_ShakeRange);
 	archive(m_SharpShakeRange, m_NoSupportFactor, m_ParticleSpreadRange, m_ShellEjectAngle, m_ShellSpreadRange, m_ShellAngVelRange, m_ShellVelVariation);
-	archive(m_RecoilScreenShakeAmount, m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar, m_FiredOnce, m_FireFrame, m_FiredLastFrame);
+	archive(m_RecoilScreenShakeAmount);
+	// The AI's ballistics are filled when this machine's own AI first asks.
+	archive.PerPeer(m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar);
+	archive(m_FiredOnce, m_FireFrame, m_FiredLastFrame);
 	archive(m_AlreadyClicked, m_RoundsFired, m_IsAnimatedManually, m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
 	return archive.Text();
 }
@@ -1250,7 +1263,10 @@ bool HDFirearm::LoadHDFirearmRuntime(std::string_view text, bool validateOnly) {
 		archive(m_BaseReloadTime, m_FullAuto, m_FireIgnoresThis, m_Reloadable, m_OneHandedReloadTimeMultiplier, m_DualReloadable, m_ReloadAngle);
 		archive(m_OneHandedReloadAngle, m_LastFireTmr, m_ReloadTmr, m_MuzzleOff, m_EjectOff, m_MagOff, m_ShakeRange);
 		archive(m_SharpShakeRange, m_NoSupportFactor, m_ParticleSpreadRange, m_ShellEjectAngle, m_ShellSpreadRange, m_ShellAngVelRange, m_ShellVelVariation);
-		archive(m_RecoilScreenShakeAmount, m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar, m_FiredOnce, m_FireFrame, m_FiredLastFrame);
+		archive(m_RecoilScreenShakeAmount);
+	// The AI's ballistics are filled when this machine's own AI first asks.
+	archive.PerPeer(m_AIFireVel, m_AIBulletLifeTime, m_AIBulletAccScalar);
+	archive(m_FiredOnce, m_FireFrame, m_FiredLastFrame);
 		archive(m_AlreadyClicked, m_RoundsFired, m_IsAnimatedManually, m_LegacyCompatibilityRoundsAlwaysFireUnflipped);
 		archive.Finish();
 		return true;

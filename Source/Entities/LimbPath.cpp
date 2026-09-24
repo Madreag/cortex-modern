@@ -275,8 +275,11 @@ CheckpointText LimbPath::CaptureTraversalState(bool forHashing) const {
 	appendVector(m_RotationOffset);
 	appendVector(m_PositionOffset);
 	for (const Timer* timer: {&m_PathTimer, &m_SegTimer}) {
+		// The real-time half is this machine's wall clock.
+		state.PeerBegin();
 		appendValue(forHashing ? int64_t{0} : timer->GetStartRealTimeMS());
 		appendValue(timer->GetRealTimeLimitTicks());
+		state.PeerEnd();
 		appendValue(timer->GetSimTimeLimitTicks());
 	}
 	appendValue(m_TotalLength);

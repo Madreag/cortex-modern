@@ -7,6 +7,8 @@ extern "C" {
 #include "lj_vmevent.h"
 }
 
+#include "CaptureSentinel.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -156,6 +158,7 @@ namespace RTE::CheckpointLua {
 							task = std::move(m_Tasks.front());
 							m_Tasks.pop_front();
 						}
+						CaptureSentinel::WorkerScope worker("heap-copy");
 						task();
 					}
 				}).detach();

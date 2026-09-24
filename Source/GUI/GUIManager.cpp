@@ -283,6 +283,7 @@ void GUIManager::Update(bool ignoreKeyboardEvents) {
 }
 
 void GUIManager::Draw(GUIScreen* Screen) {
+	const void* previousPass = BeginPanelDrawPass(this);
 	// Go through drawing panels that are invalid
 	std::vector<GUIPanel*>::iterator it;
 
@@ -295,6 +296,7 @@ void GUIManager::Draw(GUIScreen* Screen) {
 			p->Draw(Screen);
 		}
 	}
+	EndPanelDrawPass(previousPass);
 }
 
 void GUIManager::CaptureMouse(GUIPanel* Panel) {

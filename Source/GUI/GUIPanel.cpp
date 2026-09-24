@@ -3,30 +3,72 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <unordered_map>
 
 using namespace RTE;
 
 namespace RTE {
-	// Keyed by panel, so a readback can ask the renderer instead of a visible flag.
-	static std::unordered_map<const void*, std::chrono::steady_clock::time_point> s_PanelDraws;
+	namespace {
+		using DrawClock = std::chrono::steady_clock;
+		struct DrawPass {
+			uint64_t serial = 0;
+			DrawClock::time_point at;
+		};
+		struct PanelDraw {
+			const void* manager = nullptr;
+			uint64_t serial = 0;
+			DrawClock::time_point at;
+		};
+		// Keyed by manager and by panel, so a readback can ask the renderer instead of a visible flag.
+		std::unordered_map<const void*, DrawPass> s_DrawPasses;
+		std::unordered_map<const void*, PanelDraw> s_PanelDraws;
+		const void* s_DrawingManager = nullptr;
+
+		double SecondsSince(DrawClock::time_point at) { return std::chrono::duration<double>(DrawClock::now() - at).count(); }
+	} // namespace
+
+	const void* BeginPanelDrawPass(const void* manager) {
+		DrawPass& pass = s_DrawPasses[manager];
+		++pass.serial;
+		pass.at = DrawClock::now();
+		const void* previous = s_DrawingManager;
+		s_DrawingManager = manager;
+		return previous;
+	}
+
+	void EndPanelDrawPass(const void* previous) {
+		s_DrawingManager = previous;
+	}
 
 	void RecordPanelDraw(const void* panel) {
 		if (panel) {
-			s_PanelDraws[panel] = std::chrono::steady_clock::now();
+			const auto pass = s_DrawingManager ? s_DrawPasses.find(s_DrawingManager) : s_DrawPasses.end();
+			s_PanelDraws[panel] = {s_DrawingManager, pass != s_DrawPasses.end() ? pass->second.serial : 0, DrawClock::now()};
 		}
 	}
 
-	bool PanelDrewRecently(const void* panel, double seconds) {
+	bool PanelDrawnInLatestPass(const void* panel, double seconds) {
 		const auto drawn = s_PanelDraws.find(panel);
 		if (drawn == s_PanelDraws.end()) {
 			return false;
 		}
-		return std::chrono::duration<double>(std::chrono::steady_clock::now() - drawn->second).count() <= seconds;
+		if (!drawn->second.manager) {
+			return SecondsSince(drawn->second.at) <= seconds;
+		}
+		// The GUI layer is cleared every frame, so a panel its manager skipped last pass is off the screen.
+		const auto pass = s_DrawPasses.find(drawn->second.manager);
+		return pass != s_DrawPasses.end() && pass->second.serial == drawn->second.serial && SecondsSince(pass->second.at) <= seconds;
+	}
+
+	double PanelDrawAgeMs(const void* panel) {
+		const auto drawn = s_PanelDraws.find(panel);
+		return drawn == s_PanelDraws.end() ? -1.0 : SecondsSince(drawn->second.at) * 1000.0;
 	}
 
 	void ClearPanelDrawRecord() {
 		s_PanelDraws.clear();
+		s_DrawPasses.clear();
 	}
 } // namespace RTE
 

@@ -122,6 +122,13 @@ namespace luabind
 
 namespace luabind { namespace detail
 {
+	// A value of a class Lua was never told about cannot become a handle, so the call reports it instead of reading a null class.
+	inline void unregistered_type_error(lua_State* L, const std::type_info& type)
+	{
+		lua_pushfstring(L, "the binding hands Lua a %s, a class that is not registered", type.name());
+		lua_error(L);
+	}
+
 	template<class>
 	struct is_primitive;
 /*
@@ -225,6 +232,7 @@ namespace luabind { namespace detail
 	LUABIND_INTEGER_TYPE(short)
 	LUABIND_INTEGER_TYPE(int)
 	LUABIND_INTEGER_TYPE(long)
+	LUABIND_INTEGER_TYPE(long long)
 
 	template<> struct is_primitive<signed char> : boost::mpl::true_ {}; \
 	template<> struct is_primitive<signed char const> : boost::mpl::true_ {}; \
@@ -276,6 +284,8 @@ namespace luabind { namespace detail
 		void apply(lua_State* L, unsigned short v) { lua_pushnumber(L, (lua_Number)v); }
 		void apply(lua_State* L, unsigned char v) { lua_pushnumber(L, (lua_Number)v); }
 		void apply(lua_State* L, unsigned long v) { lua_pushnumber(L, (lua_Number)v); }
+		void apply(lua_State* L, long long v) { lua_pushnumber(L, (lua_Number)v); }
+		void apply(lua_State* L, unsigned long long v) { lua_pushnumber(L, (lua_Number)v); }
 		void apply(lua_State* L, float v) { lua_pushnumber(L, (lua_Number)v); }
 		void apply(lua_State* L, double v) { lua_pushnumber(L, (lua_Number)v); }
 		void apply(lua_State* L, long double v) { lua_pushnumber(L, (lua_Number)v); }
@@ -340,6 +350,12 @@ namespace luabind { namespace detail
 
 		PRIMITIVE_CONVERTER(unsigned long) { return static_cast<unsigned long>(lua_tonumber(L, index)); }
 		PRIMITIVE_MATCHER(unsigned long) { if (lua_type(L, index) == LUA_TNUMBER) return 0; else return -1; }
+
+		PRIMITIVE_CONVERTER(long long) { return static_cast<long long>(lua_tonumber(L, index)); }
+		PRIMITIVE_MATCHER(long long) { if (lua_type(L, index) == LUA_TNUMBER) return 0; else return -1; }
+
+		PRIMITIVE_CONVERTER(unsigned long long) { return static_cast<unsigned long long>(lua_tonumber(L, index)); }
+		PRIMITIVE_MATCHER(unsigned long long) { if (lua_type(L, index) == LUA_TNUMBER) return 0; else return -1; }
 
 		PRIMITIVE_CONVERTER(float) { return static_cast<float>(lua_tonumber(L, index)); }
 		PRIMITIVE_MATCHER(float) { if (lua_type(L, index) == LUA_TNUMBER) return 0; else return -1; }
@@ -487,9 +503,7 @@ namespace luabind { namespace detail
 
 			class_rep* crep = get_class_rep<T>(L);
 
-			// if you get caught in this assert you are
-			// trying to use an unregistered type
-			assert(crep && "you are trying to use an unregistered type");
+			if (crep == 0) unregistered_type_error(L, typeid(T));
 
 			// create the struct to hold the object
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
@@ -585,9 +599,7 @@ namespace luabind { namespace detail
 
 			class_rep* crep = get_class_rep<T>(L);
 
-			// if you get caught in this assert you are
-			// trying to use an unregistered type
-			assert(crep && "you are trying to use an unregistered type");
+			if (crep == 0) unregistered_type_error(L, typeid(T));
 
 			void* obj_rep;
 			void* held;
@@ -746,9 +758,7 @@ namespace luabind { namespace detail
 
 			class_rep* crep = get_class_rep<T>(L);
 
-			// if you get caught in this assert you are
-			// trying to use an unregistered type
-			assert(crep && "you are trying to use an unregistered type");
+			if (crep == 0) unregistered_type_error(L, typeid(T));
 
 			// create the struct to hold the object
 			void* obj = lua_newuserdata(L, sizeof(object_rep));
@@ -854,9 +864,7 @@ namespace luabind { namespace detail
 
 			class_rep* crep = get_class_rep<T>(L);
 
-			// if you get caught in this assert you are
-			// trying to use an unregistered type
-			assert(crep && "you are trying to use an unregistered type");
+			if (crep == 0) unregistered_type_error(L, typeid(T));
 
 			T* ptr = &ref;
 
@@ -943,9 +951,7 @@ namespace luabind { namespace detail
 
 			class_rep* crep = get_class_rep<T>(L);
 
-			// if you get caught in this assert you are
-			// trying to use an unregistered type
-			assert(crep && "you are trying to use an unregistered type");
+			if (crep == 0) unregistered_type_error(L, typeid(T));
 
 			T const* ptr = &ref;
 

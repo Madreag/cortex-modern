@@ -1,4 +1,5 @@
 #include "MOSprite.h"
+#include "HDFirearm.h"
 #include "CheckpointArchive.h"
 #include "NativeCheckpoint.h"
 #include "GUICheckpoint.h"
@@ -473,13 +474,22 @@ bool MOSprite::IsOnScenePoint(Vector& scenePoint) const {
 	return false;
 }
 
+thread_local bool (*MOSprite::s_PreviewKeepsCachesOf)(const MOSprite* object) = nullptr;
+
 Vector MOSprite::RotateOffset(const Vector& offset) const {
 	Vector rotOff(offset.GetXFlipped(m_HFlipped));
+	// A preview reads the world's objects without filling the rotation cache their checkpoint holds.
+	if (!MayFillCaches()) {
+		return m_Rotation.TransformKeepingCache(rotOff);
+	}
 	rotOff *= const_cast<Matrix&>(m_Rotation);
 	return rotOff;
 }
 
 Vector MOSprite::UnRotateOffset(const Vector& offset) const {
+	if (!MayFillCaches()) {
+		return m_Rotation.InverseTransformKeepingCache(offset).GetXFlipped(m_HFlipped);
+	}
 	Vector rotOff(offset);
 	rotOff /= const_cast<Matrix&>(m_Rotation);
 	return rotOff.GetXFlipped(m_HFlipped);
@@ -714,7 +724,10 @@ void MOSprite::Draw(BITMAP* pTargetBitmap,
 
 std::string MOSprite::SaveMOSpriteRuntime() const {
 	CheckpointWriter archive("MOSpriteRuntime2");
-	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset, m_Frame);
+	archive(m_Rotation, m_PrevRotation, m_AngularVel, m_PrevAngVel, m_FrameCount, m_SpriteOffset);
+	// A firearm's flash shows the frame this machine's draw picked with the render stream.
+	const auto* firearm = dynamic_cast<const HDFirearm*>(GetParent());
+	if (firearm && firearm->GetFlash() == this) archive.PerPeer(m_Frame); else archive(m_Frame);
 	archive(m_SpriteAnimMode, m_SpriteAnimDuration, m_SpriteAnimTimer, m_SpriteAnimIsReversingFrames, m_HFlipped, m_ForcedHFlip, m_SpriteRadius);
 	archive(m_SpriteDiameter, m_AngOscillations, m_SettleMaterialDisabled, m_SpriteModified);
 	archive(m_SpriteFile, m_IconFile);

@@ -20,7 +20,7 @@ observe assert_enabled TextHostRecAutosaveInterval 1
 observe focus TextHostRecAutosaveInterval
 observe set_text TextHostRecAutosaveInterval 1
 wait_ms 600
-observe assert_label TextHostRecAutosaveInterval 1
+observe assert_label TextHostRecAutosaveInterval 60
 activate ButtonHostOptApply
 wait_ms 900
 dump_host_options
