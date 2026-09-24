@@ -69,7 +69,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -148,7 +154,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -172,7 +184,7 @@
             },
             {
               "peer": "host",
-              "sim_tick": 1200
+              "log": "^\\[input-script\\] tick (119[5-9]|1[2-9]\\d\\d) player"
             }
           ]
         },
@@ -237,7 +249,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -319,7 +337,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -420,7 +444,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -499,7 +529,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -523,7 +559,7 @@
             },
             {
               "peer": "host",
-              "sim_tick": 1200
+              "log": "^\\[input-script\\] tick (119[5-9]|1[2-9]\\d\\d) player"
             }
           ]
         },
@@ -588,7 +624,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
@@ -670,7 +712,13 @@
           "runtime_files": [
             {
               "copy": "tools/feel/FeelBaseline.lua",
-              "to": "Userdata/UserScenes.rte/FeelBaseline.lua"
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 1800;"
+                ]
+              ]
             },
             {
               "to": "Userdata/UserScenes.rte/Index.ini",
