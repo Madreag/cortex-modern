@@ -11734,6 +11734,67 @@ namespace {
 	void DropPreviewSoundCopies() {
 		s_PreviewSoundCopies.clear();
 	}
+
+	// The window's fence at the binding boundary: the objects it owns, and the world parts it holds copies of.
+	bool s_PreviewBindingFenceOpen = false;
+	long s_PreviewBindingUIDFloor = 0;
+	std::unordered_map<const MovableObject*, MovableObject*> s_PreviewCloneOf;
+
+	// The MovableObject a handle names, cast through the bases luabind registered; null for any other class.
+	MovableObject* FencedMovableObject(const luabind::detail::object_rep* rep, int& offset) {
+		const luabind::detail::class_rep* crep = rep ? rep->crep() : nullptr;
+		if (!crep || !rep->ptr() || crep->has_holder() || crep->get_class_type() != luabind::detail::class_rep::cpp_class) {
+			return nullptr;
+		}
+		const std::type_info* movableObject = &typeid(MovableObject);
+		offset = 0;
+		if (luabind::detail::implicit_cast(crep, movableObject, offset) < 0) {
+			return nullptr;
+		}
+		return reinterpret_cast<MovableObject*>(static_cast<char*>(rep->ptr()) + offset);
+	}
+
+	void PreviewFenceSubstitute(luabind::detail::object_rep* rep) {
+		int offset = 0;
+		const MovableObject* mo = FencedMovableObject(rep, offset);
+		if (const auto clone = mo ? s_PreviewCloneOf.find(mo) : s_PreviewCloneOf.end(); clone != s_PreviewCloneOf.end()) {
+			rep->set_object(reinterpret_cast<char*>(clone->second) - offset);
+		}
+	}
+
+	// A preview copy and anything the window created are its own; every other object is the world's.
+	int PreviewFenceOwns(const luabind::detail::object_rep* rep) {
+		int offset = 0;
+		if (const MovableObject* mo = FencedMovableObject(rep, offset)) {
+			return LuaMan::IsPreviewClone(mo) || mo->GetUniqueID() > s_PreviewBindingUIDFloor ? 1 : 0;
+		}
+		// The hold's sound copies are the window's own, as are the Vectors it made.
+		if (rep && rep->crep() && std::strcmp(rep->crep()->name(), "SoundContainer") == 0 && IsPreviewSoundCopy(static_cast<const SoundContainer*>(rep->ptr()))) {
+			return 1;
+		}
+		return -1;
+	}
+
+	void OpenPreviewBindingFence() {
+		if (s_PreviewBindingFenceOpen) {
+			return;
+		}
+		s_PreviewBindingFenceOpen = true;
+		s_PreviewBindingUIDFloor = MovableObject::GetUniqueIDCounter();
+		s_PreviewCloneOf.clear();
+		luabind::detail::preview_fence::substitute = &PreviewFenceSubstitute;
+		luabind::detail::preview_fence::owns = &PreviewFenceOwns;
+		luabind::detail::preview_fence::open();
+	}
+
+	void ClosePreviewBindingFence() {
+		if (!s_PreviewBindingFenceOpen) {
+			return;
+		}
+		s_PreviewBindingFenceOpen = false;
+		s_PreviewCloneOf.clear();
+		luabind::detail::preview_fence::close();
+	}
 }
 
 bool LuaStateWrapper::CopyScriptInstanceToPreviewHold(long uniqueID, std::vector<std::string>& problems) {
@@ -12142,6 +12203,8 @@ std::string LuaMan::PreviewScriptKey(const MovableObject* mo) {
 }
 
 void LuaMan::CapturePreviewSelfCopies(const std::vector<const MovableObject*>& roots, bool sharedSlot) {
+	// Open first, so the copies the hold makes are the window's own to write.
+	OpenPreviewBindingFence();
 	DropPreviewSoundCopies();
 	s_PreviewFrozenUIDs.clear();
 	if (!sharedSlot) {
@@ -12182,7 +12245,8 @@ bool LuaMan::PreviewGlobalFenceEnabled() {
 	return enabled;
 }
 
-void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot) {
+void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool sharedSlot, const std::vector<const MovableObject*>& originals) {
+	OpenPreviewBindingFence();
 	s_PreviewClones.clear();
 	s_PreviewRootByUID.clear();
 	s_PreviewPartByUID.clear();
@@ -12196,6 +12260,17 @@ void LuaMan::BeginPreviewScripts(const std::vector<MovableObject*>& clones, bool
 			s_PreviewClones.insert(mo);
 			if (mo) {
 				s_PreviewPartByUID[mo->GetUniqueID()] = mo;
+			}
+		});
+	}
+	// A faithful copy keeps each part's unique id, so every part of an original names its copy's part.
+	for (size_t i = 0; i < originals.size() && i < clones.size(); ++i) {
+		if (!originals[i] || !clones[i]) {
+			continue;
+		}
+		WalkOwned(originals[i], [](MovableObject* part) {
+			if (const auto copy = s_PreviewPartByUID.find(part->GetUniqueID()); copy != s_PreviewPartByUID.end() && copy->second != part) {
+				s_PreviewCloneOf[part] = copy->second;
 			}
 		});
 	}
@@ -12274,6 +12349,7 @@ void LuaMan::EndPreviewScripts() {
 			std::cout << "[preview-globals] undone=" << s_PreviewGlobalsUndone << " at the first preview that wrote one" << std::endl;
 		}
 	}
+	ClosePreviewBindingFence();
 }
 
 CopyBufferProbe RTE::ProbeCheckpointCopyBuffers() {

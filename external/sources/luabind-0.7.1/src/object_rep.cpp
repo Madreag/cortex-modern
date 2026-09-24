@@ -23,10 +23,40 @@
 #include <luabind/detail/object_rep.hpp>
 #include <luabind/detail/class_rep.hpp>
 
+#include <atomic>
+
 namespace luabind { namespace detail
 {
 
 	checkpoint_object_write_cb checkpoint_object_write = 0;
+
+	thread_local unsigned preview_fence_window = 0;
+	thread_local int preview_fence_parent = -1;
+	void (*preview_fence::substitute)(object_rep*) = 0;
+	int (*preview_fence::owns)(const object_rep*) = 0;
+
+	namespace
+	{
+		thread_local int preview_fence_depth = 0;
+		// Serials are unique across threads, so a handle marked on one thread never matches a window on another.
+		std::atomic<unsigned> preview_fence_serial(0);
+	}
+
+	void preview_fence::open()
+	{
+		if (preview_fence_depth++ > 0) return;
+		unsigned serial = ++preview_fence_serial;
+		if (serial == 0) serial = ++preview_fence_serial;
+		preview_fence_window = serial;
+		preview_fence_parent = -1;
+	}
+
+	void preview_fence::close()
+	{
+		if (preview_fence_depth == 0 || --preview_fence_depth > 0) return;
+		preview_fence_window = 0;
+		preview_fence_parent = -1;
+	}
 
 	// dest is a function that is called to delete the c++ object this struct holds
 	object_rep::object_rep(void* obj, class_rep* crep, int flags, void(*dest)(void*))
@@ -38,6 +68,8 @@ namespace luabind { namespace detail
 	{
 		// if the object is owned by lua, a valid destructor must be given
 		assert((((m_flags & owner) && dest) || !(m_flags & owner)) && "internal error, please report");
+		// A value an open window creates is that window's own to write.
+		if (m_flags & owner) m_preview_window = preview_fence_window;
 	}
 
 	object_rep::object_rep(class_rep* crep, int flags, detail::lua_reference const& table_ref)
