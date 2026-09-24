@@ -2866,7 +2866,10 @@ static std::string ResyncSaveName() {
 		}
 		// A held seat costs the survivors nothing while it is away: its base is captured when its player is back, never on a cadence.
 		const uint64_t nowMs = SteadyNowMs();
-		if (!PrivateBaseWantedLocked(nowMs) || m_PrivateImageTask.valid() || m_WorldJoin.HasImageTransferInFlight() ||
+		const bool transferring = std::any_of(m_WorldJoin.Sessions().begin(), m_WorldJoin.Sessions().end(), [](const NetWorldJoinSession& session) {
+			return session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted;
+		});
+		if (!PrivateBaseWantedLocked(nowMs) || m_PrivateImageTask.valid() || transferring ||
 		    m_Coordinator->HasSeatReclaimGap(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()))) return;
 		const bool ownsKeepalive = !m_SnapshotLoadKeepalive.joinable();
 		StartSnapshotLoadKeepalive();
@@ -5034,6 +5037,13 @@ static std::string ResyncSaveName() {
 			return;
 		}
 		const auto& result = m_Coordinator->GetMigrationResult();
+		// A handover is the survivors' election. A peer that finds nobody but itself cannot tell the host's loss from its own
+		// link's, so it rejoins the host it knew instead of hosting a match the host may still be playing.
+		if (std::none_of(result.members.begin(), result.members.end(), [&](uint8_t peer) { return peer != m_LocalPeerId; })) {
+			System::PrintDiagnosticLine("[net-match] host lost with no other survivor: rejoining the host instead of taking the match over");
+			ScenarioRunner::SetControllerReplayError("PeerHeld:The host connection was lost - rejoining");
+			return;
+		}
 		const auto& config = m_Coordinator->GetConfig().matchConfig;
 		auto wire = m_Coordinator->TakeMigrationTransport();
 		if (!wire) {
