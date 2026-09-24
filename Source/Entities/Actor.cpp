@@ -2926,8 +2926,13 @@ std::string Actor::SaveActorRuntime() const {
 	archive(m_DeathTmr, m_GoldCarried, m_GoldPicked, m_CanRun, m_CrouchWalkSpeedMultiplier, m_AimState, m_AimRange);
 	archive(m_AimAngle, m_AimDistance, m_AimTmr, m_SharpAimTimer, m_SharpAimDelay, m_SharpAimProgress, m_SharpAimMaxedOut);
 	archive(m_PointingTarget, m_SeenTargetPos, m_AlarmTimer, m_LastAlarmPos, m_SightDistance, m_Perceptiveness, m_PainThreshold);
-	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass, m_OffWireAimTick);
-	archive(m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip, m_HotkeyActivated, m_HUDStack, m_DeploymentID, m_PassengerSlots);
+	archive(m_CanRevealUnseen, m_CharHeight, m_HolsterOffset, m_ReloadOffset, m_ViewPoint, m_MaxInventoryMass);
+	// What the owner's AI wrote directly is its machine's until the wire carries it as an intent.
+	archive.PerPeer(m_OffWireAimTick, m_OffWireAim, m_OffWireFlipTick, m_OffWireFlip);
+	archive(m_HotkeyActivated);
+	// The HUD stack is laid out by this machine's own draw.
+	archive.PerPeer(m_HUDStack);
+	archive(m_DeploymentID, m_PassengerSlots);
 	archive(m_AIBaseDigStrength, m_BaseMass, m_AIMode, m_WaypointCursor, m_DrawWaypoints, m_MoveTarget, m_PrevPathTarget);
 	archive(m_LastOrderedWaypoint, m_HasOrderedWaypoint, m_LastOrderedWaypointUID);
 	archive(m_MoveVector, m_UpdateMovePath, m_MoveProximityLimit, m_MovementState, m_Organic, m_Mechanical, m_LimbPushForcesAndCollisionsDisabled);

@@ -2287,7 +2287,8 @@ std::string MOSRotating::SaveMOSRotatingRuntime() const {
 	archive(m_GibWoundLimit, m_GibBlastStrength, m_GibScreenShakeAmount, m_WoundCountAffectsImpulseLimitRatio, m_DetachAttachablesBeforeGibbingFromWounds, m_GibAtEndOfLifetime, m_EffectOnGib);
     archive(m_LoudnessOnGib, m_DamageMultiplier, m_NoSetDamageMultiplier, m_FlashWhiteTimer);
     BitmapCheckpoint flip, silhouette; flip.Capture(m_pFlipBitmap); silhouette.Capture(m_pFlipBitmapS);
-    archive(flip, silhouette);
+    // The flipped draw buffers hold whatever this machine drew last.
+    archive.PerPeer(flip, silhouette);
 	return archive.Text();
 }
 

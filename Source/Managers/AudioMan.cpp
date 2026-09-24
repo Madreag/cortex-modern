@@ -2100,8 +2100,15 @@ namespace {
 		uint64_t deferredSoundOpOrdinal = 0;
 		template <class Archive> void Fields(Archive& archive) { FieldsWith(archive, samples); }
 		// The samples take their place in the archive as themselves or as their already written texts.
+		// This machine's voices and where its screens listen from are its own playback; the committed audibility is shared.
 		template <class Archive, class Samples> void FieldsWith(Archive& archive, Samples& sampleValues) {
-			archive(enabled, nextVoice, nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer, playerPositions, listeners, groups, sampleValues, voices, minimumDistances, events);
+			archive(enabled);
+			archive.PerPeer(nextVoice);
+			archive(nextSoundContainer, muteMaster, muteMusic, muteSounds, muteOnFocusLoss, masterVolume, musicVolume, soundsVolume, globalPitch, panning, listenerZ, minimumPanning, musicMuffled, multiplayer);
+			archive.PerPeer(playerPositions, listeners);
+			archive(groups, sampleValues);
+			archive.PerPeer(voices);
+			archive(minimumDistances, events);
 		}
 		std::string Save(const std::vector<CheckpointText>* sampleTexts = nullptr) {
 			CheckpointWriter archive("AudioRuntime3");
