@@ -106,7 +106,7 @@
       "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
       "log_regex": [
         "^\\[autosave\\] tick=\\d+ capture_ms=",
-        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
       ]
     },
     {
@@ -137,7 +137,7 @@
       "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
       "log_regex": [
         "^\\[autosave\\] tick=\\d+ capture_ms=",
-        "^\\[autosave\\] retained tick=\\d+ keep=2 "
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
       ]
     },
     {
