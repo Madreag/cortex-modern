@@ -2017,6 +2017,14 @@ namespace RTE {
 				SetNetParticipantCryptoForTest(nullptr);
 				return false;
 			}
+			// The host's notice names the banned player; the player's own text stays the sentence written to it.
+			if (host.GetRefusedPlayerName() != "Player" || host.BuildPlayerRefusalText() != "Player is banned from this session" ||
+			    client.BuildPlayerRefusalText() != "The host banned you from this session") {
+				*error = "the host's ban refusal does not name the refused player: host='" + host.BuildPlayerRefusalText() + "' client='" + client.BuildPlayerRefusalText() + "'";
+				SetNetAuthCryptoForTest(nullptr);
+				SetNetParticipantCryptoForTest(nullptr);
+				return false;
+			}
 			error->clear();
 			if (!bans.Unban(store.PublicId(), error) || bans.IsBanned(store.PublicId(), sessionId)) {
 				*error = "unban left the identity banned";

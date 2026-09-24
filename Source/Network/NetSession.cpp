@@ -1567,12 +1567,14 @@ namespace RTE {
 
 	void NetSession::RejectPeer(PeerState& peer, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RejectConnection(peer.transportPeerId, reason, key, expected, actual, summary);
+		m_RefusedPlayerName = peer.displayName;
 		peer.state = NetSessionState::Rejected;
 		RefreshHostState();
 	}
 
 	void NetSession::RejectConnection(NetPeerId peerId, NetRejectReason reason, const std::string& key, const std::string& expected, const std::string& actual, const std::string& summary) {
 		RecordReject(reason, key, expected, actual, summary);
+		m_RefusedPlayerName.clear();
 		Send(peerId, NetJoinRejected{reason, summary, key, expected, actual});
 		if (m_Transport) {
 			// The close reason rides the transport too, so a peer that misses the reject packet still sees why.
@@ -1644,8 +1646,14 @@ namespace RTE {
 			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
-			case NetRejectReason::ParticipantRemoved: return "The host removed you from this session";
-			case NetRejectReason::ParticipantBanned: return BuildRejectText();
+			case NetRejectReason::ParticipantRemoved:
+				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty()) return m_RefusedPlayerName + " was removed from this session";
+				return "The host removed you from this session";
+			case NetRejectReason::ParticipantBanned:
+				// The host's own notice names who it refused; the refused player reads the sentence written to it.
+				if (m_Role == NetSessionRole::Host && !m_RefusedPlayerName.empty())
+					return m_RefusedPlayerName + (m_MismatchKey == "participant_removed" ? " was removed from this session" : " is banned from this session");
+				return BuildRejectText();
 			case NetRejectReason::IdentityUnproven: return "Your player identity could not be verified.";
 			default: return "The host could not admit this connection. Please try again.";
 		}

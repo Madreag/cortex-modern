@@ -257,6 +257,8 @@ namespace RTE {
 		const std::string& GetMismatchKey() const { return m_MismatchKey; }
 		bool HasReject() const { return m_HasReject; }
 		const std::string& GetRejectSummary() const { return m_RejectSummary; }
+		/// Host: the display name the last refused connection joined with, so the host's notice can say who.
+		const std::string& GetRefusedPlayerName() const { return m_RefusedPlayerName; }
 		const NetSessionStats& GetStats() const { return m_Stats; }
 		/// The number of connections the host is tracking that have not yet passed a ClientHello.
 		uint32_t GetUnauthenticatedPeerCount() const;
@@ -403,6 +405,7 @@ namespace RTE {
 		std::string m_ExpectedValue;
 		std::string m_ActualValue;
 		std::string m_RejectSummary;
+		std::string m_RefusedPlayerName;
 		NetHash32 m_RemoteIdentityHash{};
 		bool m_HasRemoteIdentityHash = false;
 		// Client mirror of the parked peer state, bounded by its own deadline rather than by the
