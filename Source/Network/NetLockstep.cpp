@@ -5744,7 +5744,9 @@ namespace RTE {
 		for (auto arrival = first; arrival != leads.end(); ++arrival)
 			if (nowMs - arrival->ms <= NetInputDelayEstimator::c_WindowMs && arrival->frame >= firstFrameUnderCurrent) spare = std::min(spare, arrival->lead);
 		if (spare == UINT64_MAX) return std::nullopt;
-		const uint64_t needed = spare > current ? 0 : static_cast<uint64_t>(current) + 1 - spare;
+		// The seat keeps the slow-player bound's worth of that lead, so a spike the bound absorbed before the change still is.
+		const uint64_t keep = std::max<uint64_t>(1, m_Config.slowPlayerBoundTicks);
+		const uint64_t needed = spare >= current + keep ? 0 : static_cast<uint64_t>(current) + keep - spare;
 		const uint64_t delay = std::max<uint64_t>(proposed, needed);
 		return delay < current ? std::optional<uint16_t>{static_cast<uint16_t>(delay)} : std::nullopt;
 	}

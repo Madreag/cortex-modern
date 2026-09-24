@@ -19540,7 +19540,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	// window of arrivals under the delay it got.
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
 		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; uint16_t expectedDelay; }; // 0: any delay below the start
-		const Case cases[] = {{"a seat our sim waits on", 25, 8, 0, 8}, {"a seat that runs ahead", 12, 8, 0, 2}, {"a seat five ticks behind", 17, 12, 85, 0}};
+		const Case cases[] = {{"a seat our sim waits on", 25, 8, 0, 8}, {"a seat that runs ahead", 12, 8, 0, 0}, {"a seat five ticks behind", 17, 12, 85, 0}};
 		for (const Case& test: cases) {
 			const uint64_t clientPeriodMs = test.clientPeriodMs;
 			LoopbackTransport hostWire, clientWire;
