@@ -10,6 +10,7 @@
 #include "NetSession.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <iostream>
@@ -127,16 +128,40 @@ namespace RTE {
 			const std::string serviceStep = "a NetMatchService step (private capture writer, world join, checkpoint resume) that needs an activity load; the in-process rig has none";
 
 			if (s == State::Migrating) {
-				x.notWalked = "needs a three-peer rig with a successor in migration; not composed in this row";
+				const std::string migrationGap = "an event other than the migration's own steps arriving while the host is being replaced";
 				switch (e) {
-					case Event::MigrationComplete: set("legal: the successor hosts; a held seat stays with the AI on the migrated host and rejoins it through resync", "R1-392ii"); break;
-					case Event::MigrationFail: set("legal: the survivors leave to the landing with 'The host left the match'", "R1-392ii"); break;
-					case Event::SuccessorLost: set("legal: the migration moves to the next successor", "DESIGN-MIGRATION"); break;
-					case Event::MigrationBegin: set("ignore: a migration already running is not restarted", "DESIGN-MIGRATION"); break;
+					case Event::MigrationComplete: set("sub=run subhost=2", "R1-392ii"); break;
+					case Event::MigrationFail:
+						set("legal: the survivors leave to the landing with 'The host left the match'", "R1-392ii");
+						x.notWalked = "no in-process lever fails a migration short of losing every successor";
+						break;
+					case Event::SuccessorLost: set("subhost=3", "DESIGN-MIGRATION"); break;
+					case Event::MigrationBegin: set("sub=run subhost=2", "DESIGN-MIGRATION"); break;
+					case Event::HostLost: set("sub=run subhost=2", "R1-392ii"); break;
 					case Event::HostGoodbye:
-					case Event::HostLost: set("ignore: the host is already gone", "R1-392ii"); break;
-					case Event::MatchOver: set("refuse: no host remains to end the match until the successor hosts", "GAP", "an end of match requested while the host is being replaced"); break;
-					default: set("ignore until the migration completes or fails (conservative)", "GAP", "an event other than the migration's own steps arriving while the host is being replaced"); break;
+						set("n/a: the host is already gone", "R1-392ii");
+						x.notWalked = "the lost host sends nothing";
+						break;
+					case Event::MatchOver:
+						set("refuse: no host remains to end the match until the successor hosts", "GAP", "an end of match requested while the host is being replaced");
+						x.notWalked = "no peer is the host while the migration runs, so nothing authors a match end";
+						break;
+					case Event::OwnCap: set("sub=over", "R1F7", "the subject reaching its own cap while the host is being replaced (R1 F7 read for a match)"); break;
+					case Event::HoldProposed:
+					case Event::HeldRejoin:
+					case Event::LateJoin: set("api=refused sub=run subhost=2", e == Event::LateJoin ? "H4-7" : "GAP", e == Event::LateJoin ? "" : migrationGap); break;
+					case Event::TicketRejoin: set("sub=run subhost=2", "H4-0"); break;
+					case Event::LinkBlip:
+					case Event::LinkRestore: set("sub=run subhost=2", "RB2"); break;
+					case Event::PrivateCaptureComplete:
+					case Event::WorldImageOffered:
+					case Event::OpeningResumeOffer:
+					case Event::TailReplayComplete:
+					case Event::ResumeFromDisk:
+						set("ignore until the migration completes (conservative)", "GAP", migrationGap);
+						x.notWalked = serviceStep;
+						break;
+					default: set("sub=run subhost=2", "GAP", migrationGap); break;
 				}
 				return x;
 			}
@@ -505,8 +530,11 @@ namespace RTE {
 			std::string phase;
 			uint32_t holds = 0;
 			std::string api;
+			std::string sub;
+			int subHost = 0;
 
 			std::string Describe() const {
+				if (!sub.empty()) return "sub=" + sub + " subhost=" + std::to_string(subHost) + " round=" + round + " peer=" + peer + " api=" + api;
 				return "seat=" + seat + " round=" + round + " peer=" + peer + " sess=" + session + " holds=" + std::to_string(holds) + " api=" + api;
 			}
 		};
@@ -549,6 +577,8 @@ namespace RTE {
 				return false;
 			}
 			if (key == "holds") return value == "0" ? o.holds == 0 : value == ">0" ? o.holds > 0 : false;
+			if (key == "sub") return value == "run" ? o.sub == "run" : value == "over" ? o.sub == "stopped:Complete" : value == "ended" ? o.sub != "run" && o.sub != "migrating" : false;
+			if (key == "subhost") return std::to_string(o.subHost) == value;
 			if (key == "api") return value == "ok" ? o.api == "ok" : value == "refused" ? o.api.rfind("refused", 0) == 0 : false;
 			return false;
 		}
@@ -769,6 +799,161 @@ namespace RTE {
 			}
 		}
 
+		/// A three-peer star for the Migrating row: host 1, successor 2, subject 3 (the survivor that is not next in line).
+		struct StarRig {
+			uint16_t port = 0;
+			LoopbackTransport hostWire;
+			LoopbackTransport successorWire;
+			LoopbackTransport subjectWire;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator successor;
+			NetLockstepCoordinator subject;
+			uint64_t now = 0;
+			std::array<uint64_t, 3> queued{1, 1, 1};
+			std::array<uint64_t, 3> simulated{0, 0, 0};
+			std::array<bool, 3> live{true, true, true};
+			std::string error;
+
+			NetLockstepCoordinator& Peer(size_t index) { return index == 0 ? host : index == 1 ? successor : subject; }
+			LoopbackTransport& Wire(size_t index) { return index == 0 ? hostWire : index == 1 ? successorWire : subjectWire; }
+		};
+
+		NetLockstepConfig StarConfig(uint8_t peer, uint16_t port, uint64_t session) {
+			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(session);
+			match.peerCount = 3;
+			match.players.push_back({3, 2, false, "Third"});
+			match.successorOrder = {2, 3};
+			for (uint8_t member = 1; member <= 3; ++member) match.migrationPeers.push_back({member, static_cast<uint16_t>(port + member), {"loopback"}});
+			NetLockstepConfig config;
+			config.sessionId = match.sessionId;
+			config.matchConfig = match;
+			config.peerCount = 3;
+			config.localPeerId = peer;
+			config.startFrame = 1;
+			config.timeoutMs = 20000;
+			config.roundId = peer == 1 ? session : 0;
+			config.relayToOtherPeers = peer == 1;
+			config.remoteTransportPeerIds = peer == 1 ? std::map<uint8_t, NetPeerId>{{2, 1}, {3, 2}} : std::map<uint8_t, NetPeerId>{{1, 1}};
+			config.migrationKey.fill(0x39);
+			config.migrationTransportFactory = [] { return std::make_unique<LoopbackTransport>(); };
+			config.substituteSlowPeers = true;
+			config.simTickMs = 1000.0 / 60.0;
+			return config;
+		}
+
+		void StepStar(StarRig& r) {
+			std::string ignored;
+			for (size_t i = 0; i < 3; ++i) if (r.live[i]) r.Wire(i).AdvanceTimeMs(1);
+			for (size_t i = 0; i < 3; ++i) {
+				NetLockstepCoordinator& peer = r.Peer(i);
+				if (!r.live[i] || !peer.IsRunning() || peer.IsMigrating()) continue;
+				for (; r.queued[i] <= r.simulated[i] + 6; ++r.queued[i]) if (!peer.QueueLocalInput(r.queued[i], {}, {}, &ignored)) break;
+			}
+			for (size_t i = 0; i < 3; ++i) if (r.live[i]) r.Peer(i).Tick(r.now);
+			for (size_t i = 0; i < 3; ++i) {
+				if (!r.live[i]) continue;
+				NetLockstepReadyFrame ready;
+				while (r.Peer(i).PopReadyFrame(ready)) { (void)r.Peer(i).FinishSimulationTick(ready.frame); r.simulated[i] = ready.frame; }
+			}
+			++r.now;
+		}
+
+		bool PumpStar(StarRig& r, uint64_t ms, const std::function<bool()>& until = {}) {
+			for (uint64_t i = 0; i < ms; ++i) {
+				if (until && until()) return true;
+				StepStar(r);
+			}
+			return until ? until() : true;
+		}
+
+		std::string StarReport(const StarRig& r) {
+			return std::string(" (host=") + NetLockstepCoordinator::StateName(r.host.GetState()) + " successor=" + NetLockstepCoordinator::StateName(r.successor.GetState()) +
+			       " \"" + r.successor.GetStats().timeoutReason + "\" subject=" + NetLockstepCoordinator::StateName(r.subject.GetState()) + " \"" + r.subject.GetStats().timeoutReason +
+			       "\" migrating=" + std::to_string(r.subject.IsMigrating()) + " sims=" + std::to_string(r.simulated[0]) + "/" + std::to_string(r.simulated[1]) + "/" + std::to_string(r.simulated[2]) + ")";
+		}
+
+		bool EnterMigrating(StarRig& r) {
+			std::string error;
+			if (!r.hostWire.StartHost(r.port, &error) || !r.successorWire.Connect("loopback", r.port, &error) || !r.subjectWire.Connect("loopback", r.port, &error)) {
+				r.error = "star loopback: " + error;
+				return false;
+			}
+			const uint64_t session = 0x524B0000ULL + r.port;
+			if (!r.host.Start(r.hostWire, StarConfig(1, r.port, session), &error) || !r.successor.Start(r.successorWire, StarConfig(2, r.port, session), &error) ||
+			    !r.subject.Start(r.subjectWire, StarConfig(3, r.port, session), &error)) {
+				r.error = "star start: " + error;
+				return false;
+			}
+			for (size_t i = 0; i < 3; ++i) r.Peer(i).DeferStopsToTickBoundary();
+			if (!PumpStar(r, 4000, [&r] { return r.simulated[0] >= 12 && r.simulated[1] >= 12 && r.simulated[2] >= 12; })) {
+				r.error = "the star never ran twelve frames" + StarReport(r);
+				return false;
+			}
+			// The host's process dies: no close, no last packet.
+			r.live[0] = false;
+			if (!PumpStar(r, 4000, [&r] { return r.subject.IsMigrating(); })) {
+				r.error = "the survivors never began a migration" + StarReport(r);
+				return false;
+			}
+			return true;
+		}
+
+		std::string ApplyStar(StarRig& r, Event event) {
+			std::string error;
+			NetLockstepCoordinator& successor = r.successor;
+			switch (event) {
+				case Event::HoldProposed: return successor.ProposePeerHold(3, r.now, &error) ? "ok" : "refused:" + error;
+				case Event::HoldResolved: successor.ResolveHeldSeat(3, NetLockstepHoldResolution::Reclaimed, r.now); return "ok";
+				case Event::ParkBegin:
+					successor.BeginSynchronizedCapture(r.simulated[1]);
+					r.subject.BeginSynchronizedCapture(r.simulated[2]);
+					return "ok";
+				case Event::ParkEnd:
+					successor.CompleteSynchronizedCapture(r.simulated[1], 30.0);
+					r.subject.CompleteSynchronizedCapture(r.simulated[2], 30.0);
+					return "ok";
+				case Event::ResyncRelaunch: successor.RequestResync("rejoin matrix relaunch"); return "ok";
+				case Event::HostLost: r.subject.InjectEvent({NetTransportEventType::PeerDisconnected, 1, NetTransportLane::ControlReliable, {}, "Connection dropped"}, r.now); return "ok";
+				case Event::MigrationBegin: return r.subject.BeginHostMigration(r.now) ? "ok" : "refused";
+				case Event::MigrationComplete: return "ok";
+				case Event::SuccessorLost: r.live[1] = false; return "ok";
+				case Event::LateJoin: {
+					NetGameWorldTransition transition;
+					transition.kind = NetGameWorldTransition::Activate;
+					transition.peerId = 3;
+					transition.holderGeneration = 1;
+					transition.activationFrame = successor.GetStats().nextFrame + 40;
+					return successor.ProposeWorldAdmission(77, 1, transition, &error) ? "ok" : "refused:" + error;
+				}
+				case Event::TicketRejoin: successor.InjectEvent({NetTransportEventType::PeerConnected, 77, NetTransportLane::ControlReliable, {}, {}}, r.now); return "ok";
+				case Event::HeldRejoin: {
+					if (!successor.PreparePeerRejoin(3, 10, r.now, &error)) return "refused:" + error;
+					return successor.SchedulePeerReclaim(3, 2, 2, successor.GetStats().nextFrame + 60, &error) ? "ok" : "refused:" + error;
+				}
+				case Event::Kick: successor.EvictRemovedPeer(3, "kicked", r.now); return "ok";
+				case Event::Ban: successor.EvictRemovedPeer(3, "banned", r.now); return "ok";
+				case Event::SeatRelease: successor.ResolveHeldSeat(3, NetLockstepHoldResolution::Expired, r.now); return "ok";
+				case Event::OwnCap: r.subject.Complete("e2e complete"); return "ok";
+				case Event::LinkBlip:
+					r.live[2] = false;
+					PumpStar(r, 30);
+					r.live[2] = true;
+					return "ok";
+				case Event::LinkRestore: r.live[2] = true; return "ok";
+				default: return "none";
+			}
+		}
+
+		Observation ObserveStar(const StarRig& r, const std::string& api) {
+			Observation o;
+			o.sub = r.subject.IsMigrating() ? "migrating" : CoordinatorLabel(r.subject);
+			o.subHost = r.subject.GetHostPeerId();
+			o.round = CoordinatorLabel(r.host);
+			o.peer = r.successor.IsMigrating() ? "migrating" : CoordinatorLabel(r.successor);
+			o.api = api;
+			return o;
+		}
+
 		struct Totals {
 			int pairs = 0;
 			int tierOne = 0;
@@ -807,6 +992,29 @@ namespace RTE {
 			if (!x.notWalked.empty()) {
 				++totals.notWalked;
 				std::cout << c_Tag << " pair " << name << " tier=" << tier << " result=NOT-WALKED reason=\"" << x.notWalked << "\"" << std::endl;
+				continue;
+			}
+			if (state == State::Migrating) {
+				auto star = std::make_unique<StarRig>();
+				star->port = static_cast<uint16_t>(port + 1000);
+				port = static_cast<uint16_t>(port + 4);
+				if (!EnterMigrating(*star)) {
+					++totals.entryFail;
+					std::cout << c_Tag << " pair " << name << " tier=" << tier << " result=ENTRY-FAIL expected=\"" << x.expect << "\" error=\"" << star->error << "\"" << std::endl;
+					continue;
+				}
+				const std::string api = ApplyStar(*star, event);
+				// The migration settles, then a short look at where it left the subject.
+				PumpStar(*star, 4000, [&star] { return !star->subject.IsMigrating(); });
+				PumpStar(*star, 200);
+				const Observation observed = ObserveStar(*star, api);
+				std::string why;
+				const bool pass = Matches(x.expect, observed, why);
+				++totals.walked;
+				++totals.walkedTierTwo;
+				(pass ? totals.pass : totals.fail) += 1;
+				std::cout << c_Tag << " pair " << name << " tier=" << tier << " result=" << (pass ? "PASS" : "FAIL") << " expected=\"" << x.expect << "\" actual=\"" << observed.Describe()
+				          << "\"" << (pass ? "" : " unmet=\"" + why.substr(why.empty() ? 0 : 1) + "\"") << " source=" << x.source << (x.gap.empty() ? "" : " gap=yes") << std::endl;
 				continue;
 			}
 			auto rig = std::make_unique<Rig>();
