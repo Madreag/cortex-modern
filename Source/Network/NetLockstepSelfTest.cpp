@@ -19508,6 +19508,40 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		return true;
 	}
 
+	// A seat that rejoins a successor gets the successor's link from session seat 0, which is lockstep seat 1: the
+	// round's authority is seat 2. The returner answers the successor's timing proposal and both install it.
+	bool TestAReturnerAnswersItsSuccessor(std::string* error) {
+		LoopbackTransport hostTransport, clientTransport;
+		NetLockstepCoordinator host, client;
+		auto hostConfig = MakeCoordinatorConfig(2, 3, 0x9A77, 2, NetTransportLane::ControlReliable);
+		auto clientConfig = MakeCoordinatorConfig(3, 1, 0x9A77, 2, NetTransportLane::ControlReliable);
+		for (auto* config: {&hostConfig, &clientConfig}) {
+			config->peerCount = 3;
+			config->activePeerIds = {2, 3};
+			config->authorityPeerId = 2;
+			config->roundId = 23;
+		}
+		hostConfig.relayToOtherPeers = true;
+		if (!StartCoordinatorPair(48917, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return false;
+		uint64_t now = 0;
+		const auto pump = [&] {
+			++now;
+			hostTransport.AdvanceTimeMs(1); clientTransport.AdvanceTimeMs(1);
+			host.Tick(now); client.Tick(now);
+		};
+		for (int pass = 0; pass < 20; ++pass) pump();
+		if (!host.IsRunning() || !client.IsRunning()) { *error = "the successor pair did not start"; return false; }
+		if (!host.ProposeInputDelay(3, 5, 20, error)) return false;
+		for (int pass = 0; pass < 20; ++pass) pump();
+		if (host.TimingDecisionPendingAt(20) || client.TimingDecisionPendingAt(20) || host.InputDelayAt(3, 20) != 5 || client.InputDelayAt(3, 20) != 5) {
+			*error = "the returner never answered its successor's timing proposal (host pending=" + std::to_string(host.TimingDecisionPendingAt(20)) +
+			         " client delay=" + std::to_string(client.InputDelayAt(3, 20)) + ")";
+			return false;
+		}
+		std::cout << "[net-lockstep-selftest] PASS a_returner_answers_its_successor delay=" << host.InputDelayAt(3, 20) << std::endl;
+		return true;
+	}
+
 	bool TestALongLinkedSurvivorDoesNotCollapseTheBound(std::string* error) {
 		// The notice budget is sized from the SURVIVORS' links. One survivor on a 200 ms link costs more
 		// notice than the whole bound, and the seat must still be declared only after the bound of
@@ -19622,6 +19656,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		row(&TestAStartingPeerIsJudgedByItsRampForItsFirstSecond, "a_starting_peer_is_judged_by_its_ramp_for_its_first_second");
 		row(&TestASeatIsNotLateForOurOwnDecision, "a_seat_is_not_late_for_our_own_decision");
 		row(&TestAFirstDelayChangeIsNotAMutualWait, "a_first_delay_change_is_not_a_mutual_wait");
+		row(&TestAReturnerAnswersItsSuccessor, "a_returner_answers_its_successor");
 		row(&TestALinkLostBeforeTheStartIsHeld, "a_link_lost_before_the_start_is_held");
 		row(&TestTheFirstFramesRideOutABurstOnALongLink, "the_first_frames_ride_out_a_burst_on_a_long_link");
 		row(&TestAPeerIsDueADelayAfterAPark, "a_peer_is_due_a_delay_after_a_park");
